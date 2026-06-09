@@ -51,11 +51,21 @@ It performs, **idempotently**:
 - **`.claude/settings.json`:** copied if absent; if one already exists, written as `settings.harness.json` for the operator to merge (never clobbered).
 - **`.claude/.gitignore`:** ignores ephemerals (`plans/`, `settings.local.json`, `*.local.md`) — keeps `memory/` and `kaizen.md` committed.
 - **`.claude/.harness-version`:** the vendored version + timestamp.
+- **`.github/ISSUE_TEMPLATE/harness-task.yml`** (repo root, non-clobber): the issue form that makes an issue harness-ready (auto-labels `harness:ready`). Feeds the issue-poll routine.
 
 ### Step 3 — Reconcile settings (only if `settings.harness.json` was written)
 If the project already had a `settings.json`, the installer wrote `settings.harness.json` beside it.
 Present the diff to the operator in product-language and merge the harness baseline into their config
 (do not silently overwrite their permissions/hooks). Then delete `settings.harness.json`.
+
+### Step 3b — Create the harness labels (for issue-driven routines)
+The issue form auto-applies `harness:ready`, and the issue-poll routine uses these labels — they must exist in the repo. Create them (idempotent — ignore "already exists"):
+```bash
+gh label create "harness:ready"       -c "#0E8A16" -d "Pronta para a pipeline autônoma" 2>/dev/null || true
+gh label create "harness:in-progress" -c "#FBCA04" -d "Routine processando" 2>/dev/null || true
+gh label create "harness:done"        -c "#5319E7" -d "PR aberto pela routine" 2>/dev/null || true
+```
+Priority/size live in the issue body (form fields); the routine parses them when ranking.
 
 ### Step 4 — Optional add-ons (opt-in, per `modules/`)
 Ask the operator (interactive) or read the routine prompt (headless) whether to enable:

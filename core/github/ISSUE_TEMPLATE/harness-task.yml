@@ -1,0 +1,86 @@
+name: Harness Task
+description: Tarefa pronta para a pipeline autônoma do Claude Harness (issue → spec → plano → PR draft).
+title: "[harness] "
+labels: ["harness:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Preencha de forma específica — estes campos viram a spec, os `locked_tests` e o `scope_paths` do plano.
+        Issues criadas por este form entram no radar da routine (label `harness:ready`).
+        **Não use** este form para tarefas sensíveis críticas (auth/pagamento/segredos) ou arquiteturais grandes
+        sem antes alinhar — autônomo nelas é risco alto, mesmo com PR draft.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Resumo + por quê
+      description: O que é e por que importa (1–3 linhas).
+    validations:
+      required: true
+  - type: textarea
+    id: user_journeys
+    attributes:
+      label: User journeys
+      description: Uma por linha, prefixe com `#uj-N`.
+      placeholder: "#uj-1: o usuário consegue ..."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Critérios de aceite (testáveis e observáveis)
+      description: Given/When/Then com valor concreto. Prefixe `#ac-N.M`. Viram os locked_tests — assertem efeito observável (corpo, estado, erro), nunca só status.
+      placeholder: "#ac-1.1: dado X, quando Y, então Z (valor concreto)"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Escopo
+      description: Arquivos/áreas que a tarefa PODE tocar, e o que **NÃO** tocar.
+      placeholder: "Pode: src/lib/foo.ts + testes. Não tocar: fluxos de auth/DB."
+    validations:
+      required: true
+  - type: textarea
+    id: resolved_decisions
+    attributes:
+      label: Decisões já resolvidas (opcional)
+      description: chave → valor concreto, pra o executor não inventar. Ex.- `redirect_status: 301`.
+    validations:
+      required: false
+  - type: dropdown
+    id: sensitive
+    attributes:
+      label: Domínio sensível?
+      description: Se ≠ "não", a pipeline força modo FULL e roda o security.
+      options:
+        - "não"
+        - "auth/sessão"
+        - "pagamento/billing"
+        - "dados/PII"
+        - "segredos"
+        - "SQL/migração"
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Prioridade
+      description: A routine escolhe P0 antes de P1 antes de P2.
+      options:
+        - "P1"
+        - "P0"
+        - "P2"
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Tamanho estimado
+      description: Empate de prioridade → a routine pega o menor primeiro.
+      options:
+        - "S (1–2 arquivos)"
+        - "M"
+        - "L"
+    validations:
+      required: true

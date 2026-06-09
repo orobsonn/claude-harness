@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -41,6 +41,13 @@ const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 const ACCUMULATED = [
   ["memory/MEMORY.md", "memory"],
   ["kaizen.md", "."],
+];
+
+// Repo-level files vendored OUTSIDE .claude/ (into the project root). Non-clobber:
+// installed only if absent, so a project's own templates are never overwritten.
+// Maps source path under core/ → destination relative to the target repo root.
+const REPO_FILES = [
+  ["github/ISSUE_TEMPLATE/harness-task.yml", ".github/ISSUE_TEMPLATE/harness-task.yml"],
 ];
 
 const GITIGNORE = `# Claude Harness — ephemeral, never committed
@@ -139,6 +146,23 @@ function seedAccumulated(coreDir, claudeDir) {
 }
 
 /**
+ * @description Installs repo-level files (outside .claude/) into the target repo root,
+ * only when absent — never clobbers a project's own files. Returns a status string.
+ */
+function installRepoFiles(coreDir, targetDir) {
+  const installed = [];
+  for (const [rel, dest] of REPO_FILES) {
+    const src = join(coreDir, rel);
+    const out = join(targetDir, dest);
+    if (!existsSync(src) || existsSync(out)) continue;
+    mkdirSync(dirname(out), { recursive: true });
+    cpSync(src, out);
+    installed.push(dest);
+  }
+  return installed.length ? installed.join(", ") : "none (already present or no source)";
+}
+
+/**
  * @description Idempotent merge of the harness entry-policy into .claude/CLAUDE.md.
  * Replaces the content between the markers if present, else appends a fresh block.
  * Project content outside the markers is preserved.
@@ -199,6 +223,7 @@ try {
   seedAccumulated(coreDir, claudeDir);
   const claudeMd = mergeClaudeMd(coreDir, claudeDir);
   const settings = writeSettings(coreDir, claudeDir);
+  const repoFiles = installRepoFiles(coreDir, target);
 
   writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
   writeFileSync(
@@ -213,6 +238,7 @@ try {
       `  memory/MEMORY.md, kaizen.md: seeded if absent`,
       `  CLAUDE.md: ${claudeMd}`,
       `  settings.json: ${settings}`,
+      `  repo files (.github/…): ${repoFiles}`,
       `  .gitignore, .harness-version: written`,
       "",
     ].join("\n")
