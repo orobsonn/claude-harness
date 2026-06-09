@@ -29,7 +29,7 @@ The operator is a product manager, not a developer. Engineering problems are sol
 ## Macro-flow
 
 ```
-brainstorm (interactive: superpowers:brainstorming if available · headless: mandatory Workflow simulates brainstorm → synthesized spec)
+brainstorm (interactive: superpowers:brainstorming if available · headless: exploration subagents → synthesized spec)
    → spec → spec review → plan JSON (planner via creating-plans) → per-task loop
    → final dual review → demo → harvest
 ```
@@ -44,7 +44,7 @@ The pipeline is identical; only **who occupies the human decision points** chang
 
 | Touchpoint | INTERACTIVE (operator present) | HEADLESS (cloud routine) |
 |---|---|---|
-| Brainstorm / spec | `superpowers:brainstorming` if available, else inline | **mandatory: a `Workflow` simulates the brainstorm** (fan-out exploration agents, distinct lenses → synthesize spec); fail-safe to direct subagent dispatch if `Workflow` is unavailable; then adversary attacks the spec |
+| Brainstorm / spec | `superpowers:brainstorming` if available, else inline | **dispatch exploration subagents** (distinct lenses → synthesize spec) — the reliable mechanism in cloud routines; prefer a `Workflow` only where the tool is available (local headless); then adversary attacks the spec |
 | HARD-GATE 1 — spec | operator confirms | multi-agent validation (adversary on spec) → proceed; spec written into the PR body |
 | HARD-GATE 2 — plan | operator confirms | `plan-reviewer` APPROVE → proceed; plan summary written into the PR body |
 | HARD-GATE 3 — demo | operator tests output | auto-generate the demo artifact and auto-validate it against the ACs; attach to the PR |
@@ -64,8 +64,7 @@ The gates below are written for INTERACTIVE; each carries its HEADLESS substitut
 ## Phase 0 — Brainstorm and spec
 
 1. Explore intent, user journeys (`#uj-N`), and acceptance criteria (`#ac-N.M`). **INTERACTIVE:** use `superpowers:brainstorming` **if available** (it is a marketplace plugin, not vendored — may be absent); else brainstorm inline with the operator.
-   **HEADLESS:** there is no human to brainstorm with, so the brainstorm is **simulated with a `Workflow` — mandatory**. Run a workflow that fans out read-only **exploration agents** over the trigger (issue/PR/prompt) + the codebase, each with a **distinct lens** (e.g. user-journeys, edge-cases/failure-modes, constraints/non-functionals), then **synthesizes** their outputs into the spec (UJs `#uj-N` + ACs `#ac-N.M`). The workflow is the **obligatory mechanism** for the headless brainstorm — not ad-hoc dispatch — because it makes the exploration deterministic and reproducible across runs.
-   **Fail-safe (degrade, never deadlock):** if the `Workflow` tool is **unavailable** in the session (a cloud-routine capability still to confirm in Fase D), fall back to direct read-only subagent dispatch with the same lenses + synthesis. A thin one-line trigger may use inline derivation. Either way the synthesized spec then goes through the spec-validation gate (adversary attacks it). Never run an interactive brainstorm in headless, and never hard-depend on the `superpowers:brainstorming` plugin (it does not load in cloud routines).
+   **HEADLESS:** there is no human to brainstorm with, so **simulate the exploration by dispatching read-only subagents**: fan out a small set of exploration agents over the trigger (issue/PR/prompt) + the codebase, each with a **distinct lens** (e.g. user-journeys, edge-cases/failure-modes, constraints/non-functionals), then **synthesize** their outputs into the spec (UJs `#uj-N` + ACs `#ac-N.M`). Subagent dispatch is the **reliable mechanism** — **cloud routines do not have the `Workflow` tool** (confirmed: workflows are unavailable in cloud sessions and require interactive per-run approval). **Prefer a `Workflow`** only when the tool is actually available (e.g. headless-local via `claude -p`), for deterministic/reproducible orchestration. A thin one-line trigger may use inline derivation. Either way the synthesized spec then goes through the spec-validation gate (adversary attacks it). Never run an interactive brainstorm in headless, and never hard-depend on the `superpowers:brainstorming` plugin (it does not load in cloud routines).
 2. **Explicitly `Read`** the project's durable index — `.claude/memory/MEMORY.md` (the repo-committed project-pattern index; do not rely on native auto-load) and the root `CLAUDE.md` router table ("folder → what lives there") — to inform the spec. **Cold-start check:** if this is a non-trivial existing codebase and that index is cold (`.claude/memory/MEMORY.md` has no entries and the root `CLAUDE.md` router is unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code itself, then read the now-populated index before shaping the spec. This is the orchestrator's macro view forming. There is no `learnings.md`.
 3. Produce a spec with UJs, ACs, constraints, and resolved product decisions.
 
@@ -164,6 +163,8 @@ Scope = the **whole feature**, not one task. Roles, feature-wide scope:
 - **compliance** (sonnet) — entire implementation vs spec.
 - **adversary** (opus, virgin) — hunts bugs across the full implementation.
 - **security** (opus, virgin) — **dispatched in both LIGHT and FULL when `final_review.security` is true** (the planner sets it when the feature's aggregate `scope_paths`/tasks hit a security trigger). This is the only security pass LIGHT gets, so it is load-bearing: a LIGHT feature that wires an outbound HTTP call or a new entrypoint still gets audited here.
+
+**Dispatch these synchronously (foreground).** They **gate the PR** — dispatch each and **capture its verdict before proceeding**. Do **not** background the adversary (or compliance/security) and poll for it: a backgrounded verdict can arrive **stale or out-of-band** (a poll may return earlier spec-review findings instead of the final verdict), and the gate would proceed on incomplete findings. Background dispatch is only for genuinely parallel, non-gating work.
 
 Findings → sniper (tiered, same rules as step 5). Re-run gates after fixes. Only proceed when the feature-wide gates are green.
 
