@@ -10,6 +10,11 @@ This is an **optional, recommended** add-on — it sharpens planning quality —
 dependency. The agents already treat it as **best-effort**: if MV is absent (common in headless/cron
 runs), they plan with their own judgment and **never block** on it.
 
+## Get access
+
+MV is a paid product. To get access, see: https://lp.robsonlins.com/modelos-mentais-cc
+The harness works fully without it — enabling MV is entirely up to the operator.
+
 ## Connection model
 
 MV connects **per user** — never a shared instance.
