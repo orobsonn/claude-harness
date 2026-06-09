@@ -1,0 +1,11 @@
+# Claude Code local
+.claude/settings.local.json
+.claude/plans/current.md
+.claude/plans/*.local.md
+
+# OS
+.DS_Store
+*.log
+
+# Material de trabalho com paths locais / dados pessoais — não distribuir
+docs/raw/
