@@ -34,6 +34,10 @@ docs/        # o estudo: constraints da nuvem, auditoria, desenho
 VERSION
 ```
 
+## Como usar
+
+Ver **`docs/usage.md`** — instalar/atualizar o harness num projeto (`vendor-core`), o padrão de issues (`harness-ready`), e como configurar a routine no Claude Code.
+
 ## Status
 
 Em construção. Ver `docs/` para o estudo completo e `docs/audit.md` para o estado das correções.
