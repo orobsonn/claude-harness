@@ -30,7 +30,12 @@ A pipeline é a mesma; o que muda é **quem ocupa os pontos de decisão humana**
 O planner emite o `locked_test` como prosa (Given/When/Then). O **executor autora o arquivo de teste primeiro** (red), implementa até passar (green); depois disso o teste é congelado. O gate determinístico passa a ter o que rodar.
 
 ### Sanitização (framework genérico)
-Ao popular `core/` a partir do `~/.claude`, remover: perfil pessoal, `@RTK.md`, MCP pessoais (Mind Vault/Palace), nome real em fixtures, flags de autoridade do `settings.json`. A entry-policy é reescrita do zero, genérica.
+Ao popular `core/` a partir do `~/.claude`, remover **só dado pessoal**: nome real, clientes específicos, paths de home, e as flags de autoridade do `settings.json` (`skipDangerousModePermissionPrompt`, etc.). A entry-policy é reescrita do zero, genérica.
+
+**Não** remover: o conceito "operador não-dev" — esse é o **público-alvo** do framework, fica. **RTK** e **MV** entram como **integrações opcionais** documentadas (add-ons opt-in), nunca como dependência obrigatória do core nem hardcoded em agentes.
+
+### Oportunidade: SessionStart hook força a pipeline na nuvem
+Hooks rodam em cloud sessions. Como skills não auto-carregam, um `SessionStart` hook no `.claude/settings.json` pode injetar a instrução de entrada (forçar `triaging-requests` / o modo headless) de forma determinística — em vez de depender do modelo honrar a instrução do `CLAUDE.md`. A validar no 1º teste; se confirmar, é o gatilho mais robusto.
 
 ### Distribuição
 Pasta-fonte (este repo) → `vendor` pro `.claude/` do projeto pela skill de init. Discovery exige agents/rules no topo do `.claude/`. Evolução futura: empacotar como plugin/marketplace (fonte única nativa) — sem retrabalho, a estrutura já nasce pronta.
