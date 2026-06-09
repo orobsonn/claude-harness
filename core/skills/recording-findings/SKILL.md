@@ -7,9 +7,9 @@ description: "Consolidates executor, compliance, adversary, and sniper finding b
 
 **Announce at the start (in pt-br):** "Usando recording-findings para consolidar os findings da run em findings.md."
 
-**Input:** the raw output blocks emitted by executor, compliance, adversary, security, and sniper agents during the completed feature run.
+**Input:** the **on-disk running `findings.md`** that the orchestrator wrote during the run — it is the sole producer (per-task findings appended in the FULL loop step 6; the final dual-review findings appended in LIGHT). Your job is to **normalize, dedupe, and structure** that file, not to gather fresh per-agent blocks (the harvester subagent does not hold the agents' raw outputs). The block formats below describe what the orchestrator captured, so you can recognize and normalize them.
 
-**`findings.md` is TRANSIENT** — a single-run digest. It is the input to `distilling-learnings` (which routes durable insights to native memory / nested `CLAUDE.md` / kaizen) and is then **deleted by the harvester** at the end of the run. It is not a durable archive — the run's commit/PR in git is the durable audit. Do not treat it as a cross-run log.
+**`findings.md` is TRANSIENT** — a single-run digest. It is the input to `distilling-learnings` (which routes durable insights to repo memory / nested `CLAUDE.md` / kaizen) and is then **deleted by the harvester** at the end of the run. It is not a durable archive — the run's commit/PR in git is the durable audit. Do not treat it as a cross-run log.
 
 ---
 
@@ -22,7 +22,7 @@ description: "Consolidates executor, compliance, adversary, and sniper finding b
 
 **Compliance** emits under `### Problemas encontrados`:
 ```
-- PROBLEMA: <description> — file:line
+- PROBLEMA: [low|medium|high] <description> — file:line
 - SUGESTAO: <non-blocking improvement>
 ```
 

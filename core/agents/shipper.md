@@ -53,6 +53,7 @@ git checkout -b <type>/<short-description>
 ### 3. Selective stage and commit
 - Run `git diff` and `git diff --cached` to understand what changed.
 - **Stage specific files only** — never `git add .` blindly.
+- **Always stage durable harness state when it changed:** `.claude/memory/` (incl. `.claude/memory/MEMORY.md`) and `.claude/kaizen.md` — these are the repo-committed memory and improvement outbox; if they are not committed, a cloud run's accumulated knowledge evaporates.
 - **Never stage:** `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, credential or token files.
 - Commit message follows **Conventional Commits**: `<type>: <short description>` (max 72 chars header).
 - Body optional: context / why (1-3 lines). Include `Closes #N` if issue provided.

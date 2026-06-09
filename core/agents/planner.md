@@ -8,6 +8,7 @@ tools:
   - Grep
   - Bash
   - Write
+  - Skill
   - mcp__claude_ai_mv__recall
   - mcp__claude_ai_mv__get_note
 ---
@@ -32,9 +33,9 @@ Do not generate a plan for trivial changes.
 
 ## Before planning: read the durable index
 
-Before decomposing, read the project's **durable, planner-visible index** (not the ephemeral run buffers — `findings.md`/`shared_context.md` are transient and deleted at harvest end; there is no `learnings.md`):
+Before decomposing, **explicitly `Read`** the project's durable, planner-visible index (not the ephemeral run buffers — `findings.md`/`shared_context.md` are transient and deleted at harvest end; there is no `learnings.md`):
 
-- **`MEMORY.md`** (native memory index) — the always-loaded one-line index of durable project patterns and anti-patterns (reuse opportunities, recurring gotchas). Recall the full memory file behind an index line only when a line is directly relevant to a task you are shaping.
+- **`.claude/memory/MEMORY.md`** (repo-committed memory index) — the one-line index of durable project patterns and anti-patterns (reuse opportunities, recurring gotchas). Do **not** rely on auto-load; `Read` it directly (native memory auto-load is not guaranteed in cloud routines). Read the full topic file behind an index line only when a line is directly relevant to a task you are shaping.
 - **root `CLAUDE.md`** — including its **router table** ("folder → what lives there → see `<folder>/CLAUDE.md`"), so you know which folders carry their own local law before you set `scope_paths`.
 
 These inform how you decompose tasks and set severity. The per-folder nested `CLAUDE.md` is read by the orchestrator at dispatch time (injected into L3) — you do not need to inline it, just route `scope_paths` to the right folders.
@@ -58,8 +59,9 @@ Key constraints the skill enforces:
 - `resolved_judgments` must be scalar key/value pairs — no prose.
 - `scope_paths` must be specific globs — not `src/**` unless truly justified.
 - `adversarial.enabled: true` only for auth / payment / data-integrity / concurrency / external input reaching storage / secrets.
-- `model_strategy` is a frozen snapshot of tier aliases (6 fixed roles + tiers map); executor/sniper are NOT listed (tier-variable: executor resolves from `tiers[complexity ?? severity]`, sniper from `tiers[issue.severity]`, at dispatch).
-- Validate with `node references/validate-plan.mjs <path>` — exit 0 required before finalizing.
+- `model_strategy` is a frozen snapshot of tier aliases (7 fixed roles incl. `plan-reviewer` + tiers map); executor/sniper are NOT listed (tier-variable: executor resolves from `tiers[complexity ?? severity]`, sniper from `tiers[issue.severity]`, at dispatch).
+- `locked_tests` are objects `{ test_path, assertion }` — the executor authors the test file at `test_path` (TDD), so `test_path` must be writable (inside `scope_paths` or the project test dir).
+- Validate with `node .claude/skills/creating-plans/references/validate-plan.mjs <path>` — exit 0 required before finalizing.
 
 ---
 

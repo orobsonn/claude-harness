@@ -1,8 +1,9 @@
 # Claude Harness — Memory Model
 
 The single source of truth for how the harness stores and routes knowledge. Referenced by
-`harvester`, `distilling-learnings`, and `surveying-codebase`. **Native-first:** every durable
-destination is a native Claude Code mechanism — there is **no `learnings.md`** custom store.
+`harvester`, `distilling-learnings`, and `surveying-codebase`. **Repo-committed first:** every
+durable destination lives inside the repo's `.claude/` so cloud routines see and persist it — there
+is **no `learnings.md`** custom store. Never write secrets/PII into any committed memory/kaizen file.
 
 ---
 
@@ -16,18 +17,19 @@ Both are deleted by the harvester at the end of the run. The **durable audit is 
 commit/PR), which the git rule already defines as the source of truth. Never treat these as a
 cross-run archive.
 
-### N2 — durable index (always loaded, planner-visible)
-- native `MEMORY.md` — one-line index of durable project patterns/anti-patterns.
+### N2 — durable index (repo-committed, planner reads it explicitly)
+- `.claude/memory/MEMORY.md` — one-line index of durable project patterns/anti-patterns. Read it
+  with an explicit `Read` (do not rely on native auto-load — not guaranteed in cloud routines).
 - root `CLAUDE.md` router table ("folder → what lives there → see `<folder>/CLAUDE.md`").
 
 ### N3 — curated / authoritative (the durable prose, routed by blast-radius)
-- **project pattern** → native memory file in `~/.claude/projects/<slug>/memory/` (frontmatter
+- **project pattern** → repo memory file in `.claude/memory/<name>.md` (frontmatter
   `name` / `description` / `metadata.type`, body with **Why:** / **How to apply:**) + one index
-  line in `MEMORY.md`.
+  line in `.claude/memory/MEMORY.md`.
 - **law of one folder** → that folder's nested `CLAUDE.md` (e.g. `src/auth/CLAUDE.md`) + one row
   in the root `CLAUDE.md` router table.
-- **global convention** → kaizen proposal (`kaizen.md`), human-reviewed before promotion to the
-  root `CLAUDE.md` or a rule with `paths:`. Never auto-applied.
+- **global convention** → `.claude/kaizen.md` proposal (committed outbox), human-reviewed before
+  promotion to the framework source (`core/`). Never auto-applied.
 - **one-off** → stays in git only (dies with `findings.md`).
 
 ---
@@ -38,9 +40,9 @@ Ask: *where is this knowledge true?*
 
 | Scope of truth | Destination |
 |---|---|
-| This project, across folders | native memory (`MEMORY.md` + memory file) |
+| This project, across folders | repo memory (`.claude/memory/MEMORY.md` + memory file) |
 | Exactly one folder/subsystem | that folder's nested `CLAUDE.md` |
-| Every project (global convention) | `kaizen.md` proposal (human-gated) |
+| Every project (global convention) | `.claude/kaizen.md` proposal (human-gated) |
 | Only this run | git only — do not persist |
 
 ## Durability test
@@ -50,7 +52,7 @@ Persist an insight only if it is **reusable** (will inform a future task) and **
 
 ## retire-on-promote
 
-When a learning that already lived in native memory or a folder index is promoted up to a
+When a learning that already lived in repo memory or a folder index is promoted up to a
 `CLAUDE.md` / rule, turn the original pointer into `promoted → <path>` so the same content is
 never paid for twice.
 
@@ -62,7 +64,7 @@ The routing machine above (durability test → blast-radius classes → destinat
 is **identical** for both producers; only the SOURCE differs:
 
 - `distilling-learnings` — reads a run's transient `findings.md` (post-delivery).
-- `surveying-codebase` — reads the **codebase itself** (cold-start, when `MEMORY.md` and the nested
-  `CLAUDE.md` files are empty).
+- `surveying-codebase` — reads the **codebase itself** (cold-start, when `.claude/memory/MEMORY.md`
+  and the nested `CLAUDE.md` files are empty).
 
 Neither re-implements the machine — they share it.

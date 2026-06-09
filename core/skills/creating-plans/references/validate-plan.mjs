@@ -34,6 +34,7 @@ const DEMO_TYPES = ["markdown", "smoke", "playwright"];
 // sniper from tiers[issue.severity], at dispatch.
 const FIXED_ROLES = [
   "planner",
+  "plan-reviewer",
   "compliance",
   "adversary",
   "security",
@@ -91,6 +92,41 @@ function checkStringArrayMin1(value, path, errors) {
   return ok;
 }
 
+/**
+ * @description Validates locked_tests: a non-empty array of objects, each with a
+ * non-empty `test_path` (the test file the executor authors via TDD) and a
+ * non-empty `assertion` (Given/When/Then prose asserting an observable).
+ */
+function validateLockedTests(value, path, errors) {
+  if (!Array.isArray(value)) {
+    errors.add(path, "must be an array");
+    return;
+  }
+  if (value.length < 1) {
+    errors.add(path, "must have at least 1 item");
+    return;
+  }
+  value.forEach((lt, i) => {
+    const p = `${path}[${i}]`;
+    if (!isObject(lt)) {
+      errors.add(p, "must be an object { test_path, assertion }");
+      return;
+    }
+    if (!isString(lt.test_path) || lt.test_path.length < 1) {
+      errors.add(
+        `${p}.test_path`,
+        "must be a non-empty string — the test file the executor authors (within scope_paths or the project's test dir)"
+      );
+    }
+    if (!isString(lt.assertion) || lt.assertion.length < 1) {
+      errors.add(
+        `${p}.assertion`,
+        "must be a non-empty Given/When/Then string asserting an observable"
+      );
+    }
+  });
+}
+
 // ---------- model_strategy ----------
 
 function validateModelStrategy(ms, errors) {
@@ -116,7 +152,7 @@ function validateModelStrategy(ms, errors) {
     }
   }
 
-  // 6 fixed roles, each a valid tier alias
+  // 7 fixed roles, each a valid tier alias
   for (const role of FIXED_ROLES) {
     const v = ms[role];
     if (v === undefined) {
@@ -210,7 +246,7 @@ function validateTask(task, index, errors) {
     });
   }
 
-  checkStringArrayMin1(task.locked_tests, `${base}.locked_tests`, errors);
+  validateLockedTests(task.locked_tests, `${base}.locked_tests`, errors);
 
   validateAdversarial(task.adversarial, `${base}.adversarial`, errors);
 
@@ -304,6 +340,12 @@ function validateFinalReview(fr, errors) {
   }
   if (!isBoolean(fr.adversary)) {
     errors.add("final_review.adversary", "must be a boolean");
+  }
+  // security is OPTIONAL (defaults false): planner sets it true when the feature's
+  // aggregate scope_paths/tasks hit a security trigger, so the security agent runs
+  // feature-wide in the final review (the only security pass LIGHT mode gets).
+  if (fr.security !== undefined && !isBoolean(fr.security)) {
+    errors.add("final_review.security", "must be a boolean when present");
   }
 }
 

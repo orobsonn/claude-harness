@@ -7,6 +7,7 @@
   "model_strategy": {
     "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
     "planner": "opus",
+    "plan-reviewer": "opus",
     "compliance": "sonnet",
     "adversary": "opus",
     "security": "opus",
@@ -19,9 +20,11 @@
       "id": "task-1",
       "spec": "Create the KV namespace binding and wrangler.jsonc config for the URL shortener Worker. The Worker needs a KV namespace called LINKS to store slug→URL mappings.",
       "severity": "low",
+      "complexity": "low",
       "scope_paths": [
         "wrangler.jsonc",
-        "src/types.ts"
+        "src/types.ts",
+        "test/config.test.ts"
       ],
       "resolved_judgments": {
         "kv_namespace_binding": "LINKS",
@@ -32,9 +35,14 @@
       },
       "criterion_refs": ["#ac-1.1", "#ac-1.2"],
       "locked_tests": [
-        "wrangler.jsonc parses without error",
-        "LINKS binding present in wrangler.jsonc kv_namespaces",
-        "SlugEntry type has slug, url, created_at fields"
+        {
+          "test_path": "test/config.test.ts",
+          "assertion": "Given wrangler.jsonc, When parsed, Then it parses without error and the LINKS binding is present in kv_namespaces"
+        },
+        {
+          "test_path": "test/config.test.ts",
+          "assertion": "Given the SlugEntry type, When a value is constructed, Then it requires slug, url, and created_at fields"
+        }
       ],
       "adversarial": { "enabled": false },
       "depends_on": []
@@ -43,11 +51,13 @@
       "id": "task-2",
       "spec": "Implement the core Worker handler: POST /shorten to create a slug→URL mapping in KV; GET /:slug to redirect; 404 for unknown slugs. Validate URL format before storing.",
       "severity": "medium",
+      "complexity": "medium",
       "scope_paths": [
         "src/index.ts",
         "src/handlers/shorten.ts",
         "src/handlers/redirect.ts",
-        "src/lib/validate-url.ts"
+        "src/lib/validate-url.ts",
+        "test/shorten-redirect.test.ts"
       ],
       "resolved_judgments": {
         "slug_generation": "nanoid 6 chars alphanumeric",
@@ -60,12 +70,30 @@
       },
       "criterion_refs": ["#ac-2.1", "#ac-2.2", "#ac-2.3"],
       "locked_tests": [
-        "POST /shorten with valid URL returns 201 with {slug, short_url}",
-        "GET /:slug with known slug returns 301 to original URL",
-        "GET /:slug with unknown slug returns 404",
-        "POST /shorten with invalid URL returns 400",
-        "POST /shorten with non-http/https URL returns 400",
-        "POST /shorten with URL longer than 2048 chars returns 400"
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given a valid URL, When POST /shorten, Then status 201 and body {slug, short_url} where short_url ends with slug"
+        },
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given a stored slug, When GET /:slug, Then status 301 with Location header equal to the original URL"
+        },
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given an unknown slug, When GET /:slug, Then status 404 with body {error} (not 500, not empty 200)"
+        },
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given an invalid URL, When POST /shorten, Then status 400 with body {error}"
+        },
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given a non-http/https URL, When POST /shorten, Then status 400"
+        },
+        {
+          "test_path": "test/shorten-redirect.test.ts",
+          "assertion": "Given a URL longer than 2048 chars, When POST /shorten, Then status 400"
+        }
       ],
       "adversarial": { "enabled": false },
       "depends_on": ["task-1"]
@@ -74,11 +102,13 @@
       "id": "task-3",
       "spec": "Add rate limiting on POST /shorten: max 10 requests per IP per minute using Cloudflare Rate Limiting binding. Block with 429 and Retry-After header. Also add a DELETE /:slug admin endpoint protected by a Bearer token from env.",
       "severity": "high",
+      "complexity": "medium",
       "scope_paths": [
         "src/middleware/rate-limit.ts",
         "src/handlers/delete-slug.ts",
         "src/index.ts",
-        "wrangler.jsonc"
+        "wrangler.jsonc",
+        "test/rate-limit-admin.test.ts"
       ],
       "resolved_judgments": {
         "rate_limit_window_seconds": 60,
@@ -93,13 +123,30 @@
       },
       "criterion_refs": ["#ac-3.1", "#ac-3.2", "#ac-3.3"],
       "locked_tests": [
-        "11th POST /shorten from same IP within 60s returns 429",
-        "429 response includes Retry-After: 60 header",
-        "DELETE /:slug with valid Bearer token returns 204",
-        "DELETE /:slug without Authorization header returns 401",
-        "DELETE /:slug with wrong token returns 401",
-        "DELETE /:slug for unknown slug returns 404",
-        "ADMIN_TOKEN comparison uses timing-safe method"
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given 10 prior POST /shorten from one IP within 60s, When an 11th arrives, Then status 429 with header Retry-After: 60"
+        },
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given a valid Bearer token, When DELETE /:slug, Then status 204 and the slug is no longer readable via GET /:slug"
+        },
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given no Authorization header, When DELETE /:slug, Then status 401"
+        },
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given a wrong token, When DELETE /:slug, Then status 401"
+        },
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given an unknown slug with a valid token, When DELETE /:slug, Then status 404"
+        },
+        {
+          "test_path": "test/rate-limit-admin.test.ts",
+          "assertion": "Given the admin token check, When compared, Then a timing-safe comparison is used (crypto.subtle.timingSafeEqual)"
+        }
       ],
       "adversarial": {
         "enabled": true,
@@ -117,7 +164,8 @@
 
   "final_review": {
     "compliance": true,
-    "adversary": true
+    "adversary": true,
+    "security": true
   },
 
   "demo": {

@@ -42,7 +42,7 @@ The operator is a non-technical product manager. He approves the **spec** (produ
 - Is a task or judgment contradicted by code that **already exists** — e.g., the plan reinvents a helper that is already there, or violates an established pattern in the folder?
 
 ### 5. Model-routing sanity (severity vs complexity)
-- `severity` = blast radius (drives review). Does a high-blast task carry the review it needs (`adversarial.enabled`, security trigger)?
+- `severity` = blast radius (drives review). Does a high-blast task carry the review it needs — `adversarial.enabled` set where warranted, and `final_review.security` set when the feature's `scope_paths` hit the sensitive-path allowlist or a security surface (external HTTP client, entrypoint, webhook, log)?
 - `complexity` = executor model (reasoning depth). Is a genuinely hard task **under-powered** (marked low/medium when it is irreducible), or could a `high`-complexity task be **decomposed into medium subtasks** instead of running an Opus executor?
 
 ### 6. Risk introduced by the decomposition itself

@@ -51,8 +51,13 @@ For every `#ac-X.Y` in the task:
 - Verdict: PASS or FAIL.
 - Evidence: file:line or test output snippet.
 
-### 5. Check each locked_test
-Confirm the test file is unmodified (compare against its intent, not a hash). If any locked_test is missing or was altered, that is an automatic FAIL.
+### 5. Check each locked_test (authored by the executor via TDD)
+The executor authored each `locked_test` as a real test file at its `test_path` (red→green). Verify, per locked_test:
+- the test **file exists** at its `test_path`;
+- it is **green** (run the gate or read the test output);
+- it **faithfully encodes the prose assertion** (intent match — the test actually exercises the Given/When/Then, not a weaker stand-in).
+
+A missing test, a failing test, or a test **weakened/altered to pass** (assertion relaxed, hazard not exercised) is an **automatic FAIL**.
 
 ### 6. Check operator-locked decisions (anti-drift)
 The spec carries a **locked-decisions** section — the non-codifiable choices the operator owns (intervals, inclusions/exclusions, weightings, scope boundaries). For each: state the decision (value + rationale), state what the implementation does, verdict HONORED or VIOLATED with evidence (file:line). A **VIOLATED** locked decision is a **fail**, even if every `#ac` passes — the implementation drifted from what the operator decided. Never rationalize a violation as an acceptable alternative; that is the operator's call.
@@ -96,8 +101,10 @@ Reply in pt-br. End with a structured verdict block:
 - <test description> — INTACTO / ALTERADO
 
 ### Problemas encontrados
-- PROBLEMA: <descrição> — arquivo:linha
+- PROBLEMA: [low|medium|high] <descrição> — arquivo:linha
 - SUGESTAO: <melhoria não-bloqueante>
+
+**Severity:** tag every PROBLEMA with `low|medium|high` so the sniper can resolve its model tier. A **VIOLATED** locked decision or a failing/missing `locked_test` is **high**. When unsure, default to the owning task's severity.
 
 ## Veredito: pass | partial | fail
 ```

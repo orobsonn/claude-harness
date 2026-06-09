@@ -58,8 +58,15 @@ For every AC in the spec, derive at least one entry in `locked_tests` for the ta
 
 **A locked_test pins observable behavior — not that code ran.** The harness already proves the code *executes* (`tsc` + the test passing). The locked_test's job is to prove it does the *right thing*. So every locked_test must assert an **observable effect**: the response body or returned value, the persisted state, the emitted event, the error actually surfaced. A test that only asserts a status code, that a value `isDefined`/`toBeTruthy`, or that a call "does not throw" is **theatre** — it goes green while proving nothing, and a cheap executor will write exactly that to pass the gate. Reject it.
 
-**Shape:** Given/When/Then reducible to one assertion on an observable.
-- Given `<precondition>`, When `<action>`, Then `<observable outcome with a concrete value>`.
+**Shape:** each `locked_test` is an **object** `{ "test_path": "...", "assertion": "..." }`:
+- `assertion` — Given/When/Then reducible to one assertion on an observable: Given `<precondition>`, When `<action>`, Then `<observable outcome with a concrete value>`.
+- `test_path` — the **test file the executor will author** (TDD: write it red, implement to green, then it is frozen). It must be writable by the executor — **within `scope_paths`** or the project's test directory (if a separate test dir, add it to the task's `scope_paths`). Multiple assertions may share one `test_path`.
+
+```json
+"locked_tests": [
+  { "test_path": "test/shorten.test.ts", "assertion": "Given a valid URL, When POST /shorten, Then 201 with body {slug, short_url} where short_url ends with slug" }
+]
+```
 
 **Good locked_test:** concrete, machine-verifiable, asserts the observable.
 - "POST /shorten with valid URL returns 201 AND body `{slug, short_url}` where short_url ends with slug"
@@ -77,13 +84,14 @@ Rules:
 - Every AC must map to at least one locked_test in some task.
 - Each locked_test asserts an **observable** (body / returned value / persisted state / surfaced error) — never status-or-existence alone.
 - A locked_test must be traceable to a `criterion_refs` entry on the same task.
-- The executor cannot edit or relax locked_tests — they are the deterministic gate.
+- Every locked_test carries a `test_path` the executor can write (within `scope_paths` or the project test dir).
+- The executor **authors** the test file from the assertion (red→green); **after authoring** it is frozen — the executor cannot edit or relax it. It is the deterministic gate.
 
 ---
 
 ## Step 4 — Classify severity (blast radius)
 
-`severity` is the **blast-radius** signal: how much damage a defect here could cause. It drives the **review posture** — the adversarial decision (Step 5), the security trigger, reviewer rigor — **not** the executor model. The executor model is set separately by `complexity` (Step 4b).
+`severity` is the **blast-radius** signal: how much damage a defect here could cause. It drives the **review posture** — the adversarial decision (Step 5), the `final_review.security` flag (Step 8), reviewer rigor — **not** the executor model. The executor model is set separately by `complexity` (Step 4b).
 
 | Severity | When |
 |---|---|
@@ -99,7 +107,7 @@ When in doubt between medium and high, pick high — a wrong downgrade of scruti
 
 `complexity` (low/medium/high) sets **only the executor model**, resolved from `model_strategy.tiers[complexity]` at dispatch (absent → falls back to `severity`). It measures **residual reasoning**: how much thinking is left for the executor *after* the plan has already resolved every decision (`resolved_judgments`), pinned behavior (`locked_tests`), named scope (`scope_paths`), and stated acceptance (`criterion_refs`). A well-specified task has **low residual complexity even in a hard domain** — the planner (Opus) front-loaded the thinking, so the executor just implements. This is independent of `severity`. Bias DOWN: a rich plan + the Opus review net (adversary + compliance + security) mean a cheap executor suffices; paying Opus to *generate* as well is double-paying. The expensive reasoning belongs at the ends — **plan** and **review** — not the middle.
 
-**Optional deterministic cross-check:** for a band you're unsure of, run `node references/complexity-scorer.mjs <file>` — a dependency-free heuristic returning a `low/medium/high/x-high` band. It is **advisory** (your residual-reasoning judgment is primary, and it scores the whole file, not the delta — a large file barely touched over-scores); use a surprising score as a prompt to re-judge, and treat an `x-high` as a real signal to split.
+**Optional deterministic cross-check:** for a band you're unsure of, run `node .claude/skills/creating-plans/references/complexity-scorer.mjs <file>` — a dependency-free heuristic returning a `low/medium/high/x-high` band. It is **advisory** (your residual-reasoning judgment is primary, and it scores the whole file, not the delta — a large file barely touched over-scores); use a surprising score as a prompt to re-judge, and treat an `x-high` as a real signal to split.
 
 | Complexity | Executor model | When |
 |---|---|---|
@@ -107,7 +115,7 @@ When in doubt between medium and high, pick high — a wrong downgrade of scruti
 | **medium** | sonnet | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
 | **high** | opus | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
 
-**Decompose before reaching for Opus.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. Set `complexity` on every task.
+**Decompose before reaching for Opus.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `tiers[severity]`.
 
 ---
 
@@ -173,12 +181,13 @@ Required shape (validated by `references/validate-plan.mjs`):
 ```json
 "model_strategy": {
   "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
-  "planner":    "opus",
-  "compliance": "sonnet",
-  "adversary":  "opus",
-  "security":   "opus",
-  "shipper":    "sonnet",
-  "harvester":  "sonnet"
+  "planner":       "opus",
+  "plan-reviewer": "opus",
+  "compliance":    "sonnet",
+  "adversary":     "opus",
+  "security":      "opus",
+  "shipper":       "sonnet",
+  "harvester":     "sonnet"
 }
 ```
 
@@ -188,9 +197,9 @@ Note: `executor` and `sniper` are NOT listed here — they are tier-variable. Th
 
 ## Step 8 — final_review and demo
 
-**`final_review`:** both flags must be `true` — they signal that after all tasks complete, the full pipeline runs end-to-end compliance and adversarial review of the entire feature.
+**`final_review`:** `compliance` and `adversary` must both be `true` — they signal that after all tasks complete, the full pipeline runs end-to-end compliance and adversarial review of the entire feature. Add **`security: true`** when the feature's aggregate `scope_paths`/tasks hit a security trigger (sensitive-path allowlist, or an external HTTP client / service entrypoint / webhook / log surface) — this is the only security pass LIGHT mode gets, so set it whenever a security surface is touched. `security` is optional and defaults to `false`.
 ```json
-"final_review": { "compliance": true, "adversary": true }
+"final_review": { "compliance": true, "adversary": true, "security": true }
 ```
 
 **`demo`:** derived from the UJs in the spec, never from the implementation.
@@ -203,12 +212,13 @@ Note: `executor` and `sniper` are NOT listed here — they are tier-variable. Th
 
 Before writing the file, verify:
 
-1. **AC coverage:** every `#ac-N.M` in the spec appears in at least one task's `criterion_refs`. List any gap — if found, add the missing task.
-2. **locked_tests coverage:** every `criterion_ref` on a task has at least one locked_test derived from it.
-3. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
-4. **resolved_judgments completeness:** no open decisions left as prose or empty values.
-5. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
-6. **model_strategy complete:** all 6 fixed roles present; tiers populated.
+1. **Root envelope present:** `version: "1.0"`, kebab-case `feature_id`, ISO-8601 `created_at`, and `mode` (from triage). The validator requires all four.
+2. **AC coverage:** every `#ac-N.M` in the spec appears in at least one task's `criterion_refs`. List any gap — if found, add the missing task.
+3. **locked_tests coverage:** every `criterion_ref` on a task has at least one locked_test (object `{test_path, assertion}`) derived from it.
+4. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
+5. **resolved_judgments completeness:** no open decisions left as prose or empty values.
+6. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
+7. **model_strategy complete:** all 7 fixed roles present (incl. `plan-reviewer`); tiers populated.
 
 ---
 
@@ -217,11 +227,24 @@ Before writing the file, verify:
 Run the validator against the generated JSON. **Do not finalize the plan if validation fails.**
 
 ```bash
-node references/validate-plan.mjs <path-to-plan.json>
+node .claude/skills/creating-plans/references/validate-plan.mjs <path-to-plan.json>
 # Exit 0 = OK. Exit 1 = schema errors — fix and re-run.
 ```
 
-The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (tiers + 6 fixed roles, no executor/sniper), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `adversarial.focus` when enabled, `depends_on` no-dangling-refs, and cycle detection.
+The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (tiers + 7 fixed roles incl. `plan-reviewer`, no executor/sniper), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, and cycle detection.
+
+---
+
+## Revision mode (plan-reviewer REVISE)
+
+When the orchestrator re-dispatches you with an **existing plan + plan-reviewer findings** (each finding carries a `task_id` and a `planner_instruction`), do **not** regenerate from scratch:
+
+1. Load the existing `plan.json`.
+2. Apply **each** `planner_instruction` to its target `task_id` (or plan-wide for `(plan-wide)` findings) — a **targeted edit**, nothing else.
+3. Keep every untouched task **byte-stable** — do not re-derive tasks the reviewer did not flag.
+4. Re-run Step 9 self-review and Step 10 validation, then return the revised plan.
+
+Bounded by the orchestrator at 2 revision loops; if a finding cannot be satisfied, say so explicitly rather than churning the plan.
 
 ---
 
@@ -231,7 +254,7 @@ The validator is dependency-free (Node builtins only — no install, no node_mod
 - **Task scope too broad** — "implement the auth module" covers 4 concerns. Split by domain boundary.
 - **locked_tests that assert nothing observable** — "error handling works" or "returns 201" (status only) are theatre. Assert the body / returned value / persisted state, not just a status code or that a value exists.
 - **adversarial on trivial tasks** — config, types, schema wiring do not need adversarial review. Reserve it for high-risk tasks.
-- **Incomplete model_strategy** — all 6 fixed roles must be present with tier aliases. Partial snapshots break dispatch.
+- **Incomplete model_strategy** — all 7 fixed roles must be present with tier aliases (incl. `plan-reviewer`). Partial snapshots break dispatch.
 - **ACs without criterion_refs** — every AC must be owned by exactly one task. Unowned ACs mean unimplemented features.
 - **resolved_judgments left open** — if you write `"algorithm": "TBD"`, stop and resolve it with the user before continuing.
 
