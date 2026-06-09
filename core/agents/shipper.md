@@ -29,6 +29,7 @@ The orchestrator passes you:
 - **Type** — feat, fix, refactor, test, chore (default: feat)
 - **Issue** (optional) — issue number to reference with `Closes #N`
 - **Merge** (optional) — whether to auto-merge after PR creation
+- **Mode** (optional) — `interactive` (default) or `headless`. In **headless** (cloud routine), open the PR as a **draft** (`gh pr create --draft`) and **never merge** regardless of the Merge flag — the PR review is the human gate.
 
 ---
 
@@ -76,6 +77,7 @@ git push -u origin <branch>
 ```
 
 ### 5. Create PR
+In **headless** mode add `--draft`. The PR body must carry the product-language summary the orchestrator passed (spec, plan summary, demo result, any open risk).
 ```bash
 gh pr create --title "<conventional commit title>" --body "$(cat <<'EOF'
 ## Summary
@@ -92,6 +94,7 @@ EOF
 gh pr merge --squash --delete-branch
 ```
 - Only if the input explicitly authorizes merge.
+- **Never in headless mode** — a draft PR is the terminal state; the human merges after review.
 - If not authorized, report the PR URL and stop.
 
 ---

@@ -29,7 +29,9 @@ The pipeline is the same; what changes is **who occupies the human decision poin
 | Critical exception | ask the operator | record as an open risk in the PR; do not block |
 | Delivery | merge on operator OK | open a **draft PR, never merge** |
 
-**Headless golden rules** (when the routine prompt says "run autonomously", reinforced here):
+**Mode detection:** HEADLESS is active when the session is a cloud routine (env `$CLAUDE_CODE_REMOTE` is set / `claude-code-on-the-web`) **or** the trigger prompt explicitly says to run autonomously. Otherwise LOCAL. `triaging-requests` and `orchestrating-delivery` branch on this signal.
+
+**Headless golden rules** (reinforced by the skills):
 1. **Never** use `AskUserQuestion` or plan mode — undefined behavior in the cloud.
 2. Human gates become **multi-agent validation** — never "auto-approve blindly".
 3. The real human gate is the **PR review** (asynchronous, on GitHub).

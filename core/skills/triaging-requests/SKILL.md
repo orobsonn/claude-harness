@@ -13,6 +13,17 @@ All identifiers and reasoning stay in English. Every message to the operator is 
 
 ---
 
+## Execution mode — interactive vs headless
+
+Detect the mode **first**; it changes whether you may ask questions or wait for a human.
+
+- **INTERACTIVE (local):** an operator is present. Default. Clarifying questions and the human veto (Step 4) are available.
+- **HEADLESS (cloud routine):** no operator is reachable. Active when the session is a cloud routine (env `$CLAUDE_CODE_REMOTE` is set / `claude-code-on-the-web`) **or** the trigger prompt explicitly says to run autonomously. Confirm with a quick `echo "$CLAUDE_CODE_REMOTE"` if unsure.
+
+In **HEADLESS** mode the golden rules apply (see the root `CLAUDE.md`): never `AskUserQuestion`, never plan-mode, never wait for a human. Steps 2 and 4 below have an explicit headless branch.
+
+---
+
 ## Pipeline
 
 ### Step 1 — Is this a dev/build task?
@@ -27,12 +38,14 @@ Ask: does the request require writing, changing, or deleting code or configurati
 
 ### Step 2 — Classify: QUICK / LIGHT / FULL
 
-Classify only once you have enough clarity. **Ask clarifying questions until ambiguity is gone — do not guess.**
+**INTERACTIVE:** classify only once you have enough clarity. **Ask clarifying questions until ambiguity is gone — do not guess.**
 
 Useful questions (ask only what is still unclear):
 - "Tem mais de um arquivo ou módulo envolvido?"
 - "Toca em algo relacionado a login, pagamento, banco de dados ou segredos?"
 - "É uma correção pontual e óbvia, ou envolve um novo comportamento?"
+
+**HEADLESS:** there is no one to answer. Classify **deterministically from the trigger text** (the issue/PR body or routine prompt). **Default to FULL on any ambiguity or any sensitive-domain mention** — never guess into a lighter mode. If the request is so underspecified that even FULL cannot be scoped safely, do **not** proceed: stop and report the blocking question as a PR comment or a new issue (the human resolves it asynchronously). Never run a destructive action on a guess.
 
 | Mode | When to pick it |
 |---|---|
@@ -57,15 +70,17 @@ Sensitive domains that bias toward FULL:
 
 ---
 
-### Step 4 — Human veto (1 sentence, pt-br, before running QUICK or LIGHT)
+### Step 4 — Human veto (INTERACTIVE only)
 
-Before dispatching a QUICK or LIGHT, present a single short confirmation to the operator — it is the one judgment a non-dev can reliably give (business domain, not code):
+**INTERACTIVE:** before dispatching a QUICK or LIGHT, present a single short confirmation to the operator — it is the one judgment a non-dev can reliably give (business domain, not code):
 
 Examples:
 - QUICK: "Vou tratar como correção simples de 1 arquivo — isso tá tocando em login, pagamento ou algo crítico?"
 - LIGHT: "Vou tratar como feature pequena — tem algo relacionado a segurança ou dados sensíveis que eu deva saber antes de começar?"
 
 If the operator flags a sensitive concern → escalate the mode; re-classify and proceed.
+
+**HEADLESS:** skip the veto entirely (no human to answer). The Step 3 safety rule already pre-escalated; the deterministic sensitive-path override inside `orchestrating-delivery` is the backstop.
 
 ---
 

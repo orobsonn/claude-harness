@@ -29,8 +29,8 @@ The operator is a product manager, not a developer. Engineering problems are sol
 ## Macro-flow
 
 ```
-brainstorm (superpowers:brainstorming) → spec → spec review
-   → plan JSON (planner via creating-plans) → per-task loop
+brainstorm (interactive: superpowers:brainstorming if available · headless: inline issue→spec)
+   → spec → spec review → plan JSON (planner via creating-plans) → per-task loop
    → final dual review → demo → harvest
 ```
 
@@ -38,13 +38,37 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 
 ---
 
+## Execution mode — interactive vs headless
+
+The pipeline is identical; only **who occupies the human decision points** changes. Detect the mode first (same signal as `triaging-requests`): **HEADLESS** when the session is a cloud routine (env `$CLAUDE_CODE_REMOTE` set) or the trigger prompt says to run autonomously; otherwise **INTERACTIVE** (default).
+
+| Touchpoint | INTERACTIVE (operator present) | HEADLESS (cloud routine) |
+|---|---|---|
+| Brainstorm / spec | `superpowers:brainstorming` if available, else inline | **inline issue→spec derivation** (default) + adversary attacks the spec |
+| HARD-GATE 1 — spec | operator confirms | multi-agent validation (adversary on spec) → proceed; spec written into the PR body |
+| HARD-GATE 2 — plan | operator confirms | `plan-reviewer` APPROVE → proceed; plan summary written into the PR body |
+| HARD-GATE 3 — demo | operator tests output | auto-generate the demo artifact and auto-validate it against the ACs; attach to the PR |
+| Critical exception | pause and ask the operator | **record as an open risk in the PR** (label/comment); do **not** block |
+| Delivery | merge on operator authorization | **open a draft PR, never merge** |
+
+**Headless golden rules (non-negotiable):**
+1. **Never** `AskUserQuestion` or plan-mode — undefined in the cloud.
+2. A human gate becomes **multi-agent validation**, never "auto-approve blindly". If validation fails and cannot self-resolve, **stop and report** in the PR — do not ship.
+3. The real human gate is the **PR review** (asynchronous).
+4. Durable knowledge is committed in the PR (`.claude/memory/`, `.claude/kaizen.md`) — the shipper opens the PR as a **draft** and never merges.
+
+The gates below are written for INTERACTIVE; each carries its HEADLESS substitution inline.
+
+---
+
 ## Phase 0 — Brainstorm and spec
 
-1. Invoke `superpowers:brainstorming` to explore intent, user journeys (`#uj-N`), and acceptance criteria (`#ac-N.M`).
+1. Explore intent, user journeys (`#uj-N`), and acceptance criteria (`#ac-N.M`). **INTERACTIVE:** use `superpowers:brainstorming` **if available** (it is a marketplace plugin, not vendored — may be absent). **HEADLESS or plugin absent:** derive the spec **inline** from the triggering issue/PR/prompt — extract UJs and ACs directly; never hard-depend on the plugin (it does not load in cloud routines), and never run an interactive brainstorm in headless.
 2. **Explicitly `Read`** the project's durable index — `.claude/memory/MEMORY.md` (the repo-committed project-pattern index; do not rely on native auto-load) and the root `CLAUDE.md` router table ("folder → what lives there") — to inform the spec. **Cold-start check:** if this is a non-trivial existing codebase and that index is cold (`.claude/memory/MEMORY.md` has no entries and the root `CLAUDE.md` router is unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code itself, then read the now-populated index before shaping the spec. This is the orchestrator's macro view forming. There is no `learnings.md`.
 3. Produce a spec with UJs, ACs, constraints, and resolved product decisions.
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does and ask the operator to confirm. Do not show code or schema.
+**HEADLESS:** no operator to confirm. Run the **adversary on the spec** (virgin) as validation; if it surfaces no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
 
 ---
 
@@ -58,6 +82,7 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 4. **Deterministic sensitive-path override:** compare the plan's `scope_paths` against the sensitive-path allowlist (`**/auth/**`, `**/payment|billing/**`, `**/*.sql`, migrations, `.env*`, `package.json`). Any match **forces FULL**, overriding the triage mode. When it fires, **rewrite `plan.mode` to `"full"` in the persisted plan and re-validate**, and record `effective_mode: "full"` in `shared_context.md` — so a later context-compaction re-read cannot silently revert to a stale `mode: "light"`. Key the LIGHT/FULL branch off the effective mode. Determinism on the plan, judgment on entry.
 
 **HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, and any product-relevant risk it flagged — and confirm. Never expose the JSON to the operator. The engineering audit already happened (plan-reviewer); the operator approves the **product-level go**, not the engineering.
+**HEADLESS:** the plan-reviewer's **APPROVE is the gate** — on APPROVE, proceed and write the plan summary into the PR body. If it stays REVISE past the 2-loop cap, stop and open an issue (or PR comment) with the blocking finding — there is no operator to escalate to live.
 
 ---
 
@@ -110,7 +135,7 @@ For each task in **topological order** (`depends_on`), compose layered ICM conte
 These two files are the on-disk hand-off between steps and survive context compaction.
 
 **7. escalation** — engineering, resolved inside the system, never handed to the human:
-- retry same tier (bounded max) → bump tier → if still failing, **critical exception**: pause and ask the operator in **product-language** ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa"), never a technical problem ("conserta esse race condition").
+- retry same tier (bounded max) → bump tier → if still failing, **critical exception**. **INTERACTIVE:** pause and ask the operator in **product-language** ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa"), never a technical problem ("conserta esse race condition"). **HEADLESS:** do **not** pause — **record the risk as an open item in the PR** (product-language description) and continue; the human accepts or refuses it asynchronously at PR review.
 
 Move to the next task only when its gates are green.
 
@@ -150,6 +175,7 @@ Generate `demo-script.md` derived from the **UJs/ACs** (`demo.scenarios_from_ref
 - `demo.type`: `smoke` (API/CLI) · `playwright` (complex UI) · `markdown` (batch/cron).
 
 **HARD-GATE 3 — test demo (pt-br, product-language):** the operator validates the product by using the output. This is where the agentic success criterion is weakest (§2.2) — the human is insubstitutable here.
+**HEADLESS:** the human is insubstitutable, so do **not** self-grade — instead **auto-generate the demo artifact** (smoke output / playwright trace / markdown) and **auto-validate it against the ACs** (`demo.scenarios_from_refs`), then **attach it to the draft PR** for the asynchronous human review (the real gate). If auto-validation fails, mark the PR and report the failure — never silently pass.
 
 ---
 
@@ -157,13 +183,13 @@ Generate `demo-script.md` derived from the **UJs/ACs** (`demo.scenarios_from_ref
 
 Dispatch the **harvester** (sonnet) once. It consolidates the transient `findings.md`, routes each durable learning by blast-radius (project pattern → repo memory `.claude/memory/` + `.claude/memory/MEMORY.md` index · law of one folder → that folder's nested `CLAUDE.md` + root router row · global convention → `.claude/kaizen.md` proposal), logs kaizen proposals, updates local docs, then **deletes the ephemeral files — `findings.md`, `.claude/plans/<feature_id>/shared_context.md`, and `.claude/plans/mv-suggestions.md` if present** (git is the durable audit). It owns `recording-findings` / `distilling-learnings` / `proposing-improvements`. There is no `learnings.md`. It never auto-writes to MV/MP.
 
-Delivery (branch/commit/push/PR via **shipper**) happens only on explicit operator authorization — merge/deploy is an irreversible, outward-facing action (human checkpoint).
+Delivery (branch/commit/push/PR via **shipper**). **INTERACTIVE:** happens only on explicit operator authorization — merge/deploy is an irreversible, outward-facing action (human checkpoint). **HEADLESS:** the shipper opens a **draft PR and never merges** — the PR review is the real human gate. Either way the shipper commits `.claude/memory/` and `.claude/kaizen.md` so durable knowledge persists.
 
 ---
 
 ## Human checkpoints (§11 — product only)
 
-The human is called **only** for PRODUCT decisions, always in pt-br, always product-language:
+**INTERACTIVE:** the human is called **only** for PRODUCT decisions, always in pt-br, always product-language:
 1. **Approve spec** (HARD-GATE 1).
 2. **Approve plan** (HARD-GATE 2).
 3. **Test demo** (HARD-GATE 3).
@@ -171,6 +197,8 @@ The human is called **only** for PRODUCT decisions, always in pt-br, always prod
 5. **Before merge/deploy** — irreversible/outward-facing action.
 
 Engineering (tier escalation, retry, sniper) is **never** delegated to the human.
+
+**HEADLESS:** none of these pause the run. Gates 1–3 become multi-agent validation, the critical exception and the merge decision become **the draft PR** — every item above is surfaced in the PR body/labels for the **asynchronous** human review. The run never waits; it either ships a draft PR or stops and reports.
 
 ---
 
@@ -182,3 +210,4 @@ Engineering (tier escalation, retry, sniper) is **never** delegated to the human
 - Harvester ran; durable learnings routed (repo memory `.claude/memory/` / nested CLAUDE.md / `.claude/kaizen.md`); `findings.md` and `shared_context.md` deleted.
 - Adversary entered virgin on every dispatch; no prior verdict leaked into it.
 - Every operator message was product-language pt-br.
+- **HEADLESS:** no gate paused the run; gates 1–3 became multi-agent validation; spec, plan summary, demo result, and any open risk are in the draft PR (product-language); the shipper opened a **draft** PR and did not merge; `.claude/memory/` and `.claude/kaizen.md` were committed.
