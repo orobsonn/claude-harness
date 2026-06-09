@@ -1,0 +1,131 @@
+{
+  "version": "1.0",
+  "feature_id": "url-shortener-cf-worker",
+  "created_at": "2026-06-01T10:00:00.000Z",
+  "mode": "full",
+
+  "model_strategy": {
+    "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
+    "planner": "opus",
+    "compliance": "sonnet",
+    "adversary": "opus",
+    "security": "opus",
+    "shipper": "sonnet",
+    "harvester": "sonnet"
+  },
+
+  "tasks": [
+    {
+      "id": "task-1",
+      "spec": "Create the KV namespace binding and wrangler.jsonc config for the URL shortener Worker. The Worker needs a KV namespace called LINKS to store slug→URL mappings.",
+      "severity": "low",
+      "scope_paths": [
+        "wrangler.jsonc",
+        "src/types.ts"
+      ],
+      "resolved_judgments": {
+        "kv_namespace_binding": "LINKS",
+        "worker_name": "url-shortener",
+        "compatibility_date": "2025-01-01",
+        "slug_max_length": 32,
+        "ttl_seconds": 0
+      },
+      "criterion_refs": ["#ac-1.1", "#ac-1.2"],
+      "locked_tests": [
+        "wrangler.jsonc parses without error",
+        "LINKS binding present in wrangler.jsonc kv_namespaces",
+        "SlugEntry type has slug, url, created_at fields"
+      ],
+      "adversarial": { "enabled": false },
+      "depends_on": []
+    },
+    {
+      "id": "task-2",
+      "spec": "Implement the core Worker handler: POST /shorten to create a slug→URL mapping in KV; GET /:slug to redirect; 404 for unknown slugs. Validate URL format before storing.",
+      "severity": "medium",
+      "scope_paths": [
+        "src/index.ts",
+        "src/handlers/shorten.ts",
+        "src/handlers/redirect.ts",
+        "src/lib/validate-url.ts"
+      ],
+      "resolved_judgments": {
+        "slug_generation": "nanoid 6 chars alphanumeric",
+        "redirect_status": 301,
+        "url_validation": "URL constructor must not throw; http and https only",
+        "duplicate_url_behavior": "generate new slug each time",
+        "kv_put_expiration": "no expiration unless ttl_seconds > 0",
+        "content_type_post": "application/json",
+        "max_url_length": 2048
+      },
+      "criterion_refs": ["#ac-2.1", "#ac-2.2", "#ac-2.3"],
+      "locked_tests": [
+        "POST /shorten with valid URL returns 201 with {slug, short_url}",
+        "GET /:slug with known slug returns 301 to original URL",
+        "GET /:slug with unknown slug returns 404",
+        "POST /shorten with invalid URL returns 400",
+        "POST /shorten with non-http/https URL returns 400",
+        "POST /shorten with URL longer than 2048 chars returns 400"
+      ],
+      "adversarial": { "enabled": false },
+      "depends_on": ["task-1"]
+    },
+    {
+      "id": "task-3",
+      "spec": "Add rate limiting on POST /shorten: max 10 requests per IP per minute using Cloudflare Rate Limiting binding. Block with 429 and Retry-After header. Also add a DELETE /:slug admin endpoint protected by a Bearer token from env.",
+      "severity": "high",
+      "scope_paths": [
+        "src/middleware/rate-limit.ts",
+        "src/handlers/delete-slug.ts",
+        "src/index.ts",
+        "wrangler.jsonc"
+      ],
+      "resolved_judgments": {
+        "rate_limit_window_seconds": 60,
+        "rate_limit_max_requests": 10,
+        "rate_limit_key": "IP from cf.connectingIp or x-forwarded-for first segment",
+        "retry_after_value": "60",
+        "admin_token_env_var": "ADMIN_TOKEN",
+        "delete_success_status": 204,
+        "delete_not_found_status": 404,
+        "auth_header": "Authorization: Bearer <token>",
+        "timing_safe_comparison": "use crypto.subtle.timingSafeEqual for token comparison"
+      },
+      "criterion_refs": ["#ac-3.1", "#ac-3.2", "#ac-3.3"],
+      "locked_tests": [
+        "11th POST /shorten from same IP within 60s returns 429",
+        "429 response includes Retry-After: 60 header",
+        "DELETE /:slug with valid Bearer token returns 204",
+        "DELETE /:slug without Authorization header returns 401",
+        "DELETE /:slug with wrong token returns 401",
+        "DELETE /:slug for unknown slug returns 404",
+        "ADMIN_TOKEN comparison uses timing-safe method"
+      ],
+      "adversarial": {
+        "enabled": true,
+        "focus": [
+          "auth-bypass-on-delete-endpoint",
+          "rate-limit-evasion-via-header-spoofing",
+          "timing-attack-on-token-comparison",
+          "open-redirect-via-malicious-url-payload",
+          "info-leak-in-error-responses"
+        ]
+      },
+      "depends_on": ["task-1", "task-2"]
+    }
+  ],
+
+  "final_review": {
+    "compliance": true,
+    "adversary": true
+  },
+
+  "demo": {
+    "type": "smoke",
+    "scenarios_from_refs": [
+      "#uj-1-shorten-and-redirect",
+      "#uj-2-rate-limit-enforcement",
+      "#uj-3-admin-delete"
+    ]
+  }
+}

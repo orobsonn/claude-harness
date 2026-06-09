@@ -1,0 +1,181 @@
+---
+name: orchestrating-delivery
+description: "Conducts the LIGHT and FULL delivery loop of the Claude Harness — runs spec, plan, the per-task executor/compliance/adversary/sniper/gates cycle, final dual review, demo, and harvest. Dispatches a fresh subagent per role and curates layered ICM context for each; never writes code itself. Invoked by triaging-requests for LIGHT/FULL (QUICK runs inline and never reaches this skill)."
+---
+
+# Orchestrating-Delivery — The maestro of the development loop
+
+**This skill is the conductor, not a worker.** It dispatches a fresh subagent per role/task, reads each structured output, and decides the next step. It does **not** implement, validate, or attack — those are the agents (`executor`, `compliance`, `adversary`, `sniper`, `security`, `shipper`, `harvester`). It owns the human HARD-GATES and the curation of layered context.
+
+**Announce at the start (in pt-br):** "Usando orchestrating-delivery para conduzir a entrega no modo <LIGHT|FULL>."
+
+Invoked by `triaging-requests` for **LIGHT** and **FULL**. QUICK never reaches here (it runs inline, commits via `committing-changes`).
+
+All identifiers, JSON keys, and reasoning stay in English. **Every message to the operator — checkpoints, demo, critical exception — is pt-br and in product-language, never code-language.**
+
+---
+
+## Position in the system
+
+```
+triaging-requests  →  orchestrating-delivery (you)  →  agents (workers)
+                       owns: HARD-GATES + context curation + loop control
+```
+
+The operator is a product manager, not a developer. Engineering problems are solved **inside the system** (escalate tier, retry, sniper). The human is asked **only** product decisions (§ Human checkpoints).
+
+---
+
+## Macro-flow
+
+```
+brainstorm (superpowers:brainstorming) → spec → spec review
+   → plan JSON (planner via creating-plans) → per-task loop
+   → final dual review → demo → harvest
+```
+
+HARD-GATES (human, pt-br, product-language): **approve spec → approve plan → test demo**. The loop between those gates is fully autonomous.
+
+---
+
+## Phase 0 — Brainstorm and spec
+
+1. Invoke `superpowers:brainstorming` to explore intent, user journeys (`#uj-N`), and acceptance criteria (`#ac-N.M`).
+2. Read the project's durable index — the native `MEMORY.md` (always-loaded project-pattern index) and the root `CLAUDE.md` router table ("folder → what lives there") — to inform the spec. **Cold-start check:** if this is a non-trivial existing codebase and that index is cold (`MEMORY.md` has no entries and the root `CLAUDE.md` router is unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code itself, then read the now-populated index before shaping the spec. This is the orchestrator's macro view forming. There is no `learnings.md`.
+3. Produce a spec with UJs, ACs, constraints, and resolved product decisions.
+
+**HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does and ask the operator to confirm. Do not show code or schema.
+
+---
+
+## Phase 1 — Plan
+
+1. Dispatch the **planner** (opus) running the `creating-plans` skill. Hand it the approved spec.
+2. The planner returns an `execution-plan.json` that passes **structural** validation (`validate-plan.mjs` — schema, enums, AC↔locked_test traceability, dependency cycles). Structure only — not engineering soundness.
+3. **plan-reviewer** (opus, virgin, read-only) — audits the plan's **engineering soundness**: decomposition/SRP, whether `resolved_judgments` are correct, whether `locked_tests` truly pin the ACs, `scope_paths` vs. codebase reality, `severity`/`complexity` routing, and risks introduced by the decomposition itself. Consults curated mental models via MV recall (best-effort; never blocks). Returns `APPROVE | REVISE` + findings + a **product-language summary**.
+   - **REVISE** → hand the findings back to the planner to revise, then re-run structural validation + plan-reviewer. **Cap at 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product language.
+   - This is the engineering judgment the operator **cannot apply himself** — the validator checks shape, the plan-reviewer checks substance. It is the analog, at the plan layer, of the adversarial pass on the spec.
+4. **Deterministic sensitive-path override:** compare the plan's `scope_paths` against the sensitive-path allowlist (`**/auth/**`, `**/payment|billing/**`, `**/*.sql`, migrations, `.env*`, `package.json`). Any match **forces FULL**, overriding the triage mode. Determinism on the plan, judgment on entry.
+
+**HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, and any product-relevant risk it flagged — and confirm. Never expose the JSON to the operator. The engineering audit already happened (plan-reviewer); the operator approves the **product-level go**, not the engineering.
+
+---
+
+## Context composition (the ICM rule — applies to every dispatch)
+
+The orchestrator curates **layered** context per agent (budget 2k–8k tokens/step), never the whole conversation. Layers:
+
+| Layer | Content | Who gets it |
+|---|---|---|
+| L0 | `.claude/CLAUDE.md` ("where I am") | all |
+| L1 | feature objective ("where I'm going") | executor, sniper |
+| L2 | task contract (`spec`, `severity`, `scope_paths`, `resolved_judgments`, `criterion_refs`, `locked_tests`) | executor, compliance, adversary |
+| L3 | applicable rules/refs **+ the nested `CLAUDE.md` of the task's `scope_paths` folder(s)** | per role (executor always) |
+| L4 | artifacts (diff, prior findings) | compliance, sniper — **never adversary** |
+
+Curation rules:
+- **L3 nested CLAUDE.md (deliberate, per task):** for each folder in the task's `scope_paths`, the orchestrator **reads that folder's `CLAUDE.md` (if present) and injects its content into L3** of the executor (and of any role acting on that folder). This is a deliberate read by the orchestrator — it does **not** rely on the native on-demand auto-load of nested `CLAUDE.md` (which has had version bugs). The nested file is the per-folder law (written by the harvester at harvest time); this is how that law reaches the agent working in the folder.
+- **`shared_context` is a real file on disk** — `.claude/plans/<feature_id>/shared_context.md`, NOT just in-context memory. The orchestrator rewrites it after each task and reads from it to compose the next task's context. Persisting it keeps task-to-task traceability auditable and survives context compaction. **Ephemeral:** both `shared_context.md` and `findings.md` are run buffers — the harvester deletes both at the end. The durable audit is git (the run's commit/PR); durable knowledge is routed by the harvester to native memory / nested `CLAUDE.md` / kaizen.
+- **executor** (and **sniper**) receive the curated `shared_context` — the **learnings worth carrying forward**: key decisions, gotchas, and insights surfaced during the spec review, the upfront adversarial pass, prior task runs, and adversarial/compliance findings. It is a knowledge ledger, not a task log — save only what helps a later step. Budget-capped.
+- **compliance** enters lean: gets the **diff + ACs**, NOT the `shared_context` and NOT the adversary's findings.
+- **adversary** enters **virgin** — no prior verdicts, no "compliance said X is ok", no conclusions from earlier tasks. The attack's value depends on having no anchor. This guardrail is non-negotiable.
+- `shared_context` has a **ceiling** — prioritize the relevant; do not append everything, or every task gets more expensive.
+
+---
+
+## Phase 2 — The per-task loop (FULL, the core)
+
+Before the first task, **initialize** `.claude/plans/<feature_id>/shared_context.md` with the learnings worth keeping from the spec review (and, in LIGHT, the upfront adversarial pass on the spec). It grows as the loop runs.
+
+For each task in **topological order** (`depends_on`), compose layered ICM context and run:
+
+**1. executor** — model = `tiers[task.complexity ?? task.severity]` (haiku/sonnet/opus; `complexity` is the reasoning-depth axis, decoupled from `severity`/review). Receives L0–L3 + curated `shared_context`. Implements the task from intent; writes JSDoc; **must not edit `locked_tests`**. Reads back: `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
+
+**2. compliance** (sonnet, read-only) — receives the **diff + ACs/locked_tests**, NOT the `shared_context`. Validates impl vs spec/AC. Reads back: `pass | partial | fail` + issues. Issues → step 5.
+
+**3. adversary** (opus, read-only, **VIRGIN**) — only if `task.adversarial.enabled`. Receives task spec + `adversarial.focus` + the diff, **no prior verdicts**. Attacks for 3–5 real failure modes with severity + `fix_hint`. Issues → step 5.
+
+**3b. security** (opus, read-only) — conditional: dispatch when the task touches auth, secrets, external input, new deps, SQL, or a service entrypoint (the agent's own trigger list). Returns `SECURE | UNSAFE` + issues → step 5.
+
+**4. gates** (deterministic, **no LLM**) — run `locked_tests` + `tsc --noEmit` + lint. The orchestrator runs these directly (Bash). Failure → step 5. This is the formal interface against orphan state (§2.3) — non-optional.
+
+**5. sniper** — the **only fixer**. Applies **all** mapped issues from compliance + adversary + security + gates. Model = `tiers[issue.severity]`:
+- LOW → sniper haiku · MEDIUM → sniper sonnet · **HIGH → sniper opus + re-dispatch adversary** (fresh virgin) after the fix.
+- A grave bug is never fixed by a weak model. If a fix is bigger than surgical scope (re-architecture, not a fix), it is **not** a sniper job → escalation (re-dispatch executor or split the task).
+- After sniper, re-run the relevant gate to confirm green.
+
+**6. record + curate** — persist to disk after each step (never keep only in context — compaction would lose it):
+- append this task's raw findings (decisions, gotchas, bugs found/fixed) to a running `findings.md` at the project root.
+- rewrite `.claude/plans/<feature_id>/shared_context.md` with the **learnings worth carrying forward** so far — from the spec review, the upfront adversarial, this run, and adversarial/compliance findings worth keeping. Budget-capped; the adversary never reads this file (stays virgin).
+These two files are the on-disk hand-off between steps and survive context compaction.
+
+**7. escalation** — engineering, resolved inside the system, never handed to the human:
+- retry same tier (bounded max) → bump tier → if still failing, **critical exception**: pause and ask the operator in **product-language** ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa"), never a technical problem ("conserta esse race condition").
+
+Move to the next task only when its gates are green.
+
+---
+
+## LIGHT vs FULL
+
+| | LIGHT | FULL |
+|---|---|---|
+| Plan | light plan (`mode: "light"`) | full plan |
+| Spec analysis | spec-vs-codebase + adversarial **UPFRONT on the spec** (map tech debt before coding) | covered per task |
+| Per-task review | **none** — executor with tiering only, no compliance/adversary between tasks | full loop (steps 2–5 per task) |
+| Final review | **dual review only** (compliance + adversary, whole feature) | dual review + per-task loop |
+
+LIGHT trades per-task review for a single upfront adversarial spec pass plus a final dual review. **Tiering of the executor applies in both modes** — a small feature can still generate debt if a high-severity task is run on a weak model.
+
+In LIGHT, the upfront adversarial spec pass is a single **adversary** dispatch (virgin) against the spec + a read of the existing codebase, surfacing tech-debt risks before the plan is finalized.
+
+---
+
+## Phase 3 — Final dual review (both modes)
+
+Scope = the **whole feature**, not one task. Same roles, feature-wide scope:
+- **compliance** (sonnet) — entire implementation vs spec.
+- **adversary** (opus, virgin) — hunts bugs across the full implementation.
+
+Findings → sniper (tiered, same rules as step 5). Re-run gates after fixes. Only proceed when the feature-wide gates are green.
+
+---
+
+## Phase 4 — Demo
+
+Generate `demo-script.md` derived from the **UJs/ACs** (`demo.scenarios_from_refs`), **never from the implementation** — otherwise it is the student grading their own exam.
+- `demo.type`: `smoke` (API/CLI) · `playwright` (complex UI) · `markdown` (batch/cron).
+
+**HARD-GATE 3 — test demo (pt-br, product-language):** the operator validates the product by using the output. This is where the agentic success criterion is weakest (§2.2) — the human is insubstitutable here.
+
+---
+
+## Phase 5 — Harvest
+
+Dispatch the **harvester** (sonnet) once. It consolidates the transient `findings.md`, routes each durable learning by blast-radius (project pattern → native memory + `MEMORY.md` index · law of one folder → that folder's nested `CLAUDE.md` + root router row · global convention → kaizen proposal), logs kaizen proposals, updates local docs, then **deletes both ephemeral files — `findings.md` and `.claude/plans/<feature_id>/shared_context.md`** (git is the durable audit). It owns `recording-findings` / `distilling-learnings` / `proposing-improvements`. There is no `learnings.md`. It never auto-writes to MV/MP.
+
+Delivery (branch/commit/push/PR via **shipper**) happens only on explicit operator authorization — merge/deploy is an irreversible, outward-facing action (human checkpoint).
+
+---
+
+## Human checkpoints (§11 — product only)
+
+The human is called **only** for PRODUCT decisions, always in pt-br, always product-language:
+1. **Approve spec** (HARD-GATE 1).
+2. **Approve plan** (HARD-GATE 2).
+3. **Test demo** (HARD-GATE 3).
+4. **Critical exception** — a product ambiguity or a risk only the product owner can accept/refuse. A critical finding is **translated to product impact** ("o login pode falhar se o usuário fizer X"), never presented as a technical problem.
+5. **Before merge/deploy** — irreversible/outward-facing action.
+
+Engineering (tier escalation, retry, sniper) is **never** delegated to the human.
+
+---
+
+## Self-check before declaring delivery done
+
+- All tasks' gates green (or product decision recorded for any accepted risk).
+- Final dual review passed; sniper fixes re-gated.
+- `demo-script.md` derived from UJs/ACs (not implementation), tested by the operator.
+- Harvester ran; durable learnings routed (native memory / nested CLAUDE.md / kaizen); `findings.md` and `shared_context.md` deleted.
+- Adversary entered virgin on every dispatch; no prior verdict leaked into it.
+- Every operator message was product-language pt-br.
