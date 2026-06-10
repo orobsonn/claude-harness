@@ -38,6 +38,32 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 
 ---
 
+## Model routing (single source of truth)
+
+Model per role. **This table is authoritative** — when a role's model is named elsewhere in this skill, it must match here. Routing for the two boundary gates is done by an **explicit model override on the dispatch** (the Agent/Task `model` param), not by agent frontmatter — because the `adversary` agent is `opus` per-task and only becomes `fable` at the final gate, so frontmatter alone cannot express it.
+
+| Role / step | Model | Why |
+|---|---|---|
+| orchestrator (this skill / main loop) | **sonnet** default (under validation — see note) | highest token volume; cheapest lever. Curation quality is being A/B'd vs opus before commit. |
+| planner | opus | architecture-grade reasoning |
+| **plan-reviewer (initial gate)** | **fable** | strongest tier audits the opus planner's output — the highest-leverage boundary check before execution. In HEADLESS this APPROVE *is* the gate (no human), so the premium is most justified here. |
+| executor | `tiers[complexity]` (haiku/sonnet/opus) | reasoning-depth axis |
+| compliance | sonnet | spec-vs-impl check |
+| adversary (per-task) | opus | already strong; raise `effort` before raising tier |
+| security | opus | conditional auditor |
+| sniper | `tiers[severity]` (haiku/sonnet/opus) | grave bug never fixed by a weak model |
+| **adversary (final dual review = final gate)** | **fable** | strongest tier hunts bugs across the whole feature — the last boundary before delivery. In HEADLESS the PR ships on this verdict, so the premium is most justified here. |
+| compliance (final dual review) | sonnet | |
+| security (final dual review) | opus | |
+| harvester | sonnet | |
+| shipper | sonnet | |
+
+**Cost note (do not mistake for economy):** Fable is the **most expensive** model ($10/$50 per 1M vs opus $5/$25). It is placed on the two boundary gates as a deliberate **quality** investment, not a saving. The net economy of this routing comes from the **sonnet orchestrator default** (high-volume) — Fable on the gates *costs more* there, by design. On small runs with many checkpoints, watch that Fable does not outweigh the orchestrator saving — instrument `usage` per role to verify. **Fallback is safe:** frontmatter stays `opus`, so if the `fable` override is ever dropped, a gate falls back to opus, never to the weakest tier.
+
+**Validation note (orchestrator = sonnet):** the sonnet default is under test. Context curation is judgment, not mechanics — a weak curation poisons every downstream agent. Before committing sonnet as the standing default, run one representative delivery and compare curation quality (did executor get the right scope? did adversary get what it needed?) against opus. Until then, the operator chooses the default via `/model`.
+
+---
+
 ## Execution mode — interactive vs headless
 
 The pipeline is identical; only **who occupies the human decision points** changes. Detect the mode first (same signal as `triaging-requests`): **HEADLESS** when the session is a cloud routine (env `$CLAUDE_CODE_REMOTE` set) or the trigger prompt says to run autonomously; otherwise **INTERACTIVE** (default).
@@ -77,7 +103,7 @@ The gates below are written for INTERACTIVE; each carries its HEADLESS substitut
 
 1. Dispatch the **planner** (opus) running the `creating-plans` skill. Hand it the approved spec.
 2. The planner returns an `execution-plan.json` that passes **structural** validation (`validate-plan.mjs` — schema, enums, AC↔locked_test traceability, dependency cycles). Structure only — not engineering soundness.
-3. **plan-reviewer** (opus, virgin, read-only) — audits the plan's **engineering soundness**: decomposition/SRP, whether `resolved_judgments` are correct, whether `locked_tests` truly pin the ACs, `scope_paths` vs. codebase reality, `severity`/`complexity` routing, and risks introduced by the decomposition itself. Consults curated mental models via the optional MV add-on (best-effort recall; never blocks if MV is absent). Returns `APPROVE | REVISE` + findings + a **product-language summary**.
+3. **plan-reviewer** (**fable** — initial gate; dispatch with an explicit `model: fable` override; virgin, read-only) — audits the plan's **engineering soundness**: decomposition/SRP, whether `resolved_judgments` are correct, whether `locked_tests` truly pin the ACs, `scope_paths` vs. codebase reality, `severity`/`complexity` routing, and risks introduced by the decomposition itself. Consults curated mental models via the optional MV add-on (best-effort recall; never blocks if MV is absent). Returns `APPROVE | REVISE` + findings + a **product-language summary**.
    - **REVISE** → re-dispatch the planner in **revision mode**, handing it `{existing plan path, findings[] with each finding's `planner_instruction` and target `task_id`}`. The planner applies each instruction to its `task_id`, keeps every other task byte-stable, and re-runs its self-review + structural validation; then re-run plan-reviewer. **Cap at 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product language.
    - This is the engineering judgment the operator **cannot apply himself** — the validator checks shape, the plan-reviewer checks substance. It is the analog, at the plan layer, of the adversarial pass on the spec.
 4. **Deterministic sensitive-path override:** compare the plan's `scope_paths` against the sensitive-path allowlist (`**/auth/**`, `**/payment|billing/**`, `**/*.sql`, migrations, `.env*`, `package.json`). Any match **forces FULL**, overriding the triage mode. When it fires, **rewrite `plan.mode` to `"full"` in the persisted plan and re-validate**, and record `effective_mode: "full"` in `shared_context.md` — so a later context-compaction re-read cannot silently revert to a stale `mode: "light"`. Key the LIGHT/FULL branch off the effective mode. Determinism on the plan, judgment on entry.
@@ -161,7 +187,7 @@ In LIGHT, the upfront adversarial spec pass is a single **adversary** dispatch (
 
 Scope = the **whole feature**, not one task. Roles, feature-wide scope:
 - **compliance** (sonnet) — entire implementation vs spec.
-- **adversary** (opus, virgin) — hunts bugs across the full implementation.
+- **adversary** (**fable** — final gate; dispatch with an explicit `model: fable` override; virgin) — hunts bugs across the full implementation. Note: the **per-task** adversary (Phase 2, step 3) stays **opus** — only this final-gate adversary is Fable.
 - **security** (opus, virgin) — **dispatched in both LIGHT and FULL when `final_review.security` is true** (the planner sets it when the feature's aggregate `scope_paths`/tasks hit a security trigger). This is the only security pass LIGHT gets, so it is load-bearing: a LIGHT feature that wires an outbound HTTP call or a new entrypoint still gets audited here.
 
 **Dispatch these synchronously (foreground).** They **gate the PR** — dispatch each and **capture its verdict before proceeding**. Do **not** background the adversary (or compliance/security) and poll for it: a backgrounded verdict can arrive **stale or out-of-band** (a poll may return earlier spec-review findings instead of the final verdict), and the gate would proceed on incomplete findings. Background dispatch is only for genuinely parallel, non-gating work.
