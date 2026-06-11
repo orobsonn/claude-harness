@@ -194,7 +194,7 @@ test(
       const payload = makeClassifyPayload("ses_real", "FULL", "user-auth");
       handle(payload);
 
-      const triagePath = `.claude/plans/ses_real/triage.json`;
+      const triagePath = `.claude/plans/.state/ses_real/triage.json`;
       assert.ok(fs.existsSync(triagePath), "triage.json should exist");
 
       const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
@@ -224,8 +224,8 @@ test(
       };
       handle(payload);
 
-      const realPath = `.claude/plans/ses_real/triage.json`;
-      const evilPath = `.claude/plans/ses_evil/triage.json`;
+      const realPath = `.claude/plans/.state/ses_real/triage.json`;
+      const evilPath = `.claude/plans/.state/ses_evil/triage.json`;
 
       assert.ok(fs.existsSync(realPath), "triage.json should be under ses_real");
       assert.equal(
@@ -257,7 +257,7 @@ test(
 
       // Nothing should have been written anywhere under .claude/plans
       assert.equal(
-        fs.existsSync(".claude/plans/ses_real/triage.json"),
+        fs.existsSync(".claude/plans/.state/ses_real/triage.json"),
         false,
         "no triage.json should be written for invalid feature_id",
       );
@@ -276,7 +276,7 @@ test("handle: classify output mode 'BOGUS' → no triage.json written", () => {
     const payload = makeClassifyPayload("ses_real", "BOGUS", "user-auth");
     assert.doesNotThrow(() => handle(payload));
     assert.equal(
-      fs.existsSync(".claude/plans/ses_real/triage.json"),
+      fs.existsSync(".claude/plans/.state/ses_real/triage.json"),
       false,
       "no triage.json should be written for invalid mode",
     );
@@ -290,7 +290,7 @@ test(
       const payload = makeBrainstormPayload("ses_x", "foo");
       handle(payload);
 
-      const gateStatePath = `.claude/plans/ses_x/gate-state.json`;
+      const gateStatePath = `.claude/plans/.state/ses_x/gate-state.json`;
       assert.ok(fs.existsSync(gateStatePath), "gate-state.json should exist");
 
       const state = JSON.parse(fs.readFileSync(gateStatePath, "utf8"));
@@ -307,7 +307,7 @@ test(
       handle(payload);
 
       assert.equal(
-        fs.existsSync(".claude/plans/ses_y/gate-state.json"),
+        fs.existsSync(".claude/plans/.state/ses_y/gate-state.json"),
         false,
         "gate-state.json must NOT be written when agent_id is present",
       );
@@ -320,7 +320,7 @@ test(
   () => {
     withTempDir(() => {
       const sessionId = "ses_nodrop";
-      const stateDir = `.claude/plans/${sessionId}`;
+      const stateDir = `.claude/plans/.state/${sessionId}`;
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(
         path.join(stateDir, "gate-state.json"),
@@ -372,7 +372,7 @@ test(
       const payload = makeClassifyPayload("ses_notmp", "LIGHT", "clean-feature");
       handle(payload);
 
-      const triagePath = `.claude/plans/ses_notmp/triage.json`;
+      const triagePath = `.claude/plans/.state/ses_notmp/triage.json`;
       const tmpPath = `${triagePath}.tmp`;
 
       assert.ok(
@@ -398,7 +398,7 @@ test("handle: all four valid modes are accepted for triage", () => {
       const sessionId = `ses-mode-${mode.toLowerCase().replace("-", "")}`;
       const payload = makeClassifyPayload(sessionId, mode, "valid-feature");
       handle(payload);
-      const triagePath = `.claude/plans/${sessionId}/triage.json`;
+      const triagePath = `.claude/plans/.state/${sessionId}/triage.json`;
       assert.ok(fs.existsSync(triagePath), `triage.json should be written for mode '${mode}'`);
       const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
       assert.equal(triage.mode, mode);
@@ -413,7 +413,7 @@ test("handle: re-classification overwrites existing triage.json (reclassify allo
     const payload2 = makeClassifyPayload("ses_reclassify", "FULL", "some-feature");
     handle(payload2);
 
-    const triagePath = `.claude/plans/ses_reclassify/triage.json`;
+    const triagePath = `.claude/plans/.state/ses_reclassify/triage.json`;
     const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
     assert.equal(triage.mode, "FULL", "second classify should overwrite with new mode");
   });
@@ -433,7 +433,7 @@ test("handle: classify with object-shaped tool_response { stdout } → triage.js
       },
     };
     handle(payload);
-    const triagePath = `.claude/plans/ses_objshape/triage.json`;
+    const triagePath = `.claude/plans/.state/ses_objshape/triage.json`;
     assert.ok(fs.existsSync(triagePath), "triage.json should be written for object-shaped tool_response");
     const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
     assert.equal(triage.mode, "FULL");
@@ -484,7 +484,7 @@ test("handle: classify stamps gate-state.json with the classified feature_id", (
   withTempDir(() => {
     handle(makeClassifyPayload("ses_stamp", "FULL", "feature-a"));
     const state = JSON.parse(
-      fs.readFileSync(".claude/plans/ses_stamp/gate-state.json", "utf8"),
+      fs.readFileSync(".claude/plans/.state/ses_stamp/gate-state.json", "utf8"),
     );
     assert.deepEqual(state, { feature_id: "feature-a" });
   });
@@ -495,7 +495,7 @@ test("handle: reclassify to feature B resets stale brainstormed/adversary_fired 
     // Feature A: classify then complete the ceremony (brainstormed + adversary_fired)
     handle(makeClassifyPayload("ses_reset_feat", "FULL", "feature-a"));
     handle(makeBrainstormPayload("ses_reset_feat", "feature-a"));
-    const stateDir = ".claude/plans/ses_reset_feat";
+    const stateDir = ".claude/plans/.state/ses_reset_feat";
     // Simulate adversary_fired written by entry-gate, preserving feature_id
     const afterBs = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
     fs.writeFileSync(
@@ -529,7 +529,7 @@ test("handle: noisy classify stdout (banner + trailing 'ok') → triage IS writt
       tool_response: 'noise\n{"mode":"FULL","feature_id":"x"}\nok',
     };
     handle(payload);
-    const triagePath = ".claude/plans/ses_noisy/triage.json";
+    const triagePath = ".claude/plans/.state/ses_noisy/triage.json";
     assert.ok(fs.existsSync(triagePath), "triage.json should be written despite surrounding noise");
     const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
     assert.equal(triage.mode, "FULL");
@@ -558,7 +558,7 @@ test("handle: classify with tool_output field (alternate payload key) → triage
       tool_output: JSON.stringify({ mode: "QUICK", feature_id: "alt-feature" }),
     };
     handle(payload);
-    const triagePath = `.claude/plans/ses_altkey/triage.json`;
+    const triagePath = `.claude/plans/.state/ses_altkey/triage.json`;
     assert.ok(fs.existsSync(triagePath), "triage.json should be written using tool_output field");
     const triage = JSON.parse(fs.readFileSync(triagePath, "utf8"));
     assert.equal(triage.mode, "QUICK");

@@ -118,6 +118,12 @@ Não há link automático PR→sessão nem notificação de falha. Valide assim:
 
 ---
 
+## Modelo do orquestrador
+
+Setar **Sonnet** como modelo da sessão (`/model` no Claude Code, ou o modelo padrão da routine). O orquestrador é o maior consumidor de tokens do harness — é onde está a economia real. Os modelos superiores (Opus, Fable) são chamados **só nos pontos certos**, automaticamente, pelos sub-agentes: `planner` (Opus), `plan-reviewer` e `adversary` do gate final (Fable), `security`/`adversary` por-task (Opus). A tabela autoritativa está em `core/skills/orchestrating-delivery/SKILL.md`.
+
+Isso só é seguro porque as decisões críticas do orquestrador estão em **trilhos determinísticos** (hook de entrada + guard `<PLANNER-ONLY>` forçam o dispatch do `planner`; override de path sensível é check de glob; routing de modelo é tabela fixa) — o modelo barato coordena, não julga arquitetura.
+
 ## Modos
 
 - **Local (interativo):** operador no loop; gates humanos reais (aprovar spec/plano, demo).

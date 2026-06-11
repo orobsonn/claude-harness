@@ -95,11 +95,14 @@ export function isDeliveryRole(subagentType) {
 
 /**
  * Builds the canonical session-keyed state directory path.
+ * Ephemeral session state lives under a dotted `.state/` subdir so the operator
+ * browsing `.claude/plans/` sees only the readable per-feature plan dirs, never the
+ * opaque session ids. The durable plan stays keyed by feature_id at the plans root.
  * @param {string} sessionId - The session identifier (e.g., 'ses_abc123')
- * @returns {string} path ending with '.claude/plans/<sessionId>'
+ * @returns {string} path ending with '.claude/plans/.state/<sessionId>'
  */
 export function stateDirFor(sessionId) {
-  return `.claude/plans/${sessionId}`;
+  return `.claude/plans/.state/${sessionId}`;
 }
 
 /**

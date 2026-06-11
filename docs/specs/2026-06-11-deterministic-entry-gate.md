@@ -43,7 +43,7 @@ Proven fix (ported from the operator's OpenCode harness): a **runtime interlock*
 - **#ac-5.1** `core/CLAUDE.md` carries a `# Compact instructions` section preserving phase, `mode`, plan path, and gate state.
 - **#ac-5.2** A `SessionStart` hook (`matcher: compact`) re-injects the current `triage.json` + plan summary after compaction.
 - **#ac-6.1** Opt-in is by adoption: a project with the harness `.claude/settings.json` + `.claude/hooks/` has the gate; a project without does not. Hook commands use `${CLAUDE_PROJECT_DIR}` so they travel with the repo (routines-compatible).
-- **#ac-6.2** State files (`.claude/plans/<session_id>/gate-state.json`) are GC'd on SessionStart (older than N days removed).
+- **#ac-6.2** State files (`.claude/plans/.state/<session_id>/gate-state.json`) are GC'd on SessionStart (older than N days removed).
 
 ## Resolved product decisions
 

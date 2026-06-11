@@ -44,7 +44,7 @@ Model per role. **This table is authoritative** — when a role's model is named
 
 | Role / step | Model | Why |
 |---|---|---|
-| orchestrator (this skill / main loop) | **sonnet** default (under validation — see note) | highest token volume; cheapest lever. Curation quality is being A/B'd vs opus before commit. |
+| orchestrator (this skill / main loop) | **sonnet** (standing default) | highest token volume → the cheapest lever and the harness's core economy. Critical decisions are pinned by deterministic rails (see note), not left to the orchestrator's judgment. |
 | planner | opus | architecture-grade reasoning |
 | **plan-reviewer (initial gate)** | **fable** | strongest tier audits the opus planner's output — the highest-leverage boundary check before execution. In HEADLESS this APPROVE *is* the gate (no human), so the premium is most justified here. |
 | executor | `tiers[complexity]` (haiku/sonnet/opus) | reasoning-depth axis |
@@ -60,7 +60,7 @@ Model per role. **This table is authoritative** — when a role's model is named
 
 **Cost note (do not mistake for economy):** Fable is the **most expensive** model ($10/$50 per 1M vs opus $5/$25). It is placed on the two boundary gates as a deliberate **quality** investment, not a saving. The net economy of this routing comes from the **sonnet orchestrator default** (high-volume) — Fable on the gates *costs more* there, by design. On small runs with many checkpoints, watch that Fable does not outweigh the orchestrator saving — instrument `usage` per role to verify. **Fallback is safe:** frontmatter stays `opus`, so if the `fable` override is ever dropped, a gate falls back to opus, never to the weakest tier.
 
-**Validation note (orchestrator = sonnet):** the sonnet default is under test. Context curation is judgment, not mechanics — a weak curation poisons every downstream agent. Before committing sonnet as the standing default, run one representative delivery and compare curation quality (did executor get the right scope? did adversary get what it needed?) against opus. Until then, the operator chooses the default via `/model`.
+**Orchestrator = sonnet (committed default):** the orchestrator is the highest-volume token consumer, so a cheap model here is the harness's real economy — this is the whole point of the design. The residual risk is curation quality: context curation is judgment, and weak curation poisons every downstream agent. The harness mitigates this by **moving the critical decisions off the orchestrator's judgment onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (the orchestrator *cannot* generate the plan inline and must dispatch the opus `planner`), the sensitive-path override is a glob check, and per-role model routing is this fixed table. The cheaper the orchestrator, the more these rails carry the judgment. Residual curation risk stays instrumented — watch `usage` per role and whether downstream agents got the right scope. The operator may still override the model via `/model` for a given session.
 
 ---
 
@@ -99,7 +99,7 @@ The gates below are written for INTERACTIVE; each carries its HEADLESS substitut
 **HEADLESS:** no operator to confirm. The upfront adversary attack has already run; if it surfaced no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
 
 5. **Mark brainstorm complete** (final Phase 0 action before dispatch to plan): run the brainstorm-done marker to set the gate's `brainstormed` flag.
-   **INTERACTIVE:** execute `node .claude/hooks/mark.mjs brainstorm-done --feature-id <feature-id>` where `<feature-id>` matches the kebab-case identifier chosen in triaging-requests. The hook stamps `brainstormed=true` into `.claude/plans/<session_id>/gate-state.json` (PostToolUse recognition).
+   **INTERACTIVE:** execute `node .claude/hooks/mark.mjs brainstorm-done --feature-id <feature-id>` where `<feature-id>` matches the kebab-case identifier chosen in triaging-requests. The hook stamps `brainstormed=true` into `.claude/plans/.state/<session_id>/gate-state.json` (PostToolUse recognition).
    **HEADLESS:** execute the same marker command. The exploration subagents (step 1) are the brainstorm; the marker is what records completion so the gate (planner dispatch) can proceed.
 
 ---

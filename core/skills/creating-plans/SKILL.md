@@ -1,9 +1,13 @@
 ---
 name: creating-plans
-description: "Use when you have an approved spec/PRD and need to generate execution-plan.json before the orchestrating-delivery skill runs. Guides the planner (always Opus) to decompose the spec into atomic tasks with locked tests, severity tiers, adversarial flags, and scope_paths. Output is a validated JSON consumed by orchestrating-delivery."
+description: "INTERNAL to the planner agent — NOT a main-loop skill. Do NOT invoke this directly from the orchestrator or main loop; instead dispatch the `planner` agent (always Opus), which runs this skill in isolation. Describes how the planner decomposes an approved spec/PRD into a validated execution-plan.json (atomic tasks, locked tests, severity tiers, adversarial flags, scope_paths) consumed by orchestrating-delivery."
 source: adapted from pi-agent/skills/plan-make/SKILL.md
 adaptation_date: 2026-06-01
 ---
+
+<PLANNER-ONLY>
+This skill runs ONLY inside the `planner` agent (always Opus), dispatched by orchestrating-delivery in Phase 1. If you are the main loop or the orchestrator and reached here directly, STOP: do not generate the plan yourself. **Dispatch the `planner` agent** and hand it the approved spec. Generating the plan in the main loop defeats the context isolation and the model routing the harness depends on (a cheap orchestrator must delegate architecture-grade reasoning to Opus, not do it inline). The only exception is the `planner` agent itself running this skill.
+</PLANNER-ONLY>
 
 # Creating-Plans — Generating execution-plan.json from an approved spec
 

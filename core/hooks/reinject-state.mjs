@@ -6,10 +6,12 @@
  * and (optionally) the feature execution plan, emitting a compact summary as
  * additionalContext so the orchestrator resumes with the correct mode/feature/plan.
  *
- * Job 2 (GC): removes session-keyed state dirs under .claude/plans that meet ALL:
+ * Job 2 (GC): removes session-keyed state dirs under .claude/plans/.state that meet ALL:
  *   - contain triage.json OR gate-state.json (session-state marker)
  *   - do NOT contain execution-plan.json (not a feature plan dir)
  *   - have mtime older than 7 days (isExpired threshold)
+ * Feature plan dirs live at the plans root (keyed by feature_id), never under .state,
+ * so the GC scans only .state and can never reach a durable plan.
  *
  * Fail-open contract: exits 0 on any infra error; injects nothing, deletes nothing
  * on error. The GC is CONSERVATIVE — when in doubt, do NOT delete.
@@ -22,6 +24,9 @@ import { isExpired, isSafeFeatureId, isSafeSessionId } from "./lib/gate-lib.mjs"
 
 const GC_MAX_AGE_DAYS = 7;
 const DEFAULT_PLANS_ROOT = ".claude/plans";
+// Ephemeral session state (triage.json, gate-state.json) lives under this dotted
+// subdir of the plans root, keeping the operator-facing listing free of opaque ids.
+const STATE_SUBDIR = ".state";
 
 // ---------------------------------------------------------------------------
 // Pure reinject builder — no I/O, injectable readFileSync for tests
@@ -55,7 +60,8 @@ export function buildReinject(payload, opts = {}) {
     typeof opts.readFileSync === "function" ? opts.readFileSync : fs.readFileSync;
 
   // Step 1: Read triage.json — required; absent means nothing to inject.
-  const triagePath = path.join(plansRoot, sessionId, "triage.json");
+  // Session state lives under the .state subdir; the plan stays at the plans root.
+  const triagePath = path.join(plansRoot, STATE_SUBDIR, sessionId, "triage.json");
   let triage;
   try {
     const raw = readFileSyncFn(triagePath, "utf8");
@@ -200,15 +206,18 @@ export function handle(payload, opts = {}) {
   const currentSessionId =
     payload && typeof payload.session_id === "string" ? payload.session_id : null;
 
-  // Job 2: GC — runs on every SessionStart (matcher is compact, so always compact here)
+  // Job 2: GC — runs on every SessionStart (matcher is compact, so always compact here).
+  // Scans ONLY the .state subdir: every dir there is ephemeral session state. Durable
+  // feature plans live at the plans root and are never reachable by this scan.
+  const stateRoot = path.join(plansRoot, STATE_SUBDIR);
   try {
-    const entries = scanFn(plansRoot);
+    const entries = scanFn(stateRoot);
     const targets = gcTargets(entries, nowMs).filter(
       (target) => path.basename(target) !== currentSessionId,
     );
     for (const target of targets) {
-      // Belt-and-suspenders: only delete direct children of plansRoot
-      const resolvedRoot = path.resolve(plansRoot);
+      // Belt-and-suspenders: only delete direct children of the .state root
+      const resolvedRoot = path.resolve(stateRoot);
       const resolvedTarget = path.resolve(target);
       if (!resolvedTarget.startsWith(resolvedRoot + path.sep)) {
         continue; // path-traversal guard
