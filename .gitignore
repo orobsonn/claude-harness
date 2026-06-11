@@ -1,5 +1,6 @@
 # Claude Code local
 .claude/settings.local.json
+.claude/plans/
 .claude/plans/current.md
 .claude/plans/*.local.md
 

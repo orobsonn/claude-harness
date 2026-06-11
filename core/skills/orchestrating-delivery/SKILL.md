@@ -93,9 +93,14 @@ The gates below are written for INTERACTIVE; each carries its HEADLESS substitut
    **HEADLESS:** there is no human to brainstorm with, so **simulate the exploration by dispatching read-only subagents**: fan out a small set of exploration agents over the trigger (issue/PR/prompt) + the codebase, each with a **distinct lens** (e.g. user-journeys, edge-cases/failure-modes, constraints/non-functionals), then **synthesize** their outputs into the spec (UJs `#uj-N` + ACs `#ac-N.M`). Subagent dispatch is the **reliable mechanism** — **cloud routines do not have the `Workflow` tool** (confirmed: workflows are unavailable in cloud sessions and require interactive per-run approval). **Prefer a `Workflow`** only when the tool is actually available (e.g. headless-local via `claude -p`), for deterministic/reproducible orchestration. A thin one-line trigger may use inline derivation. Either way the synthesized spec then goes through the spec-validation gate (adversary attacks it). Never run an interactive brainstorm in headless, and never hard-depend on the `superpowers:brainstorming` plugin (it does not load in cloud routines).
 2. **Explicitly `Read`** the project's durable index — `.claude/memory/MEMORY.md` (the repo-committed project-pattern index; do not rely on native auto-load) and the root `CLAUDE.md` router table ("folder → what lives there") — to inform the spec. **Cold-start check:** if this is a non-trivial existing codebase and that index is cold (`.claude/memory/MEMORY.md` has no entries and the root `CLAUDE.md` router is unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code itself, then read the now-populated index before shaping the spec. This is the orchestrator's macro view forming. There is no `learnings.md`.
 3. Produce a spec with UJs, ACs, constraints, and resolved product decisions.
+4. **Upfront spec-adversary (MANDATORY in both LIGHT and FULL):** Dispatch the **adversary** (opus, virgin) against the spec + the existing codebase (if any). The adversary surfaces tech-debt risks, threats to ACs, and contradictions before the plan is written. **INTERACTIVE:** the adversary's findings inform the operator's approval decision. **HEADLESS:** if the adversary surfaces blocking issues that cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does and ask the operator to confirm. Do not show code or schema.
-**HEADLESS:** no operator to confirm. Run the **adversary on the spec** (virgin) as validation; if it surfaces no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
+**HEADLESS:** no operator to confirm. The upfront adversary attack has already run; if it surfaced no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
+
+5. **Mark brainstorm complete** (final Phase 0 action before dispatch to plan): run the brainstorm-done marker to set the gate's `brainstormed` flag.
+   **INTERACTIVE:** execute `node .claude/hooks/mark.mjs brainstorm-done --feature-id <feature-id>` where `<feature-id>` matches the kebab-case identifier chosen in triaging-requests. The hook stamps `brainstormed=true` into `.claude/plans/<session_id>/gate-state.json` (PostToolUse recognition).
+   **HEADLESS:** execute the same marker command. The exploration subagents (step 1) are the brainstorm; the marker is what records completion so the gate (planner dispatch) can proceed.
 
 ---
 
@@ -173,13 +178,12 @@ Move to the next task only when its gates are green.
 | | LIGHT | FULL |
 |---|---|---|
 | Plan | light plan (`mode: "light"`) | full plan |
-| Spec analysis | spec-vs-codebase + adversarial **UPFRONT on the spec** (map tech debt before coding) | covered per task |
+| Spec-adversary (upfront) | **MANDATORY** — single virgin **adversary** dispatch against the spec before plan dispatch | **MANDATORY** — single virgin **adversary** dispatch against the spec before plan dispatch |
+| Spec analysis | spec-vs-codebase (map existing debt) + upfront adversarial pass (map new risks) | spec-vs-codebase + upfront adversarial pass (map new risks) |
 | Per-task review | **none** — executor with tiering only, no compliance/adversary between tasks | full loop (steps 2–5 per task) |
 | Final review | **dual review only** (compliance + adversary, whole feature) | dual review + per-task loop |
 
-LIGHT trades per-task review for a single upfront adversarial spec pass plus a final dual review. **Tiering of the executor applies in both modes** — a small feature can still generate debt if a high-severity task is run on a weak model.
-
-In LIGHT, the upfront adversarial spec pass is a single **adversary** dispatch (virgin) against the spec + a read of the existing codebase, surfacing tech-debt risks before the plan is finalized.
+The **spec-adversary is unconditional and upfront in both modes** — it validates the spec surface before code is written. LIGHT trades per-task review for a final dual review; **per-task adversary (Phase 2, step 3) only runs in FULL**. **Tiering of the executor applies in both modes** — a small feature can still generate debt if a high-severity task is run on a weak model.
 
 ---
 
