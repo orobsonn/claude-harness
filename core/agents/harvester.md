@@ -70,8 +70,11 @@ After skills complete, update local project docs directly:
 
 Auto-write is allowed only for these **local** project files.
 
-### 5. Tear down the ephemeral tier (last)
-Once steps 1–4 are complete and every durable learning has been routed, **delete the ephemeral files**:
+### 5. Cost report (skill: `measuring-cost`)
+Invoke `measuring-cost`. It runs `cost-report.mjs` (wrapping `ccusage` over the local transcript JSONL) and returns a pt-br block with the session's API-equivalent cost (per-model breakdown) and the weekly consumption trend. **Fail-soft** — if ccusage is unreachable (offline / cloud headless) it degrades to "indisponível"; never block the harvest on it. Include the block verbatim in your output summary (and, in HEADLESS, in the PR body). Do **not** persist the numbers into committed files — cost is run telemetry, not durable knowledge.
+
+### 6. Tear down the ephemeral tier (last)
+Once steps 1–5 are complete and every durable learning has been routed, **delete the ephemeral files**:
 
 - `findings.md` at the project root (the run buffer — its job ended when learnings were routed).
 - `.claude/plans/<feature_id>/shared_context.md` (the task-to-task carry-forward).
@@ -107,6 +110,9 @@ Reply in pt-br. End with:
 ### Docs locais
 - CHANGELOG.md — <entry adicionada ou "sem mudança">
 - CLAUDE.md / rules — <seção atualizada ou "sem mudança">
+
+### Custo da entrega
+<bloco do measuring-cost verbatim, ou "indisponível neste ambiente">
 
 ### Tier efêmero removido
 - findings.md — deletado
