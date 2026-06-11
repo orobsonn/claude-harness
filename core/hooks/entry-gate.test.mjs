@@ -160,7 +160,7 @@ test(
 
       assert.equal(verdict.allow, true, "adversary dispatch must be allowed");
 
-      const gateStatePath = `.claude/plans/${sessionId}/gate-state.json`;
+      const gateStatePath = `.claude/plans/.state/${sessionId}/gate-state.json`;
       assert.ok(fs.existsSync(gateStatePath), "gate-state.json must exist after adversary dispatch");
 
       const state = JSON.parse(fs.readFileSync(gateStatePath, "utf8"));
@@ -492,7 +492,7 @@ test("decide: 'harness:adversary' records adversary_fired and allows", () => {
     assert.equal(verdict.allow, true, "namespaced adversary must be allowed");
 
     const state = JSON.parse(
-      fs.readFileSync(`.claude/plans/${sessionId}/gate-state.json`, "utf8"),
+      fs.readFileSync(`.claude/plans/.state/${sessionId}/gate-state.json`, "utf8"),
     );
     assert.equal(state.adversary_fired, true, "namespaced adversary must record adversary_fired");
   });
@@ -502,7 +502,7 @@ test("decide: adversary records adversary_fired without dropping pre-existing br
   withTempDir(() => {
     const sessionId = "ses_adv_nodrop";
     // Pre-write brainstormed=true into gate-state.json
-    const stateDir = `.claude/plans/${sessionId}`;
+    const stateDir = `.claude/plans/.state/${sessionId}`;
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),

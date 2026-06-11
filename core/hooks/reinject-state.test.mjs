@@ -230,7 +230,7 @@ test(
   () => {
     withTempDir(() => {
       const plansRoot = ".claude/plans";
-      const sessionDir = path.join(plansRoot, "ses_old_triage");
+      const sessionDir = path.join(plansRoot, ".state", "ses_old_triage");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(path.join(sessionDir, "triage.json"), "{}");
       // Set mtime AFTER writing files (dir mtime update)
@@ -252,7 +252,7 @@ test(
   () => {
     withTempDir(() => {
       const plansRoot = ".claude/plans";
-      const sessionDir = path.join(plansRoot, "ses_old_gs");
+      const sessionDir = path.join(plansRoot, ".state", "ses_old_gs");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(path.join(sessionDir, "gate-state.json"), "{}");
       setMtime(sessionDir, daysAgo(8));
@@ -296,7 +296,7 @@ test(
   () => {
     withTempDir(() => {
       const plansRoot = ".claude/plans";
-      const sessionDir = path.join(plansRoot, "ses_fresh");
+      const sessionDir = path.join(plansRoot, ".state", "ses_fresh");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(path.join(sessionDir, "triage.json"), "{}");
       setMtime(sessionDir, daysAgo(1));
@@ -314,7 +314,7 @@ test(
     withTempDir(() => {
       const plansRoot = ".claude/plans";
       // Create a stale session dir that would normally be GC'd
-      const sessionDir = path.join(plansRoot, "ses_would-be-deleted");
+      const sessionDir = path.join(plansRoot, ".state", "ses_would-be-deleted");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(path.join(sessionDir, "triage.json"), "{}");
       setMtime(sessionDir, daysAgo(8));
@@ -437,7 +437,7 @@ test(
   () => {
     withTempDir(() => {
       const plansRoot = ".claude/plans";
-      const sessionDir = path.join(plansRoot, "ses_reinject");
+      const sessionDir = path.join(plansRoot, ".state", "ses_reinject");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(
         path.join(sessionDir, "triage.json"),
@@ -474,7 +474,7 @@ test(
       const plansRoot = ".claude/plans";
 
       // Session triage.json
-      const sessionDir = path.join(plansRoot, "ses_with_plan");
+      const sessionDir = path.join(plansRoot, ".state", "ses_with_plan");
       fs.mkdirSync(sessionDir, { recursive: true });
       fs.writeFileSync(
         path.join(sessionDir, "triage.json"),
@@ -526,13 +526,13 @@ test(
       const plansRoot = ".claude/plans";
 
       // Current session's own state dir — stale by mtime, but must be protected.
-      const currentDir = path.join(plansRoot, "ses_current");
+      const currentDir = path.join(plansRoot, ".state", "ses_current");
       fs.mkdirSync(currentDir, { recursive: true });
       fs.writeFileSync(path.join(currentDir, "triage.json"), "{}");
       setMtime(currentDir, daysAgo(8));
 
       // A different, genuinely stale session dir — must still be GC'd.
-      const otherDir = path.join(plansRoot, "ses_other");
+      const otherDir = path.join(plansRoot, ".state", "ses_other");
       fs.mkdirSync(otherDir, { recursive: true });
       fs.writeFileSync(path.join(otherDir, "triage.json"), "{}");
       setMtime(otherDir, daysAgo(8));
@@ -664,13 +664,13 @@ test("handle: GC and reinject coexist — stale dir removed AND context injected
     const plansRoot = ".claude/plans";
 
     // Stale session dir (should be GC'd)
-    const staleDir = path.join(plansRoot, "ses_stale_old");
+    const staleDir = path.join(plansRoot, ".state", "ses_stale_old");
     fs.mkdirSync(staleDir, { recursive: true });
     fs.writeFileSync(path.join(staleDir, "triage.json"), "{}");
     setMtime(staleDir, daysAgo(10));
 
     // Current session (should be reinjected)
-    const currentDir = path.join(plansRoot, "ses_current");
+    const currentDir = path.join(plansRoot, ".state", "ses_current");
     fs.mkdirSync(currentDir, { recursive: true });
     fs.writeFileSync(
       path.join(currentDir, "triage.json"),

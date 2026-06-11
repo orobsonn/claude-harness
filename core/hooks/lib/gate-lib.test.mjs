@@ -160,19 +160,19 @@ test("isExpired returns true when mtime is exactly at boundary (8 days, inclusiv
 test("stateDirFor returns path ending with '.claude/plans/<sessionId>'", () => {
   const sessionId = "ses_abc123";
   const result = stateDirFor(sessionId);
-  assert.strictEqual(result.endsWith(".claude/plans/ses_abc123"), true);
+  assert.strictEqual(result.endsWith(".claude/plans/.state/ses_abc123"), true);
 });
 
 test("stateDirFor with different session ID", () => {
   const sessionId = "ses_xyz789";
   const result = stateDirFor(sessionId);
-  assert.strictEqual(result.endsWith(".claude/plans/ses_xyz789"), true);
+  assert.strictEqual(result.endsWith(".claude/plans/.state/ses_xyz789"), true);
 });
 
 test("stateDirFor returns exact path '.claude/plans/<sessionId>'", () => {
   const sessionId = "ses_test";
   const result = stateDirFor(sessionId);
-  assert.strictEqual(result, ".claude/plans/ses_test");
+  assert.strictEqual(result, ".claude/plans/.state/ses_test");
 });
 
 // ---------------------------------------------------------------------------
@@ -254,9 +254,9 @@ test("readGateState returns {} when gate-state.json is valid JSON but not an obj
 test("mergeGateState returns false when write cannot succeed (parent is file, not dir)", () => {
   withTempDir(() => {
     const sid = "ses-conflict";
-    const stateDir = stateDirFor(sid);
     fs.mkdirSync(".claude/plans", { recursive: true });
-    fs.writeFileSync(stateDir, "I am a file", "utf8");
+    // Make the .state parent a FILE so mkdir of the per-session state dir fails.
+    fs.writeFileSync(".claude/plans/.state", "I am a file", "utf8");
     const ok = mergeGateState(sid, { test: true });
     assert.strictEqual(ok, false);
   });
@@ -359,9 +359,9 @@ test("resetGateState leaves no .tmp file on success", () => {
 test("resetGateState returns false when write cannot succeed (parent is file, not dir)", () => {
   withTempDir(() => {
     const sid = "ses-reset-conflict";
-    const stateDir = stateDirFor(sid);
     fs.mkdirSync(".claude/plans", { recursive: true });
-    fs.writeFileSync(stateDir, "I am a file", "utf8");
+    // Make the .state parent a FILE so mkdir of the per-session state dir fails.
+    fs.writeFileSync(".claude/plans/.state", "I am a file", "utf8");
     assert.strictEqual(resetGateState(sid, "feat"), false);
   });
 });

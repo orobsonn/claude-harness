@@ -100,7 +100,7 @@ Where:
 - `<MODE>` is the mode chosen in Step 2 (`LIGHT` or `FULL`)
 - `<feature-id>` is a kebab-case identifier derived from the feature name (e.g. `user-auth`, `checkout-flow`, `audit-logging`)
 
-This command outputs a JSON stamp that the PostToolUse hook (session context, not model-visible) recognizes and writes to `.claude/plans/<session_id>/triage.json`. It is the gate's record of what was triaged.
+This command outputs a JSON stamp that the PostToolUse hook (session context, not model-visible) recognizes and writes to `.claude/plans/.state/<session_id>/triage.json`. It is the gate's record of what was triaged.
 
 ---
 
