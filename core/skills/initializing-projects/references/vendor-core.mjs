@@ -11,7 +11,7 @@
  *                        [--target <project-dir>] [--date <iso>]
  *
  * Behavior (idempotent — safe to re-run to update):
- *   - framework-owned (overwritten): agents/, skills/, rules/, CLAUDE-HARNESS-MEMORY-MODEL.md
+ *   - framework-owned (overwritten): agents/, skills/, rules/, hooks/ (*.test.mjs excluded), CLAUDE-HARNESS-MEMORY-MODEL.md
  *   - accumulated (created only if absent, never clobbered): memory/MEMORY.md, kaizen.md
  *   - .claude/CLAUDE.md: harness block merged between markers, project content preserved
  *   - settings.json: copied if absent; if present, written as settings.harness.json for manual merge
@@ -36,7 +36,7 @@ import { dirname, join } from "node:path";
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
 
-const FRAMEWORK_OWNED = ["agents", "skills", "rules"];
+const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 const ACCUMULATED = [
   ["memory/MEMORY.md", "memory"],
@@ -124,9 +124,10 @@ function readVersion(repoDir) {
 
 /** @description Copies framework-owned dirs/files into .claude/, overwriting. */
 function copyFrameworkOwned(coreDir, claudeDir) {
+  const filter = (src, dest) => !src.endsWith(".test.mjs");
   for (const dir of FRAMEWORK_OWNED) {
     const src = join(coreDir, dir);
-    if (existsSync(src)) cpSync(src, join(claudeDir, dir), { recursive: true });
+    if (existsSync(src)) cpSync(src, join(claudeDir, dir), { recursive: true, filter });
   }
   for (const file of FRAMEWORK_FILES) {
     const src = join(coreDir, file);
@@ -234,7 +235,7 @@ try {
   process.stdout.write(
     [
       `[vendor-core] OK — harness ${version} → ${claudeDir}`,
-      `  agents/skills/rules: overwritten`,
+      `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
       `  memory/MEMORY.md, kaizen.md: seeded if absent`,
       `  CLAUDE.md: ${claudeMd}`,
       `  settings.json: ${settings}`,

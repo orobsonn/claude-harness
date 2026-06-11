@@ -84,7 +84,27 @@ If the operator flags a sensitive concern → escalate the mode; re-classify and
 
 ---
 
-### Step 5 — Dispatch
+### Step 5 — Execute classify.mjs (before delivery dispatch)
+
+**Run classify.mjs BEFORE invoking orchestrating-delivery — the entry gate denies any delivery dispatch until triage.json exists.**
+
+For **LIGHT** and **FULL** modes only (QUICK does not gate on triage state):
+
+Run the triaging marker to stamp the chosen mode and feature_id into the gate's precondition state. Execute:
+
+```bash
+node .claude/hooks/classify.mjs --mode <MODE> --feature-id <feature-id>
+```
+
+Where:
+- `<MODE>` is the mode chosen in Step 2 (`LIGHT` or `FULL`)
+- `<feature-id>` is a kebab-case identifier derived from the feature name (e.g. `user-auth`, `checkout-flow`, `audit-logging`)
+
+This command outputs a JSON stamp that the PostToolUse hook (session context, not model-visible) recognizes and writes to `.claude/plans/<session_id>/triage.json`. It is the gate's record of what was triaged.
+
+---
+
+### Step 6 — Dispatch
 
 | Mode | Action |
 |---|---|

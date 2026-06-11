@@ -109,6 +109,21 @@ The operator may be a product manager, not a developer. Decisions presented to t
 **product decisions** (impact, tradeoffs, user behavior) — never engineering decisions (code,
 architecture, race conditions). Engineering problems are resolved inside the system.
 
+# Compact instructions
+
+When compacting, preserve:
+- **phase** — current phase in the harness loop (entry, spec, plan, review, delivery, etc.)
+- **mode** — triage classification (no-ceremony, QUICK, LIGHT, FULL)
+- **plan path** — absolute path to the execution plan (`.claude/plans/<feature_id>/execution-plan.json`)
+- **gate state** — the entry gate state, including `session_id` and the path to `.claude/plans/<session_id>/gate-state.json`
+
+After compaction, re-read these artifacts from disk to resume:
+1. The current phase and mode from memory or the execution plan.
+2. The gate state from `.claude/plans/<session_id>/gate-state.json`.
+3. The execution plan summary from `.claude/plans/<feature_id>/execution-plan.json`.
+
+This allows recovery without losing continuity when the context limit is reached during a harness run.
+
 ## Permissions baseline
 
 The shipped `settings.json` is a **conservative baseline** that works on desktop and cloud. It does
