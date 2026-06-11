@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   isSafeFeatureId,
   isSafeSessionId,
@@ -184,7 +185,7 @@ export function handle(payload, opts = {}) {
     const { session_id, mode, feature_id } = decision;
     const stateDir = stateDirFor(session_id);
     const triagePath = path.join(stateDir, "triage.json");
-    const tmpPath = `${triagePath}.tmp`;
+    const tmpPath = `${triagePath}.${process.pid}.tmp`;
 
     const triage = {
       session_id,
@@ -220,7 +221,17 @@ export function handle(payload, opts = {}) {
 // CLI entry point — guarded so imports from tests do not trigger side effects
 // ---------------------------------------------------------------------------
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
+if (isDirectCli()) {
   // Read stdin exactly once into a variable
   let raw = "";
   try {

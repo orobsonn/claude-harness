@@ -17,6 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isExpired, isSafeFeatureId, isSafeSessionId } from "./lib/gate-lib.mjs";
 
 const GC_MAX_AGE_DAYS = 7;
@@ -249,7 +250,17 @@ export function handle(payload, opts = {}) {
 // CLI entry point — guarded so test imports do not trigger side effects
 // ---------------------------------------------------------------------------
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
+if (isDirectCli()) {
   let raw = "";
   try {
     raw = fs.readFileSync(0, "utf8");
