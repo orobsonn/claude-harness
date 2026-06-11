@@ -131,3 +131,6 @@ Isso só é seguro porque as decisões críticas do orquestrador estão em **tri
 
 ## Add-ons opcionais
 `modules/rtk/` (economia de token, hook fail-open) e `modules/mv/` (Mind Vault, por-usuário) — opt-in, nunca dependência do core.
+
+## Medidor de custo (ccusage)
+O harvester reporta o custo da entrega (equivalente-API, por modelo) + tendência semanal de consumo, via a skill `measuring-cost`. Ela depende do **ccusage** — https://ccusage.com. Não precisa instalar: o script roda `npx -y ccusage@latest` (baixa sob demanda). Para runs repetidos mais rápidos, opcionalmente `npm i -g ccusage`. Sem rede (cloud headless), o medidor degrada para "indisponível". O número semanal é consumo real relativo (todos os projetos), **não % da subscription**.

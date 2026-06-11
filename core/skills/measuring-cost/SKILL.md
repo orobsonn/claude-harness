@@ -13,6 +13,12 @@ This skill surfaces, in product-language for the operator, two numbers:
 
 The weekly figure is a **real consumption proxy, not a subscription %** — Anthropic's subscription limits are opaque, model-weighted, and rolling-window, so no honest token→% mapping exists. Report the relative number; never invent a percentage.
 
+## Prerequisite — ccusage
+
+The script depends on **ccusage** (reads Claude Code's local transcript JSONL and prices it per model). Docs and install: **https://github.com/ryoppippi/ccusage** (npm: `ccusage`).
+
+No manual install is required — the script calls `npx -y ccusage@latest`, which fetches it on demand. For faster repeated runs the operator may install it globally (`npm i -g ccusage`) or use `bunx ccusage`. If neither npx nor network is available (cloud headless), the script degrades to "indisponível" — by design.
+
 ## How to run
 
 ```bash
