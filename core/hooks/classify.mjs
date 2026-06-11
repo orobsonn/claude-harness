@@ -7,6 +7,8 @@
  * NEITHER reads nor writes state — the stamp-triage hook handles state writes.
  */
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isSafeFeatureId, VALID_MODES } from "./lib/gate-lib.mjs";
 
 /**
@@ -68,8 +70,18 @@ export function run(args) {
   };
 }
 
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
 // CLI entry point — only run if this file is the main module
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectCli()) {
   const parsed = parseArgs(process.argv);
 
   if (!parsed) {

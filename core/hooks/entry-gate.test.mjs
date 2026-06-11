@@ -10,8 +10,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { decide, processInput } from "./entry-gate.mjs";
+
+const ENTRY_GATE_PATH = fileURLToPath(new URL("./entry-gate.mjs", import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -516,4 +520,37 @@ test("decide: adversary records adversary_fired without dropping pre-existing br
     assert.equal(state.adversary_fired, true, "adversary_fired must be set");
     assert.equal(state.brainstormed, true, "brainstormed must be retained (read-merge-write)");
   });
+});
+
+// ---------------------------------------------------------------------------
+// CLI integration: proves the main-guard fires end-to-end as a real CLI.
+// Spawns `node entry-gate.mjs` in a temp cwd (no triage.json) feeding an
+// executor payload, and asserts a deny lands on stdout — confirming main()
+// runs when invoked directly (robust to path encoding/symlinks).
+// ---------------------------------------------------------------------------
+
+test("CLI: executor with no triage.json → main() runs and emits deny on stdout", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "entry-gate-cli-"));
+  try {
+    const payload = JSON.stringify(
+      makeAgentPayload("ses_cli_exec", "executor"),
+    );
+
+    const stdout = execFileSync("node", [ENTRY_GATE_PATH], {
+      input: payload,
+      cwd: tmpDir,
+      encoding: "utf8",
+    });
+
+    assert.ok(
+      stdout.includes('"permissionDecision":"deny"'),
+      `CLI stdout must contain a deny — got: "${stdout}"`,
+    );
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
 });

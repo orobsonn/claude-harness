@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   isDeliveryRole,
   bareRole,
@@ -265,7 +266,17 @@ export function processInput(rawStr, deps = {}) {
 // CLI entry point — guarded so imports from tests do not trigger side effects
 // ---------------------------------------------------------------------------
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
+if (isDirectCli()) {
   // Read stdin exactly once into a variable — never re-read
   let raw = "";
   try {
