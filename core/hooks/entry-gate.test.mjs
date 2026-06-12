@@ -523,6 +523,246 @@ test("decide: adversary records adversary_fired without dropping pre-existing br
 });
 
 // ---------------------------------------------------------------------------
+// Gate 3: shipper is the deterministic consumer of the re-gate rail
+// ---------------------------------------------------------------------------
+
+test("decide: shipper with unmatched regate_pending (no matching regate_passed) → deny", () => {
+  const payload = makeAgentPayload("ses_ship_blocked", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ regate_pending: ["task-1"] }); // no regate_passed
+
+  const verdict = decide(payload, { readTriage, readGateStateFn });
+  assert.equal(verdict.allow, false, "shipper must be denied while a re-gate is unmatched");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  assert.ok(
+    verdict.hookSpecificOutput.permissionDecisionReason.includes("task-1"),
+    `deny reason must name the unmatched task — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+  );
+  assert.ok(
+    verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("re-gate"),
+    "deny reason must reference the mandatory re-gate",
+  );
+});
+
+test("decide: shipper with regate_pending matched by regate_passed → allow", () => {
+  const payload = makeAgentPayload("ses_ship_ok", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1"] });
+
+  const verdict = decide(payload, { readTriage, readGateStateFn });
+  assert.equal(verdict.allow, true, "shipper must be allowed once every re-gate is matched");
+});
+
+test("decide: shipper with feature-qualified unmatched regate_pending → deny naming the qualified entry", () => {
+  const payload = makeAgentPayload("ses_ship_qualified", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feature-a" });
+  // Two features share a bare task-1; the qualified form keeps them distinct, and the
+  // unmatched computation reads whatever qualified entries the arrays carry.
+  const readGateStateFn = () => ({
+    regate_pending: ["feature-a/task-1", "feature-b/task-1"],
+    regate_passed: ["feature-b/task-1"],
+  });
+
+  const verdict = decide(payload, { readTriage, readGateStateFn });
+  assert.equal(verdict.allow, false, "shipper must be denied while feature-a/task-1 is unmatched");
+  assert.ok(
+    verdict.hookSpecificOutput.permissionDecisionReason.includes("feature-a/task-1"),
+    "deny reason must name the qualified unmatched entry",
+  );
+  assert.ok(
+    !verdict.hookSpecificOutput.permissionDecisionReason.includes("feature-b/task-1"),
+    "the matched feature-b/task-1 must not appear as unmatched",
+  );
+});
+
+test("decide: shipper with no re-gate markers at all → allow (nothing to consume)", () => {
+  const payload = makeAgentPayload("ses_ship_none", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({});
+
+  const verdict = decide(payload, { readTriage, readGateStateFn });
+  assert.equal(verdict.allow, true, "shipper without any pending re-gate must be allowed");
+});
+
+// ---------------------------------------------------------------------------
+// LOCKED TESTS — delivery-bash-gate
+// PreToolUse(Bash) gate: deny delivery commands when regate_pending is unmatched.
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a minimal PreToolUse Bash payload.
+ * @param {string} sessionId
+ * @param {string} command
+ * @param {object} [extra] - extra top-level fields
+ */
+function makeBashPayload(sessionId, command, extra = {}) {
+  return {
+    session_id: sessionId,
+    tool_name: "Bash",
+    tool_input: { command },
+    ...extra,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B1
+// Given gate-state with an unmatched regate_pending=['task-1'],
+// When a PreToolUse(Bash) payload with command 'git push origin main' is decided,
+// Then permissionDecision:'deny' naming task-1.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B1: Bash 'git push' with unmatched regate_pending → deny naming task-1",
+  () => {
+    const payload = makeBashPayload("ses_bash_push_blocked", "git push origin main");
+    const readGateStateFn = () => ({ regate_pending: ["task-1"] }); // no regate_passed
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "git push must be denied while regate is unmatched");
+    assert.equal(
+      verdict.hookSpecificOutput.permissionDecision,
+      "deny",
+      "permissionDecision must be 'deny'",
+    );
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("task-1"),
+      `deny reason must name the unmatched task — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B1b
+// Same scenario but with 'gh pr create' instead of 'git push'.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B1b: Bash 'gh pr create' with unmatched regate_pending → deny naming task-1",
+  () => {
+    const payload = makeBashPayload("ses_bash_pr_create_blocked", "gh pr create --title 'My PR'");
+    const readGateStateFn = () => ({ regate_pending: ["task-1"] });
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "gh pr create must be denied while regate is unmatched");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("task-1"),
+      `deny reason must name the unmatched task — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B2
+// Given gate-state with regate_pending=['task-1'] AND regate_passed=['task-1'] (matched),
+// When a PreToolUse(Bash) payload with command 'git push origin main' is decided,
+// Then allow.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B2: Bash 'git push' with matched regate_passed → allow",
+  () => {
+    const payload = makeBashPayload("ses_bash_push_ok", "git push origin main");
+    const readGateStateFn = () => ({
+      regate_pending: ["task-1"],
+      regate_passed: ["task-1"],
+    });
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, true, "git push must be allowed once every regate is matched");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B3
+// Read-only commands ('git status', 'git diff') are ALWAYS allowed regardless of regate state.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B3: Bash read-only commands always allowed regardless of regate state",
+  () => {
+    const readGateStateFn = () => ({ regate_pending: ["task-1"] }); // unmatched pending
+    const readOnlyCmds = ["git status", "git diff HEAD", "git log --oneline", "gh pr view 1"];
+
+    for (const cmd of readOnlyCmds) {
+      const payload = makeBashPayload("ses_bash_readonly", cmd);
+      const verdict = decide(payload, { readGateStateFn });
+      assert.equal(
+        verdict.allow,
+        true,
+        `read-only command '${cmd}' must always be allowed — got deny`,
+      );
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B4
+// Absent/empty gate-state → allow delivery command, no throw.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B4: Bash delivery command with absent/empty gate-state → allow, no throw",
+  () => {
+    const payload = makeBashPayload("ses_bash_nostate", "git push");
+    const readGateStateFn = () => ({}); // empty gate state (no regate_pending)
+
+    let verdict;
+    assert.doesNotThrow(() => {
+      verdict = decide(payload, { readGateStateFn });
+    }, "decide must not throw on empty gate-state");
+    assert.equal(verdict.allow, true, "delivery command allowed when gate-state has no regate_pending");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DEFECT M — intermediate git flags before `push` must not bypass the gate
+// ---------------------------------------------------------------------------
+
+test(
+  "Bash 'git -C /x push' with unmatched regate_pending → deny (intermediate -C flag does not bypass)",
+  () => {
+    const payload = makeBashPayload("ses_bash_C_push", "git -C /repo push origin main");
+    const readGateStateFn = () => ({ regate_pending: ["my-feature/task-1"] });
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "git -C /repo push must be gated like a bare git push");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("my-feature/task-1"),
+      "deny reason must name the qualified unmatched entry",
+    );
+  },
+);
+
+test(
+  "Bash 'git --git-dir=... --work-tree=... push' with unmatched regate_pending → deny",
+  () => {
+    const payload = makeBashPayload(
+      "ses_bash_gitdir_push",
+      "git --git-dir=/repo/.git --work-tree=/repo push",
+    );
+    const readGateStateFn = () => ({ regate_pending: ["feat/t1"] });
+    const verdict = decide(payload, { readGateStateFn });
+    assert.equal(verdict.allow, false, "git --git-dir/--work-tree push must be gated");
+  },
+);
+
+test(
+  "Bash 'git -C /x status' with unmatched regate_pending → allow (read-only with intermediate flag)",
+  () => {
+    const payload = makeBashPayload("ses_bash_C_status", "git -C /repo status");
+    const readGateStateFn = () => ({ regate_pending: ["feat/t1"] });
+    const verdict = decide(payload, { readGateStateFn });
+    assert.equal(verdict.allow, true, "git -C /repo status is read-only and must always pass");
+  },
+);
+
+// ---------------------------------------------------------------------------
 // CLI integration: proves the main-guard fires end-to-end as a real CLI.
 // Spawns `node entry-gate.mjs` in a temp cwd (no triage.json) feeding an
 // executor payload, and asserts a deny lands on stdout — confirming main()

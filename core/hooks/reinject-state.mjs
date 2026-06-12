@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isExpired, isSafeFeatureId, isSafeSessionId } from "./lib/gate-lib.mjs";
+import { isExpired, isSafeFeatureId, isSafeSessionId, readGateState } from "./lib/gate-lib.mjs";
 
 const GC_MAX_AGE_DAYS = 7;
 const DEFAULT_PLANS_ROOT = ".claude/plans";
@@ -37,7 +37,7 @@ const STATE_SUBDIR = ".state";
  * Returns null when nothing should be injected (triage missing, malformed, etc.).
  *
  * @param {unknown} payload - Parsed SessionStart hook payload
- * @param {{ readFileSync?: Function, plansRoot?: string }} [opts]
+ * @param {{ readFileSync?: Function, plansRoot?: string, readGateState?: Function }} [opts]
  * @returns {string | null} additionalContext string, or null (do not inject)
  */
 export function buildReinject(payload, opts = {}) {
@@ -80,6 +80,23 @@ export function buildReinject(payload, opts = {}) {
   }
 
   let context = `[Compaction recovery]\nMode: ${mode}\nFeature: ${feature_id}\n`;
+
+  // The re-gate obligation survives compaction: a HIGH sniper fix's regate_pending without a
+  // matching regate_passed is a delivery-blocking precondition. Surface unmatched re-gates in
+  // the reminder so the post-compaction orchestrator does not silently ship a grave fix.
+  const readGateStateFn =
+    typeof opts.readGateState === "function" ? opts.readGateState : readGateState;
+  try {
+    const gateState = readGateStateFn(sessionId);
+    const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+    const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
+    const unmatched = pending.filter((t) => !passed.includes(t));
+    if (unmatched.length > 0) {
+      context += `\nDELIVERY BLOCKED — unmatched re-gate (HIGH sniper fix awaiting strong-eye re-gate): ${unmatched.join(", ")}\n`;
+    }
+  } catch {
+    // fail-open: a gate-state read error must never break the reinject summary
+  }
 
   // Step 2: Optionally enrich with the feature execution plan summary.
   // feature_id comes from on-disk triage.json content — revalidate before any

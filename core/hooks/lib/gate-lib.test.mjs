@@ -366,6 +366,51 @@ test("resetGateState returns false when write cannot succeed (parent is file, no
   });
 });
 
+test("resetGateState on SAME feature preserves regate_pending/regate_passed (delivery-blocking rail survives reclassify)", () => {
+  withTempDir(() => {
+    const sid = "ses-reset-samefeat";
+    mergeGateState(sid, {
+      feature_id: "feat-x",
+      brainstormed: true,
+      adversary_fired: true,
+      regate_pending: ["task-1"],
+      regate_passed: [],
+    });
+    const ok = resetGateState(sid, "feat-x"); // SAME feature reclassify
+    assert.strictEqual(ok, true);
+    const state = readGateState(sid);
+    assert.strictEqual(state.feature_id, "feat-x");
+    assert.deepStrictEqual(state.regate_pending, ["task-1"], "regate_pending must survive same-feature reset");
+    assert.deepStrictEqual(state.regate_passed, [], "regate_passed must survive same-feature reset");
+    assert.strictEqual(state.brainstormed, undefined, "ceremony flags are still cleared on reclassify");
+    assert.strictEqual(state.adversary_fired, undefined, "ceremony flags are still cleared on reclassify");
+  });
+});
+
+test("resetGateState on a DIFFERENT feature PRESERVES regate markers (session-scoped obligation survives a feature switch)", () => {
+  withTempDir(() => {
+    const sid = "ses-reset-switchfeat";
+    mergeGateState(sid, {
+      feature_id: "feat-a",
+      brainstormed: true,
+      adversary_fired: true,
+      regate_pending: ["feat-a/task-1"],
+      regate_passed: [],
+    });
+    resetGateState(sid, "feat-b"); // genuine switch — re-gate obligation must NOT be erased
+    const state = readGateState(sid);
+    assert.strictEqual(state.feature_id, "feat-b");
+    assert.deepStrictEqual(
+      state.regate_pending,
+      ["feat-a/task-1"],
+      "an un-pushed grave fix's re-gate obligation survives a feature switch",
+    );
+    assert.deepStrictEqual(state.regate_passed, [], "regate_passed survives the switch too");
+    assert.strictEqual(state.brainstormed, undefined, "per-feature ceremony flags are still cleared");
+    assert.strictEqual(state.adversary_fired, undefined, "per-feature ceremony flags are still cleared");
+  });
+});
+
 test("mergeGateState after resetGateState preserves feature_id (merge does not drop it)", () => {
   withTempDir(() => {
     const sid = "ses-reset-merge";

@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -71,6 +72,118 @@ test("vendor-core: all required hook files are copied to target", async (t) => {
         `${file} should exist in vendored target`
       );
     }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: installs .dev.vars.example placeholder when absent", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" }
+    );
+
+    if (result.status !== 0) {
+      throw new Error(`vendor-core failed: ${result.stderr || result.stdout}`);
+    }
+
+    const placeholder = join(tempDir, ".dev.vars.example");
+    assert.ok(
+      existsSync(placeholder),
+      ".dev.vars.example should be installed at the project root"
+    );
+
+    const content = readFileSync(placeholder, "utf8");
+    assert.match(
+      content,
+      /ANTHROPIC_AUTH_TOKEN=\s*$/m,
+      "placeholder must carry the token key with no real value"
+    );
+    assert.ok(
+      !/ANTHROPIC_AUTH_TOKEN=\S/.test(content),
+      "placeholder must NOT contain a real token value"
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: ensures root .gitignore ignores .dev.vars, idempotently", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    // Seed a root .gitignore that LACKS .dev.vars (the documented setup copies
+    // .dev.vars.example -> .dev.vars at the root, which the runner reads).
+    writeFileSync(join(tempDir, ".gitignore"), "node_modules/\n");
+
+    const run = () =>
+      spawnSync(
+        "node",
+        [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+        { encoding: "utf8", stdio: "pipe" }
+      );
+
+    const first = run();
+    if (first.status !== 0) {
+      throw new Error(`vendor-core failed: ${first.stderr || first.stdout}`);
+    }
+
+    const gitignore = join(tempDir, ".gitignore");
+    const afterFirst = readFileSync(gitignore, "utf8");
+    assert.match(
+      afterFirst,
+      /^\.dev\.vars$/m,
+      "root .gitignore must ignore .dev.vars after vendor runs"
+    );
+    assert.ok(
+      afterFirst.includes("node_modules/"),
+      "existing .gitignore entries must be preserved"
+    );
+
+    const second = run();
+    if (second.status !== 0) {
+      throw new Error(`vendor-core failed: ${second.stderr || second.stdout}`);
+    }
+
+    const afterSecond = readFileSync(gitignore, "utf8");
+    const occurrences = afterSecond
+      .split(/\r?\n/)
+      .filter((line) => line.trim() === ".dev.vars").length;
+    assert.strictEqual(
+      occurrences,
+      1,
+      "re-running vendor must NOT duplicate the .dev.vars block (idempotent)"
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: glob/example siblings do NOT short-circuit the bare .dev.vars append", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    // A pre-existing .gitignore with ONLY sibling entries: the committed example file and
+    // a glob that does NOT match the extensionless .dev.vars. A prefix match would wrongly
+    // treat the token file as already ignored and skip the append.
+    writeFileSync(join(tempDir, ".gitignore"), ".dev.vars.example\n.dev.vars.*\n");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" }
+    );
+    if (result.status !== 0) {
+      throw new Error(`vendor-core failed: ${result.stderr || result.stdout}`);
+    }
+
+    const after = readFileSync(join(tempDir, ".gitignore"), "utf8");
+    assert.match(
+      after,
+      /^\.dev\.vars$/m,
+      "bare .dev.vars must be appended even when sibling glob/example entries already exist"
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

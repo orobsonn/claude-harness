@@ -1,17 +1,25 @@
 /**
- * @description PreToolUse(Agent) hook — deterministic entry gate for harness delivery roles.
+ * @description PreToolUse(Agent|Bash) hook — deterministic entry gate for harness delivery roles.
  *
  * Fail-open contract: exits 0 on ANY infra error. DENY is emitted ONLY in the deliberate
- * gate-decision branch (Gate 1 or Gate 2). A buggy gate must never brick delivery work.
+ * gate-decision branch. A buggy gate must never brick delivery work.
  *
- * Gate order:
+ * Bash gate (delivery-bash-gate):
+ *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
+ *   any unmatched regate_pending (a regate_pending task_id with no matching regate_passed).
+ *   Read-only commands (git status, git diff, git log, gh pr view/list) always pass.
+ *   This closes the second delivery door: a direct Bash delivery command bypasses the
+ *   PreToolUse(Agent) shipper gate, so this gate closes both doors.
+ *
+ * Agent gate order:
  *   1. agent_id present → ALLOW (subagent context, no state pollution)
  *   2. subagent_type not a delivery role → ALLOW (casual agents free)
  *   3. Gate 1: triage.json must exist with mode in {LIGHT, FULL} → DENY if not
  *   4. On allow path, subagent_type=adversary → record adversary_fired in gate-state.json
  *   5. Gate 2 (planner only, BOTH LIGHT and FULL): gate-state.json must have BOTH
  *      brainstormed AND adversary_fired → DENY if either missing
- *   6. Otherwise → ALLOW
+ *   6. Gate 3 (shipper): deny while any regate_pending is unmatched by regate_passed
+ *   7. Otherwise → ALLOW
  *
  * Deny output format (stdout, then exit 0):
  *   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}
@@ -56,6 +64,104 @@ function defaultReadTriage(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery-command detection — delivery-bash-gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks if a bash command string is a delivery action that should be gated when
+ * an unmatched regate_pending exists in gate-state.
+ *
+ * Matches (deny-eligible):
+ *   - git push (all variants: flags, remote, branch, upstream tracking, etc.)
+ *   - gh pr create (with any trailing flags/args)
+ *   - gh pr merge (with any trailing flags/args)
+ *
+ * Does NOT match read-only inspection:
+ *   - git status, git diff, git log, git show, git fetch, git pull, git branch
+ *   - gh pr view, gh pr list
+ *
+ * @param {string} command - The command string to inspect
+ * @returns {boolean} true if the command is a delivery action, false otherwise
+ */
+export function isDeliveryCommand(command) {
+  // git push — tolerate intermediate git GLOBAL flags between `git` and `push`
+  // (-C <path>, -c k=v, --git-dir=, --work-tree=) so `git -C /repo push` is still gated.
+  // The flags must come BEFORE push and the first non-flag token must be `push`, so
+  // read-only subcommands (git -C /x status/diff/log) never match. The trailing word
+  // boundary still rejects 'git pushing' / 'git push-mirror'.
+  if (/\bgit\s+(?:(?:-C\s+\S+|-c\s+\S+|--git-dir=\S+|--work-tree=\S+)\s+)*push\b/.test(command)) {
+    return true;
+  }
+  // gh pr create
+  if (/\bgh\s+pr\s+create\b/.test(command)) {
+    return true;
+  }
+  // gh pr merge
+  if (/\bgh\s+pr\s+merge\b/.test(command)) {
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Bash gate — decideBash (internal)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decides whether to allow or deny a Bash tool dispatch.
+ * Only delivery commands (git push, gh pr create, gh pr merge) are gated; all other
+ * Bash commands pass freely. Fail-open on any infra error (never brick read-only work).
+ *
+ * @param {object} payload - The parsed Bash hook payload
+ * @param {object} deps - Injectable seams
+ * @param {function} deps.readGateStateFn - (sessionId: string) => object
+ * @returns {{ allow: true }
+ *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
+ */
+function decideBash(payload, { readGateStateFn }) {
+  const command = payload?.tool_input?.command;
+  // Non-string command → infra error → fail-open
+  if (typeof command !== "string") {
+    return { allow: true };
+  }
+  // Not a delivery command → allow freely (inspection, builds, tests, etc.)
+  if (!isDeliveryCommand(command)) {
+    return { allow: true };
+  }
+  // Delivery command detected. Run the same unmatched-regate check as Gate 3 (shipper).
+  const sessionId = payload.session_id;
+  if (typeof sessionId !== "string" || sessionId.length === 0 || !isSafeSessionId(sessionId)) {
+    // Cannot load state without a safe session_id → fail-open (never brick)
+    return { allow: true };
+  }
+  let gateState = {};
+  try {
+    gateState = readGateStateFn(sessionId);
+  } catch {
+    gateState = {};
+  }
+  const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+  const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
+  const unmatched = pending.filter((t) => !passed.includes(t));
+  if (unmatched.length > 0) {
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[entry-gate] Blocked: delivery command denied — HIGH sniper fix(es) for task(s) " +
+          `${unmatched.join(", ")} still await the mandatory strong-eye re-gate ` +
+          "(regate-pending without regate-passed). Dispatch the fresh-virgin adversary and " +
+          "stamp regate-passed before running any delivery command " +
+          "(git push / gh pr create / gh pr merge).",
+      },
+    };
+  }
+  return { allow: true };
+}
+
+// ---------------------------------------------------------------------------
 // Pure decision layer — testable without spawning
 // ---------------------------------------------------------------------------
 
@@ -84,6 +190,13 @@ export function decide(payload, deps = {}) {
   // Non-object payload → infra error → fail-open
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { allow: true };
+  }
+
+  // Bash tool: delivery-bash-gate — gates delivery commands regardless of who runs them
+  // (orchestrator or shipper). This closes the second delivery door: a direct git push /
+  // gh pr create / gh pr merge bypasses the PreToolUse(Agent) shipper gate.
+  if (payload.tool_name === "Bash") {
+    return decideBash(payload, { readGateStateFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)
@@ -215,7 +328,36 @@ export function decide(payload, deps = {}) {
     return { allow: true };
   }
 
-  // All other delivery roles (executor, compliance, sniper, security, harvester, shipper,
+  // Gate 3: shipper is the deterministic CONSUMER of the re-gate rail. A HIGH sniper fix
+  // stamps regate_pending; the mandatory strong-eye re-gate stamps regate_passed. An
+  // unmatched regate_pending (pending without a matching passed) is a delivery-blocking
+  // precondition — deny the shipper until every grave cheap-hand fix has been re-gated.
+  if (role === "shipper") {
+    let gateState = {};
+    try {
+      gateState = readGateStateFn(sessionId);
+    } catch {
+      gateState = {};
+    }
+    const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+    const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
+    const unmatched = pending.filter((t) => !passed.includes(t));
+    if (unmatched.length > 0) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: HIGH sniper fix(es) for task(s) ${unmatched.join(", ")} still ` +
+            "await the mandatory strong-eye re-gate (regate-pending without regate-passed). " +
+            "Dispatch the fresh-virgin adversary and stamp regate-passed before delivery.",
+        },
+      };
+    }
+  }
+
+  // All other delivery roles (executor, compliance, sniper, security, harvester,
   // plan-reviewer) with a valid Gate 1 triage → allow.
   return { allow: true };
 }

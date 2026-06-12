@@ -20,7 +20,10 @@ import { readFileSync } from "node:fs";
 
 // ---------- Allowed enum values (mirror the documented contract) ----------
 
-const TIERS = ["haiku", "sonnet", "opus"];
+// Claude aliases — the only models an EYE role may resolve to. fable joins the
+// classic three so the cheap-judge tier is expressible without ever letting an
+// eye fall through to a non-Claude (Ollama) model.
+const CLAUDE_ALIASES = ["haiku", "sonnet", "opus", "fable"];
 const MODES = ["light", "full"];
 const SEVERITIES = ["low", "medium", "high"];
 // complexity is the OPTIONAL executor-model axis (reasoning depth), decoupled
@@ -29,9 +32,18 @@ const SEVERITIES = ["low", "medium", "high"];
 const COMPLEXITIES = ["low", "medium", "high"];
 const DEMO_TYPES = ["markdown", "smoke", "playwright"];
 
-// Fixed roles in model_strategy. executor/sniper are intentionally absent:
-// they are tier-variable — executor resolves from tiers[task.complexity ?? task.severity],
-// sniper from tiers[issue.severity], at dispatch.
+// task.id must be the SAME kebab-case shape mark.mjs accepts (isSafeFeatureId), so the
+// re-gate stamp (mark.mjs regate-pending/passed --task-id <id>) can never silently fail
+// on a legit-but-unstampable id (e.g. 'auth_login', 'T1') → no regate_pending → block
+// never fires. Over-permissive task.id here is a fail-OPEN of the delivery block.
+const TASK_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const TASK_ID_MAX_LENGTH = 64;
+
+// Fixed EYE roles in model_strategy — the judging roles. executor/sniper (the
+// HANDS) are intentionally absent: they are tier-variable and resolve from the
+// active hand tier map — executor from [task.complexity ?? task.severity],
+// sniper from [issue.severity] — at dispatch. Every fixed eye role must resolve
+// to a Claude alias under BOTH shapes (no eye ever runs on a non-Claude model).
 const FIXED_ROLES = [
   "planner",
   "plan-reviewer",
@@ -94,8 +106,10 @@ function checkStringArrayMin1(value, path, errors) {
 
 /**
  * @description Validates locked_tests: a non-empty array of objects, each with a
- * non-empty `test_path` (the test file the executor authors via TDD) and a
- * non-empty `assertion` (Given/When/Then prose asserting an observable).
+ * non-empty `test_path` (the test file the test-author transcribes — frozen; the executor
+ * receives it read-only), a non-empty `assertion` (Given/When/Then prose asserting an
+ * observable), and an OPTIONAL `fixture_paths` (the enumerated fixture files the test-author
+ * may also write, captured in the manifest so the frozen-manifest gate covers them too).
  */
 function validateLockedTests(value, path, errors) {
   if (!Array.isArray(value)) {
@@ -115,7 +129,7 @@ function validateLockedTests(value, path, errors) {
     if (!isString(lt.test_path) || lt.test_path.length < 1) {
       errors.add(
         `${p}.test_path`,
-        "must be a non-empty string — the test file the executor authors (within scope_paths or the project's test dir)"
+        "must be a non-empty string — the test file the test-author transcribes (frozen; the executor receives it read-only)"
       );
     }
     if (!isString(lt.assertion) || lt.assertion.length < 1) {
@@ -124,10 +138,71 @@ function validateLockedTests(value, path, errors) {
         "must be a non-empty Given/When/Then string asserting an observable"
       );
     }
+    // fixture_paths is OPTIONAL: the enumerated fixtures the test-author writes alongside the
+    // frozen test. When present it must be a non-empty array of non-empty strings.
+    if (lt.fixture_paths !== undefined) {
+      if (!Array.isArray(lt.fixture_paths)) {
+        errors.add(`${p}.fixture_paths`, "must be an array of non-empty strings when present");
+      } else if (lt.fixture_paths.length < 1) {
+        errors.add(`${p}.fixture_paths`, "must have at least 1 item when present");
+      } else {
+        lt.fixture_paths.forEach((fp, j) => {
+          if (!isString(fp) || fp.length < 1) {
+            errors.add(`${p}.fixture_paths[${j}]`, "must be a non-empty string");
+          }
+        });
+      }
+    }
   });
 }
 
 // ---------- model_strategy ----------
+
+/**
+ * @description Legacy Claude-only tier map: low/medium/high, each a Claude
+ * alias. Hands and eyes both resolve here in the back-compat shape.
+ */
+function validateLegacyTiers(tiers, errors) {
+  if (!isObject(tiers)) {
+    errors.add("model_strategy.tiers", "must be an object");
+    return;
+  }
+  for (const key of TIER_KEYS) {
+    const v = tiers[key];
+    if (v === undefined) {
+      errors.add(`model_strategy.tiers.${key}`, "is required");
+    } else if (!CLAUDE_ALIASES.includes(v)) {
+      errors.add(
+        `model_strategy.tiers.${key}`,
+        `must be a Claude alias (one of ${CLAUDE_ALIASES.join(", ")})`
+      );
+    }
+  }
+}
+
+/**
+ * @description Split-shape HAND tier map: low/medium/high, each a non-empty
+ * model id (an Ollama model id is fine — values are NOT constrained to an enum).
+ * All three keys are required so the executor/sniper `complexity ?? severity`
+ * fallback always resolves within hand_tiers.
+ */
+function validateHandTiers(handTiers, errors) {
+  if (!isObject(handTiers)) {
+    errors.add("model_strategy.hand_tiers", "must be an object");
+    return;
+  }
+  for (const key of TIER_KEYS) {
+    const v = handTiers[key];
+    if (v === undefined) {
+      errors.add(`model_strategy.hand_tiers.${key}`, "is required");
+    } else if (!isString(v) || v.length < 1) {
+      errors.add(
+        `model_strategy.hand_tiers.${key}`,
+        "must be a non-empty model id string"
+      );
+    }
+  }
+}
 
 function validateModelStrategy(ms, errors) {
   if (!isObject(ms)) {
@@ -135,42 +210,60 @@ function validateModelStrategy(ms, errors) {
     return;
   }
 
-  // tiers: object with low/medium/high, each a valid tier alias
-  if (!isObject(ms.tiers)) {
-    errors.add("model_strategy.tiers", "must be an object");
+  // Shape is detected by the presence of hand_tiers. Exactly one tier map is
+  // allowed: legacy `tiers` (Claude-only back-compat) XOR split `hand_tiers`.
+  const hasLegacy = ms.tiers !== undefined;
+  const hasSplit = ms.hand_tiers !== undefined;
+
+  if (hasLegacy && hasSplit) {
+    errors.add(
+      "model_strategy",
+      "tiers (legacy Claude-only shape) and hand_tiers (split shape) are mutually exclusive — provide exactly one"
+    );
+  } else if (!hasLegacy && !hasSplit) {
+    errors.add(
+      "model_strategy",
+      "must provide exactly one of tiers (legacy Claude-only shape) or hand_tiers (split shape)"
+    );
+  } else if (hasSplit) {
+    validateHandTiers(ms.hand_tiers, errors);
   } else {
-    for (const key of TIER_KEYS) {
-      const v = ms.tiers[key];
-      if (v === undefined) {
-        errors.add(`model_strategy.tiers.${key}`, "is required");
-      } else if (!TIERS.includes(v)) {
-        errors.add(
-          `model_strategy.tiers.${key}`,
-          `must be one of ${TIERS.join(", ")}`
-        );
-      }
-    }
+    validateLegacyTiers(ms.tiers, errors);
   }
 
-  // 7 fixed roles, each a valid tier alias
+  // 7 fixed eye roles, each a Claude alias under BOTH shapes — an eye must
+  // never resolve to a non-Claude (Ollama) model.
   for (const role of FIXED_ROLES) {
     const v = ms[role];
     if (v === undefined) {
       errors.add(`model_strategy.${role}`, "is a required fixed role");
-    } else if (!TIERS.includes(v)) {
+    } else if (!CLAUDE_ALIASES.includes(v)) {
       errors.add(
         `model_strategy.${role}`,
-        `must be one of ${TIERS.join(", ")}`
+        `must be a Claude alias (one of ${CLAUDE_ALIASES.join(", ")}) — eyes never resolve to a non-Claude model`
       );
     }
   }
 
-  // executor/sniper must NOT appear — they are tier-variable, not fixed roles
+  // executor/sniper must NOT appear as explicit keys under either shape — they
+  // are hand roles, resolved from the active tier map at dispatch.
   for (const forbidden of FORBIDDEN_ROLES) {
     if (forbidden in ms) {
       errors.add(
         `model_strategy.${forbidden}`,
-        "must not be present (tier-variable role, resolved from tiers[severity])"
+        "must not be present (hand role, resolved from the tier map at dispatch)"
+      );
+    }
+  }
+
+  // Unknown-key allowlist: prevents silently ignoring dropped keys (e.g. eye_tiers).
+  // FORBIDDEN_ROLES included so they don't double-fire with the loop above.
+  const ALLOWED_MS_KEYS = new Set([...FIXED_ROLES, "tiers", "hand_tiers", ...FORBIDDEN_ROLES]);
+  for (const key of Object.keys(ms)) {
+    if (!ALLOWED_MS_KEYS.has(key)) {
+      errors.add(
+        `model_strategy.${key}`,
+        `unknown key (eye_tiers was intentionally dropped; eyes resolve from the 7 fixed roles)`
       );
     }
   }
@@ -204,6 +297,11 @@ function validateTask(task, index, errors) {
 
   if (!isString(task.id) || task.id.length < 1) {
     errors.add(`${base}.id`, "must be a non-empty string");
+  } else if (task.id.length > TASK_ID_MAX_LENGTH || !TASK_ID_REGEX.test(task.id)) {
+    errors.add(
+      `${base}.id`,
+      "must be kebab-case (a-z, 0-9, hyphens only; ≤64 chars) — the same shape mark.mjs accepts so the re-gate stamp never silently fails"
+    );
   }
   if (!isString(task.spec) || task.spec.length < 1) {
     errors.add(`${base}.spec`, "must be a non-empty string");
