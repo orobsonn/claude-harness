@@ -64,11 +64,14 @@ For every AC in the spec, derive at least one entry in `locked_tests` for the ta
 
 **Shape:** each `locked_test` is an **object** `{ "test_path": "...", "assertion": "..." }`:
 - `assertion` — Given/When/Then reducible to one assertion on an observable: Given `<precondition>`, When `<action>`, Then `<observable outcome with a concrete value>`.
-- `test_path` — the **test file the executor will author** (TDD: write it red, implement to green, then it is frozen). It must be writable by the executor — **within `scope_paths`** or the project's test directory (if a separate test dir, add it to the task's `scope_paths`). Multiple assertions may share one `test_path`.
+- `test_path` — the **test file the TEST-AUTHOR transcribes** (a cheap Ollama hand transcribes the pinned assertions; the file is then frozen). After freeze, the **executor receives it READ-ONLY** — it never authors or edits the test. The path must live **within `scope_paths`** or the project's test directory (if a separate test dir, add it to the task's `scope_paths`). Multiple assertions may share one `test_path` — the test-author is dispatched ONCE per `test_path` and transcribes ALL of that path's assertions into the single file.
+
+- `fixture_paths` (**optional** array of exact paths) — when an assertion needs support data (an input data file, a snapshot, a sample the assertion references by name), **enumerate the fixture files here**. The test-author is then permitted to write exactly these files, and they are captured in the freeze manifest's dependency closure. Omit when the test needs no support data. Do NOT leave a fixture the test reads unenumerated — an unfrozen dependency breaks the deterministic gate.
 
 ```json
 "locked_tests": [
-  { "test_path": "test/shorten.test.ts", "assertion": "Given a valid URL, When POST /shorten, Then 201 with body {slug, short_url} where short_url ends with slug" }
+  { "test_path": "test/shorten.test.ts", "assertion": "Given a valid URL, When POST /shorten, Then 201 with body {slug, short_url} where short_url ends with slug" },
+  { "test_path": "test/import.test.ts", "assertion": "Given the sample CSV, When POST /import, Then 200 with body {imported: 3}", "fixture_paths": ["test/fixtures/sample.csv"] }
 ]
 ```
 
@@ -89,7 +92,24 @@ Rules:
 - Each locked_test asserts an **observable** (body / returned value / persisted state / surfaced error) — never status-or-existence alone.
 - A locked_test must be traceable to a `criterion_refs` entry on the same task.
 - Every locked_test carries a `test_path` the executor can write (within `scope_paths` or the project test dir).
-- The executor **authors** the test file from the assertion (red→green); **after authoring** it is frozen — the executor cannot edit or relax it. It is the deterministic gate.
+- The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
+
+  > **Supersedes §3.7 'Chosen UX':** the orchestrator+compliance flow supersedes any prior description of the planner validating the test in-run. The planner's sole role is assertion-pinning; per-task fidelity validation belongs to compliance (a Claude eye).
+
+---
+
+## Step 3.1 — Migration and SQL locked_tests (cheap-hand rule)
+
+When a task's `scope_paths` include `**/*.sql` or `**/migrations/**` **and** the task is routed to a cheap-hand executor (resolved from `hand_tiers` in the model_strategy), a locked_test is mandatory and must be executable against a real database.
+
+**Requirement:** each migration locked_test must:
+1. **Spin up an ephemeral database** (in-memory SQLite, Docker container, or cloud sandbox) at a known baseline schema state.
+2. **Apply the migration** against that baseline.
+3. **Assert post-migration state** (schema changes, constraints, indexes, created rows, etc.) — **NOT a text-match assertion on the migration file itself**.
+
+A locked_test that only reads the migration file and checks for keywords ("CREATE TABLE", "ADD COLUMN", "ALTER", etc.) is **theatre** — it proves the file was written but not that the migration is correct, syntactically valid, or even executable. The deterministic rail only works if the frozen test proves the migration *executes* and leaves the database in the expected state.
+
+This rule closes the cheap-hand SQL gap: a tester eye (compliance, before freeze) cannot execute DDL in the schema checker (tsc/lint do not run databases), so the frozen locked_test itself becomes the deterministic gate that the executor cannot relax, rewrite, or weaken. The executor only passes when the migration actually works.
 
 ---
 
@@ -109,17 +129,17 @@ When in doubt between medium and high, pick high — a wrong downgrade of scruti
 
 ## Step 4b — Classify complexity (executor model)
 
-`complexity` (low/medium/high) sets **only the executor model**, resolved from `model_strategy.tiers[complexity]` at dispatch (absent → falls back to `severity`). It measures **residual reasoning**: how much thinking is left for the executor *after* the plan has already resolved every decision (`resolved_judgments`), pinned behavior (`locked_tests`), named scope (`scope_paths`), and stated acceptance (`criterion_refs`). A well-specified task has **low residual complexity even in a hard domain** — the planner (Opus) front-loaded the thinking, so the executor just implements. This is independent of `severity`. Bias DOWN: a rich plan + the Opus review net (adversary + compliance + security) mean a cheap executor suffices; paying Opus to *generate* as well is double-paying. The expensive reasoning belongs at the ends — **plan** and **review** — not the middle.
+`complexity` (low/medium/high) sets **only the executor model**, resolved from `model_strategy.hand_tiers[complexity]` at dispatch (absent → falls back to `severity`) — the executor is a HAND (cheap Ollama in v1), never a Claude eye. It measures **residual reasoning**: how much thinking is left for the executor *after* the plan has already resolved every decision (`resolved_judgments`), pinned behavior (`locked_tests`), named scope (`scope_paths`), and stated acceptance (`criterion_refs`). A well-specified task has **low residual complexity even in a hard domain** — the planner (Opus) front-loaded the thinking, so the executor just implements. This is independent of `severity`. Bias DOWN: a rich plan + the Opus review net (adversary + compliance + security) mean a cheap executor suffices; paying Opus to *generate* as well is double-paying. The expensive reasoning belongs at the ends — **plan** and **review** — not the middle.
 
 **Optional deterministic cross-check:** for a band you're unsure of, run `node .claude/skills/creating-plans/references/complexity-scorer.mjs <file>` — a dependency-free heuristic returning a `low/medium/high/x-high` band. It is **advisory** (your residual-reasoning judgment is primary, and it scores the whole file, not the delta — a large file barely touched over-scores); use a surprising score as a prompt to re-judge, and treat an `x-high` as a real signal to split.
 
-| Complexity | Executor model | When |
+| Complexity | Executor hand (`hand_tiers`) | When |
 |---|---|---|
-| **low** | haiku | Trivial mechanical work — DDL/migration with no logic, constants/config/enums, a pure function fully covered by `locked_tests` |
-| **medium** | sonnet | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
-| **high** | opus | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
+| **low** | `hand_tiers.low` (cheap Ollama) | Trivial mechanical work — DDL/migration with no logic, constants/config/enums, a pure function fully covered by `locked_tests` |
+| **medium** | `hand_tiers.medium` (cheap Ollama) | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
+| **high** | `hand_tiers.high` (Claude hand in v1) | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
 
-**Decompose before reaching for Opus.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `tiers[severity]`.
+**Decompose before reaching for the high hand.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `hand_tiers[severity]`.
 
 ---
 
@@ -153,7 +173,7 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 
 ## Step 6 — scope_paths, resolved_judgments, criterion_refs
 
-**`scope_paths`** (glob array, min 1): the paths the executor may write or edit. The harness gate blocks writes outside these paths. Be specific — prefer `src/handlers/shorten.ts` over `src/**`.
+**`scope_paths`** (array of **exact file or directory paths**, min 1 — a directory entry ends with `/`; these are **NOT globs**: the scope and allowed-write checks do prefix/exact matching, not glob expansion). The paths the executor may write or edit; the harness gate blocks writes outside them. Be specific — prefer `src/handlers/shorten.ts` (exact file) or `src/handlers/` (directory prefix) over a broad parent.
 
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
@@ -181,21 +201,35 @@ If a decision is genuinely open (the product has not resolved it), **stop and as
 
 Read the harness settings (project or global config). Freeze the resolved tier aliases into the plan. This snapshot is deterministic — orchestrating-delivery uses exactly this, ignoring later config changes.
 
-Required shape (validated by `references/validate-plan.mjs`):
+The model_strategy supports two shapes:
+
+**Legacy shape (Claude-only, back-compat):**
 ```json
 "model_strategy": {
   "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
-  "planner":       "opus",
-  "plan-reviewer": "opus",
-  "compliance":    "sonnet",
-  "adversary":     "opus",
-  "security":      "opus",
-  "shipper":       "sonnet",
-  "harvester":     "sonnet"
+  "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
+  "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }
 ```
 
-Note: `executor` and `sniper` are NOT listed here — they are tier-variable. The executor resolves from `tiers[task.complexity ?? task.severity]` (reasoning depth); the sniper resolves from `tiers[issue.severity]` (defect gravity).
+**Split shape (hands/eyes split, recommended):**
+```json
+"model_strategy": {
+  "hand_tiers": { "low": "deepseek-v4-flash", "medium": "kimi-k2.6", "high": "deepseek-v4-pro" },
+  "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
+  "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
+}
+```
+
+Both shapes require all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, opus, or fable).
+
+**Critical rule:** No eye role may ever resolve to a non-Claude model (e.g., Ollama). Eyes are the judging roles and must always run on Claude for security and reasoning fidelity.
+
+**Hand roles (executor and sniper):**
+- `executor` resolves from `hand_tiers[task.complexity ?? task.severity]` at dispatch (reasoning depth)
+- `sniper` resolves from `hand_tiers[issue.severity]` at dispatch (defect gravity)
+- Both hand roles are **never** listed explicitly in model_strategy — they resolve from the active `hand_tiers` or `tiers` map at dispatch
+- The split shape decouples hand execution models (cheap, e.g., Ollama) from eye judgment (always Claude), enabling the "strong eyes, cheap hands" delivery pattern
 
 ---
 

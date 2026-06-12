@@ -4,6 +4,16 @@
 .claude/plans/current.md
 .claude/plans/*.local.md
 
+# Secrets — Ollama auth token (dispatch-hand) and any env file, never commit
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+
+# Run buffers / session dirs — ephemeral harness artifacts, never commit
+/findings.md
+/projects/
+
 # OS
 .DS_Store
 *.log

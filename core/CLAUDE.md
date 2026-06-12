@@ -116,10 +116,11 @@ When compacting, preserve:
 - **mode** — triage classification (no-ceremony, QUICK, LIGHT, FULL)
 - **plan path** — absolute path to the execution plan (`.claude/plans/<feature_id>/execution-plan.json`)
 - **gate state** — the entry gate state, including `session_id` and the path to `.claude/plans/.state/<session_id>/gate-state.json`
+- **re-gate obligation** — any `regate-pending` (HIGH sniper fix) without a matching `regate-passed` (same feature-id + task-id) in the gate-state is a **delivery-blocking precondition**: a grave cheap-hand fix still awaits its mandatory strong-eye re-gate. This obligation survives compaction — never drop it; re-read the gate-state markers and block delivery until every `regate-pending` is matched by a `regate-passed`.
 
 After compaction, re-read these artifacts from disk to resume:
 1. The current phase and mode from memory or the execution plan.
-2. The gate state from `.claude/plans/.state/<session_id>/gate-state.json`.
+2. The gate state from `.claude/plans/.state/<session_id>/gate-state.json` — including any unmatched `regate-pending` (a HIGH sniper fix still awaiting its strong-eye re-gate; delivery-blocking).
 3. The execution plan summary from `.claude/plans/<feature_id>/execution-plan.json`.
 
 This allows recovery without losing continuity when the context limit is reached during a harness run.

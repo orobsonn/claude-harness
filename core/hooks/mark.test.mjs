@@ -68,6 +68,73 @@ test("mark.test.mjs", async (t) => {
     assert.match(result.error, /invalid feature_id/);
   });
 
+  // --- regate-pending / regate-passed markers (the re-gate rail) ---
+
+  await t.test("parseArgs: parses regate-pending --feature-id --task-id correctly", () => {
+    const result = parseArgs([
+      "node",
+      "mark.mjs",
+      "regate-pending",
+      "--feature-id",
+      "foo",
+      "--task-id",
+      "task-1",
+    ]);
+    assert.deepEqual(result, {
+      marker: "regate-pending",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("parseArgs: parses regate-passed --feature-id --task-id correctly", () => {
+    const result = parseArgs([
+      "node",
+      "mark.mjs",
+      "regate-passed",
+      "--feature-id",
+      "foo",
+      "--task-id",
+      "task-1",
+    ]);
+    assert.deepEqual(result, {
+      marker: "regate-passed",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("parseArgs: returns null when regate marker is missing --task-id", () => {
+    const result = parseArgs(["node", "mark.mjs", "regate-pending", "--feature-id", "foo"]);
+    assert.equal(result, null);
+  });
+
+  await t.test("run: succeeds with valid feature_id and task_id for regate-pending", () => {
+    const result = run({ marker: "regate-pending", feature_id: "foo", task_id: "task-1" });
+    assert.equal(result.success, true);
+    assert.deepEqual(result.output, {
+      marker: "regate-pending",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("run: succeeds with valid feature_id and task_id for regate-passed", () => {
+    const result = run({ marker: "regate-passed", feature_id: "foo", task_id: "task-1" });
+    assert.equal(result.success, true);
+    assert.deepEqual(result.output, {
+      marker: "regate-passed",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("run: rejects regate marker with invalid task_id", () => {
+    const result = run({ marker: "regate-pending", feature_id: "foo", task_id: "../x" });
+    assert.equal(result.success, false);
+    assert.match(result.error, /invalid task_id/);
+  });
+
   // ========================================================================
   // Integration tests spawning the CLI as subprocess
   // ========================================================================
@@ -116,6 +183,53 @@ test("mark.test.mjs", async (t) => {
       const parsed = JSON.parse(stdout);
       assert.equal(parsed.feature_id, id);
     }
+  });
+
+  await t.test("CLI: returns exit 0 and JSON with task_id for regate-pending", async () => {
+    const { exitCode, stdout, stderr } = await spawnMark([
+      "regate-pending",
+      "--feature-id",
+      "foo",
+      "--task-id",
+      "task-1",
+    ]);
+
+    assert.equal(exitCode, 0, `Expected exit 0, got ${exitCode}\nstderr: ${stderr}`);
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(parsed, {
+      marker: "regate-pending",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("CLI: returns exit 0 and JSON with task_id for regate-passed", async () => {
+    const { exitCode, stdout } = await spawnMark([
+      "regate-passed",
+      "--feature-id",
+      "foo",
+      "--task-id",
+      "task-1",
+    ]);
+
+    assert.equal(exitCode, 0, `Expected exit 0, got ${exitCode}`);
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(parsed, {
+      marker: "regate-passed",
+      feature_id: "foo",
+      task_id: "task-1",
+    });
+  });
+
+  await t.test("CLI: exits non-zero when regate marker omits --task-id", async () => {
+    const { exitCode, stderr } = await spawnMark([
+      "regate-pending",
+      "--feature-id",
+      "foo",
+    ]);
+
+    assert.notEqual(exitCode, 0, "Expected non-zero exit code");
+    assert.match(stderr, /invalid command/, "stderr should mention invalid command");
   });
 
   await t.test("CLI: rejects feature_id exceeding 64 characters", async () => {

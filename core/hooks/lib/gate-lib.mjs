@@ -179,21 +179,31 @@ export function mergeGateState(sessionId, patch) {
 }
 
 /**
- * Atomically OVERWRITES gate-state.json with exactly `{ feature_id: featureId }`,
- * discarding any prior brainstormed/adversary_fired flags. Used on (re)classify so
- * per-feature ceremony never carries stale flags across features in one session.
+ * Atomically OVERWRITES gate-state.json on (re)classify, discarding the per-feature
+ * ceremony flags (brainstormed/adversary_fired) so they never carry stale across features.
+ *
+ * Re-gate rail invariant: regate_pending/regate_passed are preserved UNCONDITIONALLY —
+ * including across a genuine feature SWITCH. A HIGH sniper fix's re-gate obligation is the
+ * SESSION's (the un-pushed branch persists across a feature switch), so a grave fix on
+ * feature A must never ship un-re-gated just because the session reclassified to feature B.
+ * Only the per-feature ceremony flags (brainstormed/adversary_fired) are discarded on reclassify.
+ *
  * Writes to <path>.<pid>.tmp then fs.renameSync to target (atomic; pid-suffixed temp
  * avoids concurrent-process collision). Never throws. Returns true on success, false otherwise.
  * @param {string} sessionId - The session identifier
- * @param {string} featureId - The feature_id to stamp as the sole field
+ * @param {string} featureId - The feature_id to stamp
  * @returns {boolean} true on success, false on any error
  */
 export function resetGateState(sessionId, featureId) {
   try {
+    const current = readGateState(sessionId);
+    const next = { feature_id: featureId };
+    if (Array.isArray(current.regate_pending)) next.regate_pending = current.regate_pending;
+    if (Array.isArray(current.regate_passed)) next.regate_passed = current.regate_passed;
     const targetPath = gateStatePathFor(sessionId);
     const tmpPath = `${targetPath}.${process.pid}.tmp`;
     fs.mkdirSync(stateDirFor(sessionId), { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify({ feature_id: featureId }, null, 2), "utf8");
+    fs.writeFileSync(tmpPath, JSON.stringify(next, null, 2), "utf8");
     fs.renameSync(tmpPath, targetPath);
     return true;
   } catch {

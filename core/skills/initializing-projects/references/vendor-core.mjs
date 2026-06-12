@@ -48,6 +48,7 @@ const ACCUMULATED = [
 // Maps source path under core/ → destination relative to the target repo root.
 const REPO_FILES = [
   ["github/ISSUE_TEMPLATE/harness-task.yml", ".github/ISSUE_TEMPLATE/harness-task.yml"],
+  ["dev.vars.example", ".dev.vars.example"],
 ];
 
 const GITIGNORE = `# Claude Harness — ephemeral, never committed
@@ -164,6 +165,33 @@ function installRepoFiles(coreDir, targetDir) {
 }
 
 /**
+ * @description Idempotently ensures the target repo ROOT `.gitignore` ignores the runtime
+ * auth-token files. vendor ships `.dev.vars.example` to the project root and the documented
+ * setup copies it to `.dev.vars` (which the dispatch runner reads from the cwd root). The
+ * only ignore file vendor otherwise writes is `.claude/.gitignore`, which CANNOT cover a
+ * root-level file — so without this the real Ollama token lands in a NON-ignored file and a
+ * `git add` commits it. Non-clobber: only a literal bare `.dev.vars` line proves the token
+ * file is ignored — a prefix match would be fooled by sibling entries vendor itself ships
+ * (`.dev.vars.example`, a committed file) or a glob (`.dev.vars.*`, which does NOT match the
+ * extensionless `.dev.vars`), wrongly skipping the append and leaving the token un-ignored. A
+ * later `!.dev.vars` negation also un-does the ignore. Returns a status string.
+ */
+function ensureDevVarsIgnored(targetDir) {
+  const gitignore = join(targetDir, ".gitignore");
+  const current = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : "";
+  const lines = current.split(/\r?\n/).map((line) => line.trim());
+  const hasBareEntry = lines.some((line) => line === ".dev.vars");
+  const hasNegation = lines.some((line) => line === "!.dev.vars");
+  if (hasBareEntry && !hasNegation) return "already ignored";
+
+  const block =
+    "\n# Claude Harness — Ollama auth token, never commit\n.dev.vars\n.dev.vars.*\n.env\n.env.*\n";
+  const body = `${current.trimEnd()}${block}`;
+  writeFileSync(gitignore, current.trim() ? body : body.replace(/^\n/, ""));
+  return "added .dev.vars block";
+}
+
+/**
  * @description Idempotent merge of the harness entry-policy into .claude/CLAUDE.md.
  * Replaces the content between the markers if present, else appends a fresh block.
  * Project content outside the markers is preserved.
@@ -225,6 +253,9 @@ try {
   const claudeMd = mergeClaudeMd(coreDir, claudeDir);
   const settings = writeSettings(coreDir, claudeDir);
   const repoFiles = installRepoFiles(coreDir, target);
+  const devVarsIgnore = existsSync(join(coreDir, "dev.vars.example"))
+    ? ensureDevVarsIgnored(target)
+    : "skipped (no dev.vars.example source)";
 
   writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
   writeFileSync(
@@ -240,6 +271,7 @@ try {
       `  CLAUDE.md: ${claudeMd}`,
       `  settings.json: ${settings}`,
       `  repo files (.github/…): ${repoFiles}`,
+      `  root .gitignore (.dev.vars): ${devVarsIgnore}`,
       `  .gitignore, .harness-version: written`,
       "",
     ].join("\n")

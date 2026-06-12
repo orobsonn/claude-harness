@@ -108,6 +108,85 @@ test(
   },
 );
 
+test(
+  "buildReinject: unmatched regate_pending → additionalContext carries a DELIVERY BLOCKED re-gate reminder",
+  () => {
+    const payload = { session_id: "ses_x", source: "compact" };
+    const mockRead = (filePath, _enc) => {
+      if (filePath.includes("ses_x") && filePath.endsWith("triage.json")) {
+        return JSON.stringify({ mode: "FULL", feature_id: "foo" });
+      }
+      throw new Error("not found");
+    };
+    const mockGateState = () => ({ regate_pending: ["task-1"] }); // no regate_passed
+
+    const ctx = buildReinject(payload, {
+      readFileSync: mockRead,
+      plansRoot: ".claude/plans",
+      readGateState: mockGateState,
+    });
+
+    assert.ok(ctx !== null, "additionalContext must not be null");
+    assert.ok(ctx.includes("DELIVERY BLOCKED"), "context must flag the delivery block");
+    assert.ok(ctx.includes("task-1"), "context must name the unmatched re-gate task");
+  },
+);
+
+test(
+  "buildReinject: surfaces feature-qualified unmatched re-gate entries verbatim",
+  () => {
+    const payload = { session_id: "ses_x", source: "compact" };
+    const mockRead = (filePath, _enc) => {
+      if (filePath.includes("ses_x") && filePath.endsWith("triage.json")) {
+        return JSON.stringify({ mode: "FULL", feature_id: "foo" });
+      }
+      throw new Error("not found");
+    };
+    // A bare task-1 collides across two features; the qualified form keeps them distinct.
+    const mockGateState = () => ({
+      regate_pending: ["feature-a/task-1", "feature-b/task-1"],
+      regate_passed: ["feature-b/task-1"],
+    });
+
+    const ctx = buildReinject(payload, {
+      readFileSync: mockRead,
+      plansRoot: ".claude/plans",
+      readGateState: mockGateState,
+    });
+
+    assert.ok(ctx !== null, "additionalContext must not be null");
+    assert.ok(ctx.includes("DELIVERY BLOCKED"), "context must flag the delivery block");
+    assert.ok(ctx.includes("feature-a/task-1"), "context must surface the qualified unmatched entry");
+    assert.ok(
+      !ctx.includes("feature-b/task-1"),
+      "the matched qualified entry must not be surfaced as unmatched",
+    );
+  },
+);
+
+test(
+  "buildReinject: regate_pending fully matched by regate_passed → no DELIVERY BLOCKED reminder",
+  () => {
+    const payload = { session_id: "ses_x", source: "compact" };
+    const mockRead = (filePath, _enc) => {
+      if (filePath.includes("ses_x") && filePath.endsWith("triage.json")) {
+        return JSON.stringify({ mode: "FULL", feature_id: "foo" });
+      }
+      throw new Error("not found");
+    };
+    const mockGateState = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1"] });
+
+    const ctx = buildReinject(payload, {
+      readFileSync: mockRead,
+      plansRoot: ".claude/plans",
+      readGateState: mockGateState,
+    });
+
+    assert.ok(ctx !== null, "additionalContext must not be null");
+    assert.ok(!ctx.includes("DELIVERY BLOCKED"), "no block reminder when every re-gate is matched");
+  },
+);
+
 // ---------------------------------------------------------------------------
 // gcTargets() — locked tests 3–6 (pure synthetic DirEntry data)
 // ---------------------------------------------------------------------------

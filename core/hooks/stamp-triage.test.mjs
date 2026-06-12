@@ -76,6 +76,26 @@ function makeBrainstormPayload(sessionId, featureId, extra = {}) {
   };
 }
 
+/**
+ * Builds a regate-pending or regate-passed marker payload.
+ * @param {string} sessionId - payload.session_id
+ * @param {'regate-pending'|'regate-passed'} marker - the marker name
+ * @param {string} featureId - feature_id passed to mark.mjs
+ * @param {string} taskId - task_id passed to mark.mjs
+ * @param {object} [extra] - extra fields (e.g. { agent_id: 'ag_1' })
+ */
+function makeRegatePayload(sessionId, marker, featureId, taskId, extra = {}) {
+  return {
+    session_id: sessionId,
+    tool_name: "Bash",
+    tool_input: {
+      command: `node .claude/hooks/mark.mjs ${marker} --feature-id ${featureId} --task-id ${taskId}`,
+    },
+    tool_response: JSON.stringify({ marker, feature_id: featureId, task_id: taskId }),
+    ...extra,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // decide() — pure unit tests (no I/O, no chdir needed)
 // ---------------------------------------------------------------------------
@@ -565,3 +585,186 @@ test("handle: classify with tool_output field (alternate payload key) → triage
     assert.equal(triage.feature_id, "alt-feature");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Re-gate rail: regate-pending / regate-passed markers
+// ---------------------------------------------------------------------------
+
+test("decide: regate-pending marker (no agent_id) → action:regate-pending with feature-qualified task_id", () => {
+  const payload = makeRegatePayload("ses_rp", "regate-pending", "my-feature", "task-1");
+  const result = decide(payload);
+  assert.equal(result.action, "regate-pending");
+  assert.equal(result.session_id, "ses_rp");
+  assert.equal(result.task_id, "my-feature/task-1");
+});
+
+test("decide: regate-passed marker (no agent_id) → action:regate-passed with feature-qualified task_id", () => {
+  const payload = makeRegatePayload("ses_rpass", "regate-passed", "my-feature", "task-1");
+  const result = decide(payload);
+  assert.equal(result.action, "regate-passed");
+  assert.equal(result.session_id, "ses_rpass");
+  assert.equal(result.task_id, "my-feature/task-1");
+});
+
+test("decide: same bare task_id under two features yields distinct qualified ids (collision-proof)", () => {
+  const a = decide(makeRegatePayload("ses_collide", "regate-pending", "feature-a", "task-1"));
+  const b = decide(makeRegatePayload("ses_collide", "regate-pending", "feature-b", "task-1"));
+  assert.equal(a.task_id, "feature-a/task-1");
+  assert.equal(b.task_id, "feature-b/task-1");
+  assert.notEqual(a.task_id, b.task_id, "qualified ids must not collide across features");
+});
+
+test("decide: regate-pending with agent_id → action:none (subagent skip)", () => {
+  const payload = makeRegatePayload("ses_rp2", "regate-pending", "my-feature", "task-1", { agent_id: "ag_1" });
+  assert.equal(decide(payload).action, "none");
+});
+
+test(
+  "handle: regate-pending marker → gate-state.json has regate_pending: [task_id]",
+  () => {
+    withTempDir(() => {
+      const payload = makeRegatePayload("ses_rp", "regate-pending", "my-feature", "task-1");
+      handle(payload);
+
+      const gateStatePath = `.claude/plans/.state/ses_rp/gate-state.json`;
+      assert.ok(fs.existsSync(gateStatePath), "gate-state.json should exist");
+
+      const state = JSON.parse(fs.readFileSync(gateStatePath, "utf8"));
+      assert.deepEqual(state.regate_pending, ["my-feature/task-1"]);
+    });
+  },
+);
+
+test(
+  "handle: regate-passed marker for a pending task → gate-state.json has regate_passed: [qualified task_id]",
+  () => {
+    withTempDir(() => {
+      // Precondition: the task must be pending for a regate-passed to count.
+      handle(makeRegatePayload("ses_rpass", "regate-pending", "my-feature", "task-1"));
+      handle(makeRegatePayload("ses_rpass", "regate-passed", "my-feature", "task-1"));
+
+      const gateStatePath = `.claude/plans/.state/ses_rpass/gate-state.json`;
+      assert.ok(fs.existsSync(gateStatePath), "gate-state.json should exist");
+
+      const state = JSON.parse(fs.readFileSync(gateStatePath, "utf8"));
+      assert.deepEqual(state.regate_passed, ["my-feature/task-1"]);
+    });
+  },
+);
+
+test(
+  "handle: regate-passed for a NEVER-pending task is a no-op (does not pre-authorize)",
+  () => {
+    withTempDir(() => {
+      const payload = makeRegatePayload("ses_rpass_noop", "regate-passed", "my-feature", "task-1");
+      handle(payload);
+
+      // No regate_passed must be recorded — there was no matching regate_pending. The
+      // no-op writes nothing, so gate-state.json must not exist (or carry no regate_passed).
+      const gateStatePath = `.claude/plans/.state/ses_rpass_noop/gate-state.json`;
+      const state = fs.existsSync(gateStatePath)
+        ? JSON.parse(fs.readFileSync(gateStatePath, "utf8"))
+        : {};
+      assert.equal(
+        state.regate_passed,
+        undefined,
+        "regate-passed for a never-pending task must NOT append",
+      );
+    });
+  },
+);
+
+test(
+  "decide: regate-pending command whose stdout is NOT marker JSON → action:none (forgery rejected)",
+  () => {
+    const payload = {
+      session_id: "ses_forge_rp",
+      tool_name: "Bash",
+      tool_input: { command: "grep regate-pending .claude/hooks/mark.mjs" },
+      tool_response: "const MARKER = 'regate-pending';\n",
+    };
+    assert.equal(decide(payload).action, "none");
+  },
+);
+
+test(
+  "decide: regate-passed command whose stdout is NOT marker JSON → action:none (forgery rejected)",
+  () => {
+    const payload = {
+      session_id: "ses_forge_rpass",
+      tool_name: "Bash",
+      tool_input: { command: "grep regate-passed .claude/hooks/mark.mjs" },
+      tool_response: "const MARKER = 'regate-passed';\n",
+    };
+    assert.equal(decide(payload).action, "none");
+  },
+);
+
+test(
+  "handle: regate-pending idempotent — stamping same task_id twice yields no duplicate",
+  () => {
+    withTempDir(() => {
+      const payload = makeRegatePayload("ses_idem_rp", "regate-pending", "my-feature", "task-1");
+      handle(payload);
+      handle(payload); // second stamp — must not duplicate
+      const state = JSON.parse(
+        fs.readFileSync(".claude/plans/.state/ses_idem_rp/gate-state.json", "utf8"),
+      );
+      assert.deepEqual(state.regate_pending, ["my-feature/task-1"]);
+    });
+  },
+);
+
+test(
+  "handle: regate-passed idempotent — stamping same task_id twice yields no duplicate",
+  () => {
+    withTempDir(() => {
+      handle(makeRegatePayload("ses_idem_rpass", "regate-pending", "my-feature", "task-1"));
+      const payload = makeRegatePayload("ses_idem_rpass", "regate-passed", "my-feature", "task-1");
+      handle(payload);
+      handle(payload); // second stamp — must not duplicate
+      const state = JSON.parse(
+        fs.readFileSync(".claude/plans/.state/ses_idem_rpass/gate-state.json", "utf8"),
+      );
+      assert.deepEqual(state.regate_passed, ["my-feature/task-1"]);
+    });
+  },
+);
+
+test(
+  "handle: regate-pending preserves existing gate-state fields (no drop)",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_rp_nodrop";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ brainstormed: true, adversary_fired: true }),
+        "utf8",
+      );
+
+      const payload = makeRegatePayload(sessionId, "regate-pending", "my-feature", "task-1");
+      handle(payload);
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.deepEqual(state.regate_pending, ["my-feature/task-1"]);
+      assert.equal(state.brainstormed, true, "brainstormed must be retained");
+      assert.equal(state.adversary_fired, true, "adversary_fired must be retained");
+    });
+  },
+);
+
+test(
+  "handle: regate-pending accumulates multiple distinct task_ids without dedup loss",
+  () => {
+    withTempDir(() => {
+      handle(makeRegatePayload("ses_multi_rp", "regate-pending", "my-feature", "task-1"));
+      handle(makeRegatePayload("ses_multi_rp", "regate-pending", "my-feature", "task-2"));
+      const state = JSON.parse(
+        fs.readFileSync(".claude/plans/.state/ses_multi_rp/gate-state.json", "utf8"),
+      );
+      assert.deepEqual(state.regate_pending, ["my-feature/task-1", "my-feature/task-2"]);
+    });
+  },
+);

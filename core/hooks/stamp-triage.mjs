@@ -20,6 +20,7 @@ import {
   isSafeSessionId,
   VALID_MODES,
   stateDirFor,
+  readGateState,
   mergeGateState,
   resetGateState,
 } from "./lib/gate-lib.mjs";
@@ -84,8 +85,10 @@ function parseLastJsonObject(stdout) {
  * Never throws. All validation lives here so decide() is unit-testable.
  *
  * @param {unknown} payload - The parsed hook payload
- * @returns {{ action: 'triage',         session_id: string, mode: string, feature_id: string }
+ * @returns {{ action: 'triage',          session_id: string, mode: string, feature_id: string }
  *         | { action: 'brainstorm-done', session_id: string }
+ *         | { action: 'regate-pending',  session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'regate-passed',   session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'none' }}
  */
 export function decide(payload) {
@@ -138,8 +141,9 @@ export function decide(payload) {
 
   // --- mark.mjs brainstorm-done marker ---
   // Agent_id already checked above: reaching here means main-loop context only.
-  // Substring match alone is forgeable (e.g. `grep brainstorm-done mark.mjs`),
-  // so only honor it when the unwrapped stdout actually parses to the marker JSON.
+  // The parse-check guards against ACCIDENTAL substring matches (e.g. `grep brainstorm-done
+  // mark.mjs` echoing the word) — it is NOT forgery-proof: an echo emitting the exact marker
+  // JSON would pass. The real delivery safety is the entry-gate consumer, not this stamp.
   if (command.includes("mark.mjs") && command.includes("brainstorm-done")) {
     const responseStr = unwrapStdout(payload);
 
@@ -155,6 +159,51 @@ export function decide(payload) {
     }
 
     return { action: "brainstorm-done", session_id };
+  }
+
+  // --- mark.mjs regate-pending marker ---
+  // Same parse-check pattern as brainstorm-done: it filters ACCIDENTAL substring matches,
+  // not deliberate forgery (an echo of the exact marker JSON would pass). The deterministic
+  // delivery safety lives in the entry-gate consumer that blocks the shipper on an unmatched
+  // regate-pending — this stamp only records the marker.
+  if (command.includes("mark.mjs") && command.includes("regate-pending")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "regate-pending") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    // Qualify the marker by feature so two features in the same session can never collide on
+    // a bare task_id (e.g. both having a 'task-1'). The qualified id is opaque (never a path).
+    return { action: "regate-pending", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
+  // --- mark.mjs regate-passed marker ---
+  if (command.includes("mark.mjs") && command.includes("regate-passed")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "regate-passed") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    // Qualify by feature to match the regate-pending entry shape (collision-proof across features).
+    return { action: "regate-passed", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
   }
 
   return { action: "none" };
@@ -211,6 +260,33 @@ export function handle(payload, opts = {}) {
     // mergeGateState from gate-lib: read-merge-write atomic (temp→rename).
     // Never drops adversary_fired written by entry-gate on the allow path.
     mergeGateState(decision.session_id, { brainstormed: true });
+    return;
+  }
+
+  if (decision.action === "regate-pending") {
+    // Append task_id to the regate_pending list (dedup — idempotent for the same task_id).
+    const current = readGateState(decision.session_id);
+    const existing = Array.isArray(current.regate_pending) ? current.regate_pending : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { regate_pending: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
+  if (decision.action === "regate-passed") {
+    // A regate-passed only clears a re-gate that was actually raised: only append when the
+    // task is currently in regate_pending. A regate-passed for a never-pending task is a
+    // no-op — it must never pre-authorize a future (or forged) pending that hasn't run.
+    const current = readGateState(decision.session_id);
+    const pending = Array.isArray(current.regate_pending) ? current.regate_pending : [];
+    if (!pending.includes(decision.task_id)) {
+      return;
+    }
+    // Append task_id to the regate_passed list (dedup — idempotent for the same task_id).
+    const existing = Array.isArray(current.regate_passed) ? current.regate_passed : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { regate_passed: [...existing, decision.task_id] });
+    }
     return;
   }
 

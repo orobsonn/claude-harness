@@ -1,12 +1,18 @@
 /**
  * @description
  * Model-invoked CLI for marking key points in the triage/delivery pipeline.
- * Currently supports: brainstorm-done --feature-id <id>
- * Validates feature_id via gate-lib, and on success echoes a single JSON line
- * {marker:'brainstorm-done', feature_id} to stdout with exit 0.
+ * Supports:
+ *   - brainstorm-done --feature-id <id>
+ *   - regate-pending  --feature-id <id> --task-id <id>
+ *   - regate-passed   --feature-id <id> --task-id <id>
+ * Validates feature_id (and task_id, where required) via gate-lib, and on success
+ * echoes a single JSON line to stdout with exit 0:
+ *   {marker:'brainstorm-done', feature_id}
+ *   {marker:'regate-pending', feature_id, task_id}
+ *   {marker:'regate-passed',  feature_id, task_id}
  * On invalid input, exits non-zero with a corrective stderr message.
  * NEITHER reads nor writes state — the stamp-triage hook observes the command
- * and sets brainstormed=true in gate-state.json.
+ * and stamps the corresponding flag into gate-state.json.
  */
 
 import { realpathSync } from "node:fs";
@@ -14,10 +20,38 @@ import { fileURLToPath } from "node:url";
 import { isSafeFeatureId } from "./lib/gate-lib.mjs";
 
 /**
- * Parses argv for the marker command and its --feature-id.
- * Expected format: ['node', 'mark.mjs', 'brainstorm-done', '--feature-id', '<id>']
+ * Markers that additionally require a --task-id (the per-task re-gate rail).
+ */
+const TASK_SCOPED_MARKERS = new Set(["regate-pending", "regate-passed"]);
+
+/**
+ * All supported marker commands.
+ */
+const SUPPORTED_MARKERS = new Set(["brainstorm-done", ...TASK_SCOPED_MARKERS]);
+
+/**
+ * Finds the value following a flag in argv, or null when absent.
  * @param {string[]} argv - process.argv
- * @returns {{marker: string, feature_id: string} | null}
+ * @param {string} flag - The flag to find (e.g. '--feature-id')
+ * @returns {string | null}
+ */
+function findFlag(argv, flag) {
+  for (let i = 3; i < argv.length; i++) {
+    if (argv[i] === flag && i + 1 < argv.length) {
+      return argv[i + 1];
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses argv for the marker command and its flags.
+ * Expected formats:
+ *   ['node', 'mark.mjs', 'brainstorm-done', '--feature-id', '<id>']
+ *   ['node', 'mark.mjs', 'regate-pending', '--feature-id', '<id>', '--task-id', '<id>']
+ *   ['node', 'mark.mjs', 'regate-passed',  '--feature-id', '<id>', '--task-id', '<id>']
+ * @param {string[]} argv - process.argv
+ * @returns {{marker: string, feature_id: string, task_id?: string} | null}
  */
 export function parseArgs(argv) {
   // First positional arg (after node and mark.mjs) should be the marker command
@@ -27,22 +61,21 @@ export function parseArgs(argv) {
 
   const marker = argv[2];
 
-  // Only support brainstorm-done for now
-  if (marker !== "brainstorm-done") {
+  if (!SUPPORTED_MARKERS.has(marker)) {
     return null;
   }
 
-  // Find --feature-id flag
-  let feature_id = null;
-  for (let i = 3; i < argv.length; i++) {
-    if (argv[i] === "--feature-id" && i + 1 < argv.length) {
-      feature_id = argv[i + 1];
-      break;
-    }
-  }
-
+  const feature_id = findFlag(argv, "--feature-id");
   if (feature_id === null) {
     return null;
+  }
+
+  if (TASK_SCOPED_MARKERS.has(marker)) {
+    const task_id = findFlag(argv, "--task-id");
+    if (task_id === null) {
+      return null;
+    }
+    return { marker, feature_id, task_id };
   }
 
   return { marker, feature_id };
@@ -50,17 +83,30 @@ export function parseArgs(argv) {
 
 /**
  * Validates and runs the marker command.
- * @param {{marker: string, feature_id: string}} args
- * @returns {{success: boolean, output?: {marker: string, feature_id: string}, error?: string}}
+ * @param {{marker: string, feature_id: string, task_id?: string}} args
+ * @returns {{success: boolean, output?: {marker: string, feature_id: string, task_id?: string}, error?: string}}
  */
 export function run(args) {
-  const { marker, feature_id } = args;
+  const { marker, feature_id, task_id } = args;
 
   // Validate feature_id
   if (!isSafeFeatureId(feature_id)) {
     return {
       success: false,
       error: `invalid feature_id: "${feature_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only). Path separators, uppercase, and underscores are rejected.`,
+    };
+  }
+
+  if (TASK_SCOPED_MARKERS.has(marker)) {
+    if (!isSafeFeatureId(task_id)) {
+      return {
+        success: false,
+        error: `invalid task_id: "${task_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only). Path separators, uppercase, and underscores are rejected.`,
+      };
+    }
+    return {
+      success: true,
+      output: { marker, feature_id, task_id },
     };
   }
 
@@ -86,7 +132,9 @@ if (isDirectCli()) {
 
   if (!parsed) {
     console.error("mark: invalid command");
-    console.error("usage: mark.mjs brainstorm-done --feature-id <id>");
+    console.error(
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id>>"
+    );
     process.exit(1);
   }
 
