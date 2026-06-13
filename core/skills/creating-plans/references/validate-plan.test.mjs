@@ -36,7 +36,7 @@ const FIXED_EYE_ROLES = {
   adversary: "opus",
   security: "opus",
   shipper: "sonnet",
-  harvester: "fable",
+  harvester: "sonnet",
 };
 
 /** @description Builds a minimal otherwise-valid plan, merging the given model_strategy. */

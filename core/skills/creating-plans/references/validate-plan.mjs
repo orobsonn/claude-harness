@@ -20,10 +20,10 @@ import { readFileSync } from "node:fs";
 
 // ---------- Allowed enum values (mirror the documented contract) ----------
 
-// Claude aliases — the only models an EYE role may resolve to. fable joins the
-// classic three so the cheap-judge tier is expressible without ever letting an
-// eye fall through to a non-Claude (Ollama) model.
-const CLAUDE_ALIASES = ["haiku", "sonnet", "opus", "fable"];
+// Claude aliases — the only models an EYE role may resolve to. An eye must never
+// fall through to a non-Claude (Ollama) model. (Fable 5 was retired; opus is the
+// strongest available tier. Add a new Claude model here first to make it routable.)
+const CLAUDE_ALIASES = ["haiku", "sonnet", "opus"];
 const MODES = ["light", "full"];
 const SEVERITIES = ["low", "medium", "high"];
 // complexity is the OPTIONAL executor-model axis (reasoning depth), decoupled
