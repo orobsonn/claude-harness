@@ -24,6 +24,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isFrameworkCopyIncluded } from "./vendor-core.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -229,4 +230,25 @@ test("vendor-core: no *.test.mjs files are copied to hooks", async (t) => {
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+// locked_test — hand-config filter predicate (AC v2.3)
+test("isFrameworkCopyIncluded: settings.json in hand-config is INCLUDED (returns true)", () => {
+  const src =
+    "skills/orchestrating-delivery/references/hand-config/settings.json";
+  assert.strictEqual(
+    isFrameworkCopyIncluded(src),
+    true,
+    "settings.json must be included so the Stop-hook config reaches consumers"
+  );
+});
+
+test("isFrameworkCopyIncluded: resolve-hook-command.test.mjs in hand-config is EXCLUDED (returns false)", () => {
+  const src =
+    "skills/orchestrating-delivery/references/hand-config/resolve-hook-command.test.mjs";
+  assert.strictEqual(
+    isFrameworkCopyIncluded(src),
+    false,
+    "a .test.mjs file living in hand-config/ must be excluded by the filter"
+  );
 });

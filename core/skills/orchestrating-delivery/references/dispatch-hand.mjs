@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
  * @description Dispatch runner for the "strong eyes, cheap hands" model: a code-writing
- * HAND runs on a cheap Ollama model via an external `claude --bare -p` process, while the
+ * HAND runs on a cheap Ollama model via an external `claude -p` process (with an isolated
+ * ephemeral CLAUDE_CONFIG_DIR so the global ~/.claude laws are excluded), while the
  * judging EYES stay on Claude. This helper is dependency-free (Node builtins only) and is
  * structured as PURE, TESTABLE functions plus a thin CLI.
  *
  * Conceptually a dispatch launches:
  *   ANTHROPIC_BASE_URL=https://ollama.com \
  *   ANTHROPIC_AUTH_TOKEN=<secret> \
- *   claude --bare -p --model <model> --output-format json --permission-mode acceptEdits
+ *   CLAUDE_CONFIG_DIR=<ephemeral-tmp-dir> \
+ *   claude -p --model <model> --output-format json --permission-mode acceptEdits
  * in the working tree, under the harness's existing command-sandbox (NO container).
  *
  * SECURITY is load-bearing:
@@ -93,17 +95,41 @@ export function truncateUpstreamError(body, max = UPSTREAM_BODY_MAX) {
 }
 
 /**
- * @description True when the child's stderr carries the known-benign `count_tokens` 404
+ * @description True when the child's output carries the known-benign `count_tokens` 404
  * (Ollama lacks that endpoint). Such a 404 must NOT fail the task. The match requires the
  * `count_tokens` endpoint token and a 404 to sit on the SAME line, with count_tokens BEFORE
  * the 404 and reasonably adjacent — so an arbitrary hostile string elsewhere can't trip it.
+ * Each channel (stderr, stdout) is scanned independently with the same adjacency regex so
+ * a 404 that appears only on stdout (or a parsed-json error field) is also recognised.
  * This only forgives the child EXIT CODE; the locked-test exit and the in-scope git diff
  * remain independent gates, so a child cannot fake acceptance by emitting this string.
  * @param {string} stderr
+ * @param {string} [stdout]
  * @returns {boolean}
  */
-export function isBenignCountTokens404(stderr = "") {
-  return /count_tokens[^\n]{0,40}\b404\b/i.test(stderr);
+export function isBenignCountTokens404(stderr = "", stdout = "") {
+  const pattern = /count_tokens[^\n]{0,40}\b404\b/i;
+  return pattern.test(stderr) || pattern.test(stdout);
+}
+
+/**
+ * @description True when the COMBINED stream (stderr + stdout) carries any REAL upstream error
+ * code: 5xx, 401, 403, or 429. The real-error set deliberately EXCLUDES 404, so a benign
+ * `count_tokens 404` — which by itself contains no real-error code — never trips this. There is
+ * therefore nothing positional to strip or skip: any 5xx/401/403/429 anywhere in the captured
+ * stream is a genuine upstream error and must NOT be forgiven, regardless of its position
+ * relative to the benign 404 (before it, after it, or between two count_tokens-404 spans). This
+ * removes every positional edge case the prior per-line strip suffered.
+ *
+ * Accepted tradeoff: a benign body that happens to contain a standalone 5xx/401/403/429-looking
+ * number would fail-CLOSED → escalation (the safe direction). In practice the Ollama count_tokens
+ * 404 body carries no such codes, so this does not misfire.
+ * @param {string} stderr
+ * @param {string} [stdout]
+ * @returns {boolean}
+ */
+export function hasNonBenignUpstreamError(stderr = "", stdout = "") {
+  return /\b(5\d\d|401|403|429)\b/.test(`${stderr}\n${stdout}`);
 }
 
 /**
@@ -203,7 +229,7 @@ export function evaluateRun({ dispatch, child }) {
   } else if (touched.length === 0) {
     status = OUTCOME.NOT_DONE;
     reasons.push("empty diff — prose-only success is not acceptance");
-  } else if (child.exitCode !== 0 && !isBenignCountTokens404(child.stderr ?? "")) {
+  } else if (child.exitCode !== 0 && !(isBenignCountTokens404(child.stderr ?? "", child.stdout ?? "") && !hasNonBenignUpstreamError(child.stderr ?? "", child.stdout ?? ""))) {
     status = OUTCOME.FAILED;
     reasons.push(`child exited ${child.exitCode}`);
   } else if ((child.lockedTestExitCode ?? 0) !== 0) {
@@ -253,8 +279,8 @@ export function buildRunRecord({ dispatch, child, token, logs = [] }) {
     allowed_writes: dispatch.allowed_writes ?? [],
     touchedPaths: child.touchedPaths ?? [],
     exitCode: child.exitCode,
-    stdout: redact(child.stdout ?? "", token),
-    stderr: redact(child.stderr ?? "", token),
+    stdout: truncateUpstreamError(redact(child.stdout ?? "", token)),
+    stderr: truncateUpstreamError(redact(child.stderr ?? "", token)),
     lockedTestExitCode: child.lockedTestExitCode ?? 0,
     upstreamErrorBody: truncateUpstreamError(redact(child.upstreamErrorBody ?? "", token)),
     logs: logs.map((line) => redact(line, token)),
@@ -311,13 +337,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const dispatch = readJson(args.dispatch, token);
 
   // The child result is supplied (already-captured) for evaluation. Live spawning of
-  // `claude --bare -p` is intentionally out of this CLI's unit-tested surface; when wired,
-  // it MUST set ANTHROPIC_BASE_URL=https://ollama.com and ANTHROPIC_AUTH_TOKEN (from `token`
-  // above) in the child env, pipe child stdout/stderr through `redact(line, token)` at
-  // capture-write time, write `result.json` only into an ephemeral, sandbox-scoped path,
-  // and populate `touchedPaths`/`lockedTestExitCode` from an INDEPENDENT `git diff --name-only`
-  // + frozen-test run (never the model's prose). A future live-spawn argv must likewise keep
-  // the token out of process arguments (env only).
+  // `claude -p` (with an isolated ephemeral CLAUDE_CONFIG_DIR) is intentionally out of this
+  // CLI's unit-tested surface; when wired, it MUST set ANTHROPIC_BASE_URL=https://ollama.com
+  // and ANTHROPIC_AUTH_TOKEN (from `token` above) in the child env, set CLAUDE_CONFIG_DIR to
+  // an ephemeral mkdtemp path (so global ~/.claude laws are excluded), pipe child stdout/stderr
+  // through `redact(line, token)` at capture-write time, write `result.json` only into an
+  // ephemeral, sandbox-scoped path, and populate `touchedPaths`/`lockedTestExitCode` from an
+  // INDEPENDENT `git diff --name-only` + frozen-test run (never the model's prose). A future
+  // live-spawn argv must likewise keep the token out of process arguments (env only).
   const child = args.result ? readJson(args.result, token) : { touchedPaths: [], exitCode: 1, stderr: "" };
 
   const record = buildRunRecord({ dispatch, child, token, logs: [] });
