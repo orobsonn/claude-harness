@@ -42,8 +42,6 @@ import {
   mkdtempSync,
   writeFileSync,
   rmSync,
-  readFileSync,
-  existsSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -56,7 +54,7 @@ import {
   checkScope,
   checkFrozen,
   checkAllowedWrites,
-  readAuthToken,
+  resolveAuthToken,
 } from "./dispatch-hand.mjs";
 
 /** @description Forced non-zero locked-test exit for the vacuous-green guard. */
@@ -291,11 +289,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
 
-  // Resolve the Ollama auth token exactly like dispatch-hand.mjs's CLI: process.env over a
-  // parsed `.dev.vars` blob. WITHOUT this the live tee + on-disk artifacts run redact(text,
-  // undefined) — a silent no-op — and any echoed bearer leaks raw to disk/stderr.
-  const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
-  const token = readAuthToken(process.env, devVars);
+  // Resolve the Ollama auth token across env → cwd/.dev.vars → ~/.claude/.dev.vars (global).
+  // WITHOUT a resolved token, the live tee + on-disk artifacts run redact(text, undefined)
+  // — a silent no-op — and any echoed bearer leaks raw to disk/stderr.
+  const token = resolveAuthToken(process.env);
 
   const dispatch = JSON.parse(readFileSync(args.dispatch, "utf8"));
   const child = JSON.parse(readFileSync(args.child, "utf8"));
