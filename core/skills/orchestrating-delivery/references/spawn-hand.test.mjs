@@ -225,6 +225,55 @@ describe("dispatchHand brief scrubbing", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Locked test 4b — the scrubbed brief reaches the child STDIN (the USER prompt)
+// and the auth token is NOT present in stdin (proven live: without a user turn
+// `claude -p` exits 1 and the hand does nothing).
+// ---------------------------------------------------------------------------
+describe("dispatchHand delivers the brief via child stdin", () => {
+  it("spawn opts.input carries the brief text (user prompt) and does NOT contain the token", async () => {
+    const secretToken = "stdin-secret-token-MUST-NOT-LEAK-4242";
+    const briefText = "Create out.txt with hello";
+    let capturedInput = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      capturedInput = opts?.input ?? null;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: briefText,
+      shared_context: "no secrets here",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: secretToken };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(
+      capturedInput !== null,
+      "spawn must receive opts.input (the brief delivered to the child stdin as the user prompt)"
+    );
+    const capturedInputStr = capturedInput instanceof Buffer ? capturedInput.toString("utf8") : String(capturedInput);
+    assert.ok(
+      capturedInputStr.includes(briefText),
+      "opts.input must contain the brief text so the hand has a user turn and acts"
+    );
+    assert.ok(
+      !capturedInputStr.includes(secretToken),
+      "opts.input (child stdin) must NOT contain the auth token — it is scrubbed before reaching stdin"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Locked test 5 — FAIL CLOSED when locked_test is missing (no armed gate)
 // ---------------------------------------------------------------------------
 describe("dispatchHand fail-closed without locked_test", () => {

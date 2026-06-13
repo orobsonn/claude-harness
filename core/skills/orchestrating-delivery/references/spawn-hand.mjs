@@ -58,7 +58,9 @@ export function buildSpawnArgs({ model, briefFile }) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {object} opts
+ * @param {{ env?: Record<string,string>, input?: string }} opts - `opts.input`, when present,
+ *   is written to the child's stdin by spawnSync (this carries the hand's USER prompt — the
+ *   scrubbed brief — so `claude -p` has a user turn and actually acts).
  * @returns {import("node:child_process").SpawnSyncReturns<Buffer>}
  */
 function defaultSpawn(cmd, args, opts) {
@@ -246,8 +248,12 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
       CLAUDE_CONFIG_DIR: ephemeralDir,
     };
 
-    // Spawn the process (injectable for unit tests)
-    const result = spawn("claude", argv, { env: childEnv });
+    // Spawn the process (injectable for unit tests).
+    // The scrubbed brief is delivered to the child's STDIN so it becomes the hand's USER
+    // prompt — without it `claude -p` has no user turn, exits 1, and the hand does NOTHING.
+    // The brief is already token-scrubbed (scrubbedBrief = redact(rawBrief, token)), so no
+    // auth token reaches stdin. --append-system-prompt-file stays as domain/context belt.
+    const result = spawn("claude", argv, { env: childEnv, input: Buffer.from(scrubbedBrief, "utf8") });
 
     const exitCode = result?.status ?? result?.exitCode ?? 1;
     const stdout = result?.stdout ? String(result.stdout) : "";
