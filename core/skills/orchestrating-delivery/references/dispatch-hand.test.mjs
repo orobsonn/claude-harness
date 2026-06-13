@@ -536,6 +536,19 @@ test("locked#7: a no-trailing-slash directory entry covers files beneath it, con
     "a directory entry with and without a trailing slash must cover identically"
   );
 
+  // Out-of-contract git-pathspec MAGIC entries fail CLOSED — an empty or "/" entry must cover
+  // NOTHING (never match-all), so a stray entry can never silently authorize every write.
+  assert.deepEqual(
+    checkScope(["core/x/new.mjs"], [""]),
+    ["core/x/new.mjs"],
+    "an empty entry must cover nothing — fail closed, never match-all"
+  );
+  assert.deepEqual(
+    checkScope(["core/x/new.mjs"], ["/"]),
+    ["core/x/new.mjs"],
+    "a bare '/' entry (empty base) must cover nothing — fail closed"
+  );
+
   // The same normalization governs the full coverage end-to-end through evaluateRun: a hand
   // that wrote a file under the no-slash directory entry reaches DONE (no spurious scope fail).
   const dispatch = baseDispatch({ scope_paths: ["core/x"], allowed_writes: ["core/x"] });
