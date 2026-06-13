@@ -13,8 +13,8 @@ vendored/legacy plans use the single `tiers` key — without silently accepting 
 
 - **Shape detection:** presence of `hand_tiers` key = new split shape. `tiers` key only = legacy
   shape (all-Claude). BOTH present = REJECT with a clear error. NEITHER present = REJECT.
-- `CLAUDE_ALIASES = [haiku, sonnet, opus, fable]` — any value not in this set is treated as an Ollama
-  model id. This is the canonical allowlist; add new Claude models here first.
+- `CLAUDE_ALIASES = [haiku, sonnet, opus]` — any value not in this set is treated as an Ollama
+  model id. This is the canonical allowlist; add new Claude models here first. (Fable 5 was retired.)
 - `ALLOWED_MS_KEYS` — explicit allowlist of valid top-level `model_strategy` keys (e.g. `hand_tiers`,
   `tiers`, `version`). An unknown key (e.g. a misspelled `eye_tiers`) = REJECT. Silently-ignored
   config is the worst kind of misconfiguration.

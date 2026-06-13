@@ -221,7 +221,7 @@ The model_strategy supports two shapes:
 }
 ```
 
-Both shapes require all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, opus, or fable).
+Both shapes require all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, or opus).
 
 **Critical rule:** No eye role may ever resolve to a non-Claude model (e.g., Ollama). Eyes are the judging roles and must always run on Claude for security and reasoning fidelity.
 

@@ -97,7 +97,7 @@ test("example-plan.json: contract shape (hand_tiers, no eye_tiers, no tiers)", (
     "shipper",
     "harvester",
   ];
-  const CLAUDE_ALIASES = ["haiku", "sonnet", "opus", "fable"];
+  const CLAUDE_ALIASES = ["haiku", "sonnet", "opus"];
   for (const role of FIXED_ROLES) {
     assert(
       plan.model_strategy[role],

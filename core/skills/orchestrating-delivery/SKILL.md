@@ -40,25 +40,25 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 
 ## Model routing (single source of truth)
 
-Model per role. **This table is authoritative** — when a role's model is named elsewhere in this skill, it must match here. Routing for the two boundary gates is done by an **explicit model override on the dispatch** (the Agent/Task `model` param), not by agent frontmatter — because the `adversary` agent is `opus` per-task and only becomes `fable` at the final gate, so frontmatter alone cannot express it.
+Model per role. **This table is authoritative** — when a role's model is named elsewhere in this skill, it must match here. Every eye role resolves to its agent frontmatter model; the two boundary gates run **opus** (the strongest available tier), the same as their frontmatter default, so no per-dispatch override is needed.
 
 | Role / step | Model | Why |
 |---|---|---|
 | orchestrator (this skill / main loop) | **sonnet** (standing default) | highest token volume → the cheapest lever and the harness's core economy. Critical decisions are pinned by deterministic rails (see note), not left to the orchestrator's judgment. |
 | planner | opus | architecture-grade reasoning |
-| **plan-reviewer (initial gate)** | **fable** | strongest tier audits the opus planner's output — the highest-leverage boundary check before execution. In HEADLESS this APPROVE *is* the gate (no human), so the premium is most justified here. |
+| **plan-reviewer (initial gate)** | **opus** | strongest available tier audits the opus planner's output — the highest-leverage boundary check before execution. In HEADLESS this APPROVE *is* the gate (no human). |
 | executor | `hand_tiers[complexity ?? severity]` · v1: LOW/MEDIUM → Ollama via `dispatch-hand.mjs` (claude --bare -p) · HIGH → Claude | HAND role — cheap Ollama in v1; HIGH deferred to v2 |
 | compliance | sonnet | spec-vs-impl check |
 | adversary (per-task) | opus | already strong; raise `effort` before raising tier |
 | security | opus | conditional auditor |
 | sniper | `hand_tiers[issue.severity]` · ALL severities via `dispatch-hand.mjs` (Ollama cheap hand) · HIGH gets MANDATORY strong-eye re-gate after fix | cheap hand for all severities including high; grave fix guaranteed by mandatory re-gate (fresh virgin strong Claude eye) after fix — not a Claude sniper |
-| **adversary (final dual review = final gate)** | **fable** | strongest tier hunts bugs across the whole feature — the last boundary before delivery. In HEADLESS the PR ships on this verdict, so the premium is most justified here. |
+| **adversary (final dual review = final gate)** | **opus** | strongest available tier hunts bugs across the whole feature — the last boundary before delivery. In HEADLESS the PR ships on this verdict. |
 | compliance (final dual review) | sonnet | |
 | security (final dual review) | opus | |
 | harvester | sonnet | |
 | shipper | sonnet | |
 
-**Cost note (do not mistake for economy):** Fable is the **most expensive** model ($10/$50 per 1M vs opus $5/$25). It is placed on the two boundary gates as a deliberate **quality** investment, not a saving. The net economy of this routing comes from the **sonnet orchestrator default** (high-volume) — Fable on the gates *costs more* there, by design. On small runs with many checkpoints, watch that Fable does not outweigh the orchestrator saving — instrument `usage` per role to verify. **Fallback is safe:** frontmatter stays `opus`, so if the `fable` override is ever dropped, a gate falls back to opus, never to the weakest tier.
+**Cost note:** Fable 5 (the former premium tier) has been **retired** — opus is now the ceiling. The two boundary gates run **opus**, the strongest available tier, which is also their frontmatter default (no override needed). The net economy of this routing comes from the **sonnet orchestrator default** (high-volume); instrument `usage` per role to verify it holds. No eye role ever falls below sonnet, and never to a non-Claude tier.
 
 **Hands vs Eyes (v1 split):** executor and sniper are **HAND** roles — code-writing workers that run on a cheap Ollama model via `dispatch-hand.mjs`. All other roles (orchestrator, planner, plan-reviewer, compliance, adversary, security, harvester, shipper) are **EYE** roles — they judge and decide, and they **always stay on Claude**. No eye role ever resolves to an Ollama model — this is a hard constraint. In v1 the sniper is wired to Ollama (`hand_tiers`) for ALL severities including high; the HIGH executor stays on Claude (deferred to v2).
 
@@ -112,7 +112,7 @@ The gates below are written for INTERACTIVE; each carries its HEADLESS substitut
 
 1. Dispatch the **planner** (opus) running the `creating-plans` skill. Hand it the approved spec.
 2. The planner returns an `execution-plan.json` that passes **structural** validation (`validate-plan.mjs` — schema, enums, AC↔locked_test traceability, dependency cycles). Structure only — not engineering soundness.
-3. **plan-reviewer** (**fable** — initial gate; dispatch with an explicit `model: fable` override; virgin, read-only) — audits the plan's **engineering soundness**: decomposition/SRP, whether `resolved_judgments` are correct, whether `locked_tests` truly pin the ACs, `scope_paths` vs. codebase reality, `severity`/`complexity` routing, and risks introduced by the decomposition itself. Consults curated mental models via the optional MV add-on (best-effort recall; never blocks if MV is absent). Returns `APPROVE | REVISE` + findings + a **product-language summary**.
+3. **plan-reviewer** (**opus** — initial gate; virgin, read-only) — audits the plan's **engineering soundness**: decomposition/SRP, whether `resolved_judgments` are correct, whether `locked_tests` truly pin the ACs, `scope_paths` vs. codebase reality, `severity`/`complexity` routing, and risks introduced by the decomposition itself. Consults curated mental models via the optional MV add-on (best-effort recall; never blocks if MV is absent). Returns `APPROVE | REVISE` + findings + a **product-language summary**.
    - **REVISE** → re-dispatch the planner in **revision mode**, handing it `{existing plan path, findings[] with each finding's `planner_instruction` and target `task_id`}`. The planner applies each instruction to its `task_id`, keeps every other task byte-stable, and re-runs its self-review + structural validation; then re-run plan-reviewer. **Cap at 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product language.
    - This is the engineering judgment the operator **cannot apply himself** — the validator checks shape, the plan-reviewer checks substance. It is the analog, at the plan layer, of the adversarial pass on the spec.
 4. **Deterministic sensitive-path override:** compare the plan's `scope_paths` against the sensitive-path allowlist (`**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding or upgrading deps)). Any match **forces FULL**, overriding the triage mode. When it fires, **rewrite `plan.mode` to `"full"` in the persisted plan and re-validate**, and record `effective_mode: "full"` in `shared_context.md` — so a later context-compaction re-read cannot silently revert to a stale `mode: "light"`. Key the LIGHT/FULL branch off the effective mode. Determinism on the plan, judgment on entry.
@@ -236,7 +236,7 @@ The **spec-adversary is unconditional and upfront in both modes** — it validat
 
 Scope = the **whole feature**, not one task. Roles, feature-wide scope:
 - **compliance** (sonnet) — entire implementation vs spec.
-- **adversary** (**fable** — final gate; dispatch with an explicit `model: fable` override; virgin) — hunts bugs across the full implementation. Note: the **per-task** adversary (Phase 2, step 3) stays **opus** — only this final-gate adversary is Fable.
+- **adversary** (**opus** — final gate; virgin) — hunts bugs across the full implementation. The **per-task** adversary (Phase 2, step 3) is also opus; the final-gate adversary differs by **scope** (the whole feature, not one task) and a raised `effort`, not by model.
 - **security** (opus, virgin) — **dispatched in both LIGHT and FULL when `final_review.security` is true** (the planner sets it when the feature's aggregate `scope_paths`/tasks hit a security trigger). This is the only security pass LIGHT gets, so it is load-bearing: a LIGHT feature that wires an outbound HTTP call or a new entrypoint still gets audited here.
 
 **Dispatch these synchronously (foreground).** They **gate the PR** — dispatch each and **capture its verdict before proceeding**. Do **not** background the adversary (or compliance/security) and poll for it: a backgrounded verdict can arrive **stale or out-of-band** (a poll may return earlier spec-review findings instead of the final verdict), and the gate would proceed on incomplete findings. Background dispatch is only for genuinely parallel, non-gating work.
