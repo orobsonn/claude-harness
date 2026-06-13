@@ -32,6 +32,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -123,9 +124,22 @@ function readVersion(repoDir) {
   }
 }
 
+/**
+ * @description Pure predicate for the framework-owned copy filter.
+ * Returns true when the given source path should be included in the vendor copy,
+ * false when it should be excluded. Only `.test.mjs` files are excluded — all other
+ * files (including `settings.json` in hand-config/) survive the filter and reach
+ * consumer projects.
+ * @param {string} src - Absolute or relative source file path.
+ * @returns {boolean} True = include, false = exclude.
+ */
+export function isFrameworkCopyIncluded(src) {
+  return !src.endsWith(".test.mjs");
+}
+
 /** @description Copies framework-owned dirs/files into .claude/, overwriting. */
 function copyFrameworkOwned(coreDir, claudeDir) {
-  const filter = (src, dest) => !src.endsWith(".test.mjs");
+  const filter = (src, _dest) => isFrameworkCopyIncluded(src);
   for (const dir of FRAMEWORK_OWNED) {
     const src = join(coreDir, dir);
     if (existsSync(src)) cpSync(src, join(claudeDir, dir), { recursive: true, filter });
@@ -237,45 +251,47 @@ function writeSettings(coreDir, claudeDir) {
   return "exists → wrote settings.harness.json for manual merge";
 }
 
-// ---------- main ----------
+// ---------- main (runs only when invoked directly as a script) ----------
 
-const args = parseArgs(process.argv.slice(2));
-const target = args.target ?? process.cwd();
-const claudeDir = join(target, ".claude");
-const stampDate = args.date ?? new Date().toISOString();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const args = parseArgs(process.argv.slice(2));
+  const target = args.target ?? process.cwd();
+  const claudeDir = join(target, ".claude");
+  const stampDate = args.date ?? new Date().toISOString();
 
-const { coreDir, version, cleanup } = resolveSource(args.source, args.ref);
+  const { coreDir, version, cleanup } = resolveSource(args.source, args.ref);
 
-try {
-  mkdirSync(claudeDir, { recursive: true });
-  copyFrameworkOwned(coreDir, claudeDir);
-  seedAccumulated(coreDir, claudeDir);
-  const claudeMd = mergeClaudeMd(coreDir, claudeDir);
-  const settings = writeSettings(coreDir, claudeDir);
-  const repoFiles = installRepoFiles(coreDir, target);
-  const devVarsIgnore = existsSync(join(coreDir, "dev.vars.example"))
-    ? ensureDevVarsIgnored(target)
-    : "skipped (no dev.vars.example source)";
+  try {
+    mkdirSync(claudeDir, { recursive: true });
+    copyFrameworkOwned(coreDir, claudeDir);
+    seedAccumulated(coreDir, claudeDir);
+    const claudeMd = mergeClaudeMd(coreDir, claudeDir);
+    const settings = writeSettings(coreDir, claudeDir);
+    const repoFiles = installRepoFiles(coreDir, target);
+    const devVarsIgnore = existsSync(join(coreDir, "dev.vars.example"))
+      ? ensureDevVarsIgnored(target)
+      : "skipped (no dev.vars.example source)";
 
-  writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
-  writeFileSync(
-    join(claudeDir, ".harness-version"),
-    `${version}\nvendored_at: ${stampDate}\n`
-  );
+    writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
+    writeFileSync(
+      join(claudeDir, ".harness-version"),
+      `${version}\nvendored_at: ${stampDate}\n`
+    );
 
-  process.stdout.write(
-    [
-      `[vendor-core] OK — harness ${version} → ${claudeDir}`,
-      `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
-      `  memory/MEMORY.md, kaizen.md: seeded if absent`,
-      `  CLAUDE.md: ${claudeMd}`,
-      `  settings.json: ${settings}`,
-      `  repo files (.github/…): ${repoFiles}`,
-      `  root .gitignore (.dev.vars): ${devVarsIgnore}`,
-      `  .gitignore, .harness-version: written`,
-      "",
-    ].join("\n")
-  );
-} finally {
-  cleanup();
+    process.stdout.write(
+      [
+        `[vendor-core] OK — harness ${version} → ${claudeDir}`,
+        `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
+        `  memory/MEMORY.md, kaizen.md: seeded if absent`,
+        `  CLAUDE.md: ${claudeMd}`,
+        `  settings.json: ${settings}`,
+        `  repo files (.github/…): ${repoFiles}`,
+        `  root .gitignore (.dev.vars): ${devVarsIgnore}`,
+        `  .gitignore, .harness-version: written`,
+        "",
+      ].join("\n")
+    );
+  } finally {
+    cleanup();
+  }
 }
