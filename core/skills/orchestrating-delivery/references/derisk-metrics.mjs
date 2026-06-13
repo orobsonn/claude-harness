@@ -7,8 +7,8 @@
  * model tier:
  *
  *   - toolCallErrorCount  — how often the cheap hand failed on tool calls
- *   - gpuTimeMs           — total GPU wall-time billed by the model provider
- *   - contextTokens       — input context tokens consumed (cost proxy)
+ *   - gpuTimeMs           — GPU wall-time in milliseconds (from last usage record emitted by provider)
+ *   - contextTokens       — input context tokens consumed (from last usage record emitted by provider)
  *
  * RECORD SCHEMA (lines in the NDJSON stream):
  *

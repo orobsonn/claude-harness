@@ -1,5 +1,5 @@
 # Claude Harness — "strong eyes, cheap hands" dispatch runner.
 # Copy this file to .dev.vars (gitignored) and set the token below.
-# Ollama auth token used by `claude --bare -p` with ANTHROPIC_BASE_URL=https://ollama.com.
+# Ollama auth token used by `claude -p` with ANTHROPIC_BASE_URL=https://ollama.com.
 # NEVER commit the real value — .dev.vars must stay out of git.
 ANTHROPIC_AUTH_TOKEN=
