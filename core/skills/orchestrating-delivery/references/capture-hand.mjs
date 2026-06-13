@@ -52,6 +52,7 @@ import {
   evaluateRun,
   redact,
   redactDeep,
+  truncateUpstreamError,
   checkScope,
   checkFrozen,
   checkAllowedWrites,
@@ -244,9 +245,17 @@ export function captureResult({
 
   // On-disk artifacts: ephemeral mkdtemp; redactDeep the result, per-line redact the cost
   // stream. Tear down in finally unless the caller keeps it (still token-free).
+  // The persisted child copy applies truncateUpstreamError (AFTER redact) to stderr/stdout so a
+  // large upstream body cannot survive in the on-disk artifact; the FULL streams remain in `built`
+  // for evaluateRun's benign-404 / hasNonBenignUpstreamError checks above.
   const dir = fs.mkdtempSync(join(tmpDir, "capture-hand-"));
   try {
-    const safeResult = redactDeep({ dispatch, child: built, outcome }, token);
+    const persistedChild = {
+      ...built,
+      stdout: truncateUpstreamError(redact(built.stdout, token)),
+      stderr: truncateUpstreamError(redact(built.stderr, token)),
+    };
+    const safeResult = redactDeep({ dispatch, child: persistedChild, outcome }, token);
     fs.writeFileSync(join(dir, "result.json"), JSON.stringify(safeResult, null, 2));
 
     const costNdjson = (costStream ?? [])

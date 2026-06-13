@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { OUTCOME, readAuthToken } from "./dispatch-hand.mjs";
+import { OUTCOME, readAuthToken, UPSTREAM_BODY_MAX } from "./dispatch-hand.mjs";
 import { captureResult } from "./capture-hand.mjs";
 
 const FREEZE_SHA = "abc123freeze";
@@ -342,4 +342,61 @@ test("captureResult throws when git adapter omits lsFilesAllOthers (sweep cannot
     () => captureResult(baseArgs({ git: partialGit })),
     /must provide lsFilesAllOthers/
   );
+});
+
+// ---- 9. stderr/stdout in persisted result.json are length-truncated AND token-redacted,
+//         while evaluateRun still sees the full stream for benign-404 detection ----
+
+test("persisted result.json: stderr truncated to <=500 chars, token absent, evaluateRun still classifies benign count_tokens 404 from full stderr", () => {
+  // The token straddles the 500-char boundary using the 'Z9' distinctive-char trick:
+  // the token starts near char 490 so its first chars fall before 500 and the rest after —
+  // confirming the truncation point does not accidentally preserve a token fragment.
+  const token = "Z9Z9Z9-secret-ollama-token";
+  const benign404Prefix = "count_tokens request failed with 404 not found\n";
+  // Fill to position 490 with 'A', then embed the token straddling the 500 boundary.
+  const filler = "A".repeat(490 - benign404Prefix.length);
+  const longStderr = benign404Prefix + filler + token + "B".repeat(200);
+  // Sanity: the full stderr is well over 500 chars and the token straddles the cut.
+  assert.ok(longStderr.length > 500, "stderr must be longer than UPSTREAM_BODY_MAX for this test");
+  assert.ok(longStderr.indexOf(token) < 500, "token must start before the truncation point");
+  assert.ok(longStderr.indexOf(token) + token.length > 500, "token must straddle the truncation boundary");
+
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ lsFilesOthers: () => ["core/x/new.mjs"] }),
+      child: baseChild({ exitCode: 1, stdout: "", stderr: longStderr }),
+      token,
+      keepArtifacts: true,
+    })
+  );
+
+  // (a) evaluateRun used the FULL stderr → benign count_tokens 404 was recognised, so the
+  //     non-zero child exit does NOT produce FAILED (only NOT_DONE from empty diff, which
+  //     is overridden here by touchedPaths being non-empty → FAILED from locked-test exit is
+  //     the actual reason, but the child exit itself was forgiven by isBenignCountTokens404).
+  //     We assert the outcome is NOT "FAILED due to child exit" by checking reasons.
+  assert.ok(
+    !result.outcome.reasons.some((r) => r.startsWith("child exited")),
+    `benign count_tokens 404 should have been forgiven in the full stderr; reasons: ${result.outcome.reasons}`
+  );
+
+  // (b) persisted result.json: stderr field is <=500 chars AND contains no token fragment.
+  const dir = result.artifactDir;
+  assert.ok(dir && existsSync(dir), "artifact dir must exist when keepArtifacts");
+  const resultJson = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));
+  const persistedStderr = resultJson.child.stderr;
+  assert.ok(
+    typeof persistedStderr === "string" && persistedStderr.length <= UPSTREAM_BODY_MAX,
+    `persisted stderr must be <=${UPSTREAM_BODY_MAX} chars; got ${typeof persistedStderr === "string" ? persistedStderr.length : typeof persistedStderr}`
+  );
+  assert.equal(
+    persistedStderr.includes(token),
+    false,
+    "no token fragment must survive in the persisted stderr"
+  );
+  // Also verify the raw token string is absent anywhere in the file.
+  const raw = readFileSync(join(dir, "result.json"), "utf8");
+  assert.equal(raw.includes(token), false, "token must not appear anywhere in result.json");
+
+  rmSync(dir, { recursive: true, force: true });
 });

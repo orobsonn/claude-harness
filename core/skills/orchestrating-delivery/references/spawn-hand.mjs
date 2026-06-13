@@ -66,6 +66,23 @@ function defaultSpawn(cmd, args, opts) {
 }
 
 /**
+ * @description Default working-tree cleanliness probe — runs `git status --porcelain`
+ * SCOPED to the task's scope_paths via a `-- <paths>` pathspec (never a shell string)
+ * and returns its stdout. Scoping prevents unrelated non-gitignored untracked files
+ * elsewhere in the tree from spuriously tripping the dirty-baseline guard. An empty
+ * scopePaths returns '' so the check is a safe no-op when the orchestrator gave no scope.
+ * Injectable so unit tests assert the guard without touching a real git tree.
+ *
+ * @param {string[]} [scopePaths] - The dispatch's scope paths to limit status to.
+ * @returns {string} The porcelain status output ('' when in-scope paths are clean).
+ */
+function defaultGitStatus(scopePaths = []) {
+  if (!scopePaths.length) return "";
+  const result = spawnSync("git", ["status", "--porcelain", "--", ...scopePaths], { encoding: "utf8" });
+  return result?.stdout ?? "";
+}
+
+/**
  * @description Dispatches a hand: sets up an ephemeral CLAUDE_CONFIG_DIR, scrubs and writes
  * the brief, resolves the Stop-hook command, then spawns `claude -p` with the token in the
  * child env only. Tears down the ephemeral dir in a finally block.
@@ -75,12 +92,24 @@ function defaultSpawn(cmd, args, opts) {
  *   - Injectable spawn, devVarsContent, and env for unit tests.
  * @returns {Promise<{ exitCode: number, stdout: string, stderr: string }>}
  */
-export async function dispatchHand(dispatch, { spawn = defaultSpawn, devVarsContent, env } = {}) {
+export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus = defaultGitStatus, devVarsContent, env } = {}) {
   // FAIL CLOSED: the frozen-test rail is the entire safety basis of the cheap hand.
   // Without an armed Stop-hook gate the hand mutates the tree with no real gate (--bare blast radius).
   if (!dispatch.locked_test) {
     throw new Error(
       "dispatchHand: locked_test is required — refusing to spawn a hand without an armed Stop-hook gate"
+    );
+  }
+
+  // FAIL CLOSED: the independent capture (`git diff <freezeCommitSha>`) attributes EVERY
+  // tracked change to the hand. A pre-existing uncommitted production edit (aborted attempt,
+  // sibling task, dirty operator tree) WITHIN scope_paths would be silently sealed into the
+  // impl-commit as if the hand authored it. Scope the check to scope_paths so unrelated
+  // untracked files elsewhere do not false-positive; an empty scope is a safe no-op. Enforce
+  // in CODE, not prose. Runs BEFORE mkdtemp (no dir leaks on throw).
+  if (gitStatus(dispatch.scope_paths ?? []).trim() !== "") {
+    throw new Error(
+      "dispatchHand: scope_paths already dirty before spawn — refusing to spawn onto a dirty baseline (pre-existing in-scope changes would be misattributed to the hand)"
     );
   }
 
@@ -96,6 +125,16 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, devVarsCont
     }
   }
   const token = readAuthToken(resolvedEnv, devVars);
+
+  // FAIL CLOSED: captureResult already throws on an undefined token; the two modules must agree.
+  // With an empty token the spawn would 401 against Ollama AND redaction degrades to a no-op
+  // (redact('') matches nothing) — every live stdout/stderr tee would leak unredacted. Refuse
+  // here, among the other pre-spawn guards, BEFORE mkdtemp (no ephemeral dir to leak on throw).
+  if (!token) {
+    throw new Error(
+      "dispatchHand: no ANTHROPIC_AUTH_TOKEN resolved (.dev.vars/env) — refusing to spawn a hand that would 401 with empty-redaction streams"
+    );
+  }
 
   // Build scrubbed brief content (redact token from brief + shared_context before writing)
   const rawBrief = [

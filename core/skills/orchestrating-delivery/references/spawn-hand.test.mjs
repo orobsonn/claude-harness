@@ -113,7 +113,7 @@ describe("dispatchHand ephemeral dir + child env", () => {
     const fakeToken = "fake-dispatch-token-xyz";
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: fakeToken };
 
-    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
 
     // ANTHROPIC_BASE_URL must be https://ollama.com
     assert.equal(
@@ -147,7 +147,7 @@ describe("dispatchHand ephemeral dir + child env", () => {
     const fakeEnv2 = { ANTHROPIC_AUTH_TOKEN: fakeToken2 };
     let configDirUsed = null;
 
-    await dispatchHand(dispatch, { spawn: fakeSpawnWithSettingsCheck, devVarsContent: "", env: fakeEnv2 });
+    await dispatchHand(dispatch, { spawn: fakeSpawnWithSettingsCheck, gitStatus: () => "", devVarsContent: "", env: fakeEnv2 });
     configDirUsed = capturedConfigDir;
 
     // settings.json must have existed and contain a Stop hook
@@ -202,7 +202,7 @@ describe("dispatchHand brief scrubbing", () => {
     // Inject token via env (never touch process.env)
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: secretToken };
 
-    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
 
     assert.ok(
       capturedBriefPath !== null,
@@ -290,7 +290,7 @@ describe("dispatchHand arms the Stop-hook gate", () => {
 
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
 
-    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
 
     assert.ok(capturedCommand, "settings.json must carry a Stop-hook command during spawn");
     assert.ok(
@@ -329,7 +329,7 @@ describe("dispatchHand fail-closed when locked_test file does not exist", () => 
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
 
     await assert.rejects(
-      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv }),
       /does not exist|gate cannot block/,
       "dispatchHand must throw when the locked_test file does not exist"
     );
@@ -367,7 +367,7 @@ describe("dispatchHand fail-closed when locked_test is a directory", () => {
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
 
     await assert.rejects(
-      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv }),
       /must be a file/,
       "dispatchHand must throw when locked_test is a directory"
     );
@@ -406,7 +406,7 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
 
     await assert.rejects(
-      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv }),
       /zero tests|vacuous/,
       "dispatchHand must throw when the frozen test registers zero tests"
     );
@@ -416,5 +416,149 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
       false,
       "the real dispatch spawn must NOT be called when the gate is vacuous"
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 10 — CODE-enforced clean baseline before the hand spawns
+// (a dirty tree would misattribute pre-existing edits to the hand)
+// ---------------------------------------------------------------------------
+describe("dispatchHand enforces a clean baseline before spawn", () => {
+  const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
+  const scopedPaths = ["core/x/foo.ts"];
+  const baseDispatch = {
+    model: "glm-5.1",
+    brief: "do the thing",
+    shared_context: "no secrets",
+    scope_paths: scopedPaths,
+    frozen_paths: [],
+    allowed_writes: ["core/"],
+    locked_test: lockedTest,
+  };
+  const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+  it("proceeds (spawn called) when gitStatus reports a CLEAN in-scope tree", async () => {
+    let dispatchSpawnCalled = false;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      dispatchSpawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    await dispatchHand(baseDispatch, {
+      spawn: fakeSpawn,
+      gitStatus: () => "",
+      devVarsContent: "",
+      env: fakeEnv,
+    });
+
+    assert.equal(dispatchSpawnCalled, true, "spawn must be called on a clean in-scope baseline");
+  });
+
+  it("proceeds (no-op) when scope_paths is omitted — the guard cannot meaningfully scope", async () => {
+    let dispatchSpawnCalled = false;
+    let gitStatusArg;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      dispatchSpawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    // Real-ish fake: returns "" for an empty/omitted scope (no-op safety).
+    const fakeGitStatus = (scopePaths = []) => {
+      gitStatusArg = scopePaths;
+      return scopePaths.length ? " M something\n" : "";
+    };
+
+    // dispatch WITHOUT scope_paths → the guard passes empty array → "" → proceed.
+    const { scope_paths, ...noScopeDispatch } = baseDispatch;
+
+    await dispatchHand(noScopeDispatch, {
+      spawn: fakeSpawn,
+      gitStatus: fakeGitStatus,
+      devVarsContent: "",
+      env: fakeEnv,
+    });
+
+    assert.deepEqual(gitStatusArg, [], "the guard must receive an empty array when scope_paths is omitted");
+    assert.equal(dispatchSpawnCalled, true, "spawn must be called when there is no scope to check");
+  });
+
+  it("throws /dirty baseline|already dirty/ and does NOT spawn when an IN-SCOPE path is DIRTY", async () => {
+    let spawnCalled = false;
+    let gitStatusArg;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      spawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    // The guard must be scoped: it returns dirt only because the in-scope path is dirty.
+    const fakeGitStatus = (scopePaths = []) => {
+      gitStatusArg = scopePaths;
+      return " M core/x/foo.ts\n";
+    };
+
+    await assert.rejects(
+      () => dispatchHand(baseDispatch, {
+        spawn: fakeSpawn,
+        gitStatus: fakeGitStatus,
+        devVarsContent: "",
+        env: fakeEnv,
+      }),
+      /dirty baseline|already dirty/,
+      "dispatchHand must throw when an in-scope path is dirty"
+    );
+
+    assert.deepEqual(gitStatusArg, scopedPaths, "the guard must be called with the dispatch's scope_paths");
+    assert.equal(spawnCalled, false, "spawn must NOT be called when the in-scope baseline is dirty");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 11 — FAIL CLOSED on an undefined token (parity with captureResult)
+// ---------------------------------------------------------------------------
+describe("dispatchHand fail-closed on undefined auth token", () => {
+  it("throws /no ANTHROPIC_AUTH_TOKEN/ and does NOT spawn when no token resolves", async () => {
+    let spawnCalled = false;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      spawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    // env WITHOUT ANTHROPIC_AUTH_TOKEN + empty devVarsContent → no token resolves.
+    const fakeEnv = {};
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, {
+        spawn: fakeSpawn,
+        gitStatus: () => "",
+        devVarsContent: "",
+        env: fakeEnv,
+      }),
+      /no ANTHROPIC_AUTH_TOKEN/,
+      "dispatchHand must throw when no auth token resolves"
+    );
+
+    assert.equal(spawnCalled, false, "spawn must NOT be called when no token resolves");
   });
 });
