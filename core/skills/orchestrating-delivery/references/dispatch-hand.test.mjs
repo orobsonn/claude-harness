@@ -6,6 +6,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   REDACTION_MARKER,
   OUTCOME,
@@ -13,6 +16,7 @@ import {
   redact,
   truncateUpstreamError,
   isBenignCountTokens404,
+  hasNonBenignUpstreamError,
   checkScope,
   checkAllowedWrites,
   checkFrozen,
@@ -261,4 +265,233 @@ test("evaluateRun: locked-test non-zero exit fails an otherwise-clean run", () =
 test("evaluateRun: in-scope, in-allow, non-empty diff, exit 0, tests green => DONE", () => {
   const outcome = evaluateRun({ dispatch: baseDispatch(), child: baseChild() });
   assert.equal(outcome.status, OUTCOME.DONE);
+});
+
+// ---- locked_test #1: count_tokens 404 on stdout/json channel is benign ----
+
+test("locked#1: count_tokens 404 on stdout (not stderr) is benign — evaluateRun does NOT fail", () => {
+  // The child's stderr is empty; the 404 appears only on stdout (or a parsed-json error field).
+  const stdout = "POST https://ollama.com/v1/messages/count_tokens 404 Not Found\nsome other output";
+  const stderr = ""; // empty — no count_tokens mention on stderr
+
+  // isBenignCountTokens404 must recognise the 404 from the stdout channel too.
+  assert.equal(
+    isBenignCountTokens404(stderr, stdout),
+    true,
+    "stdout-only count_tokens 404 must be recognised as benign"
+  );
+
+  // evaluateRun must NOT mark the run FAILED for that 404 when the diff is non-empty and locked tests pass.
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.DONE,
+    "a run whose only non-zero exit is a benign count_tokens 404 on stdout must resolve DONE"
+  );
+});
+
+// ---- locked_test #2: a genuine upstream 500 on stdout is NOT swallowed ----
+
+test("locked#2: genuine upstream 500 on stdout with non-zero exit => FAILED (adjacency guard holds)", () => {
+  // A 500 body on stdout does NOT contain the count_tokens adjacency pattern — the guard must hold.
+  const stdout = "Internal Server Error 500: quota exceeded";
+  const stderr = "";
+
+  assert.equal(
+    isBenignCountTokens404(stderr, stdout),
+    false,
+    "a non-count_tokens upstream error must NOT be treated as benign"
+  );
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.FAILED,
+    "a genuine upstream 500 with non-zero exit must fail the run"
+  );
+});
+
+// ---- locked_test #3: captured stderr is truncated AND redacted (redact before truncate) ----
+
+test("locked#3: buildRunRecord truncates captured stderr <=500 chars AND leaves no token fragment", () => {
+  // Token of 'Z9' repeated — chars that appear in neither filler nor the redaction marker.
+  // Token starts at index 480, straddles the 500-char cut boundary (runs to 519).
+  // Any surviving Z or 9 in the record.stderr is unambiguously a leaked fragment.
+  const token = "Z9".repeat(20); // 40 chars
+  const childStderr = "a".repeat(480) + token + "b".repeat(100); // 620 chars total
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ stderr: childStderr });
+  const record = buildRunRecord({ dispatch, child, token, logs: [] });
+
+  assert.ok(
+    record.stderr.length <= 500,
+    `record.stderr must be <=500 chars; got ${record.stderr.length}`
+  );
+  assert.ok(
+    !record.stderr.includes(token),
+    "the full token must not appear in record.stderr"
+  );
+  assert.ok(
+    !/[Z9]/.test(record.stderr),
+    "no token FRAGMENT (Z or 9) may survive — redact must run before truncate"
+  );
+});
+
+// ---- locked_test #4: '--bare' must not appear anywhere in dispatch-hand.mjs ----
+
+test("locked#4: dispatch-hand.mjs contains zero occurrences of the literal string '--bare'", () => {
+  // Read the source file from disk — this is the canonical check, not a memory assertion.
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(join(dir, "dispatch-hand.mjs"), "utf8");
+
+  const occurrences = (src.match(/--bare/g) ?? []).length;
+  assert.equal(
+    occurrences,
+    0,
+    `'--bare' must not appear in dispatch-hand.mjs; found ${occurrences} occurrence(s)`
+  );
+});
+
+// ---- locked_test #5: a benign count_tokens 404 co-occurring with a REAL 500 is NOT swallowed ----
+
+test("locked#5: benign count_tokens 404 + co-occurring upstream 500 on stdout => FAILED (real error not swallowed)", () => {
+  // Ollama emits the benign count_tokens 404 on warmup of nearly every call; a real later
+  // failure (quota 500) co-occurs on a SEPARATE line. The benign-404 forgiveness must NOT
+  // swallow the genuine 500.
+  const stdout =
+    "POST https://ollama.com/v1/messages/count_tokens 404 Not Found\nInternal Server Error 500: quota exceeded";
+  const stderr = "";
+
+  assert.equal(
+    isBenignCountTokens404(stderr, stdout),
+    true,
+    "the warmup 404 line is still recognised as benign"
+  );
+  assert.equal(
+    hasNonBenignUpstreamError(stderr, stdout),
+    true,
+    "the co-occurring 500 on a non-benign line is a real upstream error"
+  );
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.FAILED,
+    "a real upstream 500 co-occurring with a benign warmup 404 must NOT be forgiven"
+  );
+});
+
+// ---- locked_test #5b: benign 404 and a REAL 500 SHARING THE SAME LINE is NOT swallowed ----
+
+test("locked#5b: benign count_tokens 404 + co-occurring upstream 500 on the SAME line => FAILED", () => {
+  // The real 500 sits on the SAME physical line as the benign warmup 404 (no newline). A
+  // per-line wholesale skip would forgive the whole line and swallow the genuine 500; the
+  // strip-and-rescan must remove only the count_tokens…404 span and still catch the 500.
+  const stdout =
+    "POST https://ollama.com/v1/messages/count_tokens 404 Not Found - upstream 500 quota exceeded";
+  const stderr = "";
+
+  assert.equal(
+    isBenignCountTokens404(stderr, stdout),
+    true,
+    "the warmup 404 span on the line is still recognised as benign"
+  );
+  assert.equal(
+    hasNonBenignUpstreamError(stderr, stdout),
+    true,
+    "the co-occurring 500 sharing the benign line is a real upstream error"
+  );
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.FAILED,
+    "a real upstream 500 sharing the benign warmup-404 line must NOT be forgiven"
+  );
+});
+
+// ---- locked_test #5c: a REAL code BEFORE the 404 on the SAME line is NOT swallowed ----
+
+test("locked#5c: upstream 500 BEFORE the count_tokens 404 on the same line => FAILED (position-independent)", () => {
+  // A warmup 500 sits BEFORE the benign count_tokens 404 on one physical line. The old
+  // positional strip swallowed a code that preceded the benign span; the position-independent
+  // test must catch it.
+  const stdout = "count_tokens 500 warmup then 404 Not Found";
+  const stderr = "";
+
+  assert.equal(
+    hasNonBenignUpstreamError(stderr, stdout),
+    true,
+    "a 500 preceding the benign 404 is a real upstream error regardless of position"
+  );
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.FAILED,
+    "a real upstream 500 before the benign 404 must NOT be forgiven"
+  );
+});
+
+// ---- locked_test #5d: a REAL code BETWEEN two benign count_tokens-404 spans is NOT swallowed ----
+
+test("locked#5d: upstream 500 BETWEEN two count_tokens-404 spans on one line => FAILED (position-independent)", () => {
+  // The real 500 sits BETWEEN two benign count_tokens 404 spans on a single line. The old
+  // positional strip could window past the intervening code; the position-independent test
+  // must catch it.
+  const stdout = "count_tokens warmup 404 then 500 then count_tokens 404";
+  const stderr = "";
+
+  assert.equal(
+    hasNonBenignUpstreamError(stderr, stdout),
+    true,
+    "a 500 between two benign 404 spans is a real upstream error regardless of position"
+  );
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ exitCode: 1, stderr, stdout });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.FAILED,
+    "a real upstream 500 between two benign 404 spans must NOT be forgiven"
+  );
+});
+
+// ---- locked_test #6: captured stdout is truncated AND redacted (redact before truncate) ----
+
+test("locked#6: buildRunRecord truncates captured stdout <=500 chars AND leaves no token fragment", () => {
+  // Token of 'Z9' repeated — chars that appear in neither filler nor the redaction marker.
+  // Token starts at index 480, straddles the 500-char cut boundary (runs to 519).
+  // Any surviving Z or 9 in the record.stdout is unambiguously a leaked fragment.
+  const token = "Z9".repeat(20); // 40 chars
+  const childStdout = "a".repeat(480) + token + "b".repeat(100); // 620 chars total
+
+  const dispatch = baseDispatch();
+  const child = baseChild({ stdout: childStdout });
+  const record = buildRunRecord({ dispatch, child, token, logs: [] });
+
+  assert.ok(
+    record.stdout.length <= 500,
+    `record.stdout must be <=500 chars; got ${record.stdout.length}`
+  );
+  assert.ok(
+    !record.stdout.includes(token),
+    "the full token must not appear in record.stdout"
+  );
+  assert.ok(
+    !/[Z9]/.test(record.stdout),
+    "no token FRAGMENT (Z or 9) may survive — redact must run before truncate"
+  );
 });
