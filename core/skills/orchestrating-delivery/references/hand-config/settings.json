@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --test /PLACEHOLDER_FROZEN_TEST_PATH"
+          }
+        ]
+      }
+    ]
+  }
+}
