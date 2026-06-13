@@ -164,13 +164,21 @@ export function hasNonBenignUpstreamError(stderr = "", stdout = "") {
 }
 
 /**
- * @description True when `path` is covered by an allow entry. A trailing-slash entry is a
- * directory prefix; otherwise an exact file match.
+ * @description True when `path` is covered by an allow entry, using the SAME git-pathspec
+ * convention as the pre-spawn guard (`git status --porcelain -- <entry>`): an entry covers an
+ * exact-file match OR any path UNDER it as a directory, matched by PATH COMPONENT — with or
+ * WITHOUT a trailing slash. The trailing slash is therefore cosmetic, not load-bearing: `core/x`
+ * and `core/x/` both cover `core/x` and everything beneath `core/x/`. This is the single source
+ * of truth for coverage, so the guard (git-pathspec prefix) and `checkScope` (this) can never
+ * diverge on a directory entry a planner wrote without the trailing slash — the latent fail-closed
+ * trap where one covered by prefix and the other demanded an exact match. The component boundary
+ * (`base + "/"`) keeps `core/x` from spuriously covering a sibling like `core/xyz`, matching git.
  */
 function isPathCovered(path, allowEntries) {
-  return allowEntries.some((entry) =>
-    entry.endsWith("/") ? path === entry.slice(0, -1) || path.startsWith(entry) : path === entry
-  );
+  return allowEntries.some((entry) => {
+    const base = entry.endsWith("/") ? entry.slice(0, -1) : entry;
+    return path === base || path.startsWith(`${base}/`);
+  });
 }
 
 /**

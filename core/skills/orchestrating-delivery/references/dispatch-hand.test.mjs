@@ -497,6 +497,57 @@ test("locked#6: buildRunRecord truncates captured stdout <=500 chars AND leaves 
   );
 });
 
+// ---- locked_test #7: a directory entry WITHOUT a trailing slash covers files under it ----
+
+test("locked#7: a no-trailing-slash directory entry covers files beneath it, consistent with the git-pathspec guard", () => {
+  // The pre-spawn guard scopes via `git status --porcelain -- core/x`, where git treats `core/x`
+  // as a directory prefix (by path component). checkScope must agree: a directory entry written
+  // WITHOUT the trailing slash (the form a planner may emit) must cover everything under it — not
+  // demand an exact file match. Before the fix, this dispatch ALWAYS failed in capture (the guard
+  // covered the files by prefix while checkScope did not) — a confusing latent trap.
+  const scopePaths = ["core/x"]; // directory entry, no trailing slash
+
+  // Files UNDER the directory are covered → no scope violation.
+  assert.deepEqual(
+    checkScope(["core/x/new.mjs", "core/x/sub/deep.mjs"], scopePaths),
+    [],
+    "files beneath a no-slash directory entry must be in scope"
+  );
+
+  // The directory path itself (an exact-file match) is still covered.
+  assert.deepEqual(
+    checkScope(["core/x"], scopePaths),
+    [],
+    "the exact entry path must remain covered"
+  );
+
+  // A SIBLING that merely shares the string prefix is NOT covered — matching git's
+  // path-component boundary, so `core/x` never bleeds into `core/xyz.mjs`.
+  assert.deepEqual(
+    checkScope(["core/xyz.mjs"], scopePaths),
+    ["core/xyz.mjs"],
+    "a string-prefix sibling must NOT be covered — git matches by path component"
+  );
+
+  // The trailing slash is cosmetic: `core/x` and `core/x/` cover identically.
+  assert.deepEqual(
+    checkScope(["core/x/new.mjs", "core/xyz.mjs"], ["core/x"]),
+    checkScope(["core/x/new.mjs", "core/xyz.mjs"], ["core/x/"]),
+    "a directory entry with and without a trailing slash must cover identically"
+  );
+
+  // The same normalization governs the full coverage end-to-end through evaluateRun: a hand
+  // that wrote a file under the no-slash directory entry reaches DONE (no spurious scope fail).
+  const dispatch = baseDispatch({ scope_paths: ["core/x"], allowed_writes: ["core/x"] });
+  const child = baseChild({ touchedPaths: ["core/x/new.mjs"] });
+  const outcome = evaluateRun({ dispatch, child });
+  assert.equal(
+    outcome.status,
+    OUTCOME.DONE,
+    "a write under a no-slash directory scope entry must NOT trip a scope violation"
+  );
+});
+
 // ---- locked_tests: resolveAuthToken global fallback ----
 
 test("resolveAuthToken: env wins — cwd/global readFileSafe never consulted", () => {
