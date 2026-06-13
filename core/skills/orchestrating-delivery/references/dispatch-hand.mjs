@@ -36,6 +36,8 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const REDACTION_MARKER = "[REDACTED_AUTH_TOKEN]";
 export const AUTH_TOKEN_KEY = "ANTHROPIC_AUTH_TOKEN";
@@ -68,6 +70,35 @@ export function readAuthToken(env = {}, devVarsContent = "") {
     if (value) return value;
   }
   return undefined;
+}
+
+/**
+ * @description Reads a file safely: returns '' on any error — never throws, never leaks the path.
+ * @param {string} filePath
+ * @returns {string}
+ */
+function defaultReadFileSafe(filePath) {
+  try {
+    return existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * @description Resolves the Ollama auth token across env → cwd/.dev.vars → ~/.claude/.dev.vars (global).
+ * The global file lets the operator set the token once without exporting ANTHROPIC_AUTH_TOKEN into the
+ * shell (which would hijack Claude Code's own auth). cwd/homeDir/readFileSafe are injectable for tests.
+ * @param {Record<string,string|undefined>} [env]
+ * @param {{ cwd?: string, homeDir?: string, readFileSafe?: (path: string) => string }} [opts]
+ * @returns {string|undefined}
+ */
+export function resolveAuthToken(env = {}, { cwd = process.cwd(), homeDir = homedir(), readFileSafe = defaultReadFileSafe } = {}) {
+  const fromEnv = readAuthToken(env, "");
+  if (fromEnv) return fromEnv;
+  const fromCwd = readAuthToken({}, readFileSafe(join(cwd, ".dev.vars")));
+  if (fromCwd) return fromCwd;
+  return readAuthToken({}, readFileSafe(join(homeDir, ".claude", ".dev.vars")));
 }
 
 /**
@@ -331,8 +362,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   // Resolve the token BEFORE any readJson so its parse-error path can redact a leaked snippet.
-  const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
-  const token = readAuthToken(process.env, devVars);
+  const token = resolveAuthToken(process.env);
 
   const dispatch = readJson(args.dispatch, token);
 

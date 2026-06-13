@@ -21,7 +21,7 @@ import { join, dirname, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { readAuthToken, redact } from "./dispatch-hand.mjs";
+import { readAuthToken, resolveAuthToken, redact } from "./dispatch-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -115,18 +115,14 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
     );
   }
 
-  // Resolve auth token from env / .dev.vars.
-  // devVarsContent and env are injectable so unit tests never touch the real .dev.vars file.
+  // Resolve auth token from env / .dev.vars / global ~/.claude/.dev.vars.
+  // devVarsContent and env are injectable so unit tests never touch real files.
+  // When devVarsContent is provided (test injection), use the pure readAuthToken so tests
+  // remain deterministic. In live mode, resolveAuthToken applies the full three-tier lookup.
   const resolvedEnv = env ?? process.env;
-  let devVars = devVarsContent ?? "";
-  if (devVarsContent === undefined) {
-    try {
-      devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
-    } catch {
-      devVars = "";
-    }
-  }
-  const token = readAuthToken(resolvedEnv, devVars);
+  const token = devVarsContent !== undefined
+    ? readAuthToken(resolvedEnv, devVarsContent)
+    : resolveAuthToken(resolvedEnv);
 
   // FAIL CLOSED: captureResult already throws on an undefined token; the two modules must agree.
   // With an empty token the spawn would 401 against Ollama AND redaction degrades to a no-op

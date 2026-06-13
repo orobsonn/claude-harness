@@ -13,6 +13,7 @@ import {
   REDACTION_MARKER,
   OUTCOME,
   readAuthToken,
+  resolveAuthToken,
   redact,
   truncateUpstreamError,
   isBenignCountTokens404,
@@ -494,4 +495,63 @@ test("locked#6: buildRunRecord truncates captured stdout <=500 chars AND leaves 
     !/[Z9]/.test(record.stdout),
     "no token FRAGMENT (Z or 9) may survive — redact must run before truncate"
   );
+});
+
+// ---- locked_tests: resolveAuthToken global fallback ----
+
+test("resolveAuthToken: env wins — cwd/global readFileSafe never consulted", () => {
+  let readFileSafeCalled = false;
+  const readFileSafe = () => {
+    readFileSafeCalled = true;
+    return "";
+  };
+  const result = resolveAuthToken(
+    { ANTHROPIC_AUTH_TOKEN: "from-env" },
+    { cwd: "/fake-cwd", homeDir: "/fake-home", readFileSafe }
+  );
+  assert.equal(result, "from-env", "env token must win");
+  assert.equal(readFileSafeCalled, false, "readFileSafe must not be consulted when env carries the token");
+});
+
+test("resolveAuthToken: cwd/.dev.vars beats global when env is empty", () => {
+  const fakeCwd = "/fake-cwd";
+  const fakeHome = "/fake-home";
+  const cwdVars = "/fake-cwd/.dev.vars";
+  const globalVars = "/fake-home/.claude/.dev.vars";
+  const readFileSafe = (p) => {
+    if (p === cwdVars) return "ANTHROPIC_AUTH_TOKEN=from-cwd";
+    if (p === globalVars) return "";
+    return "";
+  };
+  const result = resolveAuthToken(
+    {},
+    { cwd: fakeCwd, homeDir: fakeHome, readFileSafe }
+  );
+  assert.equal(result, "from-cwd", "cwd/.dev.vars must beat the global file");
+});
+
+test("resolveAuthToken: global fallback fires when env and cwd are both empty", () => {
+  const fakeCwd = "/fake-cwd";
+  const fakeHome = "/fake-home";
+  const cwdVars = "/fake-cwd/.dev.vars";
+  const globalVars = "/fake-home/.claude/.dev.vars";
+  const readFileSafe = (p) => {
+    if (p === cwdVars) return "";
+    if (p === globalVars) return "ANTHROPIC_AUTH_TOKEN=from-global";
+    return "";
+  };
+  const result = resolveAuthToken(
+    {},
+    { cwd: fakeCwd, homeDir: fakeHome, readFileSafe }
+  );
+  assert.equal(result, "from-global", "global ~/.claude/.dev.vars must be the final fallback");
+});
+
+test("resolveAuthToken: returns undefined when env and both files are empty", () => {
+  const readFileSafe = () => "";
+  const result = resolveAuthToken(
+    {},
+    { cwd: "/fake-cwd", homeDir: "/fake-home", readFileSafe }
+  );
+  assert.equal(result, undefined, "must return undefined when no source has the token");
 });
