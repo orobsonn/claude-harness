@@ -1,0 +1,420 @@
+#!/usr/bin/env node
+/**
+ * @description Tests for spawn-hand.mjs — validates that buildSpawnArgs builds the correct
+ * argv array (with token excluded) and that dispatchHand correctly wires the child env,
+ * sets up the ephemeral CLAUDE_CONFIG_DIR with the Stop hook, tears it down, and scrubs
+ * the token from the brief/system-prompt file before writing.
+ */
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// The module under test — will fail to import until implemented (red).
+import {
+  buildSpawnArgs,
+  dispatchHand,
+} from "./spawn-hand.mjs";
+
+// ---------------------------------------------------------------------------
+// Locked test 1 — argv shape + token exclusion
+// ---------------------------------------------------------------------------
+describe("buildSpawnArgs", () => {
+  it("contains -p, --allowedTools Read,Write,Edit, --output-format json, resolved model, and does NOT contain the token", () => {
+    const token = "secret-ollama-token-abc123";
+    const model = "qwen3-coder:480b";
+    const briefFile = "/tmp/brief.txt";
+
+    const argv = buildSpawnArgs({ model, briefFile });
+    const fullString = argv.join(" ");
+
+    // Must contain -p flag
+    assert.ok(argv.includes("-p"), "argv must contain '-p'");
+
+    // Must have --allowedTools pair
+    const atIndex = argv.indexOf("--allowedTools");
+    assert.ok(atIndex !== -1, "argv must contain --allowedTools");
+    assert.equal(argv[atIndex + 1], "Read,Write,Edit", "--allowedTools value must be 'Read,Write,Edit'");
+
+    // Must have --output-format json
+    const ofIndex = argv.indexOf("--output-format");
+    assert.ok(ofIndex !== -1, "argv must contain --output-format");
+    assert.equal(argv[ofIndex + 1], "json", "--output-format value must be 'json'");
+
+    // Must have --model with resolved model
+    const mIndex = argv.indexOf("--model");
+    assert.ok(mIndex !== -1, "argv must contain --model");
+    assert.equal(argv[mIndex + 1], model, "--model value must equal the resolved model");
+
+    // Token must NOT appear in argv
+    assert.ok(
+      !fullString.includes(token),
+      "The auth token must NOT appear anywhere in the argv string"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 2 — no --bare, no Bash in allowedTools
+// ---------------------------------------------------------------------------
+describe("buildSpawnArgs no-bare no-bash", () => {
+  it("argv contains NO --bare AND allowedTools value contains no 'Bash'", () => {
+    const argv = buildSpawnArgs({ model: "glm-5.1", briefFile: "/tmp/brief.txt" });
+    const fullString = argv.join(" ");
+
+    // No --bare flag
+    assert.ok(!argv.includes("--bare"), "argv must NOT contain '--bare'");
+    assert.ok(!fullString.includes("--bare"), "argv joined string must NOT contain '--bare'");
+
+    // allowedTools value must not include Bash
+    const atIndex = argv.indexOf("--allowedTools");
+    assert.ok(atIndex !== -1, "--allowedTools must be present");
+    const allowedToolsValue = argv[atIndex + 1];
+    assert.ok(
+      !allowedToolsValue.includes("Bash"),
+      `allowedTools value '${allowedToolsValue}' must NOT contain 'Bash'`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 3 — dispatchHand wires child env, creates ephemeral dir, tears it down
+// ---------------------------------------------------------------------------
+describe("dispatchHand ephemeral dir + child env", () => {
+  it("child env has correct ANTHROPIC_BASE_URL and CLAUDE_CONFIG_DIR with Stop hook; dir torn down after run", async () => {
+    // Capture what spawn was called with
+    let capturedEnv = null;
+    let capturedConfigDir = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      // The dry-run (node --test) must report >=1 collected test so the vacuous-gate guard passes.
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      capturedEnv = opts?.env ?? {};
+      capturedConfigDir = capturedEnv.CLAUDE_CONFIG_DIR;
+      // Return a fake spawnSync-like result
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets here",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    // Resolve the token via injectable env (never touch process.env)
+    const fakeToken = "fake-dispatch-token-xyz";
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: fakeToken };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+
+    // ANTHROPIC_BASE_URL must be https://ollama.com
+    assert.equal(
+      capturedEnv.ANTHROPIC_BASE_URL,
+      "https://ollama.com",
+      "child env must have ANTHROPIC_BASE_URL=https://ollama.com"
+    );
+
+    // CLAUDE_CONFIG_DIR must have been set
+    assert.ok(
+      capturedConfigDir,
+      "child env must have CLAUDE_CONFIG_DIR set"
+    );
+
+    // Settings.json in the ephemeral dir must contain a Stop hook.
+    // We capture the file content during spawn (while the dir still exists).
+    let capturedSettingsContent = null;
+    const fakeSpawnWithSettingsCheck = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      capturedEnv = opts?.env ?? {};
+      capturedConfigDir = capturedEnv.CLAUDE_CONFIG_DIR;
+      if (capturedConfigDir && existsSync(join(capturedConfigDir, "settings.json"))) {
+        capturedSettingsContent = readFileSync(join(capturedConfigDir, "settings.json"), "utf8");
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const fakeToken2 = "fake-dispatch-token-xyz2";
+    const fakeEnv2 = { ANTHROPIC_AUTH_TOKEN: fakeToken2 };
+    let configDirUsed = null;
+
+    await dispatchHand(dispatch, { spawn: fakeSpawnWithSettingsCheck, devVarsContent: "", env: fakeEnv2 });
+    configDirUsed = capturedConfigDir;
+
+    // settings.json must have existed and contain a Stop hook
+    assert.ok(capturedSettingsContent, "settings.json must exist in the ephemeral dir during spawn");
+    const settings = JSON.parse(capturedSettingsContent);
+    assert.ok(settings?.hooks?.Stop, "settings.json must contain a Stop hook entry");
+
+    // After the run, the ephemeral dir must have been torn down
+    if (configDirUsed) {
+      assert.ok(
+        !existsSync(configDirUsed),
+        `ephemeral dir ${configDirUsed} must be torn down after the run`
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 4 — brief/system-prompt file has ZERO occurrences of the token
+// ---------------------------------------------------------------------------
+describe("dispatchHand brief scrubbing", () => {
+  it("the brief/system-prompt file written to disk contains ZERO occurrences of the token", async () => {
+    const secretToken = "super-secret-token-SHOULD-NOT-APPEAR-9999";
+    let capturedBriefPath = null;
+    let briefContentOnDisk = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      // Find the --append-system-prompt-file argument to get the brief path
+      const apfIndex = args.indexOf("--append-system-prompt-file");
+      if (apfIndex !== -1) {
+        capturedBriefPath = args[apfIndex + 1];
+        if (capturedBriefPath && existsSync(capturedBriefPath)) {
+          briefContentOnDisk = readFileSync(capturedBriefPath, "utf8");
+        }
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: `This is the brief. Token should not appear: ${secretToken}`,
+      shared_context: `Shared context also contains: ${secretToken}`,
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    // Inject token via env (never touch process.env)
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: secretToken };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+
+    assert.ok(
+      capturedBriefPath !== null,
+      "spawn must have received --append-system-prompt-file argument"
+    );
+
+    assert.ok(
+      briefContentOnDisk !== null,
+      "brief file must exist and be readable during spawn"
+    );
+
+    // Count occurrences of token in the written file
+    const tokenOccurrences = briefContentOnDisk.split(secretToken).length - 1;
+    assert.equal(
+      tokenOccurrences,
+      0,
+      `brief file must contain ZERO occurrences of the token; found ${tokenOccurrences}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 5 — FAIL CLOSED when locked_test is missing (no armed gate)
+// ---------------------------------------------------------------------------
+describe("dispatchHand fail-closed without locked_test", () => {
+  it("throws and does NOT spawn when locked_test is empty/missing", async () => {
+    let spawnCalled = false;
+    const fakeSpawn = () => {
+      spawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      // locked_test intentionally absent
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      /locked_test is required/,
+      "dispatchHand must throw when locked_test is missing"
+    );
+
+    assert.equal(spawnCalled, false, "spawn must NOT be called when the gate is unarmed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 6 — armed gate: written settings.json carries the resolved test
+// path, NOT the placeholder
+// ---------------------------------------------------------------------------
+describe("dispatchHand arms the Stop-hook gate", () => {
+  it("written settings.json command contains the resolved test path and NOT the placeholder", async () => {
+    let capturedCommand = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      const configDir = opts?.env?.CLAUDE_CONFIG_DIR;
+      if (configDir && existsSync(join(configDir, "settings.json"))) {
+        const settings = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+        capturedCommand = settings?.hooks?.Stop?.[0]?.hooks?.[0]?.command ?? null;
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: lockedTest,
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv });
+
+    assert.ok(capturedCommand, "settings.json must carry a Stop-hook command during spawn");
+    assert.ok(
+      !capturedCommand.includes("PLACEHOLDER_FROZEN_TEST_PATH"),
+      "Stop-hook command must NOT contain the placeholder substring"
+    );
+    assert.ok(
+      capturedCommand.includes(lockedTest),
+      "Stop-hook command must contain the resolved locked_test path"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 7 — FAIL CLOSED when locked_test points at a NON-EXISTENT file
+// (an "armed" gate over a missing test = `node --test <missing>` exits 0 = unarmed)
+// ---------------------------------------------------------------------------
+describe("dispatchHand fail-closed when locked_test file does not exist", () => {
+  it("throws and does NOT spawn when locked_test resolves to a missing file", async () => {
+    let spawnCalled = false;
+    const fakeSpawn = () => {
+      spawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/does-not-exist.test.mjs",
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      /does not exist|gate cannot block/,
+      "dispatchHand must throw when the locked_test file does not exist"
+    );
+
+    assert.equal(spawnCalled, false, "spawn must NOT be called when the gated test file is missing");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 8 — FAIL CLOSED when locked_test resolves to a DIRECTORY
+// (`node --test <dir>` exits 0 = vacuous gate)
+// ---------------------------------------------------------------------------
+describe("dispatchHand fail-closed when locked_test is a directory", () => {
+  it("throws /must be a file/ and does NOT spawn when locked_test is a directory", async () => {
+    let spawnCalled = false;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      spawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      // An existing DIRECTORY, not a file — node --test would exit 0 vacuously.
+      locked_test: "core/skills/orchestrating-delivery/references/hand-config",
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      /must be a file/,
+      "dispatchHand must throw when locked_test is a directory"
+    );
+
+    assert.equal(spawnCalled, false, "spawn must NOT be called when the gated path is a directory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 9 — FAIL CLOSED when the frozen test registers ZERO tests
+// (dry-run reports `# tests 0` → vacuous gate)
+// ---------------------------------------------------------------------------
+describe("dispatchHand fail-closed when locked_test registers zero tests", () => {
+  it("throws /zero tests|vacuous/ and does NOT dispatch when the dry-run reports # tests 0", async () => {
+    let dispatchSpawnCalled = false;
+    const fakeSpawn = (cmd, args) => {
+      // Simulate a frozen test file that collects NO tests.
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 0\n", stderr: "", output: [] };
+      }
+      dispatchSpawnCalled = true;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      // An existing FILE (passes the isFile guard) whose dry-run reports zero tests.
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, devVarsContent: "", env: fakeEnv }),
+      /zero tests|vacuous/,
+      "dispatchHand must throw when the frozen test registers zero tests"
+    );
+
+    assert.equal(
+      dispatchSpawnCalled,
+      false,
+      "the real dispatch spawn must NOT be called when the gate is vacuous"
+    );
+  });
+});
