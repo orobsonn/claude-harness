@@ -8,6 +8,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.7.0] - 2026-06-14
+
+### Added
 - **Deterministic delivery rails — pipeline steps that were prose are now state-machine checks.** Four points where the orchestrator could silently skip a pipeline step ("the orchestrator must remember to…") became deterministic gates over `gate-state.json`, the same pattern already used for triage/planner/shipper:
   - **Plan-authorship rail** (`hooks/plan-write-gate.mjs`, new `PreToolUse(Write|Edit)` hook): only the dispatched `planner` subagent may write/edit a feature's `execution-plan.json`; the main-loop orchestrator is denied. Also blocks any tool write to `.claude/plans/.state/*.json` (gate-state/triage are hook-owned).
   - **Ollama hands as default**: `validate-plan` now warns (never rejects) on legacy Claude-only `tiers`, and `creating-plans`/`planner` emit the split `hand_tiers` ladder by default (`glm-5.1` → `deepseek-v4-pro` → `kimi-2.7`).
