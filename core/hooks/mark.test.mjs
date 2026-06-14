@@ -244,3 +244,60 @@ test("mark.test.mjs", async (t) => {
     assert.match(stderr, /invalid feature_id/, "stderr should mention invalid feature_id");
   });
 });
+
+// --- escalation-fallback marker (Trilho 3 — the hand-routing escalation ticket) ---
+
+test("parseArgs+run: escalation-fallback echoes {marker, feature_id, task_id}", () => {
+  const parsed = parseArgs([
+    "node",
+    "mark.mjs",
+    "escalation-fallback",
+    "--feature-id",
+    "feat-a",
+    "--task-id",
+    "task-1",
+  ]);
+  assert.deepEqual(parsed, {
+    marker: "escalation-fallback",
+    feature_id: "feat-a",
+    task_id: "task-1",
+  });
+  const result = run(parsed);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.output, {
+    marker: "escalation-fallback",
+    feature_id: "feat-a",
+    task_id: "task-1",
+  });
+});
+
+test("parseArgs: escalation-fallback without --task-id → null (task-id required)", () => {
+  const parsed = parseArgs(["node", "mark.mjs", "escalation-fallback", "--feature-id", "feat-a"]);
+  assert.equal(parsed, null);
+});
+
+// --- hand-finished / capture-verified markers (Trilho 4 — the independent-capture rail) ---
+
+test("parseArgs+run: hand-finished echoes {marker, feature_id, task_id}", () => {
+  const parsed = parseArgs([
+    "node",
+    "mark.mjs",
+    "hand-finished",
+    "--feature-id",
+    "feat-a",
+    "--task-id",
+    "task-1",
+  ]);
+  assert.deepEqual(parsed, {
+    marker: "hand-finished",
+    feature_id: "feat-a",
+    task_id: "task-1",
+  });
+  const result = run(parsed);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.output, {
+    marker: "hand-finished",
+    feature_id: "feat-a",
+    task_id: "task-1",
+  });
+});

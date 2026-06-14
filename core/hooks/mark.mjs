@@ -2,14 +2,20 @@
  * @description
  * Model-invoked CLI for marking key points in the triage/delivery pipeline.
  * Supports:
- *   - brainstorm-done --feature-id <id>
- *   - regate-pending  --feature-id <id> --task-id <id>
- *   - regate-passed   --feature-id <id> --task-id <id>
+ *   - brainstorm-done    --feature-id <id>
+ *   - regate-pending     --feature-id <id> --task-id <id>
+ *   - regate-passed      --feature-id <id> --task-id <id>
+ *   - escalation-fallback --feature-id <id> --task-id <id>
+ *   - hand-finished      --feature-id <id> --task-id <id>
+ *   - capture-verified   --feature-id <id> --task-id <id>
  * Validates feature_id (and task_id, where required) via gate-lib, and on success
  * echoes a single JSON line to stdout with exit 0:
  *   {marker:'brainstorm-done', feature_id}
  *   {marker:'regate-pending', feature_id, task_id}
  *   {marker:'regate-passed',  feature_id, task_id}
+ *   {marker:'escalation-fallback', feature_id, task_id}
+ *   {marker:'hand-finished', feature_id, task_id}
+ *   {marker:'capture-verified', feature_id, task_id}
  * On invalid input, exits non-zero with a corrective stderr message.
  * NEITHER reads nor writes state — the stamp-triage hook observes the command
  * and stamps the corresponding flag into gate-state.json.
@@ -20,9 +26,17 @@ import { fileURLToPath } from "node:url";
 import { isSafeFeatureId } from "./lib/gate-lib.mjs";
 
 /**
- * Markers that additionally require a --task-id (the per-task re-gate rail).
+ * Markers that additionally require a --task-id (the per-task re-gate rail, the per-task
+ * escalation-fallback ticket that authorizes a K=1 Claude hand dispatch, plus the
+ * independent-capture rail: hand-finished producer + capture-verified consumer-precondition).
  */
-const TASK_SCOPED_MARKERS = new Set(["regate-pending", "regate-passed"]);
+const TASK_SCOPED_MARKERS = new Set([
+  "regate-pending",
+  "regate-passed",
+  "escalation-fallback",
+  "hand-finished",
+  "capture-verified",
+]);
 
 /**
  * All supported marker commands.
@@ -133,7 +147,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id>>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id>>"
     );
     process.exit(1);
   }

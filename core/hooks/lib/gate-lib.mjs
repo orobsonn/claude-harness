@@ -182,11 +182,14 @@ export function mergeGateState(sessionId, patch) {
  * Atomically OVERWRITES gate-state.json on (re)classify, discarding the per-feature
  * ceremony flags (brainstormed/adversary_fired) so they never carry stale across features.
  *
- * Re-gate rail invariant: regate_pending/regate_passed are preserved UNCONDITIONALLY —
- * including across a genuine feature SWITCH. A HIGH sniper fix's re-gate obligation is the
- * SESSION's (the un-pushed branch persists across a feature switch), so a grave fix on
- * feature A must never ship un-re-gated just because the session reclassified to feature B.
- * Only the per-feature ceremony flags (brainstormed/adversary_fired) are discarded on reclassify.
+ * Delivery-obligation rail invariant: regate_pending/regate_passed AND hand_finished/
+ * capture_verified are preserved UNCONDITIONALLY — including across a genuine feature SWITCH.
+ * Both are SESSION-level delivery obligations on the un-pushed branch (a HIGH sniper fix still
+ * awaiting its re-gate; a finished cheap hand still awaiting its independent capture), so a
+ * grave fix or an un-captured hand on feature A must never ship just because the session
+ * reclassified to feature B. Dropping hand_finished/capture_verified here would let a re-triage
+ * launder the capture rail. Only the per-feature ceremony flags (brainstormed/adversary_fired)
+ * are discarded on reclassify.
  *
  * Writes to <path>.<pid>.tmp then fs.renameSync to target (atomic; pid-suffixed temp
  * avoids concurrent-process collision). Never throws. Returns true on success, false otherwise.
@@ -200,6 +203,8 @@ export function resetGateState(sessionId, featureId) {
     const next = { feature_id: featureId };
     if (Array.isArray(current.regate_pending)) next.regate_pending = current.regate_pending;
     if (Array.isArray(current.regate_passed)) next.regate_passed = current.regate_passed;
+    if (Array.isArray(current.hand_finished)) next.hand_finished = current.hand_finished;
+    if (Array.isArray(current.capture_verified)) next.capture_verified = current.capture_verified;
     const targetPath = gateStatePathFor(sessionId);
     const tmpPath = `${targetPath}.${process.pid}.tmp`;
     fs.mkdirSync(stateDirFor(sessionId), { recursive: true });

@@ -129,14 +129,18 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "executor with triage.json mode FULL → allow",
+  "executor with triage.json mode FULL (+ escalation_fallback ticket) → allow",
   () => {
+    // trilho-3: a MAIN-LOOP executor now requires an escalation_fallback ticket to pass the
+    // hand-routing gate (cheap hands are dispatched via spawn-hand). Valid FULL triage plus
+    // the legit fallback ticket → allow.
     const payload = makeAgentPayload("ses_exec_full", "executor");
     const readTriage = () => ({ session_id: "ses_exec_full", mode: "FULL", feature_id: "my-feature" });
+    const readGateStateFn = () => ({ escalation_fallback: ["my-feature/task-1"] });
 
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readTriage, readGateStateFn });
 
-    assert.equal(verdict.allow, true, "executor with valid FULL triage must be allowed");
+    assert.equal(verdict.allow, true, "executor with valid FULL triage and a fallback ticket must be allowed");
   },
 );
 
@@ -289,10 +293,12 @@ test("decide: non-object payload (null) → allow (fail-open)", () => {
   assert.equal(decide([]).allow, true);
 });
 
-test("decide: executor with triage mode LIGHT → allow", () => {
+test("decide: executor with triage mode LIGHT (+ escalation_fallback ticket) → allow", () => {
+  // trilho-3: main-loop executor needs a fallback ticket to clear the hand-routing gate.
   const payload = makeAgentPayload("ses_exec_light", "executor");
   const readTriage = () => ({ mode: "LIGHT", feature_id: "feat" });
-  assert.equal(decide(payload, { readTriage }).allow, true);
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  assert.equal(decide(payload, { readTriage, readGateStateFn }).allow, true);
 });
 
 test("decide: executor with triage mode QUICK → deny (Gate 1: QUICK not in {LIGHT,FULL})", () => {
@@ -794,3 +800,259 @@ test("CLI: executor with no triage.json → main() runs and emits deny on stdout
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// trilho-3 — hand-routing gate
+// executor, sniper, and test-author are HAND roles dispatched via spawn-hand.mjs
+// (Ollama cheap hands). A MAIN-LOOP Agent of a hand role (no agent_id) is denied
+// UNLESS a session-level escalation_fallback ticket exists — that ticket marks the
+// legitimate K=1 escalation/transcription fallback. Eyes (planner, adversary, etc.)
+// are unaffected. Gate 1 (triage) precedence is preserved.
+// ---------------------------------------------------------------------------
+
+test(
+  "trilho-3 #1: executor, valid FULL triage, no escalation_fallback ticket → deny (spawn-hand)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_exec", "executor");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({}); // no escalation_fallback ticket
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "main-loop executor must be denied without a fallback ticket");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(
+      verdict.hookSpecificOutput.permissionDecisionReason,
+      /spawn-hand/,
+      "deny reason must reference spawn-hand routing",
+    );
+  },
+);
+
+test(
+  "trilho-3 #2: sniper, valid triage, no ticket → deny (spawn-hand)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_sniper", "sniper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({});
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "main-loop sniper must be denied without a fallback ticket");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+  },
+);
+
+test(
+  "trilho-3 #3: executor, valid triage, escalation_fallback ticket present → allow",
+  () => {
+    const payload = makeAgentPayload("ses_hand_exec_ok", "executor");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, true, "executor must be allowed when a fallback ticket exists");
+  },
+);
+
+test(
+  "trilho-3 #4: adversary, valid triage, no ticket → allow (eyes unaffected, still records)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_adv", "adversary");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({}); // no escalation_fallback ticket
+    let recorded = false;
+    const mergeGateStateFn = (_sid, patch) => {
+      if (patch && patch.adversary_fired === true) recorded = true;
+      return true;
+    };
+
+    const verdict = decide(payload, { readTriage, readGateStateFn, mergeGateStateFn });
+
+    assert.equal(verdict.allow, true, "adversary (eye) must remain allowed without a fallback ticket");
+    assert.equal(recorded, true, "adversary must still record adversary_fired");
+  },
+);
+
+test(
+  "trilho-3 #5: planner with both ceremony flags, no ticket → allow (eyes unaffected)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_planner", "planner");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ brainstormed: true, adversary_fired: true }); // no ticket
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, true, "planner (eye) must be allowed by its own gate, not the hand gate");
+  },
+);
+
+test(
+  "trilho-3 #6: 'harness:executor', valid triage, no ticket → deny (bareRole normalization)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_ns_exec", "harness:executor");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({});
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "namespaced executor must be normalized and denied");
+    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+  },
+);
+
+test(
+  "trilho-3 #7: test-author, valid triage, no ticket → deny (spawn-hand) — non-delivery-role early-allow trap",
+  () => {
+    const payload = makeAgentPayload("ses_hand_ta", "test-author");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({});
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "test-author (not a delivery role) must NOT slip through early-allow");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+  },
+);
+
+test(
+  "trilho-3 #8: test-author, valid triage, escalation_fallback ticket present → allow (transcription fallback)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_ta_ok", "test-author");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, true, "test-author must be allowed for the transcription fallback when a ticket exists");
+  },
+);
+
+test(
+  "trilho-3 #9: 'harness:test-author', valid triage, no ticket → deny",
+  () => {
+    const payload = makeAgentPayload("ses_hand_ns_ta", "harness:test-author");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({});
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "namespaced test-author must be normalized and denied");
+    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+  },
+);
+
+test(
+  "trilho-3 regression: executor with NO triage → Gate 1 deny naming triaging-requests (precedence preserved)",
+  () => {
+    const payload = makeAgentPayload("ses_hand_notriage", "executor");
+    const readTriage = () => null; // no triage.json
+    const readGateStateFn = () => ({}); // no ticket — but Gate 1 must fire FIRST
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+
+    assert.equal(verdict.allow, false, "no-triage executor must still be denied");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("triaging-requests"),
+      "Gate 1 (triage) must take precedence over the hand-routing gate",
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// trilho-4 — delivery-bash-gate capture rail
+// In addition to the regate rail, decideBash DENIES a delivery command while any
+// hand_finished task-id lacks a matching capture_verified task-id (same qualified
+// `${feature_id}/${task_id}` shape and array-diff style as regate_pending vs regate_passed).
+// A finished cheap-hand whose output has not been independently captured/verified blocks
+// delivery. The two rails fire INDEPENDENTLY — either unmatched set denies.
+// ---------------------------------------------------------------------------
+
+test(
+  "trilho-4 #1: Bash 'git push' with hand_finished unmatched by capture_verified → deny naming the pending capture",
+  () => {
+    const payload = makeBashPayload("ses_cap_blocked", "git push origin main");
+    const readGateStateFn = () => ({ hand_finished: ["feat-a/task-1"] }); // no capture_verified
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "git push must be denied while a capture is pending");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/task-1"),
+      `deny reason must name the pending capture — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("capture-verified"),
+      "deny reason must reference capture-verified",
+    );
+  },
+);
+
+test(
+  "trilho-4 #2: Bash 'git push' with hand_finished matched by capture_verified, no unmatched regate → allow",
+  () => {
+    const payload = makeBashPayload("ses_cap_ok", "git push origin main");
+    const readGateStateFn = () => ({
+      hand_finished: ["feat-a/task-1"],
+      capture_verified: ["feat-a/task-1"],
+    });
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, true, "git push must be allowed once every capture is matched");
+  },
+);
+
+test(
+  "trilho-4 #3: Bash 'git status' with hand_finished unmatched → allow (read-only never gated)",
+  () => {
+    const payload = makeBashPayload("ses_cap_readonly", "git status");
+    const readGateStateFn = () => ({ hand_finished: ["feat-a/task-1"] }); // no capture_verified
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, true, "read-only git status must always pass regardless of capture state");
+  },
+);
+
+test(
+  "trilho-4 #4: Bash 'git push' with unmatched regate_pending and NO hand_finished → deny (existing regate rail intact)",
+  () => {
+    const payload = makeBashPayload("ses_cap_regate_intact", "git push origin main");
+    const readGateStateFn = () => ({ regate_pending: ["feat-a/x"] }); // no regate_passed, no hand_finished
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "the existing regate rail must still fire post-extension");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/x"),
+      "deny reason must name the unmatched regate entry",
+    );
+  },
+);
+
+test(
+  "trilho-4 #5: Bash 'git push' with regate matched but hand_finished unmatched → deny (capture rail fires independently)",
+  () => {
+    const payload = makeBashPayload("ses_cap_independent", "git push origin main");
+    const readGateStateFn = () => ({
+      regate_pending: ["feat-a/x"],
+      regate_passed: ["feat-a/x"], // regate rail satisfied
+      hand_finished: ["feat-a/task-1"], // but capture rail unmatched
+    });
+
+    const verdict = decide(payload, { readGateStateFn });
+
+    assert.equal(verdict.allow, false, "capture rail must deny even when the regate rail is satisfied");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/task-1"),
+      "deny reason must name the pending capture",
+    );
+  },
+);

@@ -529,6 +529,18 @@ const errors = new Errors();
 validatePlan(data, errors);
 
 if (errors.empty) {
+  // Non-fatal legacy warning: a valid plan in the legacy `tiers` shape (Claude-only hands)
+  // still passes (exit 0, prints OK), but Ollama cheap-hands are the harness default — legacy
+  // tiers run the executor/sniper on expensive Claude. Warn so new plans adopt hand_tiers.
+  const ms = data && typeof data === "object" ? data.model_strategy : undefined;
+  const msIsObject = ms && typeof ms === "object" && !Array.isArray(ms);
+  if (msIsObject && ms.tiers !== undefined && ms.hand_tiers === undefined) {
+    process.stderr.write(
+      "[validate-plan] WARNING: legacy model_strategy.tiers (Claude-only hands) and no hand_tiers. " +
+        "Ollama cheap-hands are the harness default; legacy tiers run executor/sniper on expensive " +
+        "Claude. New plans should emit the split hand_tiers shape.\n"
+    );
+  }
   process.stdout.write("OK\n");
   process.exit(0);
 } else {

@@ -674,6 +674,67 @@ test(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Trilho 3: escalation-fallback ticket marker
+// ---------------------------------------------------------------------------
+
+test("decide: escalation-fallback marker (no agent_id) → action with feature-qualified task_id", () => {
+  const result = decide(makeRegatePayload("ses_esc_d", "escalation-fallback", "feat-a", "task-1"));
+  assert.equal(result.action, "escalation-fallback");
+  assert.equal(result.session_id, "ses_esc_d");
+  assert.equal(result.task_id, "feat-a/task-1");
+});
+
+test(
+  "handle: escalation-fallback merges escalation_fallback without dropping other markers",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_esc";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({
+          brainstormed: true,
+          adversary_fired: true,
+          regate_pending: ["feat-a/x"],
+        }),
+        "utf8",
+      );
+
+      handle(makeRegatePayload(sessionId, "escalation-fallback", "feat-a", "task-1"));
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.deepEqual(state.escalation_fallback, ["feat-a/task-1"]);
+      assert.equal(state.brainstormed, true, "brainstormed must be retained");
+      assert.equal(state.adversary_fired, true, "adversary_fired must be retained");
+      assert.deepEqual(state.regate_pending, ["feat-a/x"], "regate_pending must be retained");
+    });
+  },
+);
+
+test(
+  "handle: escalation-fallback with agent_id → no escalation_fallback entry (main-loop only)",
+  () => {
+    withTempDir(() => {
+      const payload = makeRegatePayload("ses_esc_sub", "escalation-fallback", "feat-a", "task-1", {
+        agent_id: "ag_1",
+      });
+      handle(payload);
+
+      const gateStatePath = ".claude/plans/.state/ses_esc_sub/gate-state.json";
+      const state = fs.existsSync(gateStatePath)
+        ? JSON.parse(fs.readFileSync(gateStatePath, "utf8"))
+        : {};
+      assert.equal(
+        state.escalation_fallback,
+        undefined,
+        "escalation_fallback must NOT be written from a subagent context",
+      );
+    });
+  },
+);
+
 test(
   "decide: regate-pending command whose stdout is NOT marker JSON → action:none (forgery rejected)",
   () => {
@@ -765,6 +826,99 @@ test(
         fs.readFileSync(".claude/plans/.state/ses_multi_rp/gate-state.json", "utf8"),
       );
       assert.deepEqual(state.regate_pending, ["my-feature/task-1", "my-feature/task-2"]);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Trilho 4: independent-capture rail — hand-finished / capture-verified markers
+// ---------------------------------------------------------------------------
+
+test("handle: hand-finished marker → gate-state.json has hand_finished: [qualified task_id]", () => {
+  withTempDir(() => {
+    handle(makeRegatePayload("s1", "hand-finished", "feat-a", "task-1"));
+
+    const state = JSON.parse(
+      fs.readFileSync(".claude/plans/.state/s1/gate-state.json", "utf8"),
+    );
+    assert.deepEqual(state.hand_finished, ["feat-a/task-1"]);
+  });
+});
+
+test("handle: capture-verified for a finished hand → capture_verified: [qualified task_id]", () => {
+  withTempDir(() => {
+    const sessionId = "ses_cv";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+
+    handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"));
+
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.deepEqual(state.capture_verified, ["feat-a/task-1"]);
+  });
+});
+
+test(
+  "handle: capture-verified for an UN-finished hand is a no-op (does not pre-authorize)",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_cv_noop";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+        "utf8",
+      );
+
+      handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-2"));
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.equal(
+        state.capture_verified,
+        undefined,
+        "capture-verified for a never-finished hand must NOT append",
+      );
+    });
+  },
+);
+
+test(
+  "handle: hand-finished keys off payload.session_id, ignoring an embedded session_id in stdout",
+  () => {
+    withTempDir(() => {
+      const payload = {
+        session_id: "s1",
+        tool_name: "Bash",
+        tool_input: {
+          command: "node .claude/hooks/mark.mjs hand-finished --feature-id feat-a --task-id task-1",
+        },
+        tool_response: JSON.stringify({
+          marker: "hand-finished",
+          feature_id: "feat-a",
+          task_id: "task-1",
+          session_id: "evil",
+        }),
+      };
+      handle(payload);
+
+      const realPath = ".claude/plans/.state/s1/gate-state.json";
+      const evilPath = ".claude/plans/.state/evil/gate-state.json";
+
+      assert.ok(fs.existsSync(realPath), "gate-state.json should be under payload session_id s1");
+      assert.equal(
+        fs.existsSync(evilPath),
+        false,
+        "no gate-state.json should be written under the embedded 'evil' session_id",
+      );
+
+      const state = JSON.parse(fs.readFileSync(realPath, "utf8"));
+      assert.deepEqual(state.hand_finished, ["feat-a/task-1"]);
     });
   },
 );

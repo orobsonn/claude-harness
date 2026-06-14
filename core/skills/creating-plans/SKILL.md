@@ -201,21 +201,30 @@ If a decision is genuinely open (the product has not resolved it), **stop and as
 
 Read the harness settings (project or global config). Freeze the resolved tier aliases into the plan. This snapshot is deterministic — orchestrating-delivery uses exactly this, ignoring later config changes.
 
-The model_strategy supports two shapes:
+**Default shape — `hand_tiers` (hands/eyes split).** This is THE shape you emit. It decouples
+the hand execution models (cheap, escalating weak→strong) from the eye judgment roles (always
+Claude). Pin the cravado escalation ladder verbatim — three *different* models, weakest at `low`,
+strongest at `high`, never three identical aliases:
 
-**Legacy shape (Claude-only, back-compat):**
 ```json
 "model_strategy": {
-  "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
+  "hand_tiers": { "low": "glm-5.1", "medium": "deepseek-v4-pro", "high": "kimi-2.7" },
   "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
   "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }
 ```
 
-**Split shape (hands/eyes split, recommended):**
+The `low → medium → high` ladder is a genuine escalation (`glm-5.1` → `deepseek-v4-pro` →
+`kimi-2.7`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
+
+**Read-back-compat note — legacy `tiers` (Claude-only).** The orchestrator still *accepts* a legacy
+`tiers` map on read for plans authored before the split, but you do **not** emit it as the default.
+Treat it as deprecated; prefer `hand_tiers` for every new plan.
+
 ```json
+// accepted on read only — NOT the default emission
 "model_strategy": {
-  "hand_tiers": { "low": "deepseek-v4-flash", "medium": "kimi-k2.6", "high": "deepseek-v4-pro" },
+  "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
   "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
   "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }

@@ -6,10 +6,12 @@
  *
  * Bash gate (delivery-bash-gate):
  *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
- *   any unmatched regate_pending (a regate_pending task_id with no matching regate_passed).
- *   Read-only commands (git status, git diff, git log, gh pr view/list) always pass.
- *   This closes the second delivery door: a direct Bash delivery command bypasses the
- *   PreToolUse(Agent) shipper gate, so this gate closes both doors.
+ *   EITHER (a) any unmatched regate_pending (a regate_pending task_id with no matching
+ *   regate_passed), OR (b) any unmatched hand_finished (a hand_finished task_id with no
+ *   matching capture_verified — a finished cheap-hand whose output was not independently
+ *   captured/verified). The two rails fire independently. Read-only commands (git status,
+ *   git diff, git log, gh pr view/list) always pass. This closes the second delivery door:
+ *   a direct Bash delivery command bypasses the PreToolUse(Agent) shipper gate.
  *
  * Agent gate order:
  *   1. agent_id present → ALLOW (subagent context, no state pollution)
@@ -38,6 +40,17 @@ import {
   readGateState,
   mergeGateState,
 } from "./lib/gate-lib.mjs";
+
+/**
+ * HAND roles — executor, sniper, and test-author write code/tests and are normally
+ * dispatched as cheap-hand spawns via spawn-hand.mjs (Ollama), NOT as main-loop Agents.
+ * A main-loop Agent of one of these (no agent_id) is only the legitimate K=1
+ * escalation/transcription fallback, gated below by the escalation_fallback ticket.
+ * NOTE: gate-lib's isDeliveryRole is FALSE for 'test-author' (it is not in DELIVERY_ROLES),
+ * so HAND_ROLES is checked independently to keep the early-allow from leaking a main-loop
+ * test-author through.
+ */
+const HAND_ROLES = new Set(["executor", "sniper", "test-author"]);
 
 // ---------------------------------------------------------------------------
 // Default I/O implementations (used by CLI; tests inject alternatives)
@@ -110,7 +123,10 @@ export function isDeliveryCommand(command) {
 /**
  * Decides whether to allow or deny a Bash tool dispatch.
  * Only delivery commands (git push, gh pr create, gh pr merge) are gated; all other
- * Bash commands pass freely. Fail-open on any infra error (never brick read-only work).
+ * Bash commands pass freely. A delivery command passes ONLY when BOTH rails are clear:
+ * no unmatched regate (regate_pending without regate_passed) AND no unmatched capture
+ * (hand_finished without capture_verified). Fail-open on any infra error (never brick
+ * read-only work).
  *
  * @param {object} payload - The parsed Bash hook payload
  * @param {object} deps - Injectable seams
@@ -154,6 +170,27 @@ function decideBash(payload, { readGateStateFn }) {
           `${unmatched.join(", ")} still await the mandatory strong-eye re-gate ` +
           "(regate-pending without regate-passed). Dispatch the fresh-virgin adversary and " +
           "stamp regate-passed before running any delivery command " +
+          "(git push / gh pr create / gh pr merge).",
+      },
+    };
+  }
+  // Capture rail — independent of the re-gate rail. A finished cheap-hand (hand_finished)
+  // whose output has not been independently captured/verified (no matching capture_verified)
+  // blocks delivery. Same qualified ${feature_id}/${task_id} shape and array-diff style.
+  const handFinished = Array.isArray(gateState.hand_finished) ? gateState.hand_finished : [];
+  const captureVerified = Array.isArray(gateState.capture_verified) ? gateState.capture_verified : [];
+  const unmatchedCapture = handFinished.filter((t) => !captureVerified.includes(t));
+  if (unmatchedCapture.length > 0) {
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[entry-gate] Blocked: delivery command denied — finished cheap-hand task(s) " +
+          `${unmatchedCapture.join(", ")} still await independent capture/verification ` +
+          "(hand-finished without capture-verified). Independently capture the hand output and " +
+          "stamp capture-verified before running any delivery command " +
           "(git push / gh pr create / gh pr merge).",
       },
     };
@@ -204,9 +241,12 @@ export function decide(payload, deps = {}) {
     return { allow: true };
   }
 
-  // Step 2: resolve subagent_type; non-delivery roles pass freely
+  // Step 2: resolve subagent_type; non-delivery roles pass freely.
+  // EXCEPTION: a HAND role (executor/sniper/test-author) is NOT early-allowed even though
+  // 'test-author' is not in gate-lib's delivery-role set — the hand-routing gate below must
+  // intercept all three, or a main-loop test-author would slip through this early-allow.
   const subagentType = payload?.tool_input?.subagent_type;
-  if (!isDeliveryRole(subagentType)) {
+  if (!isDeliveryRole(subagentType) && !HAND_ROLES.has(bareRole(subagentType))) {
     return { allow: true };
   }
   // Normalize namespace prefix once (e.g. 'harness:planner' → 'planner') so gate branches
@@ -357,8 +397,44 @@ export function decide(payload, deps = {}) {
     }
   }
 
-  // All other delivery roles (executor, compliance, sniper, security, harvester,
-  // plan-reviewer) with a valid Gate 1 triage → allow.
+  // Hand-routing gate: executor, sniper, and test-author are HAND roles dispatched via
+  // spawn-hand.mjs (Ollama cheap hands). A MAIN-LOOP Agent of one (no agent_id, hence here)
+  // is only the legit K=1 escalation/transcription fallback — allowed ONLY when a session-level
+  // escalation_fallback ticket exists (stamped by `mark.mjs escalation-fallback`).
+  // SESSION-LEVEL BY DESIGN: the Agent payload carries no structured task_id, so any non-empty
+  // escalation_fallback array unlocks the dispatch. This looseness is intentional — the precise
+  // per-task binding lives on the spawn-hand rail, not on this main-loop fallback door.
+  // Runs AFTER Gate 1 so a hand WITHOUT triage still hits the triage deny first.
+  if (HAND_ROLES.has(role)) {
+    let gateState = {};
+    try {
+      gateState = readGateStateFn(sessionId);
+    } catch {
+      gateState = {};
+    }
+    const tickets = Array.isArray(gateState.escalation_fallback)
+      ? gateState.escalation_fallback
+      : [];
+    if (tickets.length > 0) {
+      return { allow: true };
+    }
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[entry-gate] Blocked: executor, sniper, and test-author are HAND roles dispatched via " +
+          "spawn-hand.mjs (Ollama cheap hands), not main-loop Agents. A main-loop Agent of a hand " +
+          "role is only the K=1 escalation/transcription fallback — allowed after you stamp the " +
+          "escalation ticket (mark.mjs escalation-fallback). Route the work through spawn-hand, or " +
+          "stamp the fallback ticket first and retry the dispatch.",
+      },
+    };
+  }
+
+  // All other delivery roles (compliance, security, harvester, plan-reviewer) with a valid
+  // Gate 1 triage → allow.
   return { allow: true };
 }
 
