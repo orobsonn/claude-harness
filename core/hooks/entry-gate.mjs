@@ -32,6 +32,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import {
   isDeliveryRole,
   bareRole,
@@ -117,6 +118,48 @@ export function isDeliveryCommand(command) {
 }
 
 // ---------------------------------------------------------------------------
+// Git-state probe — branch/commit rail (production seam; injected at processInput)
+// ---------------------------------------------------------------------------
+
+/**
+ * Probes the working-tree git state for the branch/commit delivery rail.
+ * Returns { branch, commitsAhead } where branch is the current branch name (null when
+ * detached/unknown) and commitsAhead is the count of commits HEAD is ahead of its resolved
+ * base (upstream `@{u}`, else origin's default branch), or null when no base resolves. Returns
+ * null on ANY git/infra error so the caller fails open (never bricks a delivery command).
+ * @returns {{ branch: string|null, commitsAhead: number|null } | null}
+ */
+function defaultGitState() {
+  const git = (args) =>
+    execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  try {
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    let base = null;
+    try {
+      base = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    } catch {
+      try {
+        base = git(["symbolic-ref", "refs/remotes/origin/HEAD"]).replace(/^refs\/remotes\//, "");
+      } catch {
+        base = null;
+      }
+    }
+    let commitsAhead = null;
+    if (base) {
+      try {
+        const count = Number.parseInt(git(["rev-list", "--count", `${base}..HEAD`]), 10);
+        commitsAhead = Number.isNaN(count) ? null : count;
+      } catch {
+        commitsAhead = null;
+      }
+    }
+    return { branch: branch || null, commitsAhead };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Bash gate — decideBash (internal)
 // ---------------------------------------------------------------------------
 
@@ -134,7 +177,7 @@ export function isDeliveryCommand(command) {
  * @returns {{ allow: true }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-function decideBash(payload, { readGateStateFn }) {
+function decideBash(payload, { readGateStateFn, gitStateFn }) {
   const command = payload?.tool_input?.command;
   // Non-string command → infra error → fail-open
   if (typeof command !== "string") {
@@ -144,6 +187,48 @@ function decideBash(payload, { readGateStateFn }) {
   if (!isDeliveryCommand(command)) {
     return { allow: true };
   }
+
+  // Branch/commit rail — a delivery command must run from a feature branch with committed work,
+  // never from protected main/master and never with zero commits ahead of base. The gitStateFn
+  // seam's decide()-level default is a no-op (() => null), so unit callers are unaffected; the
+  // real git probe is injected at processInput (production). Fail-open: any probe error or
+  // unresolvable base → skip (never brick a delivery command).
+  let gitState = null;
+  try {
+    gitState = typeof gitStateFn === "function" ? gitStateFn() : null;
+  } catch {
+    gitState = null;
+  }
+  if (gitState && typeof gitState.branch === "string") {
+    if (gitState.branch === "main" || gitState.branch === "master") {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: delivery command on protected branch '${gitState.branch}'. ` +
+            "The per-task freeze/impl commit series must live on a feature branch — run " +
+            "`git switch -c <type>/<feature-id>` (feat/fix/refactor/chore/docs) and commit the " +
+            "work before any delivery command (git push / gh pr create / gh pr merge).",
+        },
+      };
+    }
+    if (gitState.commitsAhead === 0) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "[entry-gate] Blocked: delivery command with zero commits ahead of base. Commit the " +
+            "task's work (the freeze/impl series) before delivering — a push/PR with no commits " +
+            "ships nothing and signals the orchestrator skipped the per-task commit step.",
+        },
+      };
+    }
+  }
+
   // Delivery command detected. Run the same unmatched-regate check as Gate 3 (shipper).
   const sessionId = payload.session_id;
   if (typeof sessionId !== "string" || sessionId.length === 0 || !isSafeSessionId(sessionId)) {
@@ -222,6 +307,9 @@ export function decide(payload, deps = {}) {
     readTriage: readTriageFn = defaultReadTriage,
     readGateStateFn = readGateState,
     mergeGateStateFn = mergeGateState,
+    // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
+    // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
+    gitStateFn = () => null,
   } = deps;
 
   // Non-object payload → infra error → fail-open
@@ -233,7 +321,7 @@ export function decide(payload, deps = {}) {
   // (orchestrator or shipper). This closes the second delivery door: a direct git push /
   // gh pr create / gh pr merge bypasses the PreToolUse(Agent) shipper gate.
   if (payload.tool_name === "Bash") {
-    return decideBash(payload, { readGateStateFn });
+    return decideBash(payload, { readGateStateFn, gitStateFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)
@@ -464,7 +552,10 @@ export function processInput(rawStr, deps = {}) {
 
   let verdict;
   try {
-    verdict = decide(payload, deps);
+    // Production path: inject the real git probe so the branch/commit rail is live in the CLI,
+    // while decide()'s own default stays a no-op for unit callers. An explicit deps.gitStateFn
+    // (tests) overrides.
+    verdict = decide(payload, { gitStateFn: defaultGitState, ...deps });
   } catch {
     // Unexpected error in decide — fail-open
     return { exitCode: 0, output: null };

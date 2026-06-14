@@ -8,6 +8,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- **Branch/commit delivery rail.** The push-gate (`entry-gate` `decideBash`) now denies a delivery command (`git push` / `gh pr create` / `gh pr merge`) when `HEAD` is on `main`/`master`, or (when a base ref resolves) when there are zero commits ahead of base — forcing the per-task commit series onto a feature branch, off protected `main`. The git probe is injected at the `processInput` (production) layer with a `decide()`-level no-op default, so it's live in the CLI but inert for unit callers; fail-open on any git error or unresolvable base. Closes the "uncommitted work / everything on main, yet still trying to deliver" gap — the rest of the per-task discipline (the freeze/impl split) is already load-bearing via the capture rail.
 
 ### Changed
 
