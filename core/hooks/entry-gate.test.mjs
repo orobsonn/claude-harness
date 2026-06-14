@@ -1056,3 +1056,83 @@ test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// Branch/commit rail (push-branch-gate): a delivery command must run from a feature
+// branch with committed work — never from main/master, never with zero commits ahead.
+// gitStateFn is an injectable seam; its decide()-level default is a no-op so existing
+// callers are unaffected (the real git probe is injected at the processInput layer).
+// ---------------------------------------------------------------------------
+
+test("push-branch-gate: git push from main → deny", () => {
+  const payload = makeBashPayload("ses_pbg1", "git push origin main");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "main", commitsAhead: 3 }),
+  });
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /branch|main/i);
+});
+
+test("push-branch-gate: git push from master → deny", () => {
+  const payload = makeBashPayload("ses_pbg2", "git push");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "master", commitsAhead: 1 }),
+  });
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("push-branch-gate: feature branch with commits ahead → allow (this rail)", () => {
+  const payload = makeBashPayload("ses_pbg3", "git push -u origin feat/x");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "feat/x", commitsAhead: 2 }),
+  });
+  assert.equal(verdict.allow, true);
+});
+
+test("push-branch-gate: feature branch with ZERO commits ahead → deny naming commit", () => {
+  const payload = makeBashPayload("ses_pbg4", "gh pr create");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "feat/x", commitsAhead: 0 }),
+  });
+  assert.equal(verdict.allow, false);
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /commit/i);
+});
+
+test("push-branch-gate: base unresolved (commitsAhead null) on feature branch → allow (branch floor only)", () => {
+  const payload = makeBashPayload("ses_pbg5", "git push");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "feat/x", commitsAhead: null }),
+  });
+  assert.equal(verdict.allow, true);
+});
+
+test("push-branch-gate: git probe error (gitStateFn null) → allow (fail-open, never brick)", () => {
+  const payload = makeBashPayload("ses_pbg6", "git push");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => null,
+  });
+  assert.equal(verdict.allow, true);
+});
+
+test("push-branch-gate: read-only command on main → allow (not a delivery command)", () => {
+  const payload = makeBashPayload("ses_pbg7", "git status");
+  const verdict = decide(payload, {
+    readGateStateFn: () => ({}),
+    gitStateFn: () => ({ branch: "main", commitsAhead: 0 }),
+  });
+  assert.equal(verdict.allow, true);
+});
+
+test("push-branch-gate: decide() WITHOUT gitStateFn is inert (back-compat — existing callers unaffected)", () => {
+  const payload = makeBashPayload("ses_pbg8", "git push");
+  const verdict = decide(payload, { readGateStateFn: () => ({}) }); // no gitStateFn injected
+  assert.equal(verdict.allow, true, "the branch rail must not fire without an injected git probe");
+});
