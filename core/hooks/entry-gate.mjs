@@ -40,7 +40,35 @@ import {
   stateDirFor,
   readGateState,
   mergeGateState,
+  readHandRecord,
 } from "./lib/gate-lib.mjs";
+
+/**
+ * @description Outcome statuses (from dispatch-hand.mjs evaluateRun) that authorize a Claude hand
+ * escape: a GENUINE run that did NOT reach DONE. FAILED = the hand produced work that's wrong
+ * (scope/frozen/test violation); NOT_DONE = the hand ran but produced nothing (empty diff). Both
+ * mean "the spawn happened and did not succeed" → a stronger hand should retry (K=1 escalation).
+ * DONE is excluded — a successful run needs no Claude fallback. A pre-spawn config error writes NO
+ * record, so it never matches → it routes to the critical-exception path instead.
+ */
+const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
+
+/**
+ * @description Best-effort current-HEAD sha reader for the run-record freshness cross-check.
+ * Returns null on ANY git/infra error so the freshness check fails OPEN (never bricks a legit
+ * escalation) — it only ever DENIES on a POSITIVE staleness signal (known HEAD ≠ record's freeze).
+ * @returns {string|null}
+ */
+function defaultHeadSha() {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * HAND roles — executor, sniper, and test-author write code/tests and are normally
@@ -307,6 +335,8 @@ export function decide(payload, deps = {}) {
     readTriage: readTriageFn = defaultReadTriage,
     readGateStateFn = readGateState,
     mergeGateStateFn = mergeGateState,
+    readHandRecordFn = readHandRecord,
+    headShaFn = defaultHeadSha,
     // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
     // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
     gitStateFn = () => null,
@@ -487,12 +517,17 @@ export function decide(payload, deps = {}) {
 
   // Hand-routing gate: executor, sniper, and test-author are HAND roles dispatched via
   // spawn-hand.mjs (Ollama cheap hands). A MAIN-LOOP Agent of one (no agent_id, hence here)
-  // is only the legit K=1 escalation/transcription fallback — allowed ONLY when a session-level
-  // escalation_fallback ticket exists (stamped by `mark.mjs escalation-fallback`).
-  // SESSION-LEVEL BY DESIGN: the Agent payload carries no structured task_id, so any non-empty
-  // escalation_fallback array unlocks the dispatch. This looseness is intentional — the precise
-  // per-task binding lives on the spawn-hand rail, not on this main-loop fallback door.
-  // Runs AFTER Gate 1 so a hand WITHOUT triage still hits the triage deny first.
+  // is only the legit K=1 escalation/transcription fallback. Per-task binding from the Agent
+  // prompt prose is infeasible (untrustworthy string-match), so the binding is session-level —
+  // BUT the unlock belt is NOT the ticket alone. The escalation_fallback ticket NAMES the in-flight
+  // task(s); the real, NON-FORGEABLE belt is the on-disk run-record (written by runLiveDispatch's
+  // INDEPENDENT capture): the Claude hand escape is authorized ONLY when a ticketed task's record
+  // shows outcome === FAILED — a genuine spawn that ran and failed its locked test/exit. A
+  // PRE-SPAWN CONFIG ERROR (no token, dirty baseline, gate not armed) writes NO such record, so the
+  // escape is DENIED → the orchestrator must route to the critical-exception path, never a silent
+  // Claude fallback. This removes the old "any non-empty escalation_fallback array unlocks"
+  // looseness (an echo-forgeable ticket could fake it). Runs AFTER Gate 1 so a hand WITHOUT triage
+  // still hits the triage deny first.
   if (HAND_ROLES.has(role)) {
     let gateState = {};
     try {
@@ -503,7 +538,33 @@ export function decide(payload, deps = {}) {
     const tickets = Array.isArray(gateState.escalation_fallback)
       ? gateState.escalation_fallback
       : [];
-    if (tickets.length > 0) {
+    // Read the current HEAD ONCE (best-effort) for the freshness cross-check below.
+    let head = null;
+    try {
+      head = headShaFn();
+    } catch {
+      head = null;
+    }
+    const authorized = tickets.some((qualifiedId) => {
+      let record = null;
+      try {
+        record = readHandRecordFn(qualifiedId);
+      } catch {
+        record = null;
+      }
+      if (!record) return false;
+      // A GENUINE run that did not reach DONE (FAILED or NOT_DONE) is what authorizes the K=1
+      // Claude escalation; a config error wrote no record and never lands here.
+      if (!AUTHORIZING_OUTCOMES.has(record?.outcome?.status)) return false;
+      // Freshness: a record is anchored to the freeze it ran against. If we can read HEAD and the
+      // record is anchored, REJECT a record whose freeze differs from the current HEAD — a stale
+      // FAILED from a prior run/freeze must never authorize a later, unfailed escalation. Only a
+      // POSITIVE mismatch denies; an unreadable HEAD or an unanchored record fails open (the
+      // ticket + genuine-failure outcome still gate it).
+      if (head && record.freezeCommitSha && record.freezeCommitSha !== head) return false;
+      return true;
+    });
+    if (authorized) {
       return { allow: true };
     }
     return {
@@ -514,9 +575,12 @@ export function decide(payload, deps = {}) {
         permissionDecisionReason:
           "[entry-gate] Blocked: executor, sniper, and test-author are HAND roles dispatched via " +
           "spawn-hand.mjs (Ollama cheap hands), not main-loop Agents. A main-loop Agent of a hand " +
-          "role is only the K=1 escalation/transcription fallback — allowed after you stamp the " +
-          "escalation ticket (mark.mjs escalation-fallback). Route the work through spawn-hand, or " +
-          "stamp the fallback ticket first and retry the dispatch.",
+          "role is the K=1 escalation/transcription fallback — allowed ONLY when a stamped " +
+          "escalation_fallback ticket maps to an on-disk run-record whose outcome is FAILED (a " +
+          "genuine cheap-hand run that failed its locked test). No such failure evidence here: a " +
+          "pre-spawn config error (missing token, dirty baseline, gate not armed) is NOT a run " +
+          "failure — route it to the critical-exception path (stamp mark.mjs hand-config-error and " +
+          "surface it), never a silent Claude fallback. Otherwise route the work through spawn-hand.",
       },
     };
   }

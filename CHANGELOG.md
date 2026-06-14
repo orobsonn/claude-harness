@@ -15,6 +15,19 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.9.0] - 2026-06-14
+
+### Added
+- **A mão Ollama barata agora dispara de verdade (wiring do live spawn — Part A).** Novo `runLiveDispatch(descriptor, {…})` em `spawn-hand.mjs` é a costura que faltava entre o andaime e o dispatch real: valida o descriptor, fail-close se o token vazar no descriptor/brief, reconcilia os dois universos git (árvore limpa + HEAD ancorado ao freeze, pra captura unscoped atribuir só o trabalho da mão), sobe `claude -p` ao vivo contra `https://ollama.com` (token só no env, `CLAUDE_CONFIG_DIR` efêmero), roda a captura INDEPENDENTE e grava um run-record sem token keyed por `feature_id/task_id`. Um CLI rodável (`node spawn-hand.mjs --descriptor <descriptor.json>`) + o comando exato e a receita do descriptor no `SKILL.md` (passos 1d/5) substituem o roteamento só-em-prosa que era a causa do bug never-fire (sessão `7fcc1009` do victor: 0 `claude -p`, 15 `escalation-fallback`). **Provado ao vivo:** a mão (`qwen3-coder-next`) autorou o diff in-scope e o teste congelado ficou verde na captura independente (`outcome DONE`).
+- **Marker `hand-config-error`** (`mark.mjs` + `stamp-triage.mjs`, com `--reason` opcional) pro orchestrator carimbar um erro de config pré-spawn na rota de exceção crítica. Nunca autoriza uma mão Claude.
+
+### Changed
+- **O escape da mão barata agora se apoia em evidência on-disk não-forjável (Part B).** O branch de hand-routing do entry-gate antes liberava um `Agent(executor|sniper|test-author)` Claude no main-loop sempre que QUALQUER ticket `escalation_fallback` não-vazio existisse (forjável por echo). Agora libera o fallback Claude SÓ quando um ticket mapeia para um run-record on-disk (escrito pela captura independente do `runLiveDispatch`) cujo `outcome` é uma run genuína não-DONE (`FAILED` ou `NOT_DONE`), ancorado ao `freeze_commit_sha` e cruzado com o `HEAD` corrente — um record estale não autoriza uma escalação posterior que não falhou.
+- **Escape de config-error explícito (contrato de exit-code).** `runLiveDispatch` RETORNA só em run genuína (record gravado) e LANÇA caso contrário, então o CLI classifica: `0` = DONE, `1` = `FAILED`/`NOT_DONE` genuíno (escalação K=1, autorizada pelo record on-disk), `2` = erro de config pré-spawn / exceção crítica (emite `{configError:true}`). O orchestrator roteia exit `2` pra exceção crítica — nunca um fallback Claude calado, nunca trava. Impede que token ausente trave a entrega.
+
+### Fixed
+- **Crash latente em `capture-hand.mjs`:** o CLI usava `readFileSync` sem importá-lo de `node:fs` — teria lançado `ReferenceError` no instante em que a captura ao vivo rodasse pelo CLI.
+
 ## [0.8.0] - 2026-06-14
 
 ### Added

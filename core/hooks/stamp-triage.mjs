@@ -239,6 +239,30 @@ export function decide(payload) {
     return { action: "escalation-fallback", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
   }
 
+  // --- mark.mjs hand-config-error marker ---
+  // The cheap-hand dispatch hit a PRE-SPAWN config error (no token, dirty baseline, gate not armed,
+  // missing test) — NOT a genuine run failure. The orchestrator stamps this so the critical exception
+  // is recorded in gate-state (survives compaction) and surfaced. It NEVER authorizes a Claude hand:
+  // the entry-gate unlock requires an on-disk run-record with outcome FAILED, which a config error
+  // never produces. Same parse-check caveat — filters accidental substring matches, not forgery.
+  if (command.includes("mark.mjs") && command.includes("hand-config-error")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "hand-config-error") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    return { action: "hand-config-error", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
   // --- mark.mjs hand-finished marker ---
   // Producer of the independent-capture rail: records that the cheap hand finished a task.
   // Same parse-check caveat — filters ACCIDENTAL substring matches, not deliberate forgery; the
@@ -359,6 +383,18 @@ export function handle(payload, opts = {}) {
     const existing = Array.isArray(current.escalation_fallback) ? current.escalation_fallback : [];
     if (!existing.includes(decision.task_id)) {
       mergeGateState(decision.session_id, { escalation_fallback: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
+  if (decision.action === "hand-config-error") {
+    // Append the qualified task_id to hand_config_error (dedup — idempotent). This is an AUDIT record
+    // of a surfaced critical exception (pre-spawn config error); it NEVER authorizes a Claude hand —
+    // the entry-gate unlock belt is an on-disk run-record with outcome FAILED, which this is not.
+    const current = readGateState(decision.session_id);
+    const existing = Array.isArray(current.hand_config_error) ? current.hand_config_error : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { hand_config_error: [...existing, decision.task_id] });
     }
     return;
   }

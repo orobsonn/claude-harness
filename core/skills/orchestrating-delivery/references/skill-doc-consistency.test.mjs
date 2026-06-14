@@ -210,3 +210,63 @@ test("SKILL.md: eye roles (compliance, adversary, security) stay on Claude; neve
     "SKILL.md must explicitly state that no eye role ever resolves to an Ollama model (hard constraint)."
   );
 });
+
+// ─── Test 5 ───────────────────────────────────────────────────────────────────
+/**
+ * Given: orchestrating-delivery SKILL.md.
+ * When: the live-dispatch wiring is scanned.
+ * Then:
+ *   (a) the EXACT runnable command `node ... spawn-hand.mjs --descriptor` is present
+ *       (the missing runnable command was the never-fire bug — prose alone is not enough), AND
+ *   (b) the descriptor recipe documents every required field of the descriptor schema.
+ */
+test("SKILL.md: runnable live-dispatch command + descriptor recipe present", () => {
+  const hasRunnableCommand =
+    /node\s+[^\n`]*spawn-hand\.mjs\s+--descriptor/i.test(skillMd);
+  assert(
+    hasRunnableCommand,
+    "SKILL.md must contain the EXACT runnable command 'node …spawn-hand.mjs --descriptor <…>' for the executor/sniper hand dispatch — prose-only routing is the never-fire bug."
+  );
+
+  const requiredDescriptorFields = [
+    "feature_id",
+    "task_id",
+    "model",
+    "brief_file",
+    "scope_paths",
+    "locked_test",
+    "allowed_writes",
+    "freeze_commit_sha",
+  ];
+  for (const field of requiredDescriptorFields) {
+    assert(
+      skillMd.includes(field),
+      `SKILL.md descriptor recipe must document the '${field}' field.`
+    );
+  }
+});
+
+// ─── Test 6 (Part B) ────────────────────────────────────────────────────────
+/**
+ * Given: orchestrating-delivery SKILL.md.
+ * When: the config-error escape + on-disk evidence belt are scanned.
+ * Then:
+ *   (a) the exit-2 config-error escape is documented (the runnable command emits configError /
+ *       exit 2 and routes to the critical-exception path via the hand-config-error marker), AND
+ *   (b) the entry-gate authorizes the Claude hand fallback ONLY via an on-disk run-record whose
+ *       outcome is FAILED (the non-forgeable evidence belt) — not the ticket alone.
+ */
+test("SKILL.md: config-error escape (exit 2 / hand-config-error) + on-disk FAILED evidence belt documented", () => {
+  assert(
+    skillMd.includes("hand-config-error"),
+    "SKILL.md must document the hand-config-error marker (the pre-spawn config-error critical-exception stamp)."
+  );
+  assert(
+    /exit\s*2|exits?\s*`?2`?|`2`\s*→/i.test(skillMd),
+    "SKILL.md must document the exit-2 config-error classification of the runnable command."
+  );
+  assert(
+    /on-disk run-record[\s\S]{0,200}FAILED|run-record whose `?outcome`? is `?FAILED/i.test(skillMd),
+    "SKILL.md must state the Claude hand fallback is authorized ONLY by an on-disk run-record whose outcome is FAILED."
+  );
+});

@@ -20,6 +20,8 @@ import {
   mergeGateState,
   resetGateState,
   bareRole,
+  handRecordPathFor,
+  readHandRecord,
 } from "./gate-lib.mjs";
 
 /**
@@ -40,6 +42,38 @@ function withTempDir(fn) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
+
+test("handRecordPathFor maps feature/task qualified id to feature__task.json under hand-records", () => {
+  assert.strictEqual(
+    handRecordPathFor("my-feature/task-1"),
+    path.join(".claude/plans/.state/hand-records", "my-feature__task-1.json")
+  );
+});
+
+test("readHandRecord returns null when no record on disk", () => {
+  withTempDir(() => {
+    assert.strictEqual(readHandRecord("feat/missing"), null);
+  });
+});
+
+test("readHandRecord parses a written run-record by qualified id", () => {
+  withTempDir(() => {
+    const p = handRecordPathFor("feat/task-1");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ outcome: { status: "FAILED" }, exitCode: 1 }), "utf8");
+    const rec = readHandRecord("feat/task-1");
+    assert.strictEqual(rec?.outcome?.status, "FAILED");
+  });
+});
+
+test("readHandRecord returns null on garbage JSON (fail-closed)", () => {
+  withTempDir(() => {
+    const p = handRecordPathFor("feat/task-1");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "{ not json", "utf8");
+    assert.strictEqual(readHandRecord("feat/task-1"), null);
+  });
+});
 
 test("isSafeFeatureId rejects path-traversal '../etc/passwd'", () => {
   assert.strictEqual(isSafeFeatureId("../etc/passwd"), false);

@@ -303,6 +303,30 @@ test("handle: classify output mode 'BOGUS' → no triage.json written", () => {
   });
 });
 
+test("decide: hand-config-error marker → action hand-config-error with qualified task_id", () => {
+  const payload = makeRegatePayload("ses_cfg", "hand-config-error", "feat", "task-1");
+  const result = decide(payload);
+  assert.equal(result.action, "hand-config-error");
+  assert.equal(result.task_id, "feat/task-1");
+});
+
+test(
+  "handle: hand-config-error marker → gate-state.json records hand_config_error (audit; never authorizes a hand)",
+  () => {
+    withTempDir(() => {
+      const payload = makeRegatePayload("ses_cfg", "hand-config-error", "feat", "task-1");
+      handle(payload);
+
+      const gateStatePath = `.claude/plans/.state/ses_cfg/gate-state.json`;
+      assert.ok(fs.existsSync(gateStatePath), "gate-state.json should exist");
+      const state = JSON.parse(fs.readFileSync(gateStatePath, "utf8"));
+      assert.deepEqual(state.hand_config_error, ["feat/task-1"]);
+      // Must NOT have stamped any escape-authorizing flag.
+      assert.equal(state.escalation_fallback, undefined, "hand-config-error must never write escalation_fallback");
+    });
+  },
+);
+
 test(
   "handle: brainstorm-done marker (no agent_id) → gate-state.json has brainstormed=true",
   () => {

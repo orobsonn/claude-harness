@@ -41,6 +41,7 @@
 import {
   mkdtempSync,
   writeFileSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
