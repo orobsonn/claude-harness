@@ -210,3 +210,38 @@ test("SKILL.md: eye roles (compliance, adversary, security) stay on Claude; neve
     "SKILL.md must explicitly state that no eye role ever resolves to an Ollama model (hard constraint)."
   );
 });
+
+// ─── Test 5 ───────────────────────────────────────────────────────────────────
+/**
+ * Given: orchestrating-delivery SKILL.md.
+ * When: the live-dispatch wiring is scanned.
+ * Then:
+ *   (a) the EXACT runnable command `node ... spawn-hand.mjs --descriptor` is present
+ *       (the missing runnable command was the never-fire bug — prose alone is not enough), AND
+ *   (b) the descriptor recipe documents every required field of the descriptor schema.
+ */
+test("SKILL.md: runnable live-dispatch command + descriptor recipe present", () => {
+  const hasRunnableCommand =
+    /node\s+[^\n`]*spawn-hand\.mjs\s+--descriptor/i.test(skillMd);
+  assert(
+    hasRunnableCommand,
+    "SKILL.md must contain the EXACT runnable command 'node …spawn-hand.mjs --descriptor <…>' for the executor/sniper hand dispatch — prose-only routing is the never-fire bug."
+  );
+
+  const requiredDescriptorFields = [
+    "feature_id",
+    "task_id",
+    "model",
+    "brief_file",
+    "scope_paths",
+    "locked_test",
+    "allowed_writes",
+    "freeze_commit_sha",
+  ];
+  for (const field of requiredDescriptorFields) {
+    assert(
+      skillMd.includes(field),
+      `SKILL.md descriptor recipe must document the '${field}' field.`
+    );
+  }
+});
