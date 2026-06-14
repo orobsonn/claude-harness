@@ -13,4 +13,4 @@ The `shipper` commits this directory back so cloud routines accumulate knowledge
 -->
 
 - [Dispatch-hand contract](dispatch-hand-contract.md) — truth = git diff + `captured:true` flag, fail-closed; redact-first then truncate; per-dispatch allowedWrites; frozen manifest excludes executor writes
-- [Model strategy split](model-strategy-split.md) — `hand_tiers` (Ollama write-roles) vs eye roles (always Claude); shape detection; CLAUDE_ALIASES; ALLOWED_MS_KEYS; back-compat with legacy `tiers`
+- [Model strategy split](model-strategy-split.md) — `hand_tiers` (Ollama write-roles) vs eye roles (always Claude); shape detection; CLAUDE_ALIASES; ALLOWED_MS_KEYS; legacy `tiers` removed (rejected by validation)

@@ -10,10 +10,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Added
 
 ### Changed
+- **BREAKING: `hand_tiers` is now the only valid `model_strategy` shape.** The planner emits `hand_tiers` exclusively (cravado ladder `glm-5.1` → `deepseek-v4-pro` → `kimi-k2.7-code`), and `validate-plan` requires it. Previously the legacy Claude-only `tiers` shape was still accepted (validate-plan only warned), which let the executor/sniper silently resolve to expensive Claude and defeated the cheap-hands default — the root cause of plans that never routed hands to Ollama. A Claude hand is still reachable for a sensitive task by putting a Claude alias directly in a `hand_tiers` tier (values are free-form model ids; eyes still must be Claude aliases).
 
 ### Fixed
 
 ### Removed
+- **Legacy Claude-only `tiers` `model_strategy` shape.** `validate-plan` now hard-rejects a plan carrying `tiers` (clear error pointing to `hand_tiers`); `tiers` is dropped from `ALLOWED_MS_KEYS` and the back-compat prose is removed from `creating-plans`/`planner`/memory. Old archived plans authored with `tiers` no longer validate — they are historical artifacts and are not re-validated.
 
 ## [0.7.1] - 2026-06-14
 

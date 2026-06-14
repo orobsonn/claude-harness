@@ -32,7 +32,7 @@ function readDoc(filePath) {
   return readFileSync(filePath, "utf8");
 }
 
-test("AC1 — creating-plans Step 7 presents hand_tiers as default and pins the ladder", () => {
+test("AC1 — creating-plans Step 7 presents hand_tiers as the only shape and pins the ladder", () => {
   const content = readDoc(SKILL_CREATING_PLANS);
 
   const step7Start = content.indexOf("## Step 7");
@@ -47,8 +47,8 @@ test("AC1 — creating-plans Step 7 presents hand_tiers as default and pins the 
   );
   assert.match(
     step7,
-    /\bdefault\b/i,
-    "Step 7 must present hand_tiers as the default shape",
+    /only shape/i,
+    "Step 7 must present hand_tiers as the only valid shape",
   );
   assert.ok(
     step7.includes("glm-5.1"),
@@ -59,17 +59,17 @@ test("AC1 — creating-plans Step 7 presents hand_tiers as default and pins the 
     "Step 7 must pin the cravado ladder value deepseek-v4-pro",
   );
   assert.ok(
-    step7.includes("kimi-2.7"),
-    "Step 7 must pin the cravado ladder value kimi-2.7",
+    step7.includes("kimi-k2.7-code"),
+    "Step 7 must pin the cravado ladder value kimi-k2.7-code",
   );
   assert.match(
     step7,
-    /back-compat|back compat|read-back-compat/i,
-    "Step 7 must demote legacy tiers to a back-compat note",
+    /removed|rejected/i,
+    "Step 7 must state the legacy tiers shape is removed/rejected",
   );
 });
 
-test("AC2 — planner agent emits hand_tiers by default, legacy tiers only as back-compat", () => {
+test("AC2 — planner agent emits hand_tiers as the only shape, legacy tiers removed", () => {
   const content = readDoc(AGENT_PLANNER);
 
   assert.match(
@@ -79,13 +79,13 @@ test("AC2 — planner agent emits hand_tiers by default, legacy tiers only as ba
   );
   assert.match(
     content,
-    /hand_tiers[^.]*\bdefault\b|\bdefault\b[^.]*hand_tiers/i,
-    "planner.md must present hand_tiers as the default emitted shape",
+    /hand_tiers[^.]*only|only[^.]*hand_tiers/i,
+    "planner.md must present hand_tiers as the only emitted shape",
   );
   assert.match(
     content,
-    /back-compat|back compat/i,
-    "planner.md must refer to legacy tiers as a back-compat note",
+    /removed|rejected/i,
+    "planner.md must state legacy tiers is removed/rejected",
   );
 });
 
