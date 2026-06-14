@@ -245,3 +245,28 @@ test("SKILL.md: runnable live-dispatch command + descriptor recipe present", () 
     );
   }
 });
+
+// ─── Test 6 (Part B) ────────────────────────────────────────────────────────
+/**
+ * Given: orchestrating-delivery SKILL.md.
+ * When: the config-error escape + on-disk evidence belt are scanned.
+ * Then:
+ *   (a) the exit-2 config-error escape is documented (the runnable command emits configError /
+ *       exit 2 and routes to the critical-exception path via the hand-config-error marker), AND
+ *   (b) the entry-gate authorizes the Claude hand fallback ONLY via an on-disk run-record whose
+ *       outcome is FAILED (the non-forgeable evidence belt) — not the ticket alone.
+ */
+test("SKILL.md: config-error escape (exit 2 / hand-config-error) + on-disk FAILED evidence belt documented", () => {
+  assert(
+    skillMd.includes("hand-config-error"),
+    "SKILL.md must document the hand-config-error marker (the pre-spawn config-error critical-exception stamp)."
+  );
+  assert(
+    /exit\s*2|exits?\s*`?2`?|`2`\s*→/i.test(skillMd),
+    "SKILL.md must document the exit-2 config-error classification of the runnable command."
+  );
+  assert(
+    /on-disk run-record[\s\S]{0,200}FAILED|run-record whose `?outcome`? is `?FAILED/i.test(skillMd),
+    "SKILL.md must state the Claude hand fallback is authorized ONLY by an on-disk run-record whose outcome is FAILED."
+  );
+});

@@ -106,6 +106,41 @@ export function stateDirFor(sessionId) {
 }
 
 /**
+ * Builds the canonical path to a cheap-hand run-record. The PRODUCER is `runLiveDispatch`
+ * (spawn-hand.mjs), which writes a token-free record keyed by `${feature_id}__${task_id}.json`
+ * under this dir; the CONSUMER is the entry-gate hand-routing branch, which reads the record as
+ * the NON-FORGEABLE evidence (real exitCode + lockedTestExitCode from the independent capture)
+ * that authorizes a Claude hand escape. The qualifiedId is the gate-state shape `feature_id/task_id`;
+ * the file uses `__` as the separator (both segments are kebab-case, so `__` never collides).
+ * @param {string} qualifiedId - `${feature_id}/${task_id}`
+ * @returns {string} path to the run-record JSON, relative to process.cwd()
+ */
+export function handRecordPathFor(qualifiedId) {
+  const fileName = `${String(qualifiedId).replace("/", "__")}.json`;
+  return path.join(".claude/plans/.state/hand-records", fileName);
+}
+
+/**
+ * Reads and parses the on-disk run-record for a qualified task id.
+ * Returns null on missing file, unparseable content, or any fs error — never throws
+ * (fail-closed consumers treat a missing/garbage record as "no genuine failure evidence").
+ * @param {string} qualifiedId - `${feature_id}/${task_id}`
+ * @returns {object|null} Parsed run-record, or null on any error
+ */
+export function readHandRecord(qualifiedId) {
+  try {
+    const raw = fs.readFileSync(handRecordPathFor(qualifiedId), "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Checks if a file (by mtime) has expired beyond a maximum age.
  * @param {number} mtimeMs - File modification time in milliseconds
  * @param {number} nowMs - Current time in milliseconds

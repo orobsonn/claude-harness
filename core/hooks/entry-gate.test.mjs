@@ -129,18 +129,19 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "executor with triage.json mode FULL (+ escalation_fallback ticket) → allow",
+  "executor with FULL triage + ticket mapping to an on-disk FAILED record → allow",
   () => {
-    // trilho-3: a MAIN-LOOP executor now requires an escalation_fallback ticket to pass the
-    // hand-routing gate (cheap hands are dispatched via spawn-hand). Valid FULL triage plus
-    // the legit fallback ticket → allow.
+    // trilho-3 (Part B): a MAIN-LOOP executor escape requires (1) a stamped escalation_fallback
+    // ticket AND (2) that ticket mapping to an on-disk run-record whose outcome is FAILED (the
+    // non-forgeable genuine-failure evidence). Ticket + FAILED record → allow.
     const payload = makeAgentPayload("ses_exec_full", "executor");
     const readTriage = () => ({ session_id: "ses_exec_full", mode: "FULL", feature_id: "my-feature" });
     const readGateStateFn = () => ({ escalation_fallback: ["my-feature/task-1"] });
+    const readHandRecordFn = (qid) => (qid === "my-feature/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
 
-    assert.equal(verdict.allow, true, "executor with valid FULL triage and a fallback ticket must be allowed");
+    assert.equal(verdict.allow, true, "executor with FULL triage + ticket mapping to a FAILED record must be allowed");
   },
 );
 
@@ -293,12 +294,91 @@ test("decide: non-object payload (null) → allow (fail-open)", () => {
   assert.equal(decide([]).allow, true);
 });
 
-test("decide: executor with triage mode LIGHT (+ escalation_fallback ticket) → allow", () => {
-  // trilho-3: main-loop executor needs a fallback ticket to clear the hand-routing gate.
+test("decide: executor with LIGHT triage + ticket mapping to an on-disk FAILED record → allow", () => {
+  // trilho-3 (Part B): a ticket NAMES the task; the unlock belt is the on-disk run-record showing
+  // outcome FAILED (a genuine cheap-hand run-and-fail), not the ticket alone.
   const payload = makeAgentPayload("ses_exec_light", "executor");
   const readTriage = () => ({ mode: "LIGHT", feature_id: "feat" });
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
-  assert.equal(decide(payload, { readTriage, readGateStateFn }).allow, true);
+  const readHandRecordFn = (qid) => (qid === "feat/task-1" ? { outcome: { status: "FAILED" } } : null);
+  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow, true);
+});
+
+test("decide: executor with ticket but NO on-disk record (config error) → deny", () => {
+  // A pre-spawn config error writes NO run-record → the escape is denied → critical-exception path.
+  const payload = makeAgentPayload("ses_exec_cfgerr", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => null; // no record on disk
+  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+  assert.equal(verdict.allow, false, "a ticket without a FAILED run-record must NOT unlock the Claude hand");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("decide: executor with ticket mapping to a NOT_DONE record (empty diff — genuine run) → allow", () => {
+  // A NOT_DONE run (the hand spawned but produced an empty diff) is a genuine run failure — a
+  // stronger hand should retry. The gate must authorize it, not deadlock (adversary HIGH #1).
+  const payload = makeAgentPayload("ses_exec_notdone", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => ({ outcome: { status: "NOT_DONE" } });
+  assert.equal(
+    decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow,
+    true,
+    "a NOT_DONE genuine run must authorize the K=1 escalation (no deadlock)"
+  );
+});
+
+test("decide: ticket + FAILED record whose freeze MATCHES current HEAD → allow", () => {
+  const payload = makeAgentPayload("ses_exec_freshok", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "abc123" });
+  const headShaFn = () => "abc123"; // HEAD == record's freeze → fresh
+  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
+});
+
+test("decide: ticket + FAILED record whose freeze DIFFERS from HEAD (stale) → deny", () => {
+  // A stale FAILED record from a prior run/freeze must NOT authorize a later, unfailed escalation
+  // (adversary HIGH #2 — record reuse). The freshness cross-check denies on a positive mismatch.
+  const payload = makeAgentPayload("ses_exec_stale", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "OLD-freeze" });
+  const headShaFn = () => "NEW-head"; // HEAD advanced past the record's freeze → stale
+  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn });
+  assert.equal(verdict.allow, false, "a stale record (freeze != HEAD) must NOT unlock the Claude hand");
+});
+
+test("decide: ticket + FAILED record, HEAD unreadable → allow (freshness fails open)", () => {
+  // When HEAD can't be read, the freshness check fails OPEN so a legit escalation never bricks;
+  // the ticket + genuine-failure outcome still gate it.
+  const payload = makeAgentPayload("ses_exec_nohead", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "abc123" });
+  const headShaFn = () => null; // git unavailable
+  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
+});
+
+test("decide: executor with ticket but record outcome DONE (not FAILED) → deny", () => {
+  // A DONE run does not justify a Claude escape — only a genuine FAILED run does.
+  const payload = makeAgentPayload("ses_exec_done", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = () => ({ outcome: { status: "DONE" } });
+  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+  assert.equal(verdict.allow, false, "a DONE run-record must NOT unlock the Claude hand escape");
+});
+
+test("decide: executor with non-empty ticket array but only a FORGED (recordless) entry → deny", () => {
+  // Removes the old 'any non-empty escalation_fallback array unlocks' looseness: an echo-forged
+  // ticket with no matching on-disk FAILED record never unlocks.
+  const payload = makeAgentPayload("ses_exec_forged", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/forged-task"] });
+  const readHandRecordFn = () => null;
+  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow, false);
 });
 
 test("decide: executor with triage mode QUICK → deny (Gate 1: QUICK not in {LIGHT,FULL})", () => {
@@ -845,15 +925,16 @@ test(
 );
 
 test(
-  "trilho-3 #3: executor, valid triage, escalation_fallback ticket present → allow",
+  "trilho-3 #3: executor, valid triage, ticket mapping to an on-disk FAILED record → allow",
   () => {
     const payload = makeAgentPayload("ses_hand_exec_ok", "executor");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
+    const readHandRecordFn = (qid) => (qid === "feat-a/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
 
-    assert.equal(verdict.allow, true, "executor must be allowed when a fallback ticket exists");
+    assert.equal(verdict.allow, true, "executor must be allowed when a ticket maps to a FAILED run-record");
   },
 );
 
@@ -919,15 +1000,16 @@ test(
 );
 
 test(
-  "trilho-3 #8: test-author, valid triage, escalation_fallback ticket present → allow (transcription fallback)",
+  "trilho-3 #8: test-author, valid triage, ticket mapping to an on-disk FAILED record → allow (transcription fallback)",
   () => {
     const payload = makeAgentPayload("ses_hand_ta_ok", "test-author");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
+    const readHandRecordFn = (qid) => (qid === "feat-a/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
 
-    assert.equal(verdict.allow, true, "test-author must be allowed for the transcription fallback when a ticket exists");
+    assert.equal(verdict.allow, true, "test-author must be allowed for the transcription fallback when a ticket maps to a FAILED record");
   },
 );
 

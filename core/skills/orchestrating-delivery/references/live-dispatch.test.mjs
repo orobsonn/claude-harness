@@ -16,9 +16,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 import { runLiveDispatch } from "./spawn-hand.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SPAWN_CLI = join(__dirname, "spawn-hand.mjs");
 
 const FREEZE_SHA = "0123456789abcdef0123456789abcdef01234567";
 const REAL_LOCKED_TEST =
@@ -131,6 +136,10 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       // runLiveDispatch returns the record + outcome.
       assert.equal(result.outcome.status, "DONE", "outcome must reflect the captured run");
       assert.ok(!JSON.stringify(result.record).includes(token), "the returned record must be token-free");
+
+      // The record is ANCHORED to the freeze it ran against (the entry-gate freshness cross-check).
+      assert.equal(result.record.freezeCommitSha, FREEZE_SHA, "the record must carry the freeze_commit_sha it ran against");
+      assert.equal(JSON.parse(writtenRecord.content).freezeCommitSha, FREEZE_SHA, "the persisted record must carry freezeCommitSha");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -281,6 +290,32 @@ describe("runLiveDispatch validates the descriptor schema", () => {
         "must reject an incomplete descriptor"
       );
       assert.notEqual(sink.cmd, "claude", "must NOT spawn on an invalid descriptor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 6 (Part B) — config-error escape: the CLI distinguishes a
+// PRE-SPAWN CONFIG ERROR from a genuine run failure. A config error exits 2 with
+// a structured { configError: true } signal (the orchestrator routes exit 2 to
+// the critical-exception path — never a silent Claude fallback, never a lock).
+// ---------------------------------------------------------------------------
+describe("spawn-hand CLI classifies a pre-spawn config error as exit 2", () => {
+  it("exits 2 with a configError signal on an invalid descriptor (not exit 0/1 like a genuine run)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "live-cli-"));
+    try {
+      // An invalid descriptor (missing required field) throws at schema validation BEFORE the
+      // token is resolved or anything spawns — a deterministic pre-spawn config error.
+      const descriptorPath = join(dir, "descriptor.json");
+      writeFileSync(descriptorPath, JSON.stringify({ feature_id: "x", task_id: "y" }), "utf8");
+
+      const res = spawnSync(process.execPath, [SPAWN_CLI, "--descriptor", descriptorPath], { encoding: "utf8" });
+
+      assert.equal(res.status, 2, `a pre-spawn config error must exit 2 (got ${res.status})`);
+      const out = `${res.stdout ?? ""}`;
+      assert.match(out, /"configError"\s*:\s*true/, "the CLI must emit a structured configError signal on stdout");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

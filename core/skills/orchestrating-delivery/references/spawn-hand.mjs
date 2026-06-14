@@ -460,8 +460,11 @@ export async function runLiveDispatch(descriptor, {
     }
 
     // (10) Build the token-free run-record from the captured (independent) child + persist it,
-    // keyed by feature_id/task_id — the on-disk evidence Part B consumes.
-    const record = buildRunRecord({ dispatch, child: captured.child, token, logs: [] });
+    // keyed by feature_id/task_id — the on-disk evidence Part B consumes. Stamp the
+    // freeze_commit_sha into the record so it is ANCHORED to the freeze it ran against: the
+    // entry-gate cross-checks this against the current HEAD, so a STALE record from a prior run
+    // (a different freeze) can never authorize a Claude hand escape for a later, unfailed run.
+    const record = { ...buildRunRecord({ dispatch, child: captured.child, token, logs: [] }), freezeCommitSha: descriptor.freeze_commit_sha };
     const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-records");
     const recordPath = join(baseDir, `${descriptor.feature_id}__${descriptor.task_id}.json`);
     writeRecord(recordPath, JSON.stringify(record, null, 2));
@@ -506,7 +509,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
 
-  const result = await runLiveDispatch(descriptor, { env: process.env });
-  process.stdout.write(`${JSON.stringify(result.record, null, 2)}\n`);
-  process.exit(result.outcome.status === OUTCOME.DONE ? 0 : 1);
+  // Exit-code contract (the config-error escape — Part B):
+  //   0 → genuine run, outcome DONE.
+  //   1 → genuine run, outcome FAILED/NOT_DONE (a real spawn that ran and failed its locked test
+  //       → K=1 escalation; the on-disk run-record authorizes the Claude hand at the entry-gate).
+  //   2 → PRE-SPAWN CONFIG ERROR or post-spawn critical exception (no token, dirty baseline, gate
+  //       not armed, missing test, diverged HEAD) — NOT a genuine run failure. runLiveDispatch
+  //       RETURNS only on a genuine run (record written) and THROWS otherwise, so any throw here is
+  //       a config/critical error. The orchestrator routes exit 2 to the critical-exception path
+  //       (stamp `mark.mjs hand-config-error` + surface) — NEVER a silent Claude fallback, NEVER a lock.
+  try {
+    const result = await runLiveDispatch(descriptor, { env: process.env });
+    process.stdout.write(`${JSON.stringify(result.record, null, 2)}\n`);
+    process.exit(result.outcome.status === OUTCOME.DONE ? 0 : 1);
+  } catch (err) {
+    const reason = redact(err?.message ?? String(err), token);
+    process.stdout.write(
+      `${JSON.stringify({ configError: true, reason, feature_id: descriptor?.feature_id, task_id: descriptor?.task_id }, null, 2)}\n`
+    );
+    process.exit(2);
+  }
 }

@@ -68,6 +68,30 @@ test("mark.test.mjs", async (t) => {
     assert.match(result.error, /invalid feature_id/);
   });
 
+  // --- hand-config-error marker (the pre-spawn config-error critical-exception stamp) ---
+
+  await t.test("parseArgs: parses hand-config-error with feature-id + task-id", () => {
+    const result = parseArgs(["node", "mark.mjs", "hand-config-error", "--feature-id", "feat", "--task-id", "task-1"]);
+    assert.deepEqual(result, { marker: "hand-config-error", feature_id: "feat", task_id: "task-1" });
+  });
+
+  await t.test("parseArgs: hand-config-error captures the optional --reason", () => {
+    const result = parseArgs(["node", "mark.mjs", "hand-config-error", "--feature-id", "feat", "--task-id", "task-1", "--reason", "no token resolved"]);
+    assert.deepEqual(result, { marker: "hand-config-error", feature_id: "feat", task_id: "task-1", reason: "no token resolved" });
+  });
+
+  await t.test("run: hand-config-error echoes marker + ids (+ reason when present)", () => {
+    const result = run({ marker: "hand-config-error", feature_id: "feat", task_id: "task-1", reason: "dirty baseline" });
+    assert.equal(result.success, true);
+    assert.deepEqual(result.output, { marker: "hand-config-error", feature_id: "feat", task_id: "task-1", reason: "dirty baseline" });
+  });
+
+  await t.test("run: hand-config-error rejects invalid task_id", () => {
+    const result = run({ marker: "hand-config-error", feature_id: "feat", task_id: "../x" });
+    assert.equal(result.success, false);
+    assert.match(result.error, /invalid task_id/);
+  });
+
   // --- regate-pending / regate-passed markers (the re-gate rail) ---
 
   await t.test("parseArgs: parses regate-pending --feature-id --task-id correctly", () => {

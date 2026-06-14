@@ -36,7 +36,15 @@ const TASK_SCOPED_MARKERS = new Set([
   "escalation-fallback",
   "hand-finished",
   "capture-verified",
+  "hand-config-error",
 ]);
+
+/**
+ * Markers that accept an optional free-text `--reason` (product-language). Only hand-config-error
+ * carries one — it records WHY the cheap-hand dispatch hit a PRE-SPAWN config error (no token,
+ * dirty baseline, gate not armed) so the orchestrator can surface it on the critical-exception path.
+ */
+const REASON_MARKERS = new Set(["hand-config-error"]);
 
 /**
  * All supported marker commands.
@@ -89,7 +97,14 @@ export function parseArgs(argv) {
     if (task_id === null) {
       return null;
     }
-    return { marker, feature_id, task_id };
+    const parsed = { marker, feature_id, task_id };
+    if (REASON_MARKERS.has(marker)) {
+      const reason = findFlag(argv, "--reason");
+      if (reason !== null) {
+        parsed.reason = reason;
+      }
+    }
+    return parsed;
   }
 
   return { marker, feature_id };
@@ -101,7 +116,7 @@ export function parseArgs(argv) {
  * @returns {{success: boolean, output?: {marker: string, feature_id: string, task_id?: string}, error?: string}}
  */
 export function run(args) {
-  const { marker, feature_id, task_id } = args;
+  const { marker, feature_id, task_id, reason } = args;
 
   // Validate feature_id
   if (!isSafeFeatureId(feature_id)) {
@@ -118,9 +133,13 @@ export function run(args) {
         error: `invalid task_id: "${task_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only). Path separators, uppercase, and underscores are rejected.`,
       };
     }
+    const output = { marker, feature_id, task_id };
+    if (REASON_MARKERS.has(marker) && reason !== undefined) {
+      output.reason = reason;
+    }
     return {
       success: true,
-      output: { marker, feature_id, task_id },
+      output,
     };
   }
 
@@ -147,7 +166,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id>>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>]>"
     );
     process.exit(1);
   }
