@@ -7,6 +7,12 @@
  *                      re-validate via gate-lib, write atomic triage.json.
  *   - mark.mjs brainstorm-done → merge { brainstormed: true } into gate-state.json
  *                                 (main-loop only: skip when payload.agent_id present).
+ *   - mark.mjs regate-pending / regate-passed → merge the per-task re-gate rail.
+ *   - mark.mjs escalation-fallback → append the qualified task_id to escalation_fallback
+ *                                 (the ticket the entry-gate consumes to allow a K=1 Claude hand).
+ *   - mark.mjs hand-finished / capture-verified → the independent-capture rail: hand-finished
+ *                                 records a finished hand; capture-verified only appends once that
+ *                                 qualified id is already in hand_finished (never pre-authorizes).
  *
  * Fail-open contract: exits 0 on ANY error — parse, fs, validation.
  * Never blocks a Bash call. Session-id ALWAYS from payload, never from model output.
@@ -89,6 +95,9 @@ function parseLastJsonObject(stdout) {
  *         | { action: 'brainstorm-done', session_id: string }
  *         | { action: 'regate-pending',  session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'regate-passed',   session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'escalation-fallback', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'hand-finished',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'capture-verified', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'none' }}
  */
 export function decide(payload) {
@@ -206,6 +215,76 @@ export function decide(payload) {
     return { action: "regate-passed", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
   }
 
+  // --- mark.mjs escalation-fallback marker ---
+  // Same stateless-mark + stamp-writer pattern: the ticket authorizes the entry-gate to allow a
+  // K=1 Claude executor/sniper fallback dispatch from the main loop. Same parse-check caveat —
+  // it filters ACCIDENTAL substring matches, not deliberate forgery; the deterministic safety is
+  // the entry-gate consumer that denies main-loop Agent(executor|sniper) without a ticket.
+  if (command.includes("mark.mjs") && command.includes("escalation-fallback")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "escalation-fallback") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    // Qualify by feature to match the regate entry shape (collision-proof across features).
+    return { action: "escalation-fallback", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
+  // --- mark.mjs hand-finished marker ---
+  // Producer of the independent-capture rail: records that the cheap hand finished a task.
+  // Same parse-check caveat — filters ACCIDENTAL substring matches, not deliberate forgery; the
+  // deterministic capture safety lives in the entry-gate consumer (decideBash), not this stamp.
+  if (command.includes("mark.mjs") && command.includes("hand-finished")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "hand-finished") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    // Qualify by feature to match the regate entry shape (collision-proof across features).
+    return { action: "hand-finished", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
+  // --- mark.mjs capture-verified marker ---
+  // Consumer-precondition of the independent-capture rail. Only stamped (in handle) when the
+  // qualified id is ALREADY in hand_finished — a capture-verified must never pre-authorize an
+  // un-finished hand (mirrors the regate-passed guard).
+  if (command.includes("mark.mjs") && command.includes("capture-verified")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "capture-verified") {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(parsed.task_id)) {
+      return { action: "none" };
+    }
+    // Qualify by feature to match the regate entry shape (collision-proof across features).
+    return { action: "capture-verified", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
   return { action: "none" };
 }
 
@@ -273,6 +352,17 @@ export function handle(payload, opts = {}) {
     return;
   }
 
+  if (decision.action === "escalation-fallback") {
+    // Append the qualified task_id to escalation_fallback (dedup — idempotent). Merge via
+    // gate-lib so brainstormed/adversary_fired/regate_pending/regate_passed are never dropped.
+    const current = readGateState(decision.session_id);
+    const existing = Array.isArray(current.escalation_fallback) ? current.escalation_fallback : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { escalation_fallback: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
   if (decision.action === "regate-passed") {
     // A regate-passed only clears a re-gate that was actually raised: only append when the
     // task is currently in regate_pending. A regate-passed for a never-pending task is a
@@ -286,6 +376,33 @@ export function handle(payload, opts = {}) {
     const existing = Array.isArray(current.regate_passed) ? current.regate_passed : [];
     if (!existing.includes(decision.task_id)) {
       mergeGateState(decision.session_id, { regate_passed: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
+  if (decision.action === "hand-finished") {
+    // Append the qualified task_id to hand_finished (dedup — idempotent). Merge via gate-lib so
+    // brainstormed/adversary_fired/regate_pending/regate_passed/escalation_fallback are never dropped.
+    const current = readGateState(decision.session_id);
+    const existing = Array.isArray(current.hand_finished) ? current.hand_finished : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { hand_finished: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
+  if (decision.action === "capture-verified") {
+    // A capture-verified only counts once the hand actually finished: only append when the task is
+    // currently in hand_finished. A capture-verified for a never-finished hand is a no-op — it must
+    // never pre-authorize a future (or forged) capture that hasn't run (mirrors the regate-passed guard).
+    const current = readGateState(decision.session_id);
+    const finished = Array.isArray(current.hand_finished) ? current.hand_finished : [];
+    if (!finished.includes(decision.task_id)) {
+      return;
+    }
+    const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { capture_verified: [...existing, decision.task_id] });
     }
     return;
   }

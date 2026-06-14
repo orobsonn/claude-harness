@@ -421,3 +421,27 @@ test("mergeGateState after resetGateState preserves feature_id (merge does not d
     assert.strictEqual(state.brainstormed, true);
   });
 });
+
+// adversary Finding 1: the capture rail is a session-level delivery obligation like the regate
+// rail — a re-triage must NOT launder an un-captured finished hand.
+test("resetGateState preserves hand_finished/capture_verified across a feature switch", () => {
+  withTempDir(() => {
+    const sid = "ses-reset-capture";
+    mergeGateState(sid, {
+      feature_id: "feat-a",
+      hand_finished: ["feat-a/task-1"],
+      capture_verified: [],
+      brainstormed: true,
+    });
+    resetGateState(sid, "feat-b"); // genuine switch — the capture obligation must NOT be erased
+    const state = readGateState(sid);
+    assert.strictEqual(state.feature_id, "feat-b");
+    assert.deepStrictEqual(
+      state.hand_finished,
+      ["feat-a/task-1"],
+      "an un-captured finished hand's obligation survives a feature switch",
+    );
+    assert.deepStrictEqual(state.capture_verified, [], "capture_verified survives the switch too");
+    assert.strictEqual(state.brainstormed, undefined, "per-feature ceremony flags are still cleared");
+  });
+});

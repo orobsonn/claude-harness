@@ -8,10 +8,18 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- **Deterministic delivery rails — pipeline steps that were prose are now state-machine checks.** Four points where the orchestrator could silently skip a pipeline step ("the orchestrator must remember to…") became deterministic gates over `gate-state.json`, the same pattern already used for triage/planner/shipper:
+  - **Plan-authorship rail** (`hooks/plan-write-gate.mjs`, new `PreToolUse(Write|Edit)` hook): only the dispatched `planner` subagent may write/edit a feature's `execution-plan.json`; the main-loop orchestrator is denied. Also blocks any tool write to `.claude/plans/.state/*.json` (gate-state/triage are hook-owned).
+  - **Ollama hands as default**: `validate-plan` now warns (never rejects) on legacy Claude-only `tiers`, and `creating-plans`/`planner` emit the split `hand_tiers` ladder by default (`glm-5.1` → `deepseek-v4-pro` → `kimi-2.7`).
+  - **Hand-routing rail** (`entry-gate.mjs`): a main-loop `Agent(executor|sniper|test-author)` is denied unless an `escalation_fallback` ticket exists — hands must route through `spawn-hand` (Ollama); the Claude `Agent` path is only the K=1 escalation/transcription fallback. New `mark.mjs escalation-fallback` marker stamps the ticket.
+  - **Independent-capture rail** (`entry-gate.mjs` delivery-bash-gate): a delivery command is denied while any `hand_finished` task lacks a matching `capture_verified`. New `mark.mjs hand-finished`/`capture-verified` markers, routed through `stamp-triage` so Claude Code supplies the one authoritative `session_id` to producer and consumer.
 
 ### Changed
+- **`test-author` reconciled as the third Ollama hand** (alongside `executor`/`sniper`): the agent doc and the "Hands vs Eyes" taxonomy now describe a spawn-hand (Ollama) hand resolving from `hand_tiers`, and the hand-routing rail gates it like the other hands.
 
 ### Fixed
+- `resetGateState` now preserves `hand_finished`/`capture_verified` across a re-triage — the capture rail is a session-level delivery obligation like the re-gate rail, so a mid-session reclassify can no longer launder an un-captured hand.
+- `plan-write-gate` path matching is case-insensitive (the operator's darwin FS is case-insensitive), closing an `Execution-Plan.json` / `.Claude/` bypass.
 
 ### Removed
 

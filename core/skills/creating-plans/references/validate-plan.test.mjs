@@ -258,3 +258,37 @@ test("hand_tiers value of empty string is rejected (non-empty model id required)
   assert.match(r.stderr, /model_strategy\.hand_tiers\.low/);
   assert.match(r.stderr, /non-empty/);
 });
+
+// TRILHO 2 — legacy warning rail
+// A valid split (hand_tiers) plan emits NO legacy warning.
+test("valid hand_tiers plan → exit 0 and NO legacy warning on stderr", () => {
+  const plan = basePlan({
+    hand_tiers: { low: "glm-5.1", medium: "deepseek-v4-pro", high: "kimi-2.7" },
+    ...FIXED_EYE_ROLES,
+  });
+  const r = runValidator(plan);
+  assert.equal(r.status, 0, "valid split plan must exit 0");
+  assert.doesNotMatch(r.stderr, /legacy/i, "no legacy warning for hand_tiers plan");
+});
+
+// A valid legacy (tiers only) plan still validates but warns about Claude-only hands.
+test("valid legacy tiers plan → exit 0 and a legacy/Claude-hands warning on stderr", () => {
+  const plan = basePlan({
+    tiers: { low: "haiku", medium: "sonnet", high: "opus" },
+    ...FIXED_EYE_ROLES,
+  });
+  const r = runValidator(plan);
+  assert.equal(r.status, 0, "valid legacy plan still exits 0");
+  assert.match(r.stderr, /legacy/i, "legacy warning must name the risk");
+});
+
+// Non-regression: the warning never becomes a reject — legacy plan still prints OK.
+test("valid legacy tiers plan → not rejected (stdout OK, exit 0)", () => {
+  const plan = basePlan({
+    tiers: { low: "haiku", medium: "sonnet", high: "opus" },
+    ...FIXED_EYE_ROLES,
+  });
+  const r = runValidator(plan);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /OK/);
+});

@@ -59,7 +59,7 @@ Key constraints the skill enforces:
 - `resolved_judgments` must be scalar key/value pairs — no prose.
 - `scope_paths` must be specific globs — not `src/**` unless truly justified.
 - `adversarial.enabled: true` only for auth / payment / data-integrity / concurrency / external input reaching storage / secrets.
-- `model_strategy` is a frozen snapshot of tier aliases (7 fixed roles incl. `plan-reviewer` + tiers map); executor/sniper are NOT listed (tier-variable: executor resolves from `tiers[complexity ?? severity]`, sniper from `tiers[issue.severity]`, at dispatch).
+- `model_strategy` is a frozen snapshot of model aliases (7 fixed eye roles incl. `plan-reviewer` + a hands map). **Emit the split `hand_tiers` shape by default** — the cravado weak→strong ladder `{ "low": "glm-5.1", "medium": "deepseek-v4-pro", "high": "kimi-2.7" }` — which decouples cheap hands from always-Claude eyes. The legacy Claude-only `tiers` map is a **back-compat note only** (accepted on read for old plans, never the default emission). Executor/sniper are NOT listed (model-variable: executor resolves from `hand_tiers[complexity ?? severity]`, sniper from `hand_tiers[issue.severity]`, at dispatch).
 - `locked_tests` are objects `{ test_path, assertion }` — the executor authors the test file at `test_path` (TDD), so `test_path` must be writable (inside `scope_paths` or the project test dir).
 - Validate with `node .claude/skills/creating-plans/references/validate-plan.mjs <path>` — exit 0 required before finalizing.
 
