@@ -102,7 +102,7 @@ test("hooks.SessionStart has compact and startup matchers with reinject-state.mj
   );
 });
 
-test("NO Skill matcher in PreToolUse and exactly 5 hooks total", () => {
+test("NO Skill matcher in PreToolUse and exactly 6 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
 
@@ -125,7 +125,7 @@ test("NO Skill matcher in PreToolUse and exactly 5 hooks total", () => {
     totalHooks += settings.hooks.SessionStart.length;
   }
 
-  strictEqual(totalHooks, 5, "exactly 5 hooks should be wired (Agent + Bash for PreToolUse, Bash for PostToolUse, compact + startup for SessionStart)");
+  strictEqual(totalHooks, 6, "exactly 6 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash for PostToolUse, compact + startup for SessionStart)");
 });
 
 test("hooks.PreToolUse has Bash matcher with entry-gate.mjs command", () => {

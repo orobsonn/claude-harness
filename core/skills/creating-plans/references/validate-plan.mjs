@@ -159,28 +159,6 @@ function validateLockedTests(value, path, errors) {
 // ---------- model_strategy ----------
 
 /**
- * @description Legacy Claude-only tier map: low/medium/high, each a Claude
- * alias. Hands and eyes both resolve here in the back-compat shape.
- */
-function validateLegacyTiers(tiers, errors) {
-  if (!isObject(tiers)) {
-    errors.add("model_strategy.tiers", "must be an object");
-    return;
-  }
-  for (const key of TIER_KEYS) {
-    const v = tiers[key];
-    if (v === undefined) {
-      errors.add(`model_strategy.tiers.${key}`, "is required");
-    } else if (!CLAUDE_ALIASES.includes(v)) {
-      errors.add(
-        `model_strategy.tiers.${key}`,
-        `must be a Claude alias (one of ${CLAUDE_ALIASES.join(", ")})`
-      );
-    }
-  }
-}
-
-/**
  * @description Split-shape HAND tier map: low/medium/high, each a non-empty
  * model id (an Ollama model id is fine — values are NOT constrained to an enum).
  * All three keys are required so the executor/sniper `complexity ?? severity`
@@ -210,25 +188,23 @@ function validateModelStrategy(ms, errors) {
     return;
   }
 
-  // Shape is detected by the presence of hand_tiers. Exactly one tier map is
-  // allowed: legacy `tiers` (Claude-only back-compat) XOR split `hand_tiers`.
-  const hasLegacy = ms.tiers !== undefined;
-  const hasSplit = ms.hand_tiers !== undefined;
-
-  if (hasLegacy && hasSplit) {
+  // hand_tiers is the ONLY valid hand-routing shape. The legacy Claude-only
+  // `tiers` map is removed: it let the executor/sniper silently resolve to
+  // expensive Claude, defeating the cheap-hands default. A Claude hand is still
+  // reachable by putting a Claude alias in hand_tiers (values are free model ids).
+  if (ms.tiers !== undefined) {
     errors.add(
-      "model_strategy",
-      "tiers (legacy Claude-only shape) and hand_tiers (split shape) are mutually exclusive — provide exactly one"
+      "model_strategy.tiers",
+      "legacy tiers shape is removed — use hand_tiers (the only valid shape; values are free model ids, a Claude alias is allowed there as an explicit escape)"
     );
-  } else if (!hasLegacy && !hasSplit) {
+  }
+  if (ms.hand_tiers === undefined) {
     errors.add(
-      "model_strategy",
-      "must provide exactly one of tiers (legacy Claude-only shape) or hand_tiers (split shape)"
+      "model_strategy.hand_tiers",
+      "is required (the only valid hand-routing shape)"
     );
-  } else if (hasSplit) {
-    validateHandTiers(ms.hand_tiers, errors);
   } else {
-    validateLegacyTiers(ms.tiers, errors);
+    validateHandTiers(ms.hand_tiers, errors);
   }
 
   // 7 fixed eye roles, each a Claude alias under BOTH shapes — an eye must
@@ -258,7 +234,7 @@ function validateModelStrategy(ms, errors) {
 
   // Unknown-key allowlist: prevents silently ignoring dropped keys (e.g. eye_tiers).
   // FORBIDDEN_ROLES included so they don't double-fire with the loop above.
-  const ALLOWED_MS_KEYS = new Set([...FIXED_ROLES, "tiers", "hand_tiers", ...FORBIDDEN_ROLES]);
+  const ALLOWED_MS_KEYS = new Set([...FIXED_ROLES, "hand_tiers", ...FORBIDDEN_ROLES]);
   for (const key of Object.keys(ms)) {
     if (!ALLOWED_MS_KEYS.has(key)) {
       errors.add(
@@ -529,18 +505,6 @@ const errors = new Errors();
 validatePlan(data, errors);
 
 if (errors.empty) {
-  // Non-fatal legacy warning: a valid plan in the legacy `tiers` shape (Claude-only hands)
-  // still passes (exit 0, prints OK), but Ollama cheap-hands are the harness default — legacy
-  // tiers run the executor/sniper on expensive Claude. Warn so new plans adopt hand_tiers.
-  const ms = data && typeof data === "object" ? data.model_strategy : undefined;
-  const msIsObject = ms && typeof ms === "object" && !Array.isArray(ms);
-  if (msIsObject && ms.tiers !== undefined && ms.hand_tiers === undefined) {
-    process.stderr.write(
-      "[validate-plan] WARNING: legacy model_strategy.tiers (Claude-only hands) and no hand_tiers. " +
-        "Ollama cheap-hands are the harness default; legacy tiers run executor/sniper on expensive " +
-        "Claude. New plans should emit the split hand_tiers shape.\n"
-    );
-  }
   process.stdout.write("OK\n");
   process.exit(0);
 } else {

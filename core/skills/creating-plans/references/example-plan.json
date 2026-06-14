@@ -5,7 +5,7 @@
   "mode": "full",
 
   "model_strategy": {
-    "hand_tiers": { "low": "deepseek-v4-flash", "medium": "kimi-k2.6", "high": "deepseek-v4-pro" },
+    "hand_tiers": { "low": "glm-5.1", "medium": "deepseek-v4-pro", "high": "kimi-k2.7-code" },
     "planner": "opus",
     "plan-reviewer": "opus",
     "compliance": "sonnet",

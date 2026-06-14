@@ -89,17 +89,18 @@ test("valid split-shape plan (hand_tiers + Claude-alias eyes, no legacy tiers) p
   assert.match(r.stdout, /OK/);
 });
 
-test("legacy plan (single tiers, no hand_tiers) stays valid — back-compat", () => {
+test("legacy plan (single tiers, no hand_tiers) is now rejected — legacy shape removed", () => {
   const plan = basePlan({
     tiers: { low: "haiku", medium: "sonnet", high: "opus" },
     ...FIXED_EYE_ROLES,
   });
   const r = runValidator(plan);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout, /OK/);
+  assert.notEqual(r.status, 0, "must exit non-zero");
+  assert.match(r.stderr, /model_strategy\.tiers/);
+  assert.match(r.stderr, /removed/i);
 });
 
-test("both hand_tiers AND legacy tiers present is rejected as mutually exclusive", () => {
+test("a plan carrying legacy tiers is rejected even when hand_tiers is also present", () => {
   const plan = basePlan({
     tiers: { low: "haiku", medium: "sonnet", high: "opus" },
     hand_tiers: SPLIT_HAND_TIERS,
@@ -107,8 +108,8 @@ test("both hand_tiers AND legacy tiers present is rejected as mutually exclusive
   });
   const r = runValidator(plan);
   assert.notEqual(r.status, 0, "must exit non-zero");
-  assert.match(r.stderr, /model_strategy/);
-  assert.match(r.stderr, /mutually exclusive/i);
+  assert.match(r.stderr, /model_strategy\.tiers/);
+  assert.match(r.stderr, /removed/i);
 });
 
 test("split-shape plan missing hand_tiers.medium is rejected on that path", () => {
@@ -132,9 +133,9 @@ test("executor as an explicit model_strategy key is forbidden (split shape)", ()
   assert.match(r.stderr, /model_strategy\.executor/);
 });
 
-test("sniper as an explicit model_strategy key is forbidden (legacy shape)", () => {
+test("sniper as an explicit model_strategy key is forbidden", () => {
   const plan = basePlan({
-    tiers: { low: "haiku", medium: "sonnet", high: "opus" },
+    hand_tiers: SPLIT_HAND_TIERS,
     ...FIXED_EYE_ROLES,
     sniper: "haiku",
   });
@@ -170,13 +171,13 @@ test("all 7 eye roles set to an Ollama id are each individually rejected (table-
   }
 });
 
-// DEFECT 2 — #ac-2.2 NEITHER clause: no tiers and no hand_tiers must be rejected
-test("model_strategy with neither tiers nor hand_tiers is rejected (#ac-2.2 NEITHER clause)", () => {
+// DEFECT 2 — #ac-2.2: a model_strategy with no hand_tiers must be rejected
+test("model_strategy missing hand_tiers is rejected (#ac-2.2)", () => {
   const plan = basePlan({ ...FIXED_EYE_ROLES });
   const r = runValidator(plan);
   assert.notEqual(r.status, 0, "must exit non-zero");
-  assert.match(r.stderr, /model_strategy/);
-  assert.match(r.stderr, /must provide exactly one of tiers/);
+  assert.match(r.stderr, /model_strategy\.hand_tiers/);
+  assert.match(r.stderr, /is required/);
 });
 
 // DEFECT 3 — unknown key allowlist: eye_tiers was intentionally dropped
@@ -247,6 +248,19 @@ test("locked_test with fixture_paths that is not an array is rejected", () => {
   assert.match(r.stderr, /must be an array/);
 });
 
+// Escape hatch (operator-locked decision): hand_tiers values are free-form, so a Claude
+// alias in a tier is a valid escape for a task you don't want on a cheap Ollama hand.
+// Pins the invariant so a future enum on validateHandTiers can't silently break the escape.
+test("hand_tiers with a Claude alias in a tier (escape hatch) is accepted", () => {
+  const plan = basePlan({
+    hand_tiers: { low: "glm-5.1", medium: "deepseek-v4-pro", high: "opus" },
+    ...FIXED_EYE_ROLES,
+  });
+  const r = runValidator(plan);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  assert.match(r.stdout, /OK/);
+});
+
 // DEFECT 4b — empty string hand_tiers value is rejected (non-empty model id required)
 test("hand_tiers value of empty string is rejected (non-empty model id required)", () => {
   const plan = basePlan({
@@ -259,36 +273,14 @@ test("hand_tiers value of empty string is rejected (non-empty model id required)
   assert.match(r.stderr, /non-empty/);
 });
 
-// TRILHO 2 — legacy warning rail
-// A valid split (hand_tiers) plan emits NO legacy warning.
-test("valid hand_tiers plan → exit 0 and NO legacy warning on stderr", () => {
+// hand_tiers is the only valid shape — a clean hand_tiers plan validates with no
+// legacy noise on stderr (the legacy `tiers` shape and its warning rail are gone).
+test("valid hand_tiers plan → exit 0 and NO legacy mention on stderr", () => {
   const plan = basePlan({
-    hand_tiers: { low: "glm-5.1", medium: "deepseek-v4-pro", high: "kimi-2.7" },
+    hand_tiers: { low: "glm-5.1", medium: "deepseek-v4-pro", high: "kimi-k2.7-code" },
     ...FIXED_EYE_ROLES,
   });
   const r = runValidator(plan);
-  assert.equal(r.status, 0, "valid split plan must exit 0");
-  assert.doesNotMatch(r.stderr, /legacy/i, "no legacy warning for hand_tiers plan");
-});
-
-// A valid legacy (tiers only) plan still validates but warns about Claude-only hands.
-test("valid legacy tiers plan → exit 0 and a legacy/Claude-hands warning on stderr", () => {
-  const plan = basePlan({
-    tiers: { low: "haiku", medium: "sonnet", high: "opus" },
-    ...FIXED_EYE_ROLES,
-  });
-  const r = runValidator(plan);
-  assert.equal(r.status, 0, "valid legacy plan still exits 0");
-  assert.match(r.stderr, /legacy/i, "legacy warning must name the risk");
-});
-
-// Non-regression: the warning never becomes a reject — legacy plan still prints OK.
-test("valid legacy tiers plan → not rejected (stdout OK, exit 0)", () => {
-  const plan = basePlan({
-    tiers: { low: "haiku", medium: "sonnet", high: "opus" },
-    ...FIXED_EYE_ROLES,
-  });
-  const r = runValidator(plan);
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /OK/);
+  assert.equal(r.status, 0, "valid hand_tiers plan must exit 0");
+  assert.doesNotMatch(r.stderr, /legacy/i, "no legacy noise for a hand_tiers plan");
 });

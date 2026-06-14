@@ -201,43 +201,35 @@ If a decision is genuinely open (the product has not resolved it), **stop and as
 
 Read the harness settings (project or global config). Freeze the resolved tier aliases into the plan. This snapshot is deterministic — orchestrating-delivery uses exactly this, ignoring later config changes.
 
-**Default shape — `hand_tiers` (hands/eyes split).** This is THE shape you emit. It decouples
-the hand execution models (cheap, escalating weak→strong) from the eye judgment roles (always
-Claude). Pin the cravado escalation ladder verbatim — three *different* models, weakest at `low`,
-strongest at `high`, never three identical aliases:
+**The only shape — `hand_tiers` (hands/eyes split).** This is the single valid shape; the legacy
+Claude-only `tiers` map is removed and rejected by validation. `hand_tiers` decouples the hand
+execution models (cheap, escalating weak→strong) from the eye judgment roles (always Claude). Pin
+the cravado escalation ladder verbatim — three *different* models, weakest at `low`, strongest at
+`high`, never three identical aliases:
 
 ```json
 "model_strategy": {
-  "hand_tiers": { "low": "glm-5.1", "medium": "deepseek-v4-pro", "high": "kimi-2.7" },
+  "hand_tiers": { "low": "glm-5.1", "medium": "deepseek-v4-pro", "high": "kimi-k2.7-code" },
   "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
   "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }
 ```
 
 The `low → medium → high` ladder is a genuine escalation (`glm-5.1` → `deepseek-v4-pro` →
-`kimi-2.7`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
+`kimi-k2.7-code`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
 
-**Read-back-compat note — legacy `tiers` (Claude-only).** The orchestrator still *accepts* a legacy
-`tiers` map on read for plans authored before the split, but you do **not** emit it as the default.
-Treat it as deprecated; prefer `hand_tiers` for every new plan.
+**Need a Claude hand?** `hand_tiers` values are free model ids — putting a Claude alias (e.g.
+`"high": "opus"`) in a tier is the explicit escape for a task you don't want on a cheap hand. There
+is no separate legacy shape for this anymore.
 
-```json
-// accepted on read only — NOT the default emission
-"model_strategy": {
-  "tiers": { "low": "haiku", "medium": "sonnet", "high": "opus" },
-  "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
-  "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
-}
-```
-
-Both shapes require all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, or opus).
+The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, or opus).
 
 **Critical rule:** No eye role may ever resolve to a non-Claude model (e.g., Ollama). Eyes are the judging roles and must always run on Claude for security and reasoning fidelity.
 
 **Hand roles (executor and sniper):**
 - `executor` resolves from `hand_tiers[task.complexity ?? task.severity]` at dispatch (reasoning depth)
 - `sniper` resolves from `hand_tiers[issue.severity]` at dispatch (defect gravity)
-- Both hand roles are **never** listed explicitly in model_strategy — they resolve from the active `hand_tiers` or `tiers` map at dispatch
+- Both hand roles are **never** listed explicitly in model_strategy — they resolve from the `hand_tiers` map at dispatch
 - The split shape decouples hand execution models (cheap, e.g., Ollama) from eye judgment (always Claude), enabling the "strong eyes, cheap hands" delivery pattern
 
 ---
@@ -265,7 +257,7 @@ Before writing the file, verify:
 4. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
 5. **resolved_judgments completeness:** no open decisions left as prose or empty values.
 6. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
-7. **model_strategy complete:** all 7 fixed roles present (incl. `plan-reviewer`); tiers populated.
+7. **model_strategy complete:** all 7 fixed roles present (incl. `plan-reviewer`); `hand_tiers` populated.
 
 ---
 
@@ -278,7 +270,7 @@ node .claude/skills/creating-plans/references/validate-plan.mjs <path-to-plan.js
 # Exit 0 = OK. Exit 1 = schema errors — fix and re-run.
 ```
 
-The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (tiers + 7 fixed roles incl. `plan-reviewer`, no executor/sniper), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, and cycle detection.
+The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (`hand_tiers` map + 7 fixed roles incl. `plan-reviewer`, no executor/sniper; legacy `tiers` rejected), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, and cycle detection.
 
 ---
 
