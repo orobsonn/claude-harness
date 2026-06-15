@@ -15,6 +15,15 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.9.1] - 2026-06-15
+
+### Added
+- **Nova rule `architecture`** (carrega quando há código em `src/`, `app/` ou `worker/`): guia de fronteira de domínio que o harness não cobria — handler fino, tradução na borda (Anticorruption Layer, ex. integrações Stays/Meta), isolamento de shape (tipo de domínio ≠ linha de banco ≠ payload de terceiro), value object no lugar de obsessão primitiva, e lógica-junto-do-dado (sem modelo anêmico). Modelagem rica é condicional — o default é flat. Auto-carrega nativamente até na mão Ollama barata (`claude -p`).
+
+### Changed
+- **`plan-reviewer` audita fronteira de domínio e modelagem no tempo de plano** (keyed por severidade): a tradução de formato externo está isolada num task de borda ou vaza shape de terceiro pro core? Um task de alta severidade com invariante multi-passo está modelado rico ou espalhado num service anêmico? Numa feature flat, há camada especulativa sem core que a justifique?
+- **Doc do `executor` corrigida:** descrevia o modo `--bare` aposentado. A mão barata roda como `claude -p` no cwd do projeto, então `CLAUDE.md` e rules do projeto **auto-carregam** nativamente — só skills (sem tool `Skill`) e o config global `~/.claude` (`CLAUDE_CONFIG_DIR` efêmero) não chegam.
+
 ## [0.9.0] - 2026-06-14
 
 ### Added

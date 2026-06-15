@@ -48,6 +48,11 @@ The operator is a non-technical product manager. He approves the **spec** (produ
 ### 6. Risk introduced by the decomposition itself
 - Does splitting the work create a hazard no single task owns — an **atomicity gap across tasks**, a security hole at a seam between tasks, a **migration ordering** hazard?
 
+### 7. Domain boundary & modeling (keyed off severity)
+- Does the decomposition **isolate external-format translation** at a boundary task (an ACL), or does a third-party / DB raw shape leak across `scope_paths` into core logic tasks?
+- For a **high-severity** task with a multi-step invariant, is the logic modeled where the data lives (rich), or scattered into an anemic service the executor would assemble arbitrarily? Flag the latter as a decomposition gap.
+- Conversely, on a flat / low-severity feature, flag **speculative layering** (a `domain/application/infrastructure` skeleton with no core that justifies it) as introduced complexity.
+
 ---
 
 ## Curated mental models (MV) — advisory, best-effort
