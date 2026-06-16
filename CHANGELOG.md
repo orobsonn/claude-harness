@@ -11,7 +11,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- Resolução de auth da mão barata é responsabilidade exclusiva do `spawn-hand.mjs` (env → projeto `.dev.vars` → global `~/.claude/.dev.vars`). O orquestrador não pré-checa nem inspeciona `.dev.vars`, e o token Ollama passa a ser tratado como precondição de setup (global no local, env secret no HEADLESS) — não algo a descobrir por task.
+- Qualquer `exit 2` do `spawn-hand.mjs` vira exceção crítica citando o `reason` verbatim; o orquestrador não classifica a causa.
+
 ### Fixed
+
+- `planner.md` dizia que o executor escreve o arquivo de teste (desatualizado no v2). Agora reflete que o `test-author` transcreve o teste e o executor o recebe read-only — eliminando a confusão de dispatch que levava o modelo a tentar `Agent` para criar testes.
+- Falha de gate (captura via `capture-hand.mjs`) nunca é dispensada como "ambiental/sandbox" pela mensagem de erro — sempre escala. Fecha o falso-negativo em que uma falha real seria silenciada por um stack-trace que mencionasse `.dev.vars`.
 
 ### Removed
 

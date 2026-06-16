@@ -27,3 +27,10 @@ Scope-check and per-dispatch allowed-write sets enforce containment without a gi
 - `ANTHROPIC_AUTH_TOKEN` (and any secret from `.dev.vars`) must NEVER appear in the brief, in
   `shared_context.md`, in a commit, or in `hook.log`. `dispatch-hand.mjs` redacts it before logging;
   the brief channel carries only task description + scope + budget.
+- The orchestrator NEVER inspects `.dev.vars` directly — no `cat`/`grep`/`head`/`node -e` against it
+  to "check the token is set". The single canonical source of the token is `resolveAuthToken` /
+  `spawn-hand.mjs`, which resolves env → project `.dev.vars` → global `~/.claude/.dev.vars` internally.
+  The token is a GLOBAL credential (lives in `~/.claude/.dev.vars`); a project does not need its own
+  `.dev.vars`. Reading the file directly is both pointless (the resolver already does it) and denied
+  (`Read(.dev.vars)` baseline blocks any command whose text names the file, while the resolver's
+  internal read is unaffected). Token presence is decided ONLY by `spawn-hand.mjs`'s `exit 2` + reason.
