@@ -11,6 +11,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.9.2] - 2026-06-17
+
+### Added
+
+### Changed
+
 - Resolução de auth da mão barata é responsabilidade exclusiva do `spawn-hand.mjs` (env → projeto `.dev.vars` → global `~/.claude/.dev.vars`). O orquestrador não pré-checa nem inspeciona `.dev.vars`, e o token Ollama passa a ser tratado como precondição de setup (global no local, env secret no HEADLESS) — não algo a descobrir por task.
 - Qualquer `exit 2` do `spawn-hand.mjs` vira exceção crítica citando o `reason` verbatim; o orquestrador não classifica a causa.
 
