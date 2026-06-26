@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { OUTCOME, readAuthToken, UPSTREAM_BODY_MAX } from "./dispatch-hand.mjs";
-import { captureResult } from "./capture-hand.mjs";
+import { captureResult, subtractUnchanged } from "./capture-hand.mjs";
 
 const FREEZE_SHA = "abc123freeze";
 
@@ -23,6 +23,7 @@ function fakeGit(overrides = {}) {
     diffNameOnly: () => [],
     lsFilesOthers: () => [],
     lsFilesAllOthers: () => [],
+    hashObject: (paths) => new Map(paths.map((p) => [p, `h:${p}`])),
     ...overrides,
   };
 }
@@ -399,4 +400,47 @@ test("persisted result.json: stderr truncated to <=500 chars, token absent, eval
   assert.equal(raw.includes(token), false, "token must not appear anywhere in result.json");
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+// --- pre-existing-untracked subtraction (the "painter" fix) ---
+
+test("subtractUnchanged: drops pre-existing unchanged, keeps new + changed", () => {
+  const pre = new Map([["a", "h1"], ["b", "h2"]]);
+  const cur = new Map([["a", "h1"], ["b", "hX"], ["c", "h3"]]);
+  // a unchanged → drop; b changed → keep; c new → keep
+  assert.deepEqual(subtractUnchanged(["a", "b", "c"], pre, cur).sort(), ["b", "c"]);
+});
+
+test("subtractUnchanged: empty snapshot → no subtraction (legacy behavior)", () => {
+  assert.deepEqual(subtractUnchanged(["a", "b"], new Map(), new Map()), ["a", "b"]);
+});
+
+test("captureResult: pre-existing UNCHANGED gitignored junk is subtracted (not a violation)", () => {
+  const git = fakeGit({
+    diffNameOnly: () => ["core/x/new.mjs"], // the hand's real in-scope work
+    lsFilesAllOthers: () => ["dist/junk.js"], // gitignored, out of scope, pre-existing
+    hashObject: (paths) => new Map(paths.map((p) => [p, `h:${p}`])),
+  });
+  const preUntracked = new Map([["dist/junk.js", "h:dist/junk.js"]]); // same hash → unchanged
+  const result = captureResult(baseArgs({ git, preUntracked }));
+  assert.ok(
+    !result.child.touchedPaths.includes("dist/junk.js"),
+    "pre-existing junk must be subtracted, not misattributed to the hand"
+  );
+  assert.equal(result.outcome.status, OUTCOME.DONE);
+});
+
+test("captureResult: a hand EDITING a pre-existing gitignored file is still caught (tamper)", () => {
+  const git = fakeGit({
+    diffNameOnly: () => ["core/x/new.mjs"],
+    lsFilesAllOthers: () => ["dist/junk.js"],
+    hashObject: (paths) => new Map(paths.map((p) => [p, `now:${p}`])), // current ≠ snapshot
+  });
+  const preUntracked = new Map([["dist/junk.js", "old:dist/junk.js"]]); // hash changed → tamper
+  const result = captureResult(baseArgs({ git, preUntracked }));
+  assert.ok(
+    result.child.touchedPaths.includes("dist/junk.js"),
+    "a mutated pre-existing gitignored file must stay flagged (security control intact)"
+  );
+  assert.notEqual(result.outcome.status, OUTCOME.DONE);
 });

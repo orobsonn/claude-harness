@@ -91,7 +91,44 @@ export function realGit(cwd = process.cwd()) {
     // exclude-standard sweep above would hide, so checkScope can flag it. Tradeoff: this
     // sweep also lists IN-scope gitignored files, so we only append the OUT-OF-scope ones.
     lsFilesAllOthers: () => lines(run(["ls-files", "--others"])),
+    // Content hash (git blob sha) for each path, in input order → path→hash map. Used to subtract
+    // pre-existing-unchanged untracked files at capture. A missing/removed path is skipped (the
+    // whole batch fails closed to an empty map → no subtraction → conservative legacy behavior).
+    hashObject: (paths) => {
+      const map = new Map();
+      if (!paths || paths.length === 0) return map;
+      let out;
+      try {
+        out = run(["hash-object", ...paths]);
+      } catch {
+        return map; // fail safe: no hashes → nothing subtracted → no false-clean
+      }
+      const shas = lines(out);
+      paths.forEach((p, i) => {
+        if (shas[i]) map.set(p, shas[i]);
+      });
+      return map;
+    },
   };
+}
+
+/**
+ * @description Drops paths that were present pre-spawn with an UNCHANGED content hash (build junk
+ * that was already there). Keeps any path NEW since the snapshot, or whose hash CHANGED (a hand
+ * mutating a pre-existing untracked file). PURE — `preUntracked`/`currentHashes` are path→hash maps.
+ * @param {string[]} paths
+ * @param {Map<string,string>} preUntracked - pre-spawn snapshot (path→hash)
+ * @param {Map<string,string>} currentHashes - hashes captured now (path→hash)
+ * @returns {string[]}
+ */
+export function subtractUnchanged(paths, preUntracked, currentHashes) {
+  if (!preUntracked || preUntracked.size === 0) return paths;
+  return paths.filter((p) => {
+    const pre = preUntracked.get(p);
+    if (pre === undefined) return true; // new since snapshot → keep
+    const cur = currentHashes.get(p);
+    return cur !== pre; // changed → keep (tamper); unchanged → drop (pre-existing junk)
+  });
 }
 
 /**
@@ -170,6 +207,7 @@ export function captureResult({
   fs = { mkdtempSync, writeFileSync, rmSync },
   tmpDir = tmpdir(),
   keepArtifacts = false,
+  preUntracked = new Map(),
 }) {
   if (token === undefined)
     throw new Error(
@@ -190,10 +228,31 @@ export function captureResult({
     };
   }
 
+  // The gitignore-escape sweep is a load-bearing security control (see below) — it MUST exist.
+  if (typeof git.lsFilesAllOthers !== "function")
+    throw new Error(
+      "git adapter must provide lsFilesAllOthers for the gitignore-escape sweep"
+    );
+
   // (2) Snapshot touchedPaths = union(diff, untracked) BEFORE running the frozen test (the
   // test may write fixtures that would otherwise pollute the snapshot).
+  //
+  // Pre-existing-untracked subtraction (the "painter's pre-existing mess" fix): build junk ALREADY
+  // in the tree before the spawn (dist/, coverage/, *.tsbuildinfo) must not be misattributed to the
+  // hand. `preUntracked` is a path→hash snapshot taken pre-spawn. A path is dropped ONLY when it was
+  // present pre-spawn AND its content hash is unchanged. A NEW file (absent from the snapshot) or an
+  // EDITED pre-existing one (hash differs — a hand mutating a gitignored fixture to fake a green) is
+  // KEPT, so the security control keeps full strength. Empty preUntracked (default / standalone CLI)
+  // → no subtraction → legacy behavior. Both untracked channels are subtracted; the tracked diff
+  // channel is left untouched (the pre-spawn full-tree clean-check guarantees it is all the hand's).
   const diffPaths = git.diffNameOnly(freezeCommitSha) ?? [];
-  const untrackedPaths = git.lsFilesOthers() ?? [];
+  const rawUntracked = git.lsFilesOthers() ?? [];
+  const rawAllOthers = git.lsFilesAllOthers() ?? [];
+  const currentHashes =
+    preUntracked.size && typeof git.hashObject === "function"
+      ? git.hashObject([...new Set([...rawUntracked, ...rawAllOthers])])
+      : new Map();
+  const untrackedPaths = subtractUnchanged(rawUntracked, preUntracked, currentHashes);
   const touchedPaths = [...new Set([...diffPaths, ...untrackedPaths])];
 
   // Gitignore restriction-escape sweep: a NEW file written into a gitignored path (dist/, *.log)
@@ -204,11 +263,7 @@ export function captureResult({
   // pass a scope-only filter and escape evaluateRun's checkFrozen/checkAllowedWrites entirely —
   // letting a hand drop a gitignored file onto a frozen path to pass the frozen test vacuously.
   // The union makes every such violation visible to evaluateRun.
-  if (typeof git.lsFilesAllOthers !== "function")
-    throw new Error(
-      "git adapter must provide lsFilesAllOthers for the gitignore-escape sweep"
-    );
-  const allOthers = git.lsFilesAllOthers() ?? [];
+  const allOthers = subtractUnchanged(rawAllOthers, preUntracked, currentHashes);
   const flagged = new Set([
     ...checkScope(allOthers, dispatch.scope_paths ?? []),
     ...checkFrozen(allOthers, dispatch.frozen_paths ?? []),

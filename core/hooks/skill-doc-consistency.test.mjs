@@ -51,16 +51,16 @@ test("AC1 — creating-plans Step 7 presents hand_tiers as the only shape and pi
     "Step 7 must present hand_tiers as the only valid shape",
   );
   assert.ok(
-    step7.includes("glm-5.1"),
-    "Step 7 must pin the cravado ladder value glm-5.1",
+    step7.includes("qwen3-coder-next"),
+    "Step 7 must pin the cravado ladder value qwen3-coder-next (low)",
   );
   assert.ok(
-    step7.includes("deepseek-v4-pro"),
-    "Step 7 must pin the cravado ladder value deepseek-v4-pro",
+    step7.includes("glm-5.2"),
+    "Step 7 must pin the cravado ladder value glm-5.2 (medium)",
   );
   assert.ok(
     step7.includes("kimi-k2.7-code"),
-    "Step 7 must pin the cravado ladder value kimi-k2.7-code",
+    "Step 7 must pin the cravado ladder value kimi-k2.7-code (high)",
   );
   assert.match(
     step7,

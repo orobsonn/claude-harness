@@ -41,6 +41,12 @@ const HAND_CONFIG_SETTINGS_TEMPLATE = join(__dirname, "hand-config", "settings.j
 const OLLAMA_BASE_URL = "https://ollama.com";
 
 /**
+ * @description Claude model aliases that must NEVER be a hand model: a hand always dispatches to
+ * Ollama, so a Claude alias here is a legacy/mis-set plan that would 404. Guarded in dispatchHand.
+ */
+const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
+
+/**
  * @description Builds the argv array for `claude -p` with the required flags.
  * PURE: no side effects, no token in argv. The token is NEVER an element of this array.
  *
@@ -151,6 +157,18 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
 
   // Resolve model from dispatch (fall back to a sensible default)
   const model = dispatch.model ?? "qwen3-coder:480b";
+
+  // FAIL CLOSED: a hand ALWAYS dispatches to Ollama (ANTHROPIC_BASE_URL=ollama.com). A bare Claude
+  // alias (haiku/sonnet/opus) as the resolved hand model means a legacy `tiers` plan (Claude models)
+  // or a mis-set hand_tier — it would 404 against Ollama with a cryptic error. Refuse here with an
+  // actionable reason (the config-error path) instead of letting the 404 surface downstream.
+  if (CLAUDE_HAND_ALIASES.has(model)) {
+    throw new Error(
+      `dispatchHand: hand model "${model}" is a Claude alias dispatched to Ollama — this is a legacy ` +
+      `model_strategy (Claude tiers) or a mis-set hand_tier. Set hand_tiers to a model id that exists ` +
+      `in the Ollama endpoint (list with GET /v1/models).`
+    );
+  }
 
   // Resolve locked_test path for the Stop hook
   const lockedTest = dispatch.locked_test ?? "";
@@ -305,6 +323,16 @@ function defaultCapture(args) {
 }
 
 /**
+ * @description Default pre-spawn untracked snapshot: a path→hash map of every untracked file
+ * (gitignored included) BEFORE the hand runs, so capture can subtract pre-existing build junk
+ * instead of misattributing it to the hand. Injectable for hermetic tests.
+ */
+function defaultSnapshotUntracked() {
+  const g = realGit();
+  return g.hashObject(g.lsFilesAllOthers());
+}
+
+/**
  * @description Default run-record writer: persists the token-free record to a state path keyed
  * by feature_id/task_id (the producer of the on-disk evidence consumed by Part B). The directory
  * is created if absent; the record is the ONLY durable artifact (the descriptor is ephemeral).
@@ -335,6 +363,7 @@ export async function runLiveDispatch(descriptor, {
   gitStatus = defaultFullGitStatus,
   headSha = defaultHeadSha,
   capture = defaultCapture,
+  snapshotUntracked = defaultSnapshotUntracked,
   env = process.env,
   writeRecord = defaultWriteRecord,
   stateDir,
@@ -400,6 +429,11 @@ export async function runLiveDispatch(descriptor, {
     );
   }
 
+  // Pre-spawn untracked snapshot (path→hash). Taken right after the full-tree clean-check so the
+  // capture subtracts pre-existing build junk (dist/, coverage/, *.tsbuildinfo) instead of
+  // misattributing it to the hand as a scope/allowed-write violation.
+  const preUntracked = snapshotUntracked();
+
   // (6) FAIL CLOSED: the brief file must exist before we build the dispatch.
   if (!existsSync(descriptor.brief_file)) {
     throw new Error(`runLiveDispatch: brief_file does not exist: ${descriptor.brief_file}`);
@@ -452,6 +486,7 @@ export async function runLiveDispatch(descriptor, {
       freezeCommitSha: descriptor.freeze_commit_sha,
       testPath: descriptor.locked_test,
       token,
+      preUntracked,
     });
 
     // A post-spawn HEAD divergence (rogue commit) is a CRITICAL EXCEPTION — never stamp a record.

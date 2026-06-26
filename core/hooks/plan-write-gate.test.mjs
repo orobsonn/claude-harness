@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { decide, processInput } from "./plan-write-gate.mjs";
+import { decide, processInput, checkPlanContent } from "./plan-write-gate.mjs";
 
 const SETTINGS_PATH = fileURLToPath(new URL("../settings.json", import.meta.url));
 
@@ -29,6 +29,36 @@ function makeWritePayload(toolName, filePath, extra = {}) {
 }
 
 const PLAN_PATH = ".claude/plans/x/execution-plan.json";
+
+// --- content cancela (model_strategy furo) ---
+const VALID_MS = '{"model_strategy":{"hand_tiers":{"low":"qwen3-coder-next","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
+const LEGACY_MS = '{"model_strategy":{"tiers":{"low":"haiku","medium":"sonnet","high":"opus"}}}';
+
+test("checkPlanContent: legacy Claude `tiers` shape → deny reason", () => {
+  assert.match(checkPlanContent(LEGACY_MS), /legacy Claude `tiers`/);
+});
+test("checkPlanContent: valid hand_tiers → null (accept)", () => {
+  assert.equal(checkPlanContent(VALID_MS), null);
+});
+test("checkPlanContent: hand_tiers missing → deny reason", () => {
+  assert.match(checkPlanContent('{"model_strategy":{"planner":"opus"}}'), /hand_tiers is required/);
+});
+test("checkPlanContent: invalid JSON in a Write → deny reason (positive invalid signal)", () => {
+  assert.match(checkPlanContent("{not json"), /not valid JSON/);
+});
+test("checkPlanContent: non-string content (Edit/anomalous) → null (fail open)", () => {
+  assert.equal(checkPlanContent(undefined), null);
+});
+test("decide: planner Write with legacy tiers content → deny", () => {
+  const payload = { session_id: "s", tool_name: "Write", tool_input: { file_path: PLAN_PATH, content: LEGACY_MS }, agent_id: "ag", agent_type: "planner" };
+  const v = decide(payload);
+  assert.equal(v.allow, false);
+  assert.match(v.hookSpecificOutput.permissionDecisionReason, /legacy Claude `tiers`/);
+});
+test("decide: planner Write with valid hand_tiers content → allow", () => {
+  const payload = { session_id: "s", tool_name: "Write", tool_input: { file_path: PLAN_PATH, content: VALID_MS }, agent_id: "ag", agent_type: "planner" };
+  assert.equal(decide(payload).allow, true);
+});
 
 // LOCKED TEST 1 — main-loop Write to a plan path (no agent_id) → deny naming the rule
 test("Write to plan path with no agent_id → deny naming planner-only rule", () => {
