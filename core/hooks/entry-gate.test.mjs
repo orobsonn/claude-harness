@@ -315,6 +315,21 @@ test("decide: executor with ticket but NO on-disk record (config error) → deny
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
 
+test("decide: HEADLESS hand-role Agent → allow (cheap hands is local-only; cloud runs hands on Claude)", () => {
+  // No ticket, no record — would DENY locally; headless makes the Claude hand the INTENDED path.
+  const payload = makeAgentPayload("ses_exec_headless", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true });
+  assert.equal(verdict.allow, true, "headless must allow a main-loop hand-role Agent (Claude)");
+});
+
+test("decide: LOCAL (not headless) hand-role Agent without evidence → still deny", () => {
+  const payload = makeAgentPayload("ses_exec_local", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const verdict = decide(payload, { readTriage, isHeadlessFn: () => false });
+  assert.equal(verdict.allow, false, "local hand-role Agent without a FAILED record stays denied");
+});
+
 test("decide: executor with ticket mapping to a NOT_DONE record (empty diff — genuine run) → allow", () => {
   // A NOT_DONE run (the hand spawned but produced an empty diff) is a genuine run failure — a
   // stronger hand should retry. The gate must authorize it, not deadlock (adversary HIGH #1).

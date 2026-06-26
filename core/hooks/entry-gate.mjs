@@ -54,6 +54,19 @@ import {
 const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
 
 /**
+ * @description Detects HEADLESS (cloud routine) mode. Cheap hands is a LOCAL-only capability; in
+ * the cloud the hand roles (executor/sniper/test-author) run on Claude directly, so a main-loop
+ * Agent of a hand role is the INTENDED dispatch there, not a fallback to police. Signal is
+ * `$CLAUDE_CODE_REMOTE` — the same one the entry policy (core/CLAUDE.md) documents for mode
+ * detection. Injectable via decide()'s deps for tests.
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {boolean}
+ */
+function defaultIsHeadless(env = process.env) {
+  return Boolean(env?.CLAUDE_CODE_REMOTE);
+}
+
+/**
  * @description Best-effort current-HEAD sha reader for the run-record freshness cross-check.
  * Returns null on ANY git/infra error so the freshness check fails OPEN (never bricks a legit
  * escalation) — it only ever DENIES on a POSITIVE staleness signal (known HEAD ≠ record's freeze).
@@ -337,6 +350,7 @@ export function decide(payload, deps = {}) {
     mergeGateStateFn = mergeGateState,
     readHandRecordFn = readHandRecord,
     headShaFn = defaultHeadSha,
+    isHeadlessFn = defaultIsHeadless,
     // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
     // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
     gitStateFn = () => null,
@@ -529,6 +543,12 @@ export function decide(payload, deps = {}) {
   // looseness (an echo-forgeable ticket could fake it). Runs AFTER Gate 1 so a hand WITHOUT triage
   // still hits the triage deny first.
   if (HAND_ROLES.has(role)) {
+    // HEADLESS: cheap hands is a LOCAL-only capability. In the cloud there is no Ollama hand, so the
+    // hand roles run on the standard Claude model — a main-loop Agent(executor|sniper|test-author) is
+    // the INTENDED dispatch, not a silent fallback to deny. Allow it (no run-record/ticket needed).
+    if (isHeadlessFn()) {
+      return { allow: true };
+    }
     let gateState = {};
     try {
       gateState = readGateStateFn(sessionId);
