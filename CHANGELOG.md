@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- `triaging-requests`: QUICK ganha a porta `craft` — via rápida para artefatos visuais auto-contidos (página/quiz/landing/componente) roteados ao skill artesanal, pulando o pipeline pesado (executor→compliance→adversary→sniper). Mantém os trilhos determinísticos: glob da lista sensível nos arquivos tocados (substitui o override de `scope_paths`, ausente sem planner) + gates `tsc`/lint/build antes do commit. Override é **só-escala** ("caprichada/revisada" sobe pra LIGHT; "rápido" nunca rebaixa pedido sensível). Captura de lead no padrão do skill é pré-vetada; endpoint/integração nova escala pra LIGHT.
+
 ### Changed
 
 ### Fixed

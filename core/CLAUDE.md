@@ -9,7 +9,7 @@ Run the skill **`triaging-requests`** before doing anything else.
 
 It classifies the request into one of four paths:
 - **No ceremony** — question, chat, reading → answer directly.
-- **QUICK** — obvious hotfix, 1–2 files, no sensitive path → implement inline, commit via `committing-changes`.
+- **QUICK** — `fix` (obvious hotfix, 1–2 files) **or** `craft` (net-new self-contained visual artifact — page/quiz/landing — routed to an artisan skill), no sensitive path → implement inline / dispatch the artisan skill, run the cheap rails (gates + sensitive-path glob), commit via `committing-changes`.
 - **LIGHT** — small feature, clear scope → invoke `orchestrating-delivery` in LIGHT mode.
 - **FULL** — multi-file, high severity, or sensitive domain → invoke `orchestrating-delivery` in FULL mode.
 
