@@ -72,10 +72,12 @@ Se falhar, parar — nao release.
 git checkout -b chore/release-X.Y.Z
 ```
 
-### 6. Bump no `package.json` (sem criar tag)
+### 6. Bump da versao (sem criar tag)
 ```bash
-npm version X.Y.Z --no-git-tag-version
+npm version X.Y.Z --no-git-tag-version   # projetos com package.json
 ```
+- **Sem `package.json`** (ex.: este harness usa um arquivo `VERSION`): editar o arquivo de versao direto (`VERSION` → `X.Y.Z`).
+- **Versao hardcoded visivel**: atualizar TODO ponto que repete a versao — em especial o badge do README (`grep -n 'version-[0-9]' README.md` → trocar pra `version-X.Y.Z`). Senao a tag sobe mas o badge fica pra tras (gotcha real, v0.11.0).
 
 ### 7. Mover entries no CHANGELOG
 Editar `CHANGELOG.md`:
@@ -90,7 +92,7 @@ Validar que o arquivo tem conteudo (nao vazio).
 
 ### 9. Commit + push branch
 ```bash
-git add CHANGELOG.md package.json
+git add CHANGELOG.md package.json VERSION README.md   # os que existirem / foram tocados no passo 6
 git commit -m "chore: release vX.Y.Z"
 git push -u origin chore/release-X.Y.Z
 ```
