@@ -41,6 +41,15 @@ import { join } from "node:path";
 
 export const REDACTION_MARKER = "[REDACTED_AUTH_TOKEN]";
 export const AUTH_TOKEN_KEY = "ANTHROPIC_AUTH_TOKEN";
+// Preferred LOCAL env key. A name Claude Code does NOT honor for its own auth, so the operator
+// can `export OLLAMA_HAND_TOKEN=…` in their shell rc WITHOUT hijacking the parent session (exporting
+// ANTHROPIC_AUTH_TOKEN would point Claude Code itself at the Ollama token → 401). Env reads are NOT
+// blocked by the command-sandbox (which denies reading .dev.vars), so this is the only token source
+// that survives the sandbox locally. It is mapped back to ANTHROPIC_AUTH_TOKEN ONLY in the child env
+// (spawn-hand.mjs childEnv), never exported to the parent.
+export const HAND_ENV_TOKEN_KEY = "OLLAMA_HAND_TOKEN";
+// Keys accepted when parsing a `.dev.vars` blob (the fallback tier when no env key is set).
+const DEV_VARS_TOKEN_KEYS = [HAND_ENV_TOKEN_KEY, AUTH_TOKEN_KEY];
 export const UPSTREAM_BODY_MAX = 500;
 
 /** @description Run outcomes. Truth = git diff + locked-test exit + status, never prose. */
@@ -52,20 +61,22 @@ export const OUTCOME = {
 
 /**
  * @description Resolves the Ollama auth token, preferring process.env over a parsed
- * `.dev.vars` blob. Returns undefined when neither source carries the key.
+ * `.dev.vars` blob. The env tier prefers OLLAMA_HAND_TOKEN (sandbox-safe, Claude-Code-inert)
+ * and falls back to ANTHROPIC_AUTH_TOKEN (headless/cloud injects this as a secret). The
+ * `.dev.vars` tier accepts either key. Returns undefined when no source carries a key.
  * @param {Record<string,string|undefined>} env
  * @param {string} [devVarsContent] raw contents of a `.dev.vars` file
  * @returns {string|undefined}
  */
 export function readAuthToken(env = {}, devVarsContent = "") {
-  const fromEnv = env[AUTH_TOKEN_KEY];
+  const fromEnv = env[HAND_ENV_TOKEN_KEY] || env[AUTH_TOKEN_KEY];
   if (fromEnv) return fromEnv;
   for (const line of devVarsContent.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const eq = trimmed.indexOf("=");
     if (eq === -1) continue;
-    if (trimmed.slice(0, eq).trim() !== AUTH_TOKEN_KEY) continue;
+    if (!DEV_VARS_TOKEN_KEYS.includes(trimmed.slice(0, eq).trim())) continue;
     const value = trimmed.slice(eq + 1).trim();
     if (value) return value;
   }
@@ -87,8 +98,10 @@ function defaultReadFileSafe(filePath) {
 
 /**
  * @description Resolves the Ollama auth token across env → cwd/.dev.vars → ~/.claude/.dev.vars (global).
- * The global file lets the operator set the token once without exporting ANTHROPIC_AUTH_TOKEN into the
- * shell (which would hijack Claude Code's own auth). cwd/homeDir/readFileSafe are injectable for tests.
+ * LOCAL setup is `export OLLAMA_HAND_TOKEN=…` in the shell rc: env reads survive the command-sandbox
+ * (which blocks reading .dev.vars), and the name is inert to Claude Code's own auth. The `.dev.vars`
+ * tiers remain as a fallback for environments without the sandbox. cwd/homeDir/readFileSafe are
+ * injectable for tests.
  * @param {Record<string,string|undefined>} [env]
  * @param {{ cwd?: string, homeDir?: string, readFileSafe?: (path: string) => string }} [opts]
  * @returns {string|undefined}

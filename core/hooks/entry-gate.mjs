@@ -54,6 +54,19 @@ import {
 const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
 
 /**
+ * @description Detects HEADLESS (cloud routine) mode. Cheap hands is a LOCAL-only capability; in
+ * the cloud the hand roles (executor/sniper/test-author) run on Claude directly, so a main-loop
+ * Agent of a hand role is the INTENDED dispatch there, not a fallback to police. Signal is
+ * `$CLAUDE_CODE_REMOTE` — the same one the entry policy (core/CLAUDE.md) documents for mode
+ * detection. Injectable via decide()'s deps for tests.
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {boolean}
+ */
+function defaultIsHeadless(env = process.env) {
+  return Boolean(env?.CLAUDE_CODE_REMOTE);
+}
+
+/**
  * @description Best-effort current-HEAD sha reader for the run-record freshness cross-check.
  * Returns null on ANY git/infra error so the freshness check fails OPEN (never bricks a legit
  * escalation) — it only ever DENIES on a POSITIVE staleness signal (known HEAD ≠ record's freeze).
@@ -337,6 +350,7 @@ export function decide(payload, deps = {}) {
     mergeGateStateFn = mergeGateState,
     readHandRecordFn = readHandRecord,
     headShaFn = defaultHeadSha,
+    isHeadlessFn = defaultIsHeadless,
     // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
     // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
     gitStateFn = () => null,
@@ -529,6 +543,12 @@ export function decide(payload, deps = {}) {
   // looseness (an echo-forgeable ticket could fake it). Runs AFTER Gate 1 so a hand WITHOUT triage
   // still hits the triage deny first.
   if (HAND_ROLES.has(role)) {
+    // HEADLESS: cheap hands is a LOCAL-only capability. In the cloud there is no Ollama hand, so the
+    // hand roles run on the standard Claude model — a main-loop Agent(executor|sniper|test-author) is
+    // the INTENDED dispatch, not a silent fallback to deny. Allow it (no run-record/ticket needed).
+    if (isHeadlessFn()) {
+      return { allow: true };
+    }
     let gateState = {};
     try {
       gateState = readGateStateFn(sessionId);
@@ -577,10 +597,19 @@ export function decide(payload, deps = {}) {
           "spawn-hand.mjs (Ollama cheap hands), not main-loop Agents. A main-loop Agent of a hand " +
           "role is the K=1 escalation/transcription fallback — allowed ONLY when a stamped " +
           "escalation_fallback ticket maps to an on-disk run-record whose outcome is FAILED (a " +
-          "genuine cheap-hand run that failed its locked test). No such failure evidence here: a " +
-          "pre-spawn config error (missing token, dirty baseline, gate not armed) is NOT a run " +
-          "failure — route it to the critical-exception path (stamp mark.mjs hand-config-error and " +
-          "surface it), never a silent Claude fallback. Otherwise route the work through spawn-hand.",
+          "genuine cheap-hand run that failed its locked test). No such failure evidence here. " +
+          "Do NOT improvise a cause — in particular NEVER conclude 'spawn-hand.mjs is missing': it is " +
+          "vendored at .claude/skills/orchestrating-delivery/references/spawn-hand.mjs and the file " +
+          "exists; what is almost always missing is the Ollama token, not the script. To learn the " +
+          "EXACT cause, RUN the dispatch: `node .claude/skills/orchestrating-delivery/references/" +
+          "spawn-hand.mjs --descriptor <descriptor.json>` and read its exit-2 JSON `reason` (e.g. " +
+          "'no ANTHROPIC_AUTH_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
+          "verbatim reason to the critical-exception path: stamp `mark.mjs hand-config-error " +
+          "--reason \"<reason, translated to product-language>\"` and surface it to the operator with " +
+          "the fix (missing token → `export OLLAMA_HAND_TOKEN=…` in the shell rc — env survives the " +
+          "command-sandbox; a token in .dev.vars does NOT, because the sandbox denies reading it). " +
+          "Never a silent Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + " +
+          "on-disk record) is the ONLY thing that authorizes this Claude hand.",
       },
     };
   }
