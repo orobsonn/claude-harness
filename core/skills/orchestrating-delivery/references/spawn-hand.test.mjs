@@ -168,6 +168,27 @@ describe("dispatchHand ephemeral dir + child env", () => {
 // ---------------------------------------------------------------------------
 // Locked test 4 — brief/system-prompt file has ZERO occurrences of the token
 // ---------------------------------------------------------------------------
+describe("dispatchHand Claude-alias guard", () => {
+  it("rejects a bare Claude alias as the hand model (would 404 against Ollama)", async () => {
+    const dispatch = {
+      model: "sonnet",
+      brief: "x",
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+    await assert.rejects(
+      () => dispatchHand(dispatch, {
+        spawn: () => ({ status: 0, stdout: "", stderr: "", output: [] }),
+        gitStatus: () => "",
+        devVarsContent: "",
+        env: { ANTHROPIC_AUTH_TOKEN: "t" },
+      }),
+      /Claude alias dispatched to Ollama/
+    );
+  });
+});
+
 describe("dispatchHand brief scrubbing", () => {
   it("the brief/system-prompt file written to disk contains ZERO occurrences of the token", async () => {
     const secretToken = "super-secret-token-SHOULD-NOT-APPEAR-9999";

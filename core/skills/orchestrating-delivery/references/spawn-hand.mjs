@@ -41,6 +41,12 @@ const HAND_CONFIG_SETTINGS_TEMPLATE = join(__dirname, "hand-config", "settings.j
 const OLLAMA_BASE_URL = "https://ollama.com";
 
 /**
+ * @description Claude model aliases that must NEVER be a hand model: a hand always dispatches to
+ * Ollama, so a Claude alias here is a legacy/mis-set plan that would 404. Guarded in dispatchHand.
+ */
+const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
+
+/**
  * @description Builds the argv array for `claude -p` with the required flags.
  * PURE: no side effects, no token in argv. The token is NEVER an element of this array.
  *
@@ -151,6 +157,18 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
 
   // Resolve model from dispatch (fall back to a sensible default)
   const model = dispatch.model ?? "qwen3-coder:480b";
+
+  // FAIL CLOSED: a hand ALWAYS dispatches to Ollama (ANTHROPIC_BASE_URL=ollama.com). A bare Claude
+  // alias (haiku/sonnet/opus) as the resolved hand model means a legacy `tiers` plan (Claude models)
+  // or a mis-set hand_tier — it would 404 against Ollama with a cryptic error. Refuse here with an
+  // actionable reason (the config-error path) instead of letting the 404 surface downstream.
+  if (CLAUDE_HAND_ALIASES.has(model)) {
+    throw new Error(
+      `dispatchHand: hand model "${model}" is a Claude alias dispatched to Ollama — this is a legacy ` +
+      `model_strategy (Claude tiers) or a mis-set hand_tier. Set hand_tiers to a model id that exists ` +
+      `in the Ollama endpoint (list with GET /v1/models).`
+    );
+  }
 
   // Resolve locked_test path for the Stop hook
   const lockedTest = dispatch.locked_test ?? "";
