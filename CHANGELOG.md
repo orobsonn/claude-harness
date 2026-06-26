@@ -11,7 +11,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **hand_tiers com modelos Ollama reais**: a escada de exemplo da `creating-plans` passa a `qwen3-coder-next` (low) / `glm-5.2` (medium) / `kimi-k2.7-code` (high) — modelos que existem no endpoint Ollama. A skill agora exige que os ids do `hand_tiers` existam no endpoint (como listar) e avisa pra evitar `gpt-oss:*` (tool-use quebra em loop agêntico).
+
 ### Fixed
+
+- **plano no formato legacy (Claude tiers) passava silenciosamente e quebrava no dispatch (404)**: a validação que rejeita o `model_strategy.tiers` legacy não era determinística (dependia do planner rodar `validate-plan`). Agora há cancela em duas camadas: (1) guard no `spawn-hand` — um model que é alias Claude (haiku/sonnet/opus) indo pro Ollama falha com razão clara em vez de 404 críptico; (2) o `plan-write-gate` valida o `model_strategy` no Write do plano e rejeita o shape legacy/sem `hand_tiers` antes de virar arquivo.
+- **mão barata acusada de scope violation por arquivos untracked pré-existentes**: o `capture-hand` atribuía ao hand lixo de build pré-existente (dist/, coverage/, *.tsbuildinfo gitignored) que o clean-check (`git status --porcelain`) não enxerga mas o sweep `ls-files --others` enxerga. Agora um snapshot pré-spawn (path+hash) desconta os untracked pré-existentes **inalterados**; um arquivo novo ou um pré-existente **editado** (tamper) segue sinalizado — o controle de segurança fica intacto.
+- **planner.md instruía salvar o plano como `plan.json`**, nome que o orquestrador/gate/reinject não leem (todos usam `execution-plan.json`). Reconciliado.
 
 ### Removed
 
