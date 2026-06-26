@@ -79,6 +79,40 @@ function isStateFilePath(filePath) {
 }
 
 /**
+ * Content cancela for the model_strategy furo: a planner Write must carry the `hand_tiers`
+ * model_strategy (cheap Ollama hands), NEVER the legacy Claude `tiers` shape — which 404s at
+ * dispatch because hands always target the Ollama endpoint. This makes the model_strategy shape
+ * a DETERMINISTIC rail instead of relying on the planner self-running validate-plan.
+ *
+ * Only a COMPLETE write (content is a string) is checked — a planner emits the plan via Write,
+ * not incremental Edit. An Edit/anomalous payload (no string content) fails OPEN; the spawn-hand
+ * Claude-alias guard is the backstop at the consumer. A parse failure on a Write IS a positive
+ * invalid signal (a Write carries the whole document) → DENY, not fail-open.
+ * @param {unknown} content - payload.tool_input.content
+ * @returns {string|null} a deny reason, or null when acceptable / not checkable
+ */
+export function checkPlanContent(content) {
+  if (typeof content !== "string") return null; // Edit / anomalous → fail open
+  let plan;
+  try {
+    plan = JSON.parse(content);
+  } catch {
+    return "[plan-write-gate] Blocked: the execution-plan.json is not valid JSON — a Write must carry the complete, parseable document.";
+  }
+  const ms = plan?.model_strategy;
+  if (!ms || typeof ms !== "object" || Array.isArray(ms)) {
+    return "[plan-write-gate] Blocked: model_strategy is missing or malformed. It must carry `hand_tiers` (the cheap-hand model ladder) plus the 7 Claude eye roles.";
+  }
+  if (ms.tiers !== undefined) {
+    return "[plan-write-gate] Blocked: model_strategy uses the legacy Claude `tiers` shape (e.g. low:haiku / medium:sonnet / high:opus). Cheap hands dispatch to the Ollama endpoint — a Claude model id 404s there. Use `hand_tiers` with model ids that exist in the Ollama endpoint (list with GET /v1/models).";
+  }
+  if (ms.hand_tiers === undefined) {
+    return "[plan-write-gate] Blocked: model_strategy.hand_tiers is required — the executor/sniper resolve their Ollama model from it. Add hand_tiers: { low, medium, high } with real Ollama model ids.";
+  }
+  return null;
+}
+
+/**
  * Pure decision layer — testable without spawning.
  * @param {unknown} payload - The parsed hook payload
  * @returns {{ allow: true }
@@ -121,6 +155,19 @@ export function decide(payload) {
   // any other subagent are denied.
   const isSubagent = Object.prototype.hasOwnProperty.call(payload, "agent_id");
   if (isSubagent && bareRole(payload.agent_type) === "planner") {
+    // Authorized author — now the CONTENT cancela: reject a legacy/malformed model_strategy
+    // before it ever reaches disk, so a Claude-tiers plan can never be executed (the furo).
+    const contentReason = checkPlanContent(payload?.tool_input?.content);
+    if (contentReason) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: contentReason,
+        },
+      };
+    }
     return { allow: true };
   }
 
