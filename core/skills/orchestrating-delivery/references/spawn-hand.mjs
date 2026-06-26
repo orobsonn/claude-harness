@@ -323,6 +323,16 @@ function defaultCapture(args) {
 }
 
 /**
+ * @description Default pre-spawn untracked snapshot: a path→hash map of every untracked file
+ * (gitignored included) BEFORE the hand runs, so capture can subtract pre-existing build junk
+ * instead of misattributing it to the hand. Injectable for hermetic tests.
+ */
+function defaultSnapshotUntracked() {
+  const g = realGit();
+  return g.hashObject(g.lsFilesAllOthers());
+}
+
+/**
  * @description Default run-record writer: persists the token-free record to a state path keyed
  * by feature_id/task_id (the producer of the on-disk evidence consumed by Part B). The directory
  * is created if absent; the record is the ONLY durable artifact (the descriptor is ephemeral).
@@ -353,6 +363,7 @@ export async function runLiveDispatch(descriptor, {
   gitStatus = defaultFullGitStatus,
   headSha = defaultHeadSha,
   capture = defaultCapture,
+  snapshotUntracked = defaultSnapshotUntracked,
   env = process.env,
   writeRecord = defaultWriteRecord,
   stateDir,
@@ -418,6 +429,11 @@ export async function runLiveDispatch(descriptor, {
     );
   }
 
+  // Pre-spawn untracked snapshot (path→hash). Taken right after the full-tree clean-check so the
+  // capture subtracts pre-existing build junk (dist/, coverage/, *.tsbuildinfo) instead of
+  // misattributing it to the hand as a scope/allowed-write violation.
+  const preUntracked = snapshotUntracked();
+
   // (6) FAIL CLOSED: the brief file must exist before we build the dispatch.
   if (!existsSync(descriptor.brief_file)) {
     throw new Error(`runLiveDispatch: brief_file does not exist: ${descriptor.brief_file}`);
@@ -470,6 +486,7 @@ export async function runLiveDispatch(descriptor, {
       freezeCommitSha: descriptor.freeze_commit_sha,
       testPath: descriptor.locked_test,
       token,
+      preUntracked,
     });
 
     // A post-spawn HEAD divergence (rogue commit) is a CRITICAL EXCEPTION — never stamp a record.
