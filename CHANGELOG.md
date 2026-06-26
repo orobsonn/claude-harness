@@ -11,6 +11,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **entry-gate**: a mensagem de bloqueio de role HAND (executor/sniper/test-author despachado como Agent do main-loop) agora instrui o orquestrador a rodar `spawn-hand.mjs --descriptor` pra obter a `reason` exata do config-error (exit 2) e proíbe explicitamente inventar causa — em especial concluir que "spawn-hand.mjs não existe" (o script é vendored; o que falta quase sempre é o token Ollama). Aponta o fix do token (`ANTHROPIC_AUTH_TOKEN` em `~/.claude/.dev.vars`). Fecha o gap de aderência que fazia a mão barata cair em implementação inline silenciosa com mensagem enganosa ao operador.
+
 ### Fixed
 
 ### Removed

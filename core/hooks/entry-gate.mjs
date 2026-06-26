@@ -577,10 +577,18 @@ export function decide(payload, deps = {}) {
           "spawn-hand.mjs (Ollama cheap hands), not main-loop Agents. A main-loop Agent of a hand " +
           "role is the K=1 escalation/transcription fallback — allowed ONLY when a stamped " +
           "escalation_fallback ticket maps to an on-disk run-record whose outcome is FAILED (a " +
-          "genuine cheap-hand run that failed its locked test). No such failure evidence here: a " +
-          "pre-spawn config error (missing token, dirty baseline, gate not armed) is NOT a run " +
-          "failure — route it to the critical-exception path (stamp mark.mjs hand-config-error and " +
-          "surface it), never a silent Claude fallback. Otherwise route the work through spawn-hand.",
+          "genuine cheap-hand run that failed its locked test). No such failure evidence here. " +
+          "Do NOT improvise a cause — in particular NEVER conclude 'spawn-hand.mjs is missing': it is " +
+          "vendored at .claude/skills/orchestrating-delivery/references/spawn-hand.mjs and the file " +
+          "exists; what is almost always missing is the Ollama token, not the script. To learn the " +
+          "EXACT cause, RUN the dispatch: `node .claude/skills/orchestrating-delivery/references/" +
+          "spawn-hand.mjs --descriptor <descriptor.json>` and read its exit-2 JSON `reason` (e.g. " +
+          "'no ANTHROPIC_AUTH_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
+          "verbatim reason to the critical-exception path: stamp `mark.mjs hand-config-error " +
+          "--reason \"<reason, translated to product-language>\"` and surface it to the operator with " +
+          "the fix (missing token → set ANTHROPIC_AUTH_TOKEN in ~/.claude/.dev.vars). Never a silent " +
+          "Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + on-disk record) is " +
+          "the ONLY thing that authorizes this Claude hand.",
       },
     };
   }
