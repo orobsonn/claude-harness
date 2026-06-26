@@ -105,6 +105,19 @@ test("readAuthToken: prefers process.env, falls back to .dev.vars content", () =
   assert.equal(readAuthToken({}, ""), undefined);
 });
 
+test("readAuthToken: OLLAMA_HAND_TOKEN is the preferred env key (CC-inert, sandbox-safe)", () => {
+  // The hand-only env key wins over ANTHROPIC_AUTH_TOKEN so the operator can export it locally
+  // without hijacking Claude Code's own auth.
+  assert.equal(
+    readAuthToken({ OLLAMA_HAND_TOKEN: "hand-env", ANTHROPIC_AUTH_TOKEN: "cc-env" }),
+    "hand-env"
+  );
+  // ANTHROPIC_AUTH_TOKEN still resolves (headless/cloud secret) when the hand key is absent.
+  assert.equal(readAuthToken({ ANTHROPIC_AUTH_TOKEN: "cc-env" }), "cc-env");
+  // .dev.vars fallback accepts either key.
+  assert.equal(readAuthToken({}, "OLLAMA_HAND_TOKEN=from-file"), "from-file");
+});
+
 // ---- 2. scope violation = run failed (truth is the diff, not prose) ----
 
 test("scope: a child that wrote OUTSIDE scope_paths fails the run", () => {

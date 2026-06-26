@@ -586,9 +586,10 @@ export function decide(payload, deps = {}) {
           "'no ANTHROPIC_AUTH_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
           "verbatim reason to the critical-exception path: stamp `mark.mjs hand-config-error " +
           "--reason \"<reason, translated to product-language>\"` and surface it to the operator with " +
-          "the fix (missing token → set ANTHROPIC_AUTH_TOKEN in ~/.claude/.dev.vars). Never a silent " +
-          "Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + on-disk record) is " +
-          "the ONLY thing that authorizes this Claude hand.",
+          "the fix (missing token → `export OLLAMA_HAND_TOKEN=…` in the shell rc — env survives the " +
+          "command-sandbox; a token in .dev.vars does NOT, because the sandbox denies reading it). " +
+          "Never a silent Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + " +
+          "on-disk record) is the ONLY thing that authorizes this Claude hand.",
       },
     };
   }

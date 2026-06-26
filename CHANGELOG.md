@@ -11,9 +11,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
-- **entry-gate**: a mensagem de bloqueio de role HAND (executor/sniper/test-author despachado como Agent do main-loop) agora instrui o orquestrador a rodar `spawn-hand.mjs --descriptor` pra obter a `reason` exata do config-error (exit 2) e proíbe explicitamente inventar causa — em especial concluir que "spawn-hand.mjs não existe" (o script é vendored; o que falta quase sempre é o token Ollama). Aponta o fix do token (`ANTHROPIC_AUTH_TOKEN` em `~/.claude/.dev.vars`). Fecha o gap de aderência que fazia a mão barata cair em implementação inline silenciosa com mensagem enganosa ao operador.
+- **cheap hands (resolução de token)**: a fonte de token local passa a ser a env var `OLLAMA_HAND_TOKEN` (`export` no shell rc). Leituras de env sobrevivem ao command-sandbox; um token só no `.dev.vars` **não** é lido (o sandbox nega leitura de `.dev.vars`). O nome é inerte à auth do próprio Claude Code — `ANTHROPIC_AUTH_TOKEN` sequestraria a sessão-pai. `resolveAuthToken` aceita `OLLAMA_HAND_TOKEN` (preferencial) e `ANTHROPIC_AUTH_TOKEN` (compat/headless); `.dev.vars` segue como fallback; o childEnv mapeia pra `ANTHROPIC_AUTH_TOKEN`. SKILL.md atualizado.
+- **entry-gate**: a mensagem de bloqueio de role HAND agora instrui o orquestrador a rodar `spawn-hand.mjs --descriptor` pra obter a `reason` exata do config-error (exit 2) e proíbe explicitamente inventar causa — em especial concluir que "spawn-hand.mjs não existe" (o script é vendored; o que falta quase sempre é o token). Aponta o fix (`export OLLAMA_HAND_TOKEN`).
 
 ### Fixed
+
+- **mão barata nunca rodava sob o command-sandbox**: o `spawn-hand` despachado pelo orquestrador roda sob o sandbox, cujo `denyRead: ["**/.dev.vars"]` bloqueava o `resolveAuthToken` de ler o token → exit 2 "no ANTHROPIC_AUTH_TOKEN resolved" → caía em implementação inline silenciosa com mensagem enganosa, mesmo com o token presente no disco. Resolvido movendo a fonte do token pra env (`OLLAMA_HAND_TOKEN`), que o sandbox não bloqueia. Validado end-to-end (sob sandbox: `.dev.vars` falha, env passa).
 
 ### Removed
 
