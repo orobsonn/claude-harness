@@ -1,6 +1,6 @@
 ---
 name: triaging-requests
-description: "Classifies the operator's request into QUICK, LIGHT, or FULL delivery mode — or no ceremony at all — and dispatches accordingly. Runs on the first interaction of every session before any implementation begins."
+description: "Classifies the operator's request into QUICK (fix or craft), LIGHT, or FULL delivery mode — or no ceremony at all — and dispatches accordingly. QUICK-craft is the fast lane for self-contained visual artifacts (page/quiz/landing) routed to an artisan skill. Runs on the first interaction of every session before any implementation begins."
 ---
 
 # Triaging-Requests — The entry gate of every session
@@ -49,15 +49,50 @@ Useful questions (ask only what is still unclear):
 
 | Mode | When to pick it |
 |---|---|
-| **QUICK** | Obvious hotfix. 1–2 files max. No ambiguity. No sensitive path. Scope is completely clear without extra context. |
+| **QUICK** | Inline, no `orchestrating-delivery`. Two entry shapes: **`fix`** — obvious hotfix, 1–2 files, no sensitive path, scope fully clear. **`craft`** — net-new self-contained **visual artifact** (page, quiz, landing, component, static section) routed to an artisan skill; no novel integration, no sensitive path, any file count. See **Step 2.1**. |
 | **LIGHT** | Small feature. Clear scope. No sensitive domain. May touch several files but the change is bounded and well understood. |
 | **FULL** | Multi-file change OR high severity OR touches a sensitive domain (auth, payment, billing, SQL, migrations, `.env*`, `package.json` deps). |
+
+---
+
+### Step 2.1 — QUICK-craft: the fast lane for self-contained visual artifacts
+
+A net-new **visual artifact** (page, quiz, landing, component, static section) carries near-zero *integration* risk — the heavy pipeline (executor → compliance → adversary → sniper) exists for integration risk, so forcing it here is pure friction. The real review of one visual artifact is the operator looking at it in the browser, not four LLM agents.
+
+**Enter `QUICK-craft` only when ALL hold:**
+- Net-new, self-contained UI artifact — deletable without breaking the existing system.
+- Routed to an **artisan skill** (`quiz`, `copy`, `blog-post`) or an inline UI build.
+- **No novel integration:** does not wire into existing auth/session, payment/billing, SQL/DB writes, or existing business-logic modules; does not add or upgrade a dependency.
+- **No sensitive path** (the allowlist below).
+
+**Lead capture (known-pattern rule).** Quizzes/landings capture leads (PII → endpoint + tracking pixel) — that *is* the product. When the capture uses the **pattern already baked into the artisan skill** (its standard endpoint + pixel), it is **pre-vetted** — the security review was done once when the skill was authored — and stays in `QUICK-craft`. A **novel or custom** capture target (a new endpoint, a different integration) is novel integration → **escalate to LIGHT** (which runs the `security` agent).
+
+**Dispatch:** route to the matching artisan skill (or build inline), then **before commit** run the two cheap deterministic rails, then commit via `committing-changes`. Do **not** invoke `orchestrating-delivery`.
+
+**Rail 1 — cheap gates (deterministic, no LLM).** Run the project's cheap gates on the produced files where they exist: `tsc --noEmit`, lint, and the build. This catches the #1 failure of hand-built pages — a broken import or a typo — that the artisan skills only "test mentally."
+
+**Rail 2 — sensitive-path glob (deterministic).** This replaces the planner's `scope_paths` override (there is no planner in QUICK). Glob the touched + untracked files against the sensitive-path allowlist; **any match aborts the fast lane and escalates to LIGHT.**
+
+```bash
+git status --porcelain | awk '{print $2}' \
+  | grep -E '(^|/)(auth|payment|billing|migrations)/|\.sql$|(^|/)\.env|(^|/)package\.json$' \
+  && echo "SENSITIVE → abort QUICK-craft, escalate to LIGHT" \
+  || echo "clean → run gates, then commit"
+```
+
+Allowlist (same as the planner override): `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (deps).
+
+**Escalate-out (mid-build):** if the artifact turns out to need integration beyond its frozen template, stop the fast lane and re-classify as LIGHT.
+
+**Known limit:** detecting a *novel endpoint* relies on entry judgment + an explicit signal in the request, not a deterministic network allowlist — Rail 2 only catches sensitive **file paths**. If a request names a new/custom capture target, treat it as novel integration.
 
 ---
 
 ### Step 3 — Safety rule: only escalate, never downgrade
 
 When in doubt between two modes, **pick the higher one**.
+
+**Operator override is escalate-only.** Words like "caprichada", "revisada", "com cuidado" always force the mode **up** (e.g. to LIGHT) — escalation is always safe. Words like "rápido", "inline", "sem plano" may select `QUICK-craft` **only inside the safe envelope** (Step 2.1) — they NEVER downgrade a request that hits a sensitive path or a novel integration. "rápido" is a tone word, not consent to skip security; the operator is non-technical and trusts the system to hold this line.
 
 Any mention of a sensitive domain in the operator's message biases toward FULL. The deterministic override happens later — inside `orchestrating-delivery` when the planner defines `scope_paths` — but this skill pre-escalates so the planner receives the right framing.
 
@@ -108,7 +143,7 @@ This command outputs a JSON stamp that the PostToolUse hook (session context, no
 
 | Mode | Action |
 |---|---|
-| **QUICK** | Implement inline. Commit via skill `committing-changes`. Do **not** invoke `orchestrating-delivery`. |
+| **QUICK** | Implement inline (`fix`) or route to the artisan skill (`craft` — see Step 2.1). Run the cheap rails (gates + sensitive-path glob) before commit; any sensitive-path hit escalates to LIGHT. Commit via skill `committing-changes`. Do **not** invoke `orchestrating-delivery`. |
 | **LIGHT** | Invoke skill `orchestrating-delivery` in LIGHT mode. |
 | **FULL** | Invoke skill `orchestrating-delivery` in FULL mode. |
 
@@ -121,6 +156,12 @@ This command outputs a JSON stamp that the PostToolUse hook (session context, no
 
 **QUICK — "Corrigir o regex de validação de CPF que rejeita dígitos finais"**
 - 1–2 files, obvious bug, scope 100% clear → inline fix + commit.
+
+**QUICK-craft — "Cria uma landing pro lançamento" / "Faz um quiz de diagnóstico"**
+- Net-new self-contained visual artifact, capture no padrão do skill → route to `copy`/`quiz`, run cheap gates + sensitive-path glob, commit. No orchestrating-delivery.
+
+**LIGHT (escalated from craft) — "Faz um quiz que salva o lead num endpoint novo da API X"**
+- Novel capture target = novel integration → leaves the fast lane, LIGHT with the `security` agent.
 
 **LIGHT — "Adicionar campo de apelido no perfil do usuário"**
 - New behaviour, a few files (UI + API + schema), but bounded and no sensitive domain → orchestrating-delivery LIGHT.
