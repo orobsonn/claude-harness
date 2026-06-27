@@ -15,6 +15,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.14.4] - 2026-06-27
+
+### Added
+
+- **Disciplina de conserto na raiz (bug fix audita todos os chamadores)**: ao planejar uma correção de bug, o planner passa a confirmar que `scope_paths` cobre **todos os chamadores** da função compartilhada — dimensiona o conserto na raiz, não no call site nomeado pelo ticket. O adversary ganha um alvo explícito: o **ponto cego de chamador irmão** (fix que arruma um caminho e deixa outro chamador da mesma função quebrado). Fecha o gap onde nenhuma rule/agente cobria o diagnóstico sintoma × raiz para bug fix — só roles Opus (planner + adversary), mãos baratas intocadas.
+- **Alvos de detecção de over-engineering no `code-quality.md`**: novo gotcha nomeando as formas clássicas de excesso para o compliance pegar — stdlib reimplementada à mão, dep que duplica feature nativa da plataforma (`Intl`/`URL`/`crypto`/`fetch`), flag/config morto. Fecha os degraus stdlib/nativo que a regra não tornava explícitos; fraseado como alvo de **detecção**, nunca ordem de corte por cota. Origem: análise multi-modelo do repo `ponytail` (2 de 8 candidatos sobreviveram à crítica adversarial).
+
 ## [0.14.3] - 2026-06-27
 
 ### Fixed
