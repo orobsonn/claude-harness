@@ -9,7 +9,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Trilho de fidelidade (fidelity rail)**: o executor (mão barata) só é despachado depois que existe um teste escrito pela mão-de-teste e validado pelo compliance — congelado. Vale no modo local (spawn-hand) e na nuvem (headless). Fecha o furo em que a mão barata escrevia o próprio gate.
+- **brief-serializer**: o briefing do executor passa a ser montado deterministicamente a partir da fatia do plano (spec, decisões, escopo, critérios, asserções) + fatos validados de tarefas anteriores — sem o orquestrador escrever código ou teste à mão.
+- **descriptor-emitter**: a "ordem de serviço" da mão barata e o SHA do freeze são emitidos automaticamente no freeze-commit, eliminando a tentativa-e-erro de montar o descriptor na mão.
+- **Marcador `fidelity-pass`**: sinal em disco que o gate consome para liberar o executor após o teste congelado passar pela validação de fidelidade.
+
 ### Changed
+
+- **Princípio de relay no orquestrador**: a regra "o orquestrador não gera nada" foi substituída pela regra real e estreita — ele não autora código nem teste, apenas repassa a fatia do plano já validada por olhos/mãos mais fortes. O teste congelado é o oráculo concreto.
 
 ### Fixed
 
