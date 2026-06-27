@@ -13,6 +13,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+### Removed
+
+## [0.14.3] - 2026-06-27
+
+### Fixed
+
 - **entry-gate: piso de branch protegida agora cobre o default branch real do origin, não só main/master**: ao entregar (`git push`/`gh pr create`/`gh pr merge`) direto do branch default do repo, o gate só barrava quando o default era `main` ou `master`. Em repo cujo default é `develop`/`trunk`, a entrega direta escapava do piso e reaparecia como o falso "zero commits ahead" (após push, `origin/<default>==HEAD`). `computeGitState` passa a derivar e retornar `defaultBranch` (nome bare de `origin/HEAD`, com fallback `origin/main`→`origin/master`), e o piso barra `main`, `master` ou o default real resolvido. Match exato (não substring), `typeof` guard para back-compat, fail-open preservado (default não-resolvível → piso volta a só main/master). Limitação conhecida documentada no JSDoc: quando `origin/HEAD` não está setado e o default real difere de main/master, o fallback por existência pode mis-derivar — resolução via `git ls-remote --symref` deixada como follow-up (evita rede num gate quente).
 
 ### Removed
