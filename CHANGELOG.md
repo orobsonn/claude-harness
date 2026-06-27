@@ -9,7 +9,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-- **CI por projeto + gate de CI verde antes do release**: geração de `.github/workflows/ci.yml` com detecção de stack (node-test/vitest/jest); branch protection configurada automaticamente para exigir o job de CI como check obrigatório; gate no fluxo de release que recusa tag enquanto CI estiver vermelho ou pendente. Regra global aditiva (mandatory para projetos novos, advisory para existentes). Dogfooded no próprio harness com workflow real.
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.14.0] - 2026-06-27
+
+### Added
+
+- **CI por projeto + gate de CI verde antes do release**: geração de `.github/workflows/ci.yml` com detecção de stack (node-test/vitest/jest); helper de branch protection (GET-then-merge, `enforce_admins=false`, sem review, required check = nome do job gerado) aplicado de forma operator-gated (`--apply`) para exigir o job de CI como check obrigatório; gate no fluxo de release que recusa tag enquanto CI estiver vermelho ou pendente (`gh pr checks --json state`). Modelo de 2 jobs fork-safe (job obrigatório sem secret + job de secret que pula em fork/Dependabot). Regra global aditiva (mandatory para projetos novos, advisory para existentes). Dogfooded no próprio harness com workflow real (CI verde no PR).
 
 ### Changed
 
