@@ -1603,3 +1603,108 @@ test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// LOCKED — protected-branch-default-aware
+// The protected-branch floor must block delivery from the repo's ACTUAL default
+// branch, not just hardcoded main/master. computeGitState must surface
+// defaultBranch; decideBash must generalize the floor to cover it.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED default-branch #1: computeGitState surfaces defaultBranch from origin/HEAD (develop)",
+  () => {
+    function fakeGit(args) {
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "develop";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") return "refs/remotes/origin/develop";
+      if (cmd === "rev-list --count origin/develop..HEAD") return "3";
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.equal(state.defaultBranch, "develop", "defaultBranch must be 'develop' (stripped from refs/remotes/origin/develop)");
+    assert.equal(state.commitsAhead, 3, "commitsAhead must be 3");
+  },
+);
+
+test(
+  "LOCKED default-branch #2: computeGitState defaultBranch null when no base resolvable",
+  () => {
+    function fakeGit(args) {
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") throw new Error("not set");
+      if (cmd === "rev-parse --verify --quiet origin/main") throw new Error("not found");
+      if (cmd === "rev-parse --verify --quiet origin/master") throw new Error("not found");
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.equal(state.defaultBranch, null, "defaultBranch must be null when base is unresolvable");
+  },
+);
+
+test(
+  "LOCKED default-branch #3: decideBash denies delivery from the default branch (develop) even with commits ahead",
+  () => {
+    const payload = makeBashPayload("ses_db3", "git push");
+    const verdict = decide(payload, {
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "develop", commitsAhead: 3, defaultBranch: "develop" }),
+    });
+    assert.equal(verdict.allow, false, "delivery from default branch must be denied");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("develop"),
+      `deny reason must mention the branch — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+    assert.ok(
+      !verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("zero commits"),
+      "deny must be the protected-branch deny, NOT the zero-commits deny",
+    );
+  },
+);
+
+test(
+  "LOCKED default-branch #4: decideBash allows a feature branch when defaultBranch is develop",
+  () => {
+    const payload = makeBashPayload("ses_db4", "git push -u origin feat/x");
+    const verdict = decide(payload, {
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 2, defaultBranch: "develop" }),
+    });
+    assert.equal(verdict.allow, true, "feature branch push must be allowed when it is not the default branch");
+  },
+);
+
+test(
+  "LOCKED default-branch #5: back-compat — main and master still denied without defaultBranch field",
+  () => {
+    const payloadMain = makeBashPayload("ses_db5a", "git push");
+    const verdictMain = decide(payloadMain, {
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "main", commitsAhead: 3 }), // NO defaultBranch key
+    });
+    assert.equal(verdictMain.allow, false, "main must still be denied without defaultBranch field");
+    assert.equal(verdictMain.hookSpecificOutput.permissionDecision, "deny");
+
+    const payloadMaster = makeBashPayload("ses_db5b", "gh pr create");
+    const verdictMaster = decide(payloadMaster, {
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "master", commitsAhead: 1 }), // NO defaultBranch key
+    });
+    assert.equal(verdictMaster.allow, false, "master must still be denied without defaultBranch field");
+    assert.equal(verdictMaster.hookSpecificOutput.permissionDecision, "deny");
+  },
+);
+
+test(
+  "LOCKED default-branch #6: feature/develop-stuff must NOT be denied — only exact branch match denies",
+  () => {
+    const payload = makeBashPayload("ses_db6", "git push -u origin feature/develop-stuff");
+    const verdict = decide(payload, {
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "feature/develop-stuff", commitsAhead: 2, defaultBranch: "develop" }),
+    });
+    assert.equal(verdict.allow, true, "substring 'develop' in branch name must NOT trigger the floor; only exact equality denies");
+  },
+);

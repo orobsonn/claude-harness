@@ -201,10 +201,18 @@ function defaultReadDescriptor(descriptorPath) {
  *   1. `git symbolic-ref refs/remotes/origin/HEAD` → strip `refs/remotes/` prefix (e.g. `origin/main`)
  *   2. `git rev-parse --verify --quiet origin/main` (common default)
  *   3. `git rev-parse --verify --quiet origin/master` (legacy default)
- *   4. base = null → commitsAhead = null (fail-open; consumer skips the ahead check)
+ *   4. base = null → commitsAhead = null, defaultBranch = null (fail-open; consumer skips the ahead check)
+ *
+ * Limitation: `defaultBranch` is reliable only when `origin/HEAD` is set locally (only `git clone` sets it).
+ * When unset, fallbacks match by mere ref existence — in a repo whose real default is not `main`/`master`
+ * but stale copies exist, `defaultBranch` mis-derives and the protected-branch floor may under-deny
+ * delivery from the true default. Fixing via `git ls-remote --symref origin HEAD` adds a network call — deferred.
  *
  * @param {(args: string[]) => string} git - Runner: takes args array, returns trimmed stdout, throws on git failure
- * @returns {{ branch: string|null, commitsAhead: number|null }}
+ * @returns {{ branch: string|null, commitsAhead: number|null, defaultBranch: string|null }}
+ *   branch - current HEAD branch name, or null when detached
+ *   commitsAhead - number of commits HEAD is ahead of origin default, or null when base is unresolvable
+ *   defaultBranch - bare name of origin's default branch (e.g. "main", "develop"), or null when base is unresolvable
  */
 export function computeGitState(git) {
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -226,6 +234,10 @@ export function computeGitState(git) {
     }
   }
 
+  // Derive the bare default-branch name by stripping the remote prefix (e.g. "origin/develop" → "develop").
+  // Handles any remote name, not just "origin". Null when base is unresolvable.
+  const defaultBranch = base ? base.replace(/^[^/]+\//, "") : null;
+
   let commitsAhead = null;
   if (base !== null) {
     try {
@@ -236,17 +248,19 @@ export function computeGitState(git) {
     }
   }
 
-  return { branch: branch || null, commitsAhead };
+  return { branch: branch || null, commitsAhead, defaultBranch };
 }
 
 /**
  * Probes the working-tree git state for the branch/commit delivery rail.
- * Returns { branch, commitsAhead } where branch is the current branch name (null when
- * detached/unknown) and commitsAhead is the count of commits HEAD is ahead of the
+ * Returns { branch, commitsAhead, defaultBranch } where branch is the current branch name
+ * (null when detached/unknown), commitsAhead is the count of commits HEAD is ahead of the
  * origin default branch (resolved via origin/HEAD, then origin/main, then origin/master;
- * never the feature branch's own upstream @{u}, which would be 0 after git push). Returns
- * null on ANY git/infra error so the caller fails open (never bricks a delivery command).
- * @returns {{ branch: string|null, commitsAhead: number|null } | null}
+ * never the feature branch's own upstream @{u}, which would be 0 after git push), and
+ * defaultBranch is the bare name of origin's default branch (e.g. "main", "develop"; null
+ * when the base is unresolvable). Returns null on ANY git/infra error so the caller fails
+ * open (never bricks a delivery command).
+ * @returns {{ branch: string|null, commitsAhead: number|null, defaultBranch: string|null } | null}
  */
 function defaultGitState() {
   const git = (args) =>
@@ -443,7 +457,11 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
     gitState = null;
   }
   if (gitState && typeof gitState.branch === "string") {
-    if (gitState.branch === "main" || gitState.branch === "master") {
+    const isDefaultBranch =
+      gitState.branch === "main" ||
+      gitState.branch === "master" ||
+      (typeof gitState.defaultBranch === "string" && gitState.branch === gitState.defaultBranch);
+    if (isDefaultBranch) {
       return {
         allow: false,
         hookSpecificOutput: {
