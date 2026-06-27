@@ -13,6 +13,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+### Removed
+
+## [0.14.1] - 2026-06-27
+
+### Fixed
+
 - **entry-gate: falso "zero commits ahead of base" bloqueava delivery legítimo**: `defaultGitState()` resolvia a base do cálculo de "commits à frente" como o upstream do próprio feature branch (`@{u}`). Após `git push`, o upstream aponta para o mesmo commit que `HEAD`, zerando `@{u}..HEAD` e produzindo um deny falso que travava `git push` / `gh pr create` mesmo com commits reais à frente da main. A base passa a ser sempre o default branch do origin (`origin/HEAD` → `origin/main` → `origin/master`), contada via `rev-list --count <base>..HEAD`; nunca mais `@{u}`. Contrato fail-open preservado (base não-resolvível → `commitsAhead` null → nunca barra). Lógica de resolução extraída para `computeGitState(git)` puro/exportado e coberta por locked tests (AC-CORE: `upstream==HEAD` mas ahead-of-default > 0 → permite).
 
 ### Removed
