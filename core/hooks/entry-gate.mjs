@@ -159,6 +159,30 @@ export function isDeliveryCommand(command) {
 }
 
 // ---------------------------------------------------------------------------
+// Descriptor reader — fidelity rail (production seam; injectable for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Reads and parses a spawn-hand.mjs descriptor JSON file from disk.
+ * Returns the parsed object on success, or null on ANY error (missing/unparseable).
+ * Fail-open — callers treat a null return as "unreadable → allow" (never brick a spawn).
+ * @param {string} descriptorPath - Path to the descriptor JSON file (from --descriptor flag)
+ * @returns {object|null}
+ */
+function defaultReadDescriptor(descriptorPath) {
+  try {
+    const raw = fs.readFileSync(descriptorPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Git-state probe — branch/commit rail (production seam; injected at processInput)
 // ---------------------------------------------------------------------------
 
@@ -212,18 +236,107 @@ function defaultGitState() {
  * (hand_finished without capture_verified). Fail-open on any infra error (never brick
  * read-only work).
  *
+ * Additionally, spawn-hand.mjs dispatches are gated by the fidelity rail: the task's
+ * fidelity-pass must be stamped in gate-state before the cheap-hand executor can run.
+ * Fail-open on unreadable descriptor — never brick a legit spawn.
+ *
  * @param {object} payload - The parsed Bash hook payload
  * @param {object} deps - Injectable seams
  * @param {function} deps.readGateStateFn - (sessionId: string) => object
+ * @param {function} deps.readDescriptorFn - (descriptorPath: string) => object|null
  * @returns {{ allow: true }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-function decideBash(payload, { readGateStateFn, gitStateFn }) {
+function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn }) {
   const command = payload?.tool_input?.command;
   // Non-string command → infra error → fail-open
   if (typeof command !== "string") {
     return { allow: true };
   }
+
+  // Fidelity rail — spawn-hand.mjs dispatch is gated until the task's fidelity-pass is stamped.
+  // MUST come before the isDeliveryCommand check because spawn-hand.mjs is NOT a delivery
+  // command and would otherwise be allowed freely.
+  //
+  // Deliberate fail-policy split (defense-in-depth; backed by spawn-hand.mjs's own locked_test
+  // fail-close):
+  //   • No --descriptor flag  → fail-OPEN (allow). A read-only command such as `cat spawn-hand.mjs`
+  //     or `grep spawn-hand.mjs` carries no --descriptor and must never be denied.
+  //   • --descriptor present but unreadable / not valid JSON / not an object / non-string ids
+  //     → fail-CLOSED (DENY). A legitimate executor dispatch ALWAYS supplies a readable descriptor
+  //     with string ids; an unreadable one is either a bug or a bypass attempt. This default matches
+  //     the headless executor deny default — "evidence required but absent" → deny.
+  //   • --descriptor present and yields valid <feature_id>/<task_id> → check fidelity_pass; deny
+  //     if absent, allow if present (existing behavior, unchanged).
+  if (command.includes("spawn-hand.mjs")) {
+    const descriptorMatch = command.match(/--descriptor\s+(\S+)/);
+    if (!descriptorMatch) {
+      // No --descriptor arg → fail-open (read-only commands like cat/grep must pass freely)
+      return { allow: true };
+    }
+    const descriptorPath = descriptorMatch[1];
+    let descriptor = null;
+    try {
+      descriptor = typeof readDescriptorFn === "function" ? readDescriptorFn(descriptorPath) : null;
+    } catch {
+      descriptor = null;
+    }
+    // --descriptor present but unreadable / invalid → fail-CLOSED (deny).
+    // A legitimate spawn-hand executor dispatch always has a readable descriptor with string ids;
+    // an unreadable/missing descriptor cannot satisfy the fidelity check — matches the headless
+    // executor deny default for the same "evidence required but absent" condition.
+    if (
+      descriptor === null ||
+      typeof descriptor.feature_id !== "string" ||
+      typeof descriptor.task_id !== "string"
+    ) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "[entry-gate] Blocked: spawn-hand.mjs dispatch denied — --descriptor flag was present " +
+            `but the descriptor at '${descriptorPath}' could not be resolved to a qualified ` +
+            "feature_id/task_id (missing file, invalid JSON, or non-string ids). " +
+            "The fidelity check requires a readable descriptor with string feature_id and task_id. " +
+            "Ensure the descriptor JSON exists and is well-formed before dispatching.",
+        },
+      };
+    }
+    const qualifiedId = `${descriptor.feature_id}/${descriptor.task_id}`;
+    const spawnSessionId = payload.session_id;
+    let spawnGateState = {};
+    if (
+      typeof spawnSessionId === "string" &&
+      spawnSessionId.length > 0 &&
+      isSafeSessionId(spawnSessionId)
+    ) {
+      try {
+        spawnGateState = readGateStateFn(spawnSessionId);
+      } catch {
+        spawnGateState = {};
+      }
+    }
+    const fidelityPass = Array.isArray(spawnGateState.fidelity_pass) ? spawnGateState.fidelity_pass : [];
+    if (!fidelityPass.includes(qualifiedId)) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: spawn-hand.mjs dispatch denied — fidelity-pass for task ` +
+            `${qualifiedId} has not been stamped. Dispatch the test-author first to produce ` +
+            `a failing locked test, then stamp fidelity-pass ` +
+            `(mark.mjs fidelity-pass --feature-id ${descriptor.feature_id} --task-id ${descriptor.task_id}) ` +
+            `before dispatching the executor cheap-hand.`,
+        },
+      };
+    }
+    return { allow: true };
+  }
+
   // Not a delivery command → allow freely (inspection, builds, tests, etc.)
   if (!isDeliveryCommand(command)) {
     return { allow: true };
@@ -354,6 +467,8 @@ export function decide(payload, deps = {}) {
     // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
     // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
     gitStateFn = () => null,
+    // Reads the spawn-hand.mjs descriptor JSON from disk; injectable for tests.
+    readDescriptorFn = defaultReadDescriptor,
   } = deps;
 
   // Non-object payload → infra error → fail-open
@@ -361,11 +476,12 @@ export function decide(payload, deps = {}) {
     return { allow: true };
   }
 
-  // Bash tool: delivery-bash-gate — gates delivery commands regardless of who runs them
-  // (orchestrator or shipper). This closes the second delivery door: a direct git push /
-  // gh pr create / gh pr merge bypasses the PreToolUse(Agent) shipper gate.
+  // Bash tool: delivery-bash-gate + fidelity rail. The delivery-bash-gate closes the second
+  // delivery door (a direct git push / gh pr create / gh pr merge bypasses the Agent shipper
+  // gate). The fidelity rail gates spawn-hand.mjs dispatches until the task's fidelity-pass
+  // is stamped (test-author must produce a red locked test first).
   if (payload.tool_name === "Bash") {
-    return decideBash(payload, { readGateStateFn, gitStateFn });
+    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)
@@ -545,8 +661,48 @@ export function decide(payload, deps = {}) {
   if (HAND_ROLES.has(role)) {
     // HEADLESS: cheap hands is a LOCAL-only capability. In the cloud there is no Ollama hand, so the
     // hand roles run on the standard Claude model — a main-loop Agent(executor|sniper|test-author) is
-    // the INTENDED dispatch, not a silent fallback to deny. Allow it (no run-record/ticket needed).
+    // the INTENDED dispatch, not a silent fallback to deny.
     if (isHeadlessFn()) {
+      // test-author (the fidelity-pass producer) and sniper (the post-gate fixer) are unconditionally
+      // allowed in headless — they must never be blocked by the fidelity rail they serve. Only the
+      // executor consumer is gated: it must not run before the test-author has produced a red test.
+      if (role !== "executor") {
+        return { allow: true };
+      }
+      // Headless executor: additionally requires at least one fidelity_pass entry for the current
+      // triage's feature_id. This ensures the test-author has produced a failing locked test before
+      // the executor writes implementation code in the cloud. Qualified-id match (not just non-empty):
+      // fidelity_pass entries for OTHER features never unlock this session's executor.
+      let headlessGateState = {};
+      try {
+        headlessGateState = readGateStateFn(sessionId);
+      } catch {
+        headlessGateState = {};
+      }
+      const fidelityPassArr = Array.isArray(headlessGateState.fidelity_pass)
+        ? headlessGateState.fidelity_pass
+        : [];
+      const featureIdFromTriage = typeof triage?.feature_id === "string" ? triage.feature_id : null;
+      // A fidelity_pass entry belongs to this feature when its qualified id starts with `<feature_id>/`.
+      const hasFidelityMatch =
+        featureIdFromTriage !== null &&
+        fidelityPassArr.some((id) => id.startsWith(`${featureIdFromTriage}/`));
+      if (!hasFidelityMatch) {
+        return {
+          allow: false,
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason:
+              `[entry-gate] Blocked: headless executor denied — no fidelity-pass found for feature ` +
+              `'${featureIdFromTriage ?? "<unknown>"}'. The test-author must run first to author ` +
+              `a failing locked test and stamp fidelity-pass ` +
+              `(mark.mjs fidelity-pass --feature-id <feature-id> --task-id <task-id>) before the ` +
+              `executor is dispatched. The fidelity rail ensures the executor always inherits a ` +
+              `pre-authored red test — never writes implementation code with nothing to be green against.`,
+          },
+        };
+      }
       return { allow: true };
     }
     let gateState = {};
