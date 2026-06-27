@@ -8,6 +8,7 @@
  *   - escalation-fallback --feature-id <id> --task-id <id>
  *   - hand-finished      --feature-id <id> --task-id <id>
  *   - capture-verified   --feature-id <id> --task-id <id>
+ *   - fidelity-pass      --feature-id <id> --task-id <id>
  * Validates feature_id (and task_id, where required) via gate-lib, and on success
  * echoes a single JSON line to stdout with exit 0:
  *   {marker:'brainstorm-done', feature_id}
@@ -16,6 +17,7 @@
  *   {marker:'escalation-fallback', feature_id, task_id}
  *   {marker:'hand-finished', feature_id, task_id}
  *   {marker:'capture-verified', feature_id, task_id}
+ *   {marker:'fidelity-pass', feature_id, task_id}
  * On invalid input, exits non-zero with a corrective stderr message.
  * NEITHER reads nor writes state — the stamp-triage hook observes the command
  * and stamps the corresponding flag into gate-state.json.
@@ -28,7 +30,9 @@ import { isSafeFeatureId } from "./lib/gate-lib.mjs";
 /**
  * Markers that additionally require a --task-id (the per-task re-gate rail, the per-task
  * escalation-fallback ticket that authorizes a K=1 Claude hand dispatch, plus the
- * independent-capture rail: hand-finished producer + capture-verified consumer-precondition).
+ * independent-capture rail: hand-finished producer + capture-verified consumer-precondition,
+ * plus the fidelity rail: fidelity-pass producer marks that a frozen locked test exists
+ * and is confirmed red before the executor cheap-hand is dispatched).
  */
 const TASK_SCOPED_MARKERS = new Set([
   "regate-pending",
@@ -37,6 +41,7 @@ const TASK_SCOPED_MARKERS = new Set([
   "hand-finished",
   "capture-verified",
   "hand-config-error",
+  "fidelity-pass",
 ]);
 
 /**
@@ -118,7 +123,27 @@ export function parseArgs(argv) {
 export function run(args) {
   const { marker, feature_id, task_id, reason } = args;
 
-  // Validate feature_id
+  // fidelity-pass: IDs are correlation-only (never used as file paths) — any non-empty string
+  // is valid. parseArgs already ensures --feature-id and --task-id were present. This bypass is
+  // intentional: the fidelity rail uses short symbolic IDs in tests (e.g. "F", "T") and in
+  // production the IDs come from the execution-plan descriptor, not from operator-typed CLI input.
+  if (marker === "fidelity-pass") {
+    if (typeof feature_id !== "string" || feature_id.length === 0) {
+      return {
+        success: false,
+        error: `invalid feature_id: must be a non-empty string for fidelity-pass.`,
+      };
+    }
+    if (typeof task_id !== "string" || task_id.length === 0) {
+      return {
+        success: false,
+        error: `invalid task_id: must be a non-empty string for fidelity-pass.`,
+      };
+    }
+    return { success: true, output: { marker, feature_id, task_id } };
+  }
+
+  // Validate feature_id (kebab-case required for all other markers — IDs are used in file paths)
   if (!isSafeFeatureId(feature_id)) {
     return {
       success: false,
@@ -166,7 +191,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>]>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
     );
     process.exit(1);
   }

@@ -13,6 +13,10 @@
  *   - mark.mjs hand-finished / capture-verified → the independent-capture rail: hand-finished
  *                                 records a finished hand; capture-verified only appends once that
  *                                 qualified id is already in hand_finished (never pre-authorizes).
+ *   - mark.mjs fidelity-pass → the fidelity rail: appends the qualified <feature_id>/<task_id>
+ *                                 to gate-state.fidelity_pass (append, dedup, idempotent). Consumed
+ *                                 by entry-gate to gate spawn-hand.mjs dispatches and headless
+ *                                 executor Agent dispatches.
  *
  * Fail-open contract: exits 0 on ANY error — parse, fs, validation.
  * Never blocks a Bash call. Session-id ALWAYS from payload, never from model output.
@@ -98,6 +102,7 @@ function parseLastJsonObject(stdout) {
  *         | { action: 'escalation-fallback', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'hand-finished',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'capture-verified', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'fidelity-pass',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'none' }}
  */
 export function decide(payload) {
@@ -309,6 +314,32 @@ export function decide(payload) {
     return { action: "capture-verified", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
   }
 
+  // --- mark.mjs fidelity-pass marker ---
+  // Producer of the fidelity rail: records that the test-author has authored and confirmed a
+  // failing (red) locked test for the task. Consumed by entry-gate to gate spawn-hand.mjs
+  // dispatches (local mode) and headless executor Agent dispatches (cloud mode). IDs are
+  // correlation-only (never used as file paths) so non-empty strings are accepted without the
+  // full kebab-case constraint applied to path-adjacent markers.
+  if (command.includes("mark.mjs") && command.includes("fidelity-pass")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (parsed === null) {
+      return { action: "none" };
+    }
+    if (parsed.marker !== "fidelity-pass") {
+      return { action: "none" };
+    }
+    // IDs are correlation-only: require non-empty strings, not full kebab-case
+    if (typeof parsed.feature_id !== "string" || parsed.feature_id.length === 0) {
+      return { action: "none" };
+    }
+    if (typeof parsed.task_id !== "string" || parsed.task_id.length === 0) {
+      return { action: "none" };
+    }
+    // Qualify by feature to match the other rail entry shapes (collision-proof across features).
+    return { action: "fidelity-pass", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+  }
+
   return { action: "none" };
 }
 
@@ -439,6 +470,19 @@ export function handle(payload, opts = {}) {
     const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
     if (!existing.includes(decision.task_id)) {
       mergeGateState(decision.session_id, { capture_verified: [...existing, decision.task_id] });
+    }
+    return;
+  }
+
+  if (decision.action === "fidelity-pass") {
+    // Append the qualified task_id to fidelity_pass (dedup — idempotent). Merge via gate-lib so
+    // no other gate-state fields are dropped. This records that the test-author confirmed a red
+    // locked test exists for this task — the executor cheap-hand and headless executor are gated
+    // on this stamp before they can be dispatched.
+    const current = readGateState(decision.session_id);
+    const existing = Array.isArray(current.fidelity_pass) ? current.fidelity_pass : [];
+    if (!existing.includes(decision.task_id)) {
+      mergeGateState(decision.session_id, { fidelity_pass: [...existing, decision.task_id] });
     }
     return;
   }

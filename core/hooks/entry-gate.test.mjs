@@ -315,12 +315,49 @@ test("decide: executor with ticket but NO on-disk record (config error) → deny
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
 
-test("decide: HEADLESS hand-role Agent → allow (cheap hands is local-only; cloud runs hands on Claude)", () => {
-  // No ticket, no record — would DENY locally; headless makes the Claude hand the INTENDED path.
-  const payload = makeAgentPayload("ses_exec_headless", "executor");
+// ---------------------------------------------------------------------------
+// REWRITTEN — headless executor fidelity rail (contract updated in v0.12+)
+// The old single test "headless → allow unconditionally" is split into 3 cases
+// that reflect the new fidelity-rail contract:
+//   (a) headless executor + fidelity_pass=[] → deny  (no longer unconditional)
+//   (b) headless executor + fidelity_pass=[feat/task-1] → allow (matching feature entry)
+//   (c) headless test-author and sniper → allow regardless (role-specific exemption)
+// ---------------------------------------------------------------------------
+
+test("decide: HEADLESS executor + fidelity_pass=[] → deny (fidelity rail now gates headless executor)", () => {
+  // Headless executor is no longer unconditionally allowed — it requires a fidelity-pass
+  // entry for the current feature so the test-author always runs first.
+  const payload = makeAgentPayload("ses_exec_headless_deny", "executor");
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
-  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true });
-  assert.equal(verdict.allow, true, "headless must allow a main-loop hand-role Agent (Claude)");
+  const readGateStateFn = () => ({ fidelity_pass: [] });
+  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+  assert.equal(verdict.allow, false, "headless executor must be denied when fidelity_pass is empty");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("decide: HEADLESS executor + fidelity_pass=[feat/task-1] → allow (matching feature entry)", () => {
+  // A fidelity-pass entry for the session's feature_id unlocks the headless executor.
+  const payload = makeAgentPayload("ses_exec_headless_allow", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ fidelity_pass: ["feat/task-1"] });
+  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+  assert.equal(verdict.allow, true, "headless executor must be allowed when fidelity_pass has a matching feature entry");
+});
+
+test("decide: HEADLESS test-author and sniper → allow regardless of fidelity_pass (exemption is role-specific)", () => {
+  // test-author is the fidelity-pass producer — must never be blocked by its own rail.
+  // sniper is the post-gate fixer — must never be blocked by the fidelity rail either.
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ fidelity_pass: [] }); // empty — would deny executor
+  for (const role of ["test-author", "sniper"]) {
+    const payload = makeAgentPayload(`ses_headless_${role.replace("-", "")}`, role);
+    const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+    assert.equal(
+      verdict.allow,
+      true,
+      `headless ${role} must always be allowed regardless of fidelity_pass`,
+    );
+  }
 });
 
 test("decide: LOCAL (not headless) hand-role Agent without evidence → still deny", () => {
