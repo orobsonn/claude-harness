@@ -4,7 +4,7 @@
  * Fail-open contract: exits 0 on ANY infra error. DENY is emitted ONLY in the deliberate
  * gate-decision branch. A buggy gate must never brick delivery work.
  *
- * Bash gate (delivery-bash-gate):
+ * Bash gate (delivery-bash-gate + issue-form advisory):
  *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
  *   EITHER (a) any unmatched regate_pending (a regate_pending task_id with no matching
  *   regate_passed), OR (b) any unmatched hand_finished (a hand_finished task_id with no
@@ -12,6 +12,11 @@
  *   captured/verified). The two rails fire independently. Read-only commands (git status,
  *   git diff, git log, gh pr view/list) always pass. This closes the second delivery door:
  *   a direct Bash delivery command bypasses the PreToolUse(Agent) shipper gate.
+ *   Additionally, a non-blocking issue-form advisory is emitted on bare `gh issue create`
+ *   (allow + additionalContext, never deny) when the repo vendors the harness issue form
+ *   (.github/ISSUE_TEMPLATE/harness-task.yml). A composite command containing both
+ *   `gh issue create` and a delivery verb always hits the delivery deny rails — the advisory
+ *   attaches ONLY at the non-delivery allow return, never on a delivery-command string.
  *
  * Agent gate order:
  *   1. agent_id present → ALLOW (subagent context, no state pollution)
@@ -254,6 +259,45 @@ function defaultGitState() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue-form advisory — adviseIssueForm (pure, exported for tests)
+// ---------------------------------------------------------------------------
+
+const ISSUE_FORM_ADVISORY =
+  "This repo vendors the Claude Harness issue form (.github/ISSUE_TEMPLATE/harness-task.yml). " +
+  "Prefer creating issues through it so they enter the autonomous routine. " +
+  "The `gh issue create` CLI bypasses issue forms silently — if you proceed, replicate the form: " +
+  "title `[harness] <slug>`, label `harness:ready`, and a body with #uj-N journeys, " +
+  "#ac-N.M acceptance criteria, scope, sensitive domain, priority, and size " +
+  "(these become the spec, locked_tests and scope_paths).";
+
+/**
+ * @description Returns true when .github/ISSUE_TEMPLATE/harness-task.yml exists in cwd.
+ * Fail-open on any FS error (returns false → no nudge).
+ * @param {string} cwd
+ * @returns {boolean}
+ */
+function defaultIssueFormExists(cwd) {
+  try {
+    return fs.existsSync(path.join(cwd, ".github/ISSUE_TEMPLATE/harness-task.yml"));
+  } catch {
+    return false;
+  }
+}
+
+/** @description Best-effort advisory: nudge toward the harness issue form when an agent runs
+ * `gh issue create` in a repo that vendors the form. Returns the advisory string, or null when
+ * no nudge applies. Regex detection is best-effort (may match the phrase inside quoted text) —
+ * acceptable because the result is a NON-blocking hint, never a deny. */
+export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists) {
+  if (typeof command !== "string") return null;
+  if (!/\bgh\s+issue\s+create\b/.test(command)) return null;
+  if (/harness:ready/.test(command)) return null; // already following convention → no nag/re-nudge
+  if (typeof cwd !== "string" || !path.isAbsolute(cwd)) return null; // relative/absent cwd → fail-open, no nudge
+  if (!existsFn(cwd)) return null; // portable: no form vendored → no nudge
+  return ISSUE_FORM_ADVISORY;
+}
+
+// ---------------------------------------------------------------------------
 // Bash gate — decideBash (internal)
 // ---------------------------------------------------------------------------
 
@@ -273,10 +317,12 @@ function defaultGitState() {
  * @param {object} deps - Injectable seams
  * @param {function} deps.readGateStateFn - (sessionId: string) => object
  * @param {function} deps.readDescriptorFn - (descriptorPath: string) => object|null
+ * @param {function} deps.adviseIssueFormFn - (command: string, cwd: string) => string|null
  * @returns {{ allow: true }
+ *         | { allow: true, hookSpecificOutput: { hookEventName: string, additionalContext: string } }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn }) {
+function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn }) {
   const command = payload?.tool_input?.command;
   // Non-string command → infra error → fail-open
   if (typeof command !== "string") {
@@ -366,8 +412,22 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn }) 
     return { allow: true };
   }
 
-  // Not a delivery command → allow freely (inspection, builds, tests, etc.)
+  // Not a delivery command → allow freely (inspection, builds, tests, etc.).
+  // Attach a non-blocking advisory when the command looks like `gh issue create` in a repo
+  // that vendors the harness issue form — nudge toward the form without ever denying.
+  // NOTE: advisory MUST attach ONLY here, at the non-delivery allow return. A composite command
+  // like `gh issue create && git push` IS a delivery command (isDeliveryCommand matches `git push`
+  // anywhere), so it keeps flowing into the delivery deny rails below and never receives the advisory.
   if (!isDeliveryCommand(command)) {
+    const advisory = typeof adviseIssueFormFn === "function"
+      ? adviseIssueFormFn(command, payload.cwd)
+      : null;
+    if (advisory) {
+      return {
+        allow: true,
+        hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: advisory },
+      };
+    }
     return { allow: true };
   }
 
@@ -498,6 +558,9 @@ export function decide(payload, deps = {}) {
     gitStateFn = () => null,
     // Reads the spawn-hand.mjs descriptor JSON from disk; injectable for tests.
     readDescriptorFn = defaultReadDescriptor,
+    // No-op by default (mirrors gitStateFn's inert default for unit callers). The real FS probe
+    // (defaultIssueFormExists) is injected at the processInput layer (production CLI path).
+    issueFormExistsFn = () => false,
   } = deps;
 
   // Non-object payload → infra error → fail-open
@@ -505,12 +568,14 @@ export function decide(payload, deps = {}) {
     return { allow: true };
   }
 
-  // Bash tool: delivery-bash-gate + fidelity rail. The delivery-bash-gate closes the second
-  // delivery door (a direct git push / gh pr create / gh pr merge bypasses the Agent shipper
-  // gate). The fidelity rail gates spawn-hand.mjs dispatches until the task's fidelity-pass
-  // is stamped (test-author must produce a red locked test first).
+  // Bash tool: delivery-bash-gate + fidelity rail + issue-form advisory.
+  // The delivery-bash-gate closes the second delivery door (a direct git push / gh pr create /
+  // gh pr merge bypasses the Agent shipper gate). The fidelity rail gates spawn-hand.mjs
+  // dispatches until the task's fidelity-pass is stamped (test-author must produce a red locked
+  // test first). The advisory nudges toward the harness issue form on bare `gh issue create`.
+  const adviseIssueFormFn = (cmd, cwd) => adviseIssueForm(cmd, cwd, issueFormExistsFn);
   if (payload.tool_name === "Bash") {
-    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn });
+    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)
@@ -830,16 +895,22 @@ export function processInput(rawStr, deps = {}) {
 
   let verdict;
   try {
-    // Production path: inject the real git probe so the branch/commit rail is live in the CLI,
-    // while decide()'s own default stays a no-op for unit callers. An explicit deps.gitStateFn
-    // (tests) overrides.
-    verdict = decide(payload, { gitStateFn: defaultGitState, ...deps });
+    // Production path: inject the real git probe and real FS probe so the branch/commit rail
+    // and issue-form advisory are live in the CLI, while decide()'s own defaults stay no-ops
+    // for unit callers. Explicit deps (tests) override both.
+    verdict = decide(payload, {
+      gitStateFn: defaultGitState,
+      issueFormExistsFn: defaultIssueFormExists,
+      ...deps,
+    });
   } catch {
     // Unexpected error in decide — fail-open
     return { exitCode: 0, output: null };
   }
 
-  if (!verdict.allow) {
+  // Emit hookSpecificOutput whenever present — covers BOTH deny (permissionDecision:deny) and
+  // allow+advisory (additionalContext, no permissionDecision). A plain allow has no hookSpecificOutput.
+  if (verdict.hookSpecificOutput) {
     return {
       exitCode: 0,
       output: JSON.stringify({ hookSpecificOutput: verdict.hookSpecificOutput }),

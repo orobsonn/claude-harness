@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { decide, processInput, computeGitState } from "./entry-gate.mjs";
+import { decide, processInput, computeGitState, adviseIssueForm } from "./entry-gate.mjs";
 
 const ENTRY_GATE_PATH = fileURLToPath(new URL("./entry-gate.mjs", import.meta.url));
 
@@ -1403,6 +1403,203 @@ test(
       () => computeGitState(throwingGit),
       /git not available/,
       "computeGitState must propagate a branch-resolution throw (defaultGitState wrapper converts it to null)",
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED — Issue-form advisory (adviseIssueForm pure fn + wiring in decideBash)
+// AC-1: adviseIssueForm pure function contracts
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED issue-form-advisory #1: gh issue create + existsFn=true + abs cwd → returns advisory string (truthy)",
+  () => {
+    const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+    assert.ok(result, "advisory must be a truthy string when form exists in abs cwd");
+    assert.equal(typeof result, "string", "advisory must be a string");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #2: non-gh-issue command → null",
+  () => {
+    const result = adviseIssueForm("ls -la", "/abs/repo", () => true);
+    assert.equal(result, null, "non-gh-issue command must return null");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #3: command already contains harness:ready → null (no re-nudge)",
+  () => {
+    const result = adviseIssueForm(
+      'gh issue create --title "[harness] foo" --label "harness:ready"',
+      "/abs/repo",
+      () => true,
+    );
+    assert.equal(result, null, "command already following convention must return null");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #4: relative cwd or empty or undefined → null (fail-open, no nudge)",
+  () => {
+    const resultRelative = adviseIssueForm("gh issue create --title x", "repo", () => true);
+    assert.equal(resultRelative, null, "relative cwd must return null");
+
+    const resultEmpty = adviseIssueForm("gh issue create --title x", "", () => true);
+    assert.equal(resultEmpty, null, "empty cwd must return null");
+
+    const resultUndefined = adviseIssueForm("gh issue create --title x", undefined, () => true);
+    assert.equal(resultUndefined, null, "undefined cwd must return null");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #5: existsFn=()=>false → null (no form vendored → no nudge)",
+  () => {
+    const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => false);
+    assert.equal(result, null, "no form vendored must return null");
+  },
+);
+
+// AC-2: decide() Bash advisory path
+test(
+  "LOCKED issue-form-advisory #6: decide() gh issue create with issueFormExistsFn=true → allow + hookSpecificOutput.additionalContext (non-empty, no permissionDecision)",
+  () => {
+    const payload = {
+      session_id: "ses_issue_adv",
+      tool_name: "Bash",
+      tool_input: { command: "gh issue create --title foo" },
+      cwd: "/abs/repo",
+    };
+    const verdict = decide(payload, {
+      issueFormExistsFn: () => true,
+      readGateStateFn: () => ({}),
+    });
+    assert.equal(verdict.allow, true, "advisory path must allow");
+    assert.ok(verdict.hookSpecificOutput, "advisory must set hookSpecificOutput");
+    assert.equal(
+      typeof verdict.hookSpecificOutput.additionalContext,
+      "string",
+      "hookSpecificOutput must have a string additionalContext",
+    );
+    assert.ok(
+      verdict.hookSpecificOutput.additionalContext.length > 0,
+      "additionalContext must be non-empty",
+    );
+    assert.equal(
+      verdict.hookSpecificOutput.permissionDecision,
+      undefined,
+      "advisory hookSpecificOutput must NOT contain permissionDecision",
+    );
+  },
+);
+
+// AC-3: HIGH regression guard — composite command must hit delivery rails, never the advisory allow
+test(
+  "LOCKED issue-form-advisory #7 HIGH regression: 'gh issue create && git push' → delivery deny (permissionDecision:deny), never advisory",
+  () => {
+    const payload = {
+      session_id: "ses_composite_guard",
+      tool_name: "Bash",
+      tool_input: { command: "gh issue create --title foo && git push origin HEAD" },
+      cwd: "/abs/repo",
+    };
+    const verdict = decide(payload, {
+      issueFormExistsFn: () => true,
+      readGateStateFn: () => ({}),
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 0 }),
+    });
+    assert.equal(verdict.allow, false, "composite command must be denied by delivery rails");
+    assert.equal(
+      verdict.hookSpecificOutput.permissionDecision,
+      "deny",
+      "composite command must emit permissionDecision:deny (delivery rail), not an advisory allow",
+    );
+  },
+);
+
+// AC-4: processInput with advisory
+test(
+  "LOCKED issue-form-advisory #8: processInput advisory command → JSON output with additionalContext, no permissionDecision",
+  () => {
+    const raw = JSON.stringify({
+      session_id: "ses_proc_adv",
+      tool_name: "Bash",
+      tool_input: { command: "gh issue create --title bar" },
+      cwd: "/abs/repo",
+    });
+    const result = processInput(raw, { issueFormExistsFn: () => true });
+    assert.notEqual(result.output, null, "advisory must produce non-null output");
+    const parsed = JSON.parse(result.output);
+    assert.ok(
+      parsed.hookSpecificOutput && typeof parsed.hookSpecificOutput.additionalContext === "string",
+      "output must contain hookSpecificOutput.additionalContext",
+    );
+    assert.equal(
+      parsed.hookSpecificOutput.permissionDecision,
+      undefined,
+      "advisory output must NOT contain permissionDecision",
+    );
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #9: processInput plain allow command → output null",
+  () => {
+    const raw = JSON.stringify({
+      session_id: "ses_proc_plain",
+      tool_name: "Bash",
+      tool_input: { command: "ls" },
+      cwd: "/abs/repo",
+    });
+    const result = processInput(raw, { issueFormExistsFn: () => true });
+    assert.equal(result.output, null, "plain allow must produce null output");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #10: processInput existing deny still emits permissionDecision:deny (no regression)",
+  () => {
+    // git push on main → deny via branch rail
+    const raw = JSON.stringify({
+      session_id: "ses_proc_deny_regression",
+      tool_name: "Bash",
+      tool_input: { command: "git push origin main" },
+      cwd: "/abs/repo",
+    });
+    const result = processInput(raw, {
+      issueFormExistsFn: () => false,
+      gitStateFn: () => ({ branch: "main", commitsAhead: 3 }),
+    });
+    assert.notEqual(result.output, null, "deny must produce non-null output");
+    const parsed = JSON.parse(result.output);
+    assert.equal(
+      parsed.hookSpecificOutput.permissionDecision,
+      "deny",
+      "existing deny path must still emit permissionDecision:deny (no regression from advisory change)",
+    );
+  },
+);
+
+// AC-5: inert default (unit callers without issueFormExistsFn are unaffected)
+test(
+  "LOCKED issue-form-advisory #11: decide() without issueFormExistsFn → inert (default ()=>false, allow true, no hookSpecificOutput)",
+  () => {
+    const payload = {
+      session_id: "ses_inert_default",
+      tool_name: "Bash",
+      tool_input: { command: "gh issue create" },
+      cwd: "/abs/repo",
+    };
+    // No issueFormExistsFn injected — default inside decide() is () => false
+    const verdict = decide(payload, { readGateStateFn: () => ({}) });
+    assert.equal(verdict.allow, true, "inert default must allow");
+    assert.equal(
+      verdict.hookSpecificOutput,
+      undefined,
+      "inert default must not set hookSpecificOutput",
     );
   },
 );
