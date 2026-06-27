@@ -9,13 +9,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-- **Convenção de issue form sempre carregada + advisory determinístico**: nova rule universal `core/rules/creating-issues.md` (carrega toda sessão, sem `paths:`) instrui a criar issues pelo form do repo (`.github/ISSUE_TEMPLATE/harness-task.yml`) — título `[harness] <slug>`, label `harness:ready`, campos `#uj`/`#ac`/scope/sensitive/priority/size que viram spec/locked_tests/scope_paths — em vez de `gh issue create` com corpo manual (o `gh` CLI ignora issue forms silenciosamente). Reforço determinístico dobrado no `entry-gate.mjs`: ao detectar `gh issue create` bare num repo que vendora o form, emite um aviso não-bloqueante (`additionalContext`, sem `permissionDecision` — nunca barra, nunca auto-aprova) apontando pro form. O advisory anexa só no caminho de allow não-delivery, então um comando composto com `git push` continua caindo nos trilhos de delivery. Propaga automático no re-vendor (rules/ e hooks/ são framework-owned), sem mudança em `settings.json`.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.14.2] - 2026-06-27
+
+### Added
+
+- **Convenção de issue form sempre carregada + advisory determinístico**: nova rule universal `core/rules/creating-issues.md` (carrega toda sessão, sem `paths:`) instrui a criar issues pelo form do repo (`.github/ISSUE_TEMPLATE/harness-task.yml`) — título `[harness] <slug>`, label `harness:ready`, campos `#uj`/`#ac`/scope/sensitive/priority/size que viram spec/locked_tests/scope_paths — em vez de `gh issue create` com corpo manual (o `gh` CLI ignora issue forms silenciosamente). Reforço determinístico dobrado no `entry-gate.mjs`: ao detectar `gh issue create` bare num repo que vendora o form, emite um aviso não-bloqueante (`additionalContext`, sem `permissionDecision` — nunca barra, nunca auto-aprova) apontando pro form. O advisory anexa só no caminho de allow não-delivery, então um comando composto com `git push` continua caindo nos trilhos de delivery. Propaga automático no re-vendor (rules/ e hooks/ são framework-owned), sem mudança em `settings.json`.
 
 ## [0.14.1] - 2026-06-27
 

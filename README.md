@@ -1,6 +1,6 @@
 # Claude Harness
 
-![version](https://img.shields.io/badge/version-0.14.1-blue) ![for](https://img.shields.io/badge/for-Claude%20Code-8A2BE2) ![mode](https://img.shields.io/badge/modes-local%20%C2%B7%20headless-success)
+![version](https://img.shields.io/badge/version-0.14.2-blue) ![for](https://img.shields.io/badge/for-Claude%20Code-8A2BE2) ![mode](https://img.shields.io/badge/modes-local%20%C2%B7%20headless-success)
 
 Um framework de uso do **Claude Code** para **não desenvolvedores** (product managers, founders, operadores) entregarem software com pipeline de qualidade — sem precisar julgar arquitetura, segurança ou tradeoffs de baixo nível.
 
