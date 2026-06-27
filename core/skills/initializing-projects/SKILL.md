@@ -108,10 +108,19 @@ first time.
 **Stack skip:** If `detect-stack` returns `status: "skip"` (e.g. unrecognised runner), the CLI prints
 the skip reason and writes nothing.
 
-### Step 4c — Apply branch protection (ORDER MATTERS — workflow must land and run once first)
+### Step 4c — Apply branch protection (RECOMMENDED where the bad-merge cost justifies it — workflow must land and run once first)
 
-**CRITICAL:** Branch protection can only be applied AFTER the CI workflow has been deployed to GitHub
-and has run successfully at least once. A required status-check context cannot exist before the job runs.
+**When to apply (recommended, NOT mandatory):** branch-protection ENFORCEMENT (the GitHub rule that
+blocks a merge until the check is green) is worth its friction only where the cost of a bad merge is
+real — production users, deploys, or more than one committer. For a low-stakes or solo repo, the CI
+signal alone (the ✅/❌ surfaced on each PR) is usually enough, and enforcement adds a footgun: a
+drifted required-check name or a CI outage blocks ALL merges, and unblocking needs an `admin:repo`
+token. Default: always generate the CI and surface the signal; apply `--apply` protection only where
+the bad-merge cost justifies the friction. Never apply it autonomously.
+
+**CRITICAL (when you do apply):** Branch protection can only be applied AFTER the CI workflow has been
+deployed to GitHub and has run successfully at least once. A required status-check context cannot exist
+before the job runs.
 
 Once the workflow is live and has passed a pull request:
 
