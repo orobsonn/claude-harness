@@ -107,3 +107,4 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **`as` casting cego**: `value as Foo` mente pro compilador. Usar narrowing ou validar com Zod
 - **Default export**: dificulta refactor (renomes silenciosos) e grep. Preferir named export
 - **Numero magico**: `if (count > 5)` — extrair pra constante nomeada (`const MAX_RETRIES = 5`)
+- **Reinventar stdlib/nativo** (alvo de deteccao, nao corte por cota): parser/format/dedupe escrito a mao que a stdlib ja entrega, dep que duplica feature nativa da plataforma (`Intl`, `URL`, `crypto`, `fetch`), ou flag/config/branch morto — preferir o nativo/stdlib e remover o morto. Sinalizar pra simplificar; nunca deletar so pra baixar contagem de linha
