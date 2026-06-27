@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { decide, processInput } from "./entry-gate.mjs";
+import { decide, processInput, computeGitState } from "./entry-gate.mjs";
 
 const ENTRY_GATE_PATH = fileURLToPath(new URL("./entry-gate.mjs", import.meta.url));
 
@@ -1270,3 +1270,139 @@ test("push-branch-gate: decide() WITHOUT gitStateFn is inert (back-compat — ex
   const verdict = decide(payload, { readGateStateFn: () => ({}) }); // no gitStateFn injected
   assert.equal(verdict.allow, true, "the branch rail must not fire without an injected git probe");
 });
+
+// ---------------------------------------------------------------------------
+// LOCKED — computeGitState base resolution (never @{u}, always origin default)
+// AC-CORE: after git push the feature branch's own upstream points at HEAD → @{u}..HEAD == 0.
+// The fix resolves the merge destination (origin default) instead, never the branch's upstream.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED computeGitState AC-CORE: upstream==HEAD but ahead-of-default>0 → commitsAhead reflects origin/main, not zeroed upstream",
+  () => {
+    // Simulates: feature branch pushed, origin/<feat>==HEAD (upstream 0 commits ahead),
+    // but there ARE 3 real commits ahead of origin/main (the merge destination).
+    // Bug: old @{u} code → origin/feat → 0. Fix: origin/HEAD → origin/main → 3.
+    let atUQueried = false;
+    function fakeGit(args) {
+      if (args.some((a) => a.includes("@{u}"))) {
+        atUQueried = true;
+        throw new Error("@{u} must NOT be used — this is the bug");
+      }
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/my-feature";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") return "refs/remotes/origin/main";
+      if (cmd === "rev-list --count origin/main..HEAD") return "3";
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.ok(state !== null, "must return a state object");
+    assert.equal(state.commitsAhead, 3, "commitsAhead must be 3 (origin/main), not 0 (@{u})");
+    assert.equal(state.branch, "feat/my-feature");
+    assert.equal(atUQueried, false, "@{u} must never be queried by computeGitState");
+  },
+);
+
+test(
+  "LOCKED computeGitState: origin/HEAD unset → falls back to origin/main, commitsAhead === 2",
+  () => {
+    function fakeGit(args) {
+      if (args.some((a) => a.includes("@{u}"))) throw new Error("@{u} must NOT be used");
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") throw new Error("origin/HEAD not set");
+      if (cmd === "rev-parse --verify --quiet origin/main") return "abc123sha";
+      if (cmd === "rev-list --count origin/main..HEAD") return "2";
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.equal(state?.commitsAhead, 2, "commitsAhead must be 2 via origin/main fallback");
+    assert.equal(state?.branch, "feat/x");
+  },
+);
+
+test(
+  "LOCKED computeGitState: origin/HEAD unset, origin/main also fails → falls back to origin/master",
+  () => {
+    function fakeGit(args) {
+      if (args.some((a) => a.includes("@{u}"))) throw new Error("@{u} must NOT be used");
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") throw new Error("not set");
+      if (cmd === "rev-parse --verify --quiet origin/main") throw new Error("not found");
+      if (cmd === "rev-parse --verify --quiet origin/master") return "def456sha";
+      if (cmd === "rev-list --count origin/master..HEAD") return "1";
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.equal(state?.commitsAhead, 1, "commitsAhead must be 1 via origin/master fallback");
+  },
+);
+
+test(
+  "LOCKED computeGitState: no base resolvable (origin/HEAD, origin/main, origin/master all fail) → commitsAhead === null (fail-open), branch still returned",
+  () => {
+    function fakeGit(args) {
+      if (args.some((a) => a.includes("@{u}"))) throw new Error("@{u} must NOT be used");
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") throw new Error("not set");
+      if (cmd === "rev-parse --verify --quiet origin/main") throw new Error("not found");
+      if (cmd === "rev-parse --verify --quiet origin/master") throw new Error("not found");
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.ok(state !== null, "must return a state object even with no base resolvable");
+    assert.equal(state.commitsAhead, null, "commitsAhead must be null (fail-open)");
+    assert.equal(state.branch, "feat/x", "branch must still be returned");
+  },
+);
+
+test(
+  "LOCKED computeGitState: zero commits ahead of base → commitsAhead === 0 (consumer blocks genuine empty push)",
+  () => {
+    function fakeGit(args) {
+      if (args.some((a) => a.includes("@{u}"))) throw new Error("@{u} must NOT be used");
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") return "refs/remotes/origin/main";
+      if (cmd === "rev-list --count origin/main..HEAD") return "0";
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.equal(state?.commitsAhead, 0, "zero commits must be 0 (not null) so consumer can block genuine empty push");
+  },
+);
+
+test(
+  "LOCKED computeGitState: rev-list count throws → commitsAhead === null but branch still returned (fail-open preserved)",
+  () => {
+    function fakeGit(args) {
+      const cmd = args.join(" ");
+      if (cmd === "rev-parse --abbrev-ref HEAD") return "feat/x";
+      if (cmd === "symbolic-ref refs/remotes/origin/HEAD") return "refs/remotes/origin/main";
+      if (cmd === "rev-list --count origin/main..HEAD") throw new Error("rev-list failed");
+      throw new Error(`unexpected git call: ${cmd}`);
+    }
+    const state = computeGitState(fakeGit);
+    assert.ok(state !== null, "must return a state object even when rev-list throws");
+    assert.equal(state.commitsAhead, null, "commitsAhead must be null (fail-open) when count step throws");
+    assert.equal(state.branch, "feat/x", "branch must still be returned when count step throws");
+  },
+);
+
+test(
+  "LOCKED computeGitState: first git call (branch resolution) throws → computeGitState propagates throw, pinning defaultGitState fail-open contract",
+  () => {
+    function throwingGit() {
+      throw new Error("git not available");
+    }
+    // branch is read outside any try — the throw propagates unchanged.
+    // This is exactly what defaultGitState's try/catch catches and converts to null.
+    assert.throws(
+      () => computeGitState(throwingGit),
+      /git not available/,
+      "computeGitState must propagate a branch-resolution throw (defaultGitState wrapper converts it to null)",
+    );
+  },
+);
