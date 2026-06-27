@@ -187,10 +187,59 @@ function defaultReadDescriptor(descriptorPath) {
 // ---------------------------------------------------------------------------
 
 /**
+ * @description Computes git state (branch name and commits-ahead count) using an injected
+ * git runner. The merge base is always resolved from origin's default branch — never from
+ * the feature branch's own upstream (`@{u}`), which equals HEAD after `git push` and would
+ * incorrectly report 0 commits ahead, blocking a legitimate delivery.
+ *
+ * Base resolution order (first that succeeds wins):
+ *   1. `git symbolic-ref refs/remotes/origin/HEAD` → strip `refs/remotes/` prefix (e.g. `origin/main`)
+ *   2. `git rev-parse --verify --quiet origin/main` (common default)
+ *   3. `git rev-parse --verify --quiet origin/master` (legacy default)
+ *   4. base = null → commitsAhead = null (fail-open; consumer skips the ahead check)
+ *
+ * @param {(args: string[]) => string} git - Runner: takes args array, returns trimmed stdout, throws on git failure
+ * @returns {{ branch: string|null, commitsAhead: number|null }}
+ */
+export function computeGitState(git) {
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+
+  let base = null;
+  try {
+    const headRef = git(["symbolic-ref", "refs/remotes/origin/HEAD"]);
+    base = headRef.replace(/^refs\/remotes\//, "");
+  } catch {
+    // origin/HEAD not set (common — only `git clone` sets it); try known defaults in order
+    for (const fallback of ["origin/main", "origin/master"]) {
+      try {
+        git(["rev-parse", "--verify", "--quiet", fallback]);
+        base = fallback;
+        break;
+      } catch {
+        // continue to next fallback
+      }
+    }
+  }
+
+  let commitsAhead = null;
+  if (base !== null) {
+    try {
+      const count = Number.parseInt(git(["rev-list", "--count", `${base}..HEAD`]), 10);
+      commitsAhead = Number.isNaN(count) ? null : count;
+    } catch {
+      commitsAhead = null;
+    }
+  }
+
+  return { branch: branch || null, commitsAhead };
+}
+
+/**
  * Probes the working-tree git state for the branch/commit delivery rail.
  * Returns { branch, commitsAhead } where branch is the current branch name (null when
- * detached/unknown) and commitsAhead is the count of commits HEAD is ahead of its resolved
- * base (upstream `@{u}`, else origin's default branch), or null when no base resolves. Returns
+ * detached/unknown) and commitsAhead is the count of commits HEAD is ahead of the
+ * origin default branch (resolved via origin/HEAD, then origin/main, then origin/master;
+ * never the feature branch's own upstream @{u}, which would be 0 after git push). Returns
  * null on ANY git/infra error so the caller fails open (never bricks a delivery command).
  * @returns {{ branch: string|null, commitsAhead: number|null } | null}
  */
@@ -198,27 +247,7 @@ function defaultGitState() {
   const git = (args) =>
     execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   try {
-    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
-    let base = null;
-    try {
-      base = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-    } catch {
-      try {
-        base = git(["symbolic-ref", "refs/remotes/origin/HEAD"]).replace(/^refs\/remotes\//, "");
-      } catch {
-        base = null;
-      }
-    }
-    let commitsAhead = null;
-    if (base) {
-      try {
-        const count = Number.parseInt(git(["rev-list", "--count", `${base}..HEAD`]), 10);
-        commitsAhead = Number.isNaN(count) ? null : count;
-      } catch {
-        commitsAhead = null;
-      }
-    }
-    return { branch: branch || null, commitsAhead };
+    return computeGitState(git);
   } catch {
     return null;
   }
