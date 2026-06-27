@@ -29,14 +29,15 @@ Pairs with `initializing-projects`: init creates the STRUCTURE (nested `CLAUDE.m
 ## Pipeline
 
 1. **Confirm structure** — the root router table and nested `CLAUDE.md` stubs should already be seeded by `initializing-projects`. If missing, run `initializing-projects` first (or seed the stub for a folder as you route to it, the way the harvester does). Durable memory is the repo-committed `.claude/memory/` — no slug to resolve.
-2. **Map the structure** — top-level subsystems (domain folders under `src/` or the code root) and each one's key modules. This is **orientation, not output** — never emit a file inventory.
-3. **Extract durable-knowledge candidates** — read specifically for:
+2. **Detect stack on cold entry** — on first onboarding of a legacy/existing project, run `detect-stack` (at `core/skills/initializing-projects/references/detect-stack.mjs`) to identify the project's test/check command (node-test, vitest, jest, or custom). This **detection-only** step surfaces the runner choice so memory population can reference the actual test flow. **CI generation itself stays owned by `initializing-projects` — do not claim to generate `ci.yml` in the survey.** The survey surfaces the detection; the init skill decides whether to scaffold CI.
+3. **Map the structure** — top-level subsystems (domain folders under `src/` or the code root) and each one's key modules. This is **orientation, not output** — never emit a file inventory.
+4. **Extract durable-knowledge candidates** — read specifically for:
    - **Existing helpers/utils** a future executor would otherwise reinvent (e.g. `src/utils/errors.ts` already sanitizes upstream bodies — reuse it, don't rebuild it).
    - **Implicit conventions** the code follows but no doc states (naming, error handling, layering, where validation happens).
    - **Architectural patterns** — how requests flow, where state lives, the seam between layers.
    - **Anti-patterns / gotchas** baked into the code — a workaround, a footgun, a load-bearing quirk.
-4. **Apply the durability test** (reused) — "Would this help a future executor avoid a mistake or make a better decision?" NO → drop it; it lives in the code/git only.
-5. **Classify blast-radius and route to the native destination** (reused — table below).
+5. **Apply the durability test** (reused) — "Would this help a future executor avoid a mistake or make a better decision?" NO → drop it; it lives in the code/git only.
+6. **Classify blast-radius and route to the native destination** (reused — table below).
 
 ---
 

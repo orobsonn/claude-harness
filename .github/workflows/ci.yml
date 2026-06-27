@@ -1,0 +1,31 @@
+name: CI
+
+# OPERATOR-GATED: applying branch-protection rules is a one-time operator action,
+# NOT an autonomous CI job. To enforce required status checks on 'main', run the
+# reference script once with admin credentials:
+#
+#   node core/skills/initializing-projects/references/branch-protection.mjs
+#
+# That script calls the GitHub API to wire the 'test' job as a required check.
+# Never add a CI step that autonomously applies protection — it requires admin
+# permissions that must not live in GitHub Actions secrets.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test "core/**/*.test.mjs"
+      - name: Scan for leaked secrets
+        run: node core/skills/initializing-projects/references/scan-secrets-in-tree.mjs

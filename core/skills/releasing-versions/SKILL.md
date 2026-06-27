@@ -60,10 +60,16 @@ Se `[Unreleased]` esta vazia (so subsecoes vazias), parar — nada pra release-a
 - Confirmar a versao final com usuario
 
 ### 4. Verificacoes locais
-Rodar o que `<projeto>/.claude/CLAUDE.md` define. Tipico:
+Rodar o que `<projeto>/.claude/CLAUDE.md` define. Detectar o tipo de projeto:
+- Se `package.json` existe: rodar `npx tsc --noEmit && npm test`
+- Se apenas `VERSION` file e sem `package.json` (ex.: este harness com `node --test`): rodar `node --test` ou o comando de teste declarado no projeto
 ```bash
-npx tsc --noEmit
-npm test
+# Exemplo: detectar tipo e rodar verificacao apropriada
+if [ -f package.json ]; then
+  npx tsc --noEmit && npm test
+else
+  node --test          # ou outro comando do projeto
+fi
 ```
 Se falhar, parar — nao release.
 
@@ -121,34 +127,48 @@ echo "$LAST_MSG"
 ```
 Extrair versao do final do commit message. Se nao bater, parar e perguntar.
 
-### 2. Confirmar que tag ainda nao existe
+### 2. Verificar CI verde via PR checks
+Extrair PR number do commit message (sufixo `(#N)`) e validar CI — usar parsing de STATE explicito, nunca so o exit code (exit 1 e ambiguo: falha E "sem checks" retornam 1):
+```bash
+PR_NUMBER=$(echo "$LAST_MSG" | sed -nE 's/.*\(#([0-9]+)\).*/\1/p')  # ex.: "chore: release v0.13.0 (#41)" → 41
+STATES=$(gh pr checks "$PR_NUMBER" --json state -q '.[].state' 2>/dev/null)
+```
+Avaliar o conteudo de `$STATES` em tres ramos — contra o STATE, nao o exit code:
+
+- **Saida vazia** (`$STATES` em branco): repo nao tem CI workflow → **FAIL-SOFT** (warn, nao bloqueia). Avisar usuario que nenhum CI workflow esta configurado, mas prosseguir.
+- **Contem `FAILURE`, `ERROR`, `CANCELLED` ou `TIMED_OUT`**: CI esta **red** → **refuse** the release — nao criar tag. Parar e reportar checks que falharam. Reverter via `git revert -m 1 <merge-sha>` + PR de revert (ou botao "Revert" no GitHub via `gh pr view <N> --web`).
+- **Apenas `SUCCESS`, `SKIPPED`, `NEUTRAL` ou `PENDING` resolvidos**: CI esta verde → prosseguir.
+
+Se falhar por Red CI, parar e reportar.
+
+### 3. Confirmar que tag ainda nao existe
 ```bash
 git tag -l "vX.Y.Z"
 ```
 Se existir, parar — release ja foi feita.
 
-### 3. Criar tag local
+### 4. Criar tag local
 ```bash
 git tag vX.Y.Z
 ```
 
-### 4. Extrair release notes
+### 5. Extrair release notes
 ```bash
 awk '/^## \[X\.Y\.Z\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > /tmp/release-notes-X.Y.Z.md
 ```
 Validar conteudo.
 
-### 5. Push tag
+### 6. Push tag
 ```bash
 git push origin vX.Y.Z
 ```
 
-### 6. Criar GitHub Release
+### 7. Criar GitHub Release
 ```bash
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file /tmp/release-notes-X.Y.Z.md --latest
 ```
 
-### 7. Reportar
+### 8. Reportar
 - Nova versao publicada
 - URL da GitHub Release
 - Hash da tag
@@ -173,7 +193,7 @@ PARAR aqui. Deploy e decisao explicita.
 
 - **Auditoria**: PR fica como registro permanente — quem aprovou, quando, o que mudou
 - **CI bate de novo**: se houver workflow `on: pull_request`, ele roda no PR de release, pega regressao introduzida desde o ultimo release
-- **Reversao limpa**: PR pode ser revertido via `gh pr revert` se a release der ruim — commit direto so via `git revert + force-push`
+- **Reversao limpa**: PR pode ser revertido via `git revert -m 1 <merge-sha>` + PR de revert (ou botao "Revert" no GitHub via `gh pr view <N> --web`) se a release der ruim — commit direto so via `git revert + force-push`
 - **Sem custo extra**: ja temos `gh` CLI, abrir PR e merge sao 2 comandos
 - **Coerencia**: o resto do projeto e via PR, release segue mesma disciplina
 
