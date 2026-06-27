@@ -64,6 +64,12 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 - Worker idealmente expoe `/health` retornando 200 + JSON com `ok: true` + check do binding principal (D1, KV) — barato e habilita versionado quando virar produto serio
 - Promover versao quebrada e o pior cenario possivel — peso do smoke escala com numero de usuarios
 
+### CI green — release prerequisite
+- **Postura aditiva**: CI verde (testes passando, gates verdes) e um prerequisito de release — **mandatory para new projetos, advisory (recomendado) para existing**
+- Esta regra nao quebra fluxos de release em andamento; novos projetos entram com a pratica desde o inicio
+- **No-admin-token fallback**: quando nao ha token de admin configurado no repo pra branch protection, o gate de CI fica disponivel (testes rodam, pode ser verificado localmente) mas nao e enforçado automaticamente no GitHub — a responsabilidade recai no time de validar manualmente antes do merge
+- Postura aditiva: projetos que ja tem CI rodan continuam (advisory). Projetos novos ou que onboardam no harness devem adicionar step de CI check no fluxo de release (CHANGELOG + package.json + git hooks validam antes do commit)
+
 ## Patterns
 
 - **Fluxo completo de release via PR (10 passos)**:

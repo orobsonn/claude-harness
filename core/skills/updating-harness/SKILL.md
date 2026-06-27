@@ -68,6 +68,14 @@ are overwritten to the new version; **`.claude/memory/`, `.claude/kaizen.md`, pr
 `CLAUDE.md` (outside the markers), and `settings.json` are never clobbered**. `.claude/.harness-version`
 is restamped.
 
+### Step 2b — Re-run CI generation on re-sync (non-clobber)
+
+On a re-sync (update), re-run CI generation via `generate-ci.mjs` to align the project's
+`.github/workflows/ci.yml` with the latest harness version. The generation uses **non-clobber
+semantics**: if the project already has an existing `.github/workflows/ci.yml`, it is **never
+overwritten** — the CI generation respects the project's customizations and will only create the
+file if it does not yet exist or will update it only if instructed.
+
 ---
 
 ## Step 3 — Reconcile and report

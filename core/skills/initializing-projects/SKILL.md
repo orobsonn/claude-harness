@@ -74,10 +74,78 @@ Ask the operator (interactive) or read the routine prompt (headless) whether to 
 
 Never enable an add-on without explicit opt-in; never hardcode credentials.
 
+### Step 4b — Generate project-specific CI workflow (NON-CLOBBER)
+
+Once the harness is vendored into `.claude/`, generate a project-specific GitHub Actions CI workflow.
+`generate-ci.mjs` calls `detect-stack` and `detect-secrets` internally — a single command handles the
+full workflow.
+
+```bash
+# Generate .github/workflows/ci.yml (NON-CLOBBER — skips if file already exists)
+node .claude/skills/initializing-projects/references/generate-ci.mjs \
+  [--target <project-dir>] [--job-name <name>] [--node-version <version>]
+```
+
+For inspection without writing files, the sub-detectors can be run independently:
+
+```bash
+# Inspect detected stack only (prints JSON, no files written)
+node .claude/skills/initializing-projects/references/detect-stack.mjs \
+  [--target <project-dir>]
+
+# Inspect detected secret names only (prints JSON with secrets[] + setupGuide)
+node .claude/skills/initializing-projects/references/detect-secrets.mjs \
+  [--target <project-dir>]
+```
+
+**Non-clobber guarantee:** `generate-ci.mjs` will NOT overwrite an existing `.github/workflows/ci.yml`.
+If the file already exists, the CLI prints "Skipped (exists)" and exits 0 without modifying it.
+
+**Secret setup guide:** After writing ci.yml, `generate-ci.mjs` prints the `gh secret set <NAME>`
+commands for all detected secrets — the operator must run these before the workflow runs for the
+first time.
+
+**Stack skip:** If `detect-stack` returns `status: "skip"` (e.g. unrecognised runner), the CLI prints
+the skip reason and writes nothing.
+
+### Step 4c — Apply branch protection (ORDER MATTERS — workflow must land and run once first)
+
+**CRITICAL:** Branch protection can only be applied AFTER the CI workflow has been deployed to GitHub
+and has run successfully at least once. A required status-check context cannot exist before the job runs.
+
+Once the workflow is live and has passed a pull request:
+
+```bash
+# DRY-RUN (default — no network calls, prints the payload that WOULD be PUT)
+node .claude/skills/initializing-projects/references/branch-protection.mjs \
+  --repo <owner/repo> --branch main \
+  --required-context <jobName>
+
+# APPLY (operator-gated — performs the actual PUT; requires admin:repo token)
+node .claude/skills/initializing-projects/references/branch-protection.mjs \
+  --repo <owner/repo> --branch main \
+  --required-context <jobName> \
+  --apply
+```
+
+**Default is DRY-RUN:** without `--apply`, the CLI prints the payload that WOULD be PUT and exits 0
+without making any network call. The autonomous pipeline NEVER runs with `--apply` — that flag is
+operator-gated.
+
+**When no admin token is present:** the CLI returns `{ applied: false, reason: "..." }` — this is NOT
+a failure. Report to the operator: "Branch protection not applied — provide a token with `admin:repo`
+scope to apply branch protection." The pipeline continues; branch protection becomes a human follow-up
+step.
+
+**Safety:** The branch-protection module uses GET-then-merge to preserve existing protection rules
+and only adds the new required status-check context (avoiding clobber).
+
 ### Step 5 — Report
 Report in pt-br, product-language: what was installed, the harness version, whether settings needed a
-manual merge, and which add-ons were enabled. Suggest committing `.claude/` (so cloud routines see it),
-and — for an existing codebase with cold memory — running `surveying-codebase` to seed `.claude/memory/`.
+manual merge, and which add-ons were enabled. Include CI generation status (generated, skipped, or failed)
+and branch protection status (applied, not applied due to missing token, or failed). Suggest committing
+`.claude/` (so cloud routines see it), and — for an existing codebase with cold memory — running
+`surveying-codebase` to seed `.claude/memory/`.
 
 ---
 
