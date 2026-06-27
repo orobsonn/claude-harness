@@ -175,6 +175,8 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 
 **`scope_paths`** (array of **exact file or directory paths**, min 1 — a directory entry conventionally ends with `/`, but the trailing slash is cosmetic: coverage follows **git-pathspec** semantics, so `src/handlers` and `src/handlers/` cover identically. These are **NOT globs**: the scope and allowed-write checks match by exact file OR directory prefix (by path component), not glob expansion. The same convention governs the pre-spawn guard and the capture scope check — one source of truth). The paths the executor may write or edit; the harness gate blocks writes outside them. Be specific — prefer `src/handlers/shorten.ts` (exact file) or `src/handlers/` (directory prefix) over a broad parent.
 
+**Bug-fix scope rule:** when a task is a bug fix, locate the shared function the reported symptom routes through and confirm `scope_paths` covers **every caller the fix affects** — size the fix at the root, not the ticketed call site. Patching only the path the ticket names leaves sibling callers of the same function broken.
+
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
 ```json
