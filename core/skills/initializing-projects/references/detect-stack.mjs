@@ -64,6 +64,15 @@ export function detectStack(projectDir) {
     };
   }
 
+  // Check if package.json has a test script that uses node --test
+  if (typeof pkg.scripts?.test === "string" && pkg.scripts.test.includes("node --test")) {
+    return {
+      status: "detected",
+      runner: "node-test",
+      command: NODE_TEST_COMMAND,
+    };
+  }
+
   return {
     runner: null,
     command: null,
