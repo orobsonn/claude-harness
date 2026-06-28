@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs, runInit, SOURCE_URL } from "./cli.mjs";
+import { mkdtempSync, symlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseCliArgs, runInit, SOURCE_URL, isDirectCli } from "./cli.mjs";
 
 test("parseCliArgs", () => {
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init"]), { command: "init" });
@@ -32,4 +36,21 @@ test("runInit throws when tag cannot be resolved and never vendors", () => {
     runVendor: () => { calls++; },
   }));
   assert.equal(calls, 0);
+});
+
+test("isDirectCli resolves symlinks (npm bin is a symlink, not the real module path)", () => {
+  const cliPath = fileURLToPath(new URL("./cli.mjs", import.meta.url));
+  // direct real path -> true
+  assert.equal(isDirectCli(cliPath), true);
+  // a symlink pointing at the real module -> true (realpath resolves it)
+  const dir = mkdtempSync(join(tmpdir(), "cli-link-"));
+  try {
+    const link = join(dir, "claude-harness");
+    symlinkSync(cliPath, link);
+    assert.equal(isDirectCli(link), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // an unrelated / nonexistent path -> false
+  assert.equal(isDirectCli("/definitely/not/the/cli.mjs"), false);
 });
