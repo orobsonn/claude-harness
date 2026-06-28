@@ -9,8 +9,24 @@
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 
 export const SOURCE_URL = "https://github.com/orobsonn/claude-harness.git";
+
+/**
+ * @description Checks if the script is being run directly, resolving symlinks.
+ * @param {string} scriptPath - The path to check.
+ * @returns {boolean} True if the script is being run directly.
+ */
+export function isDirectCli(scriptPath) {
+  if (!scriptPath) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(scriptPath) === modulePath;
+  } catch {
+    return scriptPath === modulePath;
+  }
+}
 
 /**
  * @description Parses the command from argv.
@@ -101,7 +117,7 @@ function runVendorDefault({ source, ref, target }) {
 
 // ---------- main (runs only when invoked directly as a script) ----------
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectCli(process.argv[1])) {
   const { command } = parseCliArgs(process.argv);
   if (command !== "init") {
     process.stderr.write("Usage: npx claude-harness init\n");
