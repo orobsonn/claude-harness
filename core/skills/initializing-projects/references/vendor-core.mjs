@@ -56,6 +56,7 @@ const GITIGNORE = `# Claude Harness — ephemeral, never committed
 plans/
 settings.local.json
 *.local.md
+.harness-version-check-cache
 `;
 
 /** @description Parses `--flag value` pairs from argv into a plain object. */

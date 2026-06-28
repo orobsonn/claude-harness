@@ -1,0 +1,34 @@
+{
+  "name": "@orobsonn/claude-harness",
+  "version": "0.15.0",
+  "description": "One-command vendoring of the Claude Harness delivery pipeline into a project's .claude/",
+  "type": "module",
+  "bin": {
+    "claude-harness": "core/skills/initializing-projects/references/cli.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "core/skills/initializing-projects/references/cli.mjs",
+    "core/skills/initializing-projects/references/vendor-core.mjs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"core/**/*.test.mjs\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orobsonn/claude-harness.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-harness",
+    "vendoring",
+    "delivery-pipeline"
+  ],
+  "license": "MIT",
+  "dependencies": {}
+}
