@@ -9,7 +9,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Hook de version-check (SessionStart/startup) — tira do operador o fardo de lembrar de atualizar o harness vendored**: novo `core/hooks/version-check.mjs`, wired em `core/settings.json` **apenas no matcher `startup`** (nunca `compact` — sem re-nag no meio de uma entrega). No início da sessão compara a versão vendored (`.claude/.harness-version`) com a última GitHub Release; se estiver atrás, emite um `systemMessage` (operator-facing, top-level) em pt-br oferecendo rodar `/updating-harness` e reiniciar. **Fail-open total**: sem rede / `gh` ausente / 404 / parse → exit 0, zero ruído. **No-op em headless** (`$CLAUDE_CODE_REMOTE` setado — a versão no cloud é pinada de propósito), checado antes de qualquer disco/rede. **Anti-falso-positivo**: normalização semver numérica que trata `vX.Y.Z`, git-describe `vX.Y.Z-N-gSHA` e SHA puro — "igual ou à frente da última tag" é em-dia (alarme falso treina o operador a ignorar o único sinal). Rede com `AbortSignal`/`--max-time 2` e cache `{tag}` gitignored com TTL de 6h (≤1 hit no GitHub por janela, protege o limite de 60 req/h). **Chicken-and-egg conhecido**: projetos vendorados ANTES deste hook só recebem o check após um `updating-harness` manual.
+- **`npx claude-harness init` — primeira adoção num projeto novo em UM comando**: novo pacote npm `claude-harness` (zero-dep, node builtins only) cujo `init` ENVOLVE (não reimplementa) o `vendor-core.mjs` — resolve a última release tag (gh→curl) e vendora o harness no `.claude/` do diretório atual, idempotente e non-clobber (memory/kaizen/settings preservados), estampando `.harness-version`. O guard do bin resolve symlink (`realpathSync`) porque o bin npm é symlinkado — sem isso o `init` rodaria como no-op.
+
 ### Changed
+
+- **`vendor-core` ignora o cache do version-check nos consumidores**: o `.claude/.gitignore` gerado passa a incluir `.harness-version-check-cache`, então o arquivo de cache do hook nunca é commitado em projetos vendorados.
+- **`detect-stack` reconhece node-test mesmo com `package.json` presente**: antes, qualquer `package.json` sem `vitest`/`jest` caía em `skip`; agora um `scripts.test` que invoca `node --test` é detectado como runner `node-test`. Necessário porque o próprio repo passou a ter `package.json` (pelo bin do npm) sem deixar de ser um projeto `node:test`.
 
 ### Fixed
 
