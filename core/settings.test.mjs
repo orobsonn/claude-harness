@@ -102,6 +102,29 @@ test("hooks.SessionStart has compact and startup matchers with reinject-state.mj
   );
 });
 
+test("SessionStart startup wires version-check.mjs but compact does NOT (no re-nag mid-delivery)", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  const startupHook = settings.hooks.SessionStart.find((h) => h.matcher === "startup");
+  ok(startupHook, "SessionStart startup matcher found");
+  ok(
+    startupHook.hooks.some((h) => h.command && h.command.includes("version-check.mjs")),
+    "startup matcher wires version-check.mjs"
+  );
+  ok(
+    startupHook.hooks.some((h) => h.command && h.command.includes("reinject-state.mjs")),
+    "startup matcher still wires reinject-state.mjs alongside version-check"
+  );
+
+  const compactHook = settings.hooks.SessionStart.find((h) => h.matcher === "compact");
+  ok(compactHook, "SessionStart compact matcher found");
+  ok(
+    !compactHook.hooks.some((h) => h.command && h.command.includes("version-check.mjs")),
+    "compact matcher must NOT wire version-check.mjs (no re-nag mid-delivery)"
+  );
+});
+
 test("NO Skill matcher in PreToolUse and exactly 6 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
