@@ -130,6 +130,29 @@ export function driveCrossFamilyVerdict({ role, taskJson, claudeVerdict, runRole
 }
 
 /**
+ * @description Routes to the correct cross-family driver based on ROLES[role].shape.
+ * Verdict-shaped roles (plan-reviewer) go through driveCrossFamilyVerdict;
+ * findings-shaped roles (adversary, security) go through driveCrossFamily.
+ * @param {{
+ *   role?: string,
+ *   taskJson: object|string,
+ *   claudeInput: object|object[],
+ *   env?: NodeJS.ProcessEnv,
+ *   availability?: {ok:boolean, reason:string},
+ *   runAttack?: Function,
+ *   runRefute?: Function,
+ *   runRole?: Function,
+ * }} opts
+ */
+export function runForRole({ role, taskJson, claudeInput, env, availability, runAttack, runRefute, runRole }) {
+  const shape = (ROLES[role] && ROLES[role].shape) || 'findings';
+  if (shape === 'verdict') {
+    return driveCrossFamilyVerdict({ role, taskJson, claudeVerdict: claudeInput, runRole, env, availability });
+  }
+  return driveCrossFamily({ role, taskJson, claudeIssues: claudeInput, runAttack, runRefute, env, availability });
+}
+
+/**
  * @description For the security gate, attach the recomputed SECURE|UNSAFE verdict. It is computed
  * ONLY from `findings` (agreed + claude-only survivors) — codex-only findings sit in
  * pendingClaudeRefutation and do NOT escalate the gate until the orchestrator runs the Claude
@@ -170,8 +193,11 @@ function parseArgs(argv) {
 function main() {
   const { task, claude, role } = parseArgs(process.argv.slice(2));
   const taskJson = task ? readFileSync(resolveCwd(task), "utf8") : "{}";
-  const claudeIssues = claude ? readIssues(claude) : [];
-  const result = driveCrossFamily({ role, taskJson, claudeIssues });
+  const shape = (ROLES[role] && ROLES[role].shape) || "findings";
+  const claudeInput = shape === "verdict"
+    ? (claude ? JSON.parse(readFileSync(resolveCwd(claude), "utf8")) : {})
+    : (claude ? readIssues(claude) : []);
+  const result = runForRole({ role, taskJson, claudeInput });
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 

@@ -179,3 +179,65 @@ test("driveCrossFamilyVerdict [t4]: codex unavailable => fail-open, claude verdi
   });
   assert.equal(r.verdict, "APPROVE", "fail-open must preserve the Claude verdict");
 });
+
+// ============================================================================
+// TASK-2 LOCKED TESTS — runForRole routing (closes the CLI gap found in final review HIGH)
+//
+// Bug: main() in cross-family.mjs calls driveCrossFamily (findings-shaped) for ALL roles,
+// including plan-reviewer which expects the verdict path. driveCrossFamilyVerdict is dead-code
+// from the CLI perspective. The prior locked tests [t1/t2/t4] called driveCrossFamilyVerdict
+// directly and never exercised the CLI routing — so the gap passed the unit gate.
+//
+// Assumed API (production code does NOT exist yet — tests below are RED):
+//   export function runForRole({ role, taskJson, claudeInput, env, availability, runAttack, runRefute, runRole })
+//     Routes by ROLES[role].shape:
+//       shape 'verdict'  (plan-reviewer) → driveCrossFamilyVerdict({
+//                                            role, taskJson, claudeVerdict: claudeInput,
+//                                            runRole, env, availability })
+//       shape 'findings' (adversary/security) → driveCrossFamily({
+//                                                 role, taskJson, claudeIssues: claudeInput,
+//                                                 runAttack, runRefute, env, availability })
+//       unknown role → treat as findings (fail-open, same as today's behavior)
+//     Returns the result of the chosen driver unchanged.
+//   main() reads --task/--claude files and calls runForRole instead of driveCrossFamily directly.
+// ============================================================================
+
+// [TASK-2 test 1] plan-reviewer routes to verdict path: codex REVISE + claude APPROVE => REVISE.
+// Proves runForRole selected driveCrossFamilyVerdict (result has .verdict string, not findings envelope).
+test("runForRole [plan-reviewer]: routes to verdict path — codex REVISE + claude APPROVE => result.verdict === 'REVISE'", () => {
+  const claudeInput = { verdict: "APPROVE", issues: [], planner_instructions: "" };
+  const runRole = () => ({ available: true, output: { verdict: "REVISE", issues: [], planner_instructions: "fix" } });
+  const r = crossFamilyMod.runForRole({
+    role: "plan-reviewer",
+    taskJson: {},
+    claudeInput,
+    env: { HARNESS_CODEX_ADVERSARY: "1", OPENAI_API_KEY: "sk-x" },
+    availability: { ok: true, reason: "" },
+    runRole,
+  });
+  // either-REVISE-wins: codex REVISE must override claude APPROVE
+  assert.equal(r.verdict, "REVISE", "either-REVISE-wins: codex REVISE overrides claude APPROVE");
+  // Must NOT be findings-shaped: mergeVerdicts output has no pendingClaudeRefutation array
+  assert.ok(!Array.isArray(r.pendingClaudeRefutation),
+    "verdict path must not produce a findings envelope (pendingClaudeRefutation must be absent)");
+});
+
+// [TASK-2 test 2] adversary routes to findings path: output is findings-shaped (no top-level verdict).
+// Proves runForRole selected driveCrossFamily and did NOT discard findings as the buggy main() would.
+test("runForRole [adversary]: routes to findings path — output has findings[]/pendingClaudeRefutation, no top-level verdict", () => {
+  const claudeInput = [issue()];
+  const runAttack = () => ({ available: true, issues: [] });
+  const r = crossFamilyMod.runForRole({
+    role: "adversary",
+    taskJson: {},
+    claudeInput,
+    env: { HARNESS_CODEX_ADVERSARY: "1", OPENAI_API_KEY: "sk-x" },
+    availability: { ok: true, reason: "" },
+    runAttack,
+  });
+  // Must be findings-shaped
+  assert.ok(Array.isArray(r.findings), "findings path must have findings[]");
+  assert.ok(Array.isArray(r.pendingClaudeRefutation), "findings path must have pendingClaudeRefutation[]");
+  // Adversary role never emits a top-level verdict (only security does via securityVerdict())
+  assert.equal(r.verdict, undefined, "adversary findings path must not have a top-level verdict field");
+});
