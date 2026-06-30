@@ -211,6 +211,58 @@ export function runCodexAdversary({
   return { available: true, issues: parsed.issues, raw: res.stdout };
 }
 
+/**
+ * @description The OPT-IN toggle: is the cross-family adversary turned on for this run? Default OFF
+ * — the operator must explicitly opt in. Aligned with the per-task `adversarial.enabled` convention:
+ * either set env HARNESS_CODEX_ADVERSARY=1, or `adversarial.cross_family: true` in the task contract.
+ * Availability (codex present, not headless-without-key) is checked SEPARATELY — this is intent,
+ * not capability.
+ * @param {{ env?: NodeJS.ProcessEnv, task?: object }} opts
+ * @returns {boolean}
+ */
+export function isEnabled({ env = process.env, task = {} } = {}) {
+  const flag = String(env.HARNESS_CODEX_ADVERSARY ?? "").toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "on") return true;
+  if (flag === "0" || flag === "false" || flag === "off") return false;
+  return task?.adversarial?.cross_family === true;
+}
+
+/**
+ * @description Runs a single REFUTATION (cross-check policy B) on the Codex family: hands Codex a
+ * finding only the Claude adversary raised and asks it to refute. Returns a verdict shaped for
+ * finalizeFindings. FAIL-OPEN: if Codex is unavailable or its output is unparseable, returns
+ * `refuted: false` (KEEP the finding — never drop a finding because the cross-check could not run).
+ * @param {{
+ *   finding: object, taskJson: object|string, key: string,
+ *   spawn?: typeof spawnSync, codexBin?: string, env?: NodeJS.ProcessEnv,
+ *   availability?: {ok:boolean, reason:string}, rolePath?: string,
+ * }} opts
+ * @returns {{ key: string, refuted: boolean, argument: string, refuter: "codex" }}
+ */
+export function runCodexRefutation({
+  finding, taskJson, key, spawn = spawnSync, codexBin = "codex", env = process.env, availability, rolePath = ADVERSARY_ROLE_PATH,
+}) {
+  const avail = availability ?? checkAvailability({ env, codexBin });
+  if (!avail.ok) {
+    return { key, refuted: false, argument: `cross-check skipped — ${avail.reason}; finding kept (fail-open)`, refuter: "codex" };
+  }
+  const prompt = composeRefutationPrompt({ finding, taskJson, rolePath });
+  let res;
+  try {
+    res = spawn(codexBin, ["exec", "--sandbox", "read-only", "--skip-git-repo-check", prompt], { encoding: "utf8", env });
+  } catch (err) {
+    return { key, refuted: false, argument: `cross-check spawn failed: ${err?.message ?? err}; finding kept`, refuter: "codex" };
+  }
+  if (!res || res.error || res.status !== 0) {
+    return { key, refuted: false, argument: `cross-check run failed; finding kept`, refuter: "codex" };
+  }
+  const parsed = parseJsonBlock(res.stdout);
+  if (!parsed || typeof parsed.refuted !== "boolean") {
+    return { key, refuted: false, argument: "cross-check unparseable; finding kept", refuter: "codex" };
+  }
+  return { key, refuted: parsed.refuted, argument: String(parsed.argument ?? ""), refuter: "codex" };
+}
+
 // ---------------------------------------------------------------------------
 // CLI: node codex-adversary.mjs --task <task.json> [--self-test]
 // ---------------------------------------------------------------------------

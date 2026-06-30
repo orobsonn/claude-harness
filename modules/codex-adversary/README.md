@@ -99,23 +99,57 @@ adversary exactly as today**. The second family is a LOCAL (or API-key-equipped)
 **never** a precondition for a headless run to complete. This is enforced in `checkAvailability()`,
 not left to chance.
 
-### 3. Wire it into the loop (opt-in)
+### The opt-in toggle (the operator chooses)
 
-Keep the core untouched. In your orchestration, where the native adversary runs, **also** run the
-bridge in parallel and merge — see `references/codex-adversary.mjs` and `references/merge-findings.mjs`.
-Sketch:
+Cross-family is **off by default** — running it is the operator's explicit choice. There is **no
+separate "Codex init"**: the harness is one install (`vendor-core.mjs`); Codex is just a second
+*engine* for one role. To turn it on, either:
+
+- **per-run:** `export HARNESS_CODEX_ADVERSARY=1`, or
+- **per-task:** set `"adversarial": { "cross_family": true }` in the task contract (mirrors the
+  existing `adversarial.enabled` flag).
+
+`HARNESS_CODEX_ADVERSARY=0|off` force-disables even if a task sets the flag. Intent (toggle) and
+capability (availability) are separate checks — turning it on never overrides the headless/no-codex
+fail-open.
+
+### 3. Wire it into the loop — one command (opt-in)
+
+Keep the core untouched. Where the native adversary runs, capture its issues to JSON, then call the
+**driver** — it gates on the toggle + availability, runs the Codex attack, merges, and runs the
+Codex-side refutations, all in one step:
 
 ```bash
 # 1. Claude adversary runs as today (native Agent) → claude-issues.json
-# 2. Codex adversary, same task, different family:
-node modules/codex-adversary/references/codex-adversary.mjs \
-  --task .claude/plans/<feature>/task.json > codex-issues.json
-# 3. Merge: union + dedup, and emit the cross-check work-list (policy B):
-node modules/codex-adversary/references/merge-findings.mjs \
-  --claude claude-issues.json --codex codex-issues.json > merged.json
-# 4. For each entry in merged.needsCrosscheck, dispatch the OTHER family to refute,
-#    then finalize: keep unless refuted. Feed survivors to the sniper.
+# 2. One command drives attack + merge + Codex refutation:
+node modules/codex-adversary/references/cross-family.mjs \
+  --task .claude/plans/<feature>/task.json --claude claude-issues.json > xfam.json
 ```
+
+`xfam.json` contains:
+
+- `findings` — ship to the sniper **now**: the `agreed` issues (both families) plus the claude-only
+  issues Codex could **not** refute.
+- `pendingClaudeRefutation` — codex-only issues whose refutation belongs to **Claude** (node cannot
+  dispatch a Claude Agent). The orchestrator runs the native adversary in refute-mode on these, then
+  calls `finalizeFindings` again to fold the survivors into `findings`.
+- `dropped` — claude-only issues Codex refuted, with the refutation argument (audit trail).
+- `enabled` / `available` — `false` here means it ran Claude-only (toggle off, or fail-open).
+
+### How refutation works (cross-check policy B)
+
+A finding **both** families raised ships as-is (`agreed`). A finding **one** family raised is
+cross-checked by the **other** family:
+
+| Finding seen only by | Refuter | Runs where |
+|---|---|---|
+| Claude | Codex | **in JS** — the driver does it (`runCodexRefutation`) |
+| Codex | Claude | **orchestrator** — a native Claude adversary refute-pass (`pendingClaudeRefutation`) |
+
+The refuter is asked to **refute** the finding (read-only). The finding is **kept unless** the
+refuter returns `refuted: true`. If the refuter can't run (unavailable), the finding is **kept**
+(fail-open — never drop a finding because the cross-check could not complete). This preserves the
+minority catch — the whole reason for a second family — while still filtering false positives.
 
 ---
 
