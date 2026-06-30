@@ -246,6 +246,42 @@ test("SKILL.md: runnable live-dispatch command + descriptor recipe present", () 
   }
 });
 
+// ─── Test 7 ──────────────────────────────────────────────────────────────────
+/**
+ * Given: orchestrating-delivery SKILL.md.
+ * When: the Cross-family eyes section is scanned.
+ * Then:
+ *   (a) it mentions the codex-eye-nudge hook (the deterministic nudge mechanism), AND
+ *   (b) it references 'cross-family.mjs' (the driver command), AND
+ *   (c) it documents after-eye sequencing — the second family runs AFTER the Claude eye returns.
+ */
+test("SKILL.md: cross-family section documents nudge hook, cross-family.mjs driver, and after-eye sequencing", () => {
+  // (a) mentions the nudge hook
+  const mentionsNudge =
+    skillMd.includes("codex-eye-nudge") || skillMd.includes("nudge");
+  assert(
+    mentionsNudge,
+    "SKILL.md cross-family section must contain 'codex-eye-nudge' or 'nudge' — the deterministic nudge hook (PostToolUse[Agent])."
+  );
+
+  // (b) references the driver command
+  assert(
+    skillMd.includes("cross-family.mjs"),
+    "SKILL.md cross-family section must reference 'cross-family.mjs' (the cross-family driver command)."
+  );
+
+  // (c) sequencing: the second family step runs AFTER the Claude eye returns
+  const hasSequencing =
+    /after the Claude eye/i.test(skillMd) ||
+    /AFTER[\s\S]{0,200}eye[\s\S]{0,50}returns?/i.test(skillMd) ||
+    /after[\s\S]{0,50}eye[\s\S]{0,200}returns?/i.test(skillMd) ||
+    /obligation to honour AFTER/i.test(skillMd);
+  assert(
+    hasSequencing,
+    "SKILL.md cross-family section must document that the nudge is honoured AFTER the Claude eye has returned — sequencing is critical."
+  );
+});
+
 // ─── Test 6 (Part B) ────────────────────────────────────────────────────────
 /**
  * Given: orchestrating-delivery SKILL.md.
