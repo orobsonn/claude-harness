@@ -1,5 +1,11 @@
-# Codex CLI config for the cross-family adversary — copy to ~/.codex/config.toml (or .codex/config.toml
-# in a trusted project) and fill in YOUR own MCP servers (mirror the ones your .mcp.json declares).
+# Codex CLI config for the cross-family adversary.
+#
+# Where this file goes (Codex config resolution, closest wins):
+#   - GLOBAL:       ~/.codex/config.toml                 — your day-to-day default.
+#   - PER-PROJECT:  .codex/config.toml at the repo root  — versioned with the project, loaded ONLY in
+#                   a "trusted" project (analogous to .claude/). Closest-to-cwd wins.
+#   - CLI override: `codex exec -c key=value ...`        — inline, highest precedence.
+# Fill in YOUR own MCP servers (mirror the ones your .mcp.json declares).
 #
 # The adversary is an EYE, never a hand: it inspects and judges, it never mutates. The read-only
 # sandbox enforces that — Codex cannot write, run destructive commands, or touch state.
@@ -8,8 +14,9 @@
 sandbox_mode = "read-only"
 approval_policy = "never"        # non-interactive: codex exec must not prompt
 
-# Optional: pin a strong reasoning model for the attack (subscription or API key, per your login).
-# model = "gpt-5"
+# Optional: pin a strong reasoning model for the attack. The cross-family eye must be Claude-tier —
+# use the strongest you have access to (e.g. gpt-5.5), per your login (subscription or API key).
+# model = "gpt-5.5"
 
 # --- MCP servers: mirror the SAME servers Claude uses, so the Codex adversary inspects with the
 # --- same context. Each table is one server. Leave empty to run with no MCP (bridge still works).
@@ -19,7 +26,10 @@ approval_policy = "never"        # non-interactive: codex exec must not prompt
 # args = ["-y", "@some/mcp-server"]
 # env = { SOME_TOKEN = "..." }    # provide YOUR own credentials — never commit real secrets
 
-# A dedicated profile keeps the adversary settings isolated from your day-to-day Codex use.
+# A dedicated profile keeps the adversary settings isolated from your day-to-day Codex use. Select it
+# with `codex exec --profile adversary ...`. NOTE: current Codex versions read profiles from a
+# SEPARATE file `~/.codex/adversary.config.toml`; older versions used an inline `[profiles.adversary]`
+# table here. Check `codex --help` for the version you installed.
 [profiles.adversary]
 sandbox_mode = "read-only"
 approval_policy = "never"
