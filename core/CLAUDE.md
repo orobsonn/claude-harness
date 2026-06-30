@@ -83,14 +83,17 @@ and present the honest synthesis. Skip for trivial/mechanical tasks.
 
 **Cross-family eyes (optional `codex-adversary` module).** Not every task has an adversarial
 checkpoint, but every checkpoint that runs a critical-judgment **eye** (the `adversary` on spec /
-per-task / final dual-review, and the `plan-reviewer`) can run on **two model families** — Claude and
-a second family (GPT via the Codex CLI) — so each surfaces the problems the other's priors miss. The
-**global switch** is the env var `HARNESS_CODEX_ADVERSARY` (set it in `settings.json` → `env` for a
-durable, committed default; per-task via `adversarial.cross_family`). It is **fail-open**: with the
-module absent, the switch off, in headless without an `OPENAI_API_KEY`, or with `codex` unreachable,
-every checkpoint runs **Claude-only exactly as today** — the second family is never a hard dependency.
-The second family is always read-only and Claude-tier (an eye, never a cheap hand). See
-`modules/codex-adversary/`.
+per-task / final dual-review, the `plan-reviewer`, and the `security` auditor) can run on **two model
+families** — Claude and a second family (GPT via the Codex CLI) — so each surfaces the problems the
+other's priors miss. The **global switch** is the env var `HARNESS_CODEX_ADVERSARY` (set it in
+`settings.local.json` → `env` for a per-machine opt-in — what `npx claude-harness init` writes when you
+opt in — or in the committed `settings.json` → `env` for a repo-wide default; per-task via
+`adversarial.cross_family`). It is **fail-open**: with the module absent, the switch off, in headless
+without an `OPENAI_API_KEY`, or with `codex` unreachable, every checkpoint runs **Claude-only exactly
+as today** — the second family is never a hard dependency. For the `security` eye specifically, the
+SECURE|UNSAFE gate verdict stays Claude-authoritative (a codex-only finding only escalates the gate
+after its Claude refute-pass — a gate-state precondition). The second family is always read-only and
+Claude-tier (an eye, never a cheap hand). See the vendored `.claude/modules/codex-adversary/`.
 
 ## Language convention
 
@@ -140,4 +143,4 @@ This allows recovery without losing continuity when the context limit is reached
 
 The shipped `settings.json` is a **conservative baseline** that works on desktop and cloud. It does
 not bypass permission prompts. Adapt the allowlist to your environment to give Claude more autonomy
-(e.g. allow your project's build/test commands). See `settings.json` and `modules/` for optional add-ons.
+(e.g. allow your project's build/test commands). See `settings.json` and `.claude/modules/` for optional add-ons.

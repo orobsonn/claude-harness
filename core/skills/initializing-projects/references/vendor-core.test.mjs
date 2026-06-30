@@ -24,7 +24,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isFrameworkCopyIncluded } from "./vendor-core.mjs";
+import { isFrameworkCopyIncluded, shouldVendorModule } from "./vendor-core.mjs";
+import { mkdirSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -251,4 +252,97 @@ test("isFrameworkCopyIncluded: resolve-hook-command.test.mjs in hand-config is E
     false,
     "a .test.mjs file living in hand-config/ must be excluded by the filter"
   );
+});
+
+// --- opt-in module vendoring (codex-adversary) ------------------------------
+
+test("shouldVendorModule: opt-in flag forces copy; else only when already present", () => {
+  const exists = (p) => p === "/proj/.claude/modules/codex-adversary";
+  // --with-codex => always copy, regardless of presence
+  assert.strictEqual(shouldVendorModule("/proj/.claude", "codex-adversary", true, () => false), true);
+  // no flag + already vendored => refresh (do not let an existing opt-in go stale)
+  assert.strictEqual(shouldVendorModule("/proj/.claude", "codex-adversary", false, exists), true);
+  // no flag + absent => safe default: skip
+  assert.strictEqual(shouldVendorModule("/proj/.claude", "codex-adversary", false, () => false), false);
+});
+
+test("vendor-core: --with-codex vendors the module; default omits it", async () => {
+  const withDir = mkdtempSync(join(tmpdir(), "vendor-codex-"));
+  const plainDir = mkdtempSync(join(tmpdir(), "vendor-plain-"));
+  try {
+    const run = (target, extra = []) =>
+      spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", target, ...extra], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+
+    const withRes = run(withDir, ["--with-codex"]);
+    if (withRes.status !== 0) throw new Error(`vendor failed: ${withRes.stderr || withRes.stdout}`);
+    assert.ok(
+      existsSync(join(withDir, ".claude/modules/codex-adversary/references/cross-family.mjs")),
+      "--with-codex must vendor the module"
+    );
+    assert.ok(
+      !existsSync(join(withDir, ".claude/modules/codex-adversary/references/cross-family.test.mjs")),
+      "*.test.mjs must be excluded from the vendored module"
+    );
+
+    const plainRes = run(plainDir);
+    if (plainRes.status !== 0) throw new Error(`vendor failed: ${plainRes.stderr || plainRes.stdout}`);
+    assert.ok(
+      !existsSync(join(plainDir, ".claude/modules")),
+      "default init (no flag) must NOT vendor any module"
+    );
+  } finally {
+    rmSync(withDir, { recursive: true, force: true });
+    rmSync(plainDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: an already-vendored module is refreshed on update without the flag", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-update-"));
+  try {
+    // Simulate a prior opt-in: the module dir already exists in the target.
+    mkdirSync(join(tempDir, ".claude/modules/codex-adversary"), { recursive: true });
+
+    const res = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" }
+    );
+    if (res.status !== 0) throw new Error(`vendor failed: ${res.stderr || res.stdout}`);
+
+    assert.ok(
+      existsSync(join(tempDir, ".claude/modules/codex-adversary/references/cross-family.mjs")),
+      "an existing module must be refreshed even without --with-codex"
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("vendored module resolves canonical sources from .claude/agents (vendored layout)", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-selftest-"));
+  try {
+    const vendor = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--with-codex"],
+      { encoding: "utf8", stdio: "pipe" }
+    );
+    if (vendor.status !== 0) throw new Error(`vendor failed: ${vendor.stderr || vendor.stdout}`);
+
+    // The --self-test composes the adversary prompt from the canonical sources WITHOUT calling codex.
+    // In a vendored project these live at .claude/agents/... (no core/), so this proves the dual-layout
+    // resolver (item 1) works end-to-end after vendoring.
+    const selfTest = spawnSync(
+      "node",
+      [".claude/modules/codex-adversary/references/codex-adversary.mjs", "--self-test"],
+      { cwd: tempDir, encoding: "utf8", stdio: "pipe" }
+    );
+    assert.strictEqual(selfTest.status, 0, `self-test must exit 0: ${selfTest.stderr}`);
+    assert.match(selfTest.stdout, /adversary/i, "composed prompt must embed the vendored adversary role");
+    assert.match(selfTest.stdout, /ROLE \(verbatim from/, "prompt must cite the resolved canonical role path");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
