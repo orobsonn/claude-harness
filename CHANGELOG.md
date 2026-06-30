@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Revisão paralela dos olhos (fan-out-join) — entrega mais rápida sem tocar no trilho de segurança**: os olhos read-only que revisam o código (compliance + adversary + security), antes despachados em fila, passam a rodar **concorrentemente numa só leva de Agent calls (fan-out)**, com todos os verdicts coletados (**join**) antes do sniper — tanto na revisão per-task (Phase 2) quanto no final dual-review (Phase 3). O gargalo real de wall-clock é o `adversary` (Opus, lento); rodá-lo concorrente com compliance/security corta esse tempo. Seguro por construção: os olhos são read-only, não escrevem no working tree nem carimbam markers no gate-state, e são mutuamente independentes (adversary virgin, compliance lean) — o paralelismo não toca o trilho de segurança. Mantém a proibição de **background-and-poll** (verdict stale); o que se habilita é o **fan-out-join** (bloqueia até todos os verdicts finais chegarem). Mãos (executor/sniper/test-author) seguem seriais de propósito.
+
 ### Changed
 
 ### Fixed
