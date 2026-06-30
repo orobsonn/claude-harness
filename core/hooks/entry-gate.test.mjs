@@ -1037,17 +1037,19 @@ test(
 );
 
 test(
-  "trilho-3 #7: test-author, valid triage, no ticket → deny (spawn-hand) — non-delivery-role early-allow trap",
+  "trilho-3 #7: test-author, valid triage, no ticket → allow (main-loop Claude Agent in LOCAL — early-return before hand-routing gate)",
   () => {
+    // UPDATED: test-author is now dispatched as a main-loop Claude Agent in BOTH local and headless.
+    // It is the PRODUCER of the fidelity-pass and has no spawn-hand path (runLiveDispatch requires a
+    // frozen test that does not yet exist at author time). The early-return fires before the hand-routing
+    // gate for test-author in ALL modes — executor and sniper still go through the hand-routing gate.
     const payload = makeAgentPayload("ses_hand_ta", "test-author");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
-    const readGateStateFn = () => ({});
+    const readGateStateFn = () => ({}); // no escalation_fallback ticket — no longer needed for test-author
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readTriage, isHeadlessFn: () => false, readGateStateFn });
 
-    assert.equal(verdict.allow, false, "test-author (not a delivery role) must NOT slip through early-allow");
-    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
-    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+    assert.equal(verdict.allow, true, "test-author must always be allowed in LOCAL — it is the fidelity-pass producer and has no spawn-hand path");
   },
 );
 
@@ -1066,16 +1068,18 @@ test(
 );
 
 test(
-  "trilho-3 #9: 'harness:test-author', valid triage, no ticket → deny",
+  "trilho-3 #9: 'harness:test-author', valid triage, no ticket → allow (bareRole='test-author', early-return applies)",
   () => {
+    // UPDATED: the early-return fires on bareRole('harness:test-author') === 'test-author', so the
+    // namespaced form also always allows. Executor/sniper namespaced forms still go through the
+    // hand-routing gate and are denied without a ticket (trilho-3 #6 for harness:executor).
     const payload = makeAgentPayload("ses_hand_ns_ta", "harness:test-author");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
-    const readGateStateFn = () => ({});
+    const readGateStateFn = () => ({}); // no ticket — no longer needed for test-author
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readTriage, isHeadlessFn: () => false, readGateStateFn });
 
-    assert.equal(verdict.allow, false, "namespaced test-author must be normalized and denied");
-    assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+    assert.equal(verdict.allow, true, "namespaced test-author must also be allowed — bareRole normalization resolves to 'test-author', early-return fires");
   },
 );
 
@@ -1706,5 +1710,36 @@ test(
       gitStateFn: () => ({ branch: "feature/develop-stuff", commitsAhead: 2, defaultBranch: "develop" }),
     });
     assert.equal(verdict.allow, true, "substring 'develop' in branch name must NOT trigger the floor; only exact equality denies");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED — test-author is a main-loop Claude Agent in LOCAL and HEADLESS
+// The test-author is the PRODUCER of the fidelity-pass (it authors the red
+// locked test, validated by compliance in step 1b). It must never be blocked
+// by the fidelity rail it serves, and it has NO spawn-hand path: runLiveDispatch
+// requires a frozen test that does not yet exist at author time. Its safety
+// controls are the compliance eye (step 1b) + the freeze content-hash (step 1c).
+// ---------------------------------------------------------------------------
+
+test(
+  "decide: LOCAL test-author main-loop Agent → allow (fidelity-pass producer, no spawn-hand path)",
+  () => {
+    const payload = makeAgentPayload("ses_ta_local_allow", "test-author");
+    // LOCAL: isHeadlessFn returns false
+    // triage with FULL mode (Gate 1 would be satisfied)
+    // gate-state with NO escalation_fallback (old hand-routing rail would deny without this)
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({}); // no escalation_fallback ticket
+    const verdict = decide(payload, {
+      readTriage,
+      isHeadlessFn: () => false,
+      readGateStateFn,
+    });
+    assert.equal(
+      verdict.allow,
+      true,
+      "LOCAL test-author must always be allowed — it is the fidelity-pass producer and has no spawn-hand path",
+    );
   },
 );

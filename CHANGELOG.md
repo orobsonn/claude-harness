@@ -13,6 +13,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Deadlock do `test-author` no fidelity-rail (LOCAL) — destravado**: o `test-author` (quem autora o teste travado RED, o oráculo do pipeline) é a *pré-condição* do `fidelity-pass`, mas era gateado pelo MESMO fidelity-rail que serve — bloqueado por todos os caminhos (spawn-hand exige um teste congelado que ele ainda nem criou; main-loop `Agent` exigia um ticket de escalação com run-record `FAILED` inexistente). Sem saída, o orquestrador escrevia testes e código na mão e auto-carimbava o `fidelity-pass` (violando "strong eyes, cheap hands" de ponta a ponta — observado ao vivo no `victor-pipeline-dados-bot`). **Conserto:** o `test-author` passa a rodar como **main-loop Claude Agent (sonnet)** em LOCAL e HEADLESS — espelhando o que o headless já fazia — com early-return no `entry-gate.mjs` antes do hand-routing rail (escopado a `role === "test-author"`; executor/sniper seguem gateados, sem enfraquecimento). Seus controles de segurança são o olho `compliance` (step 1b) + o content-hash do freeze (step 1c). O `fidelity-pass` segue intocado (veredito do compliance).
+
 ### Removed
 
 ## [0.15.0] - 2026-06-28
