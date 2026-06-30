@@ -1,6 +1,6 @@
 # Claude Harness
 
-![version](https://img.shields.io/badge/version-0.15.0-blue) ![for](https://img.shields.io/badge/for-Claude%20Code-8A2BE2) ![mode](https://img.shields.io/badge/modes-local%20%C2%B7%20headless-success)
+![version](https://img.shields.io/badge/version-0.18.0-blue) ![for](https://img.shields.io/badge/for-Claude%20Code-8A2BE2) ![mode](https://img.shields.io/badge/modes-local%20%C2%B7%20headless-success) ![eyes](https://img.shields.io/badge/eyes-cross--family%20(Claude%20%2B%20Codex)-orange)
 
 Um framework de uso do **Claude Code** para **não desenvolvedores** (product managers, founders, operadores) entregarem software com pipeline de qualidade — sem precisar julgar arquitetura, segurança ou tradeoffs de baixo nível.
 
@@ -158,6 +158,30 @@ O que carrega a segurança:
 
 ---
 
+## Cross-family eyes — uma segunda família julga ao lado
+
+Um olho julga melhor quando uma **segunda família de modelo** julga junto: cada família enxerga os modos de falha que os vieses (*priors*) da outra deixam passar. O módulo opt-in **`codex-adversary`** roda uma segunda família (GPT, via o CLI `codex` logado por subscription) **ao lado** do olho Claude — em **todo** checkpoint que roda um olho crítico: o `adversary` (na spec, por task, e no dual review final), o `security` e o `plan-reviewer`.
+
+```mermaid
+flowchart TD
+    EYE([checkpoint roda um olho]) --> CL["olho Claude<br/>produz findings/verdict"]
+    EYE --> CX["olho Codex/GPT<br/>read-only, mesma role"]
+    CL --> MG{{"merge · policy B"}}
+    CX --> MG
+    MG -->|ambas concordam| KEEP[finding mantido]
+    MG -->|só uma família viu| XC["a outra família tenta refutar<br/>mantido salvo refutação"]
+    classDef fam fill:#d2691e,stroke:#8a4513,color:#fff;
+    class CX fam;
+```
+
+**O nudge determinístico (`codex-eye-nudge`).** O risco real não era qualidade — era o orquestrador **esquecer** de rodar a segunda família (a instrução vivia em prosa, lida no início da sessão). A correção **não** é uma catraca que bloqueia (rejeitada: forjável + deadlock fail-closed) — é um **nudge**: um hook `PostToolUse[Agent]` que, no instante em que o orquestrador despacha um olho elegível, injeta automaticamente o lembrete pra rodar o Codex e mergear. **Advisory, nunca bloqueia**; cobre todo checkpoint por `subagent_type`. *Não se adiciona gate onde nada está quebrado* — os olhos Claude já rodam confiáveis; só a segunda família era pulada.
+
+**Merge — policy B (nunca voto de maioria).** Uma finding levantada por uma única família é **mantida**, a menos que a outra família a **refute** explicitamente. Para o `security`, o veredito `SECURE|UNSAFE` continua autoritativo do Claude — uma finding só-do-Codex só escala o gate depois da sua refutação-Claude (precondição de gate-state), então um falso-positivo do Codex nunca vira REVISE/UNSAFE espúrio pelas costas do orquestrador.
+
+**Fail-open total — nunca uma dependência rígida.** Tudo é opt-in pelo switch `HARNESS_CODEX_ADVERSARY`. Com o módulo ausente, o switch desligado, em headless sem `OPENAI_API_KEY`, ou com o `codex` inalcançável → cada checkpoint roda **só-Claude exatamente como hoje**. A segunda família é sempre **read-only** e **Claude-tier** — um olho, nunca uma mão barata. O valor é comprovado em uso: nesta própria entrega, em cada gate o Codex pegou furos que o Claude não viu (e vice-versa) — a tese, *dogfoodada*.
+
+---
+
 ## Dois modos de execução
 
 A pipeline é a mesma; muda **quem ocupa os pontos de decisão humana**.
@@ -206,11 +230,14 @@ core/                 # núcleo distribuível → vai pro .claude/ do projeto
     orchestrating-delivery/references/   # runners da mão barata
                       #   spawn-hand · dispatch-hand · capture-hand (Ollama)
   rules/              # rules universais (git, security, code-quality, architecture, …)
-  hooks/              # trilhos determinísticos (entry-gate, plan-write-gate, …)
+  hooks/              # trilhos determinísticos (entry-gate, plan-write-gate,
+                      #   codex-eye-nudge — nudge da segunda família, …)
   CLAUDE.md           # entry-policy genérica (zero dado pessoal)
   settings.json       # permissões mínimas, sem flags perigosas
   memory/             # memória repo-relative
-modules/              # add-ons opt-in (rtk, mv) — nunca dependência do core
+modules/              # add-ons opt-in — nunca dependência do core
+  codex-adversary/    #   segunda família de olhos (Codex/GPT), fail-open
+  rtk/ · mv/          #   token-killer · knowledge graph
 docs/                 # o estudo: constraints da nuvem, auditoria, desenho
 ```
 
