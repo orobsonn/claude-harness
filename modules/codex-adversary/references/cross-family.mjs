@@ -23,8 +23,9 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
-import { isEnabled, checkAvailability, composeRolePrompt, runCodexAdversary, runCodexRefutation, ROLES } from "./codex-adversary.mjs";
+import { isEnabled, checkAvailability, composeRolePrompt, runCodexAdversary, runCodexRefutation, runCodexRole, ROLES } from "./codex-adversary.mjs";
 import { classifyFindings, finalizeFindings, dedupKey, readIssues, securityVerdict, DEDUP_FIELDS } from "./merge-findings.mjs";
+import { mergeVerdicts } from "./merge-verdicts.mjs";
 
 /**
  * @description Drives the cross-family loop for ANY findings-shaped EYE role (default `adversary`;
@@ -99,6 +100,33 @@ export function driveCrossFamily({ role = "adversary", taskJson, claudeIssues, e
     dropped,                  // claude-only findings Codex refuted, with the refutation argument
     classified,               // full provenance for auditing
   });
+}
+
+/**
+ * @description Drives the cross-family verdict-shaped path for roles whose output is a single
+ * verdict (APPROVE/REVISE) rather than a findings[] array. FAIL-OPEN: any error, unavailable
+ * codex, or missing output degrades to the Claude verdict with codexAvailable:false — never throws.
+ * @param {{
+ *   role: string,
+ *   taskJson: object|string,
+ *   claudeVerdict: object,
+ *   runRole?: (args:{prompt:string, availability:object}) => {available:boolean, output?:object, reason?:string},
+ *   env?: NodeJS.ProcessEnv,
+ *   availability?: {ok:boolean, reason:string},
+ * }} opts
+ */
+export function driveCrossFamilyVerdict({ role, taskJson, claudeVerdict, runRole, env = process.env, availability }) {
+  try {
+    const prompt = composeRolePrompt({ role, taskJson });
+    const run = runRole ?? ((args) => runCodexRole(args));
+    const res = run({ prompt, availability });
+    if (res && res.available === true) {
+      return mergeVerdicts(claudeVerdict, res.output, { codexAvailable: true });
+    }
+    return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+  } catch (_err) {
+    return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+  }
 }
 
 /**
