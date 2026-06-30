@@ -39,6 +39,14 @@ const HARNESS_END = "<!-- harness:end -->";
 
 const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
+
+// Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
+// operator opts in (--with-codex) OR it is already present in the target (an update refreshes an
+// existing opt-in instead of letting it go stale). Safe default: a fresh init ships NO modules.
+const OPT_IN_MODULES = ["codex-adversary"];
+
+// Lone boolean flags (no value follows). Everything else is a `--key value` pair.
+const BOOLEAN_FLAGS = new Set(["with-codex"]);
 const ACCUMULATED = [
   ["memory/MEMORY.md", "memory"],
   ["kaizen.md", "."],
@@ -59,13 +67,18 @@ settings.local.json
 .harness-version-check-cache
 `;
 
-/** @description Parses `--flag value` pairs from argv into a plain object. */
+/**
+ * @description Parses argv into a plain object. `--key value` pairs by default; flags in
+ * BOOLEAN_FLAGS (e.g. `--with-codex`) are lone booleans with no value following.
+ */
 function parseArgs(argv) {
   const args = {};
-  for (let i = 0; i < argv.length; i += 2) {
+  for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (!key?.startsWith("--")) fail(`unexpected argument: ${key}`);
-    args[key.slice(2)] = argv[i + 1];
+    const name = key.slice(2);
+    if (BOOLEAN_FLAGS.has(name)) args[name] = true;
+    else args[name] = argv[++i];
   }
   return args;
 }
@@ -149,6 +162,40 @@ function copyFrameworkOwned(coreDir, claudeDir) {
     const src = join(coreDir, file);
     if (existsSync(src)) cpSync(src, join(claudeDir, file));
   }
+}
+
+/**
+ * @description Pure predicate: should this opt-in module be vendored? True when the operator opts in
+ * (`--with-codex`) OR the module is ALREADY vendored in the target (so an update refreshes it instead
+ * of leaving it stale — without the flag, but never against the operator's prior choice). Safe
+ * default: a fresh init without the flag ships no module.
+ * @param {string} claudeDir - The target `.claude/` dir.
+ * @param {string} moduleName
+ * @param {boolean} withCodex
+ * @param {(p: string) => boolean} [exists]
+ * @returns {boolean}
+ */
+export function shouldVendorModule(claudeDir, moduleName, withCodex, exists = existsSync) {
+  if (withCodex) return true;
+  return exists(join(claudeDir, "modules", moduleName));
+}
+
+/**
+ * @description Copies opt-in modules (siblings of core/) into `.claude/modules/`, overwriting,
+ * excluding `*.test.mjs` (the source repo is the test home). Gated per-module by shouldVendorModule.
+ * Returns a status string. `modulesRoot` is `<repoDir>/modules` (core/ is `<repoDir>/core`).
+ */
+function copyModules(modulesRoot, claudeDir, withCodex) {
+  const filter = (src, _dest) => isFrameworkCopyIncluded(src);
+  const copied = [];
+  for (const name of OPT_IN_MODULES) {
+    const src = join(modulesRoot, name);
+    if (!existsSync(src)) continue;
+    if (!shouldVendorModule(claudeDir, name, withCodex)) continue;
+    cpSync(src, join(claudeDir, "modules", name), { recursive: true, filter });
+    copied.push(name);
+  }
+  return copied.length ? copied.join(", ") : "none (default off; pass --with-codex to enable)";
 }
 
 /** @description Copies accumulated stores only when absent (never clobbers). */
@@ -265,6 +312,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     mkdirSync(claudeDir, { recursive: true });
     copyFrameworkOwned(coreDir, claudeDir);
+    const modules = copyModules(join(coreDir, "..", "modules"), claudeDir, Boolean(args["with-codex"]));
     seedAccumulated(coreDir, claudeDir);
     const claudeMd = mergeClaudeMd(coreDir, claudeDir);
     const settings = writeSettings(coreDir, claudeDir);
@@ -283,6 +331,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       [
         `[vendor-core] OK — harness ${version} → ${claudeDir}`,
         `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
+        `  modules: ${modules}`,
         `  memory/MEMORY.md, kaizen.md: seeded if absent`,
         `  CLAUDE.md: ${claudeMd}`,
         `  settings.json: ${settings}`,
