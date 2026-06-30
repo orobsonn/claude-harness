@@ -111,3 +111,41 @@ test('returned descriptor satisfies runLiveDispatch schema: required string fiel
     assert.equal(Array.isArray(descriptor[field]), true, `field "${field}" must be an array`);
   }
 });
+
+test('test_runner is read from the injected readRunnerConfig seam, not a caller literal', () => {
+  const manifest = { frozen_paths: ['test/a.test.mjs'] };
+  const headSha = () => '2222222222222222222222222222222222222222';
+
+  const descriptor = emitDescriptor({
+    featureId: 'F',
+    taskId: 'T',
+    model: 'glm-5.2',
+    briefFile: '/tmp/brief.md',
+    scopePaths: ['src/', 'test/a.test.mjs'],
+    lockedTest: 'test/a.test.mjs',
+    manifest,
+    headSha,
+    readRunnerConfig: () => 'vitest',
+  });
+
+  assert.equal(descriptor.test_runner, 'vitest');
+});
+
+test('test_runner defaults to node-test (the real readRunnerConfig default) when the seam is omitted', () => {
+  const manifest = { frozen_paths: ['test/a.test.mjs'] };
+  const headSha = () => '3333333333333333333333333333333333333333';
+
+  const descriptor = emitDescriptor({
+    featureId: 'F',
+    taskId: 'T',
+    model: 'glm-5.2',
+    briefFile: '/tmp/brief.md',
+    scopePaths: ['src/', 'test/a.test.mjs'],
+    lockedTest: 'test/a.test.mjs',
+    manifest,
+    headSha,
+  });
+
+  assert.equal(typeof descriptor.test_runner, 'string');
+  assert.notEqual(descriptor.test_runner.length, 0);
+});
