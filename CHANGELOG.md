@@ -15,6 +15,23 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.17.0] - 2026-06-30
+
+### Added
+
+- **`security` vira olho cross-family (módulo `codex-adversary`) — o terceiro olho de outra família, com gate Claude-authoritative**: o auditor de segurança passa a rodar em **duas famílias** (Claude + Codex/GPT) nos checkpoints per-task (step 3b) e no final dual-review, merge **policy B** (achado de uma só família sobrevive a menos que a outra refute). Por ser um **gate** binário (`SECURE|UNSAFE`), o verdict é **Claude-authoritative**: um achado codex-only só escala o gate após o seu refute-pass do Claude — um `pendingClaudeRefutation` não-resolvido vira **precondição bloqueante no gate-state** (igual `regate-pending`). Assim um defeito real que só o Codex pegou ainda bloqueia (depois do Claude confirmar), mas um falso-high do Codex nunca vira UNSAFE espúrio por trás do orquestrador, e um refute-pass esquecido **bloqueia** em vez de passar silencioso. Dedup e `severity` **por-shape** (security não tem `category`; `Critical`/desconhecido→high conservador). Reverte a nota da v0.16.0 "security stays Claude-only" — `compliance` segue Claude-only (checa ACs do spec, não failure-modes gerais que uma 2ª família diversificaria).
+- **`vendor-core` vendoriza o módulo `codex-adversary` (gated) — fecha o gap "não auto-vendorizado" da v0.16.0**: copia `modules/` → `.claude/modules/` quando `--with-codex` OU o módulo já está presente no target (um update **refresca** o opt-in em vez de deixá-lo stale). Default sem flag = nenhum módulo (safe default = sem codex). `*.test.mjs` excluído (o repo-fonte é a casa dos testes).
+- **UX do `npx @orobsonn/claude-harness init` — pergunta o cross-check, sem nunca tocar no auth**: em TTY pergunta se quer o segundo olho (Codex/GPT); SIM vendoriza o módulo + liga o toggle `HARNESS_CODEX_ADVERSARY=1` em **`.claude/settings.local.json`** (per-machine, não-versionado, write atômico, fail-soft) + imprime o setup do Codex. Não-TTY (CI/headless) usa a flag explícita `--with-codex`; sem flag = init padrão. O `init` **nunca roda `codex login`** — o login na OpenAI é do operador.
+- **Doc do setup do Codex (operador)**: README do módulo + `config.toml.example` com os fatos verificados na doc oficial do Codex CLI — install `@openai/codex` (Node 22+; nunca o `codex` cru), gotcha do `OPENAI_API_KEY` que **não** sobrescreve um login ChatGPT ativo (use `codex login --with-api-key`), config **por-projeto** `.codex/` (trusted, closest-wins) análoga ao `.claude/`, e skills em `.codex/skills/`.
+
+### Changed
+
+- **Portabilidade do módulo `codex-adversary` — resolve as fontes canônicas nos dois layouts**: `resolveCanonicalPath` tenta `REPO_ROOT/core/<rel>` (repo-fonte) e cai pra `REPO_ROOT/<rel>` (vendored, `.claude/agents/...` sem `core/`). Sem isso o módulo vendorizado quebrava ao resolver os role files. Validado ponta-a-ponta num projeto-teste (os 3 roles resolvem de `.claude/agents/`). O driver `driveCrossFamily` vira genérico por `role` (default `adversary`; também `security`) e é **embrulhado em fail-open real** — um defeito de path/compose degrada Claude-only em vez de throw fail-CLOSED. Paths de comando nas SKILL/CLAUDE/README reconciliados pro contexto vendored (`.claude/modules/...`).
+
+### Fixed
+
+### Removed
+
 ## [0.16.0] - 2026-06-30
 
 ### Added
