@@ -10,29 +10,25 @@
  */
 
 import { resolve, isAbsolute } from "node:path";
+import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "../runner-adapters.mjs";
 
 /**
- * @description Resolves the node binary absolute path for the current runtime.
- * @returns {string} Absolute path to the node executable.
- */
-function resolveNodeBin() {
-  // process.execPath is the absolute path of the running Node.js binary.
-  return process.execPath;
-}
-
-/**
- * @description Builds the absolute `node --test <absolute-test-path>` command string
- * to be injected as the Stop-hook command in the ephemeral CLAUDE_CONFIG_DIR's settings.json.
+ * @description Builds the absolute Stop-hook command string for the selected runner adapter
+ * (`runner-adapters.mjs`), to be injected into the ephemeral CLAUDE_CONFIG_DIR's settings.json.
+ * `runnerId` defaults to `node-test`, so a project with no `.claude/hand-config/test-runner.json`
+ * keeps the original `node --test` command unchanged. The Stop hook only needs the adapter's
+ * exit code (pass/fail) — it never reads stdout — so the same adapter command used by the
+ * pre-spawn dry-run and post-spawn capture is reused here unmodified (one command, one parser,
+ * never three sources of truth).
  *
  * @param {string} configDir - Absolute path to the ephemeral config directory (part of the interface
  *   contract, but not used for path resolution; relative testPath is resolved from process.cwd()).
  * @param {string} testPath - Path to the frozen test file — relative (resolved from cwd) or absolute.
- * @returns {string} The fully-resolved `<node> --test <absolute-test-path>` command string.
- *   Contains no `${CLAUDE_PROJECT_DIR}` and no shell variable references.
+ * @param {string} [runnerId] - The selected test-runner adapter id (`runner-adapters.mjs`).
+ * @returns {string} The fully-resolved Stop-hook command string. Contains no
+ *   `${CLAUDE_PROJECT_DIR}` and no shell variable references.
  */
-export function resolveHookCommand(configDir, testPath) {
-  const nodeBin = resolveNodeBin();
-
+export function resolveHookCommand(configDir, testPath, runnerId = DEFAULT_RUNNER_ID) {
   // Resolve testPath to absolute.
   // If already absolute, isAbsolute returns true and resolve is a no-op.
   // If relative, resolve from process.cwd() (the project root at config-build time),
@@ -41,5 +37,6 @@ export function resolveHookCommand(configDir, testPath) {
     ? testPath
     : resolve(process.cwd(), testPath);
 
-  return `${nodeBin} --test ${absoluteTestPath}`;
+  const { bin, args } = resolveRunnerAdapter(runnerId).buildCommand(absoluteTestPath);
+  return [bin, ...args].join(" ");
 }

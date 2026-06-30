@@ -31,6 +31,7 @@ import {
 } from "./dispatch-hand.mjs";
 import { captureResult, realGit, realTestRunner } from "./capture-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
+import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -192,16 +193,19 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
     throw new Error("locked_test must be a file, not a directory — gate cannot block");
   }
 
-  // FAIL CLOSED: an existing file that registers ZERO tests makes `node --test <file>` exit 0,
-  // so the Stop hook can never go RED → the gate is vacuous. Dry-run the frozen test through the
+  // FAIL CLOSED: an existing file that registers ZERO tests makes the test runner exit 0, so the
+  // Stop hook can never go RED → the gate is vacuous. Dry-run the frozen test through the
   // INJECTED spawn (never a real spawnSync, so the test suite does not execute it) and confirm it
   // collects >0 tests. This checks the COUNT only — the frozen test is legitimately RED pre-impl.
-  const dryRun = spawn(process.execPath, ["--test", resolvedLockedTest], { encoding: "buffer" });
+  // `dispatch.test_runner` selects the adapter (runner-adapters.mjs) so this dry-run, the live
+  // Stop-hook gate (resolveHookCommand below), and the post-spawn capture all parse the SAME
+  // command's output — never three sources of truth for "how many tests did this collect".
+  const runnerId = dispatch.test_runner ?? DEFAULT_RUNNER_ID;
+  const runnerAdapter = resolveRunnerAdapter(runnerId);
+  const dryRunCommand = runnerAdapter.buildCommand(resolvedLockedTest);
+  const dryRun = spawn(dryRunCommand.bin, dryRunCommand.args, { encoding: "buffer" });
   const dryRunStdout = dryRun?.stdout ? String(dryRun.stdout) : "";
-  const testCountMatches = [...dryRunStdout.matchAll(/^# tests (\d+)$/gm)];
-  const testCount = testCountMatches.length
-    ? Number(testCountMatches[testCountMatches.length - 1][1])
-    : 0;
+  const testCount = runnerAdapter.parseCount(dryRunStdout) ?? 0;
   if (!testCount) {
     throw new Error(
       "locked_test registers zero tests — gate is vacuous, refusing to spawn"
@@ -230,7 +234,7 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
 
     // Resolve and inject the real Stop-hook command.
     // lockedTest is guaranteed non-empty (top-of-function guard).
-    const hookCmd = resolveHookCommand(ephemeralDir, lockedTest);
+    const hookCmd = resolveHookCommand(ephemeralDir, lockedTest, runnerId);
     // Template-shape drift must NOT silently discard the resolved command:
     // if the parsed settings cannot receive the command at hooks.Stop[0].hooks[0], fail closed.
     if (settings?.hooks?.Stop?.[0]?.hooks?.[0]) {
@@ -314,10 +318,15 @@ function defaultHeadSha() {
  * touchedPaths from an independent `git diff` — NEVER the model's prose.
  */
 function defaultCapture(args) {
+  // The dispatch carries `test_runner` (set from the descriptor by runLiveDispatch below), so
+  // the post-spawn capture re-runs the SAME adapter the pre-spawn dry-run and live Stop-hook
+  // gate already used — never a fourth, independently-hardcoded `node --test`.
+  const runnerId = args.dispatch?.test_runner ?? DEFAULT_RUNNER_ID;
   return captureResult({
     ...args,
     git: realGit(),
-    testRunner: (p) => realTestRunner(p),
+    testRunner: (p) => realTestRunner(p, process.cwd(), runnerId),
+    parseCount: resolveRunnerAdapter(runnerId).parseCount,
     logSink: (line) => process.stderr.write(`${line}\n`),
   });
 }
@@ -461,6 +470,9 @@ export async function runLiveDispatch(descriptor, {
     frozen_paths: [descriptor.locked_test],
     allowed_writes: descriptor.allowed_writes,
     locked_test: descriptor.locked_test,
+    // Optional: a descriptor with no opinion (no test_runner field) lets dispatchHand/capture
+    // default to DEFAULT_RUNNER_ID — every pre-existing descriptor keeps today's behavior.
+    test_runner: descriptor.test_runner,
   };
 
   // (7) Persist the descriptor ONLY into an ephemeral mkdtemp path, redactDeep-scrubbed, torn down

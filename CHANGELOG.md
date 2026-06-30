@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **`test_runner` configurável por projeto (`references/runner-adapters.mjs`) — Vitest deixa de ser falso-FAILED na mão barata**: o dry-run pré-spawn, o gate ao vivo do Stop-hook e a captura independente pós-spawn rodavam `node --test` cravado em três lugares distintos — um projeto Vitest (ex: `victor-pipeline-dados-bot`, com `vitest-pool-workers`) sempre reportava `lockedTestExitCode: 1` mesmo com código correto, exigindo validação manual fora do harness. Agora um adaptador único (`{ command, parseCount }` por runner, sempre array pra `execFileSync`, nunca string interpolada) é a fonte de verdade nos três pontos; `node-test` continua default — zero config pra todo projeto já vendorizado. Seleção por `.claude/hand-config/test-runner.json` (`{ "adapter": "vitest" }`).
+
 ### Changed
 
 ### Fixed
