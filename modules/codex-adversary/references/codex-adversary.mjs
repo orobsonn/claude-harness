@@ -25,13 +25,35 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** @description Repo root, three levels up from modules/codex-adversary/references/. */
+/**
+ * @description Repo root, three levels up from the module's references/ dir. In the SOURCE repo this
+ * is `<root>` (module at `<root>/modules/codex-adversary/references/`); when the module is VENDORED
+ * it is the project's `.claude/` (module at `<root>/.claude/modules/codex-adversary/references/`).
+ */
 export const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
+/**
+ * @description Resolves a canonical core source that lives under TWO possible layouts: the source
+ * repo keeps it under `core/` (`<root>/core/agents/...`), while a vendored project keeps it directly
+ * under `.claude/` (`<root>/agents/...`, no `core/`). Tries the `core/`-prefixed path first, then the
+ * bare path; if NEITHER exists, returns the `core/` variant so a downstream read error points at the
+ * canonical location. PURE — `exists` is injectable for tests.
+ * @param {string} rel - Path relative to the core root, e.g. "agents/adversary.md".
+ * @param {{ repoRoot?: string, exists?: (p: string) => boolean }} [opts]
+ * @returns {string} Absolute path to the resolved source.
+ */
+export function resolveCanonicalPath(rel, { repoRoot = REPO_ROOT, exists = existsSync } = {}) {
+  const underCore = join(repoRoot, "core", rel);
+  if (exists(underCore)) return underCore;
+  const bare = join(repoRoot, rel);
+  if (exists(bare)) return bare;
+  return underCore;
+}
+
 /** @description Canonical sources — the SINGLE source of truth shared with the Claude adversary. */
-export const ADVERSARY_ROLE_PATH = join(REPO_ROOT, "core", "agents", "adversary.md");
-export const CANONICAL_SKILL_PATH = join(
-  REPO_ROOT, "core", "skills", "canonical-critical-classes", "SKILL.md",
+export const ADVERSARY_ROLE_PATH = resolveCanonicalPath("agents/adversary.md");
+export const CANONICAL_SKILL_PATH = resolveCanonicalPath(
+  "skills/canonical-critical-classes/SKILL.md",
 );
 
 /**
@@ -49,7 +71,7 @@ export function stripFrontmatter(md) {
 }
 
 /** @description Role file path for the plan-reviewer eye (a verdict-shaped cross-family checkpoint). */
-export const PLAN_REVIEWER_ROLE_PATH = join(REPO_ROOT, "core", "agents", "plan-reviewer.md");
+export const PLAN_REVIEWER_ROLE_PATH = resolveCanonicalPath("agents/plan-reviewer.md");
 
 /**
  * @description Registry of the EYE roles that can run cross-family. The principle: NOT every task
