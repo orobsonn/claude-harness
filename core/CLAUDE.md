@@ -93,7 +93,12 @@ without an `OPENAI_API_KEY`, or with `codex` unreachable, every checkpoint runs 
 as today** — the second family is never a hard dependency. For the `security` eye specifically, the
 SECURE|UNSAFE gate verdict stays Claude-authoritative (a codex-only finding only escalates the gate
 after its Claude refute-pass — a gate-state precondition). The second family is always read-only and
-Claude-tier (an eye, never a cheap hand). See the vendored `.claude/modules/codex-adversary/`.
+Claude-tier (an eye, never a cheap hand). The **`codex-eye-nudge` hook** (PostToolUse[Agent],
+registered in `settings.json`) is the deterministic mechanism that triggers the second family: it
+fires automatically after an eligible Claude eye returns and injects an `additionalContext` reminder —
+no longer relying on the orchestrator to remember from prose. Advisory and fail-open: module absent,
+switch off, or `codex` unreachable → the hook skips silently and the checkpoint runs Claude-only.
+See the vendored `.claude/modules/codex-adversary/`.
 
 ## Language convention
 

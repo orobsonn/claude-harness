@@ -15,6 +15,19 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.0] - 2026-06-30
+
+### Added
+
+- **Nudge determinístico do segundo olho (Codex) — deixa de depender da memória do orquestrador**: um hook `PostToolUse[Agent]` (`core/hooks/codex-eye-nudge.mjs`, registrado no `settings.json`) injeta automaticamente, no instante em que o orquestrador despacha um eye elegível (adversary/security/plan-reviewer) com o cross-family ligado, um lembrete pra rodar a segunda família e mergear. Resolve o caso real (observado em sessão FULL) em que o orquestrador Sonnet pulava silenciosamente o `cross-family.mjs` — a instrução vivia em prosa na skill, lida no começo da sessão e esquecida no momento do dispatch. **Advisory e fail-open total**: nunca bloqueia (sem `permissionDecision`); switch off, módulo ausente ou headless → Claude-only exatamente como hoje. Cobertura por `subagent_type` em todos os checkpoints (spec, per-task, plan-review, final), não só os finais. Catraca/gate determinístico foi deliberadamente rejeitado (forjável + deadlock fail-closed) — não se adiciona gate onde nada está quebrado.
+- **Rota verdict-shaped pro `plan-reviewer` no `cross-family.mjs`**: `cross-family.mjs --role plan-reviewer` agora roteia pelo fluxo de veredito (`runCodexRole` + `merge-verdicts`, either-REVISE-wins) em vez do fluxo de findings, alcançável end-to-end pelo CLI. O verdict path respeita o toggle de opt-in/force-off e faz fail-open pro veredito do Claude quando o Codex está indisponível ou retorna saída sem veredito (nunca um REVISE espúrio).
+
+### Changed
+
+### Fixed
+
+### Removed
+
 ## [0.17.1] - 2026-06-30
 
 ### Added

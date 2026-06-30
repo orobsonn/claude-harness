@@ -95,6 +95,27 @@ security, the verdict is then Claude's alone). The second family is always read-
 read-only`) — an EYE, never a hand. It does **not** relax the "no eye on Ollama" constraint above:
 cross-family adds a second *Claude-tier* family, not a cheap hand.
 
+**Deterministic nudge (`codex-eye-nudge.mjs` — PostToolUse[Agent] hook):** rather than relying on
+the orchestrator to remember from prose, the harness injects the cross-family invocation
+deterministically. When the orchestrator dispatches an eligible eye (`adversary`, `security`, or
+`plan-reviewer`) with `HARNESS_CODEX_ADVERSARY` on and the module present, the PostToolUse[Agent]
+hook `codex-eye-nudge.mjs` fires automatically after the Claude eye returns and injects an
+`additionalContext` reminder to run the second family. **Sequencing (critical):** the nudge is an
+obligation to honour AFTER the Claude eye has returned — capture the eye's findings/verdict into the
+`--claude` input file FIRST, THEN run
+`node .claude/modules/codex-adversary/references/cross-family.mjs --role <role> --task <task.json> --claude <claude-input.json>`,
+THEN merge. **Never run `cross-family.mjs` against an empty `--claude` file** — that produces a
+degenerate merge with no Claude signal. **Coverage:** the nudge fires by `subagent_type` at every eye
+checkpoint (spec-adversary, per-task, plan-review, final dual-review) — not only the final ones.
+**Advisory, never a gate:** the nudge never blocks; switch off, module absent, headless, or `codex`
+unreachable → the hook skips silently and the checkpoint runs Claude-only exactly as today (fail-open).
+**Idempotence (residual accepted):** duplicate nudges are expected (final dual-review = 2 eyes → 2
+nudges; a re-gate → another); an eye whose cross-family step is already merged is satisfied; the Claude
+refute-pass for codex-only findings MUST be dispatched as a general Claude agent — **NOT** as
+`subagent_type adversary/security` — otherwise it re-triggers the nudge in a loop. The `plan-reviewer`
+cross-family step runs verdict-shaped via `cross-family.mjs --role plan-reviewer` (new route alongside
+the existing `--role security`).
+
 **Orchestrator = sonnet (committed default):** the orchestrator is the highest-volume token consumer, so a cheap model here is the harness's real economy — this is the whole point of the design. The residual risk is curation quality: context curation is judgment, and weak curation poisons every downstream agent. The harness mitigates this by **moving the critical decisions off the orchestrator's judgment onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (the orchestrator *cannot* generate the plan inline and must dispatch the opus `planner`), the sensitive-path override is a glob check, and per-role model routing is this fixed table. The cheaper the orchestrator, the more these rails carry the judgment. Residual curation risk stays instrumented — watch `usage` per role and whether downstream agents got the right scope. The operator may still override the model via `/model` for a given session.
 
 ---

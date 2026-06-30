@@ -125,7 +125,7 @@ test("SessionStart startup wires version-check.mjs but compact does NOT (no re-n
   );
 });
 
-test("NO Skill matcher in PreToolUse and exactly 6 hooks total", () => {
+test("NO Skill matcher in PreToolUse and exactly 7 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
 
@@ -148,7 +148,7 @@ test("NO Skill matcher in PreToolUse and exactly 6 hooks total", () => {
     totalHooks += settings.hooks.SessionStart.length;
   }
 
-  strictEqual(totalHooks, 6, "exactly 6 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash for PostToolUse, compact + startup for SessionStart)");
+  strictEqual(totalHooks, 7, "exactly 7 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash + Agent for PostToolUse, compact + startup for SessionStart)");
 });
 
 test("hooks.PreToolUse has Bash matcher with entry-gate.mjs command", () => {
@@ -168,6 +168,56 @@ test("hooks.PreToolUse has Bash matcher with entry-gate.mjs command", () => {
   );
   ok(
     bashHook.hooks[0].command.includes("${CLAUDE_PROJECT_DIR}"),
+    "command uses ${CLAUDE_PROJECT_DIR} variable"
+  );
+});
+
+test("Given the baseline settings.json, When parsed, Then hooks.PostToolUse contains an entry with matcher 'Agent' whose command invokes codex-eye-nudge.mjs", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  ok(settings.hooks, "hooks object exists");
+  ok(settings.hooks.PostToolUse, "hooks.PostToolUse exists");
+  ok(Array.isArray(settings.hooks.PostToolUse), "PostToolUse is an array");
+
+  const agentHook = settings.hooks.PostToolUse.find(
+    (h) => h.matcher === "Agent"
+  );
+  ok(agentHook, "PostToolUse Agent matcher found");
+  ok(
+    agentHook.hooks &&
+      agentHook.hooks[0] &&
+      agentHook.hooks[0].command &&
+      agentHook.hooks[0].command.includes("codex-eye-nudge.mjs"),
+    "Agent hook command contains codex-eye-nudge.mjs"
+  );
+  ok(
+    agentHook.hooks[0].command.includes("${CLAUDE_PROJECT_DIR}"),
+    "command uses ${CLAUDE_PROJECT_DIR} variable"
+  );
+});
+
+test("Given the baseline settings.json, When parsed, Then the existing PreToolUse 'Agent' entry still invokes entry-gate.mjs (the nudge did not replace or break the gate)", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  ok(settings.hooks, "hooks object exists");
+  ok(settings.hooks.PreToolUse, "hooks.PreToolUse exists");
+  ok(Array.isArray(settings.hooks.PreToolUse), "PreToolUse is an array");
+
+  const agentHook = settings.hooks.PreToolUse.find(
+    (h) => h.matcher === "Agent"
+  );
+  ok(agentHook, "PreToolUse Agent matcher found");
+  ok(
+    agentHook.hooks &&
+      agentHook.hooks[0] &&
+      agentHook.hooks[0].command &&
+      agentHook.hooks[0].command.includes("entry-gate.mjs"),
+    "PreToolUse Agent hook command contains entry-gate.mjs"
+  );
+  ok(
+    agentHook.hooks[0].command.includes("${CLAUDE_PROJECT_DIR}"),
     "command uses ${CLAUDE_PROJECT_DIR} variable"
   );
 });

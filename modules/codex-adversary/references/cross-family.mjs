@@ -23,8 +23,9 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
-import { isEnabled, checkAvailability, composeRolePrompt, runCodexAdversary, runCodexRefutation, ROLES } from "./codex-adversary.mjs";
+import { isEnabled, checkAvailability, composeRolePrompt, runCodexAdversary, runCodexRefutation, runCodexRole, ROLES } from "./codex-adversary.mjs";
 import { classifyFindings, finalizeFindings, dedupKey, readIssues, securityVerdict, DEDUP_FIELDS } from "./merge-findings.mjs";
+import { mergeVerdicts } from "./merge-verdicts.mjs";
 
 /**
  * @description Drives the cross-family loop for ANY findings-shaped EYE role (default `adversary`;
@@ -102,6 +103,64 @@ export function driveCrossFamily({ role = "adversary", taskJson, claudeIssues, e
 }
 
 /**
+ * @description Drives the cross-family verdict-shaped path for roles whose output is a single
+ * verdict (APPROVE/REVISE) rather than a findings[] array. FAIL-OPEN: any error, unavailable
+ * codex, or missing output degrades to the Claude verdict with codexAvailable:false — never throws.
+ * @param {{
+ *   role: string,
+ *   taskJson: object|string,
+ *   claudeVerdict: object,
+ *   runRole?: (args:{prompt:string, availability:object}) => {available:boolean, output?:object, reason?:string},
+ *   env?: NodeJS.ProcessEnv,
+ *   availability?: {ok:boolean, reason:string},
+ * }} opts
+ */
+export function driveCrossFamilyVerdict({ role, taskJson, claudeVerdict, runRole, env = process.env, availability }) {
+  try {
+    const task = typeof taskJson === 'string' ? safeParse(taskJson) : (taskJson ?? {});
+    // (A) respect the opt-in/force-off toggle, exactly like driveCrossFamily does
+    if (!isEnabled({ env, task })) {
+      return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+    }
+    const prompt = composeRolePrompt({ role, taskJson });
+    const run = runRole ?? ((args) => runCodexRole(args));
+    const res = run({ prompt, availability });
+    // (B) only merge when codex returned a REAL verdict; else fail-open to the Claude verdict
+    const v = res && res.available === true && res.output
+      && ['APPROVE', 'REVISE'].includes(String(res.output.verdict).trim().toUpperCase());
+    if (v) {
+      return mergeVerdicts(claudeVerdict, res.output, { codexAvailable: true });
+    }
+    return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+  } catch (_err) {
+    return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+  }
+}
+
+/**
+ * @description Routes to the correct cross-family driver based on ROLES[role].shape.
+ * Verdict-shaped roles (plan-reviewer) go through driveCrossFamilyVerdict;
+ * findings-shaped roles (adversary, security) go through driveCrossFamily.
+ * @param {{
+ *   role?: string,
+ *   taskJson: object|string,
+ *   claudeInput: object|object[],
+ *   env?: NodeJS.ProcessEnv,
+ *   availability?: {ok:boolean, reason:string},
+ *   runAttack?: Function,
+ *   runRefute?: Function,
+ *   runRole?: Function,
+ * }} opts
+ */
+export function runForRole({ role, taskJson, claudeInput, env, availability, runAttack, runRefute, runRole }) {
+  const shape = (ROLES[role] && ROLES[role].shape) || 'findings';
+  if (shape === 'verdict') {
+    return driveCrossFamilyVerdict({ role, taskJson, claudeVerdict: claudeInput, runRole, env, availability });
+  }
+  return driveCrossFamily({ role, taskJson, claudeIssues: claudeInput, runAttack, runRefute, env, availability });
+}
+
+/**
  * @description For the security gate, attach the recomputed SECURE|UNSAFE verdict. It is computed
  * ONLY from `findings` (agreed + claude-only survivors) — codex-only findings sit in
  * pendingClaudeRefutation and do NOT escalate the gate until the orchestrator runs the Claude
@@ -142,8 +201,11 @@ function parseArgs(argv) {
 function main() {
   const { task, claude, role } = parseArgs(process.argv.slice(2));
   const taskJson = task ? readFileSync(resolveCwd(task), "utf8") : "{}";
-  const claudeIssues = claude ? readIssues(claude) : [];
-  const result = driveCrossFamily({ role, taskJson, claudeIssues });
+  const shape = (ROLES[role] && ROLES[role].shape) || "findings";
+  const claudeInput = shape === "verdict"
+    ? (claude ? JSON.parse(readFileSync(resolveCwd(claude), "utf8")) : {})
+    : (claude ? readIssues(claude) : []);
+  const result = runForRole({ role, taskJson, claudeInput });
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 

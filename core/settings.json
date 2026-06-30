@@ -117,6 +117,15 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/stamp-triage.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/codex-eye-nudge.mjs"
+          }
+        ]
       }
     ],
     "SessionStart": [
