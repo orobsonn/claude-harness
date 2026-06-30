@@ -81,6 +81,17 @@ Before closing a non-trivial technical proposal (architecture, security, multi-t
 stack choice, blast radius), invoke an agent with an explicit **devil's-advocate** role to attack it,
 and present the honest synthesis. Skip for trivial/mechanical tasks.
 
+**Cross-family eyes (optional `codex-adversary` module).** Not every task has an adversarial
+checkpoint, but every checkpoint that runs a critical-judgment **eye** (the `adversary` on spec /
+per-task / final dual-review, and the `plan-reviewer`) can run on **two model families** — Claude and
+a second family (GPT via the Codex CLI) — so each surfaces the problems the other's priors miss. The
+**global switch** is the env var `HARNESS_CODEX_ADVERSARY` (set it in `settings.json` → `env` for a
+durable, committed default; per-task via `adversarial.cross_family`). It is **fail-open**: with the
+module absent, the switch off, in headless without an `OPENAI_API_KEY`, or with `codex` unreachable,
+every checkpoint runs **Claude-only exactly as today** — the second family is never a hard dependency.
+The second family is always read-only and Claude-tier (an eye, never a cheap hand). See
+`modules/codex-adversary/`.
+
 ## Language convention
 
 - All harness artifacts — skills (`SKILL.md`), agents (`.md`), rules, JSON keys/values, inline

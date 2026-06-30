@@ -26,6 +26,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node --test "core/**/*.test.mjs"
+      - run: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"
       - name: Scan for leaked secrets
         run: node core/skills/initializing-projects/references/scan-secrets-in-tree.mjs

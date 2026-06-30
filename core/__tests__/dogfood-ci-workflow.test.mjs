@@ -66,8 +66,8 @@ test("locked-1: ci.yml has correct trigger, node-version string, and test comman
 
   // 1d. The required test-runner step must exist exactly
   assert.ok(
-    content.includes('node --test "core/**/*.test.mjs"'),
-    `ci.yml must include a step running exactly: node --test "core/**/*.test.mjs"`
+    content.includes('node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"'),
+    `ci.yml must include a step running exactly: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"`
   );
 });
 
@@ -142,15 +142,17 @@ test("locked-5: committed test command is faithful to what the generator produce
 
   // 5c. Fidelity via globSync set-equality:
   //     The generator emits `node --test "**/*.test.mjs"` (generic node-test pattern from
-  //     detect-stack). The committed CI uses `node --test "core/**/*.test.mjs"` (narrowed).
-  //     These are EQUIVALENT for THIS repo because all .test.mjs files live under core/.
+  //     detect-stack). The committed CI uses two narrowed globs:
+  //       "core/**/*.test.mjs" and "modules/**/*.test.mjs".
+  //     Together they must be EQUIVALENT to the generic — i.e. their union covers exactly
+  //     all .test.mjs files in the repo (outside node_modules).
   //
-  //     Proof by set expansion: expand both globs under the repo root and compare the results.
-  //     The sets must be identical — if any .test.mjs file existed outside core/, the
-  //     committed command would silently skip it (a faithfulness regression). This test
+  //     Proof by set expansion: expand both committed globs, union + dedup + sort, then compare
+  //     with the generic expansion. If any .test.mjs file lives outside core/ and modules/,
+  //     the committed command would silently skip it (a faithfulness regression). This test
   //     catches that regression deterministically.
   const GENERIC_GLOB = "**/*.test.mjs";
-  const COMMITTED_GLOB = "core/**/*.test.mjs";
+  const COMMITTED_GLOBS = ["core/**/*.test.mjs", "modules/**/*.test.mjs"];
 
   const genericFiles = globSync(GENERIC_GLOB, {
     cwd: REPO_ROOT,
@@ -158,16 +160,19 @@ test("locked-5: committed test command is faithful to what the generator produce
       f.startsWith("node_modules") || f.includes("/node_modules/"),
   }).sort();
 
-  const committedFiles = globSync(COMMITTED_GLOB, {
-    cwd: REPO_ROOT,
-    exclude: (f) =>
-      f.startsWith("node_modules") || f.includes("/node_modules/"),
-  }).sort();
+  const committedFilesRaw = COMMITTED_GLOBS.flatMap((glob) =>
+    globSync(glob, {
+      cwd: REPO_ROOT,
+      exclude: (f) =>
+        f.startsWith("node_modules") || f.includes("/node_modules/"),
+    })
+  );
+  const committedFiles = [...new Set(committedFilesRaw)].sort();
 
   assert.deepStrictEqual(
     genericFiles,
     committedFiles,
-    `Glob set-equality failed — the committed glob 'core/**/*.test.mjs' does not match ` +
+    `Glob set-equality failed — the committed globs '${COMMITTED_GLOBS.join("' + '")}' do not match ` +
       `all files that '**/*.test.mjs' would match.\n` +
       `Files only in generic: ${genericFiles.filter((f) => !committedFiles.includes(f)).join(", ") || "none"}\n` +
       `Files only in committed: ${committedFiles.filter((f) => !genericFiles.includes(f)).join(", ") || "none"}`
