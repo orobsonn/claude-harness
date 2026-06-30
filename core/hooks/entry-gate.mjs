@@ -771,6 +771,17 @@ export function decide(payload, deps = {}) {
   // looseness (an echo-forgeable ticket could fake it). Runs AFTER Gate 1 so a hand WITHOUT triage
   // still hits the triage deny first.
   if (HAND_ROLES.has(role)) {
+    // test-author is dispatched as a main-loop Claude Agent in BOTH local and headless. It is the
+    // PRODUCER of the fidelity-pass (it authors the red locked test, validated by the compliance eye in
+    // step 1b), so it must never be blocked by the fidelity rail it serves — and it has NO spawn-hand
+    // path: runLiveDispatch requires a frozen test that does not yet exist at author time. Its safety
+    // controls are the compliance eye (step 1b) + the freeze content-hash (step 1c), not the executor's
+    // run-record rail. Gate 1 (triage) already ran above, so this only bypasses the hand-routing rail —
+    // for the one role that rail must not gate.
+    if (role === "test-author") {
+      return { allow: true };
+    }
+
     // HEADLESS: cheap hands is a LOCAL-only capability. In the cloud there is no Ollama hand, so the
     // hand roles run on the standard Claude model — a main-loop Agent(executor|sniper|test-author) is
     // the INTENDED dispatch, not a silent fallback to deny.

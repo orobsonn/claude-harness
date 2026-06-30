@@ -157,27 +157,38 @@ test("trilho-3-4 AC3 — Hands vs Eyes taxonomy names test-author as a HAND alon
   );
 });
 
-test("trilho-3-test-author AC1 — test-author doc describes an Ollama/spawn-hand HAND resolving from hand_tiers, not a standalone Claude-haiku hand", () => {
+test("trilho-3-test-author AC1 — test-author doc describes a main-loop Claude Agent (sonnet) dispatched in both local and headless, NOT via spawn-hand or Ollama", () => {
+  // UPDATED: test-author is now a Claude Agent (sonnet) in both local and headless.
+  // It is NOT a spawn-hand/Ollama hand — at author time no frozen test exists for
+  // runLiveDispatch to run against; the safety controls are compliance (step 1b) + freeze
+  // content-hash (step 1c). This test verifies the new contract.
   const content = readDoc(AGENT_TEST_AUTHOR);
 
   assert.match(
     content,
-    /spawn-hand/i,
-    "test-author.md must describe dispatch via the spawn-hand (Ollama) path",
+    /sonnet/i,
+    "test-author.md must name sonnet as the model (main-loop Claude Agent)",
   );
   assert.match(
     content,
-    /hand_tiers/,
-    "test-author.md must resolve its model from hand_tiers",
+    /Claude Agent/i,
+    "test-author.md must describe dispatch as a Claude Agent, not spawn-hand",
   );
   assert.match(
     content,
-    /ollama/i,
-    "test-author.md must frame the role as an Ollama hand",
+    /NOT via spawn-hand|não.*spawn-hand|spawn-hand.*não|no.*spawn-hand/i,
+    "test-author.md must explicitly state it does NOT run via spawn-hand",
+  );
+  // The doc may mention Ollama only to say it is NOT Ollama — but must NOT say 'Ollama hand'
+  // or 'Ollama spawn' or 'model: haiku' (the old fixed-haiku assumption that was wrong).
+  assert.doesNotMatch(
+    content,
+    /\bOllama\s+(?:hand|spawn)/i,
+    "test-author.md must NOT describe the role as an 'Ollama hand' or 'Ollama spawn'",
   );
   assert.doesNotMatch(
     content,
-    /Claude(?:\s+\w+)?\s+haiku\s+(?:hand|Agent)/i,
-    "test-author.md must NOT claim it IS a standalone Claude haiku hand/Agent",
+    /^model:\s*haiku\s*$/m,
+    "test-author.md frontmatter must NOT pin model to haiku (old fixed-haiku assumption)",
   );
 });

@@ -9,9 +9,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Revisão paralela dos olhos (fan-out-join) — entrega mais rápida sem tocar no trilho de segurança**: os olhos read-only que revisam o código (compliance + adversary + security), antes despachados em fila, passam a rodar **concorrentemente numa só leva de Agent calls (fan-out)**, com todos os verdicts coletados (**join**) antes do sniper — tanto na revisão per-task (Phase 2) quanto no final dual-review (Phase 3). O gargalo real de wall-clock é o `adversary` (Opus, lento); rodá-lo concorrente com compliance/security corta esse tempo. Seguro por construção: os olhos são read-only, não escrevem no working tree nem carimbam markers no gate-state, e são mutuamente independentes (adversary virgin, compliance lean) — o paralelismo não toca o trilho de segurança. Mantém a proibição de **background-and-poll** (verdict stale); o que se habilita é o **fan-out-join** (bloqueia até todos os verdicts finais chegarem). Mãos (executor/sniper/test-author) seguem seriais de propósito.
+
 ### Changed
 
 ### Fixed
+
+- **Deadlock do `test-author` no fidelity-rail (LOCAL) — destravado**: o `test-author` (quem autora o teste travado RED, o oráculo do pipeline) é a *pré-condição* do `fidelity-pass`, mas era gateado pelo MESMO fidelity-rail que serve — bloqueado por todos os caminhos (spawn-hand exige um teste congelado que ele ainda nem criou; main-loop `Agent` exigia um ticket de escalação com run-record `FAILED` inexistente). Sem saída, o orquestrador escrevia testes e código na mão e auto-carimbava o `fidelity-pass` (violando "strong eyes, cheap hands" de ponta a ponta — observado ao vivo no `victor-pipeline-dados-bot`). **Conserto:** o `test-author` passa a rodar como **main-loop Claude Agent (sonnet)** em LOCAL e HEADLESS — espelhando o que o headless já fazia — com early-return no `entry-gate.mjs` antes do hand-routing rail (escopado a `role === "test-author"`; executor/sniper seguem gateados, sem enfraquecimento). Seus controles de segurança são o olho `compliance` (step 1b) + o content-hash do freeze (step 1c). O `fidelity-pass` segue intocado (veredito do compliance).
 
 ### Removed
 
