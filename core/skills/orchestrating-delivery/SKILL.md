@@ -62,6 +62,25 @@ Model per role. **This table is authoritative** — when a role's model is named
 
 **Hands vs Eyes (v2 wiring):** executor, sniper **AND test-author** are **HAND** roles — code/test-writing workers that run on an Ollama model resolved from `hand_tiers` via `dispatch-hand.mjs` + `spawn-hand.mjs` (the **spawn-hand path**: `claude -p` + isolated ephemeral CLAUDE_CONFIG_DIR), **NOT** via `Agent`. The test-author (step 1a) is dispatched through this same spawn-hand path (Ollama, resolving from `hand_tiers`), exactly like the executor and sniper — it is a HAND, not an eye. All other roles (orchestrator, planner, plan-reviewer, compliance, adversary, security, harvester, shipper) are **EYE** roles — they judge and decide, and they **always stay on Claude**. No eye role ever resolves to an Ollama model — this is a hard constraint. In v2 ALL executor tiers (low/medium/high) route to the live spawn path; executor-high resolves to `hand_tiers.high` (a strong Ollama coder). The sniper is wired to the live spawn path (`hand_tiers[issue.severity]`) for ALL severities including high. Claude is reachable by a hand only via the K=1 escalation fallback — and the test-author's K=1 transcription fallback (step 1b, a compliance-tier Claude transcription) uses the **SAME `escalation_fallback` ticket** as the executor/sniper fallback. **HEADLESS exception (LOCAL-only capability):** the spawn-hand path is LOCAL-only. In **HEADLESS** (cloud routine, `$CLAUDE_CODE_REMOTE` set) there is no Ollama hand — the hand roles are dispatched as ordinary Claude `Agent`s on the standard cloud model, and the entry-gate allows a main-loop hand-role Agent (no spawn-hand, no ticket/run-record needed). Do NOT invoke `spawn-hand.mjs` in headless.
 
+**Cross-family eyes (optional `codex-adversary` module):** an EYE judges better when a *second model
+family* judges alongside it — each family surfaces the failure modes the other's priors miss. When the
+`codex-adversary` module is installed AND `adversarial.cross_family` is not `false` (planner default:
+`true`) AND the second family is available (the global switch `HARNESS_CODEX_ADVERSARY` is on and `codex`
+is reachable), run the eye on BOTH families and merge — at **every** checkpoint that runs an eye:
+- **adversary** (spec attack, per-task, final dual-review): dispatch the Claude `adversary` as today AND
+  `node modules/codex-adversary/references/cross-family.mjs --task <task.json> --claude <claude-issues.json>`.
+  The driver returns `findings` (ship to the sniper now), `pendingClaudeRefutation` (codex-only findings
+  whose refutation belongs to a native Claude `adversary` refute-pass — run it, then fold survivors in),
+  and `dropped` (audit). Cross-check is **policy B**: a single-family finding is kept unless the other
+  family refutes it — never majority voting.
+- **plan-reviewer**: dispatch a Claude `plan-reviewer` AND a Codex one (`runCodexRole` role `plan-reviewer`)
+  on the SAME plan to catch DISTINCT engineering problems, then merge with `merge-verdicts.mjs`
+  (**either-REVISE-wins** + union of concerns).
+This is **fail-open and never a hard dependency**: module absent, switch off, headless without
+`OPENAI_API_KEY`, or `codex` unreachable → the checkpoint runs **Claude-only exactly as today**. The
+second family is always read-only (`--sandbox read-only`) — an EYE, never a hand. It does **not** relax
+the "no eye on Ollama" constraint above: cross-family adds a second *Claude-tier* family, not a cheap hand.
+
 **Orchestrator = sonnet (committed default):** the orchestrator is the highest-volume token consumer, so a cheap model here is the harness's real economy — this is the whole point of the design. The residual risk is curation quality: context curation is judgment, and weak curation poisons every downstream agent. The harness mitigates this by **moving the critical decisions off the orchestrator's judgment onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (the orchestrator *cannot* generate the plan inline and must dispatch the opus `planner`), the sensitive-path override is a glob check, and per-role model routing is this fixed table. The cheaper the orchestrator, the more these rails carry the judgment. Residual curation risk stays instrumented — watch `usage` per role and whether downstream agents got the right scope. The operator may still override the model via `/model` for a given session.
 
 ---

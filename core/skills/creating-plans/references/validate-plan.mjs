@@ -260,6 +260,12 @@ function validateAdversarial(adv, path, errors) {
     // focus required and non-empty only when enabled
     checkStringArrayMin1(adv.focus, `${path}.focus`, errors);
   }
+  // Optional: cross_family opts this checkpoint into a second-family (Codex/GPT) adversary run
+  // alongside the Claude one. Backward-compatible — absent means "harness default" (on where the
+  // codex-adversary module is installed and available; fail-open to Claude-only otherwise).
+  if (adv.cross_family !== undefined && !isBoolean(adv.cross_family)) {
+    errors.add(`${path}.cross_family`, "must be a boolean when present");
+  }
 }
 
 // ---------- task ----------

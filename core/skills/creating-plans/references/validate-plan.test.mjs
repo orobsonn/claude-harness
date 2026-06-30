@@ -68,6 +68,27 @@ function basePlan(modelStrategy) {
 
 const SPLIT_HAND_TIERS = { low: "kimi-k2.6", medium: "qwen-3", high: "deepseek-v3" };
 
+test("adversarial.cross_family boolean is accepted", () => {
+  const plan = basePlan({ hand_tiers: SPLIT_HAND_TIERS, ...FIXED_EYE_ROLES });
+  plan.tasks[0].adversarial = { enabled: true, focus: ["auth-bypass"], cross_family: true };
+  const r = runValidator(plan);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+});
+
+test("adversarial.cross_family non-boolean is rejected on that path", () => {
+  const plan = basePlan({ hand_tiers: SPLIT_HAND_TIERS, ...FIXED_EYE_ROLES });
+  plan.tasks[0].adversarial = { enabled: false, cross_family: "yes" };
+  const r = runValidator(plan);
+  assert.notEqual(r.status, 0, "must exit non-zero");
+  assert.match(r.stderr, /cross_family/);
+});
+
+test("adversarial without cross_family stays valid (backward-compatible)", () => {
+  const plan = basePlan({ hand_tiers: SPLIT_HAND_TIERS, ...FIXED_EYE_ROLES });
+  const r = runValidator(plan);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+});
+
 test("split-shape eye role set to an Ollama id is rejected on the role path", () => {
   const plan = basePlan({
     hand_tiers: SPLIT_HAND_TIERS,
