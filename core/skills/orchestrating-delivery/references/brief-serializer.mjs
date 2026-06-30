@@ -3,6 +3,8 @@
  * slice and curated shared context. Pure function — no filesystem reads, byte-identical
  * output for identical inputs.
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { parseFlags, isDirectCli } from './cli-flags.mjs';
 
 /**
  * @description Serializes a task slice and shared context into a plain-text executor brief.
@@ -69,4 +71,33 @@ export function serializeBrief(taskSlice, sharedContext) {
   lines.push(sharedContext);
 
   return lines.join('\n');
+}
+
+// ---------- thin CLI: the runnable brief entrypoint SKILL.md promises ----------
+// "The executor brief is produced by the brief-serializer helper, not free-written" — this is
+// that runnable command, mirroring the UX already established by spawn-hand.mjs/mark.mjs.
+if (isDirectCli(import.meta.url)) {
+  const args = parseFlags(process.argv.slice(2), 'brief-serializer');
+  if (!args['task-slice'] || !args.out) {
+    process.stderr.write(
+      '[brief-serializer] --task-slice <slice.json> and --out <brief.txt> are required (--shared-context <text> or --shared-context-file <path>)\n'
+    );
+    process.exit(1);
+  }
+
+  let taskSlice;
+  try {
+    taskSlice = JSON.parse(readFileSync(args['task-slice'], 'utf8'));
+  } catch (err) {
+    process.stderr.write(`[brief-serializer] cannot read --task-slice ${args['task-slice']}: ${err.message}\n`);
+    process.exit(1);
+  }
+
+  const sharedContext = args['shared-context-file']
+    ? readFileSync(args['shared-context-file'], 'utf8')
+    : (args['shared-context'] ?? '');
+
+  const brief = serializeBrief(taskSlice, sharedContext);
+  writeFileSync(args.out, brief, 'utf8');
+  process.stdout.write(`[brief-serializer] wrote ${args.out}\n`);
 }

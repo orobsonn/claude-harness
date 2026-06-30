@@ -208,7 +208,7 @@ These are setup-injection vectors: editing any of them lets the executor make th
 
 An executor dispatch is DENIED unless a compliance-fidelity-PASS frozen test exists for the task; the `fidelity-pass` marker is the on-disk signal the gate consumes (local spawn-hand path + headless Agent path). The entry-gate **fidelity rail**: no `fidelity-pass` marker for a task → executor dispatch refused; the freeze-commit alone is not enough.
 
-**1d. executor** — model = `hand_tiers[task.complexity ?? task.severity]`. **v2 dispatch: ALL tiers (low/medium/high) → external hand via `dispatch-hand.mjs` + `spawn-hand.mjs`** (live spawn path: `claude -p` + isolated ephemeral CLAUDE_CONFIG_DIR; Ollama); executor-high resolves to `hand_tiers.high` (strong Ollama coder). The executor brief is produced by the **brief-serializer** helper (`references/brief-serializer.mjs`), not free-written — it serializes the budget-capped curated `shared_context` into the hand's system-prompt/brief file (context parity at the boundary). **The brief and `shared_context` MUST NEVER contain the `ANTHROPIC_AUTH_TOKEN` or any secret/credential/PII — the orchestrator scrubs before serializing; the token lives only in the child process env (consistent with `dispatch-hand.mjs` token hygiene). `shared_context` inherits the same no-secrets prohibition as memory/kaizen.** The external hand runs in the **working tree under the harness command-sandbox + a per-dispatch allowed-write set** (defined in step 1c). Receives L0–L3 + curated `shared_context`. Receives the frozen `locked_tests` **READ-ONLY** — does not author, edit, or relax the test file; implements production code until the frozen test goes green. Writes JSDoc. Reads back: `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`. **Precondition:** step 1a (**test-author**) completing the frozen test file and step 1b (compliance fidelity-PASS) stamping the `fidelity-pass` marker are both hard **precondition**s of this executor dispatch — the executor must not be invoked unless the `fidelity-pass` stamp is present on disk for this task.
+**1d. executor** — model = `hand_tiers[task.complexity ?? task.severity]`. **v2 dispatch: ALL tiers (low/medium/high) → external hand via `dispatch-hand.mjs` + `spawn-hand.mjs`** (live spawn path: `claude -p` + isolated ephemeral CLAUDE_CONFIG_DIR; Ollama); executor-high resolves to `hand_tiers.high` (strong Ollama coder). The executor brief is produced by the **brief-serializer** CLI (`references/brief-serializer.mjs`), not free-written — `node references/brief-serializer.mjs --task-slice <task-slice.json> --shared-context-file <curated-shared-context.md> --out <brief_file>` serializes the budget-capped curated `shared_context` into the hand's system-prompt/brief file (context parity at the boundary). **The brief and `shared_context` MUST NEVER contain the `ANTHROPIC_AUTH_TOKEN` or any secret/credential/PII — the orchestrator scrubs before serializing; the token lives only in the child process env (consistent with `dispatch-hand.mjs` token hygiene). `shared_context` inherits the same no-secrets prohibition as memory/kaizen.** The external hand runs in the **working tree under the harness command-sandbox + a per-dispatch allowed-write set** (defined in step 1c). Receives L0–L3 + curated `shared_context`. Receives the frozen `locked_tests` **READ-ONLY** — does not author, edit, or relax the test file; implements production code until the frozen test goes green. Writes JSDoc. Reads back: `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`. **Precondition:** step 1a (**test-author**) completing the frozen test file and step 1b (compliance fidelity-PASS) stamping the `fidelity-pass` marker are both hard **precondition**s of this executor dispatch — the executor must not be invoked unless the `fidelity-pass` stamp is present on disk for this task.
 
 **Capture rail (Trilho 4 — producer/consumer key-identity):** every executor (and sniper, step 5) hand-dispatch **descriptor carries `feature_id` and `task_id`**. (NOTE: `session_id` is supplied by Claude Code on the **PostToolUse hook payload**, **NOT the descriptor** — that split is exactly what guarantees producer/consumer key-identity, so the capture marker the orchestrator writes and the gate marker the hook reads resolve to the same key.) **Right AFTER the cheap hand returns**, the orchestrator runs `node .claude/hooks/mark.mjs hand-finished --feature-id <feature-id> --task-id <task-id>`. (This `hand-finished` marker is implemented by a later task; this is the prose that instructs its use.)
 
@@ -218,7 +218,20 @@ An executor dispatch is DENIED unless a compliance-fidelity-PASS frozen test exi
 node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor <descriptor.json>
 ```
 
-The orchestrator writes `descriptor.json` (the **descriptor schema** — these exact keys):
+The orchestrator NEVER hand-types `descriptor.json` — it runs the **descriptor-emitter** CLI
+(`references/descriptor-emitter.mjs`), the runnable entrypoint over the pure `emitDescriptor()`:
+
+```bash
+node .claude/skills/orchestrating-delivery/references/descriptor-emitter.mjs \
+  --feature-id <feature-id> --task-id <task-id> --model <resolved hand model> \
+  --brief-file <path to the brief written by brief-serializer.mjs below> \
+  --scope-paths <comma-separated in-scope paths> --locked-test <path to the frozen locked test> \
+  --manifest .claude/plans/<feature-id>/test-manifest-<task-id>.json --out <descriptor.json>
+```
+
+There is deliberately **no `--head-sha` flag** — `freeze_commit_sha` always resolves from the real
+`git rev-parse HEAD`, never argv, so the anchor the fidelity-rail relies on can never be forged
+through the CLI. The emitted **descriptor schema** (these exact keys):
 
 ```json
 {
@@ -229,11 +242,19 @@ The orchestrator writes `descriptor.json` (the **descriptor schema** — these e
   "scope_paths":      ["<in-scope path>", "..."],
   "locked_test":      "<path to the frozen locked test (the gate of record); frozen_paths is derived from it>",
   "allowed_writes":   ["<per-dispatch allowed-write path>", "..."],
-  "freeze_commit_sha":"<git rev-parse HEAD at the freeze-commit (step 1c-commit)>"
+  "freeze_commit_sha":"<git rev-parse HEAD at the freeze-commit (step 1c-commit)>",
+  "test_runner":      "<test-runner adapter id (references/runner-adapters.mjs) — node-test | vitest>"
 }
 ```
 
 - **Token hygiene (load-bearing):** the Ollama token lives ONLY in env / `.dev.vars` (`ANTHROPIC_AUTH_TOKEN`) — NEVER in the descriptor, argv, brief, or any log. `runLiveDispatch` fail-closes if the token literal appears in the descriptor bytes.
+- **Test-runner adapters (`references/runner-adapters.mjs`):** the pre-spawn dry-run, the live
+  Stop-hook gate, and the post-spawn independent capture all run the locked test through the SAME
+  adapter — never three independently-hardcoded `node --test` calls. `test_runner` defaults to
+  `node-test` (the harness's original behavior) for every project with no opinion. A project on
+  another framework (e.g. Vitest) selects its adapter once in
+  `.claude/hand-config/test-runner.json` (`{ "adapter": "vitest" }`); descriptor-emitter reads it
+  automatically — the orchestrator never sets `test_runner` by hand.
 - **Auth resolution — the orchestrator NEVER pre-checks the token (load-bearing):** `spawn-hand.mjs` resolves the token itself, in order **env (`OLLAMA_HAND_TOKEN`, then `ANTHROPIC_AUTH_TOKEN`) → project `.dev.vars` → global `~/.claude/.dev.vars`**. LOCALLY the operator sets `export OLLAMA_HAND_TOKEN=…` in the shell rc: env reads survive the command-sandbox while a token placed only in `.dev.vars` does **NOT** (the sandbox denies reading `.dev.vars`), and `OLLAMA_HAND_TOKEN` is inert to Claude Code's own auth (exporting `ANTHROPIC_AUTH_TOKEN` would hijack the parent session). A project **does NOT need its own `.dev.vars`**. The orchestrator MUST NOT inspect, `cat`/`grep`/`echo`, or otherwise read `.dev.vars` (project or global) to "verify the token is there", and MUST NOT raise a "token missing" exception on its own judgment — that is the resolver's job. Reading the file directly is also self-defeating: a command whose text names `.dev.vars` is denied (`Read(.dev.vars)` baseline) while `spawn-hand.mjs` resolves correctly because the read is internal. The token counts as missing ONLY when `spawn-hand.mjs` itself exits `2` with a token `reason` (below). **This does NOT relax the git-universe reconciliation pre-step — that is separate from the token and stays mandatory.**
 - **Git-universe reconciliation (mandatory pre-spawn):** before invoking the command, the orchestrator MUST commit or stash its OWN out-of-scope files (`shared_context.md`, `findings.md`, `.claude/memory/*`) so the FULL tree is clean relative to `freeze_commit_sha`. `runLiveDispatch` REFUSES to spawn onto a dirty tree (the unscoped capture diff would otherwise misattribute orchestrator writes to the hand). The freeze-commit (step 1c-commit) already commits the frozen test/fixtures, so this is normally just stashing the run buffers.
 - **Exit-code contract (the config-error escape — Trilho 5):**

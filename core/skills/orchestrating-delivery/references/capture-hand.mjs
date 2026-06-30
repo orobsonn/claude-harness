@@ -57,6 +57,7 @@ import {
   checkAllowedWrites,
   resolveAuthToken,
 } from "./dispatch-hand.mjs";
+import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
 
 /** @description Forced non-zero locked-test exit for the vacuous-green guard. */
 export const VACUOUS_GREEN_EXIT = 1;
@@ -132,15 +133,19 @@ export function subtractUnchanged(paths, preUntracked, currentHashes) {
 }
 
 /**
- * @description Real frozen-test runner (NOT exercised by `node --test`): runs the locked test
- * by path via `node --test <path>` and returns its stdout/stderr/exit without throwing.
+ * @description Real frozen-test runner (NOT exercised by `node --test`): runs the locked test by
+ * path via the selected runner adapter's command (`runner-adapters.mjs`) and returns its
+ * stdout/stderr/exit without throwing. `runnerId` defaults to `node-test`, preserving the
+ * original hardcoded behavior for every project that does not opt into another adapter.
  * @param {string} testPath
  * @param {string} cwd
+ * @param {string} [runnerId]
  * @returns {{ stdout: string, stderr: string, exitCode: number }}
  */
-export function realTestRunner(testPath, cwd = process.cwd()) {
+export function realTestRunner(testPath, cwd = process.cwd(), runnerId = DEFAULT_RUNNER_ID) {
+  const { bin, args } = resolveRunnerAdapter(runnerId).buildCommand(testPath);
   try {
-    const stdout = execFileSync("node", ["--test", testPath], { cwd, encoding: "utf8" });
+    const stdout = execFileSync(bin, args, { cwd, encoding: "utf8" });
     return { stdout, stderr: "", exitCode: 0 };
   } catch (err) {
     return {
@@ -185,6 +190,7 @@ function streamLines(text = "") {
  *   testPath: string,
  *   git: { headSha: () => string, statusPorcelain: () => string, diffNameOnly: (sha: string) => string[], lsFilesOthers: () => string[], lsFilesAllOthers: () => string[] },
  *   testRunner: (testPath: string) => { stdout: string, stderr?: string, exitCode: number },
+ *   parseCount?: (stdout: string) => number|null,
  *   logSink?: (line: string) => void,
  *   token: string,
  *   costStream?: unknown[],
@@ -201,6 +207,7 @@ export function captureResult({
   testPath,
   git,
   testRunner,
+  parseCount = parseTestsCount,
   logSink = () => {},
   token,
   costStream = [],
@@ -277,9 +284,11 @@ export function captureResult({
   for (const line of streamLines(child.stdout)) teeLine(line, token, logSink);
   for (const line of streamLines(child.stderr)) teeLine(line, token, logSink);
 
-  // (3) Run the frozen test by path; parse `# tests N`. N === 0 → vacuous-green → forced FAILED.
+  // (3) Run the frozen test by path; parse its count via the injected (runner-specific) parser.
+  // N === 0 → vacuous-green → forced FAILED. Defaults to parseTestsCount (node-test) so every
+  // caller that doesn't pass parseCount keeps today's behavior unchanged.
   const runner = testRunner(testPath);
-  const testsCount = parseTestsCount(runner.stdout);
+  const testsCount = parseCount(runner.stdout);
   const lockedTestExitCode =
     testsCount === null || testsCount === 0 ? VACUOUS_GREEN_EXIT : runner.exitCode;
 
@@ -352,13 +361,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const dispatch = JSON.parse(readFileSync(args.dispatch, "utf8"));
   const child = JSON.parse(readFileSync(args.child, "utf8"));
+  // The dispatch (descriptor) carries `test_runner` when emitted by descriptor-emitter.mjs;
+  // --test-runner overrides for a standalone/manual invocation. Defaults to node-test so a
+  // dispatch with no opinion keeps the original behavior.
+  const runnerId = args["test-runner"] ?? dispatch.test_runner ?? DEFAULT_RUNNER_ID;
   const result = captureResult({
     dispatch,
     child,
     freezeCommitSha: args.freeze,
     testPath: args.test,
     git: realGit(),
-    testRunner: (p) => realTestRunner(p),
+    testRunner: (p) => realTestRunner(p, process.cwd(), runnerId),
+    parseCount: resolveRunnerAdapter(runnerId).parseCount,
     logSink: (line) => process.stderr.write(`${line}\n`),
     token,
   });

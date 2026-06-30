@@ -490,6 +490,67 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Locked test 9b — dispatch.test_runner selects the dry-run adapter (never hardcoded node --test)
+// ---------------------------------------------------------------------------
+describe("dispatchHand dry-run honors dispatch.test_runner", () => {
+  it("dry-runs the vitest adapter's command (npx vitest run --reporter=json) instead of node --test", async () => {
+    let dryRunCmd = null;
+    let dryRunArgs = null;
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("vitest")) {
+        dryRunCmd = cmd;
+        dryRunArgs = args;
+        return { status: 0, stdout: JSON.stringify({ numTotalTests: 4 }), stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      test_runner: "vitest",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.equal(dryRunCmd, "npx");
+    assert.ok(dryRunArgs.includes("--reporter=json"));
+    assert.ok(!dryRunArgs.includes("--test"));
+  });
+
+  it("still fails closed on a vitest dry-run reporting zero tests", async () => {
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("vitest")) {
+        return { status: 0, stdout: JSON.stringify({ numTotalTests: 0 }), stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      test_runner: "vitest",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv }),
+      /zero tests|vacuous/
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Locked test 10 — CODE-enforced clean baseline before the hand spawns
 // (a dirty tree would misattribute pre-existing edits to the hand)
 // ---------------------------------------------------------------------------

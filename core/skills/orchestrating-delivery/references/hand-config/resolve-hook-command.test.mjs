@@ -49,6 +49,28 @@ test("resolveHookCommand returns absolute node --test command without CLAUDE_PRO
   );
 });
 
+// Locked test 1b: a non-default runnerId builds that adapter's command instead of node --test,
+// so the live Stop-hook gate never hardcodes node:test against a project using another runner.
+test("resolveHookCommand(configDir, testPath, 'vitest') builds the vitest adapter's command", () => {
+  const configDir = "/tmp/handcfg-x";
+  const testPath = "core/skills/orchestrating-delivery/references/dispatch-hand.test.mjs";
+
+  const command = resolveHookCommand(configDir, testPath, "vitest");
+
+  assert.ok(command.startsWith("npx --no-install vitest run --reporter=json "), `got: ${command}`);
+  assert.ok(!command.includes("node --test"), `got: ${command}`);
+
+  const testArg = command.split(" ").pop();
+  assert.ok(isAbsolute(testArg) && testArg.endsWith(testPath), `got: ${testArg}`);
+});
+
+// Locked test 1c: omitting runnerId preserves the original node --test default (backward compatible).
+test("resolveHookCommand defaults to node-test when runnerId is omitted", () => {
+  const command = resolveHookCommand("/tmp/handcfg-x", "a/b.test.mjs");
+  assert.ok(command.includes("--test"), `got: ${command}`);
+  assert.ok(!command.includes("vitest"), `got: ${command}`);
+});
+
 // Locked test 2:
 // Given the shipped hand-config/settings.json parsed as JSON,
 // When its blocking-configuration SHAPE is inspected,

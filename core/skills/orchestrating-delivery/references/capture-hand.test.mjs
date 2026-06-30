@@ -142,6 +142,36 @@ test("injected top-of-stream `# tests 999` is ignored; trailing TAP `# tests 0` 
   assert.equal(result.outcome.status, OUTCOME.FAILED);
 });
 
+// ---- 2c. parseCount is injectable so a non-node-test project's capture never hardcodes the TAP parser ----
+
+test("injected parseCount (e.g. a vitest adapter) drives the vacuous-green guard instead of the default TAP parser", () => {
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ lsFilesOthers: () => ["core/x/new.mjs"] }),
+      testRunner: () => fakeTestRunner({ stdout: '{"numTotalTests":0}', exitCode: 0 }),
+      parseCount: (stdout) => JSON.parse(stdout).numTotalTests,
+    })
+  );
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+});
+
+test("injected parseCount returning a real count yields a non-vacuous passing capture", () => {
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ lsFilesOthers: () => ["core/x/new.mjs"] }),
+      testRunner: () => fakeTestRunner({ stdout: '{"numTotalTests":11}', exitCode: 0 }),
+      parseCount: (stdout) => JSON.parse(stdout).numTotalTests,
+    })
+  );
+  assert.equal(result.child.testsCount, 11);
+  assert.equal(result.child.lockedTestExitCode, 0);
+});
+
+test("omitting parseCount preserves the default node-test TAP parser (backward compatible)", () => {
+  const result = captureResult(baseArgs({ git: fakeGit({ lsFilesOthers: () => ["core/x/new.mjs"] }) }));
+  assert.equal(result.child.testsCount, 3);
+});
+
 // ---- 3. dirty / divergent tree before spawn → critical exception, never captured ----
 
 test("divergent HEAD before capture → critical-exception signal, captured never true", () => {
