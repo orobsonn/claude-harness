@@ -9,12 +9,22 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-- **`test_runner` configurável por projeto (`references/runner-adapters.mjs`) — Vitest deixa de ser falso-FAILED na mão barata**: o dry-run pré-spawn, o gate ao vivo do Stop-hook e a captura independente pós-spawn rodavam `node --test` cravado em três lugares distintos — um projeto Vitest (ex: `victor-pipeline-dados-bot`, com `vitest-pool-workers`) sempre reportava `lockedTestExitCode: 1` mesmo com código correto, exigindo validação manual fora do harness. Agora um adaptador único (`{ command, parseCount }` por runner, sempre array pra `execFileSync`, nunca string interpolada) é a fonte de verdade nos três pontos; `node-test` continua default — zero config pra todo projeto já vendorizado. Seleção por `.claude/hand-config/test-runner.json` (`{ "adapter": "vitest" }`).
-- **CLI runnável pro `descriptor-emitter.mjs` e `brief-serializer.mjs`** — a skill já prometia "descriptor nunca digitado à mão", mas os dois helpers só existiam como função JS exportada, sem entrypoint. O orquestrador, sem runtime JS interativo, acabava digitando `descriptor.json` na mão via heredoc — exatamente o que a skill proíbe — e batendo, em sequência, erro de quoting, `fidelity-pass` faltando e `freeze_commit_sha` faltando (observado ao vivo no `victor-pipeline-dados-bot`). Agora `node references/descriptor-emitter.mjs --feature-id ... --out descriptor.json` e `node references/brief-serializer.mjs --task-slice ... --out brief.txt` espelham a UX já estabelecida em `spawn-hand.mjs`/`mark.mjs`. Sem flag `--head-sha`: `freeze_commit_sha` sempre vem do `git rev-parse HEAD` real, nunca de argv — fechar a fricção não reabre a porta de forjar o anchor do fidelity-rail.
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.17.1] - 2026-06-30
+
+### Added
 
 ### Changed
 
 ### Fixed
+
+- **`test_runner` configurável por projeto (`references/runner-adapters.mjs`) — Vitest deixa de ser falso-FAILED na mão barata**: o dry-run pré-spawn, o gate ao vivo do Stop-hook e a captura independente pós-spawn rodavam `node --test` cravado em três lugares distintos — um projeto Vitest (ex: `victor-pipeline-dados-bot`, com `vitest-pool-workers`) sempre reportava `lockedTestExitCode: 1` mesmo com código correto, exigindo validação manual fora do harness. Agora um adaptador único (`{ command, parseCount }` por runner, sempre array pra `execFileSync`, nunca string interpolada) é a fonte de verdade nos três pontos; `node-test` continua default — zero config pra todo projeto já vendorizado. Seleção por `.claude/hand-config/test-runner.json` (`{ "adapter": "vitest" }`).
+- **CLI runnável pro `descriptor-emitter.mjs` e `brief-serializer.mjs`** — a skill já prometia "descriptor nunca digitado à mão", mas os dois helpers só existiam como função JS exportada, sem entrypoint. O orquestrador, sem runtime JS interativo, acabava digitando `descriptor.json` na mão via heredoc — exatamente o que a skill proíbe — e batendo, em sequência, erro de quoting, `fidelity-pass` faltando e `freeze_commit_sha` faltando (observado ao vivo no `victor-pipeline-dados-bot`). Agora `node references/descriptor-emitter.mjs --feature-id ... --out descriptor.json` e `node references/brief-serializer.mjs --task-slice ... --out brief.txt` espelham a UX já estabelecida em `spawn-hand.mjs`/`mark.mjs`. Sem flag `--head-sha`: `freeze_commit_sha` sempre vem do `git rev-parse HEAD` real, nunca de argv — fechar a fricção não reabre a porta de forjar o anchor do fidelity-rail.
 
 ### Removed
 
