@@ -117,10 +117,18 @@ export function driveCrossFamily({ role = "adversary", taskJson, claudeIssues, e
  */
 export function driveCrossFamilyVerdict({ role, taskJson, claudeVerdict, runRole, env = process.env, availability }) {
   try {
+    const task = typeof taskJson === 'string' ? safeParse(taskJson) : (taskJson ?? {});
+    // (A) respect the opt-in/force-off toggle, exactly like driveCrossFamily does
+    if (!isEnabled({ env, task })) {
+      return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });
+    }
     const prompt = composeRolePrompt({ role, taskJson });
     const run = runRole ?? ((args) => runCodexRole(args));
     const res = run({ prompt, availability });
-    if (res && res.available === true) {
+    // (B) only merge when codex returned a REAL verdict; else fail-open to the Claude verdict
+    const v = res && res.available === true && res.output
+      && ['APPROVE', 'REVISE'].includes(String(res.output.verdict).trim().toUpperCase());
+    if (v) {
       return mergeVerdicts(claudeVerdict, res.output, { codexAvailable: true });
     }
     return mergeVerdicts(claudeVerdict, {}, { codexAvailable: false });

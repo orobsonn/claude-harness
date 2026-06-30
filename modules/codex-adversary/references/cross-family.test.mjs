@@ -241,3 +241,53 @@ test("runForRole [adversary]: routes to findings path — output has findings[]/
   // Adversary role never emits a top-level verdict (only security does via securityVerdict())
   assert.equal(r.verdict, undefined, "adversary findings path must not have a top-level verdict field");
 });
+
+// ============================================================================
+// TASK-3 LOCKED TESTS — driveCrossFamilyVerdict robustness (toggle + fail-open)
+//
+// Two defects found by final review (Codex) in driveCrossFamilyVerdict:
+//   1. Ignores the toggle: no isEnabled() call → with toggle OFF it still runs runRole.
+//   2. Output without verdict vira REVISE espúrio: output:{} hits mergeVerdicts with
+//      codexAvailable:true → normVerdict(undefined) === "REVISE" → spurious REVISE gate.
+//
+// Correct behaviour:
+//   1. Toggle OFF (env HARNESS_CODEX_ADVERSARY:'0' + task.adversarial.cross_family:false) →
+//      runRole must NOT be called; Claude verdict must be returned unchanged.
+//   2. runRole returns {available:true, output:{}} (no verdict field) →
+//      must fail-open: Claude verdict preserved, sources.codex === null.
+// ============================================================================
+
+// [TASK-3 test 1] toggle off: HARNESS_CODEX_ADVERSARY='0' + task cross_family:false =>
+// runRole NOT called, Claude verdict preserved.
+test("driveCrossFamilyVerdict [toggle off]: HARNESS_CODEX_ADVERSARY='0' + task cross_family:false => runRole NOT called, Claude verdict preserved", () => {
+  let called = false;
+  const runRole = () => { called = true; return { available: true, output: { verdict: "REVISE", issues: [], planner_instructions: "bad" } }; };
+  const claudeVerdict = { verdict: "APPROVE", issues: [], planner_instructions: "" };
+  const r = crossFamilyMod.driveCrossFamilyVerdict({
+    role: "plan-reviewer",
+    taskJson: { adversarial: { cross_family: false } },
+    claudeVerdict,
+    env: { HARNESS_CODEX_ADVERSARY: "0" },
+    availability: { ok: true, reason: "" },
+    runRole,
+  });
+  assert.equal(called, false, "runRole must NOT be called when toggle is off");
+  assert.equal(r.verdict, "APPROVE", "Claude verdict must be preserved when toggle is off");
+});
+
+// [TASK-3 test 2] codex output without verdict field => fail-open, Claude verdict preserved,
+// sources.codex === null (treated as unavailable, not a spurious REVISE).
+test("driveCrossFamilyVerdict [codex output without verdict]: available true but output {} => fail-open, Claude verdict preserved, sources.codex null", () => {
+  const runRole = () => ({ available: true, output: {} });
+  const claudeVerdict = { verdict: "APPROVE", issues: [], planner_instructions: "ok" };
+  const r = crossFamilyMod.driveCrossFamilyVerdict({
+    role: "plan-reviewer",
+    taskJson: {},
+    claudeVerdict,
+    env: { HARNESS_CODEX_ADVERSARY: "1", OPENAI_API_KEY: "sk-x" },
+    availability: { ok: true, reason: "" },
+    runRole,
+  });
+  assert.equal(r.verdict, "APPROVE", "fail-open: Claude verdict must be preserved when codex output has no verdict field");
+  assert.equal(r.sources.codex, null, "fail-open: sources.codex must be null (not a spurious REVISE)");
+});
