@@ -70,7 +70,8 @@ export function decide(payload, env, deps) {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     return { action: 'none' };
   }
-  if (!Object.prototype.hasOwnProperty.call(payload, 'tool_input')) {
+  const ti = payload.tool_input;
+  if (typeof ti !== 'object' || ti === null || Array.isArray(ti)) {
     return { action: 'none' };
   }
 
@@ -84,8 +85,8 @@ export function decide(payload, env, deps) {
     return { action: 'none' };
   }
 
-  // (d) role = bareRole(payload.tool_input.subagent_type); role NOT in eye set
-  const role = bareRole(payload.tool_input.subagent_type);
+  // (d) role = bareRole(ti.subagent_type); role NOT in eye set
+  const role = bareRole(ti.subagent_type);
   if (!EYE_ROLES.has(role)) {
     return { action: 'none' };
   }
