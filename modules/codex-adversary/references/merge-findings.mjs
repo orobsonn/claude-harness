@@ -28,14 +28,58 @@ function norm(s) {
 }
 
 /**
+ * @description Per-shape dedup discriminators. The adversary tags every issue with a `category`
+ * (failure class) — its natural discriminator. The security auditor's output has NO `category`
+ * field (core/agents/security.md), so reusing `(scope, category, evidence)` would collapse to
+ * `(scope, "", evidence)` and silently drop two DISTINCT security findings that share a scope +
+ * evidence — losing exactly the minority catch a second family exists to surface. Security uses
+ * `severity` as the discriminator instead.
+ */
+export const DEDUP_FIELDS = {
+  findings: ["scope", "category", "evidence"],
+  security: ["scope", "severity", "evidence"],
+};
+
+/**
  * @description Stable dedup key for an issue. Two issues from different families collapse when they
- * point at the same place (scope), the same failure class (category), and the same proof (evidence).
- * Evidence is normalized loosely so "line 14" vs "L14" still tend to collide on scope+category.
+ * agree on every discriminator field. `fields` is per-shape (see DEDUP_FIELDS) — default is the
+ * adversary's `(scope, category, evidence)`. Threaded consistently through classify + finalize +
+ * the driver's refutation-key construction, so the same issue maps to the same key everywhere.
  * @param {object} issue
+ * @param {string[]} [fields]
  * @returns {string}
  */
-export function dedupKey(issue) {
-  return [norm(issue.scope), norm(issue.category), norm(issue.evidence)].join("::");
+export function dedupKey(issue, fields = DEDUP_FIELDS.findings) {
+  return fields.map((f) => norm(issue[f])).join("::");
+}
+
+/**
+ * @description Normalizes a severity string from ANY model family to the harness enum
+ * (low|medium|high). A different family may emit "Critical"/"HIGH"/"crit"; an UNKNOWN value maps to
+ * "high" — conservative, so a real high is never silently demoted past a security gate.
+ * @param {string} severity
+ * @returns {"low"|"medium"|"high"}
+ */
+export function normalizeSeverity(severity) {
+  const s = norm(severity);
+  if (s === "low") return "low";
+  if (s === "medium" || s === "med" || s === "moderate") return "medium";
+  return "high"; // high, critical, crit, blocker, or anything unrecognized → conservative
+}
+
+/**
+ * @description Recomputes the security gate verdict from a final issue list. UNSAFE when ANY issue is
+ * high or medium (mirrors core/agents/security.md verdict criteria), SECURE otherwise. Severity is
+ * normalized first so a cross-family "Critical" still gates. PURE.
+ * @param {object[]} issues
+ * @returns {"SECURE"|"UNSAFE"}
+ */
+export function securityVerdict(issues = []) {
+  const blocking = issues.some((i) => {
+    const sev = normalizeSeverity(i.severity);
+    return sev === "high" || sev === "medium";
+  });
+  return blocking ? "UNSAFE" : "SECURE";
 }
 
 /** @description Tags an issue with provenance without mutating the input. */
@@ -51,19 +95,19 @@ function tag(issue, family) {
  * @param {object[]} codexIssues
  * @returns {{ agreed: object[], needsCrosscheck: { issue: object, foundBy: string, refuter: string }[] }}
  */
-export function classifyFindings(claudeIssues = [], codexIssues = []) {
+export function classifyFindings(claudeIssues = [], codexIssues = [], fields = DEDUP_FIELDS.findings) {
   const byKey = new Map();
   const order = [];
 
   for (const raw of claudeIssues) {
     const issue = tag(raw, "claude");
-    const k = dedupKey(issue);
+    const k = dedupKey(issue, fields);
     if (byKey.has(k)) { mergeFamilies(byKey.get(k), "claude"); }
     else { byKey.set(k, issue); order.push(k); }
   }
   for (const raw of codexIssues) {
     const issue = tag(raw, "codex");
-    const k = dedupKey(issue);
+    const k = dedupKey(issue, fields);
     if (byKey.has(k)) { mergeFamilies(byKey.get(k), "codex"); }
     else { byKey.set(k, issue); order.push(k); }
   }
@@ -97,13 +141,13 @@ function mergeFamilies(issue, family) {
  * @param {{ key: string, refuted: boolean, argument?: string, refuter?: string }[]} verdicts
  * @returns {{ findings: object[], dropped: object[] }}
  */
-export function finalizeFindings(classified, verdicts = []) {
+export function finalizeFindings(classified, verdicts = [], fields = DEDUP_FIELDS.findings) {
   const verdictByKey = new Map(verdicts.map((v) => [v.key, v]));
   const findings = [...classified.agreed];
   const dropped = [];
 
   for (const { issue } of classified.needsCrosscheck) {
-    const v = verdictByKey.get(dedupKey(issue));
+    const v = verdictByKey.get(dedupKey(issue, fields));
     if (v && v.refuted === true) {
       dropped.push({ ...issue, refuted_by: v.refuter, refutation: v.argument });
     } else {

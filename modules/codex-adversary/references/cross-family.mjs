@@ -23,44 +23,61 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
-import { isEnabled, checkAvailability, composeAdversaryPrompt, runCodexAdversary, runCodexRefutation } from "./codex-adversary.mjs";
-import { classifyFindings, finalizeFindings, dedupKey, readIssues } from "./merge-findings.mjs";
+import { isEnabled, checkAvailability, composeRolePrompt, runCodexAdversary, runCodexRefutation, ROLES } from "./codex-adversary.mjs";
+import { classifyFindings, finalizeFindings, dedupKey, readIssues, securityVerdict, DEDUP_FIELDS } from "./merge-findings.mjs";
 
 /**
- * @description Drives the loop with INJECTABLE codex runners (so it is unit-testable without codex).
+ * @description Drives the cross-family loop for ANY findings-shaped EYE role (default `adversary`;
+ * also `security`) with INJECTABLE codex runners (unit-testable without codex). The role is the only
+ * variable: it selects the canonical prompt source, the dedup discriminators (security has no
+ * `category`), and the refutation role file. FAIL-OPEN is total: the toggle, availability, AND the
+ * compose/attack are all guarded so a missing module, an off switch, a headless run, OR a path /
+ * compose bug all degrade to Claude-only passthrough — never a throw (a thrown compose would be
+ * fail-CLOSED, the opposite of the contract).
  * @param {{
+ *   role?: string,
  *   taskJson: object|string,
  *   claudeIssues: object[],
  *   env?: NodeJS.ProcessEnv,
- *   runAttack?: (args:{prompt:string, availability:object}) => {available:boolean, issues:object[], reason?:string},
- *   runRefute?: (args:{finding:object, taskJson:any, key:string, availability:object}) => {key:string, refuted:boolean, argument:string, refuter:string},
+ *   runAttack?: (args:{prompt:string, availability:object, role:string}) => {available:boolean, issues:object[], reason?:string},
+ *   runRefute?: (args:{finding:object, taskJson:any, key:string, availability:object, rolePath?:string}) => {key:string, refuted:boolean, argument:string, refuter:string},
  * }} opts
  */
-export function driveCrossFamily({ taskJson, claudeIssues, env = process.env, runAttack, runRefute, availability }) {
+export function driveCrossFamily({ role = "adversary", taskJson, claudeIssues, env = process.env, runAttack, runRefute, availability }) {
   const task = typeof taskJson === "string" ? safeParse(taskJson) : (taskJson ?? {});
+  const cfg = ROLES[role];
+  const fields = cfg?.dedupFields ?? DEDUP_FIELDS.findings;
+  const meta = (over) => stamp(role, claudeIssues, over);
 
   if (!isEnabled({ env, task })) {
-    return passthrough(claudeIssues, { enabled: false, available: false, reason: "cross-family toggle off (opt-in)" });
+    return meta({ enabled: false, available: false, reason: "cross-family toggle off (opt-in)" });
   }
   availability = availability ?? checkAvailability({ env });
   if (!availability.ok) {
-    return passthrough(claudeIssues, { enabled: true, available: false, reason: availability.reason });
+    return meta({ enabled: true, available: false, reason: availability.reason });
   }
 
-  const attack = (runAttack ?? defaultAttack)({ prompt: composeAdversaryPrompt({ taskJson }), availability });
-  if (!attack.available) {
-    return passthrough(claudeIssues, { enabled: true, available: false, reason: attack.reason ?? "codex attack unavailable" });
+  // Compose + attack are guarded: a path/compose defect must fail OPEN (Claude-only), never throw.
+  let attack;
+  try {
+    const prompt = composeRolePrompt({ role, taskJson });
+    attack = (runAttack ?? defaultAttack)({ prompt, availability, role });
+  } catch (err) {
+    return meta({ enabled: true, available: false, reason: `cross-family compose/attack failed: ${err?.message ?? err}` });
+  }
+  if (!attack || !attack.available) {
+    return meta({ enabled: true, available: false, reason: attack?.reason ?? "codex attack unavailable" });
   }
 
-  const classified = classifyFindings(claudeIssues, attack.issues);
+  const classified = classifyFindings(claudeIssues, attack.issues, fields);
 
   // Codex refutes the claude-only findings (JS side). Codex-only findings await a CLAUDE refutation.
   const codexVerdicts = [];
   const pendingClaudeRefutation = [];
   for (const entry of classified.needsCrosscheck) {
     if (entry.refuter === "codex") {
-      const key = dedupKey(entry.issue);
-      codexVerdicts.push((runRefute ?? defaultRefute)({ finding: entry.issue, taskJson, key, availability }));
+      const key = dedupKey(entry.issue, fields);
+      codexVerdicts.push((runRefute ?? defaultRefute)({ finding: entry.issue, taskJson, key, availability, rolePath: cfg?.rolePath }));
     } else {
       pendingClaudeRefutation.push(entry.issue); // refuter === "claude"
     }
@@ -70,27 +87,42 @@ export function driveCrossFamily({ taskJson, claudeIssues, env = process.env, ru
     // Only finalize the agreed + claude-only here; codex-only stay pending (kept provisionally).
     { agreed: classified.agreed, needsCrosscheck: classified.needsCrosscheck.filter((e) => e.refuter === "codex") },
     codexVerdicts,
+    fields,
   );
 
-  return {
+  return decorate(role, {
     enabled: true,
     available: true,
+    role,
     findings,                 // ship to sniper now (agreed + claude-only survivors)
     pendingClaudeRefutation,  // orchestrator: run Claude refutation, then finalize these too
     dropped,                  // claude-only findings Codex refuted, with the refutation argument
     classified,               // full provenance for auditing
-  };
+  });
 }
 
-function passthrough(claudeIssues, meta) {
-  return { ...meta, findings: [...claudeIssues], pendingClaudeRefutation: [], dropped: [], classified: null };
+/**
+ * @description For the security gate, attach the recomputed SECURE|UNSAFE verdict. It is computed
+ * ONLY from `findings` (agreed + claude-only survivors) — codex-only findings sit in
+ * pendingClaudeRefutation and do NOT escalate the gate until the orchestrator runs the Claude
+ * refutation and folds the survivors back in (a determinism the gate-state marker enforces). So a
+ * codex false-high can never flip the gate behind the orchestrator's back.
+ */
+function decorate(role, result) {
+  if (role === "security") result.verdict = securityVerdict(result.findings);
+  return result;
+}
+
+function stamp(role, claudeIssues, meta) {
+  const out = { ...meta, role, findings: [...claudeIssues], pendingClaudeRefutation: [], dropped: [], classified: null };
+  return decorate(role, out);
 }
 
 function defaultAttack({ prompt, availability }) {
   return runCodexAdversary({ prompt, availability });
 }
-function defaultRefute({ finding, taskJson, key, availability }) {
-  return runCodexRefutation({ finding, taskJson, key, availability });
+function defaultRefute({ finding, taskJson, key, availability, rolePath }) {
+  return runCodexRefutation({ finding, taskJson, key, availability, rolePath });
 }
 function safeParse(s) { try { return JSON.parse(s); } catch { return {}; } }
 
@@ -98,19 +130,20 @@ function safeParse(s) { try { return JSON.parse(s); } catch { return {}; } }
 // CLI: node cross-family.mjs --task <task.json> --claude <claude-issues.json>
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const out = { task: null, claude: null };
+  const out = { task: null, claude: null, role: "adversary" };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--task") out.task = argv[++i];
     else if (argv[i] === "--claude") out.claude = argv[++i];
+    else if (argv[i] === "--role") out.role = argv[++i];
   }
   return out;
 }
 
 function main() {
-  const { task, claude } = parseArgs(process.argv.slice(2));
+  const { task, claude, role } = parseArgs(process.argv.slice(2));
   const taskJson = task ? readFileSync(resolveCwd(task), "utf8") : "{}";
   const claudeIssues = claude ? readIssues(claude) : [];
-  const result = driveCrossFamily({ taskJson, claudeIssues });
+  const result = driveCrossFamily({ role, taskJson, claudeIssues });
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 

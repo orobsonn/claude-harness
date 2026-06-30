@@ -73,6 +73,9 @@ export function stripFrontmatter(md) {
 /** @description Role file path for the plan-reviewer eye (a verdict-shaped cross-family checkpoint). */
 export const PLAN_REVIEWER_ROLE_PATH = resolveCanonicalPath("agents/plan-reviewer.md");
 
+/** @description Role file path for the security auditor eye (findings-shaped, SECURE|UNSAFE gate). */
+export const SECURITY_ROLE_PATH = resolveCanonicalPath("agents/security.md");
+
 /**
  * @description Registry of the EYE roles that can run cross-family. The principle: NOT every task
  * has an adversarial checkpoint, but EVERY checkpoint that runs an eye runs it on BOTH families.
@@ -104,6 +107,23 @@ export const ROLES = {
       "the plan-reviewer schema EXACTLY: {\"verdict\": \"APPROVE | REVISE\", \"issues\": [...],",
       "\"planner_instructions\": \"...\"}, and nothing after it. REVISE only for a substantive",
       "engineering defect, never style. If sound, emit verdict APPROVE with an empty issues list.",
+    ].join("\n"),
+  },
+  security: {
+    rolePath: SECURITY_ROLE_PATH,
+    skillPaths: [],
+    shape: "findings",
+    // Security issues carry no `category` (unlike the adversary) — dedup on severity instead, so two
+    // distinct security findings in the same scope are not silently collapsed. See merge-findings.
+    dedupFields: ["scope", "severity", "evidence"],
+    headline: "CROSS-FAMILY peer of the Claude Harness security auditor",
+    outputContract: [
+      "Audit this task's scope_paths for exploitable attack vectors (secrets, auth, input validation,",
+      "data leakage, deps, endpoint surface). Reply with ONE fenced ```json block matching the security",
+      "schema EXACTLY: {\"verdict\": \"SECURE | UNSAFE\", \"issues\": [{description, severity, scope,",
+      "evidence, suggested_sniper_tier, fix_hint}]}, and nothing after it. UNSAFE requires at least one",
+      "high or medium issue. Zero real issues is a VALID result — emit verdict SECURE with `issues: []`.",
+      "NEVER fabricate a finding to hit a count.",
     ].join("\n"),
   },
 };
