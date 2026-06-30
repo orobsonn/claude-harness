@@ -46,6 +46,34 @@ classes — identical to the native adversary, because it *is* the native advers
 
 ---
 
+## Where it runs — every eye runs on both families
+
+The principle is not "a second adversary." It is: **not every task has an adversarial checkpoint,
+but every checkpoint that runs a critical-judgment EYE runs it on BOTH families** — Claude and GPT —
+so each family surfaces the problems the other's priors miss. The same bridge serves any read-only
+eye role; it composes that role's prompt from the canonical core file at runtime (zero drift).
+
+| Checkpoint | Role | Merge shape | How both families combine |
+|---|---|---|---|
+| Spec attack | `adversary` | findings | union + dedup + cross-check (B) |
+| Per-task attack | `adversary` | findings | union + dedup + cross-check (B) |
+| Final dual-review | `adversary` | findings | union + dedup + cross-check (B) |
+| **Plan review** | `plan-reviewer` | **verdict** | **either-REVISE-wins + union of concerns** |
+
+Two merge shapes, because the outputs differ:
+
+- **findings** (`issues[]`) → `merge-findings.mjs`: union + dedup + cross-check policy B (keep a
+  single-family finding unless the other family refutes it).
+- **verdict** (`APPROVE | REVISE`) → `merge-verdicts.mjs`: a plan-reviewer returns a verdict, not a
+  bug list. Here a Claude plan-reviewer and a GPT plan-reviewer run on the **same** plan to catch
+  **distinct** engineering problems; if **either** says REVISE, the plan is REVISE, and the planner
+  receives the **union** of both families' concerns. We do **not** require agreement — a defect only
+  the GPT reviewer spotted is exactly the reason to run it. Fail-open: if Codex can't run, the
+  merged verdict is just Claude's (never a spurious REVISE from an empty second opinion).
+
+The role registry lives in `codex-adversary.mjs` (`ROLES`) — add a future eye by declaring its
+canonical role file, the skills it loads, and its merge shape.
+
 ## How parity is guaranteed (single source of truth)
 
 The bridge does **not** copy the adversary prompt. At runtime it **composes** the Codex prompt from

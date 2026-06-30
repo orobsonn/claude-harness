@@ -77,8 +77,8 @@ test("runCodexAdversary fails open on non-zero exit", () => {
 test("composeAdversaryPrompt embeds the canonical role + taxonomy from disk", () => {
   // Uses the REAL core sources — proves parity wiring resolves.
   const prompt = composeAdversaryPrompt({ taskJson: { scope_paths: ["src/x.ts"] } });
-  assert.match(prompt, /ATTACK ROLE/);
-  assert.match(prompt, /ATTACK TAXONOMY/);
+  assert.match(prompt, /=== ROLE \(verbatim from core\/agents\/adversary\.md\) ===/);
+  assert.match(prompt, /=== SKILL 1 \(verbatim\) ===/);
   assert.match(prompt, /scope_paths/);
   assert.match(prompt, /issues\[\]/);
 });

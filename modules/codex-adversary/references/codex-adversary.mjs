@@ -48,38 +48,79 @@ export function stripFrontmatter(md) {
   return afterClose === -1 ? "" : md.slice(afterClose + 1).replace(/^\n+/, "");
 }
 
+/** @description Role file path for the plan-reviewer eye (a verdict-shaped cross-family checkpoint). */
+export const PLAN_REVIEWER_ROLE_PATH = join(REPO_ROOT, "core", "agents", "plan-reviewer.md");
+
 /**
- * @description Composes the attack prompt for the Codex family from the canonical core sources.
- * PURE — reads files, returns a string. The composed prompt = adversary role (frontmatter stripped)
- * + the canonical-critical-classes taxonomy + the concrete task + a strict output instruction.
- * This is what guarantees parity: both families read the same words.
- * @param {{ taskJson: object|string, rolePath?: string, skillPath?: string }} opts
+ * @description Registry of the EYE roles that can run cross-family. The principle: NOT every task
+ * has an adversarial checkpoint, but EVERY checkpoint that runs an eye runs it on BOTH families.
+ * Each entry declares the canonical role file (single source of truth — composed at runtime, never
+ * copied), the skills that role loads, the merge `shape`, and the output contract handed to Codex.
+ *   - shape "findings": output is `issues[]` → merged by union + dedup + cross-check (merge-findings).
+ *   - shape "verdict":  output is APPROVE|REVISE + concerns → merged by either-REVISE-wins (merge-verdicts).
+ */
+export const ROLES = {
+  adversary: {
+    rolePath: ADVERSARY_ROLE_PATH,
+    skillPaths: [CANONICAL_SKILL_PATH],
+    shape: "findings",
+    headline: "CROSS-FAMILY peer of the Claude Harness adversary",
+    outputContract: [
+      "Run the attested sweep against this task's scope_paths. Reply with ONE fenced ```json block",
+      "matching the adversary `issues[]` schema EXACTLY (description, category, severity, scope,",
+      "evidence, suggested_sniper_tier, fix_hint), and nothing after it. Zero real issues is a VALID",
+      "result — emit `{\"issues\": []}`. NEVER fabricate a finding to hit a count.",
+    ].join("\n"),
+  },
+  "plan-reviewer": {
+    rolePath: PLAN_REVIEWER_ROLE_PATH,
+    skillPaths: [],
+    shape: "verdict",
+    headline: "CROSS-FAMILY peer of the Claude Harness plan-reviewer",
+    outputContract: [
+      "Audit the plan as written against the codebase. Reply with ONE fenced ```json block matching",
+      "the plan-reviewer schema EXACTLY: {\"verdict\": \"APPROVE | REVISE\", \"issues\": [...],",
+      "\"planner_instructions\": \"...\"}, and nothing after it. REVISE only for a substantive",
+      "engineering defect, never style. If sound, emit verdict APPROVE with an empty issues list.",
+    ].join("\n"),
+  },
+};
+
+/**
+ * @description Composes the Codex prompt for ANY registered eye role, from the canonical core
+ * sources. PURE — reads files, returns a string. Parity guarantee: both families read the same
+ * role + skills verbatim; only the inference engine differs.
+ * @param {{ role?: string, taskJson: object|string, roles?: object }} opts
  * @returns {string}
  */
-export function composeAdversaryPrompt({ taskJson, rolePath = ADVERSARY_ROLE_PATH, skillPath = CANONICAL_SKILL_PATH }) {
-  const role = stripFrontmatter(readFileSync(rolePath, "utf8"));
-  const skill = stripFrontmatter(readFileSync(skillPath, "utf8"));
+export function composeRolePrompt({ role = "adversary", taskJson, roles = ROLES }) {
+  const cfg = roles[role];
+  if (!cfg) throw new Error(`unknown cross-family role: ${role}`);
+  const roleBody = stripFrontmatter(readFileSync(cfg.rolePath, "utf8"));
+  const skills = cfg.skillPaths.map((p) => stripFrontmatter(readFileSync(p, "utf8")).trim());
   const task = typeof taskJson === "string" ? taskJson : JSON.stringify(taskJson, null, 2);
-  return [
-    "You are running as a CROSS-FAMILY peer of the Claude Harness adversary. You are a DIFFERENT",
-    "model family; your value is the failure modes Claude's priors miss. Same role, same taxonomy,",
-    "same output schema as below — only the engine differs.",
+  const parts = [
+    `You are running as a ${cfg.headline}. You are a DIFFERENT model family; your value is the`,
+    "failure modes Claude's priors miss. Same role, same skills, same output schema — only the engine",
+    "differs.",
     "",
-    "=== ATTACK ROLE (verbatim from core/agents/adversary.md) ===",
-    role.trim(),
-    "",
-    "=== ATTACK TAXONOMY (verbatim from canonical-critical-classes) ===",
-    skill.trim(),
-    "",
-    "=== TASK UNDER ATTACK ===",
-    task,
-    "",
-    "=== OUTPUT CONTRACT ===",
-    "Run the attested sweep against this task's scope_paths. Reply with ONE fenced ```json block",
-    "matching the adversary `issues[]` schema EXACTLY (description, category, severity, scope,",
-    "evidence, suggested_sniper_tier, fix_hint), and nothing after it. Zero real issues is a VALID",
-    "result — emit `{\"issues\": []}`. NEVER fabricate a finding to hit a count.",
-  ].join("\n");
+    `=== ROLE (verbatim from ${cfg.rolePath.replace(REPO_ROOT + "/", "")}) ===`,
+    roleBody.trim(),
+  ];
+  skills.forEach((s, i) => {
+    parts.push("", `=== SKILL ${i + 1} (verbatim) ===`, s);
+  });
+  parts.push("", "=== INPUT UNDER REVIEW ===", task, "", "=== OUTPUT CONTRACT ===", cfg.outputContract);
+  return parts.join("\n");
+}
+
+/**
+ * @description Back-compat wrapper: composes the adversary attack prompt. Prefer composeRolePrompt.
+ * @param {{ taskJson: object|string }} opts
+ * @returns {string}
+ */
+export function composeAdversaryPrompt({ taskJson }) {
+  return composeRolePrompt({ role: "adversary", taskJson });
 }
 
 /**
@@ -170,45 +211,50 @@ function defaultHasCodex(bin) {
 }
 
 /**
- * @description Runs the Codex adversary read-only and returns parsed issues. INJECTABLE spawn.
- * FAIL-OPEN: never throws on a missing/erroring codex — returns { available:false, issues:[] }.
+ * @description Runs Codex read-only on a composed prompt and returns the parsed JSON output for ANY
+ * role shape. INJECTABLE spawn. FAIL-OPEN: never throws — returns { available:false } on any failure.
  * @param {{
- *   prompt: string,
- *   spawn?: typeof spawnSync,
- *   codexBin?: string,
- *   env?: NodeJS.ProcessEnv,
- *   extraArgs?: string[],
- *   availability?: {ok:boolean, reason:string},
+ *   prompt: string, spawn?: typeof spawnSync, codexBin?: string, env?: NodeJS.ProcessEnv,
+ *   extraArgs?: string[], availability?: {ok:boolean, reason:string},
  * }} opts
- * @returns {{ available: boolean, issues: object[], raw?: string, reason?: string }}
+ * @returns {{ available: boolean, output?: object, raw?: string, reason?: string }}
  */
-export function runCodexAdversary({
-  prompt,
-  spawn = spawnSync,
-  codexBin = "codex",
-  env = process.env,
-  extraArgs = [],
-  availability,
+export function runCodexRole({
+  prompt, spawn = spawnSync, codexBin = "codex", env = process.env, extraArgs = [], availability,
 } = {}) {
   const avail = availability ?? checkAvailability({ env, codexBin });
-  if (!avail.ok) return { available: false, issues: [], reason: avail.reason };
+  if (!avail.ok) return { available: false, reason: avail.reason };
 
   const args = ["exec", "--sandbox", "read-only", "--skip-git-repo-check", ...extraArgs, prompt];
   let res;
   try {
     res = spawn(codexBin, args, { encoding: "utf8", env });
   } catch (err) {
-    return { available: false, issues: [], reason: `codex spawn failed: ${err?.message ?? err}` };
+    return { available: false, reason: `codex spawn failed: ${err?.message ?? err}` };
   }
   if (!res || res.error || res.status !== 0) {
     const reason = res?.error?.message || res?.stderr || `codex exited ${res?.status}`;
-    return { available: false, issues: [], reason: `codex run failed: ${String(reason).slice(0, 300)}` };
+    return { available: false, reason: `codex run failed: ${String(reason).slice(0, 300)}` };
   }
   const parsed = parseJsonBlock(res.stdout);
-  if (!parsed || !Array.isArray(parsed.issues)) {
-    return { available: false, issues: [], reason: "codex output had no parseable issues[] block", raw: res.stdout };
+  if (!parsed || typeof parsed !== "object") {
+    return { available: false, reason: "codex output had no parseable json block", raw: res.stdout };
   }
-  return { available: true, issues: parsed.issues, raw: res.stdout };
+  return { available: true, output: parsed, raw: res.stdout };
+}
+
+/**
+ * @description Back-compat wrapper for the findings-shaped adversary role. Returns the legacy
+ * { available, issues } envelope. FAIL-OPEN.
+ * @returns {{ available: boolean, issues: object[], raw?: string, reason?: string }}
+ */
+export function runCodexAdversary(opts = {}) {
+  const r = runCodexRole(opts);
+  if (!r.available) return { available: false, issues: [], reason: r.reason, raw: r.raw };
+  if (!Array.isArray(r.output.issues)) {
+    return { available: false, issues: [], reason: "codex output had no parseable issues[] block", raw: r.raw };
+  }
+  return { available: true, issues: r.output.issues, raw: r.raw };
 }
 
 /**
