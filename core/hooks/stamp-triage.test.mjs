@@ -204,6 +204,82 @@ test("decide: unrelated command → action:none", () => {
 });
 
 // ---------------------------------------------------------------------------
+// decide: spawn-hand.mjs pre-spawn config error → hand-config-error-nudge
+// ---------------------------------------------------------------------------
+
+test("decide: spawn-hand.mjs configError:true → action hand-config-error-nudge with the real reason", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json" },
+    tool_response: JSON.stringify({
+      configError: true,
+      reason: "runLiveDispatch: no ANTHROPIC_AUTH_TOKEN resolved (.dev.vars/env) — refusing to spawn a hand that would 401",
+      feature_id: "feat",
+      task_id: "task-1",
+    }),
+  };
+  const result = decide(payload);
+  assert.equal(result.action, "hand-config-error-nudge");
+  assert.equal(
+    result.reason,
+    "runLiveDispatch: no ANTHROPIC_AUTH_TOKEN resolved (.dev.vars/env) — refusing to spawn a hand that would 401",
+  );
+  assert.equal(result.feature_id, "feat");
+  assert.equal(result.task_id, "task-1");
+});
+
+test("decide: spawn-hand.mjs genuine run (configError absent) → action:none (no nudge on a real outcome)", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json" },
+    tool_response: JSON.stringify({ outcome: { status: "DONE" }, captured: true }),
+  };
+  assert.equal(decide(payload).action, "none");
+});
+
+test("decide: spawn-hand.mjs configError:false → action:none", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json" },
+    tool_response: JSON.stringify({ configError: false, reason: "should be ignored" }),
+  };
+  assert.equal(decide(payload).action, "none");
+});
+
+test("decide: spawn-hand.mjs configError:true but empty reason → action:none (fail-open on malformed evidence)", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json" },
+    tool_response: JSON.stringify({ configError: true, reason: "", feature_id: "feat", task_id: "task-1" }),
+  };
+  assert.equal(decide(payload).action, "none");
+});
+
+test("decide: spawn-hand.mjs configError:true with malformed stdout → action:none (fail-open)", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json" },
+    tool_response: "not json at all",
+  };
+  assert.equal(decide(payload).action, "none");
+});
+
+test("decide: grep for spawn-hand.mjs (read-only, no configError in output) → action:none", () => {
+  const payload = {
+    session_id: "ses_x",
+    tool_name: "Bash",
+    tool_input: { command: "grep spawn-hand.mjs .claude/skills/orchestrating-delivery/SKILL.md" },
+    tool_response: "spawn-hand.mjs --descriptor <path>\n",
+  };
+  assert.equal(decide(payload).action, "none");
+});
+
+// ---------------------------------------------------------------------------
 // handle() — integration tests using withTempDir for fs isolation
 // ---------------------------------------------------------------------------
 
