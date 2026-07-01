@@ -15,6 +15,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.4] - 2026-07-01
+
+### Fixed
+- `adversary`/`security` não devolvem mais `suggested_sniper_tier` com nomes de modelo Anthropic (`haiku`/`sonnet`/`opus`) — campo morto de uma migração anterior incompleta; o dispatch da mão barata já é resolvido via `hand_tiers[severity]`, nunca lê esse campo. Corrigido nos dois lados (agents nativos + espelho cross-family Codex).
+
 ## [0.18.3] - 2026-07-01
 
 ### Fixed
