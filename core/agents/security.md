@@ -1,6 +1,6 @@
 ---
 name: security
-description: Security auditor — skeptical, conditional. Invoked when a task touches auth, secrets, external input, new deps, SQL, or a service entrypoint. Read-only. Returns SECURE or UNSAFE with issues in the same format as adversary (severity low/medium/high, suggested_sniper_tier).
+description: Security auditor — skeptical, conditional. Invoked when a task touches auth, secrets, external input, new deps, SQL, or a service entrypoint. Read-only. Returns SECURE or UNSAFE with issues in the same format as adversary (severity low/medium/high).
 model: opus
 tools:
   - Read
@@ -103,7 +103,6 @@ Reply in pt-br. Emit a JSON block followed by a verdict summary:
       "severity": "low | medium | high",
       "scope": "src/path/to/file.ts",
       "evidence": "function or line reference",
-      "suggested_sniper_tier": "haiku | sonnet | opus",
       "fix_hint": "exact file:function:change description"
     }
   ]

@@ -5,7 +5,7 @@ import { classifyFindings, finalizeFindings, dedupKey } from "./merge-findings.m
 const issue = (over = {}) => ({
   description: "x", category: "race", severity: "high",
   scope: "src/a.ts", evidence: "fn handleDelete line 14",
-  suggested_sniper_tier: "opus", fix_hint: "guard it", ...over,
+  fix_hint: "guard it", ...over,
 });
 
 test("dedupKey collapses same scope+category+evidence", () => {

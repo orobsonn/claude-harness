@@ -8,7 +8,7 @@ import * as crossFamilyMod from "./cross-family.mjs";
 
 const issue = (over = {}) => ({
   description: "x", category: "race", severity: "high",
-  scope: "src/a.ts", evidence: "fn f line 1", suggested_sniper_tier: "opus", fix_hint: "guard", ...over,
+  scope: "src/a.ts", evidence: "fn f line 1", fix_hint: "guard", ...over,
 });
 
 // --- toggle -----------------------------------------------------------------
@@ -124,7 +124,7 @@ test("driveCrossFamilyVerdict [t1]: codex REVISE + claude APPROVE => merged REVI
 
 // [TASK-1 locked test 2] runRole receives a prompt from composeRolePrompt: contains the
 // plan-reviewer verdict schema (planner_instructions, APPROVE/REVISE) and NOT the adversary
-// issues[] schema (suggested_sniper_tier), proving composeRolePrompt is called before runRole.
+// issues[] schema (fix_hint), proving composeRolePrompt is called before runRole.
 test("driveCrossFamilyVerdict [t2]: runRole receives composeRolePrompt output (verdict schema, not adversary schema)", () => {
   let capturedPrompt = null;
   const runRole = ({ prompt }) => {
@@ -143,8 +143,8 @@ test("driveCrossFamilyVerdict [t2]: runRole receives composeRolePrompt output (v
   // composeRolePrompt for plan-reviewer includes the verdict output contract
   assert.match(capturedPrompt, /planner_instructions/, "prompt contains verdict field planner_instructions");
   assert.match(capturedPrompt, /APPROVE|REVISE/, "prompt contains verdict values");
-  // Must NOT be the adversary's schema (which carries suggested_sniper_tier / fix_hint in its contract)
-  assert.doesNotMatch(capturedPrompt, /suggested_sniper_tier/, "prompt must not be the adversary issues[] schema");
+  // Must NOT be the adversary's schema (which carries fix_hint in its contract)
+  assert.doesNotMatch(capturedPrompt, /fix_hint/, "prompt must not be the adversary issues[] schema");
 });
 
 // [TASK-1 locked test 3] Adversary role still takes the findings-shaped driveCrossFamily path

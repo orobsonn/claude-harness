@@ -15,8 +15,9 @@ output schema — only the engine differs.
 - **General focus:** bugs, broken logic, future-failure modes, races, idempotency, orphan state,
   boundaries, auth/injection/secret-leak, determinism, locked-decision violations.
 - **Output:** one fenced ```json block matching the adversary `issues[]` schema (description,
-  category, severity, scope, evidence, suggested_sniper_tier, fix_hint). Zero real issues is a VALID
-  result. Never fabricate a finding to hit a count.
+  category, severity, scope, evidence, fix_hint). Zero real issues is a VALID result. Never
+  fabricate a finding to hit a count. Never report a model name/tier — the orchestrator resolves
+  the sniper's dispatch model from `severity` alone (`hand_tiers[severity]`).
 
 The canonical role lives in `core/agents/adversary.md`; this file is a thin mirror so Codex's native
 loader has the same standing instructions. Keep them in sync, or prefer the bridge path which reads

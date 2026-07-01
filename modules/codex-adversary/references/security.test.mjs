@@ -6,7 +6,7 @@ import { ROLES } from "./codex-adversary.mjs";
 
 const sec = (over = {}) => ({
   description: "leak", severity: "high", scope: "src/auth.ts",
-  evidence: "fn login", suggested_sniper_tier: "opus", fix_hint: "sanitize", ...over,
+  evidence: "fn login", fix_hint: "sanitize", ...over,
 });
 const ON = { HARNESS_CODEX_ADVERSARY: "1", OPENAI_API_KEY: "sk-x" };
 const OK = { ok: true, reason: "" };
