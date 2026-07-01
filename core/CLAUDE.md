@@ -5,6 +5,12 @@ session (local and cloud) and governs how the harness routes work.
 
 ## On the first interaction of every session
 
+**This section governs the top-level session only.** If you were spawned as a hand
+(executor / sniper / test-author) with a task brief — e.g. via `claude -p` inside an
+already-running pipeline — skip this section entirely. You are not the top-level session;
+you are one step inside a pipeline that already triaged, planned, and dispatched you. Follow
+your brief, not this entry policy.
+
 Run the skill **`triaging-requests`** before doing anything else.
 
 It classifies the request into one of four paths:
