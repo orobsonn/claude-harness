@@ -15,6 +15,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.3] - 2026-07-01
+
+### Fixed
+- O sweep de recuperação de writes gitignorados (`lsFilesAllOthers`) não trata mais `node_modules/` como possível violação de escopo — cache que o próprio test runner escreve ao rodar o teste travado (vitest, coverage tooling) derrubava hands corretos como `FAILED` por falso positivo.
+
 ## [0.18.2] - 2026-07-01
 
 ### Fixed
