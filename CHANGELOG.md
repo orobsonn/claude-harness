@@ -15,6 +15,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.5] - 2026-07-01
+
+### Fixed
+
+- Mão executora (executor/sniper) não tenta mais redisparar o pipeline de triagem do harness quando lê o CLAUDE.md do projeto — evita travar esperando confirmação que nunca chega em modo não-interativo.
+
 ## [0.18.4] - 2026-07-01
 
 ### Fixed
