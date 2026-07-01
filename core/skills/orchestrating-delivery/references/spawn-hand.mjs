@@ -513,7 +513,7 @@ export async function runLiveDispatch(descriptor, {
     // (a different freeze) can never authorize a Claude hand escape for a later, unfailed run.
     const record = { ...buildRunRecord({ dispatch, child: captured.child, token, logs: [] }), freezeCommitSha: descriptor.freeze_commit_sha };
     const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-records");
-    const recordPath = join(baseDir, `${descriptor.feature_id}__${descriptor.task_id}.json`);
+    const recordPath = join(baseDir, descriptor.feature_id, `${descriptor.task_id}.json`);
     writeRecord(recordPath, JSON.stringify(record, null, 2));
 
     return { record, outcome: record.outcome, captured: captured.captured === true, recordPath };

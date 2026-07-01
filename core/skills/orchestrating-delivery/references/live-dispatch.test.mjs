@@ -125,11 +125,11 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       assert.equal(captureArgs.testPath, REAL_LOCKED_TEST, "capture must re-run the frozen locked_test by path");
       assert.equal(captureArgs.token, token, "capture must receive the resolved token for redaction");
 
-      // A run-record was written, keyed by feature_id/task_id, and carries the outcome.
+      // A run-record was written, nested under a per-feature directory.
       assert.ok(writtenRecord, "a run-record must be written to disk");
       assert.ok(
-        writtenRecord.path.includes("cheap-hands-wiring") && writtenRecord.path.includes("task-1"),
-        "the run-record path must be keyed by feature_id + task_id"
+        writtenRecord.path.endsWith(join("cheap-hands-wiring", "task-1.json")),
+        "the run-record path must nest under <feature_id>/<task_id>.json"
       );
       assert.ok(!writtenRecord.content.includes(token), "the run-record must never contain the token literal");
 
