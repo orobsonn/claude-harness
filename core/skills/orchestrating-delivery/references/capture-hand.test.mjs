@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { OUTCOME, readAuthToken, UPSTREAM_BODY_MAX } from "./dispatch-hand.mjs";
-import { captureResult, subtractUnchanged } from "./capture-hand.mjs";
+import { captureResult, subtractUnchanged, excludeNodeModules } from "./capture-hand.mjs";
 
 const FREEZE_SHA = "abc123freeze";
 
@@ -219,6 +219,22 @@ test("empty git capture overrides success prose: captured:true, evaluateRun NOT_
   assert.equal(result.child.captured, true);
   assert.deepEqual(result.child.touchedPaths, []);
   assert.equal(result.outcome.status, OUTCOME.NOT_DONE);
+});
+
+// ---- 4a2. excludeNodeModules — pure helper behind realGit's lsFilesAllOthers ----
+
+test("excludeNodeModules drops every node_modules/ path, keeps everything else", () => {
+  const paths = ["node_modules/.vite/deps_temp/foo.js", "dist/sneak.js", "core/x/new.mjs"];
+  assert.deepEqual(excludeNodeModules(paths), ["dist/sneak.js", "core/x/new.mjs"]);
+});
+
+test("excludeNodeModules is a no-op on an empty or node_modules-free list", () => {
+  assert.deepEqual(excludeNodeModules([]), []);
+  assert.deepEqual(excludeNodeModules(["dist/sneak.js"]), ["dist/sneak.js"]);
+});
+
+test("excludeNodeModules does not drop a path that merely contains 'node_modules' mid-string (prefix match only)", () => {
+  assert.deepEqual(excludeNodeModules(["src/not_node_modules/foo.js"]), ["src/not_node_modules/foo.js"]);
 });
 
 // ---- 4b. gitignored out-of-scope write is recovered via no-exclude sweep → scope violation ----
