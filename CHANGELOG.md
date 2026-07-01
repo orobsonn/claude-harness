@@ -15,6 +15,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.1] - 2026-07-01
+
+### Fixed
+- `stamp-triage.mjs` agora injeta o motivo real de uma falha pré-spawn da mão barata (lido do JSON estruturado que `spawn-hand.mjs` já emite no exit 2), em vez de deixar o orquestrador compor sua própria explicação — fecha um caso real onde um agente inventou uma causa fictícia pra um erro banal (token ausente).
+
 ## [0.18.0] - 2026-06-30
 
 ### Added
