@@ -22,6 +22,8 @@ import {
   bareRole,
   handRecordPathFor,
   readHandRecord,
+  listHandRecordsForFeature,
+  markHandRecordCaptured,
 } from "./gate-lib.mjs";
 
 /**
@@ -43,11 +45,60 @@ function withTempDir(fn) {
   }
 }
 
-test("handRecordPathFor maps feature/task qualified id to feature__task.json under hand-records", () => {
+test("handRecordPathFor nests the record under a per-feature directory: <feature>/<task>.json", () => {
   assert.strictEqual(
     handRecordPathFor("my-feature/task-1"),
-    path.join(".claude/plans/.state/hand-records", "my-feature__task-1.json")
+    path.join(".claude/plans/.state/hand-records", "my-feature", "task-1.json")
   );
+});
+
+test("listHandRecordsForFeature returns [] when the feature directory does not exist", () => {
+  withTempDir(() => {
+    assert.deepStrictEqual(listHandRecordsForFeature("no-such-feature"), []);
+  });
+});
+
+test("listHandRecordsForFeature lists every task record under a feature directory", () => {
+  withTempDir(() => {
+    const p1 = handRecordPathFor("feat-x/task-1");
+    const p2 = handRecordPathFor("feat-x/task-2");
+    fs.mkdirSync(path.dirname(p1), { recursive: true });
+    fs.writeFileSync(p1, JSON.stringify({ outcome: { status: "DONE" } }));
+    fs.writeFileSync(p2, JSON.stringify({ outcome: { status: "FAILED" } }));
+    const records = listHandRecordsForFeature("feat-x");
+    assert.strictEqual(records.length, 2);
+    const byTaskId = Object.fromEntries(records.map((r) => [r.taskId, r.record]));
+    assert.strictEqual(byTaskId["task-1"].outcome.status, "DONE");
+    assert.strictEqual(byTaskId["task-2"].outcome.status, "FAILED");
+  });
+});
+
+test("listHandRecordsForFeature skips a garbage JSON file instead of throwing", () => {
+  withTempDir(() => {
+    const p1 = handRecordPathFor("feat-y/task-1");
+    fs.mkdirSync(path.dirname(p1), { recursive: true });
+    fs.writeFileSync(p1, "{not json");
+    assert.deepStrictEqual(listHandRecordsForFeature("feat-y"), []);
+  });
+});
+
+test("markHandRecordCaptured returns false and writes nothing when no record exists", () => {
+  withTempDir(() => {
+    assert.strictEqual(markHandRecordCaptured("ghost/task-1", "2026-07-01T00:00:00.000Z"), false);
+    assert.strictEqual(fs.existsSync(handRecordPathFor("ghost/task-1")), false);
+  });
+});
+
+test("markHandRecordCaptured stamps capturedVerifiedAt onto an existing record without losing other fields", () => {
+  withTempDir(() => {
+    const p = handRecordPathFor("feat-z/task-1");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ outcome: { status: "DONE" } }));
+    assert.strictEqual(markHandRecordCaptured("feat-z/task-1", "2026-07-01T00:00:00.000Z"), true);
+    const updated = JSON.parse(fs.readFileSync(p, "utf8"));
+    assert.strictEqual(updated.capturedVerifiedAt, "2026-07-01T00:00:00.000Z");
+    assert.strictEqual(updated.outcome.status, "DONE");
+  });
 });
 
 test("readHandRecord returns null when no record on disk", () => {

@@ -116,8 +116,10 @@ export function stateDirFor(sessionId) {
  * @returns {string} path to the run-record JSON, relative to process.cwd()
  */
 export function handRecordPathFor(qualifiedId) {
-  const fileName = `${String(qualifiedId).replace("/", "__")}.json`;
-  return path.join(".claude/plans/.state/hand-records", fileName);
+  const separatorIndex = String(qualifiedId).indexOf("/");
+  const featureId = separatorIndex === -1 ? String(qualifiedId) : qualifiedId.slice(0, separatorIndex);
+  const taskId = separatorIndex === -1 ? "" : qualifiedId.slice(separatorIndex + 1);
+  return path.join(".claude/plans/.state/hand-records", featureId, `${taskId}.json`);
 }
 
 /**
@@ -137,6 +139,60 @@ export function readHandRecord(qualifiedId) {
     return parsed;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Lists every on-disk run-record for a feature. Reads the feature's hand-records directory
+ * directly (bounded to one feature, never a repo-wide glob) so the delivery gate's real-file
+ * cross-check stays cheap regardless of how many features have ever run.
+ * Returns [] on a missing directory or any fs error — never throws.
+ * @param {string} featureId - The feature_id (unqualified — no task segment)
+ * @returns {Array<{taskId: string, record: object}>}
+ */
+export function listHandRecordsForFeature(featureId) {
+  const dir = path.join(".claude/plans/.state/hand-records", String(featureId));
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const taskId = entry.slice(0, -".json".length);
+    const record = readHandRecord(`${featureId}/${taskId}`);
+    if (record !== null) {
+      results.push({ taskId, record });
+    }
+  }
+  return results;
+}
+
+/**
+ * Stamps `capturedVerifiedAt` onto the real on-disk run-record for a qualified task id.
+ * No-op (returns false, writes nothing) when the record does not exist — this is the
+ * anti-forgery guard: a marker for a dispatch that never happened has no file to stamp.
+ * Never throws. Atomic write (temp -> rename), mirrors mergeGateState's strategy.
+ * @param {string} qualifiedId - `${feature_id}/${task_id}`
+ * @param {string} timestampIso - ISO-8601 timestamp string
+ * @returns {boolean} true on success, false when the record is missing or the write fails
+ */
+export function markHandRecordCaptured(qualifiedId, timestampIso) {
+  const record = readHandRecord(qualifiedId);
+  if (record === null) {
+    return false;
+  }
+  try {
+    const merged = { ...record, capturedVerifiedAt: timestampIso };
+    const targetPath = handRecordPathFor(qualifiedId);
+    const tmpPath = `${targetPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2), "utf8");
+    fs.renameSync(tmpPath, targetPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
