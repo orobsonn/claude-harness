@@ -17,6 +17,16 @@
  *                                 to gate-state.fidelity_pass (append, dedup, idempotent). Consumed
  *                                 by entry-gate to gate spawn-hand.mjs dispatches and headless
  *                                 executor Agent dispatches.
+ *   - spawn-hand.mjs pre-spawn config error → NOT a gate-state write. spawn-hand.mjs itself emits
+ *                                 a structured {configError:true, reason, feature_id, task_id} JSON
+ *                                 on exit 2 (see spawn-hand.mjs's exit-code contract) — this is the
+ *                                 only trustworthy source for WHY a cheap-hand dispatch failed
+ *                                 pre-spawn. The CLI entry point echoes that literal reason back as
+ *                                 additionalContext so the orchestrator reports the REAL cause to the
+ *                                 operator instead of composing its own explanation. Closes an incident
+ *                                 where an agent fabricated a nonexistent "auto-mode data-exfiltration
+ *                                 classifier" instead of reporting the real (and mundane) pre-spawn
+ *                                 error verbatim.
  *
  * Fail-open contract: exits 0 on ANY error — parse, fs, validation.
  * Never blocks a Bash call. Session-id ALWAYS from payload, never from model output.
@@ -151,6 +161,31 @@ export function decide(payload) {
 
     // session_id is from payload above — any session_id in classify output is IGNORED
     return { action: "triage", session_id, mode, feature_id };
+  }
+
+  // --- spawn-hand.mjs pre-spawn config error → deterministic nudge (not a gate-state write) ---
+  // spawn-hand.mjs's own CLI entry point emits {configError:true, reason, feature_id, task_id} on
+  // stdout when it exits 2 (a PRE-SPAWN check failed: no token, dirty baseline, gate not armed,
+  // missing brief, diverged HEAD — see spawn-hand.mjs's exit-code contract comment). That JSON is
+  // CODE output, not model prose — the only reason worth trusting. Read it here and hand it back as
+  // additionalContext so the orchestrator quotes the real reason instead of inventing one.
+  if (command.includes("spawn-hand.mjs")) {
+    const responseStr = unwrapStdout(payload);
+    const parsed = parseLastJsonObject(responseStr);
+    if (
+      parsed !== null &&
+      parsed.configError === true &&
+      typeof parsed.reason === "string" &&
+      parsed.reason.length > 0
+    ) {
+      return {
+        action: "hand-config-error-nudge",
+        reason: parsed.reason,
+        feature_id: typeof parsed.feature_id === "string" ? parsed.feature_id : null,
+        task_id: typeof parsed.task_id === "string" ? parsed.task_id : null,
+      };
+    }
+    return { action: "none" };
   }
 
   // --- mark.mjs brainstorm-done marker ---
@@ -525,6 +560,29 @@ if (isDirectCli()) {
     handle(payload);
   } catch {
     // Unexpected error — fail-open, never block a Bash call
+  }
+
+  // handle() covers every gate-state write; hand-config-error-nudge is the one action that
+  // instead emits additionalContext, so decide() is called again here (cheap, pure) to build it.
+  try {
+    const decision = decide(payload);
+    if (decision.action === "hand-config-error-nudge") {
+      const qualifiedId =
+        decision.feature_id && decision.task_id ? `${decision.feature_id}/${decision.task_id}` : "this task";
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PostToolUse",
+            additionalContext:
+              `spawn-hand.mjs reported a PRE-SPAWN CONFIG ERROR for ${qualifiedId} — this is not a ` +
+              `network policy, sandbox, or Auto Mode block. The real, verbatim reason: "${decision.reason}". ` +
+              "Surface this exact reason to the operator. Do not invent an alternative explanation.",
+          },
+        }),
+      );
+    }
+  } catch {
+    // fail-open — never block a Bash call over a nudge
   }
 
   process.exit(0);
