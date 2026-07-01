@@ -93,8 +93,9 @@ export const ROLES = {
     outputContract: [
       "Run the attested sweep against this task's scope_paths. Reply with ONE fenced ```json block",
       "matching the adversary `issues[]` schema EXACTLY (description, category, severity, scope,",
-      "evidence, suggested_sniper_tier, fix_hint), and nothing after it. Zero real issues is a VALID",
-      "result — emit `{\"issues\": []}`. NEVER fabricate a finding to hit a count.",
+      "evidence, fix_hint), and nothing after it. Zero real issues is a VALID result — emit",
+      "`{\"issues\": []}`. NEVER fabricate a finding to hit a count. Never report a model name/tier —",
+      "the orchestrator resolves the sniper's dispatch model from severity alone.",
     ].join("\n"),
   },
   "plan-reviewer": {
@@ -121,9 +122,10 @@ export const ROLES = {
       "Audit this task's scope_paths for exploitable attack vectors (secrets, auth, input validation,",
       "data leakage, deps, endpoint surface). Reply with ONE fenced ```json block matching the security",
       "schema EXACTLY: {\"verdict\": \"SECURE | UNSAFE\", \"issues\": [{description, severity, scope,",
-      "evidence, suggested_sniper_tier, fix_hint}]}, and nothing after it. UNSAFE requires at least one",
-      "high or medium issue. Zero real issues is a VALID result — emit verdict SECURE with `issues: []`.",
-      "NEVER fabricate a finding to hit a count.",
+      "evidence, fix_hint}]}, and nothing after it. UNSAFE requires at least one high or medium issue.",
+      "Zero real issues is a VALID result — emit verdict SECURE with `issues: []`. NEVER fabricate a",
+      "finding to hit a count. Never report a model name/tier — the orchestrator resolves the sniper's",
+      "dispatch model from severity alone.",
     ].join("\n"),
   },
 };

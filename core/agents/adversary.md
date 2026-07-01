@@ -67,7 +67,7 @@ Reply in pt-br. Emit a JSON block followed by a brief narrative summary.
 | medium | logic bug, edge case, missing validation, degraded UX |
 | high | **irreversible or propagating** — race, auth-bypass, injection, data-corruption, orphan-state erasure, secret-leak, violated operator-locked decision |
 
-Do **not** mark everything high "to be safe" — inflation wastes sniper-opus capacity on haiku-tier work. `suggested_sniper_tier` mirrors severity (low→haiku, medium→sonnet, high→opus).
+Do **not** mark everything high "to be safe" — inflation wastes hand capacity on low-tier work. The orchestrator resolves the sniper's dispatch model directly from `hand_tiers[severity]` (a cheap Ollama hand for every severity, including high) — `severity` alone drives cost. Do not report a model name or alias here; that is a dispatch-time resourcing decision, never something the eye picks.
 
 ```json
 {
@@ -78,7 +78,6 @@ Do **not** mark everything high "to be safe" — inflation wastes sniper-opus ca
       "severity": "low | medium | high",
       "scope": "src/path/to/file.ts",
       "evidence": "function or line reference proving it",
-      "suggested_sniper_tier": "haiku | sonnet | opus",
       "fix_hint": "exact file:function:change description"
     }
   ]
