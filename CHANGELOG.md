@@ -15,6 +15,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.2] - 2026-07-01
+
+### Fixed
+- Adapter `vitest` do test-runner não travava mais em falso-negativo em projetos Cloudflare Workers: o parser da contagem de testes ignorava os logs que o `@cloudflare/vitest-pool-workers` intercala com a linha JSON do reporter, tratando qualquer run como "sem contagem" e travando a mão barata.
+
 ## [0.18.1] - 2026-07-01
 
 ### Fixed
