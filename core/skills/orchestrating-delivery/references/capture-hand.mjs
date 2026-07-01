@@ -74,6 +74,21 @@ export function parseTestsCount(stdout = "") {
 }
 
 /**
+ * @description Filters `node_modules/` paths out of a raw `git ls-files --others` listing.
+ * `node_modules/` is dependency/tooling territory that can never legitimately be a `scope_paths`
+ * entry, and test runners (vitest's local results cache, coverage tooling, etc.) routinely write
+ * NEW files there as a side effect of merely running the frozen test — without this filter, every
+ * such write is a false positive on the gitignore-escape sweep below, not a real hand violation.
+ * PURE — unit-testable without a real git repo (unlike `realGit`, which is not exercised by
+ * `node --test`).
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+export function excludeNodeModules(paths = []) {
+  return paths.filter((p) => !p.startsWith("node_modules/"));
+}
+
+/**
  * @description Real git adapter (NOT exercised by `node --test`). Each method shells out with
  * an argument array (never string concat) so user/baseline input cannot inject shell.
  * @param {string} cwd
@@ -91,7 +106,9 @@ export function realGit(cwd = process.cwd()) {
     // recover an out-of-scope write into a gitignored path (dist/, *.log) that the
     // exclude-standard sweep above would hide, so checkScope can flag it. Tradeoff: this
     // sweep also lists IN-scope gitignored files, so we only append the OUT-OF-scope ones.
-    lsFilesAllOthers: () => lines(run(["ls-files", "--others"])),
+    // node_modules/ is excluded (see excludeNodeModules) — it is never a meaningful scope-
+    // violation surface, only tooling churn (see docstring above).
+    lsFilesAllOthers: () => excludeNodeModules(lines(run(["ls-files", "--others"]))),
     // Content hash (git blob sha) for each path, in input order → path→hash map. Used to subtract
     // pre-existing-unchanged untracked files at capture. A missing/removed path is skipped (the
     // whole batch fails closed to an empty map → no subtraction → conservative legacy behavior).
