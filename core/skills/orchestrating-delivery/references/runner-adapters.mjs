@@ -34,19 +34,34 @@ function parseNodeTestCount(stdout = "") {
 
 /**
  * @description Parses vitest's `--reporter=json` summary payload (`{ numTotalTests, ... }`).
- * Malformed/non-JSON stdout (a crash before the reporter writes, a stray log line) yields null —
- * the same fail-closed contract as the node-test parser, never a silent zero/pass.
+ * `@cloudflare/vitest-pool-workers` writes its own `[vpw:info]`/`[mf:warn]`/`[vpw:debug]` lines to
+ * stdout around the single-line JSON report, so stdout as a WHOLE is not valid JSON — scanning it
+ * with a single `JSON.parse` always throws for a Workers project. Scan line by line from the LAST
+ * line backward (same convention as stamp-triage.mjs's parseLastJsonObject) and return the first
+ * line that parses to a plain object carrying a numeric `numTotalTests`. Malformed/non-JSON stdout
+ * (a crash before the reporter writes) still yields null — the same fail-closed contract as the
+ * node-test parser, never a silent zero/pass.
  * @param {string} stdout
  * @returns {number|null}
  */
 function parseVitestCount(stdout = "") {
-  let parsed;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
+  const lines = String(stdout).split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line.length === 0) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && typeof parsed.numTotalTests === "number") {
+      return parsed.numTotalTests;
+    }
   }
-  return typeof parsed.numTotalTests === "number" ? parsed.numTotalTests : null;
+  return null;
 }
 
 /**
