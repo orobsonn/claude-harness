@@ -76,6 +76,26 @@ test("vitest parseCount returns null when numTotalTests is missing from otherwis
   assert.equal(parseCount(JSON.stringify({ ok: true })), null);
 });
 
+test("vitest parseCount reads numTotalTests when @cloudflare/vitest-pool-workers wraps the JSON with its own log lines", () => {
+  const { parseCount } = resolveRunnerAdapter("vitest");
+  // Real stdout shape from a Workers project: miniflare/vpw log lines before AND after the
+  // single-line JSON report — JSON.parse(stdout) on the whole blob always throws for this shape.
+  const stdout = [
+    "[vpw:info] Starting single runtime for vitest.config.ts...",
+    '[mf:warn] The latest compatibility date supported by the installed Cloudflare Workers Runtime is "2025-09-06", but you\'ve requested "2026-04-01". Falling back to "2025-09-06"...',
+    JSON.stringify({ numTotalTests: 4, numPassedTests: 0, numFailedTests: 4 }),
+    "[vpw:debug] Shutting down runtimes...",
+    "",
+  ].join("\n");
+  assert.equal(parseCount(stdout), 4);
+});
+
+test("vitest parseCount reads numTotalTests when the JSON line is the very last line (no trailing log noise)", () => {
+  const { parseCount } = resolveRunnerAdapter("vitest");
+  const stdout = `[vpw:info] Starting single runtime...\n${JSON.stringify({ numTotalTests: 7 })}`;
+  assert.equal(parseCount(stdout), 7);
+});
+
 // ---- readRunnerConfig: project-level, file-absent default, injectable fs ----
 
 test("readRunnerConfig defaults to node-test when .claude/hand-config/test-runner.json is absent", () => {
