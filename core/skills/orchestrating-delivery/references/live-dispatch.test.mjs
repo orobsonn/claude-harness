@@ -294,6 +294,29 @@ describe("runLiveDispatch validates the descriptor schema", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("throws when task_id is a path-traversal attempt instead of a safe kebab-case id", async () => {
+    const { descriptor, dir } = makeDescriptor({ task_id: "../../../etc/evil" });
+    const sink = {};
+    try {
+      await assert.rejects(
+        () =>
+          runLiveDispatch(descriptor, {
+            spawn: makeFakeSpawn(sink),
+            gitStatus: () => "",
+            headSha: () => FREEZE_SHA,
+            capture: () => { throw new Error("capture must not run"); },
+            env: { ANTHROPIC_AUTH_TOKEN: "tok" },
+            writeRecord: () => { throw new Error("writeRecord must not run"); },
+          }),
+        /feature_id|task_id|kebab-case/i,
+        "must reject a path-traversal task_id before it can be used as a path segment"
+      );
+      assert.notEqual(sink.cmd, "claude", "must NOT spawn when the id is unsafe");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

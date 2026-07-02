@@ -151,6 +151,13 @@ export function readHandRecord(qualifiedId) {
  * @returns {Array<{taskId: string, record: object}>}
  */
 export function listHandRecordsForFeature(featureId) {
+  // Defense in depth: every current caller already validates featureId upstream (gate-state's
+  // feature_id is only ever written via the isSafeFeatureId-gated triage/reclassify path), but
+  // this export has no control over future callers — guard here too so a path-traversal
+  // featureId (e.g. "../../../tmp") can never escape the hand-records directory via this function.
+  if (!isSafeFeatureId(featureId)) {
+    return [];
+  }
   const dir = path.join(".claude/plans/.state/hand-records", String(featureId));
   let entries;
   try {
@@ -180,6 +187,14 @@ export function listHandRecordsForFeature(featureId) {
  * @returns {boolean} true on success, false when the record is missing or the write fails
  */
 export function markHandRecordCaptured(qualifiedId, timestampIso) {
+  // Defense in depth: reject a qualifiedId whose feature/task segments are not both safe
+  // kebab-case ids BEFORE doing anything — same rationale as listHandRecordsForFeature.
+  const separatorIndex = String(qualifiedId).indexOf("/");
+  const featureIdPart = separatorIndex === -1 ? String(qualifiedId) : qualifiedId.slice(0, separatorIndex);
+  const taskIdPart = separatorIndex === -1 ? "" : qualifiedId.slice(separatorIndex + 1);
+  if (!isSafeFeatureId(featureIdPart) || !isSafeFeatureId(taskIdPart)) {
+    return false;
+  }
   const record = readHandRecord(qualifiedId);
   if (record === null) {
     return false;

@@ -82,6 +82,19 @@ test("listHandRecordsForFeature skips a garbage JSON file instead of throwing", 
   });
 });
 
+test("listHandRecordsForFeature rejects a path-traversal featureId instead of escaping the hand-records directory", () => {
+  withTempDir(() => {
+    assert.deepStrictEqual(listHandRecordsForFeature("../../../etc"), []);
+  });
+});
+
+test("markHandRecordCaptured rejects a path-traversal qualifiedId instead of writing outside hand-records", () => {
+  withTempDir(() => {
+    assert.strictEqual(markHandRecordCaptured("../../evil/task-1", "2026-07-01T00:00:00.000Z"), false);
+    assert.strictEqual(markHandRecordCaptured("feat/../../evil", "2026-07-01T00:00:00.000Z"), false);
+  });
+});
+
 test("markHandRecordCaptured returns false and writes nothing when no record exists", () => {
   withTempDir(() => {
     assert.strictEqual(markHandRecordCaptured("ghost/task-1", "2026-07-01T00:00:00.000Z"), false);
