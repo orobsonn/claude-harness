@@ -485,6 +485,17 @@ test("resetGateState on SAME feature preserves regate_pending/regate_passed (del
   });
 });
 
+test("resetGateState preserves plan_review_count (a re-triage cannot launder the round counter to dodge the ceiling)", () => {
+  withTempDir(() => {
+    const sid = "ses-reset-planreview";
+    mergeGateState(sid, { feature_id: "feat-x", plan_review_count: 7 });
+    const ok = resetGateState(sid, "feat-x");
+    assert.strictEqual(ok, true);
+    const state = readGateState(sid);
+    assert.strictEqual(state.plan_review_count, 7, "plan_review_count must survive a same-session reset");
+  });
+});
+
 test("resetGateState on a DIFFERENT feature PRESERVES regate markers (session-scoped obligation survives a feature switch)", () => {
   withTempDir(() => {
     const sid = "ses-reset-switchfeat";

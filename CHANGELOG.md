@@ -15,6 +15,22 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.7] - 2026-07-02
+
+### Added
+
+### Changed
+
+- Organização da pasta de plano: os buffers de run por feature (`shared_context.md`, `test-manifest-*`, `brief-*`, `descriptor-*`, `task-slice-*`, `plan-review-*`, `spec-adversary-*`, `task.json`) agora vivem em `.claude/plans/<feature_id>/run/`; só `spec.md` e `execution-plan.json` ficam na raiz da feature. Mudança de convenção na prosa do pipeline (emitters recebem paths por arg — sem mudança de código).
+
+### Fixed
+
+- Bug de ordenação `scaffold`-após-`freeze` na mão barata: quando o teste congelado importa um módulo de produção ainda inexistente, o `spawn-hand` recusava com "gate vazio"; commitar o stub depois do freeze movia o HEAD e disparava "HEAD diverged" → tempestade de retries. Agora o SKILL instrui o stub a entrar DENTRO do freeze commit (exportando exatamente os símbolos que o teste importa), e a mensagem de erro do `spawn-hand` nomeia o recovery correto.
+- Loop de plan-review sem freio determinístico: o `entry-gate` agora conta cada dispatch de `plan-reviewer` por sessão (`plan_review_count`) — reetiquetar a rodada como "verificação focada" na prosa não dribla mais o contador. Passado o cap documentado de 2 revisões, injeta um aviso visível com o número da rodada e o custo; um backstop de runaway bloqueia além da rodada 10 (só interativo — headless permanece warn-only pra não travar cloud run sem operador). O contador sobrevive a re-triage (preservado no `resetGateState`).
+- Precondição de Auto Mode pra cheap-hands documentada: o egress da mão barata pro modelo Ollama externo pode ser hard-blocked pelo classificador de data-exfiltration do Auto Mode se o endpoint não estiver declarado em `autoMode.environment`. O SKILL agora instrui checar isso UPFRONT (antes de plano/freeze), tratar o bloqueio como controle real de plataforma (não fabricação/erro de config), e nunca auto-declarar destino confiável (decisão de dado do operador). Fail-open.
+
+### Removed
+
 ## [0.18.6] - 2026-07-01
 
 ### Fixed
