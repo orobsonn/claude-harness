@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { decide, handle } from "./stamp-triage.mjs";
+import { handRecordPathFor } from "./lib/gate-lib.mjs";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -945,7 +946,7 @@ test("handle: hand-finished marker → gate-state.json has hand_finished: [quali
   });
 });
 
-test("handle: capture-verified for a finished hand → capture_verified: [qualified task_id]", () => {
+test("handle: capture-verified for a finished hand with a real on-disk record → capture_verified: [qualified task_id]", () => {
   withTempDir(() => {
     const sessionId = "ses_cv";
     const stateDir = `.claude/plans/.state/${sessionId}`;
@@ -955,6 +956,9 @@ test("handle: capture-verified for a finished hand → capture_verified: [qualif
       JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
       "utf8",
     );
+    const recordPath = handRecordPathFor("feat-a/task-1");
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 
     handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"));
 
@@ -987,6 +991,55 @@ test(
     });
   },
 );
+
+test("handle: capture-verified is a no-op when no real hand-record exists on disk (forgery guard)", () => {
+  withTempDir(() => {
+    const sessionId = "ses_capture_forge";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+    // No hand-record file written — simulates a forged mark.mjs echo with no genuine dispatch.
+
+    handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"));
+
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.equal(
+      state.capture_verified,
+      undefined,
+      "capture_verified must NOT be stamped without a real on-disk hand-record",
+    );
+  });
+});
+
+test("handle: capture-verified stamps capturedVerifiedAt onto the real hand-record when one exists", () => {
+  withTempDir(() => {
+    const sessionId = "ses_capture_real";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-b/task-1"] }),
+      "utf8",
+    );
+    const recordPath = handRecordPathFor("feat-b/task-1");
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+    handle(makeRegatePayload(sessionId, "capture-verified", "feat-b", "task-1"));
+
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.ok(state.capture_verified?.includes("feat-b/task-1"));
+    const updatedRecord = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    assert.ok(
+      typeof updatedRecord.capturedVerifiedAt === "string" && updatedRecord.capturedVerifiedAt.length > 0,
+      "the real hand-record must carry capturedVerifiedAt",
+    );
+  });
+});
 
 test(
   "handle: hand-finished keys off payload.session_id, ignoring an embedded session_id in stdout",
