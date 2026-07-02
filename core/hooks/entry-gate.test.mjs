@@ -1196,6 +1196,126 @@ test(
 );
 
 // ---------------------------------------------------------------------------
+// Real-file capture rail — reads the on-disk run-record directly, independent of the
+// hand_finished/capture_verified session-scoped arrays above (which a prior incident showed
+// can be skipped for EVERY dispatch in a run, leaving those arrays with nothing to compare).
+// ---------------------------------------------------------------------------
+
+test("real-file capture rail: denies push when a real DONE hand-record has no capturedVerifiedAt (hand_finished was never stamped)", () => {
+  const payload = makeBashPayload("ses_realfile_1", "git push");
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: (sha) => sha === "deadbeef",
+    listHandRecordsForFeatureFn: (featureId) => {
+      assert.equal(featureId, "feat-real");
+      return [{
+        taskId: "task-1",
+        record: {
+          freezeCommitSha: "deadbeef",
+          outcome: { status: "DONE", scopeViolations: [], frozenViolations: [] },
+        },
+      }];
+    },
+  });
+  assert.equal(result.allow, false);
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /task-1/);
+});
+
+test("real-file capture rail: allows push when the real hand-record already carries capturedVerifiedAt", () => {
+  const payload = makeBashPayload("ses_realfile_2", "git push");
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: () => true,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      record: {
+        freezeCommitSha: "deadbeef",
+        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
+        outcome: { status: "DONE", scopeViolations: [], frozenViolations: [] },
+      },
+    }],
+  });
+  assert.equal(result.allow, true);
+});
+
+test("real-file capture rail: denies push with a distinct hard-stop message on a scope violation, even if capturedVerifiedAt is set", () => {
+  const payload = makeBashPayload("ses_realfile_3", "git push");
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: () => true,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      record: {
+        freezeCommitSha: "deadbeef",
+        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
+        outcome: { status: "FAILED", scopeViolations: ["src/out-of-scope.ts"], frozenViolations: [] },
+      },
+    }],
+  });
+  assert.equal(result.allow, false);
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /scope/i);
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /task-1/);
+});
+
+test("real-file capture rail: ignores a hand-record whose freezeCommitSha is not an ancestor of HEAD (abandoned/unrelated branch)", () => {
+  const payload = makeBashPayload("ses_realfile_4", "git push");
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: () => false,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      record: { freezeCommitSha: "stale-sha", outcome: { status: "DONE", scopeViolations: [], frozenViolations: [] } },
+    }],
+  });
+  assert.equal(result.allow, true);
+});
+
+test("real-file capture rail: denies a freeze-commit for the NEXT task (best-effort early trigger) when the current feature has an unresolved hand-record", () => {
+  const payload = makeBashPayload("ses_freeze_early", 'git commit -m "test(cron): freeze locked tests for task-2"');
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: () => true,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      record: { freezeCommitSha: "deadbeef", outcome: { status: "DONE", scopeViolations: [], frozenViolations: [] } },
+    }],
+  });
+  assert.equal(result.allow, false);
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /task-1/);
+});
+
+test("real-file capture rail: allows an ordinary git commit (not a freeze-commit message) even with an unresolved hand-record — the freeze-commit trigger is best-effort, not the mandatory gate", () => {
+  const payload = makeBashPayload("ses_freeze_ordinary", 'git commit -m "chore: update memory notes"');
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-real" }),
+    gitStateFn: () => null,
+    isHeadlessFn: () => false,
+    headShaFn: () => "deadbeef",
+    isAncestorFn: () => true,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      record: { freezeCommitSha: "deadbeef", outcome: { status: "DONE", scopeViolations: [], frozenViolations: [] } },
+    }],
+  });
+  assert.equal(result.allow, true);
+});
+
+// ---------------------------------------------------------------------------
 // Branch/commit rail (push-branch-gate): a delivery command must run from a feature
 // branch with committed work — never from main/master, never with zero commits ahead.
 // gitStateFn is an injectable seam; its decide()-level default is a no-op so existing

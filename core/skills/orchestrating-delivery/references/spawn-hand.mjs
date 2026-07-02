@@ -31,6 +31,7 @@ import {
 } from "./dispatch-hand.mjs";
 import { captureResult, realGit, realTestRunner } from "./capture-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
+import { isSafeFeatureId } from "../../../hooks/lib/gate-lib.mjs";
 import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -392,6 +393,14 @@ export async function runLiveDispatch(descriptor, {
       throw new Error(`runLiveDispatch: descriptor.${field} is required (array)`);
     }
   }
+  // feature_id/task_id become path segments below (the hand-record's directory + filename) —
+  // reject anything that isn't a safe kebab-case id BEFORE it can traverse outside
+  // .claude/plans/.state/hand-records/ (e.g. a task_id of "../../../etc/evil").
+  if (!isSafeFeatureId(descriptor.feature_id) || !isSafeFeatureId(descriptor.task_id)) {
+    throw new Error(
+      "runLiveDispatch: descriptor.feature_id and descriptor.task_id must be safe kebab-case ids (no path separators)"
+    );
+  }
 
   // (2) Resolve the auth token (env → .dev.vars tiers). Token is env-only — never argv/descriptor.
   const token = resolveAuthToken(env);
@@ -513,7 +522,7 @@ export async function runLiveDispatch(descriptor, {
     // (a different freeze) can never authorize a Claude hand escape for a later, unfailed run.
     const record = { ...buildRunRecord({ dispatch, child: captured.child, token, logs: [] }), freezeCommitSha: descriptor.freeze_commit_sha };
     const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-records");
-    const recordPath = join(baseDir, `${descriptor.feature_id}__${descriptor.task_id}.json`);
+    const recordPath = join(baseDir, descriptor.feature_id, `${descriptor.task_id}.json`);
     writeRecord(recordPath, JSON.stringify(record, null, 2));
 
     return { record, outcome: record.outcome, captured: captured.captured === true, recordPath };

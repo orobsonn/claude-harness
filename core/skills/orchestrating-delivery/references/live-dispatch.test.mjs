@@ -125,11 +125,11 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       assert.equal(captureArgs.testPath, REAL_LOCKED_TEST, "capture must re-run the frozen locked_test by path");
       assert.equal(captureArgs.token, token, "capture must receive the resolved token for redaction");
 
-      // A run-record was written, keyed by feature_id/task_id, and carries the outcome.
+      // A run-record was written, nested under a per-feature directory.
       assert.ok(writtenRecord, "a run-record must be written to disk");
       assert.ok(
-        writtenRecord.path.includes("cheap-hands-wiring") && writtenRecord.path.includes("task-1"),
-        "the run-record path must be keyed by feature_id + task_id"
+        writtenRecord.path.endsWith(join("cheap-hands-wiring", "task-1.json")),
+        "the run-record path must nest under <feature_id>/<task_id>.json"
       );
       assert.ok(!writtenRecord.content.includes(token), "the run-record must never contain the token literal");
 
@@ -290,6 +290,29 @@ describe("runLiveDispatch validates the descriptor schema", () => {
         "must reject an incomplete descriptor"
       );
       assert.notEqual(sink.cmd, "claude", "must NOT spawn on an invalid descriptor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when task_id is a path-traversal attempt instead of a safe kebab-case id", async () => {
+    const { descriptor, dir } = makeDescriptor({ task_id: "../../../etc/evil" });
+    const sink = {};
+    try {
+      await assert.rejects(
+        () =>
+          runLiveDispatch(descriptor, {
+            spawn: makeFakeSpawn(sink),
+            gitStatus: () => "",
+            headSha: () => FREEZE_SHA,
+            capture: () => { throw new Error("capture must not run"); },
+            env: { ANTHROPIC_AUTH_TOKEN: "tok" },
+            writeRecord: () => { throw new Error("writeRecord must not run"); },
+          }),
+        /feature_id|task_id|kebab-case/i,
+        "must reject a path-traversal task_id before it can be used as a path segment"
+      );
+      assert.notEqual(sink.cmd, "claude", "must NOT spawn when the id is unsafe");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

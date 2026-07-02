@@ -46,6 +46,7 @@ import {
   readGateState,
   mergeGateState,
   readHandRecord,
+  listHandRecordsForFeature,
 } from "./lib/gate-lib.mjs";
 
 /**
@@ -86,6 +87,92 @@ function defaultHeadSha() {
   } catch {
     return null;
   }
+}
+
+/**
+ * @description Best-effort ancestor probe for scoping the real-file capture check to the
+ * current branch's lineage. Returns true when `sha` is an ancestor of (or equal to) HEAD,
+ * false when git POSITIVELY determines it is not (exit 1 — the definitive, safe-to-deny
+ * signal), or null on any other error (bad sha, git failure) so the caller fails OPEN
+ * (skips that record rather than denying on an undetermined answer).
+ * @param {string} sha
+ * @returns {boolean|null}
+ */
+function defaultIsAncestor(sha) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch (err) {
+    if (err?.status === 1) return false;
+    return null;
+  }
+}
+
+/**
+ * @description Runs the real-file capture rail for one feature: lists every hand-record via
+ * listHandRecordsForFeatureFn, scopes to records whose freezeCommitSha is an ancestor of (or
+ * equal to) HEAD, and returns a deny result for the first violation found — a scope/frozen
+ * violation (hard-stop regardless of capturedVerifiedAt), or a DONE outcome with no
+ * capturedVerifiedAt. Returns null when nothing blocks. Shared by both call sites (the
+ * mandatory delivery-command gate and the best-effort freeze-commit early trigger) so the two
+ * can never drift out of sync on what counts as "unresolved".
+ * @param {string} featureId
+ * @param {{ listHandRecordsForFeatureFn: function, isAncestorFn: function }} deps
+ * @returns {null | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
+ */
+function checkRealFileCaptureRail(featureId, { listHandRecordsForFeatureFn, isAncestorFn }) {
+  let records = [];
+  try {
+    records = listHandRecordsForFeatureFn(featureId);
+  } catch {
+    records = [];
+  }
+  for (const { taskId, record } of records) {
+    if (!record || typeof record !== "object") continue;
+    const sha = record.freezeCommitSha;
+    if (typeof sha !== "string" || sha.length === 0) continue;
+    let ancestor = null;
+    try {
+      ancestor = isAncestorFn(sha);
+    } catch {
+      ancestor = null;
+    }
+    if (ancestor !== true) continue; // undetermined or not-an-ancestor → skip (fail open on this record)
+    const outcome = record.outcome ?? {};
+    const scopeViolations = Array.isArray(outcome.scopeViolations) ? outcome.scopeViolations : [];
+    const frozenViolations = Array.isArray(outcome.frozenViolations) ? outcome.frozenViolations : [];
+    if (scopeViolations.length > 0 || frozenViolations.length > 0) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: the independent capture for ${featureId}/${taskId} found a ` +
+            `SCOPE/FROZEN-MANIFEST violation (${[...scopeViolations, ...frozenViolations].join(", ")}). ` +
+            "This requires a human decision, not a re-run or a capture-verified stamp — resolve " +
+            "the out-of-scope write (revert it or fold it into scope_paths deliberately) before proceeding.",
+        },
+      };
+    }
+    if (outcome.status === "DONE" && typeof record.capturedVerifiedAt !== "string") {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: the on-disk run-record for ${featureId}/${taskId} shows a ` +
+            "completed dispatch with no independent capture stamped on it yet " +
+            "(capturedVerifiedAt missing), regardless of what hand_finished/capture_verified show. " +
+            "Run capture-hand.mjs and stamp capture-verified before proceeding.",
+        },
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -336,7 +423,7 @@ export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists)
  *         | { allow: true, hookSpecificOutput: { hookEventName: string, additionalContext: string } }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn }) {
+function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn }) {
   const command = payload?.tool_input?.command;
   // Non-string command → infra error → fail-open
   if (typeof command !== "string") {
@@ -433,6 +520,31 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   // like `gh issue create && git push` IS a delivery command (isDeliveryCommand matches `git push`
   // anywhere), so it keeps flowing into the delivery deny rails below and never receives the advisory.
   if (!isDeliveryCommand(command)) {
+    // Best-effort early trigger (spec AC-4): a freeze-commit for the NEXT task is a natural,
+    // low-frequency checkpoint to catch an unresolved capture ONE task sooner than the mandatory
+    // delivery gate below. String-matched on the commit-message convention from
+    // orchestrating-delivery/SKILL.md step 1c-commit ("test(<scope>): freeze locked tests for
+    // <task-id>") — advisory only. The delivery-command branch below (git push / gh pr create /
+    // gh pr merge) remains the single MANDATORY enforcement point regardless of whether this
+    // trigger fires; a commit message that doesn't match this convention simply skips it.
+    if (/\bgit\s+commit\b/.test(command) && /freeze locked tests for/i.test(command)) {
+      const freezeSessionId = payload.session_id;
+      if (typeof freezeSessionId === "string" && freezeSessionId.length > 0 && isSafeSessionId(freezeSessionId)) {
+        let freezeGateState = {};
+        try {
+          freezeGateState = readGateStateFn(freezeSessionId);
+        } catch {
+          freezeGateState = {};
+        }
+        const freezeFeatureId = typeof freezeGateState.feature_id === "string" ? freezeGateState.feature_id : null;
+        if (freezeFeatureId !== null) {
+          const earlyDeny = checkRealFileCaptureRail(freezeFeatureId, { listHandRecordsForFeatureFn, isAncestorFn });
+          if (earlyDeny !== null) {
+            return earlyDeny;
+          }
+        }
+      }
+    }
     const advisory = typeof adviseIssueFormFn === "function"
       ? adviseIssueFormFn(command, payload.cwd)
       : null;
@@ -541,6 +653,27 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
       },
     };
   }
+  // Real-file capture rail — independent of hand_finished/capture_verified (a session-scoped,
+  // manually-stamped pair that a prior incident showed can be skipped for EVERY dispatch in a
+  // run, leaving the array-diff above with nothing to compare). This reads the run-record
+  // spawn-hand.mjs writes unconditionally on every dispatch, scoped to the current feature and
+  // to records whose freeze commit is still part of this branch's history (never a stale
+  // abandoned/already-shipped feature's leftovers).
+  const featureId = typeof gateState.feature_id === "string" ? gateState.feature_id : null;
+  if (featureId !== null) {
+    const realFileDeny = checkRealFileCaptureRail(featureId, { listHandRecordsForFeatureFn, isAncestorFn });
+    if (realFileDeny !== null) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          ...realFileDeny.hookSpecificOutput,
+          permissionDecisionReason:
+            `${realFileDeny.hookSpecificOutput.permissionDecisionReason} ` +
+            "(git push / gh pr create / gh pr merge).",
+        },
+      };
+    }
+  }
   return { allow: true };
 }
 
@@ -579,6 +712,12 @@ export function decide(payload, deps = {}) {
     // No-op by default (mirrors gitStateFn's inert default for unit callers). The real FS probe
     // (defaultIssueFormExists) is injected at the processInput layer (production CLI path).
     issueFormExistsFn = () => false,
+    // Inert by default (mirrors gitStateFn) — the real git probe (defaultIsAncestor) and the
+    // real hand-records reader (listHandRecordsForFeature) are injected at the processInput
+    // layer (production CLI path), so unit callers of decide() never touch git/fs unless they
+    // explicitly opt in via deps.
+    isAncestorFn = () => null,
+    listHandRecordsForFeatureFn = () => [],
   } = deps;
 
   // Non-object payload → infra error → fail-open
@@ -593,7 +732,7 @@ export function decide(payload, deps = {}) {
   // test first). The advisory nudges toward the harness issue form on bare `gh issue create`.
   const adviseIssueFormFn = (cmd, cwd) => adviseIssueForm(cmd, cwd, issueFormExistsFn);
   if (payload.tool_name === "Bash") {
-    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn });
+    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)
@@ -930,6 +1069,8 @@ export function processInput(rawStr, deps = {}) {
     verdict = decide(payload, {
       gitStateFn: defaultGitState,
       issueFormExistsFn: defaultIssueFormExists,
+      isAncestorFn: defaultIsAncestor,
+      listHandRecordsForFeatureFn: listHandRecordsForFeature,
       ...deps,
     });
   } catch {

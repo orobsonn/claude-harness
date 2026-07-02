@@ -43,6 +43,8 @@ import {
   readGateState,
   mergeGateState,
   resetGateState,
+  readHandRecord,
+  markHandRecordCaptured,
 } from "./lib/gate-lib.mjs";
 
 // ---------------------------------------------------------------------------
@@ -502,10 +504,20 @@ export function handle(payload, opts = {}) {
     if (!finished.includes(decision.task_id)) {
       return;
     }
+    // Second, independent guard: a real on-disk run-record must exist for this qualified id.
+    // hand_finished is a manually-stamped array (prose-driven, proven skippable); the run-record
+    // is written unconditionally by spawn-hand.mjs's runLiveDispatch, so requiring BOTH means a
+    // forged marker with no genuine dispatch behind it stamps nothing anywhere, ever.
+    if (readHandRecord(decision.task_id) === null) {
+      return;
+    }
     const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
     if (!existing.includes(decision.task_id)) {
       mergeGateState(decision.session_id, { capture_verified: [...existing, decision.task_id] });
     }
+    // Stamp the permanent record too — gate-state.json is session-scoped and does not survive a
+    // session restart/compaction; the hand-record does, closing that asymmetry.
+    markHandRecordCaptured(decision.task_id, new Date().toISOString());
     return;
   }
 
