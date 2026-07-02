@@ -487,6 +487,37 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
       "the real dispatch spawn must NOT be called when the gate is vacuous"
     );
   });
+
+  // Fix A: the vacuous-gate reason must NAME the correct recovery (scaffold stub INSIDE the freeze
+  // commit, exporting the test's import surface) so the orchestrator does not commit the stub AFTER
+  // the freeze and diverge HEAD (the M5 retry-storm root cause).
+  it("names the scaffold-in-freeze recovery in the vacuous-gate reason", async () => {
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) return { status: 0, stdout: "# tests 0\n", stderr: "", output: [] };
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    let caught;
+    try {
+      await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught, "must throw on a vacuous gate");
+    assert.match(caught.message, /stub/i, "reason must name the scaffold stub recovery");
+    assert.match(caught.message, /freeze/i, "reason must say the stub goes inside the freeze commit");
+    assert.match(caught.message, /diverge/i, "reason must warn that committing after the freeze diverges HEAD");
+  });
 });
 
 // ---------------------------------------------------------------------------

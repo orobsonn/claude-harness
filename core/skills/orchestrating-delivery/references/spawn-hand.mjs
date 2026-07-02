@@ -209,7 +209,13 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
   const testCount = runnerAdapter.parseCount(dryRunStdout) ?? 0;
   if (!testCount) {
     throw new Error(
-      "locked_test registers zero tests — gate is vacuous, refusing to spawn"
+      "locked_test registers zero tests — gate is vacuous, refusing to spawn. " +
+        "Recovery: the frozen test imports a production module that does not exist yet, so it collects 0 " +
+        "tests. Create a throwing scaffold stub of that module (named exports matching the test's imports, " +
+        "unimplemented bodies) and commit it INSIDE the freeze commit (step 1c-commit), alongside the test — " +
+        "NOT after. Committing the stub after the freeze moves HEAD off the freeze baseline and spawn-hand " +
+        "then refuses with 'HEAD diverged'. The stub is a production file (outside the frozen manifest), so " +
+        "the executor legitimately overwrites it with the real implementation."
     );
   }
 

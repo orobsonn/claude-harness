@@ -13,6 +13,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- Bug de ordenação `scaffold`-após-`freeze` na mão barata: quando o teste congelado importa um módulo de produção ainda inexistente, o `spawn-hand` recusava com "gate vazio"; commitar o stub depois do freeze movia o HEAD e disparava "HEAD diverged" → tempestade de retries. Agora o SKILL instrui o stub a entrar DENTRO do freeze commit (exportando exatamente os símbolos que o teste importa), e a mensagem de erro do `spawn-hand` nomeia o recovery correto.
+
 ### Removed
 
 ## [0.18.6] - 2026-07-01
