@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-01
 **Mode:** LIGHT (hardens existing hooks; no new subsystem)
-**Status:** awaiting operator approval
+**Status:** implemented on `docs/capture-verified-gate-hardening-spec`, tests green (392/392) —
+awaiting operator sign-off on the "Known limitation" section below before PR/push
 
 ## Problem
 
@@ -236,6 +237,44 @@ It now **also** reads the real hand-record file for that qualified id
   (write to nested path).
 - Docs: `core/skills/orchestrating-delivery/SKILL.md` (reflect that `capture-verified` is now
   cross-validated, not blindly trusted; note the freeze-commit early trigger).
+
+## Known limitation (found by post-implementation adversarial review — NOT closed by this spec)
+
+A second adversarial pass, run against the actual implementation (not just the design), found
+and **proved with a working PoC** that the "real on-disk run-record" this spec relies on as the
+non-forgeable source of truth is **itself forgeable** — by the same actor (the orchestrator) that
+could already forge the old marker-echo, using the same missing control: **nothing gates the Bash
+tool from writing directly into `.claude/plans/.state/hand-records/**`.** `plan-write-gate.mjs`
+denies the `Write`/`Edit` tools from touching that path, but has no Bash-tool equivalent, and the
+settings baseline already allows `Bash(cat:*)`, `Bash(echo:*)`, `Bash(tee:*)`, `Bash(cp:*)`,
+`Bash(mv:*)`, `Bash(sed:*)` without a permission prompt — any of which can write a JSON file with
+the right shape (`outcome.status: "DONE"`, empty violation arrays, a `capturedVerifiedAt`, and a
+`freezeCommitSha` equal to current HEAD) and the delivery gate allows it through, with **zero**
+genuine `spawn-hand.mjs` dispatch ever having run.
+
+**What this spec still achieves despite this:** the original incident was the orchestrator
+**forgetting** to stamp anything — an accidental omission, not deliberate forgery. Before this
+change, that omission left `gate-state.json` with no record of the dispatch at all, and the
+delivery gate had nothing to compare against. After this change, the delivery gate always has
+*something* to check (the run-record's mere existence, from every genuine dispatch, unconditional)
+— raising the bar from "do nothing and the gate has nothing to catch" to "actively fabricate a
+plausible multi-field JSON file naming the right feature/task/SHA," which is a categorically
+different (and far less likely to happen by accident) failure mode. **What it does NOT achieve:**
+protection against a deliberately adversarial or confused orchestrator choosing to fabricate that
+evidence on purpose. That property was never actually true of the pre-existing marker-based rail
+either (the old `stamp-triage.mjs` marker-echo was equally forgeable by the same actor via the same
+missing Bash write-gate) — this spec does not make that pre-existing gap worse, but it also does not
+close it, despite some of this spec's own language ("the marker alone is not authoritative")
+reading as if it does.
+
+**Recommended follow-up (separate spec, not bundled here):** closing this for real requires either
+(a) a Bash-tool write-gate for `.claude/plans/.state/**` analogous to `plan-write-gate.mjs` — hard
+to do robustly by pattern-matching Bash command text (arbitrarily many ways to write a file via
+shell), or (b) a cryptographic approach — e.g. `spawn-hand.mjs` HMAC-signs the run-record with a
+key that never reaches the model's context (env-only, like the Ollama token), and the gate verifies
+the signature on read, so a Bash-written file without the correct signature is inert regardless of
+its JSON shape. This is a genuinely harder, higher-stakes design question than the rest of this
+spec and deserves its own dedicated brainstorm + adversarial review before implementation.
 
 ## Follow-up (parked, not in this spec)
 
