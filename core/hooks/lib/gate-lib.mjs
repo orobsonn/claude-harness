@@ -311,6 +311,9 @@ export function resetGateState(sessionId, featureId) {
     if (Array.isArray(current.regate_passed)) next.regate_passed = current.regate_passed;
     if (Array.isArray(current.hand_finished)) next.hand_finished = current.hand_finished;
     if (Array.isArray(current.capture_verified)) next.capture_verified = current.capture_verified;
+    // Preserve the plan-review round counter across a re-triage/compaction-resume so a
+    // reclassify of the SAME session cannot launder the counter back to 0 and dodge the ceiling.
+    if (Number.isInteger(current.plan_review_count)) next.plan_review_count = current.plan_review_count;
     const targetPath = gateStatePathFor(sessionId);
     const tmpPath = `${targetPath}.${process.pid}.tmp`;
     fs.mkdirSync(stateDirFor(sessionId), { recursive: true });

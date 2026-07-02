@@ -14,6 +14,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Fixed
 
 - Bug de ordenação `scaffold`-após-`freeze` na mão barata: quando o teste congelado importa um módulo de produção ainda inexistente, o `spawn-hand` recusava com "gate vazio"; commitar o stub depois do freeze movia o HEAD e disparava "HEAD diverged" → tempestade de retries. Agora o SKILL instrui o stub a entrar DENTRO do freeze commit (exportando exatamente os símbolos que o teste importa), e a mensagem de erro do `spawn-hand` nomeia o recovery correto.
+- Loop de plan-review sem freio determinístico: o `entry-gate` agora conta cada dispatch de `plan-reviewer` por sessão (`plan_review_count`) — reetiquetar a rodada como "verificação focada" na prosa não dribla mais o contador. Passado o cap documentado de 2 revisões, injeta um aviso visível com o número da rodada e o custo; um backstop de runaway bloqueia além da rodada 10 (só interativo — headless permanece warn-only pra não travar cloud run sem operador). O contador sobrevive a re-triage (preservado no `resetGateState`).
 
 ### Removed
 

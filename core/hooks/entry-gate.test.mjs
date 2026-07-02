@@ -1863,3 +1863,79 @@ test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// Fix C — deterministic plan-review round rail
+// ---------------------------------------------------------------------------
+
+test("plan-reviewer: first dispatch allows and increments plan_review_count to 1", () => {
+  withTempDir(() => {
+    const sessionId = "ses_pr_first";
+    const payload = makeAgentPayload(sessionId, "plan-reviewer");
+    const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
+
+    const verdict = decide(payload, { readTriage });
+
+    assert.equal(verdict.allow, true, "first plan-review dispatch must be allowed");
+    assert.ok(!verdict.hookSpecificOutput?.additionalContext, "no warning on the first round");
+
+    const state = JSON.parse(
+      fs.readFileSync(`.claude/plans/.state/${sessionId}/gate-state.json`, "utf8"),
+    );
+    assert.equal(state.plan_review_count, 1, "plan_review_count must be 1 after the first dispatch");
+  });
+});
+
+test("plan-reviewer: past the cap (count>3) allows WITH an additionalContext warning", () => {
+  const sessionId = "ses_pr_cap";
+  const payload = makeAgentPayload(sessionId, "plan-reviewer");
+  const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
+  const readGateStateFn = () => ({ plan_review_count: 3 }); // this dispatch becomes round 4
+  const verdict = decide(payload, {
+    readTriage,
+    readGateStateFn,
+    mergeGateStateFn: () => {},
+    isHeadlessFn: () => false,
+  });
+
+  assert.equal(verdict.allow, true, "past the cap the rail warns, never blocks");
+  assert.match(
+    verdict.hookSpecificOutput.additionalContext,
+    /round 4/,
+    "warning must name the canonical round number (4)",
+  );
+  assert.match(verdict.hookSpecificOutput.additionalContext, /cap|churn|Opus/i, "warning must name the cost/cap");
+});
+
+test("plan-reviewer: past the runaway ceiling (count>10) INTERACTIVE denies", () => {
+  const sessionId = "ses_pr_ceiling";
+  const payload = makeAgentPayload(sessionId, "plan-reviewer");
+  const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
+  const readGateStateFn = () => ({ plan_review_count: 10 }); // this dispatch becomes round 11
+  const verdict = decide(payload, {
+    readTriage,
+    readGateStateFn,
+    mergeGateStateFn: () => {},
+    isHeadlessFn: () => false,
+  });
+
+  assert.equal(verdict.allow, false, "past the ceiling interactive must deny");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /escalat|operator/i, "deny must name escalation");
+});
+
+test("plan-reviewer: past the ceiling HEADLESS never denies (warn-only — no operator to escalate to)", () => {
+  const sessionId = "ses_pr_headless";
+  const payload = makeAgentPayload(sessionId, "plan-reviewer");
+  const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
+  const readGateStateFn = () => ({ plan_review_count: 10 }); // round 11
+  const verdict = decide(payload, {
+    readTriage,
+    readGateStateFn,
+    mergeGateStateFn: () => {},
+    isHeadlessFn: () => true, // HEADLESS
+  });
+
+  assert.equal(verdict.allow, true, "HEADLESS must never hard-deny — a deadlock with no operator is worse");
+  assert.ok(verdict.hookSpecificOutput?.additionalContext, "HEADLESS still gets the visible warning");
+});

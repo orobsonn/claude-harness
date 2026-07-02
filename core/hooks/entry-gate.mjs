@@ -800,6 +800,76 @@ export function decide(payload, deps = {}) {
     return { allow: true };
   }
 
+  // Plan-review round rail (Fix C): count every plan-reviewer dispatch. This RAISES THE BAR —
+  // reclassifying a round as "focused verification" in prose can no longer dodge the count (the
+  // gate keys on subagent_type, not the orchestrator's label). The count includes the initial gate
+  // dispatch (1) + each revision loop; the documented cap is "2 revision loops" = 3 dispatches.
+  //   • count > 3 (a 3rd+ revision) → ALLOW + a visible additionalContext warning (never block —
+  //     cross-family discovery past round 2 found real bugs in the evidence).
+  //   • count > 10 (runaway ceiling, well above the proven-legit 6+) → DENY, but INTERACTIVE ONLY.
+  //     HEADLESS has no operator to escalate to, so a hard-deny would deadlock a cloud run with an
+  //     unapproved plan → headless stays warn-only forever.
+  // Fail-open on any read/write error (never brick a review).
+  if (role === "plan-reviewer") {
+    const featureId = (triage && typeof triage.feature_id === "string" && triage.feature_id)
+      ? triage.feature_id
+      : "<id>";
+    let prev = 0;
+    try {
+      const gs = readGateStateFn(sessionId);
+      if (gs && Number.isInteger(gs.plan_review_count)) prev = gs.plan_review_count;
+    } catch {
+      prev = 0;
+    }
+    const count = prev + 1;
+    try {
+      mergeGateStateFn(sessionId, { plan_review_count: count });
+    } catch {
+      // fail-open: a write failure never blocks the review
+    }
+
+    const PLAN_REVIEW_CAP = 3; // initial dispatch + 2 revision loops (documented cap of 2)
+    const PLAN_REVIEW_CEILING = 10; // runaway backstop, above the proven-legit 6+
+    let headless = false;
+    try {
+      headless = Boolean(isHeadlessFn());
+    } catch {
+      headless = false;
+    }
+
+    if (count > PLAN_REVIEW_CEILING && !headless) {
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `[entry-gate] Blocked: plan-review round ${count} for "${featureId}" exceeds the runaway ` +
+            `ceiling of ${PLAN_REVIEW_CEILING}. The plan has churned far past the documented cap of 2 ` +
+            "revision loops. STOP re-reviewing: escalate the blocking finding to the operator in product " +
+            "language (or, if the finding is unresolvable, open an issue). Re-dispatching the plan-reviewer " +
+            "is denied to prevent an invisible Opus+Codex cost spiral.",
+        },
+      };
+    }
+    if (count > PLAN_REVIEW_CAP) {
+      return {
+        allow: true,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          additionalContext:
+            `[entry-gate] plan-review round ${count} for "${featureId}" exceeds the documented cap of 2 ` +
+            "revision loops. Each round costs Opus+Codex. Confirm this round is genuine NEW-bug discovery " +
+            "(a real finding the prior rounds missed), not churn or a reclassified 'focused verification'. " +
+            "If findings are converging, approve the plan or escalate the blocking finding to the operator " +
+            `instead of re-reviewing. Name this round's verdict file plan-review-<family>-r${count}.json.` +
+            (headless ? "" : ` A hard stop applies at round ${PLAN_REVIEW_CEILING}.`),
+        },
+      };
+    }
+    return { allow: true };
+  }
+
   // Gate 2: planner requires BOTH brainstormed AND adversary_fired in BOTH LIGHT and FULL.
   if (role === "planner") {
     const featureId = (triage && typeof triage.feature_id === "string" && triage.feature_id)
