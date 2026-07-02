@@ -15,6 +15,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.18.6] - 2026-07-01
+
+### Fixed
+
+- Gate de entrega (`capture-verified`) agora cruza com o registro real da mão barata, gravado automaticamente em disco a cada dispatch — não só com o carimbo manual `hand-finished`/`capture-verified`. Detecta um dispatch sem verificação independente mesmo quando o carimbo foi esquecido (incidente real onde 4 de 5 dispatches numa run ficaram sem carimbo). Violação de escopo/manifesto congelado agora bloqueia a entrega mesmo que o carimbo tenha sido feito.
+- Corrigido path traversal em `feature_id`/`task_id` nos registros de mão barata (`.claude/plans/.state/hand-records/`), achado na revisão adversarial desta mudança.
+
 ## [0.18.5] - 2026-07-01
 
 ### Fixed
