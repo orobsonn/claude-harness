@@ -11,6 +11,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.18.7] - 2026-07-02
+
+### Added
+
+### Changed
+
 - Organização da pasta de plano: os buffers de run por feature (`shared_context.md`, `test-manifest-*`, `brief-*`, `descriptor-*`, `task-slice-*`, `plan-review-*`, `spec-adversary-*`, `task.json`) agora vivem em `.claude/plans/<feature_id>/run/`; só `spec.md` e `execution-plan.json` ficam na raiz da feature. Mudança de convenção na prosa do pipeline (emitters recebem paths por arg — sem mudança de código).
 
 ### Fixed
