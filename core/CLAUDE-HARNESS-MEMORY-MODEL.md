@@ -10,7 +10,7 @@ is **no `learnings.md`** custom store. Never write secrets/PII into any committe
 ## The three tiers
 
 ### N1 — ephemeral (run buffers, deleted at harvest end)
-- `shared_context.md` (`.claude/plans/<feature_id>/shared_context.md`) — task-to-task carry-forward.
+- `shared_context.md` (`.claude/plans/<feature_id>/run/shared_context.md`) — task-to-task carry-forward.
 - `findings.md` (project root) — raw run digest, input to `distilling-learnings`.
 
 Both are deleted by the harvester at the end of the run. The **durable audit is git** (the run's

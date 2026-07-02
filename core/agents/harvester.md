@@ -77,7 +77,7 @@ Invoke `measuring-cost`. It runs `cost-report.mjs` (wrapping `ccusage` over the 
 Once steps 1–5 are complete and every durable learning has been routed, **delete the ephemeral files**:
 
 - `findings.md` at the project root (the run buffer — its job ended when learnings were routed).
-- `.claude/plans/<feature_id>/shared_context.md` (the task-to-task carry-forward).
+- `.claude/plans/<feature_id>/run/shared_context.md` (the task-to-task carry-forward).
 - `.claude/plans/mv-suggestions.md` if it exists (the MV proposal buffer — its job ended once written for human review).
 
 Git (the run's commit/PR) is the durable audit; the harness keeps no `findings.md`/`learnings.md` archive. Do this **only after** routing — deleting earlier would lose un-routed insights.

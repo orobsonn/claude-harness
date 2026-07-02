@@ -11,6 +11,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- Organização da pasta de plano: os buffers de run por feature (`shared_context.md`, `test-manifest-*`, `brief-*`, `descriptor-*`, `task-slice-*`, `plan-review-*`, `spec-adversary-*`, `task.json`) agora vivem em `.claude/plans/<feature_id>/run/`; só `spec.md` e `execution-plan.json` ficam na raiz da feature. Mudança de convenção na prosa do pipeline (emitters recebem paths por arg — sem mudança de código).
+
 ### Fixed
 
 - Bug de ordenação `scaffold`-após-`freeze` na mão barata: quando o teste congelado importa um módulo de produção ainda inexistente, o `spawn-hand` recusava com "gate vazio"; commitar o stub depois do freeze movia o HEAD e disparava "HEAD diverged" → tempestade de retries. Agora o SKILL instrui o stub a entrar DENTRO do freeze commit (exportando exatamente os símbolos que o teste importa), e a mensagem de erro do `spawn-hand` nomeia o recovery correto.
