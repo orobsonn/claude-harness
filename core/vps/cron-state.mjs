@@ -1,10 +1,80 @@
 /**
- * @description Scaffold stub for the VPS cron harness's per-issue attempt counter and
- * reviewed-SHA marker. Every export below is a throwing placeholder (`not implemented`) —
- * this file exists only so cron-state.test.mjs can import real named symbols and collect
- * as RED. The executor hand implements the real logic against the contract encoded in
- * cron-state.test.mjs.
+ * @description Per-issue attempt counter and reviewed-SHA marker used by the VPS cron
+ * harness. State is persisted as two small JSON files under opts.stateDir: one mapping
+ * issue number -> attempt count, the other mapping "pr:sha" -> reviewed flag.
  */
+import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join, dirname } from "node:path";
+
+const COUNTERS_FILE_NAME = "cron-counters.json";
+const REVIEWED_FILE_NAME = "cron-reviewed.json";
+
+function countersFilePath(stateDir) {
+  return join(stateDir, COUNTERS_FILE_NAME);
+}
+
+function reviewedFilePath(stateDir) {
+  return join(stateDir, REVIEWED_FILE_NAME);
+}
+
+function readJsonRecord(filePath) {
+  let raw;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch {
+    // ENOENT: legitimate first run, no state written yet.
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Non-empty but unparsable: a genuine crash/corruption (e.g. mid-write before the atomic
+    // write below existed, or external tampering) — NOT the same as a fresh file. Silently
+    // returning {} here would let the next write wipe every OTHER issue's counter (a chronically
+    // failing issue would then never reach its ceiling and get re-queued forever). Preserve the
+    // corrupt bytes for forensics instead of discarding them, and surface it, before falling back
+    // to an empty record — recovering the prior counts is out of scope, but the loss is never
+    // silent.
+    if (raw.length > 0) {
+      try {
+        // Unique suffix (pid+rand) so two same-millisecond corruptions never overwrite each
+        // other's forensic copy.
+        const forensicPath = `${filePath}.corrupt-${Date.now()}-${process.pid}-${randomUUID()}`;
+        writeFileSync(forensicPath, raw, "utf8");
+      } catch {
+        // best-effort forensics only; must never block the caller's fallback
+      }
+      console.error(
+        `cron-state: ${filePath} was corrupt and has been preserved alongside it; starting from an empty record`
+      );
+    }
+    return {};
+  }
+}
+
+function writeJsonRecord(filePath, record) {
+  // Idempotent self-heal: a missing stateDir (first run, or after external cleanup) must not
+  // crash the cron with ENOENT.
+  mkdirSync(dirname(filePath), { recursive: true });
+  // Atomic write: truncate-then-write can leave a half-written state file behind a crash,
+  // which readJsonRecord would otherwise have to treat as corrupt. Write to a private tmp file,
+  // then rename — atomic on the same filesystem.
+  const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(record), "utf8");
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    // A failed write/rename must not leak the private temp file behind — remove it best-effort,
+    // then re-throw so the caller still sees the failure.
+    try {
+      rmSync(tmpPath, { force: true });
+    } catch {
+      // best-effort temp cleanup; never mask the original failure
+    }
+    throw err;
+  }
+}
 
 /**
  * @description Increments the attempt counter for the given issue.
@@ -14,7 +84,10 @@
  * @returns {void}
  */
 export function increment(issue, opts) {
-  throw new Error("not implemented");
+  const filePath = countersFilePath(opts.stateDir);
+  const counters = readJsonRecord(filePath);
+  counters[issue] = (counters[issue] ?? 0) + 1;
+  writeJsonRecord(filePath, counters);
 }
 
 /**
@@ -25,7 +98,10 @@ export function increment(issue, opts) {
  * @returns {void}
  */
 export function reset(issue, opts) {
-  throw new Error("not implemented");
+  const filePath = countersFilePath(opts.stateDir);
+  const counters = readJsonRecord(filePath);
+  counters[issue] = 0;
+  writeJsonRecord(filePath, counters);
 }
 
 /**
@@ -36,7 +112,8 @@ export function reset(issue, opts) {
  * @returns {number}
  */
 export function read(issue, opts) {
-  throw new Error("not implemented");
+  const counters = readJsonRecord(countersFilePath(opts.stateDir));
+  return counters[issue] ?? 0;
 }
 
 /**
@@ -48,7 +125,10 @@ export function read(issue, opts) {
  * @returns {void}
  */
 export function recordReviewed(pr, sha, opts) {
-  throw new Error("not implemented");
+  const filePath = reviewedFilePath(opts.stateDir);
+  const reviewed = readJsonRecord(filePath);
+  reviewed[`${pr}:${sha}`] = true;
+  writeJsonRecord(filePath, reviewed);
 }
 
 /**
@@ -60,5 +140,6 @@ export function recordReviewed(pr, sha, opts) {
  * @returns {boolean}
  */
 export function alreadyReviewed(pr, sha, opts) {
-  throw new Error("not implemented");
+  const reviewed = readJsonRecord(reviewedFilePath(opts.stateDir));
+  return Boolean(reviewed[`${pr}:${sha}`]);
 }
