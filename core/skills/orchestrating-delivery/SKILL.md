@@ -373,6 +373,8 @@ Scope = the **whole feature**, not one task. Roles, feature-wide scope:
 
 Findings → sniper (tiered, same rules as step 5). Re-run gates after fixes. Only proceed when the feature-wide gates are green.
 
+**Machine-readable verdict block (AC5.1):** once the feature-wide gates are green, compute the CLEAN/BLOCKED verdict block via `formatVerdictBlock` over this final-review state (`securityVerdict`, `openRisk`, `orphanFreezeCommit`, `unresolvedBlockingAdversaryFinding`) and pass the resulting block to the **shipper** to embed in the PR body — so a headless Cron B can read the verdict without re-deriving it from prose. This is the single additive AC5.1 touch; it introduces no new gate.
+
 **Producer note:** the orchestrator is the **single producer** of `findings.md`. In FULL it appends per-task findings in the loop (step 6); in **LIGHT** (no per-task loop) it appends the final dual-review findings here, so the harvester is never handed an empty file.
 
 ---
