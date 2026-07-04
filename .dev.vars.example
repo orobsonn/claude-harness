@@ -1,0 +1,10 @@
+# Claude Harness — "strong eyes, cheap hands" dispatch runner.
+# Copy this file to .dev.vars (gitignored) and set the token below.
+# Ollama auth token used by `claude -p` with ANTHROPIC_BASE_URL=https://ollama.com.
+# NEVER commit the real value — .dev.vars must stay out of git.
+ANTHROPIC_AUTH_TOKEN=
+
+# Telegram bot token for the VPS cron NOTIFICATION module (core/vps/notify-telegram.mjs).
+# One-way notifications only. Read from disk at runtime; NEVER placed in a config, the crontab,
+# argv, or any log. Leave empty to disable notifications (the engine runs identically without it).
+TELEGRAM_BOT_TOKEN=

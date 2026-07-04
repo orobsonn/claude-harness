@@ -172,29 +172,43 @@ function crashRecover(worktree, holder, opts) {
  */
 function reapWorktree(worktree, opts) {
   const liveness = judgeLiveness(worktree.holder, opts, worktree.lockDirAgeSeconds);
-  if (liveness === null) return;
+  if (liveness === null) return null;
 
   if (liveness.alive) {
     if (liveness.registered) {
       const ageSeconds = opts.now() - (worktree.sessionStartedAt ?? worktree.holder.acquire_ts);
       if (ageSeconds >= opts.livenessCeilingHours * SECONDS_PER_HOUR) {
         opts.tmuxKillSession(worktree.holder.tmux_session_id);
+        return actionOf(worktree, "watchdog-killed");
       }
     }
-    return;
+    return null;
   }
 
   if (liveness.holderMissing) {
     opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot);
     opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
-    return;
+    return actionOf(worktree, "orphan-cleaned");
   }
 
   const relabelOk = crashRecover(worktree, worktree.holder, opts);
-  if (!relabelOk) return;
+  if (!relabelOk) return null;
 
   opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot);
   opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
+  return actionOf(worktree, "crash-recovered");
+}
+
+/**
+ * @description Additive per-worktree action descriptor the composition root translates into a
+ * notification. Carries the entry's OWN project (the reaper is a shared cron over many projects, so
+ * the `<project>` prefix must come from the worktree, never a single fleet value).
+ * @param {{ project: string, issueNumber: number }} worktree
+ * @param {"watchdog-killed"|"crash-recovered"|"orphan-cleaned"} action
+ * @returns {{ project: string, issueNumber: number, action: string }}
+ */
+function actionOf(worktree, action) {
+  return { project: worktree.project, issueNumber: worktree.issueNumber, action };
 }
 
 export function reaper(opts) {
@@ -216,12 +230,15 @@ export function reaper(opts) {
     gitWorktreeRemove,
   };
 
+  const actions = [];
   for (const worktree of listWorktrees()) {
     try {
-      reapWorktree(worktree, resolved);
+      const action = reapWorktree(worktree, resolved);
+      if (action) actions.push(action);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`reaper: failed to process ${worktree.project} ${worktree.worktreePath}: ${message}`);
     }
   }
+  return actions;
 }

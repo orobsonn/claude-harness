@@ -155,6 +155,7 @@ export function dispatch(issue, opts) {
     gh,
     counter,
     buildScopedEnv,
+    notify,
   } = opts;
   const issueNumber = issue.number;
   const branch = `harness/${issueNumber}`;
@@ -173,6 +174,18 @@ export function dispatch(issue, opts) {
   }
   const env = { ...scopedEnv };
   delete env.CLAUDE_CODE_REMOTE;
+
+  // Non-secret notify coordinates threaded into the detached session so the chained cron-a-exit
+  // (which runs in the same shell after `claude -p`, having sourced this env-file with `set -a`)
+  // can notify session-done/blocked/failed. Only chatId/threadId/project — NEVER the Telegram
+  // token (cron-a-exit reads that from ~/.claude/.dev.vars at runtime). Guarded on notify presence
+  // so a project without notify writes a byte-identical env-file.
+  if (notify && notify.chatId != null && notify.chatId !== "") {
+    env.HARNESS_NOTIFY_CHATID = String(notify.chatId);
+    if (notify.threadId != null) env.HARNESS_NOTIFY_THREADID = String(notify.threadId);
+    env.HARNESS_NOTIFY_PROJECT = project;
+    if (notify.heartbeat === true) env.HARNESS_NOTIFY_HEARTBEAT = "1";
+  }
 
   // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach
   // the tmux session even when a server already exists (spawn env is ignored in that case).

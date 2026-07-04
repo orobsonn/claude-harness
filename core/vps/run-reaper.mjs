@@ -46,6 +46,7 @@ import { readHolder } from "./run-lock.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as counterModule from "./cron-state.mjs";
 import * as runLockModule from "./run-lock.mjs";
+import { makeNotifier } from "./notify-telegram.mjs";
 
 /** @description Real `git -C <projectRoot> worktree list --porcelain` stdout. Fail-soft -> "". */
 function defaultRunGitWorktreeList(projectRoot) {
@@ -121,22 +122,61 @@ export function runReaper(config, deps = {}) {
       readHolder: readHolderFn,
     });
 
-  reaperFn({
-    listWorktrees: listWorktreesSeam,
-    tmuxHasSession,
-    kill,
-    now,
-    prExists,
-    gh,
-    runLock,
-    counter,
-    tmuxKillSession,
-  });
+  // Best-effort notifier: injected (tests observe) or no-op default. The real notifier + drain live
+  // in mainReaper. Each notification's `<project>` prefix comes from the per-worktree action entry
+  // (the reaper is a shared cron over many projects), never a single fleet value.
+  const notify = deps.notify ?? (() => {});
+
+  const actions =
+    reaperFn({
+      listWorktrees: listWorktreesSeam,
+      tmuxHasSession,
+      kill,
+      now,
+      prExists,
+      gh,
+      runLock,
+      counter,
+      tmuxKillSession,
+    }) || [];
+
+  const ACTION_TYPE = {
+    "watchdog-killed": "reaper-killed",
+    "crash-recovered": "reaper-recovered",
+    "orphan-cleaned": "reaper-orphan-cleaned",
+  };
+  for (const a of actions) {
+    try {
+      const type = ACTION_TYPE[a.action];
+      if (type) notify({ type, project: a.project, issue: a.issueNumber });
+    } catch {
+      // fail-open — a notify failure never blocks the sweep
+    }
+  }
+}
+
+/**
+ * @description CLI wrapper: builds the real FLEET-level notifier, runs runReaper with it injected,
+ * and awaits drain() before the shared reaper process exits so its notifications are not dropped.
+ * @param {object} config
+ * @returns {Promise<void>}
+ */
+export async function mainReaper(config) {
+  const notifier = makeNotifier(config, { homeDir: config.homeDir });
+  try {
+    runReaper(config, { notify: notifier.notify });
+  } finally {
+    try {
+      await notifier.drain();
+    } catch {
+      // fail-open
+    }
+  }
 }
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const arg = process.argv[2];
   const configPath = arg === "--config" ? process.argv[3] : arg;
-  runReaper(loadConfig(configPath));
+  mainReaper(loadConfig(configPath));
 }

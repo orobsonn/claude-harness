@@ -134,6 +134,22 @@ export function validateInstallCoordinates(inputs) {
     homeDir: inputs.homeDir,
   };
   if (hasAuthor) coords.harnessAuthorLogin = inputs.harnessAuthorLogin;
+
+  // Optional Telegram notify block — NOT secret (chatId/threadId are group coordinates; the bot
+  // token lives ONLY in ~/.claude/.dev.vars, never here). Validated numeric so nothing unsafe
+  // reaches the generated config. Absent notify → coords carries none and the config is unchanged.
+  const hasNotify = inputs.notify !== undefined && inputs.notify !== null;
+  if (hasNotify) {
+    const n = inputs.notify;
+    if (typeof n !== "object" || Array.isArray(n)) throw new Error("invalid notify");
+    if (!Number.isInteger(n.chatId)) throw new Error("invalid notify.chatId");
+    if (n.threadId !== undefined && !Number.isInteger(n.threadId)) throw new Error("invalid notify.threadId");
+    if (n.heartbeat !== undefined && typeof n.heartbeat !== "boolean") throw new Error("invalid notify.heartbeat");
+    const notify = { chatId: n.chatId };
+    if (n.threadId !== undefined) notify.threadId = n.threadId;
+    if (n.heartbeat !== undefined) notify.heartbeat = n.heartbeat;
+    coords.notify = notify;
+  }
   return coords;
 }
 
@@ -281,6 +297,8 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
       stateDir: coords.stateDir,
       worktreeRoot: coords.worktreeRoot,
       homeDir: coords.homeDir,
+      // Optional notify base so the shared reaper can resolve the destination. Absent → omitted.
+      ...(coords.notify ? { notify: coords.notify } : {}),
       projects: [currentEntry],
     };
   }
@@ -311,7 +329,9 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
   }
   if (!placedCurrent) reconciled.push({ ...currentEntry });
 
-  return { ...existingFleet, projects: reconciled };
+  // Latest-installer sets/updates the shared notify destination; an install without notify leaves
+  // the existing fleet's notify untouched (spread preserves it).
+  return { ...existingFleet, ...(coords.notify ? { notify: coords.notify } : {}), projects: reconciled };
 }
 
 /**
@@ -503,7 +523,11 @@ export function installProject(inputs, deps = {}) {
       const existingFleet = readConfigFileFn(fleetPath);
       const fleet = reconcileFleet(existingFleet, registered, coords);
 
+      // generateProjectConfig is frozen (exact-key tests); layer the optional notify block here,
+      // AFTER the call, so the per-project config the reaper/cron-a/cron-b read gains notify without
+      // touching the frozen generator. Absent notify → byte-identical to today.
       const perProjectConfig = generateProjectConfig(coords);
+      if (coords.notify) perProjectConfig.notify = coords.notify;
       loadConfig(perProjectConfig);
       loadConfig(fleet);
       for (const entry of fleet.projects) {

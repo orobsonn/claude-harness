@@ -136,7 +136,11 @@ export function cronB(opts) {
     harnessAuthorLogin,
   } = opts;
 
-  const prs = gh(["pr", "list", "--json", "number,headRefName,headSha", "--state", "open"]) || [];
+  const prs = gh(["pr", "list", "--json", "number,headRefName,headSha,url", "--state", "open"]) || [];
+
+  // Additive: per-PR outcomes the composition root translates into notifications. cronB's existing
+  // side effects (comment / ready / merge / recordReviewed) are unchanged; this only observes them.
+  const outcomes = [];
 
   for (const pr of prs) {
     if (!pr || typeof pr.headRefName !== "string" || !pr.headRefName.startsWith(HARNESS_BRANCH_PREFIX)) {
@@ -164,6 +168,7 @@ export function cronB(opts) {
         const finding = blockingFinding(verdict, hasOpenRisk, bodyText);
         gh(["pr", "comment", String(number), `Cannot auto-merge: ${finding}`]);
         recordReviewed(number, sha, { stateDir });
+        outcomes.push({ number, headRefName: pr.headRefName, outcome: "blocked", finding, url: pr.url });
         continue;
       }
 
@@ -171,6 +176,7 @@ export function cronB(opts) {
       if (!isOk(readyResult)) {
         gh(["pr", "comment", String(number), mergeFailureComment(pr, "PR could not be marked ready")]);
         recordReviewed(number, sha, { stateDir });
+        outcomes.push({ number, headRefName: pr.headRefName, outcome: "blocked", finding: "PR could not be marked ready", url: pr.url });
         continue;
       }
 
@@ -183,11 +189,13 @@ export function cronB(opts) {
           mergeFailureComment(pr, "merge was rejected by GitHub (head may have moved or branch protection blocked it)"),
         ]);
         recordReviewed(number, sha, { stateDir });
+        outcomes.push({ number, headRefName: pr.headRefName, outcome: "blocked", finding: "merge rejected by GitHub", url: pr.url });
         continue;
       }
 
       gh(["pr", "comment", String(number), summaryComment(pr)]);
       recordReviewed(number, sha, { stateDir });
+      outcomes.push({ number, headRefName: pr.headRefName, outcome: "merged", url: pr.url });
     } catch (error) {
       try {
         const message = error instanceof Error ? error.message : String(error);
@@ -198,4 +206,6 @@ export function cronB(opts) {
       continue;
     }
   }
+
+  return outcomes;
 }
