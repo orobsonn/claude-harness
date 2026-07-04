@@ -310,8 +310,11 @@ export async function notifyExit(outcome, deps = {}) {
         notify({ type: "blocked", project, issue: outcome.issueNumber, reason: outcome.finding });
       } else if (outcome.outcome === "failed") {
         notify({ type: "failed", project, issue: outcome.issueNumber });
+      } else if (outcome.outcome === "requeued") {
+        // Every run finish is reported so the operator always knows what happened — including the
+        // transient "session ended without a PR, will retry" case.
+        notify({ type: "session-requeued", project, issue: outcome.issueNumber });
       }
-      // "requeued" is transient (a clean retry) — intentionally not notified to avoid noise.
     } finally {
       await drain();
     }

@@ -279,7 +279,7 @@ test("notifyExit translates blocked/failed, and stays silent on requeued or when
 
   const requeued = fakeNotifierFactory();
   await notifyExit({ outcome: "requeued", issueNumber: 7, finding: null }, { env: NOTIFY_ENV, prLookup: () => null, makeNotifier: requeued.makeNotifier });
-  assert.equal(requeued.events.length, 0, "a clean requeue is intentionally not notified");
+  assert.deepEqual(requeued.events.map((e) => e.type), ["session-requeued"], "a requeue is reported too (run finished without a PR, retrying)");
 
   // No HARNESS_NOTIFY_CHATID → notify not configured → no-op (no makeNotifier call).
   let built = false;

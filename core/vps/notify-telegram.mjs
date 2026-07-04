@@ -30,6 +30,7 @@ const EMOJI = {
   picked: "🎯",
   "dispatch-failed": "⚠️",
   "session-done": "✅",
+  "session-requeued": "🔁",
   blocked: "🚧",
   failed: "❌",
   "pr-merged": "🟢",
@@ -105,6 +106,8 @@ export function formatEvent(event = {}) {
       return `${prefix} falha ao despachar issue ${issueRef} — re-enfileirada`;
     case "session-done":
       return `${prefix} issue ${issueRef} concluída → PR ${prRef ?? "aberto"}`;
+    case "session-requeued":
+      return `${prefix} issue ${issueRef} — sessão terminou sem PR, re-enfileirada pra nova tentativa`;
     case "blocked":
       return `${prefix} issue ${issueRef} BLOQUEADA — precisa de input humano${reason}`;
     case "failed":
