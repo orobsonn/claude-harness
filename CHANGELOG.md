@@ -15,6 +15,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.23.1] - 2026-07-04
+
+### Fixed
+
+- **Pacote npx quebrado na 0.23.0** — o `files` do pacote não incluía o `setup-vps.mjs`, mas o `cli.mjs` o importa no topo → `ERR_MODULE_NOT_FOUND` ao rodar QUALQUER comando via npx (`setup-local`/`init` inclusive). Corrigido adicionando `setup-vps.mjs` ao `files`.
+- **`setup-vps` apontava o crontab pro cache efêmero do npx** — o wizard agora pergunta o path do clone ESTÁVEL do harness na VPS (onde vive `core/vps/`), valida que existe, e roda o `install-crons` **de lá** — assim o crontab (que aponta pra `<clone>/core/vps/run-cron-a.mjs`) continua válido depois que o cache do npx é apagado. Sem clone válido, o wizard para com instrução clara de `git clone`.
+
 ## [0.23.0] - 2026-07-04
 
 ### Added
