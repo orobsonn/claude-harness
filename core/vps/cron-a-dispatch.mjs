@@ -1,23 +1,273 @@
 /**
- * @description VPS cron harness — Cron A dispatch phase (task-5). SCAFFOLD STUB — reset after a
- * frozen-test correction (the prior test modeled unreal spawn plumbing: a separate foreground
- * `claude` spawn fed via `stdin`, and a fake tmux returning `{sessionId}` for dispatch to
- * register). The corrected contract now pinned in cron-a-dispatch.test.mjs is:
- *   - `claude -p` runs INSIDE a detached `tmux new-session -d` shell command string — there is
- *     NO separate `claude` child process.
- *   - the issue body is written to a file and redirected into that command's stdin
- *     (`< <bodyfile>`), never interpolated into any argv or command string.
- *   - dispatch itself GENERATES a deterministic, project-scoped tmux session NAME (e.g.
- *     `harness-<project>-<issue>`) and passes it to both `tmux -s <name>` and
- *     `runLock.register(<name>, opts)` — real `tmux` returns no session id to consume.
- * Not implemented yet — throws until the executor builds the real spawn composition against
- * the corrected suite.
+ * @description VPS cron harness — Cron A dispatch phase (task-5). Runs AFTER cron-a-select
+ * (task-4) has picked + relabeled an issue `harness:in-progress` and acquired the run-lock
+ * (acquire() recorded pid + acquire_ts; no tmux_session_id yet). dispatch is the SECOND phase
+ * of the lock dance: it never re-acquires — it spawns the detached session and then calls
+ * runLock.register() to attach the owning session name onto the already-held holder.
+ *
+ * Spawn composition (pinned by cron-a-dispatch.test.mjs):
+ *   - `git worktree add <path> -b harness/<issue>` creates a per-run working tree on a
+ *     project-distinct branch, never the project's primary tree.
+ *   - `claude -p --permission-mode auto` runs INSIDE a detached `tmux new-session -d -s <name>
+ *     -c <worktree> <sessionCommand>` — there is NO separate foreground `claude` spawn (a
+ *     detached tmux session has no stdin to feed, and spawnSync ignores stdin anyway).
+ *   - The issue body is written to a file and redirected into claude's stdin from WITHIN the
+ *     session command string (`< '<bodyfile>'`), never interpolated into any argv or command
+ *     string — so shell metacharacters in the body can never be interpreted.
+ *   - The scoped child env is written to a 0600 env-file in stateDir and sourced deterministically
+ *     at the start of the session command (`set -a; . '<envfile>'; set +a;`). The spawn also still
+ *     receives the scoped env via `spawnOpts.env` (defense-in-depth). This guarantees the session
+ *     sees OLLAMA_HAND_TOKEN and never sees CLAUDE_CODE_REMOTE, even when a tmux server already
+ *     exists and a spawned-process env would otherwise be ignored by the session.
+ *   - The autonomous trigger prompt is a FIXED harness string (no user input, no
+ *     metacharacters): it is safe to inline, and is fed into claude's stdin alongside the body
+ *     via a `{ printf ...; cat < <bodyfile>; }` preamble so `claude -p` reads trigger + body as
+ *     its prompt while the body file stays byte-identical to the issue body.
+ *   - The graceful-exit handler is composed AFTER the `claude -p` invocation
+ *     (`...; cron-a-exit <issue> <worktree> <bodyfile> <envfile>`) so task-6's logic fires on
+ *     the session's OWN termination — including a successful run that opened a PR, which
+ *     nothing else invokes.
+ *
+ * Env: the scoped child env (from scoped-env) is handed to the tmux spawn and inherited by the
+ * session, AND sourced inside the session command. CLAUDE_CODE_REMOTE is never set
+ * (headless-local: the cheap Ollama hands stay reachable); OLLAMA_HAND_TOKEN is preserved so
+ * spawn-hand can resolve the hand token. dispatch never invokes any deploy command.
+ *
+ * Attempt counter: incremented ONLY after a successful spawn + run-lock registration — a
+ * spawn failure that re-queues harness:ready does NOT consume a retry attempt (single owner).
+ *
+ * Spawn-failure path (AC1.12): if `git worktree add`, env/body-file write, or the tmux spawn
+ * fails before the session is registered, dispatch releases the held run-lock AND relabels the
+ * issue harness:in-progress -> harness:ready, so neither the lock nor the issue is stranded with
+ * no release owner. A leaked `harness/<issue>` branch/worktree from a prior interrupted run is
+ * best-effort pruned during worktree-add failure recovery so the retry ceiling can eventually
+ * fire instead of looping forever.
+ *
  * @param {{ number: number, body: string }} issue - The picked issue.
- * @param {object} opts - Injected seams: project/projectRoot/worktreeRoot/stateDir, the
- *   already-held lock's acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh,
- *   counter.{increment,read}. See cron-a-dispatch.test.mjs for the exact shape.
+ * @param {object} opts - Injected seams: project, projectRoot, worktreeRoot, stateDir,
+ *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment.
+ * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
+ */
+import { writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+/**
+ * @description Fixed autonomous-trigger prefix prepended to the issue body on claude's stdin.
+ * Headless-local autonomy is declared HERE (never via $CLAUDE_CODE_REMOTE, which would disable
+ * the cheap Ollama hands). No single quotes and no `<` so it is safe to inline inside the
+ * single-quoted printf argument within the composed session command.
+ */
+const TRIGGER_PROMPT =
+  "You are an autonomous VPS cron harness session running headless-local. " +
+  "Work the issue delivered below to completion without asking questions or waiting for " +
+  "operator input. Follow the vendored .claude/ entry policy and orchestrating-delivery " +
+  "pipeline. Open a draft PR when done; never merge or deploy.";
+
+/**
+ * @description Wraps a string in single quotes for safe use in a POSIX shell word, escaping
+ * embedded single quotes as `'`\''`.
+ * @param {string} s
+ * @returns {string}
+ */
+function shellQuoteSingle(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * @description Composes the session command string handed to `tmux new-session`. The env-file is
+ * sourced first so the session deterministically receives the scoped env (and explicitly unsets
+ * CLAUDE_CODE_REMOTE). The trigger prompt is inlined (a fixed harness string, never user input)
+ * and piped into claude's stdin ahead of the body file's redirect, so `claude -p` reads trigger +
+ * body as its prompt while the body file stays byte-identical to the issue body. The graceful-exit
+ * handler is chained AFTER the `claude -p` invocation so it fires on the session's own
+ * termination, and is handed the body + env file paths so task-6 can unlink them.
+ * @param {object} parts
+ * @param {string} parts.envFile - Absolute path to the scoped env file (single-quoted for sourcing).
+ * @param {string} parts.bodyFile - Absolute path to the written body file (single-quoted in the redirect).
+ * @param {number} parts.issueNumber
+ * @param {string} parts.worktreePath - Absolute path to the per-run worktree.
+ * @returns {string}
+ */
+function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath }) {
+  return (
+    `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
+    `{ printf '%s\\n\\n' '${TRIGGER_PROMPT}'; cat < ${shellQuoteSingle(bodyFile)}; } | ` +
+    `claude -p --permission-mode auto; cron-a-exit ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+  );
+}
+
+/**
+ * @description Pre-registration spawn-failure recovery (AC1.12): release the held run-lock and
+ * relabel the issue harness:in-progress -> harness:ready so neither is stranded with no release
+ * owner. No retry attempt is consumed (the counter is charged only after a successful spawn +
+ * registration). Best-effort: any error here is swallowed so the failure path never masks the
+ * original spawn failure or leaves the lock held.
+ * @param {object} args
+ * @param {object} args.runLock - The run-lock seam (release).
+ * @param {string} args.stateDir
+ * @param {number} args.acquireTs - acquire_ts of the held holder (ownership guard).
+ * @param {object} args.gh - The gh seam.
+ * @param {number} args.issueNumber
  * @returns {void}
  */
+function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber }) {
+  try {
+    runLock.release({ stateDir, acquireTs });
+  } catch {
+    // best-effort: never leave the failure path throwing past the release
+  }
+  try {
+    gh([
+      "issue",
+      "edit",
+      String(issueNumber),
+      "--remove-label",
+      "harness:in-progress",
+      "--add-label",
+      "harness:ready",
+    ]);
+  } catch {
+    // best-effort: the lock release is the critical observable; a gh hiccup must not strand it
+  }
+}
+
+/** @description recoverSpawnFailure wrapped to return the { ok: false } result shape. */
+function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber }) {
+  recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber });
+  return { ok: false };
+}
+
+/**
+ * @description Dispatch the picked issue to a detached autonomous tmux session. See the module
+ * header for the full spawn composition and lock/counter contract.
+ * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
+ */
 export function dispatch(issue, opts) {
-  throw new Error("not implemented");
+  const {
+    project,
+    projectRoot,
+    worktreeRoot,
+    stateDir,
+    lock,
+    spawn,
+    runLock,
+    gh,
+    counter,
+    buildScopedEnv,
+  } = opts;
+  const issueNumber = issue.number;
+  const branch = `harness/${issueNumber}`;
+  const worktreePath = join(worktreeRoot, `harness-${project}-${issueNumber}`);
+  const sessionName = `harness-${project}-${issueNumber}`;
+  const acquireTs = lock.acquireTs;
+
+  // Scoped child env: headless-local (no CLAUDE_CODE_REMOTE) so the cheap Ollama hands stay
+  // reachable. Kept inside the failure-recovery path so an unreadable .dev.vars or missing stateDir
+  // does not strand the issue in harness:in-progress.
+  let scopedEnv;
+  try {
+    scopedEnv = buildScopedEnv(project, { stateDir, projectRoot });
+  } catch {
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+  const env = { ...scopedEnv };
+  delete env.CLAUDE_CODE_REMOTE;
+
+  // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach
+  // the tmux session even when a server already exists (spawn env is ignored in that case).
+  let envFile;
+  try {
+    envFile = join(stateDir, `issue-${issueNumber}-env-${randomUUID()}.env`);
+    const envBody =
+      "unset CLAUDE_CODE_REMOTE\n" +
+      Object.entries(env)
+        .map(([k, v]) => `${k}=${shellQuoteSingle(v)}`)
+        .join("\n");
+    writeFileSync(envFile, envBody, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+
+  // 1) Per-run worktree on a project-distinct branch (never the primary tree).
+  try {
+    spawn("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: projectRoot, env });
+  } catch {
+    // Prune any leaked harness/<issue> branch/worktree from a prior interrupted run so the retry
+    // ceiling can eventually fire instead of looping forever on `git worktree add -b harness/<n>`.
+    try {
+      spawn("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot, env });
+    } catch {
+      // best-effort: worktree may not exist if the failure was branch collision
+    }
+    try {
+      spawn("git", ["branch", "-D", branch], { cwd: projectRoot, env });
+    } catch {
+      // best-effort: branch may not exist if the failure was worktree collision
+    }
+    try {
+      rmSync(envFile);
+    } catch {
+      // best-effort cleanup of the short-lived env-file
+    }
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+
+  // 2) Write the issue body to a file (byte-identical) — delivered via stdin redirect, never
+  //    interpolated into any argv or command string.
+  let bodyFile;
+  try {
+    bodyFile = join(stateDir, `issue-${issueNumber}-body-${randomUUID()}.txt`);
+    writeFileSync(bodyFile, issue.body, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // git succeeded but the body write failed: drop the worktree so the next cycle can retry.
+    try {
+      spawn("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot, env });
+    } catch {
+      // best-effort: a lingering worktree is bounded by layer-3 uniqueness; do not mask the failure
+    }
+    try {
+      rmSync(envFile);
+    } catch {
+      // best-effort cleanup
+    }
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+
+  // 3) Spawn the detached tmux session running claude -p + the chained graceful-exit handler.
+  const sessionCommand = composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath });
+  try {
+    spawn(
+      "tmux",
+      ["new-session", "-d", "-s", sessionName, "-c", worktreePath, sessionCommand],
+      { cwd: projectRoot, env }
+    );
+  } catch {
+    // git succeeded but tmux failed: best-effort drop the stray worktree/files so the next
+    // cycle's `git worktree add -b harness/<issue>` does not collide on the path (defense-in-depth
+    // layer 3), then release + relabel.
+    try {
+      spawn("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot, env });
+    } catch {
+      // best-effort: a lingering worktree is bounded by layer-3 uniqueness; do not mask the failure
+    }
+    try {
+      rmSync(envFile);
+    } catch {
+      // best-effort cleanup
+    }
+    try {
+      rmSync(bodyFile);
+    } catch {
+      // best-effort cleanup
+    }
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+
+  // 4) Second lock phase + attempt charge — only AFTER a successful spawn. dispatch never
+  //    re-acquires; it registers the owning session name onto the holder cron-a-select handed it.
+  runLock.register(sessionName, { stateDir, acquireTs });
+  counter.increment(issueNumber, { stateDir });
+
+  return { ok: true, sessionName, worktreePath };
 }
