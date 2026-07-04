@@ -178,7 +178,7 @@ test("#ac-6.2 dispatch threads non-secret HARNESS_NOTIFY_* into the session env,
   }
 });
 
-test("#ac-6.2 dispatch WITHOUT notify writes no HARNESS_NOTIFY_* keys (byte-identical to today)", () => {
+test("#ac-6.2 dispatch WITHOUT notify writes only HARNESS_NOTIFY_PROJECT (no chat/thread, never a token)", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "notify-dispatch-"));
   try {
     const spawnCalls = [];
@@ -199,8 +199,9 @@ test("#ac-6.2 dispatch WITHOUT notify writes no HARNESS_NOTIFY_* keys (byte-iden
       }
     );
     const tmuxCall = spawnCalls.find((c) => c.command === "tmux");
-    const notifyKeys = Object.keys(tmuxCall.env).filter((k) => k.startsWith("HARNESS_NOTIFY_"));
-    assert.equal(notifyKeys.length, 0, "no notify → no HARNESS_NOTIFY_* keys");
+    const notifyKeys = Object.keys(tmuxCall.env).filter((k) => k.startsWith("HARNESS_NOTIFY_")).sort();
+    assert.deepEqual(notifyKeys, ["HARNESS_NOTIFY_PROJECT"], "no notify → only the project name (chat/thread come from .dev.vars); never a token");
+    assert.equal(tmuxCall.env.HARNESS_NOTIFY_PROJECT, "demo");
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

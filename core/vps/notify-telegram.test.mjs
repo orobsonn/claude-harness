@@ -206,6 +206,24 @@ test("#ac-3.2 resolveNotifyConfig: null unless notify+chatId+token present", () 
   assert.equal(resolved.token, "tok:en");
 });
 
+test("#ac-3.3 resolveNotifyConfig: falls back to .dev.vars TELEGRAM_CHAT_ID/THREAD_ID when config has no notify block", () => {
+  // The whole Telegram destination lives in ~/.claude/.dev.vars — no notify block in the config at all.
+  const devVars = () => "TELEGRAM_BOT_TOKEN=tok:en\nTELEGRAM_CHAT_ID=-1003044689525\nTELEGRAM_THREAD_ID=613\n";
+  const resolved = resolveNotifyConfig({}, { homeDir: "/h", readFileSafe: devVars });
+  assert.equal(resolved.chatId, -1003044689525, "chatId read from .dev.vars");
+  assert.equal(resolved.threadId, 613, "threadId read from .dev.vars");
+  assert.equal(resolved.token, "tok:en");
+  assert.equal(resolved.heartbeat, true, "heartbeat defaults ON");
+
+  // config.notify still wins over .dev.vars when present.
+  const overridden = resolveNotifyConfig({ notify: { chatId: -42 } }, { homeDir: "/h", readFileSafe: devVars });
+  assert.equal(overridden.chatId, -42, "config.notify.chatId overrides the .dev.vars value");
+
+  // token in .dev.vars but no chat anywhere → null (nowhere to send).
+  const noChat = () => "TELEGRAM_BOT_TOKEN=tok:en\n";
+  assert.equal(resolveNotifyConfig({}, { homeDir: "/h", readFileSafe: noChat }), null);
+});
+
 // ---------------------------------------------------------------------------
 // makeNotifier — fire-and-forget + drain, fail-open, no-op when unconfigured
 // ---------------------------------------------------------------------------
