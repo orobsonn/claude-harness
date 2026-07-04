@@ -95,7 +95,7 @@ Rules:
 - A locked_test must be traceable to a `criterion_refs` entry on the same task.
 - Every locked_test carries a `test_path` the executor can write (within `scope_paths` or the project test dir).
 - The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
-- A locked_test for an invariant with multiple branches/roles/states MUST cover ALL branches — a happy-path-only freeze is a gap.
+- An invariant with multiple branches/roles/states needs a locked_test per branch (one observable assertion each) — its locked_tests must cover ALL branches; a happy-path-only freeze is a gap.
 
   > **Supersedes §3.7 'Chosen UX':** the orchestrator+compliance flow supersedes any prior description of the planner validating the test in-run. The planner's sole role is assertion-pinning; per-task fidelity validation belongs to compliance (a Claude eye).
 
@@ -180,7 +180,7 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 
 **Bug-fix scope rule:** when a task is a bug fix, locate the shared function the reported symptom routes through and confirm `scope_paths` covers **every caller the fix affects** — size the fix at the root, not the ticketed call site. Patching only the path the ticket names leaves sibling callers of the same function broken.
 
-**Env/secret scope rule:** when a new env/secret var is consumed in tests, `scope_paths` MUST include all the files that make it usable — typically three (test config + test-env types file + runtime env types), never only the 1-2 files the test directly imports.
+**Env/secret scope rule:** when a new env/secret var is consumed in tests, `scope_paths` MUST include all the files that make it usable — trace the project's actual topology (in a TS project typically three: test config + test-env types + runtime env types), never only the 1-2 files the test directly imports.
 
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
