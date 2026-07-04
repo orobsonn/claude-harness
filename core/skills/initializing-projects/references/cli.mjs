@@ -214,13 +214,13 @@ function askTTY(question) {
 
 /**
  * @description Real seams for the setup-vps wizard: TTY prompt, stdout, safe .dev.vars read, a
- * 0600 write that never logs the token, mkdir -p for ~/.claude, and the install-crons invocation.
- * install-crons.mjs is resolved relative to this file (core/vps/install-crons.mjs).
+ * 0600 write that never logs the token, mkdir -p for ~/.claude, an existence check, and the
+ * install-crons invocation. `runInstall` runs the STABLE harness clone's install-crons (path chosen
+ * by the operator inside the wizard) — NEVER a copy under this npx cache, so the crontab stays valid
+ * after the npx cache is purged.
  * @returns {object}
  */
 function setupVpsSeams() {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const installCronsPath = join(here, "..", "..", "..", "vps", "install-crons.mjs");
   return {
     ask: askTTY,
     out: (t) => process.stdout.write(`${t}\n`),
@@ -241,8 +241,9 @@ function setupVpsSeams() {
       }
     },
     ensureDir: (d) => mkdirSync(d, { recursive: true }),
+    exists: (p) => existsSync(p),
     devVarsPathFor: (home) => join(home, ".claude", ".dev.vars"),
-    runInstall: (args) => execFileSync(process.execPath, [installCronsPath, ...args], { stdio: "inherit" }),
+    runInstall: (scriptPath, args) => execFileSync(process.execPath, [scriptPath, ...args], { stdio: "inherit" }),
   };
 }
 

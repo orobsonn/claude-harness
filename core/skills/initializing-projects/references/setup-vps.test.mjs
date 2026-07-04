@@ -16,20 +16,21 @@ import { parseCliArgs } from "./cli.mjs";
 const TOKEN = "123456789:AAH-SECRET-BOT-TOKEN-value";
 
 const ANSWERS = [
-  "/home/op", // home dir
-  "meu-app", // project
-  "orobsonn", // owner
-  "meu-app", // repo
-  "/srv/meu-app", // project-root
-  "", // state-dir (accept default)
-  "/srv/worktrees", // worktree-root
-  TOKEN, // token
-  "-1003044689525", // chat-id
-  "613", // thread-id
-  "", // heartbeat (empty → default YES)
+  "/home/op", // 0 home dir
+  "meu-app", // 1 project
+  "orobsonn", // 2 owner
+  "meu-app", // 3 repo
+  "/srv/meu-app", // 4 project-root
+  "", // 5 state-dir (accept default)
+  "/srv/worktrees", // 6 worktree-root
+  "/srv/claude-harness", // 7 harness-dir (stable clone)
+  TOKEN, // 8 token
+  "-1003044689525", // 9 chat-id
+  "613", // 10 thread-id
+  "", // 11 heartbeat (empty → default YES)
 ];
 
-function harness(answers = ANSWERS) {
+function harness(answers = ANSWERS, opts = {}) {
   const queue = [...answers];
   const outLines = [];
   const devVarsWrites = [];
@@ -41,8 +42,9 @@ function harness(answers = ANSWERS) {
     readFileSafe: () => "ANTHROPIC_AUTH_TOKEN=x\n",
     writeDevVars: (p, content) => devVarsWrites.push({ p, content }),
     ensureDir: () => {},
+    exists: opts.exists ?? (() => true),
     devVarsPathFor: (home) => `${home}/.claude/.dev.vars`,
-    runInstall: (args) => installCalls.push(args),
+    runInstall: (scriptPath, args) => installCalls.push({ scriptPath, args }),
   };
   return { deps, outLines, devVarsWrites, installCalls };
 }
@@ -93,12 +95,24 @@ test("runSetupVps: collects answers, writes token to .dev.vars, calls install-cr
   assert.match(devVarsWrites[0].content, /ANTHROPIC_AUTH_TOKEN=x/, "existing lines preserved");
 
   assert.equal(installCalls.length, 1);
-  const args = installCalls[0];
+  assert.equal(
+    installCalls[0].scriptPath,
+    "/srv/claude-harness/core/vps/install-crons.mjs",
+    "install-crons must run from the STABLE harness clone, not the npx cache",
+  );
+  const args = installCalls[0].args;
   assert.equal(args[args.indexOf("--project") + 1], "meu-app");
   assert.equal(args[args.indexOf("--state-dir") + 1], "/srv/meu-app/.claude/state", "empty state-dir → derived default");
   assert.equal(args[args.indexOf("--chat-id") + 1], "-1003044689525");
   assert.equal(args[args.indexOf("--thread-id") + 1], "613");
   assert.equal(args[args.indexOf("--heartbeat") + 1], "true", "empty heartbeat answer → default ON");
+});
+
+test("runSetupVps: a missing harness clone aborts BEFORE writing the token or installing", async () => {
+  const { deps, devVarsWrites, installCalls } = harness(ANSWERS, { exists: () => false });
+  await assert.rejects(() => runSetupVps(deps), /não encontrei|clone/i);
+  assert.equal(devVarsWrites.length, 0, "no token written when the harness clone is missing");
+  assert.equal(installCalls.length, 0, "no install attempted");
 });
 
 test("runSetupVps: the bot TOKEN never appears in any stdout/out line (secret hygiene)", async () => {
@@ -111,11 +125,11 @@ test("runSetupVps: the bot TOKEN never appears in any stdout/out line (secret hy
 
 test("runSetupVps: 'n' at the heartbeat prompt turns it OFF; empty thread-id omits the flag", async () => {
   const answers = [...ANSWERS];
-  answers[9] = ""; // thread-id empty
-  answers[10] = "n"; // heartbeat off
+  answers[10] = ""; // thread-id empty
+  answers[11] = "n"; // heartbeat off
   const { deps, installCalls } = harness(answers);
   await runSetupVps(deps);
-  const args = installCalls[0];
+  const args = installCalls[0].args;
   assert.equal(args.includes("--thread-id"), false);
   assert.equal(args[args.indexOf("--heartbeat") + 1], "false");
 });

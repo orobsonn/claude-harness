@@ -5,10 +5,18 @@
  * how to obtain each Telegram value, writing the bot token to ~/.claude/.dev.vars (0600, never
  * logged, never committed), and then invoking install-crons to register the crontab + notify config.
  *
+ * STABLE-PATH contract (critical): the crontab install-crons writes points cron at
+ * `<harnessDir>/core/vps/run-cron-a.mjs`. `npx` downloads this wizard into an EPHEMERAL cache that is
+ * later purged — so the wizard must NEVER run the engine from its own (npx) location. It asks the
+ * operator for the STABLE path of the harness clone on the VPS (where `core/vps/` lives), validates
+ * it, and runs THAT clone's install-crons — so the registered crons keep resolving after the npx
+ * cache is gone. If the harness is not cloned yet, the wizard stops with a clear clone instruction.
+ *
  * Every side-effecting seam (ask/out/fs/install-crons) is injectable so the wizard is fully testable
  * with zero real prompts/fs/crontab and the token never touches a log or a test fixture.
  * Node builtins only, zero deps.
  */
+import { join } from "node:path";
 
 /**
  * @description Self-explanatory guide (pt-br) shown before the Telegram questions: how to get the
@@ -119,9 +127,10 @@ function required(value, field) {
  * @param {(path: string) => string} deps.readFileSafe - safe reader ('' on miss).
  * @param {(path: string, content: string) => void} deps.writeDevVars - writes ~/.claude/.dev.vars 0600.
  * @param {(dir: string) => void} deps.ensureDir - mkdir -p for ~/.claude.
- * @param {(args: string[]) => void} deps.runInstall - invokes install-crons with the built argv.
+ * @param {(path: string) => boolean} deps.exists - existence check for the harness clone's install-crons.mjs.
+ * @param {(scriptPath: string, args: string[]) => void} deps.runInstall - execs the STABLE clone's install-crons with the built argv.
  * @param {(path: string) => string} deps.devVarsPathFor - resolves the ~/.claude/.dev.vars path for a home dir.
- * @returns {Promise<{ project: string, installArgs: string[] }>}
+ * @returns {Promise<{ project: string, installArgs: string[], installCronsPath: string }>}
  */
 export async function runSetupVps(deps) {
   const { ask, out, env, readFileSafe, writeDevVars, ensureDir, runInstall, devVarsPathFor } = deps;
@@ -146,6 +155,26 @@ export async function runSetupVps(deps) {
   const stateDir = required((await ask(`State dir [${stateDirDefault}]: `)) || stateDirDefault, "state-dir");
   const worktreeRoot = required(await ask("Worktree root (ex: /srv/worktrees): "), "worktree-root");
 
+  // STABLE path of the harness clone on the VPS (where core/vps/ lives). The crontab will point cron
+  // at <harnessDir>/core/vps/run-cron-a.mjs, so this MUST be a durable location — never the npx cache
+  // this wizard is running from. Validate the clone actually exists before touching anything.
+  out(
+    [
+      "",
+      "O motor (core/vps) roda a partir de um clone ESTÁVEL do harness na VPS — o crontab aponta pra ele.",
+      "Se ainda não clonou: git clone https://github.com/orobsonn/claude-harness.git <destino>",
+      "",
+    ].join("\n")
+  );
+  const harnessDir = required(await ask("Path do clone do harness na VPS (contém core/vps/): "), "harness-dir");
+  const installCronsPath = join(harnessDir, "core", "vps", "install-crons.mjs");
+  if (!deps.exists(installCronsPath)) {
+    throw new Error(
+      `setup-vps: não encontrei ${installCronsPath}. Clone o harness num path estável primeiro ` +
+        `(git clone https://github.com/orobsonn/claude-harness.git <destino>) e informe esse <destino>.`
+    );
+  }
+
   out(telegramGuide());
 
   const token = required(await ask("Cole o TELEGRAM_BOT_TOKEN (do @BotFather): "), "token");
@@ -167,19 +196,20 @@ export async function runSetupVps(deps) {
     chatId: Number(chatId), threadId: threadId || undefined, heartbeat,
   });
 
-  out("\nRegistrando os crons + config de notify...\n");
-  runInstall(installArgs);
+  out(`\nRegistrando os crons + config de notify (via ${installCronsPath})...\n`);
+  runInstall(installCronsPath, installArgs);
 
   out(
     [
       "",
       `✓ Pronto! Projeto "${project}" instalado.`,
-      `  • Crons: Cron A (4h) + Cron B (6h) + reaper diário registrados no crontab.`,
+      `  • Crons registrados apontando pro clone estável: ${harnessDir}/core/vps/`,
+      `  • Cron A (4h) + Cron B (6h) + reaper diário no crontab.`,
       `  • Notificações Telegram: ${heartbeat ? "ON (com heartbeat)" : "ON (sem heartbeat)"}.`,
       `  • Faça um teste: o próximo ciclo do Cron A já deve avisar no grupo.`,
       "",
     ].join("\n")
   );
 
-  return { project, installArgs };
+  return { project, installArgs, installCronsPath };
 }
