@@ -15,6 +15,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.21.0] - 2026-07-04
+
+### Added
+
+- **Instalador de crontab por projeto (`core/vps/install-crons.mjs`)** — fecha o follow-up do motor autônomo por VPS (v0.19.0): gera e valida o config por-projeto que os composition roots (`run-cron-a`/`run-cron-b`) consomem e o config compartilhado do reaper, e registra/desregistra as linhas de crontab de forma idempotente. Cadências fixas — Cron A a cada 4h (`0 */4`), Cron B a cada 6h (`0 */6`), reaper diário às 03:00 (`0 3`). Cada projeto vive num bloco cercado por marcador (`# >>> harness:<project> >>>`), então reexecução nunca duplica; `--uninstall <project>` remove só aquele bloco e o reaper compartilhado só sai quando o último projeto é removido (o config do fleet é apagado, não deixado obsoleto). Nenhum secret toca o crontab, config ou log — o token é lido do disco em runtime pelo caminho já existente (`scoped-env-fromdisk`). Determinístico, Node builtins puros, zero deps, 65 testes (zero mutação de crontab real no teste). Endurecido por dual-review cross-family (Claude + Codex): leitura de crontab que nunca apaga crons de outros tenants num erro de leitura, validação estrita de coordenadas + guarda no render contra injeção de linha cron, invariante single-repo por fleet, trava de install e escritas atômicas.
+
 ## [0.20.0] - 2026-07-04
 
 ### Changed
