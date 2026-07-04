@@ -78,6 +78,10 @@
     "defaultMode": "acceptEdits"
   },
   "autoMemoryDirectory": ".claude/memory",
+  "env": {
+    "HARNESS_CODEX_ADVERSARY": "0",
+    "HARNESS_REVIEW_ENABLED": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {
