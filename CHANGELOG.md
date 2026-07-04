@@ -15,6 +15,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.23.2] - 2026-07-04
+
+### Changed
+
+- **`setup-vps` agora infere tudo do contexto — digitação mínima.** Não pergunta mais o caminho do harness: o motor (`core/vps`) é resolvido automaticamente do local do próprio script (clone real) ou, se rodar via `npx` (que não empacota `core/vps`), é **clonado uma vez** num path estável (`~/.claude/harness-core`) — nunca do cache efêmero do npx. O projeto vem da pasta atual (`cwd`), owner/repo do `git remote origin`, e os paths têm defaults sensatos. O operador só digita o que não dá pra adivinhar: o **token** e o **chat_id** do Telegram (Enter aceita cada default inferido).
+
 ## [0.23.1] - 2026-07-04
 
 ### Fixed
