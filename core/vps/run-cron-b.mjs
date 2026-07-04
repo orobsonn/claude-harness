@@ -16,8 +16,6 @@
  * fully injectable so run-crons.test.mjs can pass a fake cronB + fake getAuthenticatedGhUser and
  * assert the OBSERVABLE opts cronB receives — never a real `gh` call from the test.
  *
- * STUB — throws until implemented by the executor hand. RED for run-crons.test.mjs.
- *
  * @param {object} config
  * @param {string} config.project
  * @param {string} config.owner
@@ -36,13 +34,55 @@
  * @param {Function} [deps.recordReviewed] - default: real recordReviewed from ./cron-state.mjs
  * @returns {void}
  */
+import { spawnSync } from "node:child_process";
+
 import { loadConfig } from "./run-cron-a.mjs";
+import { cronB } from "./cron-b.mjs";
+import { parseVerdictBlock } from "./verdict-block.mjs";
+import { alreadyReviewed, recordReviewed } from "./cron-state.mjs";
+import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
+
+/**
+ * @description Real authenticated-gh-user lookup: `gh api user --jq .login`. Returns "" on
+ * failure — combined with the `??` default chain this keeps the author gate fail-closed (an empty
+ * login means cronB's isHarnessAuthor treats every PR as non-harness and skips auto-merge).
+ * @returns {string}
+ */
+function defaultGetAuthenticatedGhUser() {
+  const res = spawnSync("gh", ["api", "user", "--jq", ".login"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0 || res.error) return "";
+  return (res.stdout || "").trim();
+}
 
 export function runCronB(config, deps = {}) {
-  throw new Error("runCronB not implemented");
+  const cronBFn = deps.cronB ?? cronB;
+  const getAuthenticatedGhUser = deps.getAuthenticatedGhUser ?? defaultGetAuthenticatedGhUser;
+  const ghExec = deps.ghExec ?? defaultGhExec;
+  const parseVerdictBlockFn = deps.parseVerdictBlock ?? parseVerdictBlock;
+  const alreadyReviewedFn = deps.alreadyReviewed ?? alreadyReviewed;
+  const recordReviewedFn = deps.recordReviewed ?? recordReviewed;
+
+  // Fail-closed author gate: config wins, else the authenticated gh user — NEVER unset/empty.
+  const harnessAuthorLogin = config.harnessAuthorLogin ?? getAuthenticatedGhUser();
+
+  const gh = scopedGh(config.owner, config.repo, ghExec);
+
+  cronBFn({
+    gh,
+    parseVerdictBlock: parseVerdictBlockFn,
+    alreadyReviewed: alreadyReviewedFn,
+    recordReviewed: recordReviewedFn,
+    stateDir: config.stateDir,
+    harnessAuthorLogin,
+  });
 }
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  runCronB(loadConfig(process.argv[2]));
+  const arg = process.argv[2];
+  const configPath = arg === "--config" ? process.argv[3] : arg;
+  runCronB(loadConfig(configPath));
 }
