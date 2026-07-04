@@ -36,6 +36,7 @@ import { join, dirname } from "node:path";
 import { release as releaseLock, readHolder } from "./run-lock.mjs";
 import { read as readCounter, reset as resetCounter, increment as incrementCounter } from "./cron-state.mjs";
 import { isDirectCli } from "../skills/orchestrating-delivery/references/cli-flags.mjs";
+import { makeNotifier } from "./notify-telegram.mjs";
 
 const LABEL_IN_PROGRESS = "harness:in-progress";
 const LABEL_DONE = "harness:done";
@@ -167,6 +168,15 @@ export function cronAExit(issueNumber, worktree, bodyFile, envFile, opts) {
     if (decisionError) {
       throw decisionError;
     }
+
+    // Additive structured outcome for the composition root to translate into a notification. Does
+    // NOT change any relabel/counter/cleanup side effect above; existing callers ignore the return.
+    let outcome;
+    if (hadPr) outcome = "done";
+    else if (finding) outcome = "blocked";
+    else if (addLabel === LABEL_BLOCKED) outcome = "failed";
+    else outcome = "requeued";
+    return { outcome, issueNumber, hadPr, finding };
   } finally {
     // Release the run-lock with the held acquireTs (ownership guard; idempotent if already gone)
     // and unlink the body + env files on EVERY exit path. These are the non-negotiable cleanups:
@@ -240,6 +250,73 @@ function realBlockingFinding(worktree) {
 }
 
 /**
+ * @description Best-effort PR lookup for the session-done notification: the open/merged harness PR
+ * for `harness/<issueNumber>`, returning its number + url or null. Fail-soft on any gh/parse error.
+ * @param {number} issueNumber
+ * @returns {{ number: number, url: string } | null}
+ */
+function realPrLookup(issueNumber) {
+  try {
+    const { stdout, status } = spawnSync(
+      "gh",
+      ["pr", "list", "--head", `harness/${issueNumber}`, "--state", "all", "--json", "number,url"],
+      { encoding: "utf8" }
+    );
+    if (status !== 0) return null;
+    const list = JSON.parse(stdout || "[]");
+    return Array.isArray(list) && list.length > 0 ? { number: list[0].number, url: list[0].url } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Translates the cron-a-exit structured outcome into a best-effort Telegram
+ * notification. The notify coordinates (chatId/threadId/project) arrive via HARNESS_NOTIFY_* env
+ * vars the dispatch step wrote into the sourced env-file (non-secret); the token is read from
+ * ~/.claude/.dev.vars by makeNotifier. Entirely wrapped: a notify/gh/drain failure NEVER changes
+ * the exit handler's outcome (the critical relabel/lock-release/cleanup already ran synchronously
+ * inside cronAExit). Numeric coercion keeps chat_id typed like the module path.
+ * @param {{ outcome: string, issueNumber: number, finding: string|null }} outcome
+ * @param {object} [deps]
+ * @returns {Promise<void>}
+ */
+export async function notifyExit(outcome, deps = {}) {
+  const env = deps.env ?? process.env;
+  const prLookup = deps.prLookup ?? realPrLookup;
+  const makeNotifierFn = deps.makeNotifier ?? makeNotifier;
+  try {
+    if (!outcome) return;
+    const chatId = env.HARNESS_NOTIFY_CHATID;
+    if (!chatId) return; // notify not configured for this session — no-op
+    const project = env.HARNESS_NOTIFY_PROJECT || "?";
+    const config = {
+      homeDir: env.HOME,
+      notify: {
+        chatId: Number(chatId),
+        threadId: env.HARNESS_NOTIFY_THREADID ? Number(env.HARNESS_NOTIFY_THREADID) : undefined,
+      },
+    };
+    const { notify, drain } = makeNotifierFn(config, { homeDir: env.HOME });
+    try {
+      if (outcome.outcome === "done") {
+        const pr = prLookup(outcome.issueNumber);
+        notify({ type: "session-done", project, issue: outcome.issueNumber, pr: pr?.number, url: pr?.url });
+      } else if (outcome.outcome === "blocked") {
+        notify({ type: "blocked", project, issue: outcome.issueNumber, reason: outcome.finding });
+      } else if (outcome.outcome === "failed") {
+        notify({ type: "failed", project, issue: outcome.issueNumber });
+      }
+      // "requeued" is transient (a clean retry) — intentionally not notified to avoid noise.
+    } finally {
+      await drain();
+    }
+  } catch {
+    // fail-open: notification must never affect the graceful-exit handler.
+  }
+}
+
+/**
  * @description Parses and validates the CLI argv: `<issueNumber> <worktree> <bodyFile> <envFile>`.
  * @param {string[]} argv - process.argv.slice(2) from the CLI entry.
  * @returns {{ issueNumber: number, worktree: string, bodyFile: string, envFile: string }}
@@ -266,13 +343,13 @@ function parseArgv(argv) {
  * @param {string[]} argv - process.argv.slice(2).
  * @returns {void}
  */
-export function main(argv) {
+export async function main(argv) {
   const { issueNumber, worktree, bodyFile, envFile } = parseArgv(argv);
   const stateDir = dirname(bodyFile);
   const holder = readHolder({ stateDir });
   const acquireTs = holder ? holder.acquire_ts : undefined;
 
-  cronAExit(issueNumber, worktree, bodyFile, envFile, {
+  const outcome = cronAExit(issueNumber, worktree, bodyFile, envFile, {
     gh: realGh,
     runLock: { release: releaseLock },
     counter: { read: readCounter, reset: resetCounter, increment: incrementCounter },
@@ -282,13 +359,18 @@ export function main(argv) {
     acquireTs,
     retryCeilingK: DEFAULT_RETRY_CEILING_K,
   });
+
+  // Best-effort notification AFTER the synchronous relabel/lock-release/cleanup already completed
+  // inside cronAExit. A rejection here is swallowed by notifyExit and never escapes.
+  await notifyExit(outcome);
 }
 
 if (isDirectCli(import.meta.url)) {
-  try {
-    main(process.argv.slice(2));
-  } catch (err) {
+  // main is async: await it and catch so a notify/gh/drain rejection can never become an
+  // unhandledRejection that crashes the detached session, and never changes the exit code after
+  // the critical cleanup already ran.
+  main(process.argv.slice(2)).catch((err) => {
     console.error(`cron-a-exit: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
-  }
+  });
 }

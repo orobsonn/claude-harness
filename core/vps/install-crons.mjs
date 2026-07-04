@@ -134,6 +134,22 @@ export function validateInstallCoordinates(inputs) {
     homeDir: inputs.homeDir,
   };
   if (hasAuthor) coords.harnessAuthorLogin = inputs.harnessAuthorLogin;
+
+  // Optional Telegram notify block — NOT secret (chatId/threadId are group coordinates; the bot
+  // token lives ONLY in ~/.claude/.dev.vars, never here). Validated numeric so nothing unsafe
+  // reaches the generated config. Absent notify → coords carries none and the config is unchanged.
+  const hasNotify = inputs.notify !== undefined && inputs.notify !== null;
+  if (hasNotify) {
+    const n = inputs.notify;
+    if (typeof n !== "object" || Array.isArray(n)) throw new Error("invalid notify");
+    if (!Number.isInteger(n.chatId)) throw new Error("invalid notify.chatId");
+    if (n.threadId !== undefined && !Number.isInteger(n.threadId)) throw new Error("invalid notify.threadId");
+    if (n.heartbeat !== undefined && typeof n.heartbeat !== "boolean") throw new Error("invalid notify.heartbeat");
+    const notify = { chatId: n.chatId };
+    if (n.threadId !== undefined) notify.threadId = n.threadId;
+    if (n.heartbeat !== undefined) notify.heartbeat = n.heartbeat;
+    coords.notify = notify;
+  }
   return coords;
 }
 
@@ -281,6 +297,8 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
       stateDir: coords.stateDir,
       worktreeRoot: coords.worktreeRoot,
       homeDir: coords.homeDir,
+      // Optional notify base so the shared reaper can resolve the destination. Absent → omitted.
+      ...(coords.notify ? { notify: coords.notify } : {}),
       projects: [currentEntry],
     };
   }
@@ -311,7 +329,9 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
   }
   if (!placedCurrent) reconciled.push({ ...currentEntry });
 
-  return { ...existingFleet, projects: reconciled };
+  // Latest-installer sets/updates the shared notify destination; an install without notify leaves
+  // the existing fleet's notify untouched (spread preserves it).
+  return { ...existingFleet, ...(coords.notify ? { notify: coords.notify } : {}), projects: reconciled };
 }
 
 /**
@@ -503,7 +523,11 @@ export function installProject(inputs, deps = {}) {
       const existingFleet = readConfigFileFn(fleetPath);
       const fleet = reconcileFleet(existingFleet, registered, coords);
 
+      // generateProjectConfig is frozen (exact-key tests); layer the optional notify block here,
+      // AFTER the call, so the per-project config the reaper/cron-a/cron-b read gains notify without
+      // touching the frozen generator. Absent notify → byte-identical to today.
       const perProjectConfig = generateProjectConfig(coords);
+      if (coords.notify) perProjectConfig.notify = coords.notify;
       loadConfig(perProjectConfig);
       loadConfig(fleet);
       for (const entry of fleet.projects) {
@@ -614,8 +638,15 @@ function parseFlags(args) {
   return flags;
 }
 
-/** @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`. */
-function runCli(argv) {
+/**
+ * @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`.
+ * `deps` is injectable so tests can observe the parsed inputs without touching real fs/crontab.
+ * @param {string[]} argv
+ * @param {{ installProject?: Function, uninstallProject?: Function }} [deps]
+ */
+export function runCli(argv, deps = {}) {
+  const installProjectFn = deps.installProject ?? installProject;
+  const uninstallProjectFn = deps.uninstallProject ?? uninstallProject;
   const uninstallIdx = argv.indexOf("--uninstall");
   if (uninstallIdx !== -1) {
     const target = argv[uninstallIdx + 1];
@@ -628,7 +659,7 @@ function runCli(argv) {
     // operator installed into (config removal is homeDir-derived); falls back to $HOME.
     const uflags = parseFlags(argv);
     const opts = uflags["home-dir"] ? { homeDir: uflags["home-dir"] } : {};
-    uninstallProject(target, opts);
+    uninstallProjectFn(target, opts);
     return;
   }
   if (argv[0] === "install") {
@@ -643,12 +674,20 @@ function runCli(argv) {
       homeDir: flags["home-dir"],
     };
     if (flags["harness-author-login"]) inputs.harnessAuthorLogin = flags["harness-author-login"];
-    installProject(inputs);
+    // Optional Telegram notify block. chatId/threadId are NON-secret group coordinates; the bot
+    // token stays in ~/.claude/.dev.vars. validateInstallCoordinates rejects non-integer chatId/
+    // threadId and a non-boolean heartbeat, so a malformed flag fails fast before any write.
+    if (flags["chat-id"] !== undefined) {
+      inputs.notify = { chatId: Number(flags["chat-id"]) };
+      if (flags["thread-id"] !== undefined) inputs.notify.threadId = Number(flags["thread-id"]);
+      if (flags["heartbeat"] !== undefined) inputs.notify.heartbeat = flags["heartbeat"] === "true";
+    }
+    installProjectFn(inputs);
     return;
   }
   console.error(
     "Usage:\n" +
-      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>]\n" +
+      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
       "  --uninstall <project>"
   );
   process.exitCode = 1;

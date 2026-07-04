@@ -43,6 +43,7 @@ import { buildScopedEnvFromDisk } from "./scoped-env-fromdisk.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
+import { makeNotifier } from "./notify-telegram.mjs";
 
 /** @description Required fields every per-project VPS cron config must supply. */
 export const REQUIRED_CONFIG_FIELDS = [
@@ -90,6 +91,19 @@ export function runCronA(config, deps = {}) {
   const counter = deps.counter ?? counterModule;
   const spawn = deps.spawn ?? defaultSpawn;
   const tmuxHasSession = deps.tmuxHasSession ?? defaultTmuxHasSession;
+  // Best-effort notifier: injected (tests observe it) or a no-op default. Building the REAL
+  // notifier + draining before exit is the CLI main wrapper's job (mainCronA), not this root — so
+  // an injected spy is observable and a project without notify is unaffected.
+  const notify = deps.notify ?? (() => {});
+  const heartbeat = deps.heartbeat ?? config.notify?.heartbeat === true;
+  // best-effort wrapper: a throwing notifier can NEVER break a cron.
+  const safeNotify = (event) => {
+    try {
+      notify(event);
+    } catch {
+      // fail-open — notification is never on the cron's critical path
+    }
+  };
 
   // The gh seam scopes EVERY call to the configured repo so a multi-project VPS never acts on the
   // wrong project's repo. `--repo <owner>/<repo>` is appended — valid anywhere in a gh argv.
@@ -104,8 +118,13 @@ export function runCronA(config, deps = {}) {
 
   // The dispatch seam handed to cronASelect: cronASelect calls dispatch(issue, lock); the seam
   // composes the full dispatch opts from config + the already-held lock handle + the wired seams.
-  const dispatchSeam = (issue, lock) =>
-    dispatchFn(issue, {
+  // It also observes dispatch's structured result: a {ok:false} (spawn failure → re-queued) fires
+  // the dispatch-failed notification and records the failure so the post-select `picked` is
+  // suppressed (a failed dispatch never "started a session"). notify config is threaded down so the
+  // detached session's cron-a-exit can notify session-done/blocked/failed.
+  let dispatchFailed = false;
+  const dispatchSeam = (issue, lock) => {
+    const result = dispatchFn(issue, {
       project: config.project,
       projectRoot: config.projectRoot,
       worktreeRoot: config.worktreeRoot,
@@ -116,9 +135,16 @@ export function runCronA(config, deps = {}) {
       gh,
       counter,
       buildScopedEnv,
+      notify: config.notify,
     });
+    if (result && result.ok === false) {
+      dispatchFailed = true;
+      safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number });
+    }
+    return result;
+  };
 
-  return cronASelectFn({
+  const selectResult = cronASelectFn({
     project: config.project,
     stateDir: config.stateDir,
     runLock,
@@ -126,6 +152,35 @@ export function runCronA(config, deps = {}) {
     dispatch: dispatchSeam,
     tmuxHasSession,
   });
+
+  // Translate the structured select result into an event (best-effort, off the critical path).
+  if (selectResult && selectResult.dispatched && selectResult.issue && !dispatchFailed) {
+    safeNotify({ type: "picked", project: config.project, issue: selectResult.issue.number });
+  } else if (selectResult && selectResult.dispatched === false && heartbeat) {
+    safeNotify({ type: "idle", project: config.project });
+  }
+
+  return selectResult;
+}
+
+/**
+ * @description CLI wrapper: builds the REAL best-effort notifier, runs runCronA with it injected,
+ * and awaits drain() so the short-lived cron process does not exit before in-flight notifications
+ * settle (bounded by the send timeout). A notify failure never affects the cron's exit.
+ * @param {object} config
+ * @returns {Promise<void>}
+ */
+export async function mainCronA(config) {
+  const notifier = makeNotifier(config, { homeDir: config.homeDir });
+  try {
+    runCronA(config, { notify: notifier.notify, heartbeat: notifier.heartbeat });
+  } finally {
+    try {
+      await notifier.drain();
+    } catch {
+      // fail-open
+    }
+  }
 }
 
 /**
@@ -151,5 +206,8 @@ const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const arg = process.argv[2];
   const configPath = arg === "--config" ? process.argv[3] : arg;
-  runCronA(loadConfig(configPath));
+  mainCronA(loadConfig(configPath)).catch((err) => {
+    console.error(`run-cron-a: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

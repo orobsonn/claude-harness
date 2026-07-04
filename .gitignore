@@ -9,6 +9,8 @@
 .dev.vars.*
 .env
 .env.*
+# ...but the placeholder example (no real values) IS tracked so contributors know the keys
+!.dev.vars.example
 
 # Run buffers / session dirs — ephemeral harness artifacts, never commit
 /findings.md

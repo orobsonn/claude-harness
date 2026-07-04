@@ -41,6 +41,7 @@ import { cronB } from "./cron-b.mjs";
 import { parseVerdictBlock } from "./verdict-block.mjs";
 import { alreadyReviewed, recordReviewed } from "./cron-state.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
+import { makeNotifier } from "./notify-telegram.mjs";
 
 /**
  * @description Real authenticated-gh-user lookup: `gh api user --jq .login`. Returns "" on
@@ -69,20 +70,58 @@ export function runCronB(config, deps = {}) {
   const harnessAuthorLogin = config.harnessAuthorLogin ?? getAuthenticatedGhUser();
 
   const gh = scopedGh(config.owner, config.repo, ghExec);
+  // Best-effort notifier: injected (tests observe) or no-op default. The real notifier + drain live
+  // in mainCronB. A throwing notifier can never break the review pass.
+  const notify = deps.notify ?? (() => {});
 
-  cronBFn({
+  // Tolerate a void return from the frozen cronB fakes (which predate the outcomes array).
+  const outcomes = cronBFn({
     gh,
     parseVerdictBlock: parseVerdictBlockFn,
     alreadyReviewed: alreadyReviewedFn,
     recordReviewed: recordReviewedFn,
     stateDir: config.stateDir,
     harnessAuthorLogin,
-  });
+  }) || [];
+
+  for (const o of outcomes) {
+    try {
+      if (o.outcome === "merged") {
+        notify({ type: "pr-merged", project: config.project, pr: o.number, url: o.url });
+      } else if (o.outcome === "blocked") {
+        notify({ type: "pr-blocked", project: config.project, pr: o.number, reason: o.finding, url: o.url });
+      }
+    } catch {
+      // fail-open — a notify failure never blocks the review batch
+    }
+  }
+}
+
+/**
+ * @description CLI wrapper: builds the real notifier, runs runCronB with it injected, and awaits
+ * drain() before the short-lived cron process exits so PR notifications are not dropped.
+ * @param {object} config
+ * @returns {Promise<void>}
+ */
+export async function mainCronB(config) {
+  const notifier = makeNotifier(config, { homeDir: config.homeDir });
+  try {
+    runCronB(config, { notify: notifier.notify });
+  } finally {
+    try {
+      await notifier.drain();
+    } catch {
+      // fail-open
+    }
+  }
 }
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const arg = process.argv[2];
   const configPath = arg === "--config" ? process.argv[3] : arg;
-  runCronB(loadConfig(configPath));
+  mainCronB(loadConfig(configPath)).catch((err) => {
+    console.error(`run-cron-b: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

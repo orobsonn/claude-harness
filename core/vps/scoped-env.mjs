@@ -103,7 +103,7 @@ function stripValueQuotesAndComment(rawValue) {
  * @param {string} content - Raw file content.
  * @returns {Record<string,string>} Parsed key/value map.
  */
-function parseDevVars(content) {
+export function parseDevVars(content) {
   const result = {};
   if (!content) return result;
 
