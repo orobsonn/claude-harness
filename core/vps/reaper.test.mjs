@@ -7,7 +7,7 @@
  * steady state and is ALIVE); a NOT-YET-REGISTERED holder is alive iff kill(pid) does not throw
  * AND it is still within the registration grace window.
  *
- * Every seam (listWorktrees, tmuxHasSession, kill, now, prExists, gh, runLock.release,
+ * Every seam (listWorktrees, tmuxHasSession, kill, now, prExists, issueLabels, gh, runLock.release,
  * counter.read, gitWorktreeRemove, tmuxKillSession) is an in-memory fake recording every call it
  * receives — no real git/tmux/gh/process is ever touched. Assertions are made exclusively on
  * those recorded-call arrays (the observables), never on a return value from reaper().
@@ -73,6 +73,11 @@ function makePrExists(issueNumbersWithPr = new Set()) {
   return (issueNumber) => issueNumbersWithPr.has(issueNumber);
 }
 
+/** @description Fake issue-labels seam; `labelsByIssue` maps issueNumber -> array of label strings. */
+function makeIssueLabels(labelsByIssue = {}) {
+  return (issueNumber) => labelsByIssue[issueNumber] ?? [];
+}
+
 /** @description Records every `gitWorktreeRemove(path)` call into an array. */
 function makeGitWorktreeRemove() {
   const calls = [];
@@ -111,6 +116,7 @@ function baseOpts(overrides = {}) {
     registrationGraceSeconds: REGISTRATION_GRACE_SECONDS,
     retryCeilingK: RETRY_CEILING_K,
     prExists: makePrExists(),
+    issueLabels: makeIssueLabels(),
     gh: makeFakeGh().gh,
     runLock: makeFakeRunLock().runLock,
     counter: makeFakeCounter({}),
@@ -360,4 +366,78 @@ test("reaper: a registered holder with a live tmux session but a DEAD launcher p
     "a registered live tmux session must never trigger a ready relabel"
   );
   assert.equal(releaseCalls.length, 0, "a registered live tmux session's lock must never be released");
+});
+
+test("reaper: an issue labeled harness:in-review is NEVER relabeled to ready or blocked even when its PR is GONE and its holder is dead (in-review is owned by the review phase's reconciliation, not orphan crash-recovery)", () => {
+  const now = () => 100_000;
+  const inReviewPrGone = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-55",
+    issueNumber: 55,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 5555, acquire_ts: 50_000, tmux_session_id: "sess-55" }, // dead session -> crashRecover would fire
+  });
+
+  const { gh, calls: ghCalls } = makeFakeGh();
+  const { runLock, releaseCalls } = makeFakeRunLock();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [inReviewPrGone],
+      tmuxHasSession: () => false, // session exited -> holder dead
+      prExists: makePrExists(), // PR is GONE — the vacuous !prExists guard alone would let crashRecover relabel
+      issueLabels: makeIssueLabels({ 55: ["harness:in-review"] }),
+      counter: makeFakeCounter({ 55: 0 }), // 0 < retryCeilingK (2) — would resolve to harness:ready, not blocked
+      gh,
+      runLock,
+    })
+  );
+
+  assert.ok(
+    !ghCalls.some(
+      (args) =>
+        args.includes(String(55)) &&
+        args.includes("--add-label") &&
+        (args.includes("harness:ready") || args.includes("harness:blocked"))
+    ),
+    "an in-review issue must never be relabeled to ready or blocked, even with its PR gone and a dead holder — it is left to the review phase's reconciliation, never mistaken for an orphan"
+  );
+});
+
+test("reaper: a genuinely orphaned harness:in-progress worktree with NO PR is still relabeled ready under the retry ceiling — unchanged crash-recovery, not conflated with in-review", () => {
+  const now = () => 100_000;
+  const trueOrphan = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-66",
+    issueNumber: 66,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 6666, acquire_ts: 50_000, tmux_session_id: "sess-66" }, // dead session
+  });
+
+  const { gh, calls: ghCalls } = makeFakeGh();
+  const { runLock, releaseCalls } = makeFakeRunLock();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [trueOrphan],
+      tmuxHasSession: () => false, // session exited
+      prExists: makePrExists(), // no PR -> genuinely orphaned
+      issueLabels: makeIssueLabels({ 66: ["harness:in-progress"] }),
+      counter: makeFakeCounter({ 66: 0 }), // 0 < retryCeilingK (2)
+      gh,
+      runLock,
+    })
+  );
+
+  assert.ok(
+    ghCalls.some(
+      (args) =>
+        args.includes(String(66)) && args.includes("--add-label") && args.includes("harness:ready")
+    ),
+    "a true orphan (no PR, not in-review) must still be relabeled to harness:ready — existing crash-recovery behavior unchanged"
+  );
+  assert.ok(
+    releaseCalls.some((args) => args.acquireTs === 50_000),
+    "the stale run-lock holder must still be released for a true orphan"
+  );
 });
