@@ -76,6 +76,27 @@ Flow:
   configured. A test that silently matches the wrong row provides no safety. Unique row identifiers
   make the table both human-readable and machine-verifiable without special test logic.
 
+### 2026-07-04 — cross-family: codex eye fail-opens under a file-read-heavy sandbox — keep it advisory, never gate
+
+- **Observed:** During the `process-eye-routing` delivery the operator asked to run the cross-family
+  (Codex/GPT) eye at the two highest-leverage gates (spec-adversary + final dual-review). `codex exec
+  --sandbox read-only` was logged in (ChatGPT session, no `OPENAI_API_KEY`) but **timed out with ZERO
+  output on all three attempts** (spec ×2, final ×1) at 240–420s windows — it never emitted a verdict.
+  The likely cause is the read-only sandbox + large-file reads (SKILL.md ~74KB, entry-gate ~55KB) being
+  too slow for the CLI to reach a first token. The Claude opus adversary carried the gate; cross-family
+  correctly **failed open** (checkpoint ran Claude-only exactly as today) and no verdict was fabricated.
+- **Proposed change:** (a) document a **lean cross-family invocation profile** — point `cross-family.mjs`
+  at the *diff* (and only the hunks' immediate context), not the full skill files, so the Codex peer can
+  reach a verdict inside a normal window; (b) add a short **timeout budget** to the driver (e.g. 180s)
+  that returns a `{ available:false, reason:"codex timeout" }` passthrough rather than blocking the
+  orchestrator's own turn; (c) keep the fail-open invariant explicit in the SKILL: a cross-family eye
+  that produces no output within budget is a non-event, never a gate — and the orchestrator must record
+  the *attempt + timeout* (not silently drop it) so the operator sees cross-family was tried.
+- **Rationale:** cross-family's whole value is a second family catching what the first's priors miss,
+  but it is explicitly a fail-open enhancement. A profile that reliably reaches a verdict on the diff is
+  worth more than a thorough prompt that never returns; and an audit line ("cross-family attempted,
+  timed out, ran Claude-only") keeps the fail-open honest instead of looking like it silently ran.
+
 ### 2026-06-27 — executor/planner: inert-mechanism trap — CLI docs must be backed by a real CLI entry block
 
 - **Observed:** During the `ci-release-gate` feature, library-only `.mjs` modules (exporting pure

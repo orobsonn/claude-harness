@@ -304,3 +304,136 @@ test("mark.mjs supports the regate-pending and regate-passed markers", () => {
     "mark.mjs must support the regate-passed marker"
   );
 });
+
+// ─── Test 7 (Change 2 — process-eye-routing) ────────────────────────────────────
+/**
+ * Given: orchestrating-delivery Phase 2 step 5.
+ * When: the conditional re-gate for a NON-grave surgical HIGH fix is inspected.
+ * Then: a light path is allowed via (a) a red->green frozen test OR (b) a virgin sonnet
+ *       adversary spot-check, and a merely "stays green" test is explicitly INSUFFICIENT.
+ */
+test("Phase 2 step 5 (Change 2): non-grave surgical HIGH fix light path — red->green test OR virgin sonnet spot-check; stays-green rejected", () => {
+  const section = extractSection(orchestratingMd, "Phase 2");
+  assert(section.length > 0, "Phase 2 section not found");
+  const lower = section.toLowerCase();
+
+  // A conditional / light path exists for a surgical, non-grave HIGH fix.
+  assert(
+    (lower.includes("surgical") || lower.includes("mechanical")) &&
+      (lower.includes("light path") || lower.includes("conditional re-gate") || lower.includes("conditional")),
+    "step 5 must describe a conditional/light re-gate path for a non-grave surgical HIGH fix"
+  );
+
+  // Option (a): a red->green frozen test IS the re-gate.
+  assert(
+    lower.includes("red") && lower.includes("green"),
+    "step 5 light path must include the red->green frozen-test shortcut"
+  );
+
+  // Explicitly reject a "stays green" test as sufficient (adversary H2).
+  assert(
+    lower.includes("stays green") || lower.includes("stay green"),
+    "step 5 must explicitly REJECT a merely 'stays green' test as the re-gate (insufficient — the test is blind to the fix)"
+  );
+
+  // Option (b): a virgin sonnet spot-check eye (still Claude), never the orchestrator.
+  assert(
+    lower.includes("sonnet") && (lower.includes("spot-check") || lower.includes("spot check")),
+    "step 5 light path must include a virgin sonnet adversary spot-check option"
+  );
+});
+
+// ─── Test 8 (Change 2) — grave classes NEVER take the light path ─────────────────
+/**
+ * Given: orchestrating-delivery Phase 2 step 5.
+ * When: the grave-class guardrail is inspected.
+ * Then: an isGrave(fix) fix — any canonical-critical-class, sensitive-path, re-architecture,
+ *       or >1 function/seam — is FORBIDDEN the light path and keeps the full opus re-gate;
+ *       the omission of the irreversible classes is closed (all canonical classes count).
+ */
+test("Phase 2 step 5 (Change 2): isGrave(fix) — canonical class / sensitive-path / re-arch / >1 seam — never takes the light path", () => {
+  const section = extractSection(orchestratingMd, "Phase 2");
+  assert(section.length > 0, "Phase 2 section not found");
+  const lower = section.toLowerCase();
+
+  // The grave predicate must cover ALL canonical classes (not a hand-picked two) —
+  // named explicitly as canonical-critical-class(es) so the irreversible classes 1/2 are in.
+  assert(
+    lower.includes("canonical") && (lower.includes("critical-class") || lower.includes("critical class")),
+    "step 5 grave predicate must reference the canonical-critical-classes (all of them, incl. the irreversible classes)"
+  );
+
+  // Grave surfaces named: sensitive-path AND (re-architecture OR >1 function/seam).
+  assert(lower.includes("sensitive-path") || lower.includes("sensitive path"), "grave predicate must include sensitive-path");
+  assert(
+    lower.includes("re-architecture") || lower.includes(">1 function") || lower.includes("more than one") || lower.includes(">1 seam") || lower.includes("multiple function"),
+    "grave predicate must include re-architecture / >1 function-or-seam"
+  );
+
+  // The light path is explicitly forbidden for grave fixes — pinned as a CO-LOCATED
+  // statement on ONE line (a token-scatter check would stay green if the guarantee sentence
+  // were deleted, since 'not'/'light path' co-occur elsewhere in the ~150-line section).
+  const graveGuaranteeLine = section
+    .split("\n")
+    .some((line) => {
+      const l = line.toLowerCase();
+      return l.includes("grave") && (l.includes("never") || l.includes("forbidden")) && l.includes("light path");
+    });
+  assert(
+    graveGuaranteeLine,
+    "step 5 must carry a single-line guarantee that a GRAVE fix NEVER takes the light path (co-located, not token-scattered)"
+  );
+
+  // The bias-to-grave default (when in doubt → grave/opus) must be stated (adversary M1).
+  assert(
+    (lower.includes("when in doubt") || lower.includes("bias-to-grave") || lower.includes("bias to grave") || lower.includes("ambiguity")) &&
+      lower.includes("grave"),
+    "step 5 must state the hard bias-to-grave default (ambiguity resolves to the full opus re-gate)"
+  );
+});
+
+// ─── Test 9 (Change 2) — light-path regate-passed requires an on-disk artifact ───
+/**
+ * Given: orchestrating-delivery self-check section.
+ * When: the light-path evidence backstop is inspected.
+ * Then: the self-check asserts that every light-path regate-passed has its on-disk
+ *       run/ artifact (the only teeth for the prose-only artifact belt; #ac-2.5).
+ */
+test("Self-check (Change 2): a light-path regate-passed requires its on-disk run/ artifact", () => {
+  const selfCheck = extractSection(orchestratingMd, "Self-check");
+  assert(selfCheck.length > 0, "Self-check section not found");
+  const lower = selfCheck.toLowerCase();
+
+  assert(
+    lower.includes("regate-passed") && lower.includes("light path") && lower.includes("artifact"),
+    "self-check must require an on-disk artifact for every light-path regate-passed (#ac-2.5)"
+  );
+  assert(
+    lower.includes("run/") || lower.includes("on-disk") || lower.includes("on disk"),
+    "self-check must state the artifact lives on disk under run/"
+  );
+});
+
+// ─── Test 10 (Change 2) — mark.mjs doc records the flexed re-gate producers ───────
+/**
+ * Given: hooks/mark.mjs doc-comment.
+ * When: inspected.
+ * Then: it records that regate-passed may be earned via the full opus adversary (grave) OR
+ *       the red->green test / virgin sonnet spot-check (surgical non-grave), each leaving an
+ *       artifact (#ac-2.6); and the 2-cycle re-gate iteration cap survives in step 5.
+ */
+test("mark.mjs doc (Change 2): regate-passed earnable via opus adversary OR red->green test / sonnet spot-check; 2-cycle cap survives", () => {
+  const lower = markMjs.toLowerCase();
+  assert(
+    lower.includes("regate-passed") &&
+      (lower.includes("spot-check") || lower.includes("red->green") || lower.includes("red→green") || lower.includes("light path")),
+    "mark.mjs doc-comment must record the light-path way to earn regate-passed (surgical non-grave) alongside the full opus adversary (grave) (#ac-2.6)"
+  );
+
+  // The 2-cycle re-gate iteration cap must survive in the SKILL step 5.
+  const phase2 = extractSection(orchestratingMd, "Phase 2");
+  assert(
+    phase2.toLowerCase().includes("iteration cap") && phase2.includes("2"),
+    "step 5 must retain the 2-cycle re-gate iteration cap (#ac-2.6)"
+  );
+});
