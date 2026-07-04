@@ -213,18 +213,47 @@ function askTTY(question) {
 // ---------- main (runs only when invoked directly as a script) ----------
 
 /**
- * @description Real seams for the setup-vps wizard: TTY prompt, stdout, safe .dev.vars read, a
- * 0600 write that never logs the token, mkdir -p for ~/.claude, an existence check, and the
- * install-crons invocation. `runInstall` runs the STABLE harness clone's install-crons (path chosen
- * by the operator inside the wizard) — NEVER a copy under this npx cache, so the crontab stays valid
- * after the npx cache is purged.
+ * @description Real seams for the setup-vps wizard. Infers everything it can so the operator barely
+ * types: the engine dir (this script's own clone if it ships core/vps, else a stable ~/.claude/
+ * harness-core auto-cloned once — NEVER the ephemeral npx cache), the project (cwd), and owner/repo
+ * (the dir's git remote). Token write is 0600 and never logs the token.
  * @returns {object}
  */
 function setupVpsSeams() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // This file lives at <harness>/core/skills/initializing-projects/references/cli.mjs — 4 up is the
+  // harness root. It only counts as the engine when it actually ships core/vps (a real clone, not npx).
+  const localCandidate = join(here, "..", "..", "..", "..");
+  const localEngineDir = existsSync(join(localCandidate, "core", "vps", "install-crons.mjs"))
+    ? localCandidate
+    : null;
+  const home = process.env.HOME || process.env.USERPROFILE || ".";
+  const stableEngineDir = join(home, ".claude", "harness-core");
   return {
     ask: askTTY,
     out: (t) => process.stdout.write(`${t}\n`),
     env: process.env,
+    cwd: process.cwd(),
+    gitRemote: (dir) => {
+      try {
+        return execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        return "";
+      }
+    },
+    localEngineDir,
+    stableEngineDir,
+    cloneEngine: (dir) => {
+      const tag = resolveLatestTag();
+      const args = ["clone", "--depth", "1"];
+      if (tag) args.push("--branch", tag);
+      args.push(SOURCE_URL, dir);
+      execFileSync("git", args, { stdio: "inherit" });
+    },
+    exists: (p) => existsSync(p),
     readFileSafe: (p) => {
       try {
         return readFileSync(p, "utf8");
@@ -241,8 +270,7 @@ function setupVpsSeams() {
       }
     },
     ensureDir: (d) => mkdirSync(d, { recursive: true }),
-    exists: (p) => existsSync(p),
-    devVarsPathFor: (home) => join(home, ".claude", ".dev.vars"),
+    devVarsPathFor: (h) => join(h, ".claude", ".dev.vars"),
     runInstall: (scriptPath, args) => execFileSync(process.execPath, [scriptPath, ...args], { stdio: "inherit" }),
   };
 }

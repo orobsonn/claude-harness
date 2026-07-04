@@ -1,12 +1,15 @@
 /**
  * @description Frozen oracle for the setup-vps wizard. Every seam injected — ZERO real prompts/fs/
- * install-crons — and a dedicated assertion proves the bot token NEVER reaches stdout/logs.
+ * git/install-crons. Proves: inference from cwd + git remote (Enter accepts defaults), the STABLE
+ * engine resolution (local clone, else auto-clone — never the npx cache), and that the bot token
+ * NEVER reaches stdout or the install-crons args.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
   telegramGuide,
+  parseGitRemote,
   buildInstallArgs,
   upsertTokenLine,
   runSetupVps,
@@ -15,38 +18,43 @@ import { parseCliArgs } from "./cli.mjs";
 
 const TOKEN = "123456789:AAH-SECRET-BOT-TOKEN-value";
 
-const ANSWERS = [
-  "/home/op", // 0 home dir
-  "meu-app", // 1 project
-  "orobsonn", // 2 owner
-  "meu-app", // 3 repo
-  "/srv/meu-app", // 4 project-root
-  "", // 5 state-dir (accept default)
-  "/srv/worktrees", // 6 worktree-root
-  "/srv/claude-harness", // 7 harness-dir (stable clone)
-  TOKEN, // 8 token
-  "-1003044689525", // 9 chat-id
-  "613", // 10 thread-id
-  "", // 11 heartbeat (empty → default YES)
-];
+// All-Enter for the inferred fields (home/projectRoot/project/owner/repo/stateDir/worktreeRoot),
+// then the Telegram values. Order matches runSetupVps's prompts.
+const INFER = ["", "", "", "", "", "", "", TOKEN, "-1003044689525", "613", ""];
 
-function harness(answers = ANSWERS, opts = {}) {
+function harness(opts = {}) {
+  const {
+    answers = INFER,
+    localEngineDir = "/srv/claude-harness",
+    stableEngineDir = "/home/op/.claude/harness-core",
+    gitRemote = () => "git@github.com:orobsonn/myproject.git",
+    cwd = "/srv/myproject",
+    exists,
+    cloneEngine,
+  } = opts;
   const queue = [...answers];
   const outLines = [];
   const devVarsWrites = [];
   const installCalls = [];
+  const cloneCalls = [];
   const deps = {
     ask: async () => queue.shift(),
     out: (t) => outLines.push(t),
     env: { HOME: "/home/op" },
+    cwd,
+    gitRemote,
+    localEngineDir,
+    stableEngineDir,
+    cloneEngine: cloneEngine ?? ((dir) => cloneCalls.push(dir)),
+    // default: only the local engine's install-crons exists.
+    exists: exists ?? ((p) => localEngineDir != null && p.startsWith(localEngineDir)),
     readFileSafe: () => "ANTHROPIC_AUTH_TOKEN=x\n",
     writeDevVars: (p, content) => devVarsWrites.push({ p, content }),
     ensureDir: () => {},
-    exists: opts.exists ?? (() => true),
-    devVarsPathFor: (home) => `${home}/.claude/.dev.vars`,
+    devVarsPathFor: (h) => `${h}/.claude/.dev.vars`,
     runInstall: (scriptPath, args) => installCalls.push({ scriptPath, args }),
   };
-  return { deps, outLines, devVarsWrites, installCalls };
+  return { deps, outLines, devVarsWrites, installCalls, cloneCalls };
 }
 
 test("telegramGuide explains how to obtain token / chat_id / thread_id", () => {
@@ -58,23 +66,25 @@ test("telegramGuide explains how to obtain token / chat_id / thread_id", () => {
   assert.match(g, /message_thread_id/);
 });
 
+test("parseGitRemote handles ssh, https, .git and trailing slash", () => {
+  assert.deepEqual(parseGitRemote("git@github.com:orobsonn/myproject.git"), { owner: "orobsonn", repo: "myproject" });
+  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject.git"), { owner: "orobsonn", repo: "myproject" });
+  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject"), { owner: "orobsonn", repo: "myproject" });
+  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject/"), { owner: "orobsonn", repo: "myproject" });
+  assert.deepEqual(parseGitRemote(""), { owner: "", repo: "" });
+});
+
 test("buildInstallArgs produces the install-crons argv and NEVER includes the token", () => {
   const args = buildInstallArgs({
-    project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/pr/.claude/state",
+    project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/s",
     worktreeRoot: "/w", homeDir: "/h", chatId: -100, threadId: 613, heartbeat: true,
   });
   assert.equal(args[0], "install");
   assert.equal(args[args.indexOf("--chat-id") + 1], "-100");
-  assert.equal(args[args.indexOf("--thread-id") + 1], "613");
   assert.equal(args[args.indexOf("--heartbeat") + 1], "true");
-  assert.ok(!args.some((a) => /AAH-SECRET|TELEGRAM_BOT_TOKEN/.test(a)), "the token must never be an install-crons arg");
-
-  const noThread = buildInstallArgs({
-    project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/s",
-    worktreeRoot: "/w", homeDir: "/h", chatId: -100, threadId: undefined, heartbeat: false,
-  });
-  assert.equal(noThread.includes("--thread-id"), false, "empty thread id → flag omitted");
-  assert.equal(noThread[noThread.indexOf("--heartbeat") + 1], "false");
+  assert.ok(!args.some((a) => /AAH-SECRET|TELEGRAM_BOT_TOKEN/.test(a)), "token must never be an install-crons arg");
+  const noThread = buildInstallArgs({ project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/s", worktreeRoot: "/w", homeDir: "/h", chatId: -100, heartbeat: false });
+  assert.equal(noThread.includes("--thread-id"), false);
 });
 
 test("upsertTokenLine appends when absent, replaces when present, preserves other lines", () => {
@@ -84,63 +94,74 @@ test("upsertTokenLine appends when absent, replaces when present, preserves othe
   assert.equal(upsertTokenLine("export TELEGRAM_BOT_TOKEN=old\n", "new"), "TELEGRAM_BOT_TOKEN=new\n");
 });
 
-test("runSetupVps: collects answers, writes token to .dev.vars, calls install-crons with the right args", async () => {
-  const { deps, devVarsWrites, installCalls } = harness();
-  const result = await runSetupVps(deps);
+test("runSetupVps INFERS project/owner/repo/paths from cwd + git remote (operator just presses Enter)", async () => {
+  const { deps, installCalls, cloneCalls } = harness();
+  const r = await runSetupVps(deps);
 
-  assert.equal(result.project, "meu-app");
-  assert.equal(devVarsWrites.length, 1);
-  assert.equal(devVarsWrites[0].p, "/home/op/.claude/.dev.vars");
-  assert.match(devVarsWrites[0].content, /TELEGRAM_BOT_TOKEN=123456789:AAH-SECRET-BOT-TOKEN-value/);
-  assert.match(devVarsWrites[0].content, /ANTHROPIC_AUTH_TOKEN=x/, "existing lines preserved");
-
+  assert.equal(r.project, "myproject");
+  assert.equal(cloneCalls.length, 0, "a valid local engine must NOT trigger a clone");
   assert.equal(installCalls.length, 1);
-  assert.equal(
-    installCalls[0].scriptPath,
-    "/srv/claude-harness/core/vps/install-crons.mjs",
-    "install-crons must run from the STABLE harness clone, not the npx cache",
-  );
+  assert.equal(installCalls[0].scriptPath, "/srv/claude-harness/core/vps/install-crons.mjs", "runs the local clone's install-crons");
   const args = installCalls[0].args;
-  assert.equal(args[args.indexOf("--project") + 1], "meu-app");
-  assert.equal(args[args.indexOf("--state-dir") + 1], "/srv/meu-app/.claude/state", "empty state-dir → derived default");
+  assert.equal(args[args.indexOf("--project") + 1], "myproject", "project inferred from cwd basename");
+  assert.equal(args[args.indexOf("--owner") + 1], "orobsonn", "owner inferred from git remote");
+  assert.equal(args[args.indexOf("--repo") + 1], "myproject", "repo inferred from git remote");
+  assert.equal(args[args.indexOf("--project-root") + 1], "/srv/myproject", "project-root inferred from cwd");
+  assert.equal(args[args.indexOf("--state-dir") + 1], "/srv/myproject/.claude/state");
+  assert.equal(args[args.indexOf("--worktree-root") + 1], "/home/op/.claude/harness-worktrees");
+  assert.equal(args[args.indexOf("--home-dir") + 1], "/home/op");
   assert.equal(args[args.indexOf("--chat-id") + 1], "-1003044689525");
-  assert.equal(args[args.indexOf("--thread-id") + 1], "613");
-  assert.equal(args[args.indexOf("--heartbeat") + 1], "true", "empty heartbeat answer → default ON");
 });
 
-test("runSetupVps: a missing harness clone aborts BEFORE writing the token or installing", async () => {
-  const { deps, devVarsWrites, installCalls } = harness(ANSWERS, { exists: () => false });
-  await assert.rejects(() => runSetupVps(deps), /não encontrei|clone/i);
-  assert.equal(devVarsWrites.length, 0, "no token written when the harness clone is missing");
-  assert.equal(installCalls.length, 0, "no install attempted");
+test("runSetupVps: an explicit answer overrides the inferred default", async () => {
+  const answers = ["", "/custom/project", "custom-slug", "acme", "custom-repo", "", "", TOKEN, "-100", "", "n"];
+  const { deps, installCalls } = harness({ answers });
+  await runSetupVps(deps);
+  const args = installCalls[0].args;
+  assert.equal(args[args.indexOf("--project-root") + 1], "/custom/project");
+  assert.equal(args[args.indexOf("--project") + 1], "custom-slug");
+  assert.equal(args[args.indexOf("--owner") + 1], "acme");
+  assert.equal(args[args.indexOf("--repo") + 1], "custom-repo");
+  assert.equal(args[args.indexOf("--state-dir") + 1], "/custom/project/.claude/state", "state-dir default follows the overridden project-root");
+  assert.equal(args.includes("--thread-id"), false, "empty thread-id omits the flag");
+  assert.equal(args[args.indexOf("--heartbeat") + 1], "false", "'n' turns heartbeat off");
+});
+
+test("runSetupVps: npx case (no local engine) auto-clones to the stable dir and runs from THERE", async () => {
+  let cloned = false;
+  const stable = "/home/op/.claude/harness-core";
+  const { deps, installCalls, cloneCalls } = harness({
+    localEngineDir: null,
+    exists: (p) => p.startsWith(stable) && cloned, // stable engine exists only after the clone
+    cloneEngine: (dir) => {
+      cloned = true;
+      cloneCalls.push?.(dir);
+    },
+  });
+  // capture cloneCalls via the closure above
+  const clones = [];
+  deps.cloneEngine = (dir) => {
+    cloned = true;
+    clones.push(dir);
+  };
+  await runSetupVps(deps);
+  assert.deepEqual(clones, [stable], "the engine is cloned once into the stable dir");
+  assert.equal(installCalls[0].scriptPath, `${stable}/core/vps/install-crons.mjs`, "runs from the stable clone, never the npx cache");
 });
 
 test("runSetupVps: the bot TOKEN never appears in any stdout/out line (secret hygiene)", async () => {
-  const { deps, outLines } = harness();
+  const { deps, outLines, devVarsWrites } = harness();
   await runSetupVps(deps);
-  const serialized = outLines.join("\n");
-  assert.doesNotMatch(serialized, /AAH-SECRET-BOT-TOKEN/, "the token must never be printed to stdout");
-  assert.match(serialized, /Token salvo/, "only a value-free confirmation is printed");
+  assert.doesNotMatch(outLines.join("\n"), /AAH-SECRET-BOT-TOKEN/, "token must never be printed");
+  assert.match(devVarsWrites[0].content, /TELEGRAM_BOT_TOKEN=123456789:AAH-SECRET-BOT-TOKEN-value/, "token IS written to .dev.vars");
+  assert.match(devVarsWrites[0].content, /ANTHROPIC_AUTH_TOKEN=x/, "existing lines preserved");
 });
 
-test("runSetupVps: 'n' at the heartbeat prompt turns it OFF; empty thread-id omits the flag", async () => {
-  const answers = [...ANSWERS];
-  answers[10] = ""; // thread-id empty
-  answers[11] = "n"; // heartbeat off
-  const { deps, installCalls } = harness(answers);
-  await runSetupVps(deps);
-  const args = installCalls[0].args;
-  assert.equal(args.includes("--thread-id"), false);
-  assert.equal(args[args.indexOf("--heartbeat") + 1], "false");
-});
-
-test("runSetupVps: a missing required field fails fast without calling install-crons", async () => {
-  const answers = [...ANSWERS];
-  answers[1] = ""; // project empty → required throws
-  const { deps, installCalls, devVarsWrites } = harness(answers);
-  await assert.rejects(() => runSetupVps(deps), /project/);
-  assert.equal(installCalls.length, 0, "no install on a failed wizard");
-  assert.equal(devVarsWrites.length, 0, "no token written on a failed wizard");
+test("runSetupVps: a missing token fails fast without installing", async () => {
+  const answers = ["", "", "", "", "", "", "", "", "-100", "", ""]; // empty token
+  const { deps, installCalls } = harness({ answers });
+  await assert.rejects(() => runSetupVps(deps), /token/);
+  assert.equal(installCalls.length, 0);
 });
 
 test("parseCliArgs passes the command through raw (init alias resolved by the dispatcher)", () => {

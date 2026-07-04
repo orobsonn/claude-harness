@@ -1,22 +1,24 @@
 /**
- * @description Interactive wizard behind `npx claude-harness setup-vps`. Runs ON the VPS: it guides
- * the operator (a non-dev) through configuring the autonomous engine + Telegram notifications —
- * collecting the project/repo coordinates and the Telegram token/chat/thread/heartbeat, EXPLAINING
- * how to obtain each Telegram value, writing the bot token to ~/.claude/.dev.vars (0600, never
- * logged, never committed), and then invoking install-crons to register the crontab + notify config.
+ * @description Interactive wizard behind `npx claude-harness setup-vps` / `node .../cli.mjs setup-vps`.
+ * Runs ON the VPS, from inside the project you want to onboard. Designed for the MINIMUM typing:
+ * it INFERS everything it can — the engine path (from the script's own location, or an auto-clone),
+ * the project (current dir), and owner/repo (the dir's git remote) — so the operator only types what
+ * cannot be guessed: the Telegram token + chat_id. Every inferred value is a prompt DEFAULT (Enter
+ * accepts, or override).
  *
- * STABLE-PATH contract (critical): the crontab install-crons writes points cron at
- * `<harnessDir>/core/vps/run-cron-a.mjs`. `npx` downloads this wizard into an EPHEMERAL cache that is
- * later purged — so the wizard must NEVER run the engine from its own (npx) location. It asks the
- * operator for the STABLE path of the harness clone on the VPS (where `core/vps/` lives), validates
- * it, and runs THAT clone's install-crons — so the registered crons keep resolving after the npx
- * cache is gone. If the harness is not cloned yet, the wizard stops with a clear clone instruction.
+ * STABLE-ENGINE contract (critical): the crontab install-crons writes points cron at
+ * `<engineDir>/core/vps/run-cron-a.mjs`, so the engine MUST live at a durable path. Resolution:
+ *   1. `deps.localEngineDir` — this script's own harness clone, when it actually contains core/vps
+ *      (the normal case: run from a cloned harness). Stable.
+ *   2. else `deps.stableEngineDir` (~/.claude/harness-core) — if core/vps is missing there (e.g. the
+ *      wizard is running from the ephemeral npx cache, which does NOT ship core/vps), it is CLONED
+ *      once via `deps.cloneEngine`. Never runs the engine from the npx cache.
  *
- * Every side-effecting seam (ask/out/fs/install-crons) is injectable so the wizard is fully testable
- * with zero real prompts/fs/crontab and the token never touches a log or a test fixture.
+ * Secret hygiene: the bot token is written to ~/.claude/.dev.vars (0600) and NEVER printed/logged/
+ * passed as an install-crons arg. Every side-effecting seam is injectable for hermetic testing.
  * Node builtins only, zero deps.
  */
-import { join } from "node:path";
+import { join, basename } from "node:path";
 
 /**
  * @description Self-explanatory guide (pt-br) shown before the Telegram questions: how to get the
@@ -55,10 +57,21 @@ export function telegramGuide() {
 }
 
 /**
- * @description Builds the install-crons argv from the collected wizard answers. The Telegram TOKEN
- * is deliberately NOT here — install-crons never receives it (it is read from disk at runtime);
- * only the non-secret chat_id/thread_id/heartbeat coordinates are passed.
- * @param {object} a - Collected answers.
+ * @description Parses `owner`/`repo` from a git remote URL (ssh `git@host:owner/repo.git`, https
+ * `https://host/owner/repo(.git)`, or trailing slash). Returns empty strings when unparseable.
+ * @param {string} url
+ * @returns {{ owner: string, repo: string }}
+ */
+export function parseGitRemote(url) {
+  const m = String(url ?? "").trim().match(/[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/);
+  return m ? { owner: m[1], repo: m[2] } : { owner: "", repo: "" };
+}
+
+/**
+ * @description Builds the install-crons argv from the collected answers. The Telegram TOKEN is
+ * deliberately NOT here — install-crons reads it from disk at runtime; only the non-secret
+ * chat_id/thread_id/heartbeat coordinates are passed.
+ * @param {object} a
  * @returns {string[]}
  */
 export function buildInstallArgs(a) {
@@ -84,8 +97,8 @@ export function buildInstallArgs(a) {
  * @description PURE upsert of the TELEGRAM_BOT_TOKEN line into existing .dev.vars content: replaces
  * an existing `TELEGRAM_BOT_TOKEN=` line (tolerating an `export ` prefix) or appends one, preserving
  * every other line. A missing/empty file yields just the token line.
- * @param {string} content - Current .dev.vars content ('' if absent).
- * @param {string} token - The bot token to store.
+ * @param {string} content
+ * @param {string} token
  * @returns {string}
  */
 export function upsertTokenLine(content, token) {
@@ -106,8 +119,8 @@ export function upsertTokenLine(content, token) {
 }
 
 /**
- * @description Trims an answer; throws a clear, field-named error when a required value is empty so
- * the wizard fails fast instead of writing a half-config. NEVER echoes a secret value.
+ * @description Trims an answer; throws a clear, field-named error when a required value is empty.
+ * NEVER echoes a secret value.
  * @param {string} value
  * @param {string} field
  * @returns {string}
@@ -119,61 +132,79 @@ function required(value, field) {
 }
 
 /**
+ * @description Resolves the STABLE engine dir (containing core/vps/install-crons.mjs): the script's
+ * own clone when valid, else a stable clone dir (cloned once if missing). See module header.
+ * @param {object} deps
+ * @param {(t: string) => void} out
+ * @returns {string} installCronsPath
+ */
+function resolveInstallCronsPath(deps, out) {
+  const rel = ["core", "vps", "install-crons.mjs"];
+  let engineDir = deps.localEngineDir || null;
+  if (!engineDir || !deps.exists(join(engineDir, ...rel))) {
+    engineDir = deps.stableEngineDir;
+    if (!deps.exists(join(engineDir, ...rel))) {
+      out(`\nMotor do harness (core/vps) não está aqui — clonando uma vez em ${engineDir}...`);
+      deps.cloneEngine(engineDir);
+    }
+  }
+  const installCronsPath = join(engineDir, ...rel);
+  if (!deps.exists(installCronsPath)) {
+    throw new Error(
+      `setup-vps: não consegui disponibilizar o motor em ${installCronsPath}. ` +
+        `Clone o harness num path estável (git clone https://github.com/orobsonn/claude-harness.git <destino>) ` +
+        `e rode de dentro dele: node <destino>/core/skills/initializing-projects/references/cli.mjs setup-vps`
+    );
+  }
+  return installCronsPath;
+}
+
+/**
  * @description Runs the interactive VPS setup wizard. All seams injected for testability.
  * @param {object} deps
- * @param {(question: string) => Promise<string>} deps.ask - TTY line prompt.
- * @param {(text: string) => void} deps.out - stdout writer.
- * @param {Record<string,string|undefined>} deps.env - environment (HOME).
- * @param {(path: string) => string} deps.readFileSafe - safe reader ('' on miss).
- * @param {(path: string, content: string) => void} deps.writeDevVars - writes ~/.claude/.dev.vars 0600.
- * @param {(dir: string) => void} deps.ensureDir - mkdir -p for ~/.claude.
- * @param {(path: string) => boolean} deps.exists - existence check for the harness clone's install-crons.mjs.
- * @param {(scriptPath: string, args: string[]) => void} deps.runInstall - execs the STABLE clone's install-crons with the built argv.
- * @param {(path: string) => string} deps.devVarsPathFor - resolves the ~/.claude/.dev.vars path for a home dir.
+ * @param {(question: string) => Promise<string>} deps.ask
+ * @param {(text: string) => void} deps.out
+ * @param {Record<string,string|undefined>} deps.env
+ * @param {string} deps.cwd - current working directory (the project being onboarded).
+ * @param {(dir: string) => string} deps.gitRemote - `git -C <dir> remote get-url origin` ('' on failure).
+ * @param {string|null} deps.localEngineDir - this script's harness clone root, or null if not a clone.
+ * @param {string} deps.stableEngineDir - fallback stable engine dir (~/.claude/harness-core).
+ * @param {(dir: string) => void} deps.cloneEngine - clones the harness (pinned) into dir.
+ * @param {(path: string) => boolean} deps.exists
+ * @param {(path: string) => string} deps.readFileSafe
+ * @param {(path: string, content: string) => void} deps.writeDevVars - 0600 write, never logs the token.
+ * @param {(dir: string) => void} deps.ensureDir
+ * @param {(path: string) => string} deps.devVarsPathFor
+ * @param {(scriptPath: string, args: string[]) => void} deps.runInstall - execs the stable install-crons.
  * @returns {Promise<{ project: string, installArgs: string[], installCronsPath: string }>}
  */
 export async function runSetupVps(deps) {
-  const { ask, out, env, readFileSafe, writeDevVars, ensureDir, runInstall, devVarsPathFor } = deps;
-  const homeDefault = env.HOME || "";
+  const { ask, out, env, readFileSafe, writeDevVars, ensureDir, devVarsPathFor, runInstall, cwd, gitRemote } = deps;
+
+  const installCronsPath = resolveInstallCronsPath(deps, out);
 
   out(
     [
       "",
-      "=== claude-harness setup-vps — motor autônomo + notificações Telegram na VPS ===",
-      "Vou te fazer algumas perguntas e no fim registro os crons e ligo as notificações.",
-      "Rode ISTO na sua VPS (é onde o motor vive). Enter aceita o valor entre [colchetes].",
+      "=== claude-harness setup-vps — motor autônomo + notificações Telegram ===",
+      "Vou inferir o máximo do projeto atual. Enter aceita o valor entre [colchetes];",
+      "você só precisa digitar o token e o chat_id do Telegram.",
       "",
     ].join("\n")
   );
 
-  const homeDir = required((await ask(`Home dir do operador [${homeDefault}]: `)) || homeDefault, "home-dir");
-  const project = required(await ask("Slug do projeto (kebab-case, ex: meu-app): "), "project");
-  const owner = required(await ask("Owner no GitHub (ex: orobsonn): "), "owner");
-  const repo = required(await ask("Nome do repo (ex: meu-app): "), "repo");
-  const projectRoot = required(await ask("Path absoluto do projeto na VPS (project-root): "), "project-root");
-  const stateDirDefault = `${projectRoot}/.claude/state`;
+  // Inferred project coordinates — the operator mostly presses Enter.
+  const homeDir = required((await ask(`Home dir [${env.HOME ?? ""}]: `)) || env.HOME, "home-dir");
+  const projectRoot = required((await ask(`Path do projeto [${cwd}]: `)) || cwd, "project-root");
+  const projectDefault = basename(projectRoot);
+  const project = required((await ask(`Slug do projeto [${projectDefault}]: `)) || projectDefault, "project");
+  const remote = parseGitRemote(gitRemote(projectRoot));
+  const owner = required((await ask(`Owner no GitHub [${remote.owner}]: `)) || remote.owner, "owner");
+  const repo = required((await ask(`Repo [${remote.repo}]: `)) || remote.repo, "repo");
+  const stateDirDefault = join(projectRoot, ".claude", "state");
   const stateDir = required((await ask(`State dir [${stateDirDefault}]: `)) || stateDirDefault, "state-dir");
-  const worktreeRoot = required(await ask("Worktree root (ex: /srv/worktrees): "), "worktree-root");
-
-  // STABLE path of the harness clone on the VPS (where core/vps/ lives). The crontab will point cron
-  // at <harnessDir>/core/vps/run-cron-a.mjs, so this MUST be a durable location — never the npx cache
-  // this wizard is running from. Validate the clone actually exists before touching anything.
-  out(
-    [
-      "",
-      "O motor (core/vps) roda a partir de um clone ESTÁVEL do harness na VPS — o crontab aponta pra ele.",
-      "Se ainda não clonou: git clone https://github.com/orobsonn/claude-harness.git <destino>",
-      "",
-    ].join("\n")
-  );
-  const harnessDir = required(await ask("Path do clone do harness na VPS (contém core/vps/): "), "harness-dir");
-  const installCronsPath = join(harnessDir, "core", "vps", "install-crons.mjs");
-  if (!deps.exists(installCronsPath)) {
-    throw new Error(
-      `setup-vps: não encontrei ${installCronsPath}. Clone o harness num path estável primeiro ` +
-        `(git clone https://github.com/orobsonn/claude-harness.git <destino>) e informe esse <destino>.`
-    );
-  }
+  const worktreeDefault = join(homeDir, ".claude", "harness-worktrees");
+  const worktreeRoot = required((await ask(`Worktree root [${worktreeDefault}]: `)) || worktreeDefault, "worktree-root");
 
   out(telegramGuide());
 
@@ -181,32 +212,29 @@ export async function runSetupVps(deps) {
   const chatId = required(await ask("chat_id do grupo (ex: -1003044689525): "), "chat-id");
   const threadId = String((await ask("message_thread_id do tópico (opcional — Enter pra pular): ")) ?? "").trim();
   const hbAnswer = String((await ask("Ativar heartbeat (ping periódico de 'nada a fazer', ~a cada 4h)? [Y/n]: ")) ?? "").trim();
-  const heartbeat = !/^n(o|ão|ao)?$/i.test(hbAnswer); // default YES
+  const heartbeat = !/^n(o|ão|ao)?$/i.test(hbAnswer);
 
-  // Persist the token to ~/.claude/.dev.vars (0600, never logged). Only a confirmation WITHOUT the
-  // value is printed.
-  ensureDir(`${homeDir}/.claude`);
-  const path = devVarsPathFor(homeDir);
-  const nextContent = upsertTokenLine(readFileSafe(path), token);
-  writeDevVars(path, nextContent);
-  out(`\n✓ Token salvo em ${path} (permissão 0600, fora do git — nunca é exibido nem logado).`);
+  // Persist the token to ~/.claude/.dev.vars (0600, never logged — only a value-free confirmation).
+  ensureDir(join(homeDir, ".claude"));
+  const devVarsPath = devVarsPathFor(homeDir);
+  writeDevVars(devVarsPath, upsertTokenLine(readFileSafe(devVarsPath), token));
+  out(`\n✓ Token salvo em ${devVarsPath} (0600, fora do git — nunca exibido nem logado).`);
 
   const installArgs = buildInstallArgs({
     project, owner, repo, projectRoot, stateDir, worktreeRoot, homeDir,
     chatId: Number(chatId), threadId: threadId || undefined, heartbeat,
   });
 
-  out(`\nRegistrando os crons + config de notify (via ${installCronsPath})...\n`);
+  out(`\nRegistrando os crons + notify (via ${installCronsPath})...\n`);
   runInstall(installCronsPath, installArgs);
 
   out(
     [
       "",
       `✓ Pronto! Projeto "${project}" instalado.`,
-      `  • Crons registrados apontando pro clone estável: ${harnessDir}/core/vps/`,
       `  • Cron A (4h) + Cron B (6h) + reaper diário no crontab.`,
       `  • Notificações Telegram: ${heartbeat ? "ON (com heartbeat)" : "ON (sem heartbeat)"}.`,
-      `  • Faça um teste: o próximo ciclo do Cron A já deve avisar no grupo.`,
+      `  • O próximo ciclo do Cron A já deve avisar no grupo.`,
       "",
     ].join("\n")
   );
