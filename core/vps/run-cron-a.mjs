@@ -43,7 +43,7 @@ import { buildScopedEnvFromDisk } from "./scoped-env-fromdisk.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
-import { makeNotifier } from "./notify-telegram.mjs";
+import { makeNotifier, summarizeIssueBody } from "./notify-telegram.mjs";
 
 /** @description Required fields every per-project VPS cron config must supply. */
 export const REQUIRED_CONFIG_FIELDS = [
@@ -157,7 +157,14 @@ export function runCronA(config, deps = {}) {
 
   // Translate the structured select result into an event (best-effort, off the critical path).
   if (selectResult && selectResult.dispatched && selectResult.issue && !dispatchFailed) {
-    safeNotify({ type: "picked", project: config.project, issue: selectResult.issue.number });
+    // Include the title + a one-line body summary so the operator sees WHAT is being implemented.
+    safeNotify({
+      type: "picked",
+      project: config.project,
+      issue: selectResult.issue.number,
+      issueTitle: selectResult.issue.title,
+      summary: summarizeIssueBody(selectResult.issue.body),
+    });
   } else if (selectResult && selectResult.dispatched === false && heartbeat) {
     safeNotify({ type: "idle", project: config.project });
   }

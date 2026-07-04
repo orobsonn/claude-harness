@@ -75,6 +75,25 @@ function refLink(ref, url) {
 }
 
 /**
+ * @description Extracts a short one-line "what is being implemented" summary from an issue body:
+ * the first substantive prose line, skipping markdown headers (`#`), bold metadata (`**Source:**`)
+ * and bare list markers, with emphasis/backticks stripped and truncated. '' when nothing suitable.
+ * @param {string} body
+ * @param {number} [max]
+ * @returns {string}
+ */
+export function summarizeIssueBody(body, max = 180) {
+  for (const raw of String(body ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue; // blank / markdown header
+    if (line.startsWith("**")) continue; // bold metadata (**Source:**, **Tier 3** —, **needs-investigation**)
+    const clean = line.replace(/^[-*]\s+/, "").replace(/\*\*/g, "").replace(/`/g, "").trim();
+    if (clean.length >= 12) return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  }
+  return "";
+}
+
+/**
  * @description PURE. Builds the short HTML message string for an event — `<emoji> [<project>]
  * <line>`. Multi-project safe: the `[<project>]` prefix is always present. Carries no issue body,
  * no secret, no token, no chat_id. Dynamic text is HTML-escaped and length-bounded.
@@ -100,8 +119,10 @@ export function formatEvent(event = {}) {
   switch (type) {
     case "idle":
       return `${prefix} nenhuma issue pronta — nada a fazer`;
-    case "picked":
-      return `${prefix} pegou issue ${issueRef}${title} — sessão iniciada`;
+    case "picked": {
+      const summaryLine = event.summary ? `\n<i>${escapeHtml(truncate(event.summary, 180))}</i>` : "";
+      return `${prefix} pegou issue ${issueRef}${title} — sessão iniciada${summaryLine}`;
+    }
     case "dispatch-failed":
       return `${prefix} falha ao despachar issue ${issueRef} — re-enfileirada`;
     case "session-done":

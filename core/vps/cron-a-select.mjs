@@ -69,8 +69,9 @@ export function cronASelect(opts) {
       "--json",
       // `body` is REQUIRED: cron-a-dispatch writes issue.body to the prompt file it feeds `claude -p`.
       // Without it dispatch writes `undefined` and every real spawn fails on the body write (the unit
-      // tests inject a body via fakes, so this only surfaced on the first live run).
-      "number,labels,createdAt,body",
+      // tests inject a body via fakes, so this only surfaced on the first live run). `title` feeds the
+      // "picked" Telegram notification so the operator sees WHAT is being implemented, not just #N.
+      "number,labels,createdAt,body,title",
     ]);
     const hasLabel = (issue, name) =>
       (issue.labels ?? []).some((label) => (label.name ?? label) === name);
