@@ -21,6 +21,18 @@
  * On invalid input, exits non-zero with a corrective stderr message.
  * NEITHER reads nor writes state — the stamp-triage hook observes the command
  * and stamps the corresponding flag into gate-state.json.
+ *
+ * Re-gate rail note (process-eye-routing / conditional re-gate): `regate-pending` is
+ * stamped for EVERY HIGH sniper fix; `regate-passed` clears it only after a re-gate returns
+ * zero blocking findings. WHAT may produce that pass is conditional on the fix's gravity and
+ * lives in orchestrating-delivery's Phase 2 step 5, NOT here — this CLI is mechanism-agnostic:
+ *   - grave HIGH fix (`isGrave(fix)`: any canonical-critical-class, sensitive-path,
+ *     re-architecture, or >1 function/seam) → the full opus fresh-virgin adversary re-gate;
+ *   - non-grave surgical HIGH fix → the light path: a red→green frozen locked_test (RED pre-fix
+ *     on the flagged assertion, GREEN post-fix — a "stays green" test is INSUFFICIENT) OR a
+ *     virgin sonnet adversary spot-check, each leaving an on-disk artifact the self-check asserts.
+ * The pending→passed diff (entry-gate) and the append-only stamp (stamp-triage) are unchanged —
+ * the rail enforces the obligation identically however the pass was earned.
  */
 
 import { realpathSync } from "node:fs";

@@ -326,3 +326,93 @@ test("dispatch section (Phase 2): executor runs in working tree under sandbox + 
     "Phase 2 dispatch step must NOT state 'isolated git worktree' as the v1 mechanism"
   );
 });
+
+// ─── Test 7 (Change 1 — process-eye-routing) ────────────────────────────────────
+/**
+ * Given: SKILL.md Model routing section.
+ * When: the per-task adversary row and the boundary rows are read.
+ * Then: the per-task adversary row FLEXES tier (references resolveEyeTier or an opus/sonnet
+ *       flex by severity/grave) and stays a Claude tier (no ollama/hand_tiers/dispatch-hand),
+ *       carries NO 'haiku' (the sonnet floor), while the boundary adversary (final dual review)
+ *       and the security rows still state opus.
+ */
+test("Model routing (Change 1): per-task adversary row flexes tier (Claude, no haiku); boundary adversary + security stay opus", () => {
+  const section = extractSection(skillMd, "Model routing");
+  assert(section.length > 0, "Model routing section not found in SKILL.md");
+  const rows = extractTableRows(section);
+
+  const perTaskAdvRow = rows.find((r) => r.toLowerCase().includes("adversary (per-task)"));
+  assert(perTaskAdvRow, "per-task adversary row not found");
+
+  // Flexes: references the resolver or an explicit severity/grave-driven opus↔sonnet flex.
+  const lower = perTaskAdvRow.toLowerCase();
+  const flexes =
+    lower.includes("resolveeyetier") ||
+    (lower.includes("opus") && lower.includes("sonnet"));
+  assert(flexes, `per-task adversary row must flex tier (resolveEyeTier or opus/sonnet), got:\n  ${perTaskAdvRow}`);
+
+  // Stays Claude — no hand/Ollama tokens.
+  for (const forbidden of ["ollama", "hand_tiers", "dispatch-hand.mjs"]) {
+    assert(!lower.includes(forbidden), `per-task adversary row must not reference '${forbidden}', got:\n  ${perTaskAdvRow}`);
+  }
+
+  // Sonnet floor: no haiku on the eye row.
+  assert(!lower.includes("haiku"), `per-task adversary row must not mention haiku (sonnet floor), got:\n  ${perTaskAdvRow}`);
+
+  // Boundary adversary (final dual review) stays opus.
+  const boundaryAdvRow = rows.find((r) => r.toLowerCase().includes("final dual review"));
+  assert(boundaryAdvRow, "boundary (final dual review) adversary row not found");
+  assert(boundaryAdvRow.toLowerCase().includes("opus"), `boundary adversary row must stay opus, got:\n  ${boundaryAdvRow}`);
+
+  // Security rows stay opus (per-task + final).
+  const securityRows = rows.filter((r) => r.toLowerCase().includes("| security"));
+  assert(securityRows.length > 0, "security row(s) not found");
+  for (const row of securityRows) {
+    assert(row.toLowerCase().includes("opus"), `security row must stay opus, got:\n  ${row}`);
+  }
+});
+
+// ─── Test 8 (Change 1) — guardrail prose survives ───────────────────────────────
+/**
+ * Given: SKILL.md Model routing section.
+ * When: read.
+ * Then: (a) the "raise effort before raising tier" note survives (#ac-1.4);
+ *       (b) it instructs measuring/instrumenting `usage` per eye (#ac-1.8).
+ */
+test("Model routing (Change 1): raise-effort-before-tier note survives and usage is instrumented per eye", () => {
+  const section = extractSection(skillMd, "Model routing");
+  assert(section.length > 0, "Model routing section not found");
+  const lower = section.toLowerCase();
+
+  assert(
+    lower.includes("raise") && lower.includes("effort") && lower.includes("tier"),
+    "Model routing must keep the 'raise effort before raising tier' note (#ac-1.4)"
+  );
+  assert(
+    lower.includes("usage per eye") || (lower.includes("usage") && lower.includes("per eye")),
+    "Model routing must instruct instrumenting `usage` PER EYE (#ac-1.8)"
+  );
+});
+
+// ─── Test 9 (Change 1) — trivial saving is by SKIPPING, never a sub-sonnet eye ───
+/**
+ * Given: SKILL.md (Model routing or Phase 2).
+ * When: read.
+ * Then: the trivial-end saving is stated as the planner NOT enabling the per-task
+ *       adversary (adversarial.enabled=false) — never a sub-sonnet eye (#ac-1.5).
+ */
+test("Change 1: trivial-end saving comes from skipping the per-task adversary (adversarial.enabled false), not a sub-sonnet eye", () => {
+  const routing = extractSection(skillMd, "Model routing");
+  const phase2 = extractSection(skillMd, "Phase 2");
+  const hay = (routing + "\n" + phase2).toLowerCase();
+
+  assert(
+    hay.includes("adversarial.enabled") && (hay.includes("false") || hay.includes("skip")),
+    "SKILL.md must state the trivial-end saving is skipping the per-task adversary (adversarial.enabled=false), not a weaker eye (#ac-1.5)"
+  );
+  // Reinforce the floor: the routing rationale must name the sonnet floor / never-below-sonnet.
+  assert(
+    hay.includes("sonnet floor") || hay.includes("never below sonnet") || hay.includes("no eye") ,
+    "SKILL.md must reaffirm the sonnet floor (no eye below sonnet)"
+  );
+});
