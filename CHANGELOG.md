@@ -15,6 +15,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.20.0] - 2026-07-04
+
+### Changed
+
+- **Revisão proporcional dos "eyes" (process-eye-routing)** — duas mudanças de custo/latência no próprio pipeline, sem enfraquecer as classes graves:
+  - **Roteamento do adversary por blast radius.** O adversary per-task deixa de rodar Opus em todo checkpoint: agora flexiona o tier via o helper puro determinístico `references/eye-tier.mjs` (`resolveEyeTier`) — **Opus** quando a task é grave (`severity` HIGH **ou** sensitive-path), **Sonnet** caso contrário (com **piso Sonnet** — nunca Haiku, nunca Ollama). Os dois gates de fronteira (spec-adversary upfront + dual-review final), o `plan-reviewer` e o `security` per-task **continuam Opus sempre**. A economia no trivial vem de **pular** o eye (`adversarial.enabled=false`), nunca de um eye sub-Sonnet. Nota "raise effort before raising tier" preservada; instrumentar `usage` **por eye** para comprovar a economia.
+  - **Re-gate condicional do sniper.** O re-gate obrigatório após fix HIGH deixa de ser sempre um adversário Opus fresh-virgin: continua **Opus completo para fixes graves** (`isGrave(fix)` = qualquer classe canônica-crítica — incluindo as irreversíveis 1/2 — **ou** sensitive-path **ou** re-arquitetura **ou** >1 função/seam; default duro de viés-pra-grave na dúvida). Para um fix HIGH **cirúrgico não-grave**, um **caminho leve**: um `locked_test` congelado que vai **red→green** por causa do fix (um "stays green" é explicitamente insuficiente) **ou** um spot-check de adversary Sonnet virgem com zero findings — cada um deixando um **artefato em disco** sob `run/` que o self-check exige. O trilho `regate-pending`→`regate-passed` permanece **inalterado e delivery-blocking**; os hooks seguem mechanism-agnostic (nenhuma mudança de lógica de hook).
+
 ## [0.19.0] - 2026-07-04
 
 ### Added
