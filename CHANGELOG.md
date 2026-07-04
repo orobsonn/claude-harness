@@ -15,6 +15,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.23.0] - 2026-07-04
+
+### Added
+
+- **Wizard interativo `npx claude-harness setup-vps`** — liga o motor autônomo + as notificações Telegram na VPS por um assistente guiado, pensado pra operador não-dev. Pergunta projeto/owner/repo/paths e o Telegram (token, chat_id, thread_id, heartbeat), e é **auto-explicativo**: mostra na hora como conseguir cada valor do Telegram (criar bot no @BotFather, ler o chat_id via `getUpdates`/@RawDataBot, achar o message_thread_id do tópico). Grava o bot token **só** em `~/.claude/.dev.vars` (0600, fora do git, nunca exibido/logado — auditoria SECURE) e registra os crons + config de notify via `install-crons`. Substitui o one-liner `node install-crons.mjs install --flags`.
+
+### Changed
+
+- **`npx claude-harness init` → `setup-local`** — o comando de vendoring do harness na máquina de dev agora se chama `setup-local` (deixa claro o par com o `setup-vps`); `init` segue funcionando como alias retrocompatível.
+- **Heartbeat do Telegram agora é ON por padrão** — o aviso periódico de "nada a fazer" (evento `idle`) passa a ser opt-**out** (`heartbeat: false` desliga), não mais opt-in. Configurar notify sem especificar heartbeat liga o ping. O `install-crons install --chat-id ...` pergunta interativamente (default sim) quando `--heartbeat` não é passado.
+
 ## [0.22.0] - 2026-07-04
 
 ### Added

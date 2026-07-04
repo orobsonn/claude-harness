@@ -253,13 +253,21 @@ docs/                 # o estudo: constraints da nuvem, auditoria, desenho
 
 ## Como usar
 
-**Primeira adoção num projeto novo — um comando:**
+**Primeira adoção num projeto novo (máquina de dev) — um comando:**
 
 ```bash
-npx @orobsonn/claude-harness init
+npx @orobsonn/claude-harness setup-local     # (alias: init)
 ```
 
 Vendora o harness no `.claude/` do diretório atual (idempotente, non-clobber — preserva `memory/`, `kaizen.md`, `settings.json`), pinado na última release. Revise e commite o `.claude/`. Por baixo é o mesmo `vendor-core` do `updating-harness`.
+
+**Ligar o motor autônomo + notificações Telegram (na VPS) — wizard interativo:**
+
+```bash
+npx @orobsonn/claude-harness setup-vps
+```
+
+Roda **na VPS**. Pergunta o projeto/repo/paths e o Telegram (token, chat_id, thread_id, heartbeat), **explica como conseguir cada valor** (BotFather, `getUpdates`, topic id), grava o token só no `~/.claude/.dev.vars` (0600, fora do git) e registra os crons + notify via `install-crons`. Notificações são opt-out e fail-open — sem token, o motor roda idêntico.
 
 Ver **[`docs/usage.md`](docs/usage.md)** — instalar/atualizar o harness num projeto (`vendor-core`), o padrão de issues (`harness-ready`), configurar a routine no Claude Code, e setar o modelo do orquestrador.
 
