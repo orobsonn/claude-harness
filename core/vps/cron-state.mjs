@@ -143,3 +143,25 @@ export function alreadyReviewed(pr, sha, opts) {
   const reviewed = readJsonRecord(reviewedFilePath(opts.stateDir));
   return Boolean(reviewed[`${pr}:${sha}`]);
 }
+
+// --- Scaffold stubs (freeze baseline) — root-keyed chain store + windowed circuit-breaker.
+// Replaced by the executor with the real implementation; throwing keeps the frozen test RED
+// while letting it COLLECT (the module still links).
+export function incrementChain(root, opts) {
+  throw new Error("not implemented");
+}
+export function readChain(root, opts) {
+  throw new Error("not implemented");
+}
+export function resetChain(root, opts) {
+  throw new Error("not implemented");
+}
+export function atCeiling(root, opts) {
+  throw new Error("not implemented");
+}
+export function recordReviewSession(opts) {
+  throw new Error("not implemented");
+}
+export function breakerTripped(opts) {
+  throw new Error("not implemented");
+}
