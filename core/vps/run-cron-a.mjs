@@ -45,7 +45,7 @@ import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
 
 /** @description Required fields every per-project VPS cron config must supply. */
-const REQUIRED_CONFIG_FIELDS = [
+export const REQUIRED_CONFIG_FIELDS = [
   "project",
   "owner",
   "repo",
