@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { isEnabled, runCodexRefutation } from "./codex-adversary.mjs";
 import { driveCrossFamily } from "./cross-family.mjs";
 // Namespace import so tests for driveCrossFamilyVerdict (not yet exported) fail at call-time,
@@ -83,6 +85,29 @@ test("driveCrossFamily: unrefuted claude-only survives", () => {
   const runRefute = ({ key }) => ({ key, refuted: false, argument: "real", refuter: "codex" });
   const r = driveCrossFamily({ taskJson: {}, claudeIssues: [claudeOnly], env, runAttack, runRefute, availability: { ok: true, reason: "" } });
   assert.ok(r.findings.map((f) => f.scope).includes("src/keep.ts"));
+});
+
+// --- CLI fail-fast (no degenerate pass) -------------------------------------
+const CLI_PATH = fileURLToPath(new URL("./cross-family.mjs", import.meta.url));
+const runCli = (args) => spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf8" });
+
+test("CLI: no args => exits non-zero with usage, never runs a degenerate pass", () => {
+  const r = runCli([]);
+  assert.notEqual(r.status, 0, "must exit non-zero when --task/--claude are absent");
+  assert.match(r.stderr, /usage: cross-family\.mjs/, "must print usage to stderr");
+  assert.equal(r.stdout, "", "must not emit a degenerate result on stdout");
+});
+
+test("CLI: --task without --claude => exits non-zero with usage", () => {
+  const r = runCli(["--task", "task.json"]);
+  assert.notEqual(r.status, 0, "must exit non-zero when --claude is missing");
+  assert.match(r.stderr, /usage: cross-family\.mjs/);
+});
+
+test("CLI: --claude without --task => exits non-zero with usage", () => {
+  const r = runCli(["--claude", "issues.json"]);
+  assert.notEqual(r.status, 0, "must exit non-zero when --task is missing");
+  assert.match(r.stderr, /usage: cross-family\.mjs/);
 });
 
 // ============================================================================
