@@ -67,3 +67,14 @@ test("missing/unknown severity defaults to the sonnet floor (never below sonnet)
   assert.equal(resolveEyeTier({ boundary: false, sensitivePath: false }), "sonnet");
   assert.equal(resolveEyeTier({ boundary: false, severity: "bogus", sensitivePath: false }), "sonnet");
 });
+
+// ─── severity is normalized: casing/whitespace never misroutes GRAVE -> sonnet ──
+test("severity high is normalized (High/HIGH/' high ') -> opus (never misroute grave down)", () => {
+  for (const variant of ["High", "HIGH", " high", "high ", "  HiGh  "]) {
+    assert.equal(
+      resolveEyeTier({ boundary: false, sensitivePath: false, severity: variant }),
+      "opus",
+      `severity '${variant}' must normalize to opus (grave), not fall through to sonnet`
+    );
+  }
+});

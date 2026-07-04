@@ -39,6 +39,10 @@
 export function resolveEyeTier({ boundary = false, sensitivePath = false, severity } = {}) {
   if (boundary === true) return "opus";
   if (sensitivePath === true) return "opus";
-  if (severity === "high") return "opus";
+  // Normalize before comparing so 'High'/'HIGH'/' high ' can never misroute a grave task
+  // DOWN to sonnet (the dangerous direction). The default-to-sonnet on an unknown severity is
+  // only safe under the harness's fixed low|medium|high vocabulary — if severity aliases
+  // (critical/P0/sev1) are ever introduced, map them here explicitly.
+  if (typeof severity === "string" && severity.toLowerCase().trim() === "high") return "opus";
   return "sonnet";
 }

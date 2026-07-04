@@ -370,11 +370,25 @@ test("Phase 2 step 5 (Change 2): isGrave(fix) — canonical class / sensitive-pa
     "grave predicate must include re-architecture / >1 function-or-seam"
   );
 
-  // The light path is explicitly forbidden for grave fixes.
+  // The light path is explicitly forbidden for grave fixes — pinned as a CO-LOCATED
+  // statement on ONE line (a token-scatter check would stay green if the guarantee sentence
+  // were deleted, since 'not'/'light path' co-occur elsewhere in the ~150-line section).
+  const graveGuaranteeLine = section
+    .split("\n")
+    .some((line) => {
+      const l = line.toLowerCase();
+      return l.includes("grave") && (l.includes("never") || l.includes("forbidden")) && l.includes("light path");
+    });
   assert(
-    (lower.includes("never") || lower.includes("forbidden") || lower.includes("not")) &&
-      lower.includes("light path"),
-    "step 5 must state a grave fix NEVER takes the light path (always the full opus re-gate)"
+    graveGuaranteeLine,
+    "step 5 must carry a single-line guarantee that a GRAVE fix NEVER takes the light path (co-located, not token-scattered)"
+  );
+
+  // The bias-to-grave default (when in doubt → grave/opus) must be stated (adversary M1).
+  assert(
+    (lower.includes("when in doubt") || lower.includes("bias-to-grave") || lower.includes("bias to grave") || lower.includes("ambiguity")) &&
+      lower.includes("grave"),
+    "step 5 must state the hard bias-to-grave default (ambiguity resolves to the full opus re-gate)"
   );
 });
 

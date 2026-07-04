@@ -344,12 +344,21 @@ test("Model routing (Change 1): per-task adversary row flexes tier (Claude, no h
   const perTaskAdvRow = rows.find((r) => r.toLowerCase().includes("adversary (per-task)"));
   assert(perTaskAdvRow, "per-task adversary row not found");
 
-  // Flexes: references the resolver or an explicit severity/grave-driven opus↔sonnet flex.
+  // Flexes with the CORRECT DIRECTION pinned: opus tied to grave/HIGH/sensitive, sonnet as the
+  // fallback (a bare opus+sonnet co-occurrence would pass even if the routing were inverted).
   const lower = perTaskAdvRow.toLowerCase();
-  const flexes =
-    lower.includes("resolveeyetier") ||
-    (lower.includes("opus") && lower.includes("sonnet"));
-  assert(flexes, `per-task adversary row must flex tier (resolveEyeTier or opus/sonnet), got:\n  ${perTaskAdvRow}`);
+  const referencesResolver = lower.includes("resolveeyetier");
+  const opusIdx = lower.indexOf("opus");
+  const sonnetIdx = lower.indexOf("sonnet");
+  const directionPinned =
+    opusIdx !== -1 &&
+    sonnetIdx !== -1 &&
+    opusIdx < sonnetIdx && // opus stated first (the grave branch), sonnet as the else
+    (lower.includes("grave") || lower.includes("high") || lower.includes("sensitive"));
+  assert(
+    referencesResolver && directionPinned,
+    `per-task adversary row must flex via resolveEyeTier with opus tied to grave/HIGH/sensitive (direction pinned), got:\n  ${perTaskAdvRow}`
+  );
 
   // Stays Claude — no hand/Ollama tokens.
   for (const forbidden of ["ollama", "hand_tiers", "dispatch-hand.mjs"]) {
