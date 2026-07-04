@@ -54,6 +54,8 @@ Split into separate tasks when:
 
 Order tasks topologically: each task's `depends_on` must reference only tasks that appear earlier in the array.
 
+**Frozen-signature rule (kaizen):** before introducing a new parameter to a function that a **later** task also touches, check whether an **earlier** task's `locked_test` already froze that function's signature. A frozen signature is read-only after freeze — a downstream task cannot change it without breaking the deterministic gate. When you need the later task to influence that function's behavior, reach for dependency injection or an alternative seam (a wrapper, a new function, a passed-in collaborator) instead of altering the pinned parameter list. Adding a parameter to a signature a prior locked_test pinned makes the later task unimplementable against the frozen test.
+
 ---
 
 ## Step 3 — Derive locked_tests from ACs
@@ -92,6 +94,7 @@ Rules:
 - Each locked_test asserts an **observable** (body / returned value / persisted state / surfaced error) — never status-or-existence alone.
 - A locked_test must be traceable to a `criterion_refs` entry on the same task.
 - Every locked_test carries a `test_path` the executor can write (within `scope_paths` or the project test dir).
+- **Multi-branch freeze rule (kaizen):** when a locked_test pins an invariant that spans multiple branches, roles, or states, it MUST assert **every** branch — one assertion per role / state / outcome. A freeze that covers only the happy path is a gap: the executor makes the single green case pass while the uncovered branches (the other role, the denied case, the empty/error state) ship unverified behind a green gate. If the invariant has N distinct outcomes, pin all N — as N assertions sharing one `test_path`, or as sibling locked_tests — never just the one that is easiest to satisfy.
 - The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
 
   > **Supersedes §3.7 'Chosen UX':** the orchestrator+compliance flow supersedes any prior description of the planner validating the test in-run. The planner's sole role is assertion-pinning; per-task fidelity validation belongs to compliance (a Claude eye).
@@ -176,6 +179,8 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 **`scope_paths`** (array of **exact file or directory paths**, min 1 — a directory entry conventionally ends with `/`, but the trailing slash is cosmetic: coverage follows **git-pathspec** semantics, so `src/handlers` and `src/handlers/` cover identically. These are **NOT globs**: the scope and allowed-write checks match by exact file OR directory prefix (by path component), not glob expansion. The same convention governs the pre-spawn guard and the capture scope check — one source of truth). The paths the executor may write or edit; the harness gate blocks writes outside them. Be specific — prefer `src/handlers/shorten.ts` (exact file) or `src/handlers/` (directory prefix) over a broad parent.
 
 **Bug-fix scope rule:** when a task is a bug fix, locate the shared function the reported symptom routes through and confirm `scope_paths` covers **every caller the fix affects** — size the fix at the root, not the ticketed call site. Patching only the path the ticket names leaves sibling callers of the same function broken.
+
+**Test-enabling scope rule for env/secret vars (kaizen):** when a new environment or secret variable is consumed in a task's `locked_tests`, `scope_paths` MUST include **all three** files that make the variable usable, never only one or two: (1) the **test-runtime config** where the var is injected for the test run (e.g. the vitest/jest config or a `wrangler`/`.dev.vars` test binding), (2) the **test env-types declaration** that types the variable for the test harness, and (3) the **runtime env types** that type it in production code. A var wired in the test config but absent from the type files leaves the test uncompilable (or the runtime untyped); scoping only a subset silently ships a half-wired variable that the frozen test cannot exercise.
 
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
