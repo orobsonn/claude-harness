@@ -237,7 +237,9 @@ export function resolveNotifyConfig(config, deps = {}) {
     chatId: notify.chatId,
     threadId: notify.threadId,
     token,
-    heartbeat: notify.heartbeat === true,
+    // Heartbeat (the "nada a fazer" idle ping) defaults ON when notify is configured — opt-OUT via
+    // an explicit `heartbeat: false`, not opt-in. So a notify block with no heartbeat key pings.
+    heartbeat: notify.heartbeat !== false,
   };
 }
 

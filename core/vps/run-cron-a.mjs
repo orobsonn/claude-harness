@@ -95,7 +95,9 @@ export function runCronA(config, deps = {}) {
   // notifier + draining before exit is the CLI main wrapper's job (mainCronA), not this root — so
   // an injected spy is observable and a project without notify is unaffected.
   const notify = deps.notify ?? (() => {});
-  const heartbeat = deps.heartbeat ?? config.notify?.heartbeat === true;
+  // Heartbeat defaults ON when notify is configured (opt-out via `heartbeat: false`); with no notify
+  // block at all it stays off (the notifier is a no-op anyway).
+  const heartbeat = deps.heartbeat ?? (config.notify ? config.notify.heartbeat !== false : false);
   // best-effort wrapper: a throwing notifier can NEVER break a cron.
   const safeNotify = (event) => {
     try {

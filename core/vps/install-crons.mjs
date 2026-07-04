@@ -26,6 +26,7 @@ import { join, dirname, basename, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 
 import { loadConfig, REQUIRED_CONFIG_FIELDS } from "./run-cron-a.mjs";
 
@@ -638,15 +639,43 @@ function parseFlags(args) {
   return flags;
 }
 
+/** @description Prompts on the TTY for a single line; resolves with the typed answer. */
+function askTTY(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (answer) => {
+    rl.close();
+    resolve(answer);
+  }));
+}
+
+/**
+ * @description Decides the heartbeat (idle "nada a fazer" ping) setting. PURE — `ask` is injectable.
+ * An explicit `--heartbeat true|false` flag always wins (non-interactive / CI). Otherwise, ONLY on a
+ * TTY do we prompt (default YES — heartbeat is ON by default). A non-TTY with no flag defaults ON.
+ * @param {{ flag: string|undefined, isTTY: boolean, ask: (q: string) => Promise<string> }} opts
+ * @returns {Promise<boolean>}
+ */
+export async function decideHeartbeat({ flag, isTTY, ask }) {
+  if (flag !== undefined) return flag === "true";
+  if (!isTTY) return true;
+  const answer = await ask(
+    "Ativar o heartbeat do Telegram (aviso periódico de \"nada a fazer\" a cada ~4h)? [Y/n] "
+  );
+  const trimmed = String(answer ?? "").trim();
+  return !/^n(o|ão|ao)?$/i.test(trimmed); // default YES: anything but an explicit "n" keeps it ON
+}
+
 /**
  * @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`.
  * `deps` is injectable so tests can observe the parsed inputs without touching real fs/crontab.
  * @param {string[]} argv
- * @param {{ installProject?: Function, uninstallProject?: Function }} [deps]
+ * @param {{ installProject?: Function, uninstallProject?: Function, isTTY?: boolean, askHeartbeat?: Function }} [deps]
  */
-export function runCli(argv, deps = {}) {
+export async function runCli(argv, deps = {}) {
   const installProjectFn = deps.installProject ?? installProject;
   const uninstallProjectFn = deps.uninstallProject ?? uninstallProject;
+  const isTTY = deps.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const askHeartbeat = deps.askHeartbeat ?? askTTY;
   const uninstallIdx = argv.indexOf("--uninstall");
   if (uninstallIdx !== -1) {
     const target = argv[uninstallIdx + 1];
@@ -680,7 +709,9 @@ export function runCli(argv, deps = {}) {
     if (flags["chat-id"] !== undefined) {
       inputs.notify = { chatId: Number(flags["chat-id"]) };
       if (flags["thread-id"] !== undefined) inputs.notify.threadId = Number(flags["thread-id"]);
-      if (flags["heartbeat"] !== undefined) inputs.notify.heartbeat = flags["heartbeat"] === "true";
+      // Heartbeat defaults ON: an explicit --heartbeat flag wins; otherwise prompt on a TTY (default
+      // YES) or default ON non-interactively. The resolved value is written so the config is explicit.
+      inputs.notify.heartbeat = await decideHeartbeat({ flag: flags["heartbeat"], isTTY, ask: askHeartbeat });
     }
     installProjectFn(inputs);
     return;
@@ -695,5 +726,8 @@ export function runCli(argv, deps = {}) {
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  runCli(process.argv.slice(2));
+  runCli(process.argv.slice(2)).catch((err) => {
+    console.error(`install-crons: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

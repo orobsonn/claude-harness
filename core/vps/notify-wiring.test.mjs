@@ -116,7 +116,25 @@ test("#ac-5.2 runCronA notifies 'idle' on dispatched:false ONLY when heartbeat i
     notify: (e) => noHb.push(e),
     heartbeat: false,
   });
-  assert.equal(noHb.length, 0, "no heartbeat → no idle notification");
+  assert.equal(noHb.length, 0, "explicit heartbeat:false → no idle notification");
+
+  // Default ON: a config with a notify block but NO heartbeat key (and no injected deps.heartbeat)
+  // → idle fires, because heartbeat defaults ON when notify is configured.
+  const defaultOn = [];
+  runCronA(
+    { ...BASE_CONFIG, notify: { chatId: -100, threadId: 613 } },
+    {
+      cronASelect: () => ({ ok: true, dispatched: false }),
+      dispatch: () => ({ ok: true }),
+      buildScopedEnvFromDisk: () => ({}),
+      ghExec: () => ({ ok: true }),
+      runLock: { acquire: () => ({ acquired: false }), release: () => {}, register: () => {} },
+      spawn: () => {},
+      counter: { increment: () => {}, read: () => 0 },
+      notify: (e) => defaultOn.push(e),
+    }
+  );
+  assert.deepEqual(defaultOn.map((e) => e.type), ["idle"], "notify block without heartbeat key → idle ON by default");
 });
 
 // ---------------------------------------------------------------------------
@@ -445,7 +463,7 @@ test("#ac-8.2 reconcileFleet carries notify into the fleet base (null-seed + lat
   assert.ok(!("notify" in plain));
 });
 
-test("#ac-8.1 runCli install branch parses --chat-id/--thread-id/--heartbeat into inputs.notify", () => {
+test("#ac-8.1 runCli install branch parses --chat-id/--thread-id/--heartbeat into inputs.notify", async () => {
   let captured;
   const argv = [
     "install", "--project", "demo", "--owner", "acme", "--repo", "demo-repo",
@@ -453,11 +471,31 @@ test("#ac-8.1 runCli install branch parses --chat-id/--thread-id/--heartbeat int
     "--worktree-root", "/srv/worktrees", "--home-dir", "/home/harness",
     "--chat-id", "-1003044689525", "--thread-id", "613", "--heartbeat", "true",
   ];
-  runCli(argv, { installProject: (inputs) => { captured = inputs; } });
+  await runCli(argv, { installProject: (inputs) => { captured = inputs; }, isTTY: false });
   assert.deepEqual(captured.notify, { chatId: -1003044689525, threadId: 613, heartbeat: true });
+
+  // --heartbeat false is honored (explicit opt-out).
+  let capturedOff;
+  const argvOff = [...argv.slice(0, 20), "--heartbeat", "false"];
+  await runCli(argvOff, { installProject: (inputs) => { capturedOff = inputs; }, isTTY: false });
+  assert.equal(capturedOff.notify.heartbeat, false);
+
+  // --chat-id with NO --heartbeat flag, non-TTY → heartbeat defaults ON.
+  let capturedDefault;
+  const argvNoHb = argv.slice(0, 20); // through --thread-id 613, no --heartbeat
+  await runCli(argvNoHb, { installProject: (inputs) => { capturedDefault = inputs; }, isTTY: false });
+  assert.equal(capturedDefault.notify.heartbeat, true, "heartbeat is ON by default when unspecified");
+
+  // On a TTY with no flag, the prompt decides (default YES on empty input).
+  let capturedPrompt;
+  await runCli(argvNoHb, { installProject: (inputs) => { capturedPrompt = inputs; }, isTTY: true, askHeartbeat: async () => "" });
+  assert.equal(capturedPrompt.notify.heartbeat, true, "empty prompt answer keeps heartbeat ON");
+  let capturedPromptNo;
+  await runCli(argvNoHb, { installProject: (inputs) => { capturedPromptNo = inputs; }, isTTY: true, askHeartbeat: async () => "n" });
+  assert.equal(capturedPromptNo.notify.heartbeat, false, "explicit 'n' at the prompt turns heartbeat OFF");
 
   // Without notify flags → no notify block (byte-identical CLI to today).
   let captured2;
-  runCli(argv.slice(0, 16), { installProject: (inputs) => { captured2 = inputs; } });
+  await runCli(argv.slice(0, 16), { installProject: (inputs) => { captured2 = inputs; }, isTTY: false });
   assert.ok(!("notify" in captured2), "no --chat-id → no notify block");
 });

@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 /**
- * @description Thin CLI wrapper for `npx claude-harness init` that vendors the harness.
- *
- * Delegates to vendor-core.mjs for the actual vendoring. Node builtins only.
- * Usage: npx claude-harness init
+ * @description Thin CLI dispatcher for `npx claude-harness`. Two commands:
+ *   - `setup-local` (alias: `init`) — vendors the harness into ./.claude on a dev machine
+ *     (delegates to vendor-core.mjs).
+ *   - `setup-vps` — interactive wizard (setup-vps.mjs) run ON the VPS: configures the autonomous
+ *     engine + Telegram notifications (token → ~/.claude/.dev.vars, then install-crons).
+ * Node builtins only.
  */
 
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync } from "node:fs";
 import { createInterface } from "node:readline";
+
+import { runSetupVps } from "./setup-vps.mjs";
 
 export const SOURCE_URL = "https://github.com/orobsonn/claude-harness.git";
 
@@ -33,7 +37,8 @@ export function isDirectCli(scriptPath) {
 }
 
 /**
- * @description Parses the command and flags from argv.
+ * @description Parses the command and flags from argv (raw — no aliasing; the `init`→`setup-local`
+ * alias is resolved by the dispatcher in main()).
  * @param {string[]} argv - The process.argv-shaped array.
  * @returns {{ command: string | undefined, withCodex: boolean }} The parsed command + flags.
  */
@@ -207,10 +212,61 @@ function askTTY(question) {
 
 // ---------- main (runs only when invoked directly as a script) ----------
 
+/**
+ * @description Real seams for the setup-vps wizard: TTY prompt, stdout, safe .dev.vars read, a
+ * 0600 write that never logs the token, mkdir -p for ~/.claude, and the install-crons invocation.
+ * install-crons.mjs is resolved relative to this file (core/vps/install-crons.mjs).
+ * @returns {object}
+ */
+function setupVpsSeams() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const installCronsPath = join(here, "..", "..", "..", "vps", "install-crons.mjs");
+  return {
+    ask: askTTY,
+    out: (t) => process.stdout.write(`${t}\n`),
+    env: process.env,
+    readFileSafe: (p) => {
+      try {
+        return readFileSync(p, "utf8");
+      } catch {
+        return "";
+      }
+    },
+    writeDevVars: (p, content) => {
+      writeFileSync(p, content, { mode: 0o600 });
+      try {
+        chmodSync(p, 0o600);
+      } catch {
+        // best-effort tighten — a pre-existing file may resist chmod under some mounts
+      }
+    },
+    ensureDir: (d) => mkdirSync(d, { recursive: true }),
+    devVarsPathFor: (home) => join(home, ".claude", ".dev.vars"),
+    runInstall: (args) => execFileSync(process.execPath, [installCronsPath, ...args], { stdio: "inherit" }),
+  };
+}
+
 async function main() {
-  const { command, withCodex: withCodexFlag } = parseCliArgs(process.argv);
-  if (command !== "init") {
-    process.stderr.write("Usage: npx claude-harness init [--with-codex]\n");
+  const { command: rawCommand, withCodex: withCodexFlag } = parseCliArgs(process.argv);
+  // `init` is a backward-compatible alias for `setup-local` (vendors the harness locally).
+  const command = rawCommand === "init" ? "setup-local" : rawCommand;
+
+  if (command === "setup-vps") {
+    try {
+      await runSetupVps(setupVpsSeams());
+    } catch (err) {
+      process.stderr.write(`[claude-harness] ${err.message}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (command !== "setup-local") {
+    process.stderr.write(
+      "Usage:\n" +
+        "  npx claude-harness setup-local [--with-codex]   # vendora o harness no projeto (máquina de dev)\n" +
+        "  npx claude-harness setup-vps                    # wizard interativo: motor + notificações Telegram (na VPS)\n"
+    );
     process.exit(1);
   }
 
