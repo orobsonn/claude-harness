@@ -79,6 +79,8 @@ EOF
 )"
 ```
 
+**Machine-readable verdict block (HEADLESS, AC5.1):** in HEADLESS the orchestrator's Phase 3 final dual review already computed the CLEAN/BLOCKED verdict block via `formatVerdictBlock` — embed that block verbatim into the PR body (near the Summary/Test plan) so a headless Cron B can read "safe to merge?" without re-deriving delivery state from prose. Before embedding, run your own delivery-time orphan-freeze / open-risk check (step 1 above); if it trips, apply `downgradeVerdictForDelivery` to the received block — **downgrade-only** (CLEAN→BLOCKED with the finding named), never upgrading a BLOCKED block to CLEAN.
+
 ### 5. Merge (only if authorized)
 ```bash
 gh pr merge --squash --delete-branch

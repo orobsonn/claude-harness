@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Entrega autônoma por VPS (cron-driven)** — substitui as Cloud Routines por um motor self-hosted: dois crons por projeto + um reaper compartilhado que rodam o pipeline do harness sem operador. O Cron A pega a issue `harness:ready` mais antiga, marca `in-progress`, roda a sessão autônoma (`claude -p --permission-mode auto`, headless-local, mãos baratas Ollama ativas) num git worktree isolado e abre um PR rascunho; o Cron B revisa o PR e faz **merge automático** quando o veredito do dual-review é CLEAN (gate de autor fail-closed + merge preso ao SHA revisado), senão comenta o bloqueio; o reaper mata sessões penduradas (watchdog de tempo), recupera runs que crasharam e limpa worktrees órfãos. Inclui trava de concorrência atômica (single-winner via `mkdir`+`rename`, com defesa em 3 camadas), isolamento de secret por projeto (env-scoping), máquina de estados da issue (`done`/`blocked`/re-fila com teto de retentativas) e persistência do veredito CLEAN/BLOCKED no corpo do PR — o único toque aditivo no pipeline existente. Código em `core/vps/` (15 módulos, 66 testes), runnable via `run-cron-a`/`run-cron-b`/`run-reaper`. O instalador que registra o crontab por projeto é follow-up.
+
 ### Changed
 
 ### Fixed
