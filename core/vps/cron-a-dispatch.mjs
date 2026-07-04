@@ -48,9 +48,18 @@
  *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment.
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
-import { writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, rmSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+
+/**
+ * @description Absolute path to the graceful-exit handler. The session command invokes it with the
+ * node binary and this absolute path — NOT a bare `cron-a-exit` command, which is not on PATH and
+ * would fail command-not-found, leaving the run orphaned (issue in-progress, lock held, files
+ * uncleaned) for the reaper to recover instead of the intended graceful exit.
+ */
+const CRON_A_EXIT_PATH = join(dirname(fileURLToPath(import.meta.url)), "cron-a-exit.mjs");
 
 /**
  * @description Fixed autonomous-trigger prefix prepended to the issue body on claude's stdin.
@@ -93,7 +102,8 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
   return (
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
     `{ printf '%s\\n\\n' '${TRIGGER_PROMPT}'; cat < ${shellQuoteSingle(bodyFile)}; } | ` +
-    `claude -p --permission-mode auto; cron-a-exit ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+    `claude -p --permission-mode auto; ` +
+    `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
 
@@ -180,10 +190,12 @@ export function dispatch(issue, opts) {
   // can notify session-done/blocked/failed. Only chatId/threadId/project — NEVER the Telegram
   // token (cron-a-exit reads that from ~/.claude/.dev.vars at runtime). Guarded on notify presence
   // so a project without notify writes a byte-identical env-file.
+  // The project name is always threaded (non-secret) so cron-a-exit knows which project's prefix to
+  // use even when the chat/thread come from ~/.claude/.dev.vars rather than config.notify.
+  env.HARNESS_NOTIFY_PROJECT = project;
   if (notify && notify.chatId != null && notify.chatId !== "") {
     env.HARNESS_NOTIFY_CHATID = String(notify.chatId);
     if (notify.threadId != null) env.HARNESS_NOTIFY_THREADID = String(notify.threadId);
-    env.HARNESS_NOTIFY_PROJECT = project;
   }
 
   // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach
@@ -223,6 +235,23 @@ export function dispatch(issue, opts) {
       // best-effort cleanup of the short-lived env-file
     }
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+  }
+
+  // 1b) git worktree only checks out TRACKED files. When `.claude` is gitignored (e.g. the harness
+  //      source repo), the vendored harness — skills, agents, entry policy, hooks, settings — is
+  //      ABSENT from the worktree, so the spawned `claude -p` runs with NO pipeline (no
+  //      triaging-requests, no orchestrating-delivery, no planner/adversary/plan-reviewer/cheap
+  //      hands). Copy it in from projectRoot when the worktree lacks it, so the session actually runs
+  //      the harness. Best-effort: a project without .claude simply has nothing to copy, and a copy
+  //      hiccup must never fail the dispatch.
+  try {
+    const claudeSrc = join(projectRoot, ".claude");
+    const claudeDst = join(worktreePath, ".claude");
+    if (existsSync(claudeSrc) && !existsSync(claudeDst)) {
+      spawn("cp", ["-a", claudeSrc, claudeDst], { cwd: projectRoot, env });
+    }
+  } catch {
+    // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
   }
 
   // 2) Write the issue body to a file (byte-identical) — delivered via stdin redirect, never

@@ -194,6 +194,29 @@ test("cronASelect: the relabel gh call for the picked issue occurs BEFORE dispat
   );
 });
 
+test("cronASelect: fetches the issue body and passes it to dispatch (dispatch needs it for the claude -p prompt file)", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const gh = makeFakeGh(callLog, {
+    issues: [{ number: 7, labels: ["harness:ready"], body: "the issue body\nwith detail" }],
+  });
+  const dispatch = makeFakeDispatch(callLog);
+
+  cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  // The list query MUST request `body` — dispatch writes it to the prompt file it feeds `claude -p`.
+  const listCall = callLog.find((e) => e.type === "gh" && e.args[0] === "issue" && e.args[1] === "list");
+  const jsonFields = listCall.args[listCall.args.indexOf("--json") + 1].split(",");
+  assert.ok(jsonFields.includes("body"), "the gh issue list --json fields must include `body`");
+
+  const dispatchEntry = callLog.find((e) => e.type === "dispatch");
+  assert.equal(
+    dispatchEntry.issue.body,
+    "the issue body\nwith detail",
+    "dispatch must receive the picked issue's body (else the spawn writes an undefined prompt file)"
+  );
+});
+
 test("cronASelect: with no open harness:ready issue left after excluding in-progress/blocked, the run-lock is released and dispatch is NEVER called (no relabel either)", () => {
   const callLog = makeCallLog();
   const runLock = makeFakeRunLock(callLog);

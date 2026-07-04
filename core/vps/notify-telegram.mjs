@@ -30,6 +30,7 @@ const EMOJI = {
   picked: "🎯",
   "dispatch-failed": "⚠️",
   "session-done": "✅",
+  "session-requeued": "🔁",
   blocked: "🚧",
   failed: "❌",
   "pr-merged": "🟢",
@@ -105,6 +106,8 @@ export function formatEvent(event = {}) {
       return `${prefix} falha ao despachar issue ${issueRef} — re-enfileirada`;
     case "session-done":
       return `${prefix} issue ${issueRef} concluída → PR ${prRef ?? "aberto"}`;
+    case "session-requeued":
+      return `${prefix} issue ${issueRef} — sessão terminou sem PR, re-enfileirada pra nova tentativa`;
     case "blocked":
       return `${prefix} issue ${issueRef} BLOQUEADA — precisa de input humano${reason}`;
     case "failed":
@@ -225,22 +228,39 @@ export function readTelegramToken({ homeDir, readFileSafe = defaultReadFileSafe 
  * @returns {{ chatId: number|string, threadId?: number|string, token: string, heartbeat: boolean } | null}
  */
 export function resolveNotifyConfig(config, deps = {}) {
-  const notify = config?.notify;
-  if (!notify || notify.chatId == null || notify.chatId === "") {
-    return null;
+  const readFileSafe = deps.readFileSafe ?? defaultReadFileSafe;
+  let vars = {};
+  try {
+    vars = parseDevVars(readFileSafe(join(deps.homeDir ?? "", ".claude", ".dev.vars")));
+  } catch {
+    vars = {};
   }
-  const token = readTelegramToken({ homeDir: deps.homeDir, readFileSafe: deps.readFileSafe });
+  const token = vars.TELEGRAM_BOT_TOKEN || "";
   if (!token) {
     return null;
   }
-  return {
-    chatId: notify.chatId,
-    threadId: notify.threadId,
-    token,
-    // Heartbeat (the "nada a fazer" idle ping) defaults ON when notify is configured — opt-OUT via
-    // an explicit `heartbeat: false`, not opt-in. So a notify block with no heartbeat key pings.
-    heartbeat: notify.heartbeat !== false,
-  };
+  // chatId/threadId: the per-project config.notify wins; otherwise fall back to ~/.claude/.dev.vars
+  // (TELEGRAM_CHAT_ID / TELEGRAM_THREAD_ID) so putting ALL Telegram values in .dev.vars just works —
+  // the operator does not have to duplicate the destination into every project config.
+  const notify = config?.notify ?? {};
+  const chatId =
+    notify.chatId != null && notify.chatId !== ""
+      ? notify.chatId
+      : vars.TELEGRAM_CHAT_ID !== undefined && vars.TELEGRAM_CHAT_ID !== ""
+        ? Number(vars.TELEGRAM_CHAT_ID)
+        : undefined;
+  if (chatId == null || Number.isNaN(chatId)) {
+    return null;
+  }
+  const threadId =
+    notify.threadId != null && notify.threadId !== ""
+      ? notify.threadId
+      : vars.TELEGRAM_THREAD_ID
+        ? Number(vars.TELEGRAM_THREAD_ID)
+        : undefined;
+  // Heartbeat (the "nada a fazer" idle ping) defaults ON — opt-OUT via an explicit `heartbeat: false`.
+  const heartbeat = notify.heartbeat !== false;
+  return { chatId, threadId, token, heartbeat };
 }
 
 /**

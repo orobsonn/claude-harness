@@ -287,15 +287,19 @@ export async function notifyExit(outcome, deps = {}) {
   const makeNotifierFn = deps.makeNotifier ?? makeNotifier;
   try {
     if (!outcome) return;
+    const project = env.HARNESS_NOTIFY_PROJECT;
+    if (!project) return; // not an engine-dispatched session (no project threaded) — no-op
     const chatId = env.HARNESS_NOTIFY_CHATID;
-    if (!chatId) return; // notify not configured for this session — no-op
-    const project = env.HARNESS_NOTIFY_PROJECT || "?";
     const config = {
       homeDir: env.HOME,
-      notify: {
-        chatId: Number(chatId),
-        threadId: env.HARNESS_NOTIFY_THREADID ? Number(env.HARNESS_NOTIFY_THREADID) : undefined,
-      },
+      // config.notify (from the env-file) overrides; when the chat/thread were NOT threaded, makeNotifier
+      // falls back to ~/.claude/.dev.vars (TELEGRAM_CHAT_ID/THREAD_ID) — so putting them in .dev.vars works.
+      notify: chatId
+        ? {
+            chatId: Number(chatId),
+            threadId: env.HARNESS_NOTIFY_THREADID ? Number(env.HARNESS_NOTIFY_THREADID) : undefined,
+          }
+        : undefined,
     };
     const { notify, drain } = makeNotifierFn(config, { homeDir: env.HOME });
     try {
@@ -306,8 +310,11 @@ export async function notifyExit(outcome, deps = {}) {
         notify({ type: "blocked", project, issue: outcome.issueNumber, reason: outcome.finding });
       } else if (outcome.outcome === "failed") {
         notify({ type: "failed", project, issue: outcome.issueNumber });
+      } else if (outcome.outcome === "requeued") {
+        // Every run finish is reported so the operator always knows what happened — including the
+        // transient "session ended without a PR, will retry" case.
+        notify({ type: "session-requeued", project, issue: outcome.issueNumber });
       }
-      // "requeued" is transient (a clean retry) — intentionally not notified to avoid noise.
     } finally {
       await drain();
     }

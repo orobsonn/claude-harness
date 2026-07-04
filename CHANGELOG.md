@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Três regras de checklist no `creating-plans`** (fecha #93, #94, #98) — o planner agora sabe: (a) incluir todos os arquivos que tornam uma env/secret var usável em `scope_paths`, não só os 1-2 que o teste importa direto; (b) nunca adicionar um parâmetro posicional obrigatório a uma função cuja assinatura já foi pinada por um `locked_test` de tarefa anterior (preferir default opcional ou DI); (c) exigir que um `locked_test` cubra TODOS os branches de um invariante multi-estado, não só o happy-path. Documentação apenas — nenhum comportamento de código muda.
+
 ### Changed
 
 ### Fixed

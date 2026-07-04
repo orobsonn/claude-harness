@@ -407,9 +407,14 @@ test("dispatch: the tmux session command runs the graceful cron-a-exit handler a
     assert.ok(sessionCommand, "the tmux argv must carry a composed session command string");
 
     const claudeIndex = sessionCommand.indexOf("claude -p");
-    const exitIndex = sessionCommand.indexOf(`cron-a-exit 42 ${worktreePath}`);
+    // The exit handler is invoked as `node <abs>/cron-a-exit.mjs 42 <worktree> ...` — NOT a bare
+    // `cron-a-exit` command, which is not on PATH and would fail command-not-found (leaving the run
+    // orphaned instead of gracefully relabeled + cleaned).
+    const exitIndex = sessionCommand.indexOf("cron-a-exit.mjs");
     assert.notEqual(claudeIndex, -1, "the session command must invoke claude -p");
-    assert.notEqual(exitIndex, -1, "the session command must invoke cron-a-exit 42 <worktree>");
+    assert.notEqual(exitIndex, -1, "the session command must invoke node .../cron-a-exit.mjs");
+    assert.ok(sessionCommand.includes("node "), "the exit handler must run via the node binary, not a bare command");
+    assert.ok(sessionCommand.includes(`42 ${worktreePath} `), "the exit handler must receive the issue number + worktree path");
     assert.ok(claudeIndex < exitIndex, "cron-a-exit must be composed AFTER the claude -p invocation, so it fires on the session's own termination");
   } finally {
     cleanup();
