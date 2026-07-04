@@ -1,73 +1,591 @@
 #!/usr/bin/env node
 /**
- * @description VPS cron installer — THROWING SCAFFOLD (freeze baseline). Exports the exact named
- * symbols install-crons.test.mjs imports so the frozen suite COLLECTS (>0 tests) and stays
- * legitimately RED until the executor replaces each body with the real implementation. Every
- * export throws "not implemented" — no logic is committed at freeze time.
+ * @description VPS cron installer — registers/unregisters a project's per-project cron jobs
+ * (Cron A + Cron B) and the ONE shared reaper cron in the operator's crontab, plus the matching
+ * JSON configs under `~/.claude/harness-crons/`. Mirrors the run-cron-a.mjs seam idiom: every
+ * side-effecting seam is injectable (`deps.x ?? realX`) so the frozen suite drives pure transforms
+ * with plain strings/objects and the composition roots (installProject/uninstallProject) with
+ * in-memory fakes — zero real crontab/fs mutation from tests. Node builtins only, zero deps.
+ *
+ * Path formulas (POSIX single-operator VPS; Windows-style paths fail isAbsolute → rejected):
+ *   - per-project config: <homeDir>/.claude/harness-crons/<project>.json
+ *   - reaper fleet config: <homeDir>/.claude/harness-crons/reaper.json
+ *   - install lock:        <homeDir>/.claude/harness-crons/.install.lock
  */
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+} from "node:fs";
+import { join, dirname, basename, isAbsolute } from "node:path";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-const NOT_IMPLEMENTED = "install-crons: not implemented";
+import { loadConfig, REQUIRED_CONFIG_FIELDS } from "./run-cron-a.mjs";
 
-export function validateInstallCoordinates() {
-  throw new Error(NOT_IMPLEMENTED);
+const HARNESS_CRONS_SUBDIR = ".claude/harness-crons";
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const NAME_TOKEN = /^[A-Za-z0-9._-]+$/;
+const RESERVED_PROJECT = "reaper";
+
+/** @description Absolute scriptDir the crontab lines invoke; injectable via deps.scriptDir. */
+const DEFAULT_SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** @description Per-project config path — the single join() formula shared by both roots. */
+function perProjectConfigPath(homeDir, project) {
+  return join(homeDir, HARNESS_CRONS_SUBDIR, `${project}.json`);
 }
 
-export function generateProjectConfig() {
-  throw new Error(NOT_IMPLEMENTED);
+/** @description Reaper fleet config path — the single join() formula shared by both roots. */
+function fleetConfigPath(homeDir) {
+  return join(homeDir, HARNESS_CRONS_SUBDIR, "reaper.json");
 }
 
-export function renderProjectBlock() {
-  throw new Error(NOT_IMPLEMENTED);
+/** @description Install-lock path — the single join() formula the lock seam guards. */
+function installLockPath(homeDir) {
+  return join(homeDir, HARNESS_CRONS_SUBDIR, ".install.lock");
 }
 
-export function renderReaperBlock() {
-  throw new Error(NOT_IMPLEMENTED);
+// ---------------------------------------------------------------------------------------------
+// Pure transforms (seam-free)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * @description Validates raw install coordinates into a known-field coords object, or throws an
+ * Error naming ONLY the offending field (never echoing its raw value — a control char must never
+ * reach a log). Stricter superset of loadConfig's presence check: project must be a slug and not
+ * the reserved "reaper"; owner/repo/optional harnessAuthorLogin must be safe name tokens;
+ * projectRoot/stateDir/worktreeRoot/homeDir must be absolute; no control char in any string field.
+ * @param {object} inputs
+ * @returns {{project:string,owner:string,repo:string,projectRoot:string,stateDir:string,worktreeRoot:string,homeDir:string,harnessAuthorLogin?:string}}
+ */
+export function validateInstallCoordinates(inputs) {
+  const stringFields = [
+    "project",
+    "owner",
+    "repo",
+    "projectRoot",
+    "stateDir",
+    "worktreeRoot",
+    "homeDir",
+  ];
+  for (const field of stringFields) {
+    const value = inputs[field];
+    if (typeof value !== "string" || value.length === 0 || CONTROL_CHAR.test(value)) {
+      throw new Error(`invalid ${field}`);
+    }
+  }
+  const hasAuthor = inputs.harnessAuthorLogin !== undefined && inputs.harnessAuthorLogin !== null;
+  if (hasAuthor) {
+    if (typeof inputs.harnessAuthorLogin !== "string" || CONTROL_CHAR.test(inputs.harnessAuthorLogin)) {
+      throw new Error("invalid harnessAuthorLogin");
+    }
+  }
+
+  if (!PROJECT_SLUG.test(inputs.project) || inputs.project === RESERVED_PROJECT) {
+    throw new Error("invalid project");
+  }
+  for (const field of ["owner", "repo"]) {
+    if (!NAME_TOKEN.test(inputs[field])) throw new Error(`invalid ${field}`);
+  }
+  if (hasAuthor && !NAME_TOKEN.test(inputs.harnessAuthorLogin)) {
+    throw new Error("invalid harnessAuthorLogin");
+  }
+  for (const field of ["projectRoot", "stateDir", "worktreeRoot", "homeDir"]) {
+    if (!isAbsolute(inputs[field])) throw new Error(`invalid ${field}`);
+  }
+
+  const coords = {
+    project: inputs.project,
+    owner: inputs.owner,
+    repo: inputs.repo,
+    projectRoot: inputs.projectRoot,
+    stateDir: inputs.stateDir,
+    worktreeRoot: inputs.worktreeRoot,
+    homeDir: inputs.homeDir,
+  };
+  if (hasAuthor) coords.harnessAuthorLogin = inputs.harnessAuthorLogin;
+  return coords;
 }
 
-export function upsertBlock() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Produces the per-project config object with keys in exactly REQUIRED_CONFIG_FIELDS
+ * order (+ harnessAuthorLogin last iff present). Never reads any token or secret — derived purely
+ * from validated coords.
+ * @param {object} coords
+ * @returns {object}
+ */
+export function generateProjectConfig(coords) {
+  const config = {};
+  for (const field of REQUIRED_CONFIG_FIELDS) {
+    config[field] = coords[field];
+  }
+  if (coords.harnessAuthorLogin !== undefined && coords.harnessAuthorLogin !== null) {
+    config.harnessAuthorLogin = coords.harnessAuthorLogin;
+  }
+  return config;
 }
 
-export function removeBlock() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Renders the fenced crontab block for a project: Cron A (every 4h) and Cron B
+ * (every 6h) invoking the run-cron scripts with absolute paths, wrapped in literal
+ * `# >>> harness:<project> >>>` / `# <<< harness:<project> <<<` fence lines. No trailing newline.
+ * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string}} args
+ * @returns {string}
+ */
+export function renderProjectBlock({ project, nodeBin, scriptDir, configPath }) {
+  const cronA = `0 */4 * * * ${nodeBin} ${join(scriptDir, "run-cron-a.mjs")} --config ${configPath}`;
+  const cronB = `0 */6 * * * ${nodeBin} ${join(scriptDir, "run-cron-b.mjs")} --config ${configPath}`;
+  return [`# >>> harness:${project} >>>`, cronA, cronB, `# <<< harness:${project} <<<`].join("\n");
 }
 
-export function listRegisteredProjects() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Renders the shared reaper's fenced crontab block: a single 0 3 * * * run-reaper line
+ * inside the literal harness:reaper fence. No trailing newline.
+ * @param {{nodeBin:string,scriptDir:string,reaperConfigPath:string}} args
+ * @returns {string}
+ */
+export function renderReaperBlock({ nodeBin, scriptDir, reaperConfigPath }) {
+  const line = `0 3 * * * ${nodeBin} ${join(scriptDir, "run-reaper.mjs")} --config ${reaperConfigPath}`;
+  return ["# >>> harness:reaper >>>", line, "# <<< harness:reaper <<<"].join("\n");
 }
 
-export function reconcileFleet() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Removes any block delimited by the marker's literal fence lines, matched by
+ * FULL-LINE equality only (never substring/regex). Every other line is byte-preserved; the two
+ * neighbors of a removed block are joined by exactly one newline (no glue, no accumulating blank).
+ * @param {string} crontabText
+ * @param {string} marker - e.g. "harness:demo"
+ * @returns {string}
+ */
+export function removeBlock(crontabText, marker) {
+  const opener = `# >>> ${marker} >>>`;
+  const closer = `# <<< ${marker} <<<`;
+  const lines = crontabText.split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i] === opener) {
+      let j = i + 1;
+      while (j < lines.length && lines[j] !== closer) j++;
+      if (j < lines.length) {
+        i = j + 1; // skip opener..closer inclusive
+        continue;
+      }
+      // Unterminated fence: drop only the opener line, keep the rest.
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  return out.join("\n");
 }
 
-export function removeFromFleetConfig() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Idempotently inserts/replaces the marker's block: removes any existing occurrence
+ * (literal fence) then appends the fresh block. Output ends in exactly one newline; an inserted
+ * block never glues to a preceding line and never leaves a leading blank on an empty crontab.
+ * @param {string} crontabText
+ * @param {string} marker
+ * @param {string} blockText
+ * @returns {string}
+ */
+export function upsertBlock(crontabText, marker, blockText) {
+  const block = blockText.replace(/\n+$/, "");
+  const base = removeBlock(crontabText, marker).replace(/\n+$/, "");
+  if (base === "") return `${block}\n`;
+  return `${base}\n${block}\n`;
 }
 
-export function readConfigFile() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Lists every registered project name from the crontab's literal opener fence lines,
+ * excluding the shared reaper. Full-line match only.
+ * @param {string} crontabText
+ * @returns {string[]}
+ */
+export function listRegisteredProjects(crontabText) {
+  const names = [];
+  for (const line of crontabText.split("\n")) {
+    const match = /^# >>> harness:(.+) >>>$/.exec(line);
+    if (match && match[1] !== RESERVED_PROJECT) names.push(match[1]);
+  }
+  return names;
 }
 
-export function readCrontab() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Builds the reconciled fleet config for the reaper. A null existing fleet seeds a
+ * fresh one from coords. An existing fleet whose top owner/repo differs from coords throws BEFORE
+ * any write (single-repo invariant) and never mutates its input. The projects[] array is reconciled
+ * to only currently-registered projects plus the one being installed (ghosts whose crontab block is
+ * absent are dropped), upserting the current project in place; top owner/repo stay constant.
+ * @param {object|null} existingFleet
+ * @param {string[]} registeredProjects
+ * @param {object} coords
+ * @returns {object}
+ */
+export function reconcileFleet(existingFleet, registeredProjects, coords) {
+  const currentEntry = {
+    project: coords.project,
+    projectRoot: coords.projectRoot,
+    stateDir: coords.stateDir,
+  };
+
+  if (existingFleet == null) {
+    return {
+      project: coords.project,
+      owner: coords.owner,
+      repo: coords.repo,
+      projectRoot: coords.projectRoot,
+      stateDir: coords.stateDir,
+      worktreeRoot: coords.worktreeRoot,
+      homeDir: coords.homeDir,
+      projects: [currentEntry],
+    };
+  }
+
+  if (existingFleet.owner !== coords.owner) throw new Error("owner mismatch with existing fleet");
+  if (existingFleet.repo !== coords.repo) throw new Error("repo mismatch with existing fleet");
+
+  const keep = new Set(registeredProjects);
+  keep.add(coords.project);
+  const existingProjects = Array.isArray(existingFleet.projects) ? existingFleet.projects : [];
+  const reconciled = [];
+  let placedCurrent = false;
+  for (const entry of existingProjects) {
+    if (!entry || !keep.has(entry.project)) continue; // drop ghost / malformed
+    if (entry.project === coords.project) {
+      reconciled.push({ ...currentEntry });
+      placedCurrent = true;
+    } else {
+      reconciled.push({
+        project: entry.project,
+        projectRoot: entry.projectRoot,
+        stateDir: entry.stateDir,
+      });
+    }
+  }
+  if (!placedCurrent) reconciled.push({ ...currentEntry });
+
+  return { ...existingFleet, projects: reconciled };
 }
 
-export function writeCrontab() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Returns a copy of the fleet with the named project's entry removed; base fields and
+ * other entries are untouched (never mutates the input).
+ * @param {object} fleet
+ * @param {string} project
+ * @returns {object}
+ */
+export function removeFromFleetConfig(fleet, project) {
+  const projects = Array.isArray(fleet.projects) ? fleet.projects : [];
+  return { ...fleet, projects: projects.filter((entry) => entry.project !== project) };
 }
 
-export function atomicWriteConfig() {
-  throw new Error(NOT_IMPLEMENTED);
+// ---------------------------------------------------------------------------------------------
+// Real seams (injectable; default real wiring)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * @description Reads a JSON config file, returning the parsed object or null when absent (ENOENT).
+ * @param {string} filePath
+ * @param {object} [deps]
+ * @returns {object|null}
+ */
+export function readConfigFile(filePath, deps = {}) {
+  const readFileSyncFn = deps.readFileSync ?? readFileSync;
+  let raw;
+  try {
+    raw = readFileSyncFn(filePath, "utf8");
+  } catch (err) {
+    if (err && err.code === "ENOENT") return null;
+    throw err;
+  }
+  return JSON.parse(raw);
 }
 
-export function withInstallLock() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Reads the operator crontab via `crontab -l` under LC_ALL=C. Exit 0 → stdout; a
+ * non-zero exit whose stderr matches "no crontab for " (benign empty-crontab signal) → ""; ANY
+ * other non-zero → throw (catastrophic guard: a permission error must never look like "empty").
+ * @param {object} [deps]
+ * @returns {string}
+ */
+export function readCrontab(deps = {}) {
+  const spawnSyncFn = deps.spawnSync ?? spawnSync;
+  const res = spawnSyncFn("crontab", ["-l"], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  if (res.error) throw res.error;
+  if (res.status === 0) return res.stdout ?? "";
+  const stderr = res.stderr ?? "";
+  if (/no crontab for /.test(stderr)) return "";
+  throw new Error(`crontab -l failed (status=${res.status})`);
 }
 
-export function installProject() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Writes the operator crontab by piping text to `crontab -` under LC_ALL=C. The piped
+ * text is coerced to end in exactly one newline. A non-zero exit or spawn error throws.
+ * @param {string} text
+ * @param {object} [deps]
+ * @returns {void}
+ */
+export function writeCrontab(text, deps = {}) {
+  const spawnSyncFn = deps.spawnSync ?? spawnSync;
+  const input = `${text.replace(/\n+$/, "")}\n`;
+  const res = spawnSyncFn("crontab", ["-"], {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  if (res.error) throw res.error;
+  if (res.status !== 0) throw new Error(`crontab - failed (status=${res.status})`);
 }
 
-export function uninstallProject() {
-  throw new Error(NOT_IMPLEMENTED);
+/**
+ * @description Atomically writes a JSON config: mkdir -p the parent, write to a sibling tmp file in
+ * the SAME directory, then rename over the final path. Content is JSON.stringify(obj,null,2) + a
+ * trailing newline. A write failure removes the tmp file and rethrows — the final path is never
+ * renamed after a failed write, never truncated directly.
+ * @param {string} filePath
+ * @param {object} obj
+ * @param {object} [deps]
+ * @returns {void}
+ */
+export function atomicWriteConfig(filePath, obj, deps = {}) {
+  const mkdirSyncFn = deps.mkdirSync ?? mkdirSync;
+  const writeFileSyncFn = deps.writeFileSync ?? writeFileSync;
+  const renameSyncFn = deps.renameSync ?? renameSync;
+  const rmSyncFn = deps.rmSync ?? rmSync;
+
+  const dir = dirname(filePath);
+  mkdirSyncFn(dir, { recursive: true });
+  const tmpPath = join(dir, `${basename(filePath)}.tmp-${process.pid}-${randomUUID()}`);
+  const content = `${JSON.stringify(obj, null, 2)}\n`;
+  try {
+    writeFileSyncFn(tmpPath, content, "utf8");
+  } catch (err) {
+    try {
+      rmSyncFn(tmpPath, { force: true });
+    } catch {
+      // best-effort tmp cleanup; never mask the original write failure
+    }
+    throw err;
+  }
+  renameSyncFn(tmpPath, filePath);
+}
+
+/**
+ * @description Runs `fn` while holding the exclusive install lock. mkdir -p the lock's parent BEFORE
+ * openSync(lock,"wx") (first-ever install has no dir yet); an EEXIST throws "install already in
+ * progress" WITHOUT unlinking (it is another installer's lock). On success or failure the lock this
+ * call created is closed and unlinked in a finally — the original error from `fn` is never masked.
+ * @param {string} homeDir
+ * @param {Function} fn
+ * @param {object} [deps]
+ * @returns {any}
+ */
+export function withInstallLock(homeDir, fn, deps = {}) {
+  const mkdirSyncFn = deps.mkdirSync ?? mkdirSync;
+  const openSyncFn = deps.openSync ?? openSync;
+  const closeSyncFn = deps.closeSync ?? closeSync;
+  const unlinkSyncFn = deps.unlinkSync ?? unlinkSync;
+
+  const lockPath = installLockPath(homeDir);
+  mkdirSyncFn(dirname(lockPath), { recursive: true });
+
+  let fd;
+  try {
+    fd = openSyncFn(lockPath, "wx");
+  } catch (err) {
+    if (err && err.code === "EEXIST") throw new Error("install already in progress");
+    throw err;
+  }
+
+  try {
+    return fn();
+  } finally {
+    try {
+      closeSyncFn(fd);
+    } catch {
+      // best-effort fd close
+    }
+    try {
+      unlinkSyncFn(lockPath);
+    } catch {
+      // best-effort lock release
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Composition roots (pure wiring)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * @description Installs a project's cron jobs and configs. Validates coords, then under the install
+ * lock: reads the crontab, reads the existing fleet, reconciles the fleet (throwing on a repo
+ * mismatch BEFORE any write), validates both configs and the projects shape, THEN writes in order —
+ * per-project config, fleet config, crontab (project block + reaper block). Any validation/mismatch
+ * writes nothing. Never reads .dev.vars or any token.
+ * @param {object} inputs
+ * @param {object} [deps]
+ * @returns {{project:string}}
+ */
+export function installProject(inputs, deps = {}) {
+  const readCrontabFn = deps.readCrontab ?? readCrontab;
+  const writeCrontabFn = deps.writeCrontab ?? writeCrontab;
+  const readConfigFileFn = deps.readConfigFile ?? readConfigFile;
+  const writeConfigFn = deps.writeConfig ?? atomicWriteConfig;
+  const nodeBin = deps.nodeBin ?? process.execPath;
+  const scriptDir = deps.scriptDir ?? DEFAULT_SCRIPT_DIR;
+  const log = deps.log ?? console.error;
+
+  const coords = validateInstallCoordinates(inputs);
+  const { homeDir, project } = coords;
+  const perProjectPath = perProjectConfigPath(homeDir, project);
+  const fleetPath = fleetConfigPath(homeDir);
+
+  return withInstallLock(
+    homeDir,
+    () => {
+      const crontabText = readCrontabFn();
+      const registered = listRegisteredProjects(crontabText);
+      const existingFleet = readConfigFileFn(fleetPath);
+      const fleet = reconcileFleet(existingFleet, registered, coords);
+
+      const perProjectConfig = generateProjectConfig(coords);
+      loadConfig(perProjectConfig);
+      loadConfig(fleet);
+      for (const entry of fleet.projects) {
+        if (!entry || !entry.project || !entry.projectRoot || !entry.stateDir) {
+          throw new Error("fleet projects entry missing required fields");
+        }
+      }
+
+      writeConfigFn(perProjectPath, perProjectConfig);
+      writeConfigFn(fleetPath, fleet);
+
+      const projectBlock = renderProjectBlock({ project, nodeBin, scriptDir, configPath: perProjectPath });
+      const reaperBlock = renderReaperBlock({ nodeBin, scriptDir, reaperConfigPath: fleetPath });
+      let nextCrontab = upsertBlock(crontabText, `harness:${project}`, projectBlock);
+      nextCrontab = upsertBlock(nextCrontab, "harness:reaper", reaperBlock);
+      writeCrontabFn(nextCrontab);
+
+      log(`Installed cron jobs for project "${project}".`);
+      return { project };
+    },
+    deps
+  );
+}
+
+/**
+ * @description Uninstalls a project's cron jobs and configs. Validates the slug, then under the
+ * install lock: reads the crontab and removes the project block. If nothing changed (an
+ * unregistered/ghost project) it early-returns with ZERO writes — an orphaned reaper is retained
+ * byte-identical. Otherwise, if no projects remain it also removes the reaper block, then writes in
+ * order — crontab, fleet config update, per-project config removal (force).
+ * @param {string} project
+ * @param {object} [deps]
+ * @returns {{project:string,removed:boolean}}
+ */
+export function uninstallProject(project, deps = {}) {
+  const readCrontabFn = deps.readCrontab ?? readCrontab;
+  const writeCrontabFn = deps.writeCrontab ?? writeCrontab;
+  const readConfigFileFn = deps.readConfigFile ?? readConfigFile;
+  const writeConfigFn = deps.writeConfig ?? atomicWriteConfig;
+  const rmSyncFn = deps.rmSync ?? rmSync;
+  const env = deps.env ?? process.env;
+  const homeDir = deps.homeDir ?? env.HOME;
+  const log = deps.log ?? console.error;
+
+  if (!PROJECT_SLUG.test(project) || project === RESERVED_PROJECT) {
+    throw new Error("invalid project");
+  }
+  const perProjectPath = perProjectConfigPath(homeDir, project);
+  const fleetPath = fleetConfigPath(homeDir);
+
+  return withInstallLock(
+    homeDir,
+    () => {
+      const crontabText = readCrontabFn();
+      let nextCrontab = removeBlock(crontabText, `harness:${project}`);
+      if (nextCrontab === crontabText) {
+        log(`Project "${project}" was not registered; nothing to uninstall.`);
+        return { project, removed: false };
+      }
+      if (listRegisteredProjects(nextCrontab).length === 0) {
+        nextCrontab = removeBlock(nextCrontab, "harness:reaper");
+      }
+      writeCrontabFn(nextCrontab);
+
+      const existingFleet = readConfigFileFn(fleetPath);
+      if (existingFleet != null) {
+        writeConfigFn(fleetPath, removeFromFleetConfig(existingFleet, project));
+      }
+      rmSyncFn(perProjectPath, { force: true });
+
+      log(`Uninstalled cron jobs for project "${project}".`);
+      return { project, removed: true };
+    },
+    deps
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// CLI entry (hand-rolled flag parser; product-language logs only)
+// ---------------------------------------------------------------------------------------------
+
+/** @description Parses `--flag value` pairs into a plain object. */
+function parseFlags(args) {
+  const flags = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      flags[arg.slice(2)] = args[i + 1];
+      i++;
+    }
+  }
+  return flags;
+}
+
+/** @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`. */
+function runCli(argv) {
+  const uninstallIdx = argv.indexOf("--uninstall");
+  if (uninstallIdx !== -1) {
+    uninstallProject(argv[uninstallIdx + 1]);
+    return;
+  }
+  if (argv[0] === "install") {
+    const flags = parseFlags(argv.slice(1));
+    const inputs = {
+      project: flags.project,
+      owner: flags.owner,
+      repo: flags.repo,
+      projectRoot: flags["project-root"],
+      stateDir: flags["state-dir"],
+      worktreeRoot: flags["worktree-root"],
+      homeDir: flags["home-dir"],
+    };
+    if (flags["harness-author-login"]) inputs.harnessAuthorLogin = flags["harness-author-login"];
+    installProject(inputs);
+    return;
+  }
+  console.error(
+    "Usage:\n" +
+      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>]\n" +
+      "  --uninstall <project>"
+  );
+  process.exitCode = 1;
+}
+
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  runCli(process.argv.slice(2));
 }
