@@ -13,10 +13,10 @@ import { runCronA } from "./run-cron-a.mjs";
 import { runCronB } from "./run-cron-b.mjs";
 import { runReaper } from "./run-reaper.mjs";
 import { dispatch } from "./cron-a-dispatch.mjs";
-import { cronAExit } from "./cron-a-exit.mjs";
+import { cronAExit, notifyExit } from "./cron-a-exit.mjs";
 import { cronB } from "./cron-b.mjs";
 import { reaper } from "./reaper.mjs";
-import { validateInstallCoordinates, generateProjectConfig, reconcileFleet } from "./install-crons.mjs";
+import { validateInstallCoordinates, generateProjectConfig, reconcileFleet, runCli } from "./install-crons.mjs";
 
 const BASE_CONFIG = {
   project: "demo",
@@ -143,7 +143,7 @@ test("#ac-6.2 dispatch threads non-secret HARNESS_NOTIFY_* into the session env,
         gh: () => ({ ok: true }),
         counter: { increment: () => {} },
         buildScopedEnv: () => ({ OLLAMA_HAND_TOKEN: "x" }),
-        notify: { chatId: -1003044689525, threadId: 613, heartbeat: true },
+        notify: { chatId: -1003044689525, threadId: 613 },
       }
     );
     const tmuxCall = spawnCalls.find((c) => c.command === "tmux");
@@ -151,7 +151,6 @@ test("#ac-6.2 dispatch threads non-secret HARNESS_NOTIFY_* into the session env,
     assert.equal(tmuxCall.env.HARNESS_NOTIFY_CHATID, "-1003044689525");
     assert.equal(tmuxCall.env.HARNESS_NOTIFY_THREADID, "613");
     assert.equal(tmuxCall.env.HARNESS_NOTIFY_PROJECT, "demo");
-    assert.equal(tmuxCall.env.HARNESS_NOTIFY_HEARTBEAT, "1");
     // The Telegram token must NEVER be threaded through dispatch's env.
     for (const key of Object.keys(tmuxCall.env)) {
       assert.ok(!/TELEGRAM/i.test(key), `env key ${key} must not carry the Telegram token`);
@@ -222,6 +221,64 @@ test("#ac-6.1 cronAExit returns the additive structured outcome per path", () =>
 
   const requeued = cronAExit(42, "/wt", "/b", "/e", exitOpts());
   assert.equal(requeued.outcome, "requeued");
+});
+
+// ---------------------------------------------------------------------------
+// cron-a-exit notifyExit — #uj-1 session-done/blocked/failed translation (coverage gap)
+// ---------------------------------------------------------------------------
+
+function fakeNotifierFactory() {
+  const events = [];
+  const makeNotifier = () => ({ notify: (e) => events.push(e), drain: async () => {} });
+  return { events, makeNotifier };
+}
+
+const NOTIFY_ENV = { HARNESS_NOTIFY_CHATID: "-100", HARNESS_NOTIFY_THREADID: "613", HARNESS_NOTIFY_PROJECT: "demo", HOME: "/h" };
+
+test("notifyExit translates 'done' → session-done with the looked-up PR number + url", async () => {
+  const { events, makeNotifier } = fakeNotifierFactory();
+  await notifyExit(
+    { outcome: "done", issueNumber: 42, finding: null },
+    { env: NOTIFY_ENV, prLookup: () => ({ number: 9, url: "https://gh/pull/9" }), makeNotifier }
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "session-done");
+  assert.equal(events[0].project, "demo");
+  assert.equal(events[0].issue, 42);
+  assert.equal(events[0].pr, 9);
+  assert.equal(events[0].url, "https://gh/pull/9");
+});
+
+test("notifyExit translates blocked/failed, and stays silent on requeued or when unconfigured", async () => {
+  const blocked = fakeNotifierFactory();
+  await notifyExit({ outcome: "blocked", issueNumber: 7, finding: "needs a call" }, { env: NOTIFY_ENV, prLookup: () => null, makeNotifier: blocked.makeNotifier });
+  assert.deepEqual(blocked.events.map((e) => [e.type, e.reason]), [["blocked", "needs a call"]]);
+
+  const failed = fakeNotifierFactory();
+  await notifyExit({ outcome: "failed", issueNumber: 7, finding: null }, { env: NOTIFY_ENV, prLookup: () => null, makeNotifier: failed.makeNotifier });
+  assert.deepEqual(failed.events.map((e) => e.type), ["failed"]);
+
+  const requeued = fakeNotifierFactory();
+  await notifyExit({ outcome: "requeued", issueNumber: 7, finding: null }, { env: NOTIFY_ENV, prLookup: () => null, makeNotifier: requeued.makeNotifier });
+  assert.equal(requeued.events.length, 0, "a clean requeue is intentionally not notified");
+
+  // No HARNESS_NOTIFY_CHATID → notify not configured → no-op (no makeNotifier call).
+  let built = false;
+  await notifyExit({ outcome: "done", issueNumber: 7, finding: null }, { env: { HOME: "/h" }, prLookup: () => null, makeNotifier: () => { built = true; return { notify: () => {}, drain: async () => {} }; } });
+  assert.equal(built, false, "unconfigured session must not build a notifier");
+});
+
+test("notifyExit never rejects even if the notifier throws (fail-open exit handler)", async () => {
+  let threw = false;
+  try {
+    await notifyExit(
+      { outcome: "done", issueNumber: 1, finding: null },
+      { env: NOTIFY_ENV, prLookup: () => { throw new Error("gh down"); }, makeNotifier: () => { throw new Error("boom"); } }
+    );
+  } catch {
+    threw = true;
+  }
+  assert.equal(threw, false, "notifyExit must swallow all failures");
 });
 
 // ---------------------------------------------------------------------------
@@ -386,4 +443,21 @@ test("#ac-8.2 reconcileFleet carries notify into the fleet base (null-seed + lat
   // Absent notify → fleet base has no notify key.
   const plain = reconcileFleet(null, [], validateInstallCoordinates({ ...BASE_CONFIG }));
   assert.ok(!("notify" in plain));
+});
+
+test("#ac-8.1 runCli install branch parses --chat-id/--thread-id/--heartbeat into inputs.notify", () => {
+  let captured;
+  const argv = [
+    "install", "--project", "demo", "--owner", "acme", "--repo", "demo-repo",
+    "--project-root", "/srv/demo", "--state-dir", "/srv/demo/.claude/state",
+    "--worktree-root", "/srv/worktrees", "--home-dir", "/home/harness",
+    "--chat-id", "-1003044689525", "--thread-id", "613", "--heartbeat", "true",
+  ];
+  runCli(argv, { installProject: (inputs) => { captured = inputs; } });
+  assert.deepEqual(captured.notify, { chatId: -1003044689525, threadId: 613, heartbeat: true });
+
+  // Without notify flags → no notify block (byte-identical CLI to today).
+  let captured2;
+  runCli(argv.slice(0, 16), { installProject: (inputs) => { captured2 = inputs; } });
+  assert.ok(!("notify" in captured2), "no --chat-id → no notify block");
 });

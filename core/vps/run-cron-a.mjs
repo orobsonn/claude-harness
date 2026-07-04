@@ -206,5 +206,8 @@ const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const arg = process.argv[2];
   const configPath = arg === "--config" ? process.argv[3] : arg;
-  mainCronA(loadConfig(configPath));
+  mainCronA(loadConfig(configPath)).catch((err) => {
+    console.error(`run-cron-a: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

@@ -178,5 +178,8 @@ const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const arg = process.argv[2];
   const configPath = arg === "--config" ? process.argv[3] : arg;
-  mainReaper(loadConfig(configPath));
+  mainReaper(loadConfig(configPath)).catch((err) => {
+    console.error(`run-reaper: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

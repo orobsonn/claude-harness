@@ -184,7 +184,6 @@ export function dispatch(issue, opts) {
     env.HARNESS_NOTIFY_CHATID = String(notify.chatId);
     if (notify.threadId != null) env.HARNESS_NOTIFY_THREADID = String(notify.threadId);
     env.HARNESS_NOTIFY_PROJECT = project;
-    if (notify.heartbeat === true) env.HARNESS_NOTIFY_HEARTBEAT = "1";
   }
 
   // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach

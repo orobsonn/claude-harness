@@ -638,8 +638,15 @@ function parseFlags(args) {
   return flags;
 }
 
-/** @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`. */
-function runCli(argv) {
+/**
+ * @description Dispatches the CLI subcommands: `install <flags>` and `--uninstall <project>`.
+ * `deps` is injectable so tests can observe the parsed inputs without touching real fs/crontab.
+ * @param {string[]} argv
+ * @param {{ installProject?: Function, uninstallProject?: Function }} [deps]
+ */
+export function runCli(argv, deps = {}) {
+  const installProjectFn = deps.installProject ?? installProject;
+  const uninstallProjectFn = deps.uninstallProject ?? uninstallProject;
   const uninstallIdx = argv.indexOf("--uninstall");
   if (uninstallIdx !== -1) {
     const target = argv[uninstallIdx + 1];
@@ -652,7 +659,7 @@ function runCli(argv) {
     // operator installed into (config removal is homeDir-derived); falls back to $HOME.
     const uflags = parseFlags(argv);
     const opts = uflags["home-dir"] ? { homeDir: uflags["home-dir"] } : {};
-    uninstallProject(target, opts);
+    uninstallProjectFn(target, opts);
     return;
   }
   if (argv[0] === "install") {
@@ -667,12 +674,20 @@ function runCli(argv) {
       homeDir: flags["home-dir"],
     };
     if (flags["harness-author-login"]) inputs.harnessAuthorLogin = flags["harness-author-login"];
-    installProject(inputs);
+    // Optional Telegram notify block. chatId/threadId are NON-secret group coordinates; the bot
+    // token stays in ~/.claude/.dev.vars. validateInstallCoordinates rejects non-integer chatId/
+    // threadId and a non-boolean heartbeat, so a malformed flag fails fast before any write.
+    if (flags["chat-id"] !== undefined) {
+      inputs.notify = { chatId: Number(flags["chat-id"]) };
+      if (flags["thread-id"] !== undefined) inputs.notify.threadId = Number(flags["thread-id"]);
+      if (flags["heartbeat"] !== undefined) inputs.notify.heartbeat = flags["heartbeat"] === "true";
+    }
+    installProjectFn(inputs);
     return;
   }
   console.error(
     "Usage:\n" +
-      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>]\n" +
+      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
       "  --uninstall <project>"
   );
   process.exitCode = 1;
