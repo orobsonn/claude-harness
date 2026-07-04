@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const settingsPath = resolve("core/settings.json");
+const SECRET_PATTERN = /(token|secret|password|api[_-]?key|bearer)/i;
+const MAX_FLAG_VALUE_LENGTH = 40;
 
 test("core/settings.json is valid JSON", () => {
   const content = readFileSync(settingsPath, "utf8");
@@ -250,4 +252,63 @@ test("permissions baseline preserved and unchanged", () => {
     settings.autoMemoryDirectory === ".claude/memory",
     "autoMemoryDirectory preserved"
   );
+});
+
+/**
+ * @description Given core/settings.json, When parsed as JSON, Then it is valid JSON AND
+ * settings.env is an object containing keys HARNESS_CODEX_ADVERSARY and
+ * HARNESS_REVIEW_ENABLED, each with a string value (the env block was previously empty {}).
+ */
+test("settings.env contains HARNESS_CODEX_ADVERSARY and HARNESS_REVIEW_ENABLED as strings", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  strictEqual(typeof settings.env, "object", "settings.env is an object");
+  ok(settings.env, "settings.env is not null");
+  ok(
+    Object.prototype.hasOwnProperty.call(settings.env, "HARNESS_CODEX_ADVERSARY"),
+    "settings.env is missing HARNESS_CODEX_ADVERSARY"
+  );
+  ok(
+    Object.prototype.hasOwnProperty.call(settings.env, "HARNESS_REVIEW_ENABLED"),
+    "settings.env is missing HARNESS_REVIEW_ENABLED"
+  );
+  strictEqual(
+    typeof settings.env.HARNESS_CODEX_ADVERSARY,
+    "string",
+    "HARNESS_CODEX_ADVERSARY must be a string"
+  );
+  strictEqual(
+    typeof settings.env.HARNESS_REVIEW_ENABLED,
+    "string",
+    "HARNESS_REVIEW_ENABLED must be a string"
+  );
+});
+
+/**
+ * @description Given the settings.env block, When inspected, Then it contains no secret
+ * values — no key or value matching a token/key/password pattern. Flags are short strings
+ * (e.g. "1"/"true"/"on"), not long secrets that would imply a leaked credential.
+ */
+test("settings.env has no secret-shaped keys or values", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  ok(settings.env, "settings.env exists");
+
+  for (const [key, value] of Object.entries(settings.env)) {
+    ok(
+      !SECRET_PATTERN.test(key),
+      `settings.env key "${key}" looks like a secret name`
+    );
+    strictEqual(typeof value, "string", `settings.env["${key}"] value is a string`);
+    ok(
+      !SECRET_PATTERN.test(value),
+      `settings.env["${key}"] value looks like a secret`
+    );
+    ok(
+      value.length < MAX_FLAG_VALUE_LENGTH,
+      `settings.env["${key}"] value is too long to be a flag (possible secret leak)`
+    );
+  }
 });
