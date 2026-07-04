@@ -15,6 +15,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.22.0] - 2026-07-04
+
+### Added
+
+- **Notificação Telegram one-way para o motor autônomo por VPS (`core/vps/notify-telegram.mjs`)** — o operador passa a receber os eventos-chave do ciclo cron num tópico de grupo compartilhado, sem SSH: issue escolhida, dispatch falhou/re-enfileirada, sessão concluída → PR aberto, issue bloqueada (precisa de atenção humana) ou com retentativas esgotadas, PR revisado CLEAN→merged ou BLOCKED, e ações do reaper (watchdog kill / recuperação de crash / worktree órfão limpo). Cada mensagem é prefixada `[<project>]` (multi-projeto: um destino compartilhado serve vários projetos). O módulo é **puro/injetável e zero-dep** (Node builtins): `formatEvent` puro (HTML-escape, links `<a href>`, truncagem), `sendNotification` best-effort com `AbortSignal.timeout` (~5s) e feature-detect de runtime, sem retry (429 engolido). A lógica pura de cada cron retorna resultado estruturado; os composition roots (`run-cron-a`/`run-cron-b`/`run-reaper`/`cron-a-exit`) traduzem em evento e notificam best-effort com `drain` antes do exit. **100% opcional e fail-open**: sem `notify` configurado ou com o Telegram fora do ar, o motor roda idêntico a hoje — uma falha de notificação nunca derruba nem atrasa um cron. **Higiene de segredo (auditoria SECURE):** o `TELEGRAM_BOT_TOKEN` vive só em `~/.claude/.dev.vars`, lido do disco no envio; nunca no config, crontab, argv, log ou na URL logada — falha loga só `{op,type,project,status}`. Config `notify:{chatId,threadId}` opcional via `install-crons` (flags `--chat-id`/`--thread-id`/`--heartbeat`); `chatId`/`threadId` não são secret. 42 testes novos com `fetch` injetado (zero chamada real ao Telegram), suíte inteira 846/846. Entregue pela pipeline FULL do harness (spec-adversary + plano + plan-review + TDD congelado + dual-review compliance/adversary/security).
+
 ## [0.21.0] - 2026-07-04
 
 ### Added
