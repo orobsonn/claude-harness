@@ -141,3 +141,101 @@ Flow:
 - **Rationale:** Read-tool rendering can silently misrepresent binary/hex literals. An adversary that
   treats rendered output as ground truth will generate false HIGH findings that cost sniper cycles.
   The correct posture is: flag + hedge + gate. The gate settles it.
+
+### 2026-07-05 — test-author: distinguish "preserve coverage" from "preserve assertions" on behavior-change tasks
+
+- **Observed:** During `independent-pr-review` (cron-a-exit-done-fix), a task CHANGED behavior that
+  existing tests pinned (the done-bug fix flips PR-exists → in-review instead of done). The default
+  test-author brief ("preserve ALL existing tests unchanged") contradicts this: legacy tests assert
+  the old behavior, new tests assert the new — the executor cannot make both green. The conflict only
+  surfaced after a second reconcile dispatch (a wasted cycle).
+- **Proposed change:** The `orchestrating-delivery` test-author step (or the test-author agent prompt)
+  should distinguish "preserve coverage" (every previously-tested scenario still has a test) from
+  "preserve assertions" (the exact old expected value). For a behavior-change task, the brief must
+  instruct the test-author to UPDATE the specific legacy tests that pin the superseded behavior
+  (keeping their still-valid sub-assertions) in the SAME dispatch. Detect trigger: task spec says
+  "fix/change/replace <existing behavior>" AND `test_path` already exists → flag legacy-assertion
+  reconciliation up front, before the first executor dispatch.
+- **Rationale:** A test-author that blindly preserves assertions on a behavior-change task guarantees
+  a contradiction the executor cannot resolve — costing a full reconcile cycle that a one-line brief
+  addendum would have prevented.
+
+### 2026-07-05 — test-author gotcha: `*/` inside a JSDoc `/** */` block breaks JS parse — needs a pre-freeze guard
+
+- **Observed:** During `independent-pr-review`, a frozen test froze with a SyntaxError: its JSDoc
+  header wrote a cron cadence literally as `0 */6`, and the `*/` sequence closed the `/** */` comment
+  mid-sentence, so the file failed to parse (0 tests collected, error before any assertion). A
+  parse-error freeze is the worst kind — it blocks the whole file and survives the freeze silently
+  until the gate runs.
+- **Proposed change:** (a) add a rule to test-author guidance: never write a cron string (or any
+  string containing `*/`) literally inside a `/** */` block — use `//` line comments, escape, or
+  rephrase (e.g. "every 6h" instead of "0 */6 * * *"); (b) add a cheap pre-freeze guard to
+  `creating-plans`/the freeze tooling: run `node --check <test>` (or confirm the test file collects
+  >0 tests) before committing the freeze — a file that fails to parse collects 0 tests and must never
+  freeze as-is.
+- **Rationale:** A frozen test that cannot even parse gives zero safety while looking green-adjacent
+  in tooling that doesn't explicitly check test count. The guard is a one-line, near-zero-cost check
+  that eliminates the whole failure class.
+
+### 2026-07-05 — spawn-hand: version-check cache write is flagged as an out-of-scope violation (false positive)
+
+- **Observed:** During `independent-pr-review`, the child `claude -p` hand session loads the
+  project's `.claude/settings.json`, whose `SessionStart` hook `version-check.mjs` writes
+  `.claude/.harness-version-check-cache` (gitignored) whenever the cache is stale (>6h ttl).
+  spawn-hand's independent capture (`lsFilesAllOthers`, no `--exclude-standard`) correctly detects
+  this as an out-of-scope gitignored write and marks the run-record `FAILED` with
+  `scopeViolations=[.claude/.harness-version-check-cache]`, which `entry-gate.mjs` then hard-blocks —
+  failing a genuinely correct, in-scope, frozen-test-green run and costing a wasted re-spawn.
+- **Proposed change:** pick one — (a) spawn-hand/capture-hand excludes a small allowlist of known
+  benign harness infra caches (`.claude/.harness-version-check-cache*`) from the out-of-scope
+  gitignored sweep; (b) `version-check.mjs` no-ops when running inside a hand child session (detect
+  via an env flag spawn-hand sets, e.g. `HARNESS_HAND_CHILD=1`); (c) spawn-hand pre-refreshes the
+  cache's `cachedAt` to now before spawning so the child always finds it fresh and skips the write.
+  (c) is the cheapest and was used as a manual workaround this run — worth making it the default.
+- **Rationale:** A benign, deterministic, harness-owned infra write should never fail a hand's scope
+  check. The false positive costs a full re-spawn cycle every time the 6h cache ttl expires mid-run.
+
+### 2026-07-05 — spawn-hand: detect Ollama 429 usage-limit distinctly and short-circuit the fallback ceremony
+
+- **Observed:** During `independent-pr-review`, the Ollama account hit its session usage limit
+  (429 "session usage limit") partway through the run. Every subsequent spawn-hand returned an empty
+  diff (`NOT_DONE`) because the child `claude -p --model <ollama>` got 429 on turn 1 — confirmed
+  account-level (two different models failed identically), not a model issue. The K=1
+  escalation-fallback correctly authorizes a main-loop Claude executor once an on-disk
+  `NOT_DONE`/`FAILED` run-record + escalation-fallback ticket exist, but this meant every remaining
+  task paid for one wasted ~3min 429-spawn purely to mint the authorizing record.
+- **Proposed change:** when spawn-hand detects a 429 usage-limit response (distinct from a transient
+  timeout), it should (a) surface it as an operator-facing infra notice, and (b) short-circuit the
+  ceremony — either auto-authorize the Claude fallback for the rest of the run, or (in a headless-local
+  run) let the orchestrator flip to Claude-executor mode without a wasted 429-spawn per task.
+- **Rationale:** A 429 usage-limit is a known, detectable, account-level condition — not a fluke worth
+  re-testing every task. Short-circuiting saves a wasted spawn per task for the remainder of the run
+  and gives the operator an actionable signal (upgrade plan / wait for reset) sooner.
+
+### 2026-07-05 — process/tooling: enforce frozen-test-GREEN + record-DONE before the impl-commit
+
+- **Observed:** During `independent-pr-review` (compliance-diff-adapter), the impl was committed
+  based on the executor's Note preview WITHOUT running the frozen test — a regex bug left the frozen
+  test RED and the run-record `FAILED`. Committing moved HEAD off the freeze baseline, which then
+  denied the Claude sniper (freeze≠HEAD dispatch gate), requiring a `git reset --mixed <freeze>` to
+  recover before the sniper could run. `drive-verify.sh` already gates on `lockedTestExit`, but the
+  step was skipped in favor of committing off prose. Compounding this in the same incident: the
+  original `drive-freeze` scope had been narrowed to the two files the locked test touched
+  (`adapter.mjs`, `adapter.test.mjs`), omitting `core/agents/compliance.md`, which WAS in the task's
+  `scope_paths` — so a legitimate in-scope executor edit to `compliance.md` was recorded as a false
+  scope violation, and the resulting `FAILED` record survived the later revert+fix, silently blocking
+  every subsequent delivery-bash-gate command even though the delivered state was independently
+  verified clean (2/2 green, only `adapter.mjs` touched, `compliance.md` reverted).
+- **Proposed change:** (a) make `drive-verify.sh` (or equivalent) a **mandatory** step the shipper/
+  orchestrator invokes right before the impl-commit — never commit from an agent's prose summary;
+  (b) always pass the task's FULL `scope_paths` to `drive-freeze` (not just the files the locked test
+  touches) so an in-scope write by the executor is never a false scope violation; (c) give the
+  orchestrator (or a small CLI) a documented, audited way to prune/regenerate a stale `FAILED`
+  run-record once the delivered state has been independently re-verified clean — today the only path
+  is manual deletion with no tooling support, which is easy to get wrong under pressure.
+- **Rationale:** These three gaps compounded into a single incident (premature commit → freeze
+  desync → stale-record delivery block) that cost a manual recovery sequence. Each fix is cheap in
+  isolation and closes a distinct step in the chain: verify-before-commit prevents the desync from
+  happening; full-scope-freeze prevents the false violation that triggered the FAILED record in the
+  first place; and a supported prune path removes the need for undocumented manual surgery when a
+  stale record does slip through.
