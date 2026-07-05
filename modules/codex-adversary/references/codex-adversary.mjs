@@ -11,9 +11,11 @@
  *   and return a prompt string; no process is launched.
  * - `runCodexAdversary` is INJECTABLE: the `spawn` parameter defaults to a thin spawnSync wrapper
  *   so tests pass a FAKE spawn that captures args/env without launching a real `codex`.
- * - FAIL-OPEN: a missing/unauthenticated `codex`, or a HEADLESS routine with no API key, returns
+ * - FAIL-OPEN: a missing or definitively-unauthenticated `codex` returns
  *   `{ available: false, issues: [], reason }`. The caller degrades to the Claude-only adversary
- *   and NEVER blocks — the second family is an enhancement, never a hard dependency.
+ *   and NEVER blocks — the second family is an enhancement, never a hard dependency. An ambiguous
+ *   auth probe (spawn error / timeout) is treated as available so the real `codex exec` is the
+ *   authority, never silently degrading on a probe glitch.
  * - READ-ONLY: Codex is invoked with `--sandbox read-only`. It is an EYE, never a hand.
  * - Dependency-free: only node builtins (fs, path, child_process, url).
  */
@@ -229,19 +231,51 @@ export function isHeadless(env = process.env) {
 }
 
 /**
- * @description Decides whether the Codex bridge can run at all, BEFORE spawning anything.
- * Headless + no API key => unavailable by design (subscription/OAuth can't complete headlessly),
- * so the loop runs Claude-only. Returns { ok, reason }.
- * @param {{ env?: NodeJS.ProcessEnv, codexBin?: string, hasCodex?: (bin:string)=>boolean }} opts
+ * @description Decides whether the Codex bridge can run at all, BEFORE spawning anything. Probes the
+ * REAL auth contract: `codex login status` exits 0 with stdout containing "Logged in" when authed by
+ * ChatGPT subscription (no API key needed). An explicit OPENAI_API_KEY is an accepted alternate
+ * credential and short-circuits the probe. `isHeadless` is no longer a gate — headless runs succeed
+ * via subscription auth (confirmed live) or the API key; the real `codex exec` is the final authority
+ * when the probe is ambiguous. FAIL-OPEN: an ambiguous probe (throws / times out) returns ok so the
+ * real codex exec can decide, never silently degrading to Claude-only on a probe glitch.
+ *
+ * Logic order:
+ *   (1) !hasCodex(codexBin)           -> { ok:false, reason '... not found ...' } (unchanged)
+ *   (2) env.OPENAI_API_KEY set         -> { ok:true } (accepted alternate credential, short-circuit)
+ *   (3) loginStatus() throws/times out -> { ok:true } (ambiguous; real codex exec is the authority)
+ *   (4) probe ran, status===0 AND stdout includes 'Logged in' -> { ok:true }
+ *   (5) otherwise (probe ran, not authed) -> { ok:false, reason 'codex not authenticated ...' }
+ *
+ * @param {{ env?: NodeJS.ProcessEnv, codexBin?: string, hasCodex?: (bin:string)=>boolean, loginStatus?: ()=>{status:number, stdout:string, error?:Error} }} opts
+ * @returns {{ ok: boolean, reason: string }}
  */
-export function checkAvailability({ env = process.env, codexBin = "codex", hasCodex = defaultHasCodex } = {}) {
-  if (isHeadless(env) && !env.OPENAI_API_KEY) {
-    return { ok: false, reason: "headless routine without OPENAI_API_KEY — OAuth/subscription auth cannot run; degrading to Claude-only" };
-  }
+export function checkAvailability({
+  env = process.env,
+  codexBin = "codex",
+  hasCodex = defaultHasCodex,
+  loginStatus = defaultLoginStatus,
+} = {}) {
   if (!hasCodex(codexBin)) {
     return { ok: false, reason: `codex CLI not found on PATH (${codexBin}) — degrading to Claude-only` };
   }
-  return { ok: true, reason: "" };
+  if (env.OPENAI_API_KEY) {
+    return { ok: true, reason: "" };
+  }
+  let probe;
+  try {
+    probe = loginStatus();
+  } catch {
+    // Ambiguous: a spawn error / timeout is NOT proof of being unauthed. Let the real codex exec be
+    // the authority rather than silently degrading to Claude-only on a probe glitch.
+    return { ok: true, reason: "" };
+  }
+  if (probe && probe.status === 0 && typeof probe.stdout === "string" && probe.stdout.includes("Logged in")) {
+    return { ok: true, reason: "" };
+  }
+  return {
+    ok: false,
+    reason: "codex not authenticated (codex login status reports not logged in) — degrading to Claude-only",
+  };
 }
 
 /** @description Best-effort `codex` presence probe via `command -v`. Pure-ish; injectable in tests. */
@@ -252,6 +286,17 @@ function defaultHasCodex(bin) {
   } catch {
     return false;
   }
+}
+
+/**
+ * @description Default auth probe: runs `codex login status` synchronously with a short timeout. The
+ * real contract is exit 0 + stdout containing "Logged in" (authed by ChatGPT subscription). Injectable
+ * via `checkAvailability({ loginStatus })` so tests stub the probe without spawning a real `codex`.
+ * @param {string} [bin] - codex binary name (defaults to the same `codexBin` the caller passed).
+ * @returns {{ status: number, stdout: string, stderr?: string, error?: Error }}
+ */
+function defaultLoginStatus(bin = "codex") {
+  return spawnSync(bin, ["login", "status"], { encoding: "utf8", timeout: 8000 });
 }
 
 /**
@@ -305,8 +350,8 @@ export function runCodexAdversary(opts = {}) {
  * @description The OPT-IN toggle: is the cross-family adversary turned on for this run? Default OFF
  * — the operator must explicitly opt in. Aligned with the per-task `adversarial.enabled` convention:
  * either set env HARNESS_CODEX_ADVERSARY=1, or `adversarial.cross_family: true` in the task contract.
- * Availability (codex present, not headless-without-key) is checked SEPARATELY — this is intent,
- * not capability.
+ * Availability (codex present and authed, or OPENAI_API_KEY set) is checked SEPARATELY — this is
+ * intent, not capability.
  * @param {{ env?: NodeJS.ProcessEnv, task?: object }} opts
  * @returns {boolean}
  */
