@@ -30,10 +30,12 @@
  *        - `false` && `!freshVerdictClean` → `opts.routeReject(pr, sha, {...})`.
  *        - `false` && `secondPassRequired && !secondPassClean` → `gh(["label","create",
  *          "harness:blocked","--force"])` THEN `gh(["issue","edit", <root>, ...,
- *          "--add-label","harness:blocked"])`.
+ *          "--add-label","harness:blocked"])`, AND `opts.recordReviewed(pr.number, sha,
+ *          {stateDir})` — a same-SHA re-review of a still-blocked PR must be a no-op.
  *        - `false` (residual: cross-family absent) → `gh(["label","create",
  *          "harness:awaiting-merge","--force"])` THEN `gh(["issue","edit", <root>, ...,
- *          "--add-label","harness:awaiting-merge"])`.
+ *          "--add-label","harness:awaiting-merge"])`, AND `opts.recordReviewed(pr.number, sha,
+ *          {stateDir})` — same idempotency guarantee while the PR sits awaiting merge.
  *
  * Every seam is injected as an in-memory fake/spy — no real `gh`/`git` process is ever spawned.
  * `isReviewEligible`, `touchesGateMachinery` and `mergeEligible` are the REAL modules (not fakes)
@@ -90,6 +92,20 @@ function makeSpy(impl) {
   return fn;
 }
 
+/**
+ * @description Builds a STATEFUL reviewed-PR store backed by a `Set` of `"<pr>:<sha>"` keys, so
+ * `recordReviewed`/`alreadyReviewed` behave like the real persisted idempotency ledger across
+ * multiple `cronReview` cycles run against the same in-memory store.
+ */
+function makeStatefulReviewedStore() {
+  const seen = new Set();
+  const recordReviewed = makeSpy((prNumber, sha, meta) => {
+    seen.add(`${prNumber}:${sha}`);
+  });
+  const alreadyReviewed = makeSpy((prNumber, sha) => seen.has(`${prNumber}:${sha}`));
+  return { recordReviewed, alreadyReviewed, seen };
+}
+
 /** @description Assembles a full cronReview() opts object from defaults + per-test overrides. */
 function baseOpts(overrides = {}) {
   return {
@@ -109,6 +125,7 @@ function baseOpts(overrides = {}) {
     recordReviewSession: makeSpy(),
     breakerTripped: () => false,
     alreadyReviewed: () => false,
+    recordReviewed: makeSpy(),
     ...overrides,
   };
 }
@@ -234,4 +251,85 @@ test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVE
     );
     assert.ok(routedBlocked, "[gate diff + 2nd pass BLOCKED] the PR's issue must be routed to harness:blocked");
   }
+});
+
+test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is a no-op", () => {
+  const stateDir = "/fake/state/review";
+  const { gh, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 40, headRefName: "harness/70", author: { login: "bot-user" }, labels: [], headSha: "sha-e" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/qux.js"]); // not gate machinery
+
+  const { recordReviewed, alreadyReviewed } = makeStatefulReviewedStore();
+  const spawnReviewSession = makeSpy();
+
+  const opts = baseOpts({
+    gh,
+    stateDir,
+    crossFamilyEligible: () => false, // cross-family absent -> residual awaiting-merge route
+    recordReviewed,
+    alreadyReviewed,
+    spawnReviewSession,
+  });
+
+  // Cycle 1: PR is fresh -> reviewed, routed to awaiting-merge, and recorded.
+  cronReview(opts);
+
+  assert.equal(recordReviewed.calls.length, 1, "recordReviewed must be called once after the awaiting-merge route");
+  const [recordedPrNumber, recordedSha, recordedMeta] = recordReviewed.calls[0];
+  assert.equal(recordedPrNumber, pr.number, "recordReviewed must receive the PR number as the first arg");
+  assert.equal(recordedSha, pr.headSha, "recordReviewed must receive the head SHA as the second arg");
+  assert.equal(typeof recordedMeta, "object", "recordReviewed's third arg must be an object");
+  assert.equal(recordedMeta.stateDir, stateDir, "recordReviewed's third arg must carry the stateDir");
+  assert.equal(recordReviewed.calls[0].length, 3, "recordReviewed must be called with exactly 3 args");
+
+  // Cycle 2: SAME PR, SAME headSha -> alreadyReviewed short-circuits, no new session is spawned.
+  const { gh: gh2, setPr: setPr2, setDiff: setDiff2 } = makeFakeGh();
+  setPr2(pr.number, pr);
+  setDiff2(pr.number, ["src/qux.js"]);
+  cronReview({ ...opts, gh: gh2 });
+
+  assert.equal(
+    spawnReviewSession.calls.length,
+    1,
+    "across BOTH cycles spawnReviewSession must be invoked EXACTLY ONCE — cycle 2 short-circuits via alreadyReviewed"
+  );
+});
+
+test("cronReview: 2nd-pass-blocked route records pr:sha", () => {
+  const stateDir = "/fake/state/review";
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 41, headRefName: "harness/71", author: { login: "bot-user" }, labels: [], headSha: "sha-f" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["core/vps/cron-review.mjs"]); // matches the "core/vps/" gate-machinery glob
+
+  const getFreshVerdictTwoPass = (prArg, sha, sd) =>
+    sd.includes("second-pass") ? { status: "BLOCKED", finding: "x" } : { status: "CLEAN" };
+  const mergeAndFinalizeSpy = makeSpy();
+  const recordReviewed = makeSpy();
+
+  cronReview(
+    baseOpts({
+      gh,
+      stateDir,
+      crossFamilyEligible: () => true, // present — isolates the 2nd-pass-blocked route as the sole blocker
+      getFreshVerdict: getFreshVerdictTwoPass,
+      mergeAndFinalize: mergeAndFinalizeSpy,
+      recordReviewed,
+    })
+  );
+
+  assert.equal(recordReviewed.calls.length, 1, "recordReviewed must be called once after the 2nd-pass-blocked route");
+  const [recordedPrNumber, recordedSha, recordedMeta] = recordReviewed.calls[0];
+  assert.equal(recordedPrNumber, pr.number, "recordReviewed must receive the PR number as the first arg");
+  assert.equal(recordedSha, pr.headSha, "recordReviewed must receive the head SHA as the second arg");
+  assert.equal(typeof recordedMeta, "object", "recordReviewed's third arg must be an object");
+  assert.equal(recordedMeta.stateDir, stateDir, "recordReviewed's third arg must carry the stateDir");
+  assert.equal(recordReviewed.calls[0].length, 3, "recordReviewed must be called with exactly 3 args");
+
+  assert.equal(mergeAndFinalizeSpy.calls.length, 0, "mergeAndFinalize must NEVER be invoked on a 2nd-pass BLOCKED verdict");
+  const routedBlocked = calls.some(
+    (args) => args[0] === "issue" && args[1] === "edit" && args.includes("--add-label") && args.includes("harness:blocked")
+  );
+  assert.ok(routedBlocked, "the PR's issue must be routed to harness:blocked");
 });
