@@ -9,6 +9,10 @@
  *   2. The body names all three eyes (adversary, compliance, security), the compliance
  *      diff-adapter, the cross-family requirement, and states the verdict artifact is
  *      written to the engine-controlled stateDir.
+ *   3. The body states that NODE derives the merge verdict and the session only EMITS
+ *      raw eye-outputs (the session does not self-report the merge verdict).
+ *   4. The body states that Node (cron-review) orchestrates cross-family eligibility
+ *      AND the gate-hardening 2nd pass — the session runs only the 3 eyes per invocation.
  *
  * Tests run under node:test.
  */
@@ -163,5 +167,54 @@ test("SKILL.md: names all three eyes, the compliance diff-adapter, cross-family 
     verdictArtifactToStateDir,
     true,
     "SKILL.md must state that the verdict artifact is written to the engine-controlled 'stateDir' (e.g. 'verdict artifact ... stateDir' or a 'review-<pr>-<sha>' filename pattern)."
+  );
+});
+
+// ─── Test 3 ───────────────────────────────────────────────────────────────────
+/**
+ * Given: the SKILL.md body.
+ * When: scanned.
+ * Then: it states that NODE derives the merge verdict AND the session EMITS raw
+ * eye-outputs — the session does NOT self-report the merge verdict; Node (the
+ * engine) is the one deriving it from the raw eye-outputs the session emits.
+ */
+test("SKILL.md: states that NODE derives the merge verdict and the session EMITS raw eye-outputs", () => {
+  const skillMd = readSkillMd();
+  const body = skillMd.slice(skillMd.indexOf("---", 3) + 3);
+
+  const nodeDerivesVerdict = /node[\s\S]{0,80}deriv/i.test(body);
+  assert.equal(
+    nodeDerivesVerdict,
+    true,
+    "SKILL.md body must state that Node derives the merge verdict (e.g. 'Node ... derives the merge verdict') — the session does not self-report it."
+  );
+
+  const sessionEmitsEyeOutputs = /emits[\s\S]{0,40}eye.?outputs/i.test(body);
+  assert.equal(
+    sessionEmitsEyeOutputs,
+    true,
+    "SKILL.md body must state that the session emits raw eye-outputs (e.g. 'emits ... eye-outputs') rather than a self-derived merge verdict."
+  );
+});
+
+// ─── Test 4 ───────────────────────────────────────────────────────────────────
+/**
+ * Given: the SKILL.md body.
+ * When: scanned.
+ * Then: it states that Node (cron-review) orchestrates BOTH cross-family
+ * eligibility AND the gate-hardening 2nd pass — the session itself runs only
+ * the 3 eyes per invocation, it does not decide cross-family dispatch or the
+ * 2nd pass on its own.
+ */
+test("SKILL.md: states that Node (cron-review) orchestrates cross-family eligibility AND the gate-hardening 2nd pass", () => {
+  const skillMd = readSkillMd();
+  const body = skillMd.slice(skillMd.indexOf("---", 3) + 3);
+
+  const nodeOrchestratesCrossFamilyAndSecondPass =
+    /node[\s\S]{0,120}(cross-family|2nd pass|second pass)/i.test(body);
+  assert.equal(
+    nodeOrchestratesCrossFamilyAndSecondPass,
+    true,
+    "SKILL.md body must state that Node (cron-review) orchestrates cross-family eligibility and the gate-hardening 2nd pass — the session runs only the 3 eyes per invocation."
   );
 });

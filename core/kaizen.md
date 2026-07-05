@@ -239,3 +239,46 @@ Flow:
   happening; full-scope-freeze prevents the false violation that triggered the FAILED record in the
   first place; and a supported prune path removes the need for undocumented manual surgery when a
   stale record does slip through.
+
+### 2026-07-05 — adversary/test-author: seam-mock-vs-production shape divergence is invisible to hermetic tests
+
+- **Observed:** During `review-spawn-wiring`, the final-review adversary caught a HIGH that ALL
+  hermetic per-task tests missed: `cron-review.mjs` reads `gh(["pr","diff", n, "--name-only"])`
+  expecting a `string[]`, but the REAL `defaultGhExec` (`gh-exec.mjs`) only parses `--json` calls into
+  arrays — a non-json `pr diff` call actually returned `{ok:true}` (an object). The bug was dormant
+  under the old throwing `spawnReviewSession` stub and only became live once this feature wired the
+  real actuator. Every frozen/task test injected a fake `gh` seam that returned an array directly for
+  this call, so the mismatch between the seam's test-double shape and its production shape was never
+  exercised — only the whole-feature adversary tracing a live call path caught it (`touchesGateMachinery({ok:true})`
+  → `.some` on a non-array → `TypeError` every cron cycle, burning a `claude -p` spawn and never
+  routing/recording, until the breaker trips).
+- **Proposed change:** when a module consumes an injected seam whose PRODUCTION implementation
+  returns a **different shape depending on call arguments** (e.g. json vs non-json vs raw-text calls
+  to the same `gh` function), require at least one test that exercises the REAL seam's shape for each
+  call variant the module makes (either call the real seam directly in an isolated unit test, or use a
+  fixture that mirrors its actual per-variant return shape — not a single generic mock). Additionally,
+  the final-review adversary's checklist should explicitly include "trace one live production call
+  path per injected seam per feature" as a standing check, not an incidental catch.
+- **Rationale:** Mock-vs-production shape divergence is a class of bug that hermetic per-task tests
+  structurally cannot see — the test author controls both the caller and the fake seam, so they agree
+  with each other by construction even when they disagree with reality. Only tracing (or fixture-
+  mirroring) the real seam's behavior per call variant closes this blind spot, and doing it as a named
+  standing check (rather than relying on an adversary catching it by chance) makes the safety net
+  systematic instead of incidental.
+
+### 2026-07-05 — RECURRENCE of "spawn-hand: detect Ollama 429 usage-limit distinctly" (see entry above, same date)
+
+- **Observed:** `review-spawn-wiring` hit the identical pattern already logged above (Ollama account
+  429 session-usage-limit on the FIRST dispatch, staying rate-limited for the whole run) — every one
+  of the 5 tasks' executor/sniper dispatches paid the same wasted ~3min 429-spawn-to-generate-the-
+  authorizing-NOT_DONE-record cost before the K=1 Claude-fallback correctly took over. Two independent
+  runs on the same day hit this exact condition, which raises its priority from "worth fixing" to
+  "worth fixing now" — it is not a one-off fluke.
+- **Proposed change:** no new proposal — this reinforces the existing one (pre-flight cheap-hand
+  health probe / first-failure short-circuit to Claude-executor mode). Bumping visibility: two
+  same-day recurrences of the identical failure mode is a strong signal to prioritize this fix in the
+  next harness iteration rather than let it sit in the outbox.
+- **Rationale:** kaizen.md is the durable cross-run signal precisely so recurring patterns are visible
+  across runs whose `findings.md` has already been deleted. Recording the recurrence (rather than a
+  fresh duplicate proposal) keeps the outbox from accumulating near-identical entries while still
+  surfacing the frequency signal to the human reviewer.

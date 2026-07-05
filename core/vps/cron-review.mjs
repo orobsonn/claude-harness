@@ -46,6 +46,7 @@ function extractRoot(headRefName) {
  * @param {(o: {stateDir: string}) => void} opts.recordReviewSession breaker increment
  * @param {(o: {stateDir: string}) => boolean} opts.breakerTripped windowed-cap gate
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge and 2nd-pass-blocked routes
  * @returns {void}
  */
 export function cronReview(opts) {
@@ -67,6 +68,7 @@ export function cronReview(opts) {
     recordReviewSession,
     breakerTripped,
     alreadyReviewed,
+    recordReviewed,
   } = opts;
 
   const prs = gh(["pr", "list", "--json", "number,headRefName,headSha,author,labels", "--state", "open"]) || [];
@@ -155,6 +157,7 @@ export function cronReview(opts) {
       if (root !== null) {
         gh(["issue", "edit", String(root), "--add-label", "harness:blocked"]);
       }
+      recordReviewed(pr.number, sha, { stateDir });
     } else {
       // Residual: cross-family absent/ineligible — route to harness:awaiting-merge.
       // Ensure the label exists BEFORE the first relabel (fail-closed route never fails on a missing label).
@@ -163,6 +166,7 @@ export function cronReview(opts) {
       if (root !== null) {
         gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
       }
+      recordReviewed(pr.number, sha, { stateDir });
     }
    } catch (err) {
     // Isolate one PR's failure — a throw here must not skip the remaining PRs or reconcile().
