@@ -9,6 +9,18 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Encadeamento de roadmap por dependência (parte 1: motor de liberação)** — uma issue de roadmap
+  pode declarar de quais issues ela depende num bloco fechado no corpo (` ```harness-deps ` com
+  `#12`, `#13`…), e nasce com a label `harness:queued` — invisível pro seletor, que só pega
+  `harness:ready`. A cada ciclo de revisão, o motor libera automaticamente `harness:queued →
+  harness:ready` **assim que TODAS as dependências têm PR merjado na main** (verdade-fundamento = PR
+  merjado, nunca o label, que pode atrasar). Uma dependência diamante só libera quando a última
+  merjа. Se qualquer dependência morre (`harness:blocked`), a dependente é encalhada
+  (`harness:queued → harness:blocked`) e o operador é **notificado** — a corrente abaixo de um nó
+  morto nunca fica parada em silêncio. A liberação roda no `reconcile()` do review cron, agnóstica
+  ao modo de merge (auto **ou** merge manual do operador). A ordem é garantida por dois mecanismos
+  combinados: o gate (dependente espera as deps merjarem) + a serialização do run-lock por-projeto
+  (uma issue por vez) — sem dispatch automático nem race de implementação paralela.
 - **Fase independente de revisão de PR agora funciona de verdade** — o `spawnReviewSession` deixou
   de ser um stub que sempre falhava: a sessão de revisão roda de fato sobre o diff do PR (só olhos —
   adversary/compliance/security, nunca um hand com escrita) e o veredito CLEAN/BLOCKED que decide

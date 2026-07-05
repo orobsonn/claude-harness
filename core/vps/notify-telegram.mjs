@@ -40,6 +40,8 @@ const EMOJI = {
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
   "reaper-orphan-cleaned": "🧹",
+  "chain-released": "🔗",
+  "chain-stranded": "⛓️‍💥",
 };
 
 /**
@@ -131,6 +133,14 @@ export function formatEvent(event = {}) {
       return `${prefix} run da issue ${issueRef} recuperado de crash`;
     case "reaper-orphan-cleaned":
       return `${prefix} worktree órfão da issue ${issueRef} limpo`;
+    case "chain-released": {
+      const deps = Array.isArray(event.deps) && event.deps.length ? ` (dependências #${event.deps.join(", #")} merjadas)` : "";
+      return `${prefix} issue ${issueRef} liberada da fila → pronta pra execução${deps}`;
+    }
+    case "chain-stranded": {
+      const deps = Array.isArray(event.deps) && event.deps.length ? ` (depende de #${event.deps.join(", #")})` : "";
+      return `${prefix} issue ${issueRef} encalhada — uma dependência morreu (blocked)${deps}; a corrente abaixo dela não avança`;
+    }
     default:
       return `${prefix} ${escapeHtml(type ?? "evento")}`;
   }
