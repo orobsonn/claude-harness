@@ -442,3 +442,14 @@ test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, st
   const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
   assert.ok(routedAwaiting, "a synchronous boolean false must route to awaiting-merge (proves no await/Promise truthiness)");
 });
+
+test("cronReview: a rejected auto-merge (mergeAndFinalize returns {merged:false}) notifies pr-merge-failed so the operator sees the stuck merge", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(80, { number: 80, headRefName: "harness/120", author: { login: "bot-user" }, labels: [], headSha: "sha-mf", url: "u80" });
+  setDiff(80, ["src/z.js"]); // not gate machinery
+  const notify = makeSpy();
+  cronReview(baseOpts({ gh, notify, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false })) }));
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-merge-failed"), "a rejected auto-merge must notify pr-merge-failed");
+  assert.ok(!types.includes("pr-merged"), "a rejected merge must NOT notify pr-merged");
+});
