@@ -32,12 +32,6 @@ test("isHeadless detects the cloud-routine env", () => {
   assert.equal(isHeadless({}), false);
 });
 
-test("checkAvailability: headless without API key is unavailable by design", () => {
-  const r = checkAvailability({ env: { CLAUDE_CODE_REMOTE: "1" }, hasCodex: () => true });
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /headless/i);
-});
-
 test("checkAvailability: headless WITH API key may proceed if codex present", () => {
   const r = checkAvailability({ env: { CLAUDE_CODE_REMOTE: "1", OPENAI_API_KEY: "sk-x" }, hasCodex: () => true });
   assert.equal(r.ok, true);
@@ -47,6 +41,46 @@ test("checkAvailability: missing codex binary is unavailable", () => {
   const r = checkAvailability({ env: {}, hasCodex: () => false });
   assert.equal(r.ok, false);
   assert.match(r.reason, /not found/i);
+});
+
+test("checkAvailability: subscription login (loginStatus exit 0 'Logged in') and no OPENAI_API_KEY is available", () => {
+  const r = checkAvailability({
+    env: {},
+    hasCodex: () => true,
+    loginStatus: () => ({ status: 0, stdout: "Logged in using ChatGPT" }),
+  });
+  assert.equal(r.ok, true);
+});
+
+test("checkAvailability: definitively-not-authed probe (non-zero / 'not logged in') with no API key is unavailable", () => {
+  const r = checkAvailability({
+    env: {},
+    hasCodex: () => true,
+    loginStatus: () => ({ status: 1, stdout: "Not logged in" }),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(typeof r.reason, "string");
+  assert.ok(r.reason.length > 0);
+});
+
+test("checkAvailability: ambiguous probe (throws / times out) with no API key is available so real codex exec is the authority", () => {
+  const r = checkAvailability({
+    env: {},
+    hasCodex: () => true,
+    loginStatus: () => {
+      throw new Error("spawn ETIMEDOUT");
+    },
+  });
+  assert.equal(r.ok, true);
+});
+
+test("checkAvailability: OPENAI_API_KEY is an accepted alternate credential even when loginStatus reports not-authed", () => {
+  const r = checkAvailability({
+    env: { OPENAI_API_KEY: "sk-x" },
+    hasCodex: () => true,
+    loginStatus: () => ({ status: 1, stdout: "Not logged in" }),
+  });
+  assert.equal(r.ok, true);
 });
 
 test("runCodexAdversary fails open when unavailable (never throws)", () => {
