@@ -526,3 +526,27 @@ test("run-cron-review: codex security output with an explicit verdict UNSAFE blo
     assert.equal(result, false, "an explicit codex security verdict UNSAFE must block regardless of an empty issues[]");
   } finally { cleanup(); }
 });
+
+test("run-cron-review: codex security verdict 'unsafe' (lowercase) with empty issues still blocks (case-insensitive UNSAFE guard)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-unsafe-lower-");
+  try {
+    const { driver } = makeRawCodexDriver({ adversaryOutput: { issues: [] }, securityOutput: { verdict: "unsafe", issues: [] }, available: true });
+    const gh = makeSpy((args) => args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "REAL PATCH" : { ok: true }));
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a lowercase 'unsafe' verdict must block just like 'UNSAFE'");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: codex security verdict 'UNSAFE ' with trailing whitespace still blocks (trimmed UNSAFE guard)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-unsafe-ws-");
+  try {
+    const { driver } = makeRawCodexDriver({ adversaryOutput: { issues: [] }, securityOutput: { verdict: "UNSAFE ", issues: [] }, available: true });
+    const gh = makeSpy((args) => args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "REAL PATCH" : { ok: true }));
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a 'UNSAFE ' verdict with whitespace must block");
+  } finally { cleanup(); }
+});
