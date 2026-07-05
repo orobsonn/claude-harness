@@ -206,7 +206,8 @@ export async function runCronReview(config, deps = {}) {
         }
       };
 
-      if (!codexDriver || !codexDriver.checkAvailability({}).ok) {
+      const avail = codexDriver?.checkAvailability({});
+      if (!codexDriver || !avail?.ok) {
         writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
         return crossFamilyEligible(pr, { available: false, secondFamilyVerdict: null });
       }
@@ -224,21 +225,27 @@ export async function runCronReview(config, deps = {}) {
         return crossFamilyEligible(pr, { available: false });
       }
 
-      const avail = codexDriver.checkAvailability({});
+      const boundSpawn = (bin, a, o) => spawnSync(bin, a, { ...o, timeout: 120000, killSignal: "SIGKILL" });
       const advPrompt = codexDriver.composeRolePrompt({ role: "adversary", taskJson: patch });
-      const adv = codexDriver.runCodexRole({ role: "adversary", prompt: advPrompt, availability: avail });
+      const adv = codexDriver.runCodexRole({ role: "adversary", prompt: advPrompt, availability: avail, spawn: boundSpawn });
       const secPrompt = codexDriver.composeRolePrompt({ role: "security", taskJson: patch });
-      const sec = codexDriver.runCodexRole({ role: "security", prompt: secPrompt, availability: avail });
+      const sec = codexDriver.runCodexRole({ role: "security", prompt: secPrompt, availability: avail, spawn: boundSpawn });
 
+      const advIssues = Array.isArray(adv.output?.issues) ? adv.output.issues : null;
+      const secIssues = Array.isArray(sec.output?.issues) ? sec.output.issues : null;
+      // An eye counts as a genuine pass ONLY if it ran, returned a valid issues[] array, and did not
+      // explicitly declare UNSAFE. A malformed / verdict-UNSAFE output fails CLOSED (treated as absent).
+      const advOk = adv.available === true && advIssues !== null && adv.output?.verdict !== "UNSAFE";
+      const secOk = sec.available === true && secIssues !== null && sec.output?.verdict !== "UNSAFE";
       const codexEyes = {
-        adversary: { available: adv.available, issues: adv.output?.issues ?? [] },
-        security: { available: sec.available, issues: sec.output?.issues ?? [] },
+        adversary: { available: advOk, issues: advIssues ?? [] },
+        security: { available: secOk, issues: secIssues ?? [] },
       };
 
       const verdict = deriveSecondFamilyVerdict(codexEyes, { securityVerdict: codexDriver.securityVerdict });
-      const available = Boolean(adv.available && sec.available);
-      const adversaryClean = codexDriver.securityVerdict(codexEyes.adversary.issues) === "SECURE";
-      const securitySecure = codexDriver.securityVerdict(codexEyes.security.issues) === "SECURE";
+      const available = Boolean(advOk && secOk);
+      const adversaryClean = advOk && codexDriver.securityVerdict(advIssues ?? []) === "SECURE";
+      const securitySecure = secOk && codexDriver.securityVerdict(secIssues ?? []) === "SECURE";
 
       writeArtifact({ available, verdict: verdict.status, adversaryClean, securitySecure });
       return crossFamilyEligible(pr, { available, secondFamilyVerdict: verdict });
