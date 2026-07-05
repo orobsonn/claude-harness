@@ -27,3 +27,8 @@ cheap-hands default. A Claude hand is still reachable by putting a Claude alias 
   eye-role alias.
 - `executor` and `sniper` are forbidden as fixed keys in `model_strategy` (they resolve via
   `hand_tiers`). Having them as fixed keys would bypass the tier routing logic.
+- **Observed reliability (surgical/composition-root work):** `glm-5.2` (medium tier) flaked
+  repeatedly on surgical fixes — `NOT_DONE` returns and confabulated "permission blocked" claims that
+  weren't real — while `kimi-k2.7-code` (high tier) completed the same class of task reliably on the
+  first try. Prefer the **high** tier for surgical fixes and composition-root wiring; medium is fine
+  for lower-stakes/boilerplate dispatches until a broader sample says otherwise.

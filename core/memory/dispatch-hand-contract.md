@@ -34,3 +34,19 @@ Scope-check and per-dispatch allowed-write sets enforce containment without a gi
   `.dev.vars`. Reading the file directly is both pointless (the resolver already does it) and denied
   (`Read(.dev.vars)` baseline blocks any command whose text names the file, while the resolver's
   internal read is unaffected). Token presence is decided ONLY by `spawn-hand.mjs`'s `exit 2` + reason.
+
+- **Commit BEFORE re-freezing/re-spawning on the same file.** The spawn-hand git-universe
+  reconciliation step (used to snapshot/restore working-tree state between hand dispatches) eats
+  *uncommitted* production work: if a hand's fix or the executor's own change sits uncommitted when
+  the orchestrator freezes a new manifest / spawns another hand touching the same file, the
+  reconciliation can stash or mangle it. Always commit the impl (or the sniper's fix) before the next
+  freeze/spawn cycle on that file — never chain "fix in place, then immediately re-spawn" without a
+  commit in between.
+
+- **`mark.mjs` marker stdout must never be redirected to `/dev/null`.** The `stamp-triage`
+  `PostToolUse` hook reads the marker's stdout JSON to stamp `fidelity-pass` / `hand-finished` /
+  `capture-verified` records; silencing it (`> /dev/null` or piping through something that swallows
+  stdout) makes the hook stamp nothing, silently. Also: emit each marker call as its own **standalone**
+  tool call issued *after* the freeze-commit — not chained into the same compound command as the
+  spawn/commit — so the `PostToolUse` hook fires on it individually instead of only seeing the last
+  command in a `&&` chain.

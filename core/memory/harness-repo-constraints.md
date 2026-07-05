@@ -30,6 +30,14 @@ not be run unconditionally.
   tests assert the core file only. Diverged mirrors are a silent bug — the agent uses the live copy,
   CI enforces the core copy, and they drift undetected until a test catches a stale value.
 
+- **The project-local `.claude/` tree is itself gitignored in this SOURCE repo** (see
+  `.git/info/exclude`) — only `core/` and `modules/` ship in git; `.claude/` is the locally-vendored
+  mirror the running agent reads (parallel to `~/.claude/`, same rule as above one level down). Any
+  drift-guard test or docs-mirror test that asserts byte-identity against `.claude/<path>` must
+  `existsSync`-guard that side (skip/no-op when absent) or compare `core/`↔`modules/` only — a fresh
+  CI checkout has no `.claude/` tree at all, and an unguarded assertion fails hard there even though
+  local dev is fine.
+
 - **Path tests use `import.meta.url`** — tests that reference repo files must resolve paths via
   `resolve(dirname(fileURLToPath(import.meta.url)), '../...')`. Hardcoded absolute paths
   (`/Users/robson/...`) pass locally and always fail in GitHub Actions (different checkout path).
