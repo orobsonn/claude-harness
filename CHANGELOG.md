@@ -23,6 +23,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `autoMergeEnabled` (desligada por padrão) garante que nenhum PR mescla sozinho até o operador
   decidir ligar o auto-merge cross-family de propósito.
 
+### Fixed
+
+- **A notificação "revisão iniciada" volta a chegar** — antes o aviso de que a análise de um PR
+  começou era disparado logo antes de um `spawn` bloqueante de vários minutos; o tempo-limite de 5s
+  do envio estourava durante o bloqueio e a notificação nunca chegava, o operador só via o resultado.
+  Agora o envio de "revisão iniciada" é aguardado até concluir enquanto o loop está livre, antes do
+  spawn — o ping chega de fato.
+
 ### Changed
 
 - **PR já revisado no mesmo commit deixa de ser revisado de novo em todo ciclo** (fecha parte do
