@@ -365,7 +365,8 @@ function defaultGitState() {
 
 const ISSUE_FORM_ADVISORY =
   "This repo vendors the Claude Harness issue form (.github/ISSUE_TEMPLATE/harness-task.yml). " +
-  "Prefer creating issues through it so they enter the autonomous routine. " +
+  "Prefer creating issues through it so they enter the autonomous routine — or run the " +
+  "`creating-issues` skill, which authors them to standard for you. " +
   "The `gh issue create` CLI bypasses issue forms silently — if you proceed, replicate the form: " +
   "title `[harness] <slug>`, label `harness:ready`, and a body with #uj-N journeys, " +
   "#ac-N.M acceptance criteria, scope, sensitive domain, priority, and size " +

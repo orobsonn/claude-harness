@@ -2,6 +2,10 @@
 
 Universal — sem `paths:`, carrega em toda conversa.
 
+> Esta rule é o **padrão** (o quê/porquê). Para criar issue(s) **ativamente** — passo a passo,
+> aplicando sizing, critério de aceite verificável e roadmap — use a skill **`creating-issues`**, o
+> procedimento que aplica este padrão. Fonte única: a skill lê esta rule, não a duplica.
+
 ## Conventions
 
 ### Issue form — sempre que disponível

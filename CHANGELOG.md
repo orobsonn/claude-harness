@@ -9,6 +9,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Skill `creating-issues`** — procedimento ativo pra criar a issue (o insumo de maior alavancagem
+  da pipeline: último ponto de controle humano antes da máquina rodar plano→build→review→merge
+  sozinha). Aplica a regra de sizing (unidade de entrega pequena e revertível), **treina critério de
+  aceite verificável** (os `locked_tests` saem dele — AC vago mira a pipeline inteira errado), amarra
+  `harness-deps` pra ordem do roadmap, cria tudo `harness:ready` e roda o `chain-validate`. Fonte
+  única: lê a rule `creating-issues`, não a duplica; o advisory de `gh issue create` aponta pra ela.
 - **Encadeamento de roadmap por dependência (parte 1: motor de liberação)** — uma issue de roadmap
   pode declarar de quais issues ela depende num bloco fechado no corpo (` ```harness-deps ` com
   `#12`, `#13`…), e nasce com a label `harness:queued` — invisível pro seletor, que só pega
