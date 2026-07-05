@@ -93,6 +93,20 @@ function makeFakeCodexDriver({ adversaryIssues = [], securityIssues = [], availa
   return { driver, runCodexRole };
 }
 
+// A driver whose runCodexRole returns caller-controlled RAW output objects per role (to exercise malformed codex output).
+function makeRawCodexDriver({ adversaryOutput, securityOutput, available = true }) {
+  const runCodexRole = makeSpy(({ role }) => ({ available, output: role === "security" ? securityOutput : adversaryOutput }));
+  return {
+    driver: {
+      runCodexRole,
+      checkAvailability: () => ({ ok: available, reason: "" }),
+      securityVerdict: (issues = []) => (issues.some((i) => i.severity === "high" || i.severity === "medium") ? "UNSAFE" : "SECURE"),
+      composeRolePrompt: ({ role, taskJson }) => `CODEX ${role} ::: ${typeof taskJson === "string" ? taskJson : JSON.stringify(taskJson)}`,
+    },
+    runCodexRole,
+  };
+}
+
 // Runs runCronReview with deps.cronReview captured, returns the captured opts (crossFamilyEligible + autoMergeEnabled).
 async function captureCronReviewOpts(configOverrides, depsOverrides) {
   let captured = null;
@@ -485,4 +499,30 @@ test("run-cron-review: the cross-family step writes ONLY the crossfamily sibling
   } finally {
     cleanup();
   }
+});
+
+test("run-cron-review: codex adversary output lacking an issues[] array fails CLOSED (not become CLEAN), never coerced to [] -> CLEAN", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-malformed-adv-");
+  try {
+    const { driver } = makeRawCodexDriver({ adversaryOutput: { note: "no issues key here" }, securityOutput: { verdict: "SECURE", issues: [] }, available: true });
+    const gh = makeSpy((args) => args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "REAL PATCH" : { ok: true }));
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a codex output with no issues[] must never resolve to eligible/CLEAN");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.notEqual(artifact.verdict, "CLEAN", "the recorded verdict must not be CLEAN for a malformed codex output");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: codex security output with an explicit verdict UNSAFE blocks even if its issues[] is empty", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-unsafe-verdict-");
+  try {
+    const { driver } = makeRawCodexDriver({ adversaryOutput: { issues: [] }, securityOutput: { verdict: "UNSAFE", issues: [] }, available: true });
+    const gh = makeSpy((args) => args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "REAL PATCH" : { ok: true }));
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "an explicit codex security verdict UNSAFE must block regardless of an empty issues[]");
+  } finally { cleanup(); }
 });
