@@ -4,6 +4,10 @@
  * the old normalizer always returned `{ok}`, but the review phase needs a `string[]` of changed
  * file paths from `pr diff --name-only`. These tests pin the exact contract (see file header of
  * gh-exec.mjs) so the fix can't silently regress back to `{ok}` for the diff branch.
+ *
+ * RD-5: `pr diff` fetch failures (both `--name-only` and the full-patch form) are fail-CLOSED
+ * and must return the distinct sentinel `{ ok: false, diffFailed: true }` — never a bare `[]`
+ * (which would be indistinguishable from a genuinely empty diff) and never a bare `{ ok: false }`.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -70,9 +74,28 @@ test("pr diff --name-only filters blank/trailing lines", () => {
   assert.deepEqual(result, ["a.js", "b.js"]);
 });
 
-test("pr diff --name-only that failed returns [] (fail-closed, so touchesGateMachinery sees no gate files on a gh hiccup)", () => {
+test("pr diff --name-only that failed returns the distinct failure sentinel { ok:false, diffFailed:true }, NOT []", () => {
   const result = normalizeGhResult(["pr", "diff", "5", "--name-only"], { status: 1 });
-  assert.deepEqual(result, []);
+  assert.deepEqual(result, { ok: false, diffFailed: true });
+  assert.equal(Array.isArray(result), false);
+});
+
+test("pr diff --name-only with status 0 and empty stdout returns [] (empty diff stays distinguishable from the failure sentinel)", () => {
+  const result = normalizeGhResult(["pr", "diff", "5", "--name-only"], { status: 0, stdout: "" });
+  assert.equal(Array.isArray(result), true);
+  assert.equal(result.length, 0);
+});
+
+test("pr diff <n> without --name-only (full patch) with status 0 returns the stdout patch string, never { ok:true }", () => {
+  const patch = "diff --git a/x b/x\n+patch";
+  const result = normalizeGhResult(["pr", "diff", "5"], { status: 0, stdout: patch });
+  assert.equal(typeof result, "string");
+  assert.equal(result, patch);
+});
+
+test("pr diff <n> without --name-only that failed returns { ok:false, diffFailed:true }, not a patch string and not a bare { ok:false }", () => {
+  const result = normalizeGhResult(["pr", "diff", "5"], { status: 1 });
+  assert.deepEqual(result, { ok: false, diffFailed: true });
 });
 
 test("defaultGhExec and scopedGh remain exported functions", () => {
