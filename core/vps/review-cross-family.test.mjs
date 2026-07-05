@@ -6,13 +6,22 @@
  * `opts.secondFamilyVerdict`) are INJECTED so the module never hard-depends on the gitignored
  * codex driver and every test stays deterministic — ZERO real availability probe, ZERO real
  * codex call.
+ *
+ * Also covers `deriveSecondFamilyVerdict(codexEyes, { securityVerdict })` — a pure helper that
+ * folds the codex adversary + security eye outputs into a single { status } verdict object, using
+ * an injected `securityVerdict` fn to judge each eye's issues. It is fail-closed: CLEAN requires
+ * BOTH eyes present AND both judged SECURE; any missing eye or any UNSAFE judgement yields
+ * BLOCKED, never a false CLEAN.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { crossFamilyEligible } from "./review-cross-family.mjs";
+import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
+import { securityVerdict as realSecurityVerdict } from "../../modules/codex-adversary/references/merge-findings.mjs";
 
 const PR = { number: 42, headRefName: "harness/feat-x", headSha: "abc123", url: "https://github.com/acme/demo/pull/42" };
+
+const fakeSecurityVerdict = (issues = []) => (issues.some((i) => i.severity === "high" || i.severity === "medium") ? "UNSAFE" : "SECURE");
 
 test("Given the second family is UNAVAILABLE, When crossFamilyEligible runs, Then it returns false even with a CLEAN verdict present (fail-closed)", () => {
   const unavailableButClean = crossFamilyEligible(PR, {
@@ -63,4 +72,66 @@ test("Given availability is TRUE AND a real second-family CLEAN verdict object e
     secondFamilyVerdict: (prArg) => (prArg.number === PR.number ? { status: "CLEAN" } : null),
   });
   assert.equal(eligibleViaFns, true, "eligibility must also hold when both seams are functions resolving to available+CLEAN");
+});
+
+test("deriveSecondFamilyVerdict: codex security has a high issue + clean adversary → BLOCKED, and crossFamilyEligible false", () => {
+  const v = deriveSecondFamilyVerdict(
+    { adversary: { issues: [] }, security: { issues: [{ severity: "high", scope: "x" }] } },
+    { securityVerdict: fakeSecurityVerdict },
+  );
+  assert.equal(v.status, "BLOCKED");
+  assert.equal(crossFamilyEligible(PR, { available: true, secondFamilyVerdict: v }), false);
+});
+
+test("deriveSecondFamilyVerdict: clean adversary (zero high/medium) + SECURE security → CLEAN, and crossFamilyEligible true", () => {
+  const v = deriveSecondFamilyVerdict(
+    { adversary: { issues: [{ severity: "low", scope: "y" }] }, security: { issues: [] } },
+    { securityVerdict: fakeSecurityVerdict },
+  );
+  assert.equal(v.status, "CLEAN");
+  assert.equal(crossFamilyEligible(PR, { available: true, secondFamilyVerdict: v }), true);
+});
+
+test("deriveSecondFamilyVerdict: adversary has a medium issue → BLOCKED (adversaryClean false, never a false-CLEAN)", () => {
+  const v = deriveSecondFamilyVerdict(
+    { adversary: { issues: [{ severity: "medium", scope: "z" }] }, security: { issues: [] } },
+    { securityVerdict: fakeSecurityVerdict },
+  );
+  assert.equal(v.status, "BLOCKED");
+});
+
+test("deriveSecondFamilyVerdict: a missing/null eye output → BLOCKED (absent eye never derives CLEAN)", () => {
+  assert.equal(
+    deriveSecondFamilyVerdict({ adversary: null, security: { issues: [] } }, { securityVerdict: fakeSecurityVerdict }).status,
+    "BLOCKED",
+  );
+  assert.equal(
+    deriveSecondFamilyVerdict({ adversary: { issues: [] }, security: null }, { securityVerdict: fakeSecurityVerdict }).status,
+    "BLOCKED",
+  );
+});
+
+test("crossFamilyEligible pre-existing fail-closed seam unchanged: available false + CLEAN verdict → false", () => {
+  assert.equal(crossFamilyEligible(PR, { available: false, secondFamilyVerdict: { status: "CLEAN" } }), false);
+});
+
+test("deriveSecondFamilyVerdict: an eye envelope carrying available:false (unavailable, never ran) is BLOCKED even with empty issues (no false-CLEAN from an unrun eye)", () => {
+  const bothUnavailable = deriveSecondFamilyVerdict(
+    { adversary: { available: false, issues: [] }, security: { available: false, issues: [] } },
+    { securityVerdict: fakeSecurityVerdict }
+  );
+  assert.equal(bothUnavailable.status, "BLOCKED");
+  const oneUnavailable = deriveSecondFamilyVerdict(
+    { adversary: { available: false, issues: [] }, security: { available: true, issues: [] } },
+    { securityVerdict: fakeSecurityVerdict }
+  );
+  assert.equal(oneUnavailable.status, "BLOCKED");
+});
+
+test("deriveSecondFamilyVerdict: a codex adversary 'critical' finding blocks under the REAL securityVerdict (critical normalizes to high)", () => {
+  const v = deriveSecondFamilyVerdict(
+    { adversary: { available: true, issues: [{ severity: "critical", scope: "x" }] }, security: { available: true, issues: [] } },
+    { securityVerdict: realSecurityVerdict }
+  );
+  assert.equal(v.status, "BLOCKED");
 });

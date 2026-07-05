@@ -16,6 +16,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   Reforços anti-spoofing: artefatos de uma tentativa anterior (travada/expirada) são sempre apagados
   antes de rodar uma nova sessão e também em qualquer falha, para nunca herdar um veredito CLEAN
   velho.
+- **Segunda família de modelo (Codex/GPT) agora roda de verdade na revisão de PR** — antes a
+  checagem cross-family estava sempre desligada por um bug de fiação; agora ela chama o Codex de
+  fato, sobre o diff real do PR, ao lado dos olhos Claude. A autenticação passou a reconhecer o
+  login por assinatura do ChatGPT (sem precisar de chave de API). Uma trava explícita
+  `autoMergeEnabled` (desligada por padrão) garante que nenhum PR mescla sozinho até o operador
+  decidir ligar o auto-merge cross-family de propósito.
 
 ### Changed
 
@@ -28,15 +34,21 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - **Bug do disjuntor (breaker) da revisão de PR corrigido** — o contador de sessões de revisão por
   janela de tempo travava (matemática quebrada) e nunca se recuperava depois de bater o teto; agora
   conta, corta no limite e se recupera normalmente após a janela.
+- **Falha ao buscar o diff do PR deixou de ser indistinguível de "PR sem mudanças"** — antes uma
+  falha transitória de rede/API ao buscar o diff caía silenciosamente no mesmo caminho de "diff
+  vazio", podendo pular sem aviso uma checagem extra de segurança em PRs que tocam a própria
+  infraestrutura de revisão. Agora a falha é sinalizada de forma distinta e o PR é reenfileirado em
+  vez de seguir como se nada tivesse mudado.
 
 ### Removed
 
-**Riscos abertos registrados (não bloqueiam esta entrega, mas travam o auto-merge cross-family
-real):** um veredito manipulado via injeção de prompt só é barrado hoje por revisão humana do PR
-(cross-family real ainda não ligado); e uma falha transitória ao buscar o diff do PR pode, em teoria,
-pular silenciosamente uma checagem extra de segurança em PRs que tocam a própria infraestrutura de
-revisão — inofensivo agora porque nada ainda mescla automaticamente sem essa segunda família de
-modelo, mas deve ser fechado antes de ligar o auto-merge cross-family.
+**Riscos abertos registrados (não bloqueiam esta entrega — o auto-merge cross-family segue
+desligado por padrão, mas devem ser fechados antes de ligar `autoMergeEnabled` em produção):** um
+veredito manipulado via injeção de prompt segue barrado hoje só por revisão humana do PR; e uma
+falha transitória da segunda família de modelo (timeout, indisponibilidade) ainda é tratada como um
+veredito definitivo de "bloqueado" em vez de "tentar de novo depois" — inofensivo hoje porque nada
+mescla automaticamente sem essa trava, mas pode prender sem necessidade um PR bom até o próximo
+push.
 
 ## [0.24.0] - 2026-07-05
 

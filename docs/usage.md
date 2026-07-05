@@ -122,13 +122,13 @@ Não há link automático PR→sessão nem notificação de falha. Valide assim:
 
 Em runs autônomos via VPS (headless-local), depois que a issue vira PR existe uma **segunda etapa**, independente da sessão que implementou: uma sessão de revisão com olhos frescos que reanalisa o diff do PR do zero (adversary + compliance + security), sem herdar contexto de quem codou. Ela roda como cron próprio (`cron-review`), agendada `0 */6 * * *` (a cada 6h) — **substitui** o antigo Cron B fraco nesse mesmo horário. A implementação do **Cron A** (seleção e dispatch da issue) não muda: continua `0 */4 * * *` (a cada 4h).
 
-A sessão de revisão soma cross-family (segunda família de modelo, quando disponível) e, se o diff toca a própria maquinaria de gate do harness, um segundo passe de gate-hardening. Só auto-merge na **conjunção completa**: veredito fresco limpo + cross-family elegível + (quando aplicável) segundo passe limpo.
+A sessão de revisão soma cross-family (segunda família de modelo, **Codex via ChatGPT subscription**, rodando **FOR REAL sobre o diff do PR**) e, se o diff toca a própria maquinaria de gate do harness, um segundo passe de gate-hardening. O veredito final é derivado pelo Node a partir dos outputs estruturados dos olhos (adversary + security), com os dois modelos em paralelo. Só auto-merge na **conjunção completa**: veredito fresco limpo + cross-family elegível + (quando aplicável) segundo passe limpo + `autoMergeEnabled` ativado.
 
 - **Kill switch:** a env var `HARNESS_REVIEW_ENABLED` liga/desliga a fase inteira (`1` = ativa — default do `settings.json` do core). Desligada, a etapa de revisão some sem afetar o Cron A.
 - **Fail-closed sem a segunda família:** sem o módulo `codex-adversary` instalado, com o switch de cross-family desligado, ou com o `codex` inalcançável, um PR que passaria em tudo o mais **não é auto-mergeado** — vai para o label `harness:awaiting-merge`, aguardando merge manual do operador. A revisão nunca aceita silenciosamente na ausência da segunda checagem.
+- **`autoMergeEnabled` — rollout lock separado:** além da conjunção acima, o auto-merge exige explicitamente `config.autoMergeEnabled === true`. Por default, está **desligado (OFF/false)** — mesmo com todas as checagens CLEAN, o PR vai para `harness:awaiting-merge` até que o operador ative essa flag. Isso decouple a validação cross-family do disparo do auto-merge, permitindo que o operador valide que a segunda família está rodando antes de confiar no merge automático. A flag passa a valer para revisões subsequentes (risco aberto documentado).
+- **Fail-closed na busca do diff:** uma falha transitória em `gh pr diff` (exit non-zero) é tratada como erro grave (`diffFailed: true`) e re-filega a revisão; **nunca** silencia e passa adiante (o antigo comportamento de diff vazio como OK foi corrigido).
 - Quando o merge sai automático, a notificação (Telegram) traz a reversão em uma linha: `git revert -m 1 <sha-do-merge>`.
-
-**Riscos abertos registrados:** mesmo com a conjunção completa fechada, o auto-merge carrega um risco residual total — nenhuma revisão de máquina substitui 100% o julgamento humano; e sem o módulo `codex-adversary` instalado a fase fica "segura, porém inerte" nesse ponto — os olhos Claude rodam normalmente, mas o merge automático nunca acontece (tudo cai em `awaiting-merge`) até a segunda família estar disponível.
 
 ---
 

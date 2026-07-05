@@ -112,6 +112,7 @@ function baseOpts(overrides = {}) {
     isReviewEligible,
     getFreshVerdict: () => ({ status: "CLEAN" }),
     crossFamilyEligible: () => true,
+    autoMergeEnabled: true,
     mergeAndFinalize: makeSpy(),
     reconcile: makeSpy(() => []),
     routeReject: makeSpy(),
@@ -375,4 +376,80 @@ test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", () 
 
   const types = notify.calls.map((a) => a[0] && a[0].type);
   assert.ok(types.includes("pr-merged"), "must notify pr-merged on a successful autonomous merge");
+});
+
+test("cronReview: a diff-fetch failure sentinel {ok:false,diffFailed:true} re-queues (notify pr-diff-fetch-failed, NO spawn, NO recordReviewed)", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(60, { number: 60, headRefName: "harness/90", author: { login: "bot-user" }, labels: [], headSha: "sha-k" });
+  setDiff(60, { ok: false, diffFailed: true }); // fetch failure sentinel
+  const notify = makeSpy();
+  const spawnReviewSession = makeSpy();
+  const recordReviewed = makeSpy();
+  cronReview(baseOpts({ gh, notify, spawnReviewSession, recordReviewed }));
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-diff-fetch-failed"), "must notify pr-diff-fetch-failed on a diff sentinel");
+  assert.equal(spawnReviewSession.calls.length, 0, "must NOT spawn a review session on a diff fetch failure");
+  assert.equal(recordReviewed.calls.length, 0, "must NOT record reviewed (re-queue: retry next cycle)");
+});
+
+test("cronReview: a genuinely empty diff [] is NOT a fetch failure — the review session IS spawned", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(61, { number: 61, headRefName: "harness/91", author: { login: "bot-user" }, labels: [], headSha: "sha-l" });
+  setDiff(61, []); // genuinely empty
+  const spawnReviewSession = makeSpy();
+  cronReview(baseOpts({ gh, spawnReviewSession }));
+  assert.equal(spawnReviewSession.calls.length, 1, "an empty [] diff must proceed to a normal review spawn");
+});
+
+test("cronReview: fully-eligible PR with autoMergeEnabled false routes to awaiting-merge (mergeAndFinalize never called, recordReviewed once)", () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(62, { number: 62, headRefName: "harness/92", author: { login: "bot-user" }, labels: [], headSha: "sha-m" });
+  setDiff(62, ["src/ok.js"]); // not gate machinery
+  const mergeAndFinalize = makeSpy(() => ({ merged: true }));
+  const recordReviewed = makeSpy();
+  cronReview(baseOpts({ gh, autoMergeEnabled: false, crossFamilyEligible: () => true, mergeAndFinalize, recordReviewed }));
+  assert.equal(mergeAndFinalize.calls.length, 0, "autoMergeEnabled false must NOT auto-merge an eligible PR");
+  const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
+  assert.ok(routedAwaiting, "flag-off eligible PR must be routed to harness:awaiting-merge");
+  assert.equal(recordReviewed.calls.length, 1, "the awaiting-merge route records reviewed exactly once");
+});
+
+test("cronReview: fully-eligible PR with autoMergeEnabled true DOES call mergeAndFinalize(pr, sha, opts)", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 63, headRefName: "harness/93", author: { login: "bot-user" }, labels: [], headSha: "sha-n" };
+  setPr(63, pr);
+  setDiff(63, ["src/ok2.js"]);
+  const mergeAndFinalize = makeSpy(() => ({ merged: true }));
+  cronReview(baseOpts({ gh, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize }));
+  assert.equal(mergeAndFinalize.calls.length, 1, "autoMergeEnabled true must auto-merge an eligible PR");
+  assert.equal(mergeAndFinalize.calls[0][0].number, 63, "mergeAndFinalize receives the pr as first arg");
+  assert.equal(mergeAndFinalize.calls[0][1], "sha-n", "mergeAndFinalize receives the head sha as second arg");
+});
+
+test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, stateDir}) and its boolean return is consumed synchronously", () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(64, { number: 64, headRefName: "harness/94", author: { login: "bot-user" }, labels: [], headSha: "sha-o" });
+  setDiff(64, ["src/ok3.js"]);
+  const cfeSpy = makeSpy(() => false); // returns a plain boolean; false → awaiting-merge route
+  cronReview(baseOpts({ gh, crossFamilyEligible: cfeSpy, mergeAndFinalize: makeSpy() }));
+  assert.equal(cfeSpy.calls.length, 1, "crossFamilyEligible must be called once for the PR");
+  const secondArg = cfeSpy.calls[0][1];
+  assert.equal(typeof secondArg, "object", "crossFamilyEligible's 2nd arg must be an options object");
+  assert.deepEqual(secondArg.changedFiles, ["src/ok3.js"], "2nd arg must carry the changedFiles");
+  assert.equal(secondArg.sha, "sha-o", "2nd arg must carry the head sha");
+  assert.equal(typeof secondArg.stateDir, "string", "2nd arg must carry the stateDir");
+  // a plain boolean false was consumed synchronously → routed to awaiting-merge (a Promise would be truthy and merge/misroute)
+  const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
+  assert.ok(routedAwaiting, "a synchronous boolean false must route to awaiting-merge (proves no await/Promise truthiness)");
+});
+
+test("cronReview: a rejected auto-merge (mergeAndFinalize returns {merged:false}) notifies pr-merge-failed so the operator sees the stuck merge", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(80, { number: 80, headRefName: "harness/120", author: { login: "bot-user" }, labels: [], headSha: "sha-mf", url: "u80" });
+  setDiff(80, ["src/z.js"]); // not gate machinery
+  const notify = makeSpy();
+  cronReview(baseOpts({ gh, notify, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false })) }));
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-merge-failed"), "a rejected auto-merge must notify pr-merge-failed");
+  assert.ok(!types.includes("pr-merged"), "a rejected merge must NOT notify pr-merged");
 });

@@ -40,3 +40,31 @@ export function crossFamilyEligible(pr, opts) {
 
   return verdict.status === "CLEAN";
 }
+
+/**
+ * @description Pure RD-1 second-family verdict folder. Folds the codex adversary + security eye
+ * outputs into a single `{ status }` verdict object using the injected `securityVerdict` seam.
+ * Fail-closed: CLEAN requires both eyes present AND both judged SECURE; any missing eye or any
+ * non-SECURE judgement yields BLOCKED, never a false CLEAN. Does no I/O, no spawning, and does not
+ * import the optional codex driver.
+ *
+ * @param {{adversary: {available?: boolean, issues: unknown[]}|null, security: {available?: boolean, issues: unknown[]}|null}} codexEyes
+ *   Each eye is `{available?: boolean, issues: unknown[]}`. `available === false` means the eye
+ *   never ran and is treated as absent (fail-closed). A missing `available` field counts as present.
+ * @param {{securityVerdict: (issues: unknown[]) => string}} opts
+ * @returns {{status: "CLEAN" | "BLOCKED"}}
+ */
+export function deriveSecondFamilyVerdict(codexEyes, { securityVerdict }) {
+  const adversary = codexEyes?.adversary;
+  const security = codexEyes?.security;
+
+  const present = (e) => Boolean(e) && e.available !== false && Array.isArray(e.issues);
+  if (!present(adversary) || !present(security)) {
+    return { status: "BLOCKED" };
+  }
+
+  const adversaryClean = securityVerdict(adversary.issues) === "SECURE";
+  const securitySecure = securityVerdict(security.issues) === "SECURE";
+
+  return { status: adversaryClean && securitySecure ? "CLEAN" : "BLOCKED" };
+}

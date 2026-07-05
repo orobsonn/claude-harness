@@ -76,7 +76,7 @@ export function normalizeSeverity(severity) {
  */
 export function securityVerdict(issues = []) {
   const blocking = issues.some((i) => {
-    const sev = normalizeSeverity(i.severity);
+    const sev = normalizeSeverity(i?.severity);
     return sev === "high" || sev === "medium";
   });
   return blocking ? "UNSAFE" : "SECURE";

@@ -1,6 +1,6 @@
 ---
 name: independent-pr-review-phase
-description: Architecture of the independent PR-review phase (cron-review.mjs + run-cron-review.mjs) that replaces the editable-PR-body auto-merge verdict with a fresh, fail-closed, cross-family conjunction. spawnReviewSession is now LIVE (real claude -p actuator); breaker now-threading and the idempotency gap are fixed; open risks before enabling cross-family auto-merge are tracked below.
+description: Architecture of the independent PR-review phase (cron-review.mjs + run-cron-review.mjs) that replaces the editable-PR-body auto-merge verdict with a fresh, fail-closed, cross-family conjunction. spawnReviewSession is LIVE (real claude -p actuator); the real 2nd-family (Codex) actuator is now WIRED (runCodexRole direct, deriveSecondFamilyVerdict, autoMergeEnabled rollout lock); breaker now-threading and the idempotency gap are fixed; open risks before flipping autoMergeEnabled=true are tracked below.
 metadata:
   type: project
 ---
@@ -84,29 +84,83 @@ the conjunction, the label taxonomy, and — critically — that the phase does 
   pass a real `issueLabels` — until wired, the explicit skip is inert (defaults to `[]`); the
   pre-existing `!prExists` guard still protects the common case.
 
-- **Open risks (before enabling cross-family auto-merge)** — the review phase is live and
-  fail-closed for merge, but these gaps must close before flipping `crossFamilyEligible`/real
-  cross-family on for auto-merge:
+- **Real cross-family (Codex) actuator — NOW WIRED** (`cross-family-review-actuator` feature, closes
+  what was previously listed here as "not implemented"):
+  - **Verdict derivation (RD-1):** `deriveSecondFamilyVerdict` is a pure fold over
+    `{adversary, security}` codex-eye envelopes + an injected `securityVerdict` (from
+    `merge-findings.mjs`, not `codex-adversary.mjs` — no hard import of the optional driver). CLEAN
+    iff both eyes present, `available !== false`, `Array.isArray(issues)`, and both resolve SECURE/no
+    high-medium. Any missing/unavailable/malformed eye → BLOCKED. Never route through
+    `driveCrossFamily`/`runForRole` with a hardcoded `claudeIssues:[]` — that shape produces a
+    permanent false-CLEAN.
+  - **Real subscription auth (RD-2):** `checkAvailability` probes `codex login status` for real
+    (exit 0 + "Logged in using ChatGPT" stdout = authed by ChatGPT subscription, no API key needed).
+    `OPENAI_API_KEY` remains an accepted alternate. Ambiguous probe (spawn error/timeout, which
+    `spawnSync` returns as `{error, status:null}` rather than a throw) resolves to **available**
+    (let the real codex exec be the authority) — never to silently-Claude-only.
+  - **`autoMergeEnabled` rollout lock (RD-3/RD-6):** hard `=== true` check, default OFF. Flag-off →
+    every eligible PR routes to `awaiting-merge` exactly like the cross-family-absent path
+    (still calls `recordReviewed`). Must be threaded explicitly at the composition root
+    (`run-cron-review.mjs` → `cronReviewFn({..., autoMergeEnabled: config.autoMergeEnabled === true})`)
+    — omitting this wiring leaves the flag permanently inert (fail-safe, but silently so).
+  - **Fail-closed diff fetch (RD-4/RD-5) — closes what open-risk (b) below used to describe:**
+    `gh-exec` now returns a distinct non-array sentinel (`{ok:false, diffFailed:true}`) when
+    `pr diff --name-only` fails, instead of collapsing to `[]` (which was indistinguishable from a
+    genuinely-empty diff and silently skipped the HR-9 2nd pass). `cron-review` detects the sentinel
+    and skips/re-queues (notify + continue) BEFORE any spawn/record — coercing the sentinel to `[]`
+    would re-open the same fail-open bug, so callers must branch on `diffFailed`, never coerce.
+    A second `gh(["pr","diff",<n>])` (no `--name-only`) branch returns the raw patch-string codex
+    reviews; a non-string result from that branch is also treated as fail-closed (re-queue).
+  - **Sibling artifact (RD-8):** cross-family writes `review-<n>-<sha>.crossfamily.json`, a SIBLING
+    of the canonical `review-<n>-<sha>.json` — `spawn-review-session.mjs` stays the canonical's
+    exclusive writer.
+  - **Sync-seam invariant preserved:** `crossFamilyEligible(pr, {...})` stays a SYNCHRONOUS
+    `(pr) => boolean` (a Promise here would be always-truthy and silently defeat the gate). The
+    codex driver loads ONCE at `runCronReview` setup (now async); the per-PR closure itself stays
+    sync since `runCodexRole`/`gh`/`fs` are all `spawnSync`-backed.
+  - **Bounded spawn:** `runCodexRole` now runs under a bounded `spawnSync` (120s timeout,
+    `SIGKILL`) — an earlier draft had no timeout, so a hung codex process would have frozen the
+    review cron while holding its lock.
+  - **Env scrub (security-blocking, fixed):** the codex child process must NOT inherit the full
+    `process.env` — `ANTHROPIC_AUTH_TOKEN`/`OLLAMA_HAND_TOKEN` (and other hand tokens) are scrubbed
+    from its env before spawn, mirroring the scrub `spawn-review-session.mjs` already does. An
+    untrusted PR patch is fed to this binary — leaking harness credentials into it is a real, not
+    theoretical, exposure.
+  - **Codex latency is HIGH (~minutes per exec).** Per-task `codex-eye-nudge` dispatch is
+    impractical inside a cron/headless review session with tight timeouts — it timed out (300s) on
+    a spec-adversary refutation loop during this feature's own delivery. Carry cross-family at
+    **boundary gates only** (spec adversary, per-task adversary/security, final dual-review) rather
+    than nudging every intermediate step in a cron context. Subscription-based auth (no API key) is
+    confirmed working headless/live.
+
+- **Open risks (before flipping `autoMergeEnabled: true`)** — the review phase is live, fail-closed
+  for merge, and cross-family now genuinely runs, but these gaps should close before trusting it to
+  auto-merge unattended:
   - **(a) judge prompt-injection:** prBody/prTitle/changedFiles are attacker-controlled and only
     delimited as untrusted stdin data (nonce-scoped, never argv/system instructions) — this defends
     against argv/shell injection, but a fully prompt-injected eye output (the LLM judge itself
-    convinced to lie) is only truly backstopped by cross-family agreement + human PR review, both
-    currently out of scope. Safe today only because nothing auto-merges without cross-family, which
-    defaults to unavailable → fail-closed.
-  - **(b) gh diff-fetch failure is indistinguishable from an empty diff:** `normalizeGhResult`
-    returns `[]` both when a PR's diff is genuinely empty and when the `gh pr diff --name-only` fetch
-    itself fails/hiccups. `touchesGateMachinery([])` is `false` either way, so a transient `gh` failure
-    on a gate-machinery PR silently skips the HR-9 2nd pass — fail-**open** for that gate. Unreachable
-    today only because cross-family is `available:false` (nothing merges regardless). **Must be made
-    fail-closed before enabling cross-family** — signal diff-fetch failure distinctly (e.g. `null`)
-    and force the 2nd pass / re-queue on a failed diff, updating the frozen `gh-exec.test.mjs` `[]`
-    contract accordingly.
+    convinced to lie) is only truly backstopped by cross-family agreement + human PR review. Same
+    residual risk applies to the codex eye now that it runs for real — a prompt-injected codex verdict
+    is not independently detected beyond disagreement with the Claude eyes.
+  - **(b) transient vs. permanent cross-family failure not distinguished (NEW, from this feature's
+    final review):** a transient cross-family failure (codex timeout, internal full-patch fetch
+    failure) is currently treated identically to a genuine BLOCKED verdict — `recordReviewed` fires,
+    parking the PR in `awaiting-merge` until the SHA changes, and the gate never re-runs after codex
+    recovers. The crossfamily sibling artifact's `available` field could distinguish the two
+    (`available === true` → genuine BLOCKED → record; `available === false` → transient → re-queue
+    without recording) but the fold currently returns only a boolean, losing that signal at the
+    call site. Fail-safe today (never wrong-merges) — just needs the re-queue path before enabling
+    auto-merge in earnest.
   - **(c) breaker 2nd-pass overrun:** `breakerTripped` is checked before the primary spawn but not
     re-checked before the 2nd-pass spawn — the session cap can overrun by 1 on a gate-machinery PR.
     Bounded/reversible; fix is a 3-line re-check + `secondPassClean=false` (fail-closed) if tripped.
   - **(d) dead read:** `review-routing.mjs:65` calls `reviewed.alreadyReviewed(...)` and discards the
     boolean (vestigial, out of scope for this slice).
+  - **(e) silent stuck auto-merge on protected-branch rejection (NEW):** `mergeAndFinalize` returning
+    `{merged:false}` (e.g. GitHub branch protection rejects the merge) currently fires no notify and
+    no record — the PR silently stalls and the same PR re-runs the full review cycle on every cycle.
+    Needs a `notify('pr-merge-failed', ...)` on that branch.
   - Also still open (unchanged from before this feature): `engineKnows`/`recordFindings` remain
-    stub/no-op, real cross-family wiring over the diff is not implemented, and
-    `review-verdict-source.mjs` path/shape hardening (validating `pr.number`/`sha` before `join`, and
-    the parsed JSON shape) is a pre-existing follow-up — `getFreshVerdict` stays untouched by design.
+    stub/no-op, and `review-verdict-source.mjs` path/shape hardening (validating `pr.number`/`sha`
+    before `join`, and the parsed JSON shape) is a pre-existing follow-up — `getFreshVerdict` stays
+    untouched by design.

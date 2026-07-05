@@ -282,3 +282,69 @@ Flow:
   across runs whose `findings.md` has already been deleted. Recording the recurrence (rather than a
   fresh duplicate proposal) keeps the outbox from accumulating near-identical entries while still
   surfacing the frequency signal to the human reviewer.
+
+### 2026-07-05 — cross-family-review-actuator: transient cross-family failure indistinguishable from genuine BLOCKED (MUST fix before autoMergeEnabled)
+
+- **Observed:** In the final dual review of `cross-family-review-actuator`, `deriveSecondFamilyVerdict`
+  returns only a boolean-shaped verdict — the caller (`cron-review.mjs`) cannot distinguish "codex
+  genuinely found issues" (real BLOCKED; correctly calls `recordReviewed` and parks the PR in
+  `awaiting-merge` until the SHA changes) from "codex timed out / the full-patch fetch failed"
+  (transient; should re-queue WITHOUT recording so the gate re-runs once codex recovers). Today both
+  collapse to the same outcome and both call `recordReviewed`. Fail-safe today (a PR never
+  wrong-merges, and `autoMergeEnabled` defaults OFF) but becomes a real throughput bug the moment an
+  operator flips the flag — codex has documented high latency (minutes per exec) and this feature's
+  own delivery already saw it time out live.
+- **Proposed change:** have the residual-branch consumer read the crossfamily sibling artifact's
+  `available` field directly instead of relying only on the folded boolean: `available === true`
+  (both eyes actually ran and disagreed) → genuine BLOCKED → `recordReviewed`; `available === false`
+  (codex didn't run / fetch failed) → transient → route to `awaiting-merge` WITHOUT recording, so the
+  next cron pass re-attempts cross-family on the same SHA.
+- **Rationale:** MUST land before flipping `autoMergeEnabled: true` in any real config — otherwise a
+  transient codex hiccup can permanently strand an otherwise-good PR in `awaiting-merge` until a new
+  push changes the SHA, which may never happen without manual intervention.
+
+### 2026-07-05 — cross-family-review-actuator: codex spawn env hygiene + artifact identity hardening (2 low residuals)
+
+- **Observed:** Final security review of `cross-family-review-actuator` found two low, non-blocking
+  residuals: (1) `defaultHasCodex` invokes its login-status probe with `shell: true` on a hardcoded
+  constant argument — not exploitable today, but `shell:true` on any spawn is a footgun the next edit
+  could turn live by concatenating a variable in; (2) the new `review-<n>-<sha>.crossfamily.json`
+  sibling artifact path is derived the same way as the canonical verdict artifact and could re-validate
+  `pr.number`/`sha` identity before use as defense-in-depth — matching the pre-existing, already-tracked
+  hardening gap on `review-verdict-source.mjs` (no path-traversal vector demonstrated).
+- **Proposed change:** drop `shell: true` from `defaultHasCodex`'s spawn (argv array form instead); fold
+  the crossfamily artifact path through the same `pr.number`/`sha` shape validation once
+  `review-verdict-source.mjs` gets its own hardening pass — one fix covers both call sites.
+- **Rationale:** Neither is reachable today, but both are cheap to close and remove a latent footgun
+  before the codex spawn path sees more traffic under `autoMergeEnabled`.
+
+### 2026-07-05 — cross-family-review-actuator: exact-match UNSAFE guard misses trailing-text codex verdicts (accepted low residual)
+
+- **Observed:** During task-5's mandatory re-gate (grave HIGH fix), the case-insensitive UNSAFE guard
+  added to close the false-CLEAN path does an exact (case-folded) match against the codex verdict
+  string. A codex output like `"UNSAFE - XSS in handler"` (verdict + trailing rationale in the same
+  field, instead of a clean enum value) would not match and would fall through as if SECURE. Requires a
+  double deviation from codex (wrong enum shape AND inline rationale) to trigger; the
+  severity/issues-array gate already catches the realistic case since a real UNSAFE verdict is normally
+  accompanied by non-empty `issues`. Accepted as a residual by the virgin sonnet spot-check (zero
+  blocking findings).
+- **Proposed change:** loosen the guard to an `includes`/regex check (`/unsafe/i.test(verdict)`) instead
+  of exact match, OR normalize codex's verdict field at the parse boundary (split on first
+  whitespace/dash before comparing).
+- **Rationale:** Low priority — the issues-array gate already covers the realistic failure mode; this
+  closes the theoretical edge case cheaply whenever someone next touches this file.
+
+### 2026-07-05 — RECURRENCE: cron-review 2nd-pass spawn still not re-gated by breakerTripped (pre-existing, now confirmed twice)
+
+- **Observed:** First tracked as an open risk in `independent-pr-review-phase` (#132/#134); reconfirmed
+  as explicitly out-of-scope during `cross-family-review-actuator` task-4's adversary pass.
+  `breakerTripped` is checked once before the primary review spawn but is not re-checked before the
+  HR-9 2nd-pass spawn on a gate-machinery PR — a single such PR can consume 2 breaker slots in one
+  cycle, letting the session cap overrun by 1. Bounded and reversible (worst case is one extra session
+  per breaker window, not an auto-merge safety issue), but two independent features have now flagged it
+  as "should fix, out of this slice's scope."
+- **Proposed change:** add a 3-line re-check of `breakerTripped` immediately before the 2nd-pass spawn;
+  treat a trip there as `secondPassClean=false` (fail-closed), matching the primary-spawn behavior.
+- **Rationale:** kaizen.md's job is to surface recurrence once `findings.md` is gone — a fix this small,
+  flagged twice across separate delivery slices, is worth prioritizing rather than deferring a third
+  time.
