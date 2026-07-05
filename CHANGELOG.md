@@ -21,6 +21,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   ao modo de merge (auto **ou** merge manual do operador). A ordem é garantida por dois mecanismos
   combinados: o gate (dependente espera as deps merjarem) + a serialização do run-lock por-projeto
   (uma issue por vez) — sem dispatch automático nem race de implementação paralela.
+- **Encadeamento de roadmap (parte 2: gate na seleção + lint de DAG)** — o seletor do Cron A agora
+  **adia** qualquer issue `harness:ready` cujas dependências ainda não têm PR merjado
+  (`harness:ready → harness:queued`), então o operador cria TODAS as issues do roadmap como
+  `harness:ready` e o motor se auto-organiza — uma issue nunca é implementada sobre uma main que
+  ainda não tem o código da dependência, mesmo que tenha sido criada `ready` por engano. O form de
+  issue ganhou o campo **Dependências** (bloco ` ```harness-deps `). Novo lint pré-flight
+  `node core/vps/chain-validate.mjs` detecta **ciclos** e **dependências inexistentes** de roadmap —
+  os dois erros de autoria que o runtime não consegue auto-curar (ficariam encalhados em silêncio).
 - **Fase independente de revisão de PR agora funciona de verdade** — o `spawnReviewSession` deixou
   de ser um stub que sempre falhava: a sessão de revisão roda de fato sobre o diff do PR (só olhos —
   adversary/compliance/security, nunca um hand com escrita) e o veredito CLEAN/BLOCKED que decide

@@ -1587,6 +1587,26 @@ test(
   },
 );
 
+test(
+  "LOCKED issue-form-advisory #6: advisory carries the roadmap dependency standard (harness-deps block + chain-validate lint)",
+  () => {
+    const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+    assert.match(result, /harness-deps/, "must guide the fenced dependency block for a chained roadmap");
+    assert.match(result, /harness:ready/, "must state every roadmap issue is created harness:ready (never queued by hand)");
+    assert.match(result, /chain-validate/, "must point to the DAG lint to catch cycles / non-existent deps");
+  },
+);
+
+test(
+  "LOCKED issue-form-advisory #7: advisory carries the small-delivery-unit sizing standard (per-issue retry/blast → prefer small)",
+  () => {
+    const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+    assert.match(result, /per-issue/, "must state retry / partial delivery / blast radius are per-issue");
+    assert.match(result, /revertible/, "must frame the delivery unit as independently shippable/revertible");
+    assert.match(result, /two issues/, "must give the operator-checkable 'two things → two issues' rule");
+  },
+);
+
 // AC-2: decide() Bash advisory path
 test(
   "LOCKED issue-form-advisory #6: decide() gh issue create with issueFormExistsFn=true → allow + hookSpecificOutput.additionalContext (non-empty, no permissionDecision)",
