@@ -93,7 +93,11 @@ body:
     id: size
     attributes:
       label: Tamanho estimado
-      description: Empate de prioridade → a routine pega o menor primeiro.
+      description: >-
+        Empate de prioridade → a routine pega o menor primeiro. Prefira PEQUENO: 1 issue = 1 coisa
+        que merjа e reverte sozinha (≤ ~400 linhas). Se dá pra nomear duas coisas que poderiam ir pro
+        ar separadas, são duas issues (com `harness-deps` se houver ordem). `L` só quando as partes
+        são inseparáveis — retry, entrega e o merge são tudo-ou-nada por issue.
       options:
         - "S (1–2 arquivos)"
         - "M"
