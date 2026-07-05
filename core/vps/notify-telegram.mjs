@@ -33,7 +33,9 @@ const EMOJI = {
   "session-requeued": "🔁",
   blocked: "🚧",
   failed: "❌",
+  "review-started": "🔍",
   "pr-merged": "🟢",
+  "pr-awaiting-merge": "🟡",
   "pr-blocked": "🔴",
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
@@ -113,10 +115,14 @@ export function formatEvent(event = {}) {
       return `${prefix} issue ${issueRef} BLOQUEADA — precisa de input humano${reason}`;
     case "failed":
       return `${prefix} issue ${issueRef} falhou — retentativas esgotadas`;
+    case "review-started":
+      return `${prefix} revisando PR ${prRef} — análise independente iniciada (olhos frescos)`;
     case "pr-merged": {
       const revert = event.mergeSha ? `\ngit revert -m 1 ${escapeHtml(event.mergeSha)}` : "";
       return `${prefix} PR ${prRef} revisado CLEAN → merged${revert}`;
     }
+    case "pr-awaiting-merge":
+      return `${prefix} PR ${prRef} revisado CLEAN → aguardando seu merge manual${reason}`;
     case "pr-blocked":
       return `${prefix} PR ${prRef} BLOQUEADO${reason}`;
     case "reaper-killed":

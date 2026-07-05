@@ -71,7 +71,12 @@ export function cronReview(opts) {
     recordReviewed,
   } = opts;
 
-  const prs = gh(["pr", "list", "--json", "number,headRefName,headSha,author,labels", "--state", "open"]) || [];
+  // `gh pr list --json` exposes the head SHA as `headRefOid` (there is NO `headSha` field — an
+  // invalid field makes gh exit non-zero, which normalizeGhResult turns into `[]`, silently
+  // blanking the whole review cycle). Fetch `headRefOid` and normalize it onto `headSha` so every
+  // downstream consumer (and the frozen test fakes, which supply `headSha`) keeps working.
+  const prs = (gh(["pr", "list", "--json", "number,headRefName,headRefOid,author,labels,url", "--state", "open"]) || [])
+    .map((pr) => (pr && pr.headSha == null && pr.headRefOid != null ? { ...pr, headSha: pr.headRefOid } : pr));
 
   // Track whether the harness:awaiting-merge label has been ensured to exist.
   // The idempotent `gh label create --force` runs BEFORE the first relabel to that label
@@ -113,6 +118,10 @@ export function cronReview(opts) {
       continue;
     }
 
+    // Tell the operator a fresh-eyes analysis is starting (before the multi-minute synchronous
+    // spawn) so a non-dev operator sees the review begin, not only its outcome.
+    notify({ type: "review-started", pr: number, url: pr.url });
+
     // Spawn the review session, then record it for the breaker cap.
     spawnReviewSession(pr, { stateDir, changedFiles });
     recordReviewSession({ stateDir });
@@ -143,12 +152,17 @@ export function cronReview(opts) {
       secondPassClean,
     });
 
-    // Route at the composition decision boundary.
+    // Route at the composition decision boundary. Every routine outcome notifies the operator so a
+    // non-dev never has to poll GitHub to learn what the autonomous review did (HR: observability).
     if (decision.eligible) {
       // All conditions met — merge.
-      mergeAndFinalize(pr, sha, { gh, stateDir });
+      const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
+      if (merged) {
+        notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+      }
     } else if (!freshVerdictClean) {
-      // Fresh verdict is not CLEAN — reject (advance chain, re-queue or block).
+      // Fresh verdict is not CLEAN — reject (advance chain, re-queue or block). routeReject owns its
+      // own notify (chain-ceiling blocked); a plain re-queue is reported by the fix session's own run.
       routeReject(pr, sha, { gh, stateDir, findings: verdict });
     } else if (secondPassRequired && !secondPassClean) {
       // Gate-machinery diff whose 2nd pass is BLOCKED — route to harness:blocked.
@@ -158,6 +172,7 @@ export function cronReview(opts) {
         gh(["issue", "edit", String(root), "--add-label", "harness:blocked"]);
       }
       recordReviewed(pr.number, sha, { stateDir });
+      notify({ type: "pr-blocked", pr: pr.number, reason: "gate-machinery 2nd-pass BLOCKED", url: pr.url });
     } else {
       // Residual: cross-family absent/ineligible — route to harness:awaiting-merge.
       // Ensure the label exists BEFORE the first relabel (fail-closed route never fails on a missing label).
@@ -167,6 +182,7 @@ export function cronReview(opts) {
         gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
       }
       recordReviewed(pr.number, sha, { stateDir });
+      notify({ type: "pr-awaiting-merge", pr: pr.number, url: pr.url });
     }
    } catch (err) {
     // Isolate one PR's failure — a throw here must not skip the remaining PRs or reconcile().

@@ -333,3 +333,46 @@ test("cronReview: 2nd-pass-blocked route records pr:sha", () => {
   );
   assert.ok(routedBlocked, "the PR's issue must be routed to harness:blocked");
 });
+
+test("cronReview: requests headRefOid (not the invalid headSha field) in `gh pr list --json` — regression for the blank-cycle bug", () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(50, { number: 50, headRefName: "harness/80", author: { login: "bot-user" }, labels: [], headSha: "sha-h" });
+  setDiff(50, ["docs/x.md"]);
+
+  cronReview(baseOpts({ gh }));
+
+  const listCall = calls.find((a) => a[0] === "pr" && a[1] === "list" && a.includes("--json"));
+  assert.ok(listCall, "must call `gh pr list --json`");
+  const jsonFields = listCall[listCall.indexOf("--json") + 1];
+  assert.match(jsonFields, /headRefOid/, "must request the valid `headRefOid` field");
+  assert.doesNotMatch(
+    jsonFields,
+    /headSha/,
+    "must NOT request the invalid `headSha` field — gh exits non-zero → [] → the whole review cycle silently blanks"
+  );
+});
+
+test("cronReview: notifies review-started (before spawn) and pr-awaiting-merge on the cross-family-absent route", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(51, { number: 51, headRefName: "harness/81", author: { login: "bot-user" }, labels: [], headSha: "sha-i", url: "u51" });
+  setDiff(51, ["src/x.js"]);
+
+  const notify = makeSpy();
+  cronReview(baseOpts({ gh, notify, crossFamilyEligible: () => false, mergeAndFinalize: makeSpy() }));
+
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("review-started"), "must notify review-started so the operator sees the analysis begin");
+  assert.ok(types.includes("pr-awaiting-merge"), "must notify pr-awaiting-merge when cross-family is absent");
+});
+
+test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(52, { number: 52, headRefName: "harness/82", author: { login: "bot-user" }, labels: [], headSha: "sha-j", url: "u52" });
+  setDiff(52, ["src/y.js"]);
+
+  const notify = makeSpy();
+  cronReview(baseOpts({ gh, notify, mergeAndFinalize: makeSpy(() => ({ merged: true })) }));
+
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-merged"), "must notify pr-merged on a successful autonomous merge");
+});

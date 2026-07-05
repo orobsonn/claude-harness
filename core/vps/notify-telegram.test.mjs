@@ -315,3 +315,17 @@ test("#ac-5.2 sendNotification: pr-merged failure log stays redacted to exactly 
     );
   }
 });
+
+test("formatEvent: review-started references the PR and reads as an analysis-started message", () => {
+  const text = formatEvent({ type: "review-started", project: "demo", pr: 7, url: "https://github.com/acme/demo/pull/7" });
+  assert.match(text, /^🔍 \[demo\]/, "must start with the review emoji + [project]");
+  assert.match(text, /#7/, "must reference the PR number");
+  assert.match(text, /revis/i, "must read as a review-started message");
+});
+
+test("formatEvent: pr-awaiting-merge references the PR and signals a pending manual merge", () => {
+  const text = formatEvent({ type: "pr-awaiting-merge", project: "demo", pr: 8, url: "https://github.com/acme/demo/pull/8" });
+  assert.match(text, /^🟡 \[demo\]/, "must start with the awaiting-merge emoji + [project]");
+  assert.match(text, /#8/, "must reference the PR number");
+  assert.match(text, /merge/i, "must mention the pending merge");
+});
