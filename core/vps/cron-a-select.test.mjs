@@ -58,11 +58,17 @@ function makeFakeRunLock(callLog, { acquireResult = { acquired: true, acquireTs:
  * `gh issue list` with the injected `issues` set (each `{ number, labels }`); every other
  * invocation (label create, issue edit) returns `{ ok: true }`.
  */
-function makeFakeGh(callLog, { issues = [] } = {}) {
+function makeFakeGh(callLog, { issues = [], mergedDeps = new Set() } = {}) {
   function gh(args) {
     callLog.push({ type: "gh", args });
     if (args[0] === "issue" && args[1] === "list") {
       return issues;
+    }
+    // Dependency-gate ground truth: a merged PR on `harness/<dep>` iff dep ∈ mergedDeps.
+    if (args[0] === "pr" && args[1] === "list" && args.includes("--head") && args.includes("merged")) {
+      const head = args[args.indexOf("--head") + 1];
+      const n = Number(String(head).replace("harness/", ""));
+      return mergedDeps.has(n) ? [{ number: 900 + n }] : [];
     }
     return { ok: true };
   }
@@ -332,4 +338,77 @@ test("cronASelect: an issue carrying ONLY harness:ready (no in-review) stays in 
   const dispatchEntry = callLog.find((e) => e.type === "dispatch");
   assert.notEqual(dispatchEntry, undefined, "dispatch must be invoked for the plain ready issue");
   assert.equal(dispatchEntry.issue.number, 11, "dispatch must receive the plain ready issue");
+});
+
+test("cronASelect: DEFERS a ready issue whose declared deps are not all merged (relabel ready->queued, NOT dispatched)", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const gh = makeFakeGh(callLog, {
+    issues: [{ number: 20, labels: ["harness:ready"], createdAt: "2024-01-01T00:00:00Z", body: "```harness-deps\n#12\n```" }],
+    mergedDeps: new Set(), // #12 not merged
+  });
+  const dispatch = makeFakeDispatch(callLog);
+
+  const result = cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  const deferred = callLog.find(
+    (e) => e.type === "gh" && e.args[0] === "issue" && e.args[1] === "edit" && e.args[2] === "20" && e.args.includes("--add-label") && e.args.includes("harness:queued") && e.args.includes("--remove-label") && e.args.includes("harness:ready")
+  );
+  assert.ok(deferred, "the ready issue with an unmerged dependency must be relabeled ready->queued");
+  const dispatched = callLog.find((e) => e.type === "dispatch");
+  assert.equal(dispatched, undefined, "an issue with unmerged deps must NEVER be dispatched");
+  assert.equal(result.dispatched, false, "no dispatchable issue this fire");
+  assert.equal(runLock.releaseCalls.length, 1, "the lock must be released when nothing is dispatched");
+});
+
+test("cronASelect: ensures the harness:queued label exists BEFORE the first defer relabel", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const gh = makeFakeGh(callLog, {
+    issues: [{ number: 21, labels: ["harness:ready"], createdAt: "2024-01-01T00:00:00Z", body: "```harness-deps\n#99\n```" }],
+  });
+  cronASelect(baseOpts({ runLock, gh, dispatch: makeFakeDispatch(callLog) }));
+
+  const ensureIdx = callLog.findIndex((e) => e.type === "gh" && e.args[0] === "label" && e.args[1] === "create" && e.args[2] === "harness:queued" && e.args.includes("--force"));
+  const deferIdx = callLog.findIndex((e) => e.type === "gh" && e.args[0] === "issue" && e.args[1] === "edit" && e.args[2] === "21" && e.args.includes("harness:queued"));
+  assert.notEqual(ensureIdx, -1, "harness:queued label-create must be invoked");
+  assert.ok(ensureIdx < deferIdx, "the label-create must run before the first defer relabel");
+});
+
+test("cronASelect: DISPATCHES a ready issue once ALL its declared deps are merged", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const gh = makeFakeGh(callLog, {
+    issues: [{ number: 22, labels: ["harness:ready"], createdAt: "2024-01-01T00:00:00Z", body: "```harness-deps\n#12\n#13\n```" }],
+    mergedDeps: new Set([12, 13]),
+  });
+  const dispatch = makeFakeDispatch(callLog);
+
+  const result = cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  assert.equal(result.dispatched, true, "an issue whose deps are all merged must be dispatched");
+  const dispatchEntry = callLog.find((e) => e.type === "dispatch");
+  assert.equal(dispatchEntry.issue.number, 22, "dispatch must receive the dep-satisfied issue");
+  const toInProgress = callLog.find((e) => e.type === "gh" && e.args[0] === "issue" && e.args[1] === "edit" && e.args[2] === "22" && e.args.includes("harness:in-progress"));
+  assert.ok(toInProgress, "the dispatched issue must be relabeled ready->in-progress");
+});
+
+test("cronASelect: DEFERS a dep-unsatisfied older issue and dispatches a dep-free younger one instead", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const gh = makeFakeGh(callLog, {
+    issues: [
+      { number: 30, labels: ["harness:ready"], createdAt: "2024-01-01T00:00:00Z", body: "```harness-deps\n#12\n```" }, // older, deps unmerged
+      { number: 31, labels: ["harness:ready"], createdAt: "2024-02-01T00:00:00Z", body: "no deps" }, // younger, dep-free
+    ],
+    mergedDeps: new Set(), // #12 not merged
+  });
+  const dispatch = makeFakeDispatch(callLog);
+
+  const result = cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  const deferred30 = callLog.find((e) => e.type === "gh" && e.args[0] === "issue" && e.args[1] === "edit" && e.args[2] === "30" && e.args.includes("harness:queued"));
+  assert.ok(deferred30, "the older dep-unsatisfied issue must be deferred to queued");
+  assert.equal(result.dispatched, true, "a dispatchable younger issue must still be dispatched this fire");
+  assert.equal(callLog.find((e) => e.type === "dispatch").issue.number, 31, "dispatch must receive the dep-free issue #31");
 });

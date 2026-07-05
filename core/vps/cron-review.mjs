@@ -48,9 +48,9 @@ function extractRoot(headRefName) {
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge and 2nd-pass-blocked routes
  * @param {boolean} [opts.autoMergeEnabled] - only strict `=== true` auto-merges eligible PRs; default/false routes to awaiting-merge
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function cronReview(opts) {
+export async function cronReview(opts) {
   const {
     gh,
     isReviewEligible,
@@ -126,8 +126,11 @@ export function cronReview(opts) {
     }
 
     // Tell the operator a fresh-eyes analysis is starting (before the multi-minute synchronous
-    // spawn) so a non-dev operator sees the review begin, not only its outcome.
-    notify({ type: "review-started", pr: number, url: pr.url });
+    // spawn) so a non-dev operator sees the review begin, not only its outcome. AWAITED here so the
+    // send actually completes while the event loop is free: the next line is a blocking spawnSync
+    // that would otherwise stall the event loop for minutes, expiring the send's AbortSignal timeout
+    // before its promise ever settles — the review-started ping would silently never arrive.
+    await notify({ type: "review-started", pr: number, url: pr.url });
 
     // Spawn the review session, then record it for the breaker cap.
     spawnReviewSession(pr, { stateDir, changedFiles });

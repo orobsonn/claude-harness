@@ -17,6 +17,32 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   uma linha de crontab de verdade, espera o **cron daemon do SO disparar** e observa o efeito, então
   restaura o crontab original — prova que o scheduler agendado roda a linha instalada, algo que os
   testes herméticos (fakes em memória) nunca cobriram. Fica de fora do `npm test` normal (skip).
+- **Skill `creating-issues`** — procedimento ativo pra criar a issue (o insumo de maior alavancagem
+  da pipeline: último ponto de controle humano antes da máquina rodar plano→build→review→merge
+  sozinha). Aplica a regra de sizing (unidade de entrega pequena e revertível), **treina critério de
+  aceite verificável** (os `locked_tests` saem dele — AC vago mira a pipeline inteira errado), amarra
+  `harness-deps` pra ordem do roadmap, cria tudo `harness:ready` e roda o `chain-validate`. Fonte
+  única: lê a rule `creating-issues`, não a duplica; o advisory de `gh issue create` aponta pra ela.
+- **Encadeamento de roadmap por dependência (parte 1: motor de liberação)** — uma issue de roadmap
+  pode declarar de quais issues ela depende num bloco fechado no corpo (` ```harness-deps ` com
+  `#12`, `#13`…), e nasce com a label `harness:queued` — invisível pro seletor, que só pega
+  `harness:ready`. A cada ciclo de revisão, o motor libera automaticamente `harness:queued →
+  harness:ready` **assim que TODAS as dependências têm PR merjado na main** (verdade-fundamento = PR
+  merjado, nunca o label, que pode atrasar). Uma dependência diamante só libera quando a última
+  merjа. Se qualquer dependência morre (`harness:blocked`), a dependente é encalhada
+  (`harness:queued → harness:blocked`) e o operador é **notificado** — a corrente abaixo de um nó
+  morto nunca fica parada em silêncio. A liberação roda no `reconcile()` do review cron, agnóstica
+  ao modo de merge (auto **ou** merge manual do operador). A ordem é garantida por dois mecanismos
+  combinados: o gate (dependente espera as deps merjarem) + a serialização do run-lock por-projeto
+  (uma issue por vez) — sem dispatch automático nem race de implementação paralela.
+- **Encadeamento de roadmap (parte 2: gate na seleção + lint de DAG)** — o seletor do Cron A agora
+  **adia** qualquer issue `harness:ready` cujas dependências ainda não têm PR merjado
+  (`harness:ready → harness:queued`), então o operador cria TODAS as issues do roadmap como
+  `harness:ready` e o motor se auto-organiza — uma issue nunca é implementada sobre uma main que
+  ainda não tem o código da dependência, mesmo que tenha sido criada `ready` por engano. O form de
+  issue ganhou o campo **Dependências** (bloco ` ```harness-deps `). Novo lint pré-flight
+  `node core/vps/chain-validate.mjs` detecta **ciclos** e **dependências inexistentes** de roadmap —
+  os dois erros de autoria que o runtime não consegue auto-curar (ficariam encalhados em silêncio).
 - **Fase independente de revisão de PR agora funciona de verdade** — o `spawnReviewSession` deixou
   de ser um stub que sempre falhava: a sessão de revisão roda de fato sobre o diff do PR (só olhos —
   adversary/compliance/security, nunca um hand com escrita) e o veredito CLEAN/BLOCKED que decide
@@ -30,6 +56,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   login por assinatura do ChatGPT (sem precisar de chave de API). Uma trava explícita
   `autoMergeEnabled` (desligada por padrão) garante que nenhum PR mescla sozinho até o operador
   decidir ligar o auto-merge cross-family de propósito.
+
+### Fixed
+
+- **A notificação "revisão iniciada" volta a chegar** — antes o aviso de que a análise de um PR
+  começou era disparado logo antes de um `spawn` bloqueante de vários minutos; o tempo-limite de 5s
+  do envio estourava durante o bloqueio e a notificação nunca chegava, o operador só via o resultado.
+  Agora o envio de "revisão iniciada" é aguardado até concluir enquanto o loop está livre, antes do
+  spawn — o ping chega de fato.
 
 ### Changed
 

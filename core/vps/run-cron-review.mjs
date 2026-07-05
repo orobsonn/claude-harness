@@ -69,6 +69,7 @@ import { isReviewEligible } from "./review-origin-gate.mjs";
 import { getFreshVerdict } from "./review-verdict-source.mjs";
 import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
 import { mergeAndFinalize, reconcile } from "./review-merge.mjs";
+import { releaseChainedDependents } from "./chain-release.mjs";
 import { routeReject } from "./review-routing.mjs";
 import { touchesGateMachinery, mergeEligible } from "./review-gate-hardening.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
@@ -148,9 +149,13 @@ export async function runCronReview(config, deps = {}) {
     try {
       // Inject the project slug so every review-cron notification renders `[<project>]` instead of
       // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
-      notify({ project: config.project, ...event });
+      // Returns the underlying notify promise so a caller that needs the send to COMPLETE before a
+      // blocking spawn (cronReview's awaited review-started) can await it; fire-and-forget callers
+      // simply ignore the return.
+      return notify({ project: config.project, ...event });
     } catch {
       // fail-open — a notify failure never masks the breaker's stall or blocks the cycle
+      return undefined;
     }
   };
 
@@ -190,7 +195,24 @@ export async function runCronReview(config, deps = {}) {
   const mergeAndFinalizeFn =
     deps.mergeAndFinalize ??
     ((pr, sha, o) => mergeAndFinalize(pr, sha, { ...o, counter: cronState, recordReviewed: cronState.recordReviewed }));
-  const reconcileFn = deps.reconcile ?? (() => reconcile({ gh, counter: cronState, stateDir: reviewStateDir }));
+  // The per-cycle reconcile closure does TWO merge-driven things, both keyed on merged-PR ground
+  // truth and both merge-mode-agnostic (auto-merge OR operator manual-merge): (1) self-heal any
+  // issue whose PR merged but whose done relabel was missed, and (2) release the roadmap's chained
+  // dependents whose dependencies have all merged (or strand a subtree under a dead dependency).
+  // Chaining lives HERE — not on the auto-merge-only mergeAndFinalize path — so a manual merge (the
+  // shipped default) still advances the roadmap. Best-effort: a chaining failure never breaks the
+  // self-heal or the review cycle.
+  const reconcileFn =
+    deps.reconcile ??
+    (() => {
+      const healed = reconcile({ gh, counter: cronState, stateDir: reviewStateDir });
+      try {
+        releaseChainedDependents({ gh, notify: safeNotify });
+      } catch {
+        // fail-open — the roadmap simply doesn't advance this cycle; it retries next cycle
+      }
+      return healed;
+    });
 
   // crossFamilyEligible is a POSITIVE assertion (fail-closed by its own contract): the default
   // closure runs the vendored Codex 2nd family synchronously per PR, writes a sibling artifact, and
@@ -282,7 +304,7 @@ export async function runCronReview(config, deps = {}) {
   const cronReviewFn = deps.cronReview ?? cronReview;
 
   try {
-    cronReviewFn({
+    await cronReviewFn({
       gh,
       isReviewEligible: deps.isReviewEligible ?? isReviewEligible,
       getFreshVerdict: deps.getFreshVerdict ?? getFreshVerdict,
