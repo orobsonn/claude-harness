@@ -226,10 +226,14 @@ export async function runCronReview(config, deps = {}) {
       }
 
       const boundSpawn = (bin, a, o) => spawnSync(bin, a, { ...o, timeout: 120000, killSignal: "SIGKILL" });
+      const HAND_TOKEN_ENV_KEYS = ["OLLAMA_HAND_TOKEN", "ANTHROPIC_AUTH_TOKEN"];
+      const scrubbedEnv = { ...process.env };
+      for (const k of HAND_TOKEN_ENV_KEYS) delete scrubbedEnv[k];
+
       const advPrompt = codexDriver.composeRolePrompt({ role: "adversary", taskJson: patch });
-      const adv = codexDriver.runCodexRole({ role: "adversary", prompt: advPrompt, availability: avail, spawn: boundSpawn });
+      const adv = codexDriver.runCodexRole({ role: "adversary", prompt: advPrompt, availability: avail, spawn: boundSpawn, env: scrubbedEnv });
       const secPrompt = codexDriver.composeRolePrompt({ role: "security", taskJson: patch });
-      const sec = codexDriver.runCodexRole({ role: "security", prompt: secPrompt, availability: avail, spawn: boundSpawn });
+      const sec = codexDriver.runCodexRole({ role: "security", prompt: secPrompt, availability: avail, spawn: boundSpawn, env: scrubbedEnv });
 
       const advIssues = Array.isArray(adv.output?.issues) ? adv.output.issues : null;
       const secIssues = Array.isArray(sec.output?.issues) ? sec.output.issues : null;
