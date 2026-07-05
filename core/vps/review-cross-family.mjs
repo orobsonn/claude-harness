@@ -40,3 +40,10 @@ export function crossFamilyEligible(pr, opts) {
 
   return verdict.status === "CLEAN";
 }
+
+/**
+ * @description Scaffold stub — replaced by the executor with the real RD-1 implementation.
+ */
+export function deriveSecondFamilyVerdict() {
+  throw new Error("deriveSecondFamilyVerdict not implemented");
+}
