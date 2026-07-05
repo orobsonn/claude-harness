@@ -9,11 +9,34 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Fase independente de revisão de PR agora funciona de verdade** — o `spawnReviewSession` deixou
+  de ser um stub que sempre falhava: a sessão de revisão roda de fato sobre o diff do PR (só olhos —
+  adversary/compliance/security, nunca um hand com escrita) e o veredito CLEAN/BLOCKED que decide
+  auto-merge é calculado pelo motor a partir dos vereditos brutos, nunca por autorrelato da sessão.
+  Reforços anti-spoofing: artefatos de uma tentativa anterior (travada/expirada) são sempre apagados
+  antes de rodar uma nova sessão e também em qualquer falha, para nunca herdar um veredito CLEAN
+  velho.
+
 ### Changed
+
+- **PR já revisado no mesmo commit deixa de ser revisado de novo em todo ciclo** (fecha parte do
+  risco de custo apontado no release anterior) — um PR aguardando merge ou barrado na segunda
+  passagem de revisão agora é marcado como já revisado por SHA.
 
 ### Fixed
 
+- **Bug do disjuntor (breaker) da revisão de PR corrigido** — o contador de sessões de revisão por
+  janela de tempo travava (matemática quebrada) e nunca se recuperava depois de bater o teto; agora
+  conta, corta no limite e se recupera normalmente após a janela.
+
 ### Removed
+
+**Riscos abertos registrados (não bloqueiam esta entrega, mas travam o auto-merge cross-family
+real):** um veredito manipulado via injeção de prompt só é barrado hoje por revisão humana do PR
+(cross-family real ainda não ligado); e uma falha transitória ao buscar o diff do PR pode, em teoria,
+pular silenciosamente uma checagem extra de segurança em PRs que tocam a própria infraestrutura de
+revisão — inofensivo agora porque nada ainda mescla automaticamente sem essa segunda família de
+modelo, mas deve ser fechado antes de ligar o auto-merge cross-family.
 
 ## [0.24.0] - 2026-07-05
 
