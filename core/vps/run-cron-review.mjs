@@ -27,10 +27,12 @@
  * supplies that extra context via a bound closure, mirroring run-cron-b.mjs's `harnessAuthorLogin`
  * composition.
  *
- * Three seams have NO production implementation anywhere in this repo yet — a separate, dedicated
- * task's responsibility, not invented here: `engineKnows` (the secondary machine-origin cross-check),
- * `spawnReviewSession` (the actual review-session spawn), and `routeReject`'s `recordFindings`. Their
- * defaults are documented, fail-closed stubs (see below) rather than a guessed implementation.
+ * Two seams have NO production implementation anywhere in this repo yet — a separate, dedicated
+ * task's responsibility, not invented here: `engineKnows` (the secondary machine-origin cross-check)
+ * and `routeReject`'s `recordFindings`. Their defaults are documented, fail-closed stubs (see below)
+ * rather than a guessed implementation. `spawnReviewSession` IS wired to the real production
+ * actuator (./spawn-review-session.mjs), bound with this composition root's `gh`/`spawn`/`notify`
+ * seams — it refuses invalid `pr.number`/`pr.headSha` without throwing.
  *
  * @param {object} config
  * @param {string} config.project
@@ -57,6 +59,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import { cronReview } from "./cron-review.mjs";
+import { spawnReviewSession } from "./spawn-review-session.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import * as cronState from "./cron-state.mjs";
 import { isReviewEligible } from "./review-origin-gate.mjs";
@@ -99,17 +102,6 @@ function defaultEngineKnows() {
 }
 
 /**
- * @description The review-session spawn has no production implementation yet. Throwing (rather
- * than a silent no-op) means an eligible unreviewed PR surfaces a loud, diagnosable failure
- * instead of a review phase that looks like it ran but never actually reviewed anything.
- */
-function defaultSpawnReviewSession() {
-  throw new Error(
-    "run-cron-review: spawnReviewSession has no production wiring yet — inject deps.spawnReviewSession"
-  );
-}
-
-/**
  * @description routeReject's finding-persistence seam has no production implementation yet.
  * Best-effort no-op: the chain-depth advance and relabel in routeReject still happen; only the
  * findings payload itself is not yet durably stored.
@@ -140,12 +132,11 @@ export function runCronReview(config, deps = {}) {
 
   // Circuit-breaker gate BEFORE acquiring the lock — a tripped breaker must never spawn, and the
   // stall must always be observable via notify, never silent.
-  // NOTE (follow-up): `now` is threaded as a function `() => number` to match the frozen test's
-  // seeding + the run-lock clock. cron-state.breakerTripped/recordReviewSession expect a NUMERIC now;
-  // a coordinated fix (invoke now() at every cron-state boundary AND correct the frozen test's
-  // seeding) is deferred with the spawnReviewSession wiring — the breaker is inert until the review
-  // session actually spawns. See kaizen-notes.md (breaker now-threading).
-  if (breakerTrippedFn({ stateDir: reviewStateDir, now })) {
+  // `now` is kept as a `() => number` clock function for run-lock.acquire below, but cron-state's
+  // breakerTripped/recordReviewSession expect a NUMERIC now — so it is INVOKED (`now()`) at this
+  // boundary, never passed through as the function itself (that degraded the window-rollover
+  // comparison to NaN and left the breaker unable to ever recover).
+  if (breakerTrippedFn({ stateDir: reviewStateDir, now: now() })) {
     safeNotify({ type: "review-breaker-tripped", project: config.project, stateDir: reviewStateDir });
     return;
   }
@@ -210,7 +201,15 @@ export function runCronReview(config, deps = {}) {
       routeReject: routeRejectFn,
       touchesGateMachinery: deps.touchesGateMachinery ?? touchesGateMachinery,
       mergeEligible: deps.mergeEligible ?? mergeEligible,
-      spawnReviewSession: deps.spawnReviewSession ?? defaultSpawnReviewSession,
+      spawnReviewSession:
+        deps.spawnReviewSession ??
+        ((pr, meta) =>
+          spawnReviewSession(pr, meta, {
+            projectRoot: config.projectRoot,
+            gh,
+            spawn: spawnSync,
+            notify: safeNotify,
+          })),
       notify: safeNotify,
       stateDir: reviewStateDir,
       authenticatedUser,
