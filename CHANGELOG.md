@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.24.0] - 2026-07-05
+
+### Added
+
 - **Três regras de checklist no `creating-plans`** (fecha #93, #94, #98) — o planner agora sabe: (a) incluir todos os arquivos que tornam uma env/secret var usável em `scope_paths`, não só os 1-2 que o teste importa direto; (b) nunca adicionar um parâmetro posicional obrigatório a uma função cuja assinatura já foi pinada por um `locked_test` de tarefa anterior (preferir default opcional ou DI); (c) exigir que um `locked_test` cubra TODOS os branches de um invariante multi-estado, não só o happy-path. Documentação apenas — nenhum comportamento de código muda.
 - **Fase independente de revisão de PR** (`cron-review.mjs` + `run-cron-review.mjs`) — o auto-merge deixa de confiar no corpo editável do PR como veredito e passa a ler um artefato de veredito fresco e fora de banda, só mesclando na conjunção completa de checks (origem-máquina + veredito CLEAN + acordo cross-family quando disponível). Rótulos novos no fluxo: `harness:in-review` → `harness:awaiting-merge` → `harness:done`/`harness:blocked`. **Nota:** a fase está montada e com testes verdes, mas ainda **inerte em produção** até um follow-up implementar o `spawnReviewSession` (o disparo real da sessão de revisão) — falha alto e claro (throw), nunca silenciosamente.
 
