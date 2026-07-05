@@ -269,6 +269,11 @@ export function checkAvailability({
     // the authority rather than silently degrading to Claude-only on a probe glitch.
     return { ok: true, reason: "" };
   }
+  // spawnSync signals a timeout/spawn-failure via a RETURNED `.error` + null status, NOT a throw —
+  // treat that as ambiguous → available (RD-2), letting the real `codex exec` be the authority.
+  if (!probe || probe.error || probe.status === null) {
+    return { ok: true, reason: "" };
+  }
   if (probe && probe.status === 0 && typeof probe.stdout === "string" && probe.stdout.includes("Logged in")) {
     return { ok: true, reason: "" };
   }
