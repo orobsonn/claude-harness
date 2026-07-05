@@ -17,9 +17,12 @@
  *
  *     Behavior:
  *       1. Calls `gh(["pr", "merge", String(pr.number), "--squash", "--match-head-commit", sha])`
- *          FIRST, unconditionally.
- *       2. If that merge call is NOT ok (`{ok:false}` or falsy): returns `{merged:false}`
- *          immediately. Does NOT relabel the issue, does NOT call counter.reset, does NOT call
+ *          FIRST — retrying a NOT-ok result up to a bounded number of attempts (default 3), spaced
+ *          by `opts.sleep(ms)` (injectable; a real sync sleep in prod, a no-op in tests). This
+ *          absorbs GitHub's async mergeability lag (a clean PR can report NOT-mergeable for a few
+ *          seconds right after the review) without waiting a whole cron cycle.
+ *       2. If the merge call is STILL NOT ok after the retries (`{ok:false}` or falsy): returns
+ *          `{merged:false}`. Does NOT relabel the issue, does NOT call counter.reset, does NOT call
  *          recordReviewed for this sha (a head that moved under `--match-head-commit` must stay
  *          re-reviewable next pass).
  *       3. If the merge call IS ok: derives the issue number from `pr.headRefName` (pattern
@@ -244,7 +247,7 @@ test("mergeAndFinalize: head moved (gh pr merge --match-head-commit rejects) -> 
   const counter = makeFakeCounter();
   const { recordReviewed, calls: recordedCalls } = makeFakeRecordReviewed();
 
-  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR });
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {} });
 
   assert.equal(result.merged, false, "a rejected merge must report merged:false");
 
@@ -326,4 +329,33 @@ test("reconcile: harness PR observed MERGED while its issue is still harness:in-
   );
   assert.equal(counter.resetCalls.length, 1, "counter.reset must be called exactly once");
   assert.equal(counter.resetCalls[0].issueNumber, 61);
+});
+
+test("mergeAndFinalize: transient merge failure (GitHub mergeability lag) is retried and merges on a later attempt", () => {
+  const sha = "clean-sha-1111";
+  const pr = { number: 12, headRefName: "harness/120" };
+  let mergeAttempts = 0;
+  const gh = (args) => {
+    if (args[0] === "pr" && args[1] === "merge") {
+      mergeAttempts += 1;
+      return { ok: mergeAttempts >= 2 }; // first attempt fails (mergeability still computing), then succeeds
+    }
+    return { ok: true };
+  };
+  const counter = makeFakeCounter();
+  const { recordReviewed, calls: recordedCalls } = makeFakeRecordReviewed();
+  let slept = 0;
+
+  const result = mergeAndFinalize(pr, sha, {
+    gh,
+    counter,
+    recordReviewed,
+    stateDir: STATE_DIR,
+    sleep: () => { slept += 1; },
+  });
+
+  assert.equal(result.merged, true, "a transient first-attempt failure must be retried and merge on a later attempt");
+  assert.ok(mergeAttempts >= 2, "the merge must be retried after a transient failure, not given up on immediately");
+  assert.ok(slept >= 1, "retries must be spaced by a sleep");
+  assert.equal(recordedCalls.length, 1, "recordReviewed is called once the retry succeeds");
 });

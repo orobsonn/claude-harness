@@ -31,6 +31,16 @@ function isOk(result) {
 }
 
 /**
+ * @description Blocks synchronously for `ms` milliseconds without a subprocess — used to space out
+ * merge retries while GitHub finishes computing mergeability. Injectable via `mergeAndFinalize`'s
+ * `sleep` opt so tests pass a no-op and never actually wait.
+ * @param {number} ms
+ */
+function defaultSleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
  * @description Derives the harness issue number from a PR's head branch name (`harness/<digits>`).
  * @param {string} headRefName
  * @returns {number}
@@ -57,11 +67,22 @@ function issueNumberFromHeadRefName(headRefName) {
  * @returns {{merged: boolean}}
  */
 export function mergeAndFinalize(pr, sha, opts) {
-  const { gh, counter, recordReviewed, stateDir } = opts;
+  const { gh, counter, recordReviewed, stateDir, sleep = defaultSleep, maxMergeAttempts = 3 } = opts;
 
   const issueNumber = issueNumberFromHeadRefName(pr.headRefName);
 
-  const mergeResult = gh(["pr", "merge", String(pr.number), "--squash", "--match-head-commit", sha]);
+  // GitHub computes mergeability ASYNCHRONOUSLY; right after the review pass it can still be
+  // "unknown" (computing), which makes the first `gh pr merge` fail transiently even for a
+  // clean, eligible PR. Retry a few times with a short gap so an otherwise-mergeable PR merges on
+  // THIS cron pass instead of waiting a whole cycle (the SHA is not recorded on failure, so a real
+  // rejection still stays re-reviewable). The `--match-head-commit` guard keeps the retry safe: a
+  // head that actually moved fails every attempt rather than merging stale code.
+  let mergeResult;
+  for (let attempt = 0; attempt < maxMergeAttempts; attempt++) {
+    if (attempt > 0) sleep(2000);
+    mergeResult = gh(["pr", "merge", String(pr.number), "--squash", "--match-head-commit", sha]);
+    if (isOk(mergeResult)) break;
+  }
 
   if (!isOk(mergeResult)) {
     return { merged: false };
