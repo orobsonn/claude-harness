@@ -43,15 +43,25 @@
  * best-effort pruned during worktree-add failure recovery so the retry ceiling can eventually
  * fire instead of looping forever.
  *
+ * Resume mode (HR-1/#ac-4.2): a `branchExists(branch)` seam probes whether harness/<issue> already
+ * exists (e.g. a prior run already opened a PR on it). When it does, `git worktree add` attaches
+ * the EXISTING branch (no `-b`), and the failure-recovery path never runs `git branch -D` against
+ * it — deleting an already-existing branch would destroy a delivered PR. When it does not exist,
+ * the fresh `-b` path is unchanged, including the branch-D prune on failure. In production, when
+ * `opts.branchExists` is not injected, it defaults to a real `git rev-parse --verify --quiet
+ * refs/heads/<branch>` probe against `projectRoot`.
+ *
  * @param {{ number: number, body: string }} issue - The picked issue.
  * @param {object} opts - Injected seams: project, projectRoot, worktreeRoot, stateDir,
- *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment.
+ *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment,
+ *   branchExists (optional; defaults to a real git probe in production).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
 import { writeFileSync, rmSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -149,6 +159,29 @@ function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueN
 }
 
 /**
+ * @description Real branch-existence probe used in production when dispatch is not handed an
+ * injected `branchExists` seam (tests always inject one, so this path is never exercised by the
+ * test suite). `git rev-parse --verify --quiet refs/heads/<branch>` exits 0 iff the local branch
+ * exists; any non-zero exit or spawn error is treated as "does not exist" so a probe hiccup falls
+ * back to the safe fresh-branch path rather than silently resuming into an unknown branch. `env`
+ * is the SAME scoped env used for the `git worktree add` spawn, so the probe resolves `git`
+ * identically — an inherited-PATH/scoped-PATH mismatch could otherwise false-negative the probe
+ * into the fresh `-b` path for a branch that actually exists, and the fresh-branch failure
+ * recovery would then `git branch -D` a PR-carrying branch.
+ * @param {string} branch
+ * @param {{ cwd: string, env: object }} args
+ * @returns {boolean}
+ */
+function defaultBranchExists(branch, { cwd, env }) {
+  try {
+    const result = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd, env });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @description Dispatch the picked issue to a detached autonomous tmux session. See the module
  * header for the full spawn composition and lock/counter contract.
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
@@ -166,12 +199,17 @@ export function dispatch(issue, opts) {
     counter,
     buildScopedEnv,
     notify,
+    branchExists,
   } = opts;
   const issueNumber = issue.number;
   const branch = `harness/${issueNumber}`;
   const worktreePath = join(worktreeRoot, `harness-${project}-${issueNumber}`);
   const sessionName = `harness-${project}-${issueNumber}`;
   const acquireTs = lock.acquireTs;
+  // Note: `env` (the scoped env used for the worktree-add spawn) is referenced here via closure
+  // but is only read when probeBranchExists is actually invoked below, AFTER `env` is built —
+  // so git resolves identically for the probe and the worktree-add spawn.
+  const probeBranchExists = branchExists ?? ((b) => defaultBranchExists(b, { cwd: projectRoot, env }));
 
   // Scoped child env: headless-local (no CLAUDE_CODE_REMOTE) so the cheap Ollama hands stay
   // reachable. Kept inside the failure-recovery path so an unreadable .dev.vars or missing stateDir
@@ -213,21 +251,33 @@ export function dispatch(issue, opts) {
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
   }
 
-  // 1) Per-run worktree on a project-distinct branch (never the primary tree).
+  // 1) Per-run worktree on a project-distinct branch (never the primary tree). When branch/<issue>
+  //    already exists (resume/repair of a run whose branch may already carry an open PR), attach
+  //    the EXISTING branch (no -b) instead of creating a fresh one, so repair never orphans the PR.
+  const branchAlreadyExisted = probeBranchExists(branch);
+  const branchWasFreshlyCreated = !branchAlreadyExisted;
   try {
-    spawn("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: projectRoot, env });
+    if (branchAlreadyExisted) {
+      spawn("git", ["worktree", "add", worktreePath, branch], { cwd: projectRoot, env });
+    } else {
+      spawn("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: projectRoot, env });
+    }
   } catch {
-    // Prune any leaked harness/<issue> branch/worktree from a prior interrupted run so the retry
-    // ceiling can eventually fire instead of looping forever on `git worktree add -b harness/<n>`.
+    // Prune any leaked worktree from a prior interrupted run so the retry ceiling can eventually
+    // fire instead of looping forever on `git worktree add`.
     try {
       spawn("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot, env });
     } catch {
       // best-effort: worktree may not exist if the failure was branch collision
     }
-    try {
-      spawn("git", ["branch", "-D", branch], { cwd: projectRoot, env });
-    } catch {
-      // best-effort: branch may not exist if the failure was worktree collision
+    // Only prune the branch itself when THIS dispatch would have freshly created it — an
+    // already-existing branch may carry an open PR, and deleting it would destroy delivered work.
+    if (branchWasFreshlyCreated) {
+      try {
+        spawn("git", ["branch", "-D", branch], { cwd: projectRoot, env });
+      } catch {
+        // best-effort: branch may not exist if the failure was worktree collision
+      }
     }
     try {
       rmSync(envFile);
