@@ -244,6 +244,8 @@ An executor dispatch is DENIED unless a compliance-fidelity-PASS frozen test exi
 node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor <descriptor.json>
 ```
 
+**BLOCKING, never background (load-bearing under `claude -p`).** Run this command **synchronously in the foreground** and wait for it to return — `spawn-hand.mjs` is `spawnSync`-based and blocks until the hand finishes (minutes is normal — allow a long Bash timeout). **NEVER dispatch it with `run_in_background: true`, and NEVER `sleep`-poll for its completion.** Under a headless `claude -p` session (single-shot, no interactive loop) the assistant yielding its turn to "wait for a background hand — the monitor will re-invoke me" **terminates the process**: print mode has no re-invocation-on-background-completion, so the backgrounded hand is killed mid-run, its spawn log is left 0 bytes, no code is captured/committed, and the run dies — the issue re-queues and then hits the retry ceiling (`harness:blocked`). A slow foreground call is EXPECTED — block on it; do not background it. (This is the ONLY correct way to run a hand in both local and headless-local.)
+
 The orchestrator NEVER hand-types `descriptor.json` — it runs the **descriptor-emitter** CLI
 (`references/descriptor-emitter.mjs`), the runnable entrypoint over the pure `emitDescriptor()`:
 
