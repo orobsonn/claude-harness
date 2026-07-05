@@ -57,3 +57,22 @@ test("docs document the fail-closed awaiting-merge behavior when the second mode
     "expected docs to explain the fail-closed behavior tied to the absence of the second model family"
   );
 });
+
+/**
+ * @description Given the combined text of cloud-routines.md and usage.md, when searching
+ * for the auto-merge rollout lock, then it must document the autoMergeEnabled config
+ * (defaulting OFF) that decouples cross-family running from auto-merge actually firing.
+ */
+test("docs document the autoMergeEnabled rollout lock (default OFF) decoupling cross-family running from auto-merge firing", () => {
+  const combined = `${readDoc(cloudRoutinesPath)}\n${readDoc(usagePath)}`;
+  assert.match(
+    combined,
+    /autoMergeEnabled/,
+    "expected docs to document the autoMergeEnabled config lock"
+  );
+  assert.match(
+    combined,
+    /default.*(desligad|off|false)/i,
+    "expected docs to state the autoMergeEnabled lock defaults OFF"
+  );
+});
