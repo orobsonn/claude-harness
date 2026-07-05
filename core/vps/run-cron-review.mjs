@@ -235,8 +235,8 @@ export async function runCronReview(config, deps = {}) {
       const secIssues = Array.isArray(sec.output?.issues) ? sec.output.issues : null;
       // An eye counts as a genuine pass ONLY if it ran, returned a valid issues[] array, and did not
       // explicitly declare UNSAFE. A malformed / verdict-UNSAFE output fails CLOSED (treated as absent).
-      const advOk = adv.available === true && advIssues !== null && adv.output?.verdict !== "UNSAFE";
-      const secOk = sec.available === true && secIssues !== null && sec.output?.verdict !== "UNSAFE";
+      const advOk = adv.available === true && advIssues !== null && String(adv.output?.verdict ?? "").trim().toUpperCase() !== "UNSAFE";
+      const secOk = sec.available === true && secIssues !== null && String(sec.output?.verdict ?? "").trim().toUpperCase() !== "UNSAFE";
       const codexEyes = {
         adversary: { available: advOk, issues: advIssues ?? [] },
         security: { available: secOk, issues: secIssues ?? [] },
