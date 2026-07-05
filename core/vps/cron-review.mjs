@@ -32,7 +32,7 @@ function extractRoot(headRefName) {
  * @param {(args: string[]) => any} opts.gh injected `gh` seam
  * @param {(pr: object, o: {authenticatedUser: string, engineKnows: Function}) => boolean} opts.isReviewEligible
  * @param {(pr: object, sha: string, stateDir: string) => {status: string, finding?: string}|null} opts.getFreshVerdict
- * @param {(pr: object) => boolean} opts.crossFamilyEligible pre-bound cross-family eligibility check
+ * @param {(pr: object, o: {changedFiles: string[], sha: string, stateDir: string}) => boolean} opts.crossFamilyEligible pre-bound cross-family eligibility check
  * @param {(pr: object, sha: string, o: object) => {merged: boolean}} opts.mergeAndFinalize
  * @param {() => Array<{issue: number, from: string}>} opts.reconcile zero-arg reconciliation driver
  * @param {(pr: object, sha: string, o: object) => void} opts.routeReject
@@ -47,6 +47,7 @@ function extractRoot(headRefName) {
  * @param {(o: {stateDir: string}) => boolean} opts.breakerTripped windowed-cap gate
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge and 2nd-pass-blocked routes
+ * @param {boolean} [opts.autoMergeEnabled] - only strict `=== true` auto-merges eligible PRs; default/false routes to awaiting-merge
  * @returns {void}
  */
 export function cronReview(opts) {
@@ -69,6 +70,7 @@ export function cronReview(opts) {
     breakerTripped,
     alreadyReviewed,
     recordReviewed,
+    autoMergeEnabled,
   } = opts;
 
   // `gh pr list --json` exposes the head SHA as `headRefOid` (there is NO `headSha` field — an
@@ -110,7 +112,12 @@ export function cronReview(opts) {
     }
 
     // Read the diff via `gh pr diff <n> --name-only` — NEVER checkout branch harness/<N>.
-    const changedFiles = gh(["pr", "diff", String(number), "--name-only"]) || [];
+    const rawDiff = gh(["pr", "diff", String(number), "--name-only"]);
+    if (rawDiff && rawDiff.diffFailed) {
+      notify({ type: "pr-diff-fetch-failed", pr: number, url: pr.url });
+      continue;
+    }
+    const changedFiles = Array.isArray(rawDiff) ? rawDiff : [];
 
     // Circuit-breaker gate BEFORE spawning the review session (HR-8 / #ac-6.2).
     if (breakerTripped({ stateDir })) {
@@ -131,7 +138,7 @@ export function cronReview(opts) {
     const freshVerdictClean = Boolean(verdict && verdict.status === "CLEAN");
 
     // Cross-family eligibility (HR-2 / #ac-2.3).
-    const crossFamilyOk = crossFamilyEligible(pr);
+    const crossFamilyOk = crossFamilyEligible(pr, { changedFiles, sha, stateDir });
 
     // Gate-machinery 2nd pass (HR-9 / #ac-3.2).
     const secondPassRequired = touchesGateMachinery(changedFiles);
@@ -155,10 +162,21 @@ export function cronReview(opts) {
     // Route at the composition decision boundary. Every routine outcome notifies the operator so a
     // non-dev never has to poll GitHub to learn what the autonomous review did (HR: observability).
     if (decision.eligible) {
-      // All conditions met — merge.
-      const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
-      if (merged) {
-        notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+      if (autoMergeEnabled === true) {
+        // All conditions met — merge.
+        const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
+        if (merged) {
+          notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+        }
+      } else {
+        // Auto-merge rollout lock is OFF — route to harness:awaiting-merge.
+        ensureAwaitingMergeLabel();
+        const root = extractRoot(pr.headRefName);
+        if (root !== null) {
+          gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
+        }
+        recordReviewed(pr.number, sha, { stateDir });
+        notify({ type: "pr-awaiting-merge", pr: pr.number, url: pr.url });
       }
     } else if (!freshVerdictClean) {
       // Fresh verdict is not CLEAN — reject (advance chain, re-queue or block). routeReject owns its
