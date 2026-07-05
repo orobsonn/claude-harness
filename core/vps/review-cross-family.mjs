@@ -48,7 +48,9 @@ export function crossFamilyEligible(pr, opts) {
  * non-SECURE judgement yields BLOCKED, never a false CLEAN. Does no I/O, no spawning, and does not
  * import the optional codex driver.
  *
- * @param {{adversary: {issues: unknown[]}|null, security: {issues: unknown[]}|null}} codexEyes
+ * @param {{adversary: {available?: boolean, issues: unknown[]}|null, security: {available?: boolean, issues: unknown[]}|null}} codexEyes
+ *   Each eye is `{available?: boolean, issues: unknown[]}`. `available === false` means the eye
+ *   never ran and is treated as absent (fail-closed). A missing `available` field counts as present.
  * @param {{securityVerdict: (issues: unknown[]) => string}} opts
  * @returns {{status: "CLEAN" | "BLOCKED"}}
  */
@@ -56,7 +58,8 @@ export function deriveSecondFamilyVerdict(codexEyes, { securityVerdict }) {
   const adversary = codexEyes?.adversary;
   const security = codexEyes?.security;
 
-  if (!adversary || !security || !Array.isArray(adversary.issues) || !Array.isArray(security.issues)) {
+  const present = (e) => Boolean(e) && e.available !== false && Array.isArray(e.issues);
+  if (!present(adversary) || !present(security)) {
     return { status: "BLOCKED" };
   }
 
