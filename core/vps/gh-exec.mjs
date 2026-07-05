@@ -12,6 +12,17 @@
 import { spawnSync } from "node:child_process";
 
 /**
+ * @description Scaffold stub (task-5 of review-spawn-wiring). Pure normalization of a gh
+ * spawnSync result into the shape each logic seam expects. Replaced by the executor.
+ * @param {string[]} args
+ * @param {{status?: number, error?: unknown, stdout?: string}} res
+ * @returns {any}
+ */
+export function normalizeGhResult(args, res) {
+  throw new Error("not implemented");
+}
+
+/**
  * @description Runs `gh <args>` synchronously and normalizes the result. See file header.
  * @param {string[]} args
  * @returns {any}
