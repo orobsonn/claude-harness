@@ -79,19 +79,30 @@ Dispatch all three eyes **concurrently in a single fan-out** (one message with N
 
 ### Step 4 — Cross-family (Node-orchestrated, when available)
 
-Cross-family is **not** something this session decides for itself. **Node (cron-review) orchestrates cross-family eligibility**: it checks whether the `codex-adversary` module is installed, the global switch `HARNESS_CODEX_ADVERSARY` is on, and `codex` is reachable, and dispatches the second-family **adversary** AND **security** eyes (GPT via Codex CLI) accordingly, merging under **policy B**:
+Cross-family is **not** something this session decides for itself. **Node (the composition root
+`run-cron-review.mjs`) orchestrates the second family** directly, over the PR diff — it is NOT the
+per-task `driveCrossFamily`/policy-B refute-loop used elsewhere in the harness. Per PR, the bound
+`crossFamilyEligible` closure:
 
-```
-node .claude/modules/codex-adversary/references/cross-family.mjs \
-  --role adversary --task <task.json> --claude <claude-issues.json>
-node .claude/modules/codex-adversary/references/cross-family.mjs \
-  --role security --task <task.json> --claude <claude-issues.json>
-```
+1. Loads the `codex-adversary` module ONCE at composition-root setup (dynamic import; absent → fail-open).
+2. Re-verifies the PR head (`headRefOid` still equals the reviewed `sha`) and fetches the **full patch**
+   (`gh pr diff <n>`) as the review content — a diff-fetch failure or head drift → `available: false`
+   (re-queue), never a review of a drifted revision.
+3. Runs `runCodexRole` **directly** for the `adversary` AND `security` roles (GPT via Codex CLI) over the
+   patch — the codex spawn env is scrubbed of hand-token credentials.
+4. Derives the second-family verdict in **Node** via `deriveSecondFamilyVerdict` from the two codex eyes'
+   structured `issues[]` (fail-closed: a malformed / unavailable eye, or an explicit `UNSAFE`, → BLOCKED;
+   never a free-text summary), and writes a **sibling** artifact `review-<n>-<sha>.crossfamily.json`
+   (`{available, verdict, adversaryClean, securitySecure}`) — never touching the canonical verdict artifact.
+5. Injects `available` + the derived verdict into `crossFamilyEligible(pr, {available, secondFamilyVerdict})`.
 
-- A single-family finding is kept unless the other family refutes it — never majority voting.
-- Codex-only findings get their Claude refute-pass before being folded into the verdict.
-- For security, the `SECURE|UNSAFE` verdict is recomputed only after the refute-pass.
-- **Fail-closed if absent:** when the module is absent, the switch is off, or `codex` is unreachable, Node records the cross-family requirement as **unmet** (`crossFamilyEligible: false`) instead of running it, and the merge-eligible conjunction (HR-9) requires it. Absence → awaiting-merge, never fail-open "ok" (HR-2).
+- **Compliance stays Claude-only** (it is not run cross-family).
+- **Fail-closed if absent:** when the module is absent, the switch is off, `codex` is unauthenticated, or
+  `codex` is unreachable, the closure resolves `crossFamilyEligible: false` (never fabricates `available`),
+  and the merge-eligible conjunction (HR-9) requires it. Absence → awaiting-merge, never fail-open "ok" (HR-2).
+- **Auto-merge rollout lock:** even with the full conjunction CLEAN, a PR auto-merges ONLY when
+  `config.autoMergeEnabled === true` (default OFF) — otherwise it routes to awaiting-merge. This decouples
+  "cross-family validated running" from "auto-merge fires" (operator enables it after validating).
 
 **Compliance stays Claude-only** — it checks THIS PR's acceptance criteria against the pseudo-contract, not general failure modes a second family would diversify.
 
