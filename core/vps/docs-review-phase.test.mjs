@@ -21,7 +21,7 @@ function readDoc(fileUrl) {
 /**
  * @description Given the combined text of cloud-routines.md and usage.md, when searching
  * for the review-phase kill switch, then it must document the env var
- * HARNESS_REVIEW_ENABLED and the review cadence "0 */6" (distinct from Cron A's "0 */4").
+ * HARNESS_REVIEW_ENABLED and the review cadence (every 6h) distinct from Cron A (every 4h).
  */
 test("docs document the HARNESS_REVIEW_ENABLED kill switch and the 0 */6 review cadence", () => {
   const combined = `${readDoc(cloudRoutinesPath)}\n${readDoc(usagePath)}`;

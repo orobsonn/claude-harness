@@ -118,6 +118,20 @@ Não há link automático PR→sessão nem notificação de falha. Valide assim:
 
 ---
 
+## 6. Fase de revisão independente do PR (opcional, VPS)
+
+Em runs autônomos via VPS (headless-local), depois que a issue vira PR existe uma **segunda etapa**, independente da sessão que implementou: uma sessão de revisão com olhos frescos que reanalisa o diff do PR do zero (adversary + compliance + security), sem herdar contexto de quem codou. Ela roda como cron próprio (`cron-review`), agendada `0 */6 * * *` (a cada 6h) — **substitui** o antigo Cron B fraco nesse mesmo horário. A implementação do **Cron A** (seleção e dispatch da issue) não muda: continua `0 */4 * * *` (a cada 4h).
+
+A sessão de revisão soma cross-family (segunda família de modelo, quando disponível) e, se o diff toca a própria maquinaria de gate do harness, um segundo passe de gate-hardening. Só auto-merge na **conjunção completa**: veredito fresco limpo + cross-family elegível + (quando aplicável) segundo passe limpo.
+
+- **Kill switch:** a env var `HARNESS_REVIEW_ENABLED` liga/desliga a fase inteira (`1` = ativa — default do `settings.json` do core). Desligada, a etapa de revisão some sem afetar o Cron A.
+- **Fail-closed sem a segunda família:** sem o módulo `codex-adversary` instalado, com o switch de cross-family desligado, ou com o `codex` inalcançável, um PR que passaria em tudo o mais **não é auto-mergeado** — vai para o label `harness:awaiting-merge`, aguardando merge manual do operador. A revisão nunca aceita silenciosamente na ausência da segunda checagem.
+- Quando o merge sai automático, a notificação (Telegram) traz a reversão em uma linha: `git revert -m 1 <sha-do-merge>`.
+
+**Riscos abertos registrados:** mesmo com a conjunção completa fechada, o auto-merge carrega um risco residual total — nenhuma revisão de máquina substitui 100% o julgamento humano; e sem o módulo `codex-adversary` instalado a fase fica "segura, porém inerte" nesse ponto — os olhos Claude rodam normalmente, mas o merge automático nunca acontece (tudo cai em `awaiting-merge`) até a segunda família estar disponível.
+
+---
+
 ## Modelo do orquestrador
 
 Setar **Sonnet** como modelo da sessão (`/model` no Claude Code, ou o modelo padrão da routine). O orquestrador é o maior consumidor de tokens do harness — é onde está a economia real. Os modelos superiores (Opus, Fable) são chamados **só nos pontos certos**, automaticamente, pelos sub-agentes: `planner` (Opus), `plan-reviewer` e `adversary` do gate final (Fable), `security`/`adversary` por-task (Opus). A tabela autoritativa está em `core/skills/orchestrating-delivery/SKILL.md`.
