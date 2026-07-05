@@ -70,6 +70,18 @@ function dependencyBlocked(gh, dep) {
 }
 
 /**
+ * @description True when EVERY listed dependency has a merged PR (ground truth). Empty `deps` is
+ * vacuously true. Shared with cron-a-select.mjs's dispatch-time gate so both the review-cron release
+ * and the select-cron defer decide dependency satisfaction from the exact same merged-PR signal.
+ * @param {(args: string[]) => any} gh
+ * @param {number[]} deps
+ * @returns {boolean}
+ */
+export function dependenciesAllMerged(gh, deps) {
+  return Array.isArray(deps) && deps.every((dep) => dependencyMerged(gh, dep));
+}
+
+/**
  * @description Scans the open `harness:queued` issues and releases / strands each per the contract
  * in the module header. Idempotent per cycle: an issue that stays pending is left untouched, so a
  * repeat pass only acts on a newly-satisfied or newly-dead dependency.

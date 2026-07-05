@@ -30,6 +30,9 @@
  * @param {(id: string) => boolean} [opts.tmuxHasSession] - tmux liveness probe for acquire
  * @returns {{ ok: boolean, dispatched?: boolean, issue?: { number: number, labels: string[] } }}
  */
+import { parseDependsOn } from "./chain-deps.mjs";
+import { dependenciesAllMerged } from "./chain-release.mjs";
+
 export function cronASelect(opts) {
   const {
     project,
@@ -88,13 +91,45 @@ export function cronASelect(opts) {
         return (a.number ?? 0) - (b.number ?? 0);
       });
 
-    if (eligible.length === 0) {
-      // 4) No work this fire — release the held lock and exit without dispatch or relabel.
+    // 4) Dependency gate (defense-in-depth for roadmap chaining): walk the eligible issues
+    //    oldest-first and pick the first whose declared `harness-deps` are ALL merged. A ready issue
+    //    whose dependencies are NOT all on main yet is DEFERRED — relabeled harness:ready ->
+    //    harness:queued so it becomes invisible until chain-release (review cron) promotes it back
+    //    once its deps land. This guarantees an issue is NEVER dispatched onto a fresh worktree
+    //    branched off a main that still lacks its dependency's code, even if the issue was
+    //    mistakenly created harness:ready instead of harness:queued. An issue with no declared deps
+    //    is picked exactly as before. A failed defer relabel just leaves the issue harness:ready to
+    //    retry next tick (best-effort, never fatal).
+    let picked = null;
+    let queuedLabelEnsured = false;
+    for (const candidate of eligible) {
+      const deps = parseDependsOn(candidate.body);
+      if (deps.length > 0 && !dependenciesAllMerged(gh, deps)) {
+        if (!queuedLabelEnsured) {
+          gh(["label", "create", "harness:queued", "--force"]);
+          queuedLabelEnsured = true;
+        }
+        gh([
+          "issue",
+          "edit",
+          String(candidate.number),
+          "--remove-label",
+          "harness:ready",
+          "--add-label",
+          "harness:queued",
+        ]);
+        continue;
+      }
+      picked = candidate;
+      break;
+    }
+
+    if (picked === null) {
+      // 4b) No dispatchable issue this fire (none eligible, or every eligible one deferred to
+      //     harness:queued pending its deps) — release the held lock and exit without dispatch.
       runLock.release({ stateDir, acquireTs: lock.acquireTs });
       return { ok: true, dispatched: false };
     }
-
-    const picked = eligible[0];
 
     // 5) Relabel harness:ready -> harness:in-progress BEFORE any worktree/session is created, so an
     //    interrupted spawn never leaves a parallel fire free to re-pick the same issue. If the relabel
