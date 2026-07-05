@@ -369,7 +369,13 @@ const ISSUE_FORM_ADVISORY =
   "The `gh issue create` CLI bypasses issue forms silently — if you proceed, replicate the form: " +
   "title `[harness] <slug>`, label `harness:ready`, and a body with #uj-N journeys, " +
   "#ac-N.M acceptance criteria, scope, sensitive domain, priority, and size " +
-  "(these become the spec, locked_tests and scope_paths).";
+  "(these become the spec, locked_tests and scope_paths). " +
+  "For a CHAINED ROADMAP, create EVERY issue with `harness:ready` (never `harness:queued` by hand) " +
+  "and, in each dependent issue's body, declare its prerequisites in a fenced ```harness-deps block " +
+  "(one `#N` per line). The engine gates order and serialization on its own — a dependent is held " +
+  "until every prerequisite's PR merges, and only one issue is built at a time. After creating the " +
+  "roadmap, run `node core/vps/chain-validate.mjs --config <project.json>` to catch dependency " +
+  "cycles and non-existent references before the engine runs.";
 
 /**
  * @description Returns true when .github/ISSUE_TEMPLATE/harness-task.yml exists in cwd.
