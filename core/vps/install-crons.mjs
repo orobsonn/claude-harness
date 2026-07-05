@@ -139,6 +139,18 @@ export function validateInstallCoordinates(inputs) {
   // Optional Telegram notify block — NOT secret (chatId/threadId are group coordinates; the bot
   // token lives ONLY in ~/.claude/.dev.vars, never here). Validated numeric so nothing unsafe
   // reaches the generated config. Absent notify → coords carries none and the config is unchanged.
+  // Optional cadence overrides (integers 1..24) — install-time crontab-render knobs, injection-safe
+  // by construction. Absent → the block renders with the default 4h/6h cadence.
+  for (const field of ["intervalHoursA", "intervalHoursReview"]) {
+    if (inputs[field] !== undefined && inputs[field] !== null) {
+      const value = inputs[field];
+      if (!Number.isInteger(value) || value < 1 || value > 24) {
+        throw new Error(`invalid ${field}`);
+      }
+      coords[field] = value;
+    }
+  }
+
   const hasNotify = inputs.notify !== undefined && inputs.notify !== null;
   if (hasNotify) {
     const n = inputs.notify;
@@ -172,23 +184,55 @@ export function generateProjectConfig(coords) {
   return config;
 }
 
+/** @description Default hour interval for Cron A (select/dispatch) and the review phase. */
+const DEFAULT_INTERVAL_HOURS_A = 4;
+const DEFAULT_INTERVAL_HOURS_REVIEW = 6;
+
 /**
- * @description Renders the fenced crontab block for a project: Cron A (every 4h, run-cron-a.mjs)
- * and the review phase (every 6h, run-cron-review.mjs — REPLACES the old Cron B slot, not a third
- * line) invoking the run-cron scripts with absolute paths, wrapped in literal
- * `# >>> harness:<project> >>>` / `# <<< harness:<project> <<<` fence lines. No trailing newline.
- * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string}} args
+ * @description Renders the five-field cron schedule prefix for an every-N-hours cadence
+ * (minute 0, hour step N), validating N is an integer in [1,24]. N is injection-safe by
+ * construction (an integer), so the rendered schedule never carries anything unsafe into the
+ * crontab line. Chaining latency is tuned here: a shorter Cron A / review interval advances a
+ * merged roadmap faster.
+ * @param {number} hours
+ * @param {string} label
  * @returns {string}
  */
-export function renderProjectBlock({ project, nodeBin, scriptDir, configPath }) {
+function everyNHoursSchedule(hours, label) {
+  if (!Number.isInteger(hours) || hours < 1 || hours > 24) {
+    throw new Error(`invalid ${label} (must be an integer 1..24)`);
+  }
+  return `0 */${hours} * * *`;
+}
+
+/**
+ * @description Renders the fenced crontab block for a project: Cron A (run-cron-a.mjs) and the
+ * review phase (run-cron-review.mjs — REPLACES the old Cron B slot, not a third line) invoking the
+ * run-cron scripts with absolute paths, wrapped in literal `# >>> harness:<project> >>>` /
+ * `# <<< harness:<project> <<<` fence lines. No trailing newline. Cadence defaults to every 4h
+ * (Cron A) / 6h (review); `intervalHoursA` / `intervalHoursReview` (integers 1..24) override it to
+ * make a merged roadmap chain faster.
+ * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string,intervalHoursA?:number,intervalHoursReview?:number}} args
+ * @returns {string}
+ */
+export function renderProjectBlock({
+  project,
+  nodeBin,
+  scriptDir,
+  configPath,
+  intervalHoursA = DEFAULT_INTERVAL_HOURS_A,
+  intervalHoursReview = DEFAULT_INTERVAL_HOURS_REVIEW,
+}) {
   const scriptA = join(scriptDir, "run-cron-a.mjs");
   const scriptReview = join(scriptDir, "run-cron-review.mjs");
   assertCronSafe(nodeBin, "nodeBin");
   assertCronSafe(scriptA, "script path");
   assertCronSafe(scriptReview, "script path");
   assertCronSafe(configPath, "configPath");
-  const cronA = `0 */4 * * * ${nodeBin} ${scriptA} --config ${configPath}`;
-  const cronReview = `0 */6 * * * ${nodeBin} ${scriptReview} --config ${configPath}`;
+  const scheduleA = everyNHoursSchedule(intervalHoursA, "intervalHoursA");
+  const scheduleReview = everyNHoursSchedule(intervalHoursReview, "intervalHoursReview");
+  const cronA = `${scheduleA} ${nodeBin} ${scriptA} --config ${configPath}`;
+  const cronReview = `${scheduleReview} ${nodeBin} ${scriptReview} --config ${configPath}`;
   return [`# >>> harness:${project} >>>`, cronA, cronReview, `# <<< harness:${project} <<<`].join("\n");
 }
 
@@ -530,6 +574,10 @@ export function installProject(inputs, deps = {}) {
       // touching the frozen generator. Absent notify → byte-identical to today.
       const perProjectConfig = generateProjectConfig(coords);
       if (coords.notify) perProjectConfig.notify = coords.notify;
+      // Persist the cadence overrides so the installed config records the chosen interval (the crontab
+      // line renders from coords below; this keeps the config self-describing for audit/re-install).
+      if (coords.intervalHoursA !== undefined) perProjectConfig.intervalHoursA = coords.intervalHoursA;
+      if (coords.intervalHoursReview !== undefined) perProjectConfig.intervalHoursReview = coords.intervalHoursReview;
       loadConfig(perProjectConfig);
       loadConfig(fleet);
       for (const entry of fleet.projects) {
@@ -540,7 +588,14 @@ export function installProject(inputs, deps = {}) {
 
       // Render BEFORE any write so assertCronSafe (an unsafe nodeBin/scriptDir/config path) throws
       // before mutating any config file — validation fully precedes mutation (#ac-5.4).
-      const projectBlock = renderProjectBlock({ project, nodeBin, scriptDir, configPath: perProjectPath });
+      const projectBlock = renderProjectBlock({
+        project,
+        nodeBin,
+        scriptDir,
+        configPath: perProjectPath,
+        intervalHoursA: coords.intervalHoursA,
+        intervalHoursReview: coords.intervalHoursReview,
+      });
       const reaperBlock = renderReaperBlock({ nodeBin, scriptDir, reaperConfigPath: fleetPath });
 
       writeConfigFn(perProjectPath, perProjectConfig);
@@ -704,6 +759,10 @@ export async function runCli(argv, deps = {}) {
       homeDir: flags["home-dir"],
     };
     if (flags["harness-author-login"]) inputs.harnessAuthorLogin = flags["harness-author-login"];
+    // Optional cadence overrides (every N hours; integers 1..24). Absent → default 4h/6h. Shorter
+    // intervals make a merged roadmap chain advance faster. A non-integer fails validation before any write.
+    if (flags["interval-hours-a"] !== undefined) inputs.intervalHoursA = Number(flags["interval-hours-a"]);
+    if (flags["interval-hours-review"] !== undefined) inputs.intervalHoursReview = Number(flags["interval-hours-review"]);
     // Review-phase kill switch. Defaults OFF (unlike heartbeat, which defaults ON) — an explicit
     // --review-enabled true|false flag always wins; absent, the review phase stays disabled until
     // the operator opts in.
@@ -723,7 +782,7 @@ export async function runCli(argv, deps = {}) {
   }
   console.error(
     "Usage:\n" +
-      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
+      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--interval-hours-a <1..24>] [--interval-hours-review <1..24>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
       "  --uninstall <project>"
   );
   process.exitCode = 1;
