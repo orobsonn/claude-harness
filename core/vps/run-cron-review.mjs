@@ -148,9 +148,13 @@ export async function runCronReview(config, deps = {}) {
     try {
       // Inject the project slug so every review-cron notification renders `[<project>]` instead of
       // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
-      notify({ project: config.project, ...event });
+      // Returns the underlying notify promise so a caller that needs the send to COMPLETE before a
+      // blocking spawn (cronReview's awaited review-started) can await it; fire-and-forget callers
+      // simply ignore the return.
+      return notify({ project: config.project, ...event });
     } catch {
       // fail-open — a notify failure never masks the breaker's stall or blocks the cycle
+      return undefined;
     }
   };
 
@@ -282,7 +286,7 @@ export async function runCronReview(config, deps = {}) {
   const cronReviewFn = deps.cronReview ?? cronReview;
 
   try {
-    cronReviewFn({
+    await cronReviewFn({
       gh,
       isReviewEligible: deps.isReviewEligible ?? isReviewEligible,
       getFreshVerdict: deps.getFreshVerdict ?? getFreshVerdict,
