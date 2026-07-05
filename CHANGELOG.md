@@ -9,6 +9,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Cadência dos crons configurável na instalação** — `install-crons` aceita `--interval-hours-a` e
+  `--interval-hours-review` (inteiros 1..24; default 4h/6h). Intervalos menores fazem um roadmap
+  encadeado avançar mais rápido sem tocar na garantia de ordem. Injection-safe por construção (só
+  inteiro entra na linha do crontab).
+- **Validação end-to-end do agendamento real** — novo teste opt-in (`HARNESS_CRON_E2E=1`) instala
+  uma linha de crontab de verdade, espera o **cron daemon do SO disparar** e observa o efeito, então
+  restaura o crontab original — prova que o scheduler agendado roda a linha instalada, algo que os
+  testes herméticos (fakes em memória) nunca cobriram. Fica de fora do `npm test` normal (skip).
 - **Fase independente de revisão de PR agora funciona de verdade** — o `spawnReviewSession` deixou
   de ser um stub que sempre falhava: a sessão de revisão roda de fato sobre o diff do PR (só olhos —
   adversary/compliance/security, nunca um hand com escrita) e o veredito CLEAN/BLOCKED que decide

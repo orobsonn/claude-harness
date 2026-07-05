@@ -1214,3 +1214,71 @@ test("[review-phase] a52: upsertBlock: an OLD crontab fence containing a run-cro
   assert.equal(bCount, 0, "no run-cron-b.mjs invocation may survive the upgrade");
   assert.ok(result.includes("backup.sh"), "unrelated crontab lines outside the fence must be preserved");
 });
+
+// --- Configurable cadence (chaining latency lever) ---
+
+/**
+ * @description Asserts a crontab line begins with a well-formed 5-field cron schedule that a real
+ * scheduler would accept: minute/hour/dom/month/dow, each field a valid cron token, minute a plain int.
+ */
+function assertValidCronSchedulePrefix(line, label) {
+  const fields = line.split(/\s+/).slice(0, 5);
+  assert.equal(fields.length, 5, `${label}: a cron line must start with 5 schedule fields`);
+  for (const f of fields) {
+    assert.match(f, /^[0-9*/,-]+$/, `${label}: cron field "${f}" must be a valid cron token`);
+  }
+  assert.match(fields[0], /^\d+$/, `${label}: the minute field must be a plain integer`);
+}
+
+test("cadence: renderProjectBlock defaults to 0 */4 (Cron A) and 0 */6 (review) when no interval is given", () => {
+  const block = projectBlockFixture("demo");
+  const [, cronA, cronReview] = block.split("\n");
+  assert.ok(cronA.startsWith("0 */4 * * * "), "Cron A defaults to every 4h");
+  assert.ok(cronReview.startsWith("0 */6 * * * "), "review defaults to every 6h");
+  assertValidCronSchedulePrefix(cronA, "default Cron A");
+  assertValidCronSchedulePrefix(cronReview, "default review");
+});
+
+test("cadence: renderProjectBlock honors custom intervalHoursA / intervalHoursReview", () => {
+  const block = renderProjectBlock({
+    project: "demo",
+    nodeBin: NODE_BIN,
+    scriptDir: SCRIPT_DIR,
+    configPath: configPathFor("demo"),
+    intervalHoursA: 1,
+    intervalHoursReview: 2,
+  });
+  const [, cronA, cronReview] = block.split("\n");
+  assert.ok(cronA.startsWith("0 */1 * * * "), "Cron A cadence must reflect intervalHoursA=1");
+  assert.ok(cronReview.startsWith("0 */2 * * * "), "review cadence must reflect intervalHoursReview=2");
+  assertValidCronSchedulePrefix(cronA, "custom Cron A");
+  assertValidCronSchedulePrefix(cronReview, "custom review");
+});
+
+test("cadence: renderProjectBlock rejects an out-of-range or non-integer interval (never emits a malformed cron line)", () => {
+  const base = { project: "demo", nodeBin: NODE_BIN, scriptDir: SCRIPT_DIR, configPath: configPathFor("demo") };
+  assert.throws(() => renderProjectBlock({ ...base, intervalHoursA: 0 }), /intervalHoursA/);
+  assert.throws(() => renderProjectBlock({ ...base, intervalHoursA: 25 }), /intervalHoursA/);
+  assert.throws(() => renderProjectBlock({ ...base, intervalHoursReview: 1.5 }), /intervalHoursReview/);
+});
+
+test("cadence: validateInstallCoordinates carries valid intervals and rejects invalid ones", () => {
+  const base = {
+    project: "demo",
+    owner: "acme",
+    repo: "demo-repo",
+    projectRoot: "/srv/demo",
+    stateDir: "/srv/demo/.claude/state",
+    worktreeRoot: "/srv/worktrees",
+    homeDir: "/home/harness",
+  };
+  const coords = validateInstallCoordinates({ ...base, intervalHoursA: 2, intervalHoursReview: 3 });
+  assert.equal(coords.intervalHoursA, 2);
+  assert.equal(coords.intervalHoursReview, 3);
+  assert.throws(() => validateInstallCoordinates({ ...base, intervalHoursA: 0 }), /intervalHoursA/);
+  assert.throws(() => validateInstallCoordinates({ ...base, intervalHoursReview: 99 }), /intervalHoursReview/);
+  // Absent intervals → coords omits them (default cadence at render time).
+  const plain = validateInstallCoordinates(base);
+  assert.equal(plain.intervalHoursA, undefined);
+  assert.equal(plain.intervalHoursReview, undefined);
+});
