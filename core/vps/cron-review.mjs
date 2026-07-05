@@ -88,6 +88,7 @@ export function cronReview(opts) {
   }
 
   for (const pr of prs) {
+   try {
     // Origin gate — single self-contained eligibility source (review-origin-gate.mjs).
     if (!isReviewEligible(pr, { authenticatedUser, engineKnows })) {
       continue;
@@ -127,6 +128,7 @@ export function cronReview(opts) {
     if (secondPassRequired) {
       const secondPassStateDir = join(stateDir, "second-pass");
       spawnReviewSession(pr, { stateDir: secondPassStateDir, changedFiles, secondPass: true });
+      recordReviewSession({ stateDir });
       const secondVerdict = getFreshVerdict(pr, sha, secondPassStateDir);
       secondPassClean = Boolean(secondVerdict && secondVerdict.status === "CLEAN");
     }
@@ -162,6 +164,11 @@ export function cronReview(opts) {
         gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
       }
     }
+   } catch (err) {
+    // Isolate one PR's failure — a throw here must not skip the remaining PRs or reconcile().
+    notify({ type: "pr-review-error", pr: pr.number, message: err instanceof Error ? err.message : String(err) });
+    continue;
+   }
   }
 
   // Reconciliation driver (HR-3 / #ac-7.1): invoked EVERY cycle, independent of the open-PR loop,
