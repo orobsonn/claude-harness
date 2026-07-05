@@ -574,3 +574,64 @@ test("run-cron-review: the codex eye spawn env is scrubbed of hand-token credent
     cleanup();
   }
 });
+
+test("run-cron-review: the DEFAULT reconcile closure releases chained dependents whose dependencies have merged (queued->ready + chain-released notify)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-chain-");
+  try {
+    // gh fake: reconcile's non-terminal label scans return [] (nothing to self-heal); the queued
+    // scan returns one dependent whose single dependency (#12) has a merged PR.
+    const calls = [];
+    const gh = (args) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "list") {
+        const li = args.indexOf("--label");
+        const label = li !== -1 ? args[li + 1] : "";
+        return label === "harness:queued" ? [{ number: 50, body: "```harness-deps\n#12\n```" }] : [];
+      }
+      if (args[0] === "pr" && args[1] === "list") {
+        if (args.includes("--head")) {
+          const head = args[args.indexOf("--head") + 1];
+          return String(head) === "harness/12" ? [{ number: 999 }] : [];
+        }
+        return []; // open-PR list (cronReview is captured, never calls this)
+      }
+      if (args[0] === "issue" && args[1] === "view") return { labels: [] };
+      return { ok: true };
+    };
+
+    const notify = makeSpy();
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        gh,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify,
+      }
+    );
+
+    // The composition root did NOT inject reconcile, so captured.reconcile is the DEFAULT closure
+    // that runs review-merge.reconcile() AND releaseChainedDependents().
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    captured.reconcile();
+
+    const releasedEdit = calls.find(
+      (a) => a[0] === "issue" && a[1] === "edit" && a[2] === "50" && a.includes("--add-label") && a.includes("harness:ready") && a.includes("--remove-label") && a.includes("harness:queued")
+    );
+    assert.ok(releasedEdit, "the default reconcile closure must relabel the satisfied dependent queued->ready");
+    assert.ok(
+      notify.calls.some((a) => a[0] && a[0].type === "chain-released" && a[0].issue === 50),
+      "a chain-released notification must fire (carrying the project via safeNotify)"
+    );
+    assert.ok(
+      notify.calls.some((a) => a[0] && a[0].project === "demo"),
+      "safeNotify must inject the project slug into chaining events"
+    );
+  } finally {
+    cleanup();
+  }
+});

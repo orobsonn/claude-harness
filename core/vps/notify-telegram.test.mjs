@@ -316,6 +316,21 @@ test("#ac-5.2 sendNotification: pr-merged failure log stays redacted to exactly 
   }
 });
 
+test("formatEvent: chain-released reads as a queue-release and names the merged dependencies", () => {
+  const text = formatEvent({ type: "chain-released", project: "demo", issue: 50, deps: [12, 13] });
+  assert.match(text, /^🔗 \[demo\]/, "must start with the chain emoji + [project]");
+  assert.match(text, /#50/, "must reference the released issue");
+  assert.match(text, /#12, #13/, "must name the merged dependencies");
+  assert.match(text, /liberada|pronta/i, "must read as a release message");
+});
+
+test("formatEvent: chain-stranded reads as a dead-subtree warning", () => {
+  const text = formatEvent({ type: "chain-stranded", project: "demo", issue: 70, deps: [30, 31] });
+  assert.match(text, /^⛓️‍💥 \[demo\]/, "must start with the broken-chain emoji + [project]");
+  assert.match(text, /#70/, "must reference the stranded issue");
+  assert.match(text, /encalhada|blocked/i, "must read as a stranded/dead-dependency message");
+});
+
 test("formatEvent: review-started references the PR and reads as an analysis-started message", () => {
   const text = formatEvent({ type: "review-started", project: "demo", pr: 7, url: "https://github.com/acme/demo/pull/7" });
   assert.match(text, /^🔍 \[demo\]/, "must start with the review emoji + [project]");
