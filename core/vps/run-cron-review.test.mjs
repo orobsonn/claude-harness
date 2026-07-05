@@ -550,3 +550,27 @@ test("run-cron-review: codex security verdict 'UNSAFE ' with trailing whitespace
     assert.equal(result, false, "a 'UNSAFE ' verdict with whitespace must block");
   } finally { cleanup(); }
 });
+
+test("run-cron-review: the codex eye spawn env is scrubbed of hand-token credentials (no ANTHROPIC_AUTH_TOKEN / OLLAMA_HAND_TOKEN leak to the codex binary)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-envscrub-");
+  const prevA = process.env.ANTHROPIC_AUTH_TOKEN;
+  const prevO = process.env.OLLAMA_HAND_TOKEN;
+  process.env.ANTHROPIC_AUTH_TOKEN = "secret-anthropic";
+  process.env.OLLAMA_HAND_TOKEN = "secret-ollama";
+  try {
+    const { driver, runCodexRole } = makeFakeCodexDriver({ available: true });
+    const gh = makeSpy((args) => args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "PATCH" : { ok: true }));
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.ok(runCodexRole.calls.length >= 1, "runCodexRole must be called");
+    const envArg = runCodexRole.calls[0][0].env;
+    assert.equal(typeof envArg, "object", "runCodexRole must receive an explicit env (scrubbed), not undefined");
+    assert.equal(envArg.ANTHROPIC_AUTH_TOKEN, undefined, "ANTHROPIC_AUTH_TOKEN must be scrubbed from the codex spawn env");
+    assert.equal(envArg.OLLAMA_HAND_TOKEN, undefined, "OLLAMA_HAND_TOKEN must be scrubbed from the codex spawn env");
+  } finally {
+    if (prevA === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN; else process.env.ANTHROPIC_AUTH_TOKEN = prevA;
+    if (prevO === undefined) delete process.env.OLLAMA_HAND_TOKEN; else process.env.OLLAMA_HAND_TOKEN = prevO;
+    cleanup();
+  }
+});
