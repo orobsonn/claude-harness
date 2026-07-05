@@ -29,6 +29,7 @@ import {
   withInstallLock,
   installProject,
   uninstallProject,
+  runCli,
 } from "./install-crons.mjs";
 import { loadConfig, REQUIRED_CONFIG_FIELDS } from "./run-cron-a.mjs";
 
@@ -1147,4 +1148,69 @@ test("[#ac-5.4] installProject: an unsafe nodeBin (shell metachar) is rejected a
   assert.throws(() => installProject({ ...BASE_COORDS }, deps), /unsafe/i);
   assert.equal(state.writeConfigCalls.length, 0, "no config may be written when the cron line is unsafe");
   assert.equal(state.writeCrontabCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review-phase replaces Cron B (run-cron-review.mjs) + reviewEnabled kill switch. Additive; every
+// test above stays byte-stable. RED until the implementer replaces run-cron-b.mjs with
+// run-cron-review.mjs in renderProjectBlock and adds the reviewEnabled kill-switch field.
+// ---------------------------------------------------------------------------------------------
+
+test("[review-phase] a50: renderProjectBlock: the 0 */6 line invokes run-cron-review.mjs and contains NO run-cron-b.mjs line, while the Cron A line stays 0 */4 invoking run-cron-a.mjs (the review phase REPLACES Cron B, not a third line)", () => {
+  const block = projectBlockFixture("demo");
+  assert.match(block, /0 \*\/6 \* \* \*.*run-cron-review\.mjs/);
+  assert.equal(block.includes("run-cron-b.mjs"), false, "run-cron-b.mjs must no longer appear anywhere in the block");
+  assert.match(block, /0 \*\/4 \* \* \*.*run-cron-a\.mjs/);
+
+  const lines = block.split("\n");
+  const cronLines = lines.slice(1, -1); // exclude the two fence lines
+  assert.equal(cronLines.length, 2, "exactly 2 project cron lines (Cron A + review), never a third");
+});
+
+test("[review-phase] a51: runCli: the review-phase kill switch (\"reviewEnabled\") defaults OFF when no flag is passed, and an explicit --review-enabled false flag resolves to false", async () => {
+  const calls = [];
+  const baseArgv = [
+    "install",
+    "--project",
+    "demo",
+    "--owner",
+    "acme",
+    "--repo",
+    "demo-repo",
+    "--project-root",
+    "/srv/demo",
+    "--state-dir",
+    "/srv/demo/.claude/state",
+    "--worktree-root",
+    "/srv/worktrees",
+    "--home-dir",
+    "/home/harness",
+  ];
+
+  await runCli(baseArgv, { installProject: (inputs) => calls.push(inputs), isTTY: false });
+  assert.equal(calls[0].reviewEnabled, false, "the review kill switch must default OFF when absent");
+
+  await runCli([...baseArgv, "--review-enabled", "false"], {
+    installProject: (inputs) => calls.push(inputs),
+    isTTY: false,
+  });
+  assert.equal(calls[1].reviewEnabled, false, "an explicit --review-enabled false must resolve to false");
+});
+
+test("[review-phase] a52: upsertBlock: an OLD crontab fence containing a run-cron-b.mjs line is REPLACED (not appended) by the new renderProjectBlock output, leaving run-cron-review.mjs and ZERO run-cron-b.mjs lines (no second insecure merge routine left active on upgrade)", () => {
+  const oldBlock = [
+    "# >>> harness:demo >>>",
+    `0 */4 * * * ${NODE_BIN} ${join(SCRIPT_DIR, "run-cron-a.mjs")} --config ${configPathFor("demo")}`,
+    `0 */6 * * * ${NODE_BIN} ${join(SCRIPT_DIR, "run-cron-b.mjs")} --config ${configPathFor("demo")}`,
+    "# <<< harness:demo <<<",
+  ].join("\n");
+  const oldCrontab = `*/5 * * * * backup.sh\n${oldBlock}\n`;
+
+  const newBlock = projectBlockFixture("demo");
+  const result = upsertBlock(oldCrontab, "harness:demo", newBlock);
+
+  assert.ok(result.includes("run-cron-review.mjs"), "the replaced block must invoke run-cron-review.mjs");
+  const bCount = (result.match(/run-cron-b\.mjs/g) || []).length;
+  assert.equal(bCount, 0, "no run-cron-b.mjs invocation may survive the upgrade");
+  assert.ok(result.includes("backup.sh"), "unrelated crontab lines outside the fence must be preserved");
 });
