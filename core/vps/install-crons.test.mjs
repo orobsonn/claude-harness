@@ -311,7 +311,7 @@ test("[#ac-2.1/#ac-2.3] a12: renderProjectBlock: fixed cadences, absolute paths,
   );
   assert.ok(
     lines.some(
-      (l) => l.startsWith("0 */6 * * * ") && l.includes(NODE_BIN) && l.includes("run-cron-b.mjs") && l.includes(configPathFor("demo"))
+      (l) => l.startsWith("0 */6 * * * ") && l.includes(NODE_BIN) && l.includes("run-cron-review.mjs") && l.includes(configPathFor("demo"))
     )
   );
 });
