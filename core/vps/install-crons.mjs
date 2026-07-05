@@ -173,22 +173,23 @@ export function generateProjectConfig(coords) {
 }
 
 /**
- * @description Renders the fenced crontab block for a project: Cron A (every 4h) and Cron B
- * (every 6h) invoking the run-cron scripts with absolute paths, wrapped in literal
+ * @description Renders the fenced crontab block for a project: Cron A (every 4h, run-cron-a.mjs)
+ * and the review phase (every 6h, run-cron-review.mjs — REPLACES the old Cron B slot, not a third
+ * line) invoking the run-cron scripts with absolute paths, wrapped in literal
  * `# >>> harness:<project> >>>` / `# <<< harness:<project> <<<` fence lines. No trailing newline.
  * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string}} args
  * @returns {string}
  */
 export function renderProjectBlock({ project, nodeBin, scriptDir, configPath }) {
   const scriptA = join(scriptDir, "run-cron-a.mjs");
-  const scriptB = join(scriptDir, "run-cron-b.mjs");
+  const scriptReview = join(scriptDir, "run-cron-review.mjs");
   assertCronSafe(nodeBin, "nodeBin");
   assertCronSafe(scriptA, "script path");
-  assertCronSafe(scriptB, "script path");
+  assertCronSafe(scriptReview, "script path");
   assertCronSafe(configPath, "configPath");
   const cronA = `0 */4 * * * ${nodeBin} ${scriptA} --config ${configPath}`;
-  const cronB = `0 */6 * * * ${nodeBin} ${scriptB} --config ${configPath}`;
-  return [`# >>> harness:${project} >>>`, cronA, cronB, `# <<< harness:${project} <<<`].join("\n");
+  const cronReview = `0 */6 * * * ${nodeBin} ${scriptReview} --config ${configPath}`;
+  return [`# >>> harness:${project} >>>`, cronA, cronReview, `# <<< harness:${project} <<<`].join("\n");
 }
 
 /**
@@ -703,6 +704,10 @@ export async function runCli(argv, deps = {}) {
       homeDir: flags["home-dir"],
     };
     if (flags["harness-author-login"]) inputs.harnessAuthorLogin = flags["harness-author-login"];
+    // Review-phase kill switch. Defaults OFF (unlike heartbeat, which defaults ON) — an explicit
+    // --review-enabled true|false flag always wins; absent, the review phase stays disabled until
+    // the operator opts in.
+    inputs.reviewEnabled = flags["review-enabled"] === "true";
     // Optional Telegram notify block. chatId/threadId are NON-secret group coordinates; the bot
     // token stays in ~/.claude/.dev.vars. validateInstallCoordinates rejects non-integer chatId/
     // threadId and a non-boolean heartbeat, so a malformed flag fails fast before any write.

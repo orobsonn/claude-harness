@@ -3,15 +3,15 @@
  * graceful-exit state machine. cronAExit() is chained AFTER `claude -p` inside the tmux
  * session dispatch (task-5) spawns, and fires on the session's OWN termination:
  *
- *   - PR exists on harness/<issue>                              -> harness:done
+ *   - PR exists on harness/<issue>                              -> harness:in-review
  *   - no PR + a recorded deliberate blocking finding             -> harness:blocked (+ comment)
  *   - no PR, no blocking record, attempt counter < retryCeilingK -> harness:ready (re-queue)
  *   - no PR, no blocking record, attempt counter >= retryCeilingK -> harness:blocked (ceiling)
  *
  * It is a READ-ONLY comparator of the per-issue attempt counter (never calls increment() —
- * dispatch owns charging attempts), except it calls reset() on the done path. It always
- * releases the run-lock and always unlinks the body-file + env-file (issue body + scoped
- * secrets) on every exit path.
+ * dispatch owns charging attempts); it does NOT reset() on the PR-exists path (the done+reset
+ * moved to the post-merge review phase). It always releases the run-lock and always unlinks the
+ * body-file + env-file (issue body + scoped secrets) on every exit path.
  *
  * Every seam cronAExit needs — `gh`, the run-lock release, the attempt counter, whether a PR
  * was opened, and whether a blocking finding was recorded — is INJECTED as a fake so these
@@ -127,7 +127,7 @@ function anyRelabelAdds(calls, label) {
   );
 }
 
-test("cronAExit: PR exists on harness/42 -> relabels harness:in-progress -> harness:done; no path leaves the issue in harness:in-progress", () => {
+test("cronAExit: PR exists on harness/42 -> relabels harness:in-progress -> harness:in-review; no path leaves the issue in harness:in-progress", () => {
   const { stateDir, cleanup } = makeTempDirs();
   try {
     const { gh, calls } = makeFakeGh();
@@ -142,8 +142,11 @@ test("cronAExit: PR exists on harness/42 -> relabels harness:in-progress -> harn
       baseOpts({ stateDir, gh, runLock, counter, prExists: () => true, blockingFinding: () => null })
     );
 
-    const doneRelabel = findRelabelCall(calls, { removeLabel: "harness:in-progress", addLabel: "harness:done" });
-    assert.ok(doneRelabel, "must relabel harness:in-progress -> harness:done when a PR exists on harness/42");
+    const inReviewRelabel = findRelabelCall(calls, {
+      removeLabel: "harness:in-progress",
+      addLabel: "harness:in-review",
+    });
+    assert.ok(inReviewRelabel, "must relabel harness:in-progress -> harness:in-review when a PR exists on harness/42");
     assert.equal(
       anyRelabelAdds(calls, "harness:in-progress"),
       false,
@@ -255,7 +258,7 @@ test("cronAExit: no PR, no blocking record, attempt counter for 42 already = 2 (
   }
 });
 
-test("cronAExit: the done path calls reset(42) so the persisted counter reads 0; increment() is NEVER called on any exit path (done/blocked/ready)", () => {
+test("cronAExit: increment() is NEVER called on any exit path (done/blocked/ready)", () => {
   const scenarios = [
     { name: "done", prExists: () => true, blockingFinding: () => null, initialCount: 1 },
     { name: "blocked-by-finding", prExists: () => false, blockingFinding: () => "blocking finding", initialCount: 0 },
@@ -291,11 +294,6 @@ test("cronAExit: the done path calls reset(42) so the persisted counter reads 0;
         `cronAExit must never call increment() on the "${scenario.name}" exit path — it is a read-only ` +
           "comparator of the failure count, never a writer of it"
       );
-
-      if (scenario.name === "done") {
-        assert.deepEqual(counter.resetCalls, [42], "the done path must call reset(42) exactly once");
-        assert.equal(counter.read(42), 0, "after the done path runs, the persisted counter must read 0");
-      }
     } finally {
       cleanup();
     }
@@ -354,5 +352,105 @@ test("cronAExit: unlinks the bodyFile and envFile on any exit path (done/blocked
     } finally {
       cleanup();
     }
+  }
+});
+
+test("cronAExit: PR exists on harness/42 -> the captured `gh issue edit` argv adds harness:in-review and NEVER harness:done", () => {
+  const { stateDir, cleanup } = makeTempDirs();
+  try {
+    const { gh, calls } = makeFakeGh();
+    const runLock = makeFakeRunLock();
+    const counter = makeFakeCounter({ 42: 1 });
+
+    cronAExit(
+      42,
+      "/fake/worktree",
+      join(stateDir, "issue-42-body.txt"),
+      join(stateDir, "issue-42-env.env"),
+      baseOpts({ stateDir, gh, runLock, counter, prExists: () => true, blockingFinding: () => null })
+    );
+
+    assert.equal(
+      anyRelabelAdds(calls, "harness:in-review"),
+      true,
+      "the PR-exists path must relabel by adding harness:in-review"
+    );
+
+    const anyCallMentionsDone = calls.some((args) => Array.isArray(args) && args.includes("harness:done"));
+    assert.equal(
+      anyCallMentionsDone,
+      false,
+      "no gh call on the PR-exists path may ever reference harness:done"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("cronAExit: PR exists on harness/42 -> counter.reset is NOT called on the PR-exists path", () => {
+  const { stateDir, cleanup } = makeTempDirs();
+  try {
+    const { gh } = makeFakeGh();
+    const runLock = makeFakeRunLock();
+    const counter = makeFakeCounter({ 42: 1 });
+
+    cronAExit(
+      42,
+      "/fake/worktree",
+      join(stateDir, "issue-42-body.txt"),
+      join(stateDir, "issue-42-env.env"),
+      baseOpts({ stateDir, gh, runLock, counter, prExists: () => true, blockingFinding: () => null })
+    );
+
+    assert.deepEqual(
+      counter.resetCalls,
+      [],
+      "counter.reset must never be called on the PR-exists (harness:in-review) path"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("cronAExit: PR exists on harness/42 -> `gh label create harness:in-review --force` runs BEFORE the `gh issue edit ... --add-label harness:in-review` relabel", () => {
+  const { stateDir, cleanup } = makeTempDirs();
+  try {
+    const { gh, calls } = makeFakeGh();
+    const runLock = makeFakeRunLock();
+    const counter = makeFakeCounter({ 42: 1 });
+
+    cronAExit(
+      42,
+      "/fake/worktree",
+      join(stateDir, "issue-42-body.txt"),
+      join(stateDir, "issue-42-env.env"),
+      baseOpts({ stateDir, gh, runLock, counter, prExists: () => true, blockingFinding: () => null })
+    );
+
+    const labelCreateIndex = calls.findIndex(
+      (args) =>
+        Array.isArray(args) &&
+        args[0] === "label" &&
+        args[1] === "create" &&
+        args[2] === "harness:in-review" &&
+        args.includes("--force")
+    );
+    const relabelIndex = calls.findIndex(
+      (args) =>
+        Array.isArray(args) &&
+        args[0] === "issue" &&
+        args[1] === "edit" &&
+        args.includes("--add-label") &&
+        args[args.indexOf("--add-label") + 1] === "harness:in-review"
+    );
+
+    assert.notEqual(labelCreateIndex, -1, "must call `gh label create harness:in-review --force`");
+    assert.notEqual(relabelIndex, -1, "must call `gh issue edit ... --add-label harness:in-review`");
+    assert.ok(
+      labelCreateIndex < relabelIndex,
+      "the label-create call must happen BEFORE the issue-edit relabel call"
+    );
+  } finally {
+    cleanup();
   }
 });

@@ -78,7 +78,8 @@ export function cronASelect(opts) {
       .filter(
         (issue) =>
           !hasLabel(issue, "harness:in-progress") &&
-          !hasLabel(issue, "harness:blocked")
+          !hasLabel(issue, "harness:blocked") &&
+          !hasLabel(issue, "harness:in-review")
       )
       .sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;

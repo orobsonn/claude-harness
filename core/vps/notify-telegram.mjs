@@ -86,6 +86,7 @@ function refLink(ref, url) {
  * @param {number} [event.pr] - PR number.
  * @param {string} [event.reason] - Short reason (truncated ≤80, escaped).
  * @param {string} [event.url] - GitHub link (rendered as `<a href>`).
+ * @param {string} [event.mergeSha] - Merge commit SHA (appended as a one-line revert instruction for pr-merged).
  * @returns {string}
  */
 export function formatEvent(event = {}) {
@@ -112,8 +113,10 @@ export function formatEvent(event = {}) {
       return `${prefix} issue ${issueRef} BLOQUEADA — precisa de input humano${reason}`;
     case "failed":
       return `${prefix} issue ${issueRef} falhou — retentativas esgotadas`;
-    case "pr-merged":
-      return `${prefix} PR ${prRef} revisado CLEAN → merged`;
+    case "pr-merged": {
+      const revert = event.mergeSha ? `\ngit revert -m 1 ${escapeHtml(event.mergeSha)}` : "";
+      return `${prefix} PR ${prRef} revisado CLEAN → merged${revert}`;
+    }
     case "pr-blocked":
       return `${prefix} PR ${prRef} BLOQUEADO${reason}`;
     case "reaper-killed":

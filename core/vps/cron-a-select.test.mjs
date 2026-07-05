@@ -282,3 +282,54 @@ test("cronASelect: dispatch is called exactly once with the chosen issue and the
   );
   assert.equal(runLockB.releaseCalls.length, 1, "the no-work path must release the run-lock exactly once");
 });
+
+test("cronASelect: an issue carrying BOTH harness:ready and harness:in-review is EXCLUDED from the eligible set (never picked/re-dispatched while under review)", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const issues = [{ number: 9, labels: ["harness:ready", "harness:in-review"] }];
+  const gh = makeFakeGh(callLog, { issues });
+  const dispatch = makeFakeDispatch(callLog);
+
+  const result = cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  assert.equal(
+    callLog.some((e) => e.type === "dispatch"),
+    false,
+    "an issue that is both harness:ready and harness:in-review must never be dispatched"
+  );
+  assert.equal(
+    relabelIndicesFor(callLog, 9).length,
+    0,
+    "an in-review issue must never be relabeled/re-dispatched"
+  );
+  assert.equal(
+    runLock.releaseCalls.length,
+    1,
+    "with the only candidate excluded (in-review), no work is found and the run-lock must be released"
+  );
+  assert.equal(
+    result.dispatched,
+    false,
+    "cronASelect must report no dispatch when the sole candidate is under review"
+  );
+});
+
+test("cronASelect: an issue carrying ONLY harness:ready (no in-review) stays in the eligible set and is picked", () => {
+  const callLog = makeCallLog();
+  const runLock = makeFakeRunLock(callLog);
+  const issue = { number: 11, labels: ["harness:ready"] };
+  const gh = makeFakeGh(callLog, { issues: [issue] });
+  const dispatch = makeFakeDispatch(callLog);
+
+  const result = cronASelect(baseOpts({ runLock, gh, dispatch }));
+
+  assert.equal(
+    result.dispatched,
+    true,
+    "a plain harness:ready issue (no in-review) must be picked and dispatched"
+  );
+  assert.equal(result.issue.number, 11, "the eligible plain-ready issue must be the one picked");
+  const dispatchEntry = callLog.find((e) => e.type === "dispatch");
+  assert.notEqual(dispatchEntry, undefined, "dispatch must be invoked for the plain ready issue");
+  assert.equal(dispatchEntry.issue.number, 11, "dispatch must receive the plain ready issue");
+});

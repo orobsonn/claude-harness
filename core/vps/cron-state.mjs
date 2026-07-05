@@ -9,6 +9,12 @@ import { join, dirname } from "node:path";
 
 const COUNTERS_FILE_NAME = "cron-counters.json";
 const REVIEWED_FILE_NAME = "cron-reviewed.json";
+const CHAIN_FILE_NAME = "cron-chain.json";
+const BREAKER_FILE_NAME = "cron-breaker.json";
+
+const CHAIN_CEILING = 3;
+const BREAKER_WINDOW_SECONDS = 21_600;
+const BREAKER_MAX_SESSIONS = 12;
 
 function countersFilePath(stateDir) {
   return join(stateDir, COUNTERS_FILE_NAME);
@@ -16,6 +22,14 @@ function countersFilePath(stateDir) {
 
 function reviewedFilePath(stateDir) {
   return join(stateDir, REVIEWED_FILE_NAME);
+}
+
+function chainFilePath(stateDir) {
+  return join(stateDir, CHAIN_FILE_NAME);
+}
+
+function breakerFilePath(stateDir) {
+  return join(stateDir, BREAKER_FILE_NAME);
 }
 
 function readJsonRecord(filePath) {
@@ -142,4 +156,128 @@ export function recordReviewed(pr, sha, opts) {
 export function alreadyReviewed(pr, sha, opts) {
   const reviewed = readJsonRecord(reviewedFilePath(opts.stateDir));
   return Boolean(reviewed[`${pr}:${sha}`]);
+}
+
+// --- Root-keyed chain-depth store (cron-chain.json) ---
+// Keyed by the issue number (root). Incremented once per review-REJECT.
+// Separate from cron-counters.json — chain depth and attempt count are independent dimensions.
+
+/**
+ * @description Increments the chain depth for the given root issue by 1.
+ * @param {number} root
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function incrementChain(root, opts) {
+  const filePath = chainFilePath(opts.stateDir);
+  const chain = readJsonRecord(filePath);
+  chain[root] = (chain[root] ?? 0) + 1;
+  writeJsonRecord(filePath, chain);
+}
+
+/**
+ * @description Reads the current chain depth for the given root issue (0 if never incremented).
+ * @param {number} root
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {number}
+ */
+export function readChain(root, opts) {
+  const chain = readJsonRecord(chainFilePath(opts.stateDir));
+  return chain[root] ?? 0;
+}
+
+/**
+ * @description Resets the chain depth for the given root issue back to 0.
+ * @param {number} root
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function resetChain(root, opts) {
+  const filePath = chainFilePath(opts.stateDir);
+  const chain = readJsonRecord(filePath);
+  chain[root] = 0;
+  writeJsonRecord(filePath, chain);
+}
+
+/**
+ * @description Returns true when the chain depth for the given root has exceeded the ceiling (3).
+ * @param {number} root
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {boolean}
+ */
+export function atCeiling(root, opts) {
+  return readChain(root, opts) > CHAIN_CEILING;
+}
+
+// --- Time-windowed circuit-breaker store (cron-breaker.json) ---
+// Holds { window_start_ts, count }. Rolls over (count resets) when now - window_start
+// exceeds the window. Trips when count reaches the per-window limit.
+// The cap is driven by real per-session increments — recordReviewSession() is the only
+// path that bumps the count; the trip/rollover/reset decision alone never bumps it.
+
+/**
+ * @description Reads the raw breaker record from disk.
+ * @param {string} stateDir
+ * @returns {{ window_start_ts: number, count: number }}
+ */
+function readBreakerRecord(stateDir) {
+  const record = readJsonRecord(breakerFilePath(stateDir));
+  return { window_start_ts: record.window_start_ts ?? 0, count: record.count ?? 0 };
+}
+
+/**
+ * @description Writes the breaker record to disk atomically.
+ * @param {string} stateDir
+ * @param {{ window_start_ts: number, count: number }} record
+ * @returns {void}
+ */
+function writeBreakerRecord(stateDir, record) {
+  writeJsonRecord(breakerFilePath(stateDir), record);
+}
+
+/**
+ * @description Records a review session, bumping the per-window count by 1.
+ * Creates or rolls the window as needed — this is the ONLY path that increments
+ * the breaker count. The trip/rollover/reset decision alone never bumps it.
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @param {number} [opts.now] — current timestamp in seconds; defaults to Date.now()/1000
+ * @returns {void}
+ */
+export function recordReviewSession(opts) {
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const record = readBreakerRecord(opts.stateDir);
+
+  // Roll over if the window has elapsed
+  if (now - record.window_start_ts >= BREAKER_WINDOW_SECONDS) {
+    record.window_start_ts = now;
+    record.count = 0;
+  }
+
+  record.count += 1;
+  writeBreakerRecord(opts.stateDir, record);
+}
+
+/**
+ * @description Returns true when the breaker is tripped (count >= limit within the current window).
+ * Does NOT bump the count — the cap is driven by real recordReviewSession() calls.
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @param {number} [opts.now] — current timestamp in seconds; defaults to Date.now()/1000
+ * @returns {boolean}
+ */
+export function breakerTripped(opts) {
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const record = readBreakerRecord(opts.stateDir);
+
+  // If the window has elapsed, the breaker is not tripped (count is effectively 0)
+  if (now - record.window_start_ts >= BREAKER_WINDOW_SECONDS) {
+    return false;
+  }
+
+  return record.count >= BREAKER_MAX_SESSIONS;
 }

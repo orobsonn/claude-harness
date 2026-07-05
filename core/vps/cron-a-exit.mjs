@@ -7,16 +7,18 @@
  * INVOCATION is wired into the detached-session lifecycle by task-5.
  *
  * Relabel state machine (never leaves the issue stranded in harness:in-progress):
- *   - PR exists on harness/<issue>                              -> harness:in-progress -> harness:done
- *                                                               (and resets the attempt counter)
+ *   - PR exists on harness/<issue>                              -> harness:in-progress -> harness:in-review
+ *                                                               (does NOT reset the attempt counter here;
+ *                                                               the done transition + counter reset moved
+ *                                                               to the post-merge review phase, HR-3)
  *   - no PR + a recorded deliberate blocking finding             -> harness:blocked (+ `gh issue comment`)
  *   - no PR, no blocking record, attempt counter < retryCeilingK -> harness:ready (re-queue)
  *   - no PR, no blocking record, attempt counter >= retryCeilingK -> harness:blocked (retry ceiling;
  *                                                               a chronically-failing issue leaves the loop)
  *
  * Counter contract: cronAExit is a READ-ONLY comparator of the per-issue attempt counter — it
- * NEVER calls counter.increment() on any exit path (dispatch owns charging attempts). The single
- * write it performs is counter.reset() on the done path (attempt_counter_reset_on_success).
+ * NEVER calls counter.increment() on any exit path (dispatch owns charging attempts), and it no
+ * longer calls counter.reset() on any path (the reset moved to the post-merge review phase).
  *
  * Cleanup contract: on EVERY exit path it (a) releases the run-lock with the held acquireTs
  * (ownership guard) and (b) unlinks BOTH the bodyFile (issue body) and envFile (scoped secrets)
@@ -39,7 +41,7 @@ import { isDirectCli } from "../skills/orchestrating-delivery/references/cli-fla
 import { makeNotifier } from "./notify-telegram.mjs";
 
 const LABEL_IN_PROGRESS = "harness:in-progress";
-const LABEL_DONE = "harness:done";
+const LABEL_IN_REVIEW = "harness:in-review";
 const LABEL_BLOCKED = "harness:blocked";
 const LABEL_READY = "harness:ready";
 const DEFAULT_RETRY_CEILING_K = 2;
@@ -110,7 +112,10 @@ export function cronAExit(issueNumber, worktree, bodyFile, envFile, opts) {
     try {
       hadPr = Boolean(prExists(issueNumber));
       if (hadPr) {
-        addLabel = LABEL_DONE;
+        // Ensure the harness:in-review label exists before the relabel so --add-label never
+        // fails against a nonexistent label (mirrors cron-a-select.mjs:57's harness:blocked pattern).
+        gh(["label", "create", "harness:in-review", "--force"]);
+        addLabel = LABEL_IN_REVIEW;
       } else {
         finding = blockingFinding(issueNumber) || null;
         if (finding) {
@@ -142,17 +147,6 @@ export function cronAExit(issueNumber, worktree, bodyFile, envFile, opts) {
       throw new Error(
         `cron-a-exit: failed to relabel issue ${issueNumber} from ${LABEL_IN_PROGRESS} to ${addLabel}`
       );
-    }
-
-    if (hadPr) {
-      // Reset-on-success: a delivered issue re-enters the loop with a zero attempt count. Only
-      // run after the relabel to harness:done is confirmed, so a failed relabel never zeroes the
-      // retry history of an issue that is still harness:in-progress.
-      try {
-        counter.reset(issueNumber, { stateDir });
-      } catch {
-        // best-effort: a counter-store hiccup must not mask a confirmed done relabel
-      }
     }
 
     // A deliberately-blocked issue gets the recorded finding posted as a comment so the operator

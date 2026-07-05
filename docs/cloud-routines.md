@@ -36,6 +36,8 @@ Consequência crítica: "não trava" significa **aceitar qualquer coisa cegament
 
 A routine **não pausa** esperando humano. O padrão oficial é **abrir um PR (draft)** como entregável; o humano revisa de forma **assíncrona** no GitHub. Confirmado como o pattern pretendido para review de output de routine.
 
+No modo VPS (headless-local), essa revisão assíncrona ganha uma camada automatizada extra antes de chegar no humano: a **fase de revisão independente** (`cron-review`, detalhada em `usage.md` §6) reanalisa o diff do PR com olhos frescos e só auto-merge na conjunção completa dos vereditos. É fail-closed — sem a segunda família de modelo (cross-family), o PR fica em `harness:awaiting-merge` em vez de ser mergeado sozinho.
+
 ## Dependências e integrações opcionais
 
 A nuvem tem um **setup script** (configurado na UI do ambiente, roda como **root** no Ubuntu 24.04 antes do Claude Code lançar; acesso de rede a npm/PyPI/crates.io/GitHub no nível "Trusted"). Permite instalar binários arbitrários: `apt install`, `cargo install`, `npm i -g`.

@@ -32,6 +32,15 @@
  * an observable, without ever running a real subprocess. `failCommands` makes the fake throw
  * for a given command, driving the pre-registration spawn-failure path (run-lock release +
  * harness:ready relabel, no retry-attempt consumed).
+ *
+ * RESUME-MODE (branch-existence probe): dispatch is also handed an injected `branchExists(branch)`
+ * seam (a plain predicate, independent of the spawn fake so its result is deterministic even when
+ * `failCommands` makes every `git` spawn throw). When the branch already exists, `git worktree add`
+ * must check it out WITHOUT `-b`, and the pre-registration failure-recovery path must NEVER run
+ * `git branch -D <branch>` against it — deleting the branch of an already-existing (possibly
+ * PR-carrying) branch would destroy work. When the branch does not exist, the original fresh `-b`
+ * path is unchanged. Every existing test above exercises the fresh path implicitly via
+ * `baseOpts`'s default `branchExists: () => false`.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -136,6 +145,7 @@ function baseOpts({
   counter = makeFakeCounter(),
   buildScopedEnv = () => ({ PATH: "/usr/bin", OLLAMA_HAND_TOKEN: "oll-token" }),
   lock = { acquireTs: 1000 },
+  branchExists = () => false,
 }) {
   return {
     project,
@@ -148,6 +158,7 @@ function baseOpts({
     gh,
     counter,
     buildScopedEnv,
+    branchExists,
   };
 }
 
@@ -500,6 +511,94 @@ test("dispatch: two dispatches for the SAME issue number in DIFFERENT projects p
       runLockA.registerCalls[0].tmuxId,
       runLockB.registerCalls[0].tmuxId,
       "register() must be called with each project's own distinct session name"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: given branch harness/<n> already EXISTS (the branch-existence probe succeeds), the git worktree add argv checks it out WITHOUT -b", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => true })
+    );
+
+    const gitCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.ok(gitCall, "dispatch must run `git worktree add` when resuming an already-existing branch");
+    assert.deepEqual(
+      gitCall.args,
+      ["worktree", "add", gitCall.args[2], "harness/42"],
+      "resuming an existing branch must check it out with exactly `worktree add <path> harness/42` — no -b flag"
+    );
+    assert.equal(
+      gitCall.args.includes("-b"),
+      false,
+      "the -b flag must be absent from the worktree-add argv when the branch already exists"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: given branch harness/<n> EXISTS and the worktree prep then FAILS, recovery must NEVER invoke `git branch -D harness/<n>`", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn({ failCommands: ["git"] });
+    const runLock = makeFakeRunLock({ pid: 111, acquire_ts: 5000 });
+    const gh = makeFakeGh();
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fake.spawn,
+      runLock,
+      gh: gh.gh,
+      branchExists: () => true,
+    });
+
+    try {
+      dispatch({ number: 42, body: "hello" }, opts);
+    } catch {
+      // A spawn-failure path may legitimately surface as a thrown error after cleanup runs —
+      // either way, the observable below is what this test pins.
+    }
+
+    const branchDeleteCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "branch" && c.args[1] === "-D" && c.args[2] === "harness/42"
+    );
+    assert.equal(
+      branchDeleteCall,
+      undefined,
+      "an already-existing branch (e.g. one carrying an open PR) must never be deleted by the failure-recovery path"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: given branch harness/<n> does NOT exist (probe fails), the git worktree add argv includes -b harness/<n> (fresh path unchanged)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => false })
+    );
+
+    const gitCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.ok(gitCall, "dispatch must run `git worktree add` for a fresh branch");
+    assert.ok(gitCall.args.includes("-b"), "a fresh (non-existent) branch must still be created with -b");
+    assert.equal(
+      gitCall.args[gitCall.args.indexOf("-b") + 1],
+      "harness/42",
+      "the -b flag must target harness/42, unchanged from the pre-resume-mode fresh path"
     );
   } finally {
     cleanup();

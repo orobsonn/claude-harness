@@ -268,3 +268,50 @@ test("makeNotifier: a configured notifier POSTs via the injected fetch and drain
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/bottok:en\/sendMessage$/);
 });
+
+// ---------------------------------------------------------------------------
+// pr-merged — autonomous-merge notification carries a one-line revert instruction
+// ---------------------------------------------------------------------------
+
+test("#ac-5.1 formatEvent: pr-merged message contains the PR reference AND a one-line git revert instruction referencing the merge sha", () => {
+  const event = {
+    type: "pr-merged",
+    project: "demo",
+    pr: 9,
+    url: "https://github.com/acme/demo/pull/9",
+    mergeSha: "abc1234",
+  };
+  const text = formatEvent(event);
+  assert.match(text, /#9/, "must reference the PR number");
+  assert.match(text, /git revert/i, "must include a one-line git revert instruction");
+  assert.match(text, /abc1234/, "the revert instruction must reference the merge sha");
+});
+
+test("#ac-5.2 sendNotification: pr-merged failure log stays redacted to exactly {op,type,project,status} — no revert text, pr url, or merge sha leaked", async () => {
+  const logs = [];
+  const log = (entry) => logs.push(entry);
+  const { fetchImpl } = makeFakeFetch(new Error("boom with https://api.telegram.org/botSECRET123:abc leaked"));
+  await sendNotification(
+    {
+      type: "pr-merged",
+      project: "demo",
+      pr: 9,
+      url: "https://github.com/acme/demo/pull/9",
+      mergeSha: "abc1234",
+    },
+    { config: VALID_CONFIG, fetch: fetchImpl, log }
+  );
+  assert.ok(logs.length >= 1, "a failure must be logged internally");
+  const serialized = JSON.stringify(logs);
+  assert.doesNotMatch(serialized, /SECRET123/, "the token must never be logged");
+  assert.doesNotMatch(serialized, /git revert/i, "the revert instruction text must never be logged");
+  assert.doesNotMatch(serialized, /abc1234/, "the merge sha must never be logged");
+  assert.doesNotMatch(serialized, /pull\/9/, "the PR url must never be logged");
+  for (const entry of logs) {
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ["op", "project", "status", "type"],
+      "the log entry must stay exactly {op,type,project,status} — no extra keys"
+    );
+  }
+});

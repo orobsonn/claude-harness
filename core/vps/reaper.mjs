@@ -59,6 +59,8 @@
  * @param {number} [opts.registrationGraceSeconds] - default 120.
  * @param {number} [opts.retryCeilingK] - default 2.
  * @param {(issueNumber: number) => boolean} opts.prExists
+ * @param {(issueNumber: number) => string[]} [opts.issueLabels] - returns the current labels for an issue;
+ *   used to recognize harness:in-review so the reaper never mistakes it for an orphan.
  * @param {(args: string[]) => { ok: boolean }} opts.gh
  * @param {{ release: (opts: { stateDir: string, acquireTs: number }) => void }} opts.runLock
  * @param {{ read: (issueNumber: number, opts: { stateDir: string }) => number }} opts.counter -
@@ -77,6 +79,7 @@ const DEFAULT_REGISTRATION_GRACE_SECONDS = 120;
 const DEFAULT_RETRY_CEILING_K = 2;
 const SECONDS_PER_HOUR = 3600;
 const LABEL_IN_PROGRESS = "harness:in-progress";
+const LABEL_IN_REVIEW = "harness:in-review";
 const LABEL_READY = "harness:ready";
 const LABEL_BLOCKED = "harness:blocked";
 
@@ -144,6 +147,13 @@ function judgeLiveness(holder, opts, lockDirAgeSeconds) {
  *   lock intact so the next cycle can retry.
  */
 function crashRecover(worktree, holder, opts) {
+  // in-review issues are owned by the review phase's reconciliation — never relabel,
+  // never release the lock, never remove the worktree. The existing !prExists guard
+  // already protects the normal case (in-review has a PR), but an explicit skip
+  // prevents the edge case where the label lingers after a PR is closed/deleted.
+  const labels = opts.issueLabels ? opts.issueLabels(worktree.issueNumber) : [];
+  if (labels.includes(LABEL_IN_REVIEW)) return false;
+
   if (!opts.prExists(worktree.issueNumber)) {
     const count = opts.counter.read(worktree.issueNumber, { stateDir: worktree.stateDir });
     const label = count < opts.retryCeilingK ? LABEL_READY : LABEL_BLOCKED;
