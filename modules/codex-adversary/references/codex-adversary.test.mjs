@@ -116,3 +116,12 @@ test("composeAdversaryPrompt embeds the canonical role + taxonomy from disk", ()
   assert.match(prompt, /scope_paths/);
   assert.match(prompt, /issues\[\]/);
 });
+
+test("checkAvailability: spawnSync timeout return-shape (status null + error, not a throw) is ambiguous -> available", () => {
+  const r = checkAvailability({
+    env: {},
+    hasCodex: () => true,
+    loginStatus: () => ({ status: null, error: new Error("spawn ETIMEDOUT"), signal: "SIGTERM", stdout: "" }),
+  });
+  assert.equal(r.ok, true);
+});
