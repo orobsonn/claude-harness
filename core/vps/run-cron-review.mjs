@@ -146,7 +146,9 @@ export async function runCronReview(config, deps = {}) {
   const notify = deps.notify ?? (() => {});
   const safeNotify = (event) => {
     try {
-      notify(event);
+      // Inject the project slug so every review-cron notification renders `[<project>]` instead of
+      // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
+      notify({ project: config.project, ...event });
     } catch {
       // fail-open — a notify failure never masks the breaker's stall or blocks the cycle
     }

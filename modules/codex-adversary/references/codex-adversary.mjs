@@ -274,7 +274,12 @@ export function checkAvailability({
   if (!probe || probe.error || probe.status === null) {
     return { ok: true, reason: "" };
   }
-  if (probe && probe.status === 0 && typeof probe.stdout === "string" && probe.stdout.includes("Logged in")) {
+  // `codex login status` prints "Logged in using ChatGPT" to STDERR (not stdout) — check BOTH
+  // streams so a real subscription login is not misread as unauthenticated.
+  const probeText =
+    (typeof probe.stdout === "string" ? probe.stdout : "") +
+    (typeof probe.stderr === "string" ? probe.stderr : "");
+  if (probe && probe.status === 0 && probeText.includes("Logged in")) {
     return { ok: true, reason: "" };
   }
   return {

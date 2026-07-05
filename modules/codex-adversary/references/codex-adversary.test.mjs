@@ -125,3 +125,14 @@ test("checkAvailability: spawnSync timeout return-shape (status null + error, no
   });
   assert.equal(r.ok, true);
 });
+
+test("checkAvailability: subscription login writes 'Logged in' to STDERR (real codex) -> available", () => {
+  // Real `codex login status` prints "Logged in using ChatGPT" to STDERR (stdout empty). The probe
+  // must check BOTH streams, else a genuine subscription login is misread as unauthenticated.
+  const r = checkAvailability({
+    env: {},
+    hasCodex: () => true,
+    loginStatus: () => ({ status: 0, stdout: "", stderr: "Logged in using ChatGPT\n" }),
+  });
+  assert.equal(r.ok, true, "must recognize a subscription login reported on stderr");
+});
