@@ -53,10 +53,13 @@
  * @param {(o: {stateDir: string, now?: number}) => boolean} [deps.breakerTripped] - default: real breakerTripped from ./cron-state.mjs
  * @param {(o: {stateDir: string, now?: number}) => void} [deps.recordReviewSession] - default: real recordReviewSession from ./cron-state.mjs
  * @param {(event: object) => void} [deps.notify] - default: no-op
- * @returns {void}
+ * @param {(o?: object) => Promise<object|null>} [deps.loadCodexDriver] - optional override for the 2nd-family driver load
+ * @returns {Promise<void>}
  */
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { cronReview } from "./cron-review.mjs";
 import { spawnReviewSession } from "./spawn-review-session.mjs";
@@ -64,7 +67,7 @@ import { acquire, release } from "./run-lock.mjs";
 import * as cronState from "./cron-state.mjs";
 import { isReviewEligible } from "./review-origin-gate.mjs";
 import { getFreshVerdict } from "./review-verdict-source.mjs";
-import { crossFamilyEligible } from "./review-cross-family.mjs";
+import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
 import { mergeAndFinalize, reconcile } from "./review-merge.mjs";
 import { routeReject } from "./review-routing.mjs";
 import { touchesGateMachinery, mergeEligible } from "./review-gate-hardening.mjs";
@@ -110,7 +113,29 @@ function defaultRecordFindings() {
   // Pending dedicated wiring — intentionally not fabricated here.
 }
 
-export function runCronReview(config, deps = {}) {
+/**
+ * @description Loads the vendored Codex cross-family driver ONCE at composition-root setup.
+ * Fail-open: any import or runtime failure returns null so an absent/unreachable second family
+ * degrades to the Claude-only path instead of crashing review.
+ * @returns {Promise<{runCodexRole: Function, checkAvailability: Function, composeRolePrompt: Function, securityVerdict: Function}|null>}
+ */
+async function defaultLoadCodexDriver() {
+  try {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const ca = await import(join(root, ".claude/modules/codex-adversary/references/codex-adversary.mjs"));
+    const mf = await import(join(root, ".claude/modules/codex-adversary/references/merge-findings.mjs"));
+    return {
+      runCodexRole: ca.runCodexRole,
+      checkAvailability: ca.checkAvailability,
+      composeRolePrompt: ca.composeRolePrompt,
+      securityVerdict: mf.securityVerdict,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function runCronReview(config, deps = {}) {
   // Kill switch — checked FIRST, before touching any other seam (no lock, no breaker, no spawn).
   if (config.reviewEnabled === false) {
     return;
@@ -151,6 +176,8 @@ export function runCronReview(config, deps = {}) {
     return;
   }
 
+  const codexDriver = await (deps.loadCodexDriver ?? defaultLoadCodexDriver)();
+
   const ghExec = deps.ghExec ?? defaultGhExec;
   const gh = deps.gh ?? scopedGh(config.owner, config.repo, ghExec);
   const authenticatedUser = deps.authenticatedUser ?? defaultGetAuthenticatedGhUser;
@@ -163,10 +190,61 @@ export function runCronReview(config, deps = {}) {
     ((pr, sha, o) => mergeAndFinalize(pr, sha, { ...o, counter: cronState, recordReviewed: cronState.recordReviewed }));
   const reconcileFn = deps.reconcile ?? (() => reconcile({ gh, counter: cronState, stateDir: reviewStateDir }));
 
-  // crossFamilyEligible is a POSITIVE assertion (fail-closed by its own contract): without a wired
-  // second-family driver, `available: false` correctly makes it ineligible rather than guessing.
+  // crossFamilyEligible is a POSITIVE assertion (fail-closed by its own contract): the default
+  // closure runs the vendored Codex 2nd family synchronously per PR, writes a sibling artifact, and
+  // returns a plain boolean. The driver is loaded ONCE above; the closure itself stays sync so the
+  // cron-review boolean conjunction never accidentally truthy-coerces a Promise.
   const crossFamilyEligibleFn =
-    deps.crossFamilyEligible ?? ((pr) => crossFamilyEligible(pr, { available: false, secondFamilyVerdict: null }));
+    deps.crossFamilyEligible ??
+    ((pr, { changedFiles, sha, stateDir: sd }) => {
+      const writeArtifact = (obj) => {
+        try {
+          mkdirSync(sd, { recursive: true });
+          writeFileSync(join(sd, `review-${pr.number}-${sha}.crossfamily.json`), JSON.stringify(obj));
+        } catch {
+          // best-effort artifact; eligibility is still decided by the boolean return
+        }
+      };
+
+      if (!codexDriver || !codexDriver.checkAvailability({}).ok) {
+        writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
+        return crossFamilyEligible(pr, { available: false, secondFamilyVerdict: null });
+      }
+
+      const view = gh(["pr", "view", String(pr.number), "--json", "headRefOid"]);
+      const currentHead = view && view.headRefOid;
+      if (currentHead !== sha) {
+        writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
+        return crossFamilyEligible(pr, { available: false });
+      }
+
+      const patch = gh(["pr", "diff", String(pr.number)]);
+      if (typeof patch !== "string" || patch.length === 0) {
+        writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
+        return crossFamilyEligible(pr, { available: false });
+      }
+
+      const avail = codexDriver.checkAvailability({});
+      const advPrompt = codexDriver.composeRolePrompt({ role: "adversary", taskJson: patch });
+      const adv = codexDriver.runCodexRole({ role: "adversary", prompt: advPrompt, availability: avail });
+      const secPrompt = codexDriver.composeRolePrompt({ role: "security", taskJson: patch });
+      const sec = codexDriver.runCodexRole({ role: "security", prompt: secPrompt, availability: avail });
+
+      const codexEyes = {
+        adversary: { available: adv.available, issues: adv.output?.issues ?? [] },
+        security: { available: sec.available, issues: sec.output?.issues ?? [] },
+      };
+
+      const verdict = deriveSecondFamilyVerdict(codexEyes, { securityVerdict: codexDriver.securityVerdict });
+      const available = Boolean(adv.available && sec.available);
+      const adversaryClean = codexDriver.securityVerdict(codexEyes.adversary.issues) === "SECURE";
+      const securitySecure = codexDriver.securityVerdict(codexEyes.security.issues) === "SECURE";
+
+      writeArtifact({ available, verdict: verdict.status, adversaryClean, securitySecure });
+      return crossFamilyEligible(pr, { available, secondFamilyVerdict: verdict });
+    });
+
+  const autoMergeEnabled = config.autoMergeEnabled === true;
 
   const chain = {
     increment: (root) => cronState.incrementChain(root, { stateDir: reviewStateDir }),
@@ -218,6 +296,7 @@ export function runCronReview(config, deps = {}) {
       breakerTripped: breakerTrippedFn,
       alreadyReviewed: alreadyReviewedFn,
       recordReviewed: deps.recordReviewed ?? cronState.recordReviewed,
+      autoMergeEnabled,
     });
   } finally {
     runLock.release({ stateDir: reviewStateDir, acquireTs: lock.acquireTs });
@@ -234,7 +313,7 @@ export function runCronReview(config, deps = {}) {
 export async function mainCronReview(config) {
   const notifier = makeNotifier(config, { homeDir: config.homeDir });
   try {
-    runCronReview(config, { notify: notifier.notify });
+    await runCronReview(config, { notify: notifier.notify });
   } finally {
     try {
       await notifier.drain();
