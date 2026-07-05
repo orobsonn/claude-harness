@@ -217,6 +217,7 @@ export function runCronReview(config, deps = {}) {
       recordReviewSession: recordReviewSessionFn,
       breakerTripped: breakerTrippedFn,
       alreadyReviewed: alreadyReviewedFn,
+      recordReviewed: deps.recordReviewed ?? cronState.recordReviewed,
     });
   } finally {
     runLock.release({ stateDir: reviewStateDir, acquireTs: lock.acquireTs });
