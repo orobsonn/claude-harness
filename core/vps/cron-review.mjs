@@ -167,6 +167,8 @@ export function cronReview(opts) {
         const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
         if (merged) {
           notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+        } else {
+          notify({ type: "pr-merge-failed", pr: pr.number, url: pr.url });
         }
       } else {
         // Auto-merge rollout lock is OFF — route to harness:awaiting-merge.
