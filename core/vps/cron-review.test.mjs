@@ -131,12 +131,12 @@ function baseOpts(overrides = {}) {
   };
 }
 
-test("cronReview: reads the PR diff via `gh pr diff <n>` (or `gh api`) and NEVER checks out branch harness/<N>", () => {
+test("cronReview: reads the PR diff via `gh pr diff <n>` (or `gh api`) and NEVER checks out branch harness/<N>", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(10, { number: 10, headRefName: "harness/42", author: { login: "bot-user" }, labels: [], headSha: "sha-a" });
   setDiff(10, ["src/foo.js"]);
 
-  cronReview(baseOpts({ gh }));
+  await cronReview(baseOpts({ gh }));
 
   const readsDiff = calls.some((args) => (args[0] === "pr" && args[1] === "diff") || args[0] === "api");
   assert.ok(readsDiff, "cronReview must read the PR diff via `gh pr diff <n>` (or `gh api`)");
@@ -152,11 +152,11 @@ test("cronReview: reads the PR diff via `gh pr diff <n>` (or `gh api`) and NEVER
   );
 });
 
-test("cronReview: DRIVES reconciliation every cycle — reconcile is invoked independent of the open-PR loop", () => {
+test("cronReview: DRIVES reconciliation every cycle — reconcile is invoked independent of the open-PR loop", async () => {
   const { gh } = makeFakeGh(); // no PRs set -> `gh pr list` returns []
   const reconcileSpy = makeSpy(() => []);
 
-  cronReview(baseOpts({ gh, reconcile: reconcileSpy }));
+  await cronReview(baseOpts({ gh, reconcile: reconcileSpy }));
 
   assert.ok(
     reconcileSpy.calls.length >= 1,
@@ -164,12 +164,12 @@ test("cronReview: DRIVES reconciliation every cycle — reconcile is invoked ind
   );
 });
 
-test("cronReview: awaiting-merge label-create happens BEFORE the first relabel to harness:awaiting-merge", () => {
+test("cronReview: awaiting-merge label-create happens BEFORE the first relabel to harness:awaiting-merge", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(20, { number: 20, headRefName: "harness/55", author: { login: "bot-user" }, labels: [], headSha: "sha-b" });
   setDiff(20, ["src/bar.js"]); // not gate machinery
 
-  cronReview(
+  await cronReview(
     baseOpts({
       gh,
       crossFamilyEligible: () => false, // cross-family absent -> routes to harness:awaiting-merge
@@ -194,7 +194,7 @@ test("cronReview: awaiting-merge label-create happens BEFORE the first relabel t
   );
 });
 
-test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVER invoked unless fresh-CLEAN AND cross-family AND (2nd pass when required) all hold", () => {
+test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVER invoked unless fresh-CLEAN AND cross-family AND (2nd pass when required) all hold", async () => {
   // Sub-case A: fresh verdict CLEAN but crossFamilyEligible=false -> never merges, routes to awaiting-merge.
   {
     const { gh, calls, setPr, setDiff } = makeFakeGh();
@@ -202,7 +202,7 @@ test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVE
     setDiff(30, ["src/baz.js"]); // not gate machinery
     const mergeAndFinalizeSpy = makeSpy();
 
-    cronReview(
+    await cronReview(
       baseOpts({
         gh,
         crossFamilyEligible: () => false,
@@ -233,7 +233,7 @@ test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVE
         ? { status: "BLOCKED", finding: "gate-machinery regression" }
         : { status: "CLEAN" };
 
-    cronReview(
+    await cronReview(
       baseOpts({
         gh,
         crossFamilyEligible: () => true, // present — isolates the 2nd-pass BLOCKED verdict as the sole blocker
@@ -254,7 +254,7 @@ test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVE
   }
 });
 
-test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is a no-op", () => {
+test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is a no-op", async () => {
   const stateDir = "/fake/state/review";
   const { gh, setPr, setDiff } = makeFakeGh();
   const pr = { number: 40, headRefName: "harness/70", author: { login: "bot-user" }, labels: [], headSha: "sha-e" };
@@ -274,7 +274,7 @@ test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is
   });
 
   // Cycle 1: PR is fresh -> reviewed, routed to awaiting-merge, and recorded.
-  cronReview(opts);
+  await cronReview(opts);
 
   assert.equal(recordReviewed.calls.length, 1, "recordReviewed must be called once after the awaiting-merge route");
   const [recordedPrNumber, recordedSha, recordedMeta] = recordReviewed.calls[0];
@@ -288,7 +288,7 @@ test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is
   const { gh: gh2, setPr: setPr2, setDiff: setDiff2 } = makeFakeGh();
   setPr2(pr.number, pr);
   setDiff2(pr.number, ["src/qux.js"]);
-  cronReview({ ...opts, gh: gh2 });
+  await cronReview({ ...opts, gh: gh2 });
 
   assert.equal(
     spawnReviewSession.calls.length,
@@ -297,7 +297,7 @@ test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is
   );
 });
 
-test("cronReview: 2nd-pass-blocked route records pr:sha", () => {
+test("cronReview: 2nd-pass-blocked route records pr:sha", async () => {
   const stateDir = "/fake/state/review";
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   const pr = { number: 41, headRefName: "harness/71", author: { login: "bot-user" }, labels: [], headSha: "sha-f" };
@@ -309,7 +309,7 @@ test("cronReview: 2nd-pass-blocked route records pr:sha", () => {
   const mergeAndFinalizeSpy = makeSpy();
   const recordReviewed = makeSpy();
 
-  cronReview(
+  await cronReview(
     baseOpts({
       gh,
       stateDir,
@@ -335,12 +335,12 @@ test("cronReview: 2nd-pass-blocked route records pr:sha", () => {
   assert.ok(routedBlocked, "the PR's issue must be routed to harness:blocked");
 });
 
-test("cronReview: requests headRefOid (not the invalid headSha field) in `gh pr list --json` — regression for the blank-cycle bug", () => {
+test("cronReview: requests headRefOid (not the invalid headSha field) in `gh pr list --json` — regression for the blank-cycle bug", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(50, { number: 50, headRefName: "harness/80", author: { login: "bot-user" }, labels: [], headSha: "sha-h" });
   setDiff(50, ["docs/x.md"]);
 
-  cronReview(baseOpts({ gh }));
+  await cronReview(baseOpts({ gh }));
 
   const listCall = calls.find((a) => a[0] === "pr" && a[1] === "list" && a.includes("--json"));
   assert.ok(listCall, "must call `gh pr list --json`");
@@ -353,85 +353,116 @@ test("cronReview: requests headRefOid (not the invalid headSha field) in `gh pr 
   );
 });
 
-test("cronReview: notifies review-started (before spawn) and pr-awaiting-merge on the cross-family-absent route", () => {
+test("cronReview: notifies review-started (before spawn) and pr-awaiting-merge on the cross-family-absent route", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(51, { number: 51, headRefName: "harness/81", author: { login: "bot-user" }, labels: [], headSha: "sha-i", url: "u51" });
   setDiff(51, ["src/x.js"]);
 
   const notify = makeSpy();
-  cronReview(baseOpts({ gh, notify, crossFamilyEligible: () => false, mergeAndFinalize: makeSpy() }));
+  await cronReview(baseOpts({ gh, notify, crossFamilyEligible: () => false, mergeAndFinalize: makeSpy() }));
 
   const types = notify.calls.map((a) => a[0] && a[0].type);
   assert.ok(types.includes("review-started"), "must notify review-started so the operator sees the analysis begin");
   assert.ok(types.includes("pr-awaiting-merge"), "must notify pr-awaiting-merge when cross-family is absent");
 });
 
-test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", () => {
+test("cronReview: AWAITS the review-started send (it SETTLES) before the blocking review-session spawn", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(70, { number: 70, headRefName: "harness/100", author: { login: "bot-user" }, labels: [], headSha: "sha-p", url: "u70" });
+  setDiff(70, ["src/x.js"]);
+
+  const order = [];
+  // review-started's send resolves on a LATER microtask. If cronReview does NOT await it, the
+  // synchronous spawnReviewSession runs first and "spawn" precedes "review-started:settled" —
+  // exactly the bug (the 5s AbortSignal expires during the multi-minute spawn, dropping the ping).
+  const notify = (event) => {
+    if (event && event.type === "review-started") {
+      return Promise.resolve().then(() => order.push("review-started:settled"));
+    }
+    return undefined;
+  };
+  const spawnReviewSession = makeSpy(() => order.push("spawn"));
+
+  await cronReview(
+    baseOpts({ gh, notify, spawnReviewSession, crossFamilyEligible: () => false, mergeAndFinalize: makeSpy() })
+  );
+
+  const settledIdx = order.indexOf("review-started:settled");
+  const spawnIdx = order.indexOf("spawn");
+  assert.notEqual(settledIdx, -1, "the review-started send must settle");
+  assert.notEqual(spawnIdx, -1, "the review session must be spawned");
+  assert.ok(
+    settledIdx < spawnIdx,
+    "review-started must be AWAITED — its send has to SETTLE before the blocking spawn, never after"
+  );
+});
+
+test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(52, { number: 52, headRefName: "harness/82", author: { login: "bot-user" }, labels: [], headSha: "sha-j", url: "u52" });
   setDiff(52, ["src/y.js"]);
 
   const notify = makeSpy();
-  cronReview(baseOpts({ gh, notify, mergeAndFinalize: makeSpy(() => ({ merged: true })) }));
+  await cronReview(baseOpts({ gh, notify, mergeAndFinalize: makeSpy(() => ({ merged: true })) }));
 
   const types = notify.calls.map((a) => a[0] && a[0].type);
   assert.ok(types.includes("pr-merged"), "must notify pr-merged on a successful autonomous merge");
 });
 
-test("cronReview: a diff-fetch failure sentinel {ok:false,diffFailed:true} re-queues (notify pr-diff-fetch-failed, NO spawn, NO recordReviewed)", () => {
+test("cronReview: a diff-fetch failure sentinel {ok:false,diffFailed:true} re-queues (notify pr-diff-fetch-failed, NO spawn, NO recordReviewed)", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(60, { number: 60, headRefName: "harness/90", author: { login: "bot-user" }, labels: [], headSha: "sha-k" });
   setDiff(60, { ok: false, diffFailed: true }); // fetch failure sentinel
   const notify = makeSpy();
   const spawnReviewSession = makeSpy();
   const recordReviewed = makeSpy();
-  cronReview(baseOpts({ gh, notify, spawnReviewSession, recordReviewed }));
+  await cronReview(baseOpts({ gh, notify, spawnReviewSession, recordReviewed }));
   const types = notify.calls.map((a) => a[0] && a[0].type);
   assert.ok(types.includes("pr-diff-fetch-failed"), "must notify pr-diff-fetch-failed on a diff sentinel");
   assert.equal(spawnReviewSession.calls.length, 0, "must NOT spawn a review session on a diff fetch failure");
   assert.equal(recordReviewed.calls.length, 0, "must NOT record reviewed (re-queue: retry next cycle)");
 });
 
-test("cronReview: a genuinely empty diff [] is NOT a fetch failure — the review session IS spawned", () => {
+test("cronReview: a genuinely empty diff [] is NOT a fetch failure — the review session IS spawned", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(61, { number: 61, headRefName: "harness/91", author: { login: "bot-user" }, labels: [], headSha: "sha-l" });
   setDiff(61, []); // genuinely empty
   const spawnReviewSession = makeSpy();
-  cronReview(baseOpts({ gh, spawnReviewSession }));
+  await cronReview(baseOpts({ gh, spawnReviewSession }));
   assert.equal(spawnReviewSession.calls.length, 1, "an empty [] diff must proceed to a normal review spawn");
 });
 
-test("cronReview: fully-eligible PR with autoMergeEnabled false routes to awaiting-merge (mergeAndFinalize never called, recordReviewed once)", () => {
+test("cronReview: fully-eligible PR with autoMergeEnabled false routes to awaiting-merge (mergeAndFinalize never called, recordReviewed once)", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(62, { number: 62, headRefName: "harness/92", author: { login: "bot-user" }, labels: [], headSha: "sha-m" });
   setDiff(62, ["src/ok.js"]); // not gate machinery
   const mergeAndFinalize = makeSpy(() => ({ merged: true }));
   const recordReviewed = makeSpy();
-  cronReview(baseOpts({ gh, autoMergeEnabled: false, crossFamilyEligible: () => true, mergeAndFinalize, recordReviewed }));
+  await cronReview(baseOpts({ gh, autoMergeEnabled: false, crossFamilyEligible: () => true, mergeAndFinalize, recordReviewed }));
   assert.equal(mergeAndFinalize.calls.length, 0, "autoMergeEnabled false must NOT auto-merge an eligible PR");
   const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
   assert.ok(routedAwaiting, "flag-off eligible PR must be routed to harness:awaiting-merge");
   assert.equal(recordReviewed.calls.length, 1, "the awaiting-merge route records reviewed exactly once");
 });
 
-test("cronReview: fully-eligible PR with autoMergeEnabled true DOES call mergeAndFinalize(pr, sha, opts)", () => {
+test("cronReview: fully-eligible PR with autoMergeEnabled true DOES call mergeAndFinalize(pr, sha, opts)", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   const pr = { number: 63, headRefName: "harness/93", author: { login: "bot-user" }, labels: [], headSha: "sha-n" };
   setPr(63, pr);
   setDiff(63, ["src/ok2.js"]);
   const mergeAndFinalize = makeSpy(() => ({ merged: true }));
-  cronReview(baseOpts({ gh, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize }));
+  await cronReview(baseOpts({ gh, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize }));
   assert.equal(mergeAndFinalize.calls.length, 1, "autoMergeEnabled true must auto-merge an eligible PR");
   assert.equal(mergeAndFinalize.calls[0][0].number, 63, "mergeAndFinalize receives the pr as first arg");
   assert.equal(mergeAndFinalize.calls[0][1], "sha-n", "mergeAndFinalize receives the head sha as second arg");
 });
 
-test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, stateDir}) and its boolean return is consumed synchronously", () => {
+test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, stateDir}) and its boolean return is consumed synchronously", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(64, { number: 64, headRefName: "harness/94", author: { login: "bot-user" }, labels: [], headSha: "sha-o" });
   setDiff(64, ["src/ok3.js"]);
   const cfeSpy = makeSpy(() => false); // returns a plain boolean; false → awaiting-merge route
-  cronReview(baseOpts({ gh, crossFamilyEligible: cfeSpy, mergeAndFinalize: makeSpy() }));
+  await cronReview(baseOpts({ gh, crossFamilyEligible: cfeSpy, mergeAndFinalize: makeSpy() }));
   assert.equal(cfeSpy.calls.length, 1, "crossFamilyEligible must be called once for the PR");
   const secondArg = cfeSpy.calls[0][1];
   assert.equal(typeof secondArg, "object", "crossFamilyEligible's 2nd arg must be an options object");
@@ -443,12 +474,12 @@ test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, st
   assert.ok(routedAwaiting, "a synchronous boolean false must route to awaiting-merge (proves no await/Promise truthiness)");
 });
 
-test("cronReview: a rejected auto-merge (mergeAndFinalize returns {merged:false}) notifies pr-merge-failed so the operator sees the stuck merge", () => {
+test("cronReview: a rejected auto-merge (mergeAndFinalize returns {merged:false}) notifies pr-merge-failed so the operator sees the stuck merge", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(80, { number: 80, headRefName: "harness/120", author: { login: "bot-user" }, labels: [], headSha: "sha-mf", url: "u80" });
   setDiff(80, ["src/z.js"]); // not gate machinery
   const notify = makeSpy();
-  cronReview(baseOpts({ gh, notify, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false })) }));
+  await cronReview(baseOpts({ gh, notify, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false })) }));
   const types = notify.calls.map((a) => a[0] && a[0].type);
   assert.ok(types.includes("pr-merge-failed"), "a rejected auto-merge must notify pr-merge-failed");
   assert.ok(!types.includes("pr-merged"), "a rejected merge must NOT notify pr-merged");
