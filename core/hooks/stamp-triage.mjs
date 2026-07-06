@@ -104,6 +104,51 @@ function parseLastJsonObject(stdout) {
 }
 
 /**
+ * Detects the REAL spawn-hand run-record on stdout — a genuine completed run, NOT the
+ * {configError:true,...} pre-spawn shape. The run-record is built from the descriptor by
+ * spawn-hand.mjs's runLiveDispatch (fields: model/scope_paths/frozen_paths/allowed_writes/
+ * touchedPaths/exitCode/outcome/freezeCommitSha). It carries NO role field and NO top-level
+ * task_id/feature_id. The distinguishing shape vs the config-error record is `outcome` (a plain
+ * object) + `exitCode` (a number); config-error has neither. configError:true also excludes.
+ * Never throws.
+ *
+ * @param {object|null} parsed - The last JSON object parsed from stdout
+ * @returns {boolean} true when parsed is the real run-record shape
+ */
+function isRealRunRecord(parsed) {
+  return (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    parsed.configError !== true &&
+    typeof parsed.outcome === "object" &&
+    parsed.outcome !== null &&
+    typeof parsed.exitCode === "number"
+  );
+}
+
+/**
+ * Extracts the --descriptor <path> value from a spawn-hand.mjs command string. The descriptor
+ * path is the trustworthy source for task_id/feature_id/model (the stdout run-record carries none
+ * of them). Returns null when no `--descriptor <path>` pair is present. Never throws.
+ *
+ * @param {string} command - The Bash command string from tool_input.command
+ * @returns {string|null} the descriptor path, or null
+ */
+function extractDescriptorPath(command) {
+  if (typeof command !== "string" || command.length === 0) {
+    return null;
+  }
+  const tokens = command.split(/\s+/);
+  const idx = tokens.indexOf("--descriptor");
+  if (idx === -1 || idx + 1 >= tokens.length) {
+    return null;
+  }
+  const descriptorPath = tokens[idx + 1];
+  return descriptorPath.length > 0 ? descriptorPath : null;
+}
+
+/**
  * Counts JSON objects on stdout whose `marker` field equals `markerName`.
  * Scans ALL lines (not just the last), counting BEFORE any feature_id/task_id validation.
  * Returns both the count and, when count === 1, the sole matching object.
@@ -160,6 +205,8 @@ function countMarkerObjectsByName(stdout, markerName) {
  *         | { action: 'plan-reviewed',  verdict: 'APPROVE'|'REVISE' }  observability-only (no gate-state write)
  *         | { action: 'task-executing', n: number, total: number }     observability-only (no gate-state write)
  *         | { action: 'final-review-done' }                           observability-only (no gate-state write)
+ *         | { action: 'hand-ran', descriptorPath: string }              observability-only (no gate-state write);
+ *                                 task/model are read from the --descriptor file at effect time
  *         | { action: 'marker-ambiguous' }
  *         | { action: 'none' }}
  */
@@ -232,6 +279,17 @@ export function decide(payload) {
         feature_id: typeof parsed.feature_id === "string" ? parsed.feature_id : null,
         task_id: typeof parsed.task_id === "string" ? parsed.task_id : null,
       };
+    }
+    // REAL run-record: a genuine completed run (the hand actually fired). The stdout record has
+    // NO role field and NO top-level task_id/feature_id, so task/model are sourced from the
+    // --descriptor file named in argv at effect time — never fabricated from stdout. The hook
+    // appends a {type:'hand-ran', task, model} checkpoint to the observability outbox, closing
+    // executor/sniper blindness (hands are Bash via spawn-hand, not Agent).
+    if (isRealRunRecord(parsed)) {
+      const descriptorPath = extractDescriptorPath(command);
+      if (descriptorPath) {
+        return { action: "hand-ran", descriptorPath };
+      }
     }
     return { action: "none" };
   }
@@ -516,6 +574,40 @@ function obsAppend(event, appendFn) {
 }
 
 /**
+ * @description Reads the --descriptor file named in the spawn-hand command argv — the
+ * trustworthy source for task_id/model (the stdout run-record carries neither; it has no role
+ * field either). Returns the parsed descriptor object, or null on any missing/malformed/absent
+ * path. role is honored only when the descriptor carries a valid executor|sniper string; it is
+ * otherwise omitted, NEVER fabricated. Never throws.
+ * @param {string|null|undefined} descriptorPath
+ * @returns {{ task_id: string, model: string, role?: string }|null}
+ */
+function readDescriptorForHandRan(descriptorPath) {
+  if (typeof descriptorPath !== "string" || descriptorPath.length === 0) {
+    return null;
+  }
+  try {
+    if (!fs.existsSync(descriptorPath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(descriptorPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    if (typeof parsed.task_id !== "string" || parsed.task_id.length === 0) {
+      return null;
+    }
+    if (typeof parsed.model !== "string" || parsed.model.length === 0) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Executes the action returned by decide().
  * Fail-open: all fs errors are swallowed — never propagated to the caller.
  *
@@ -734,6 +826,22 @@ export function handle(payload, opts = {}) {
 
   if (decision.action === "final-review-done") {
     obsAppend({ type: "final-review-done" }, appendEventFn);
+    return;
+  }
+
+  // --- observability-only: the spawn-hand hand actually ran (a genuine completed run) ---
+  // task/model come from the --descriptor file (the trustworthy source); the stdout run-record
+  // has NO role/task_id field, so role is honored only when the descriptor carries a valid
+  // executor|sniper value — otherwise omitted, never fabricated. No gate-state write, no fetch.
+  if (decision.action === "hand-ran") {
+    const descriptor = readDescriptorForHandRan(decision.descriptorPath);
+    if (descriptor) {
+      const event = { type: "hand-ran", task: descriptor.task_id, model: descriptor.model };
+      if (descriptor.role === "executor" || descriptor.role === "sniper") {
+        event.role = descriptor.role;
+      }
+      obsAppend(event, appendEventFn);
+    }
     return;
   }
 
