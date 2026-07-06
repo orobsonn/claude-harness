@@ -44,8 +44,20 @@ import { buildScopedEnvFromDisk } from "./scoped-env-fromdisk.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
-import { makeNotifier } from "./notify-telegram.mjs";
-import { readEvents, readMeta, advanceCursor, updateMeta } from "./obs-outbox.mjs";
+import {
+  makeNotifier,
+  resolveNotifyConfig,
+  createForumTopic as realCreateForumTopic,
+  closeForumTopic as realCloseForumTopic,
+} from "./notify-telegram.mjs";
+import {
+  createRun,
+  appendEvent,
+  updateMeta,
+  readEvents,
+  readMeta,
+  advanceCursor,
+} from "./obs-outbox.mjs";
 
 /** @description Required fields every per-project VPS cron config must supply. */
 export const REQUIRED_CONFIG_FIELDS = [
@@ -84,6 +96,49 @@ function defaultTmuxHasSession(sessionId) {
   return res.status === 0 && !res.error;
 }
 
+/**
+ * @description Builds the TOKEN-BOUND forum-topic seams the composition root hands down to dispatch.
+ * The token is resolved ONCE here via resolveNotifyConfig reading `~/.claude/.dev.vars` (the same
+ * disk source makeNotifier uses) — NEVER written into the env-file, argv, or any log. dispatch never
+ * resolves the token itself; it only receives these pre-bound async seams. When notify is
+ * unconfigured (no token / no chatId) the seams resolve to no-op `{ ok:false }` results with NO
+ * network call and `enabled:false` so the legacy direct 'picked' sendNotification stays active.
+ * @param {object} config
+ * @param {object} deps - { fetch, log, timeoutMs, readFileSafe } threaded through to the API calls.
+ * @returns {{ createForumTopic: Function, closeForumTopic: Function, enabled: boolean }}
+ */
+function makeForumTopicSeams(config, deps = {}) {
+  const homeDir = config?.homeDir;
+  let resolved = null;
+  try {
+    resolved = resolveNotifyConfig(config, { homeDir, readFileSafe: deps.readFileSafe });
+  } catch {
+    resolved = null;
+  }
+  if (!resolved) {
+    return {
+      createForumTopic: async () => ({ ok: false }),
+      closeForumTopic: async () => ({ ok: false }),
+      enabled: false,
+    };
+  }
+  const callOpts = { config: resolved, fetch: deps.fetch, log: deps.log, timeoutMs: deps.timeoutMs };
+  return {
+    createForumTopic: (input) => realCreateForumTopic(input, callOpts),
+    closeForumTopic: (input) => realCloseForumTopic(input, callOpts),
+    enabled: true,
+  };
+}
+
+/** @description Real obs-outbox seam group handed to dispatch, mirroring obs-outbox.mjs exports. */
+const realObsSeam = {
+  createRun: (input, stateDir) => createRun(input, stateDir),
+  appendEvent: (metaPath, event) => appendEvent(metaPath, event),
+  updateMeta: (metaPath, partial) => updateMeta(metaPath, partial),
+  readEvents: (metaPath) => readEvents(metaPath),
+  readMeta: (metaPath) => readMeta(metaPath),
+};
+
 export function runCronA(config, deps = {}) {
   const cronASelectFn = deps.cronASelect ?? cronASelect;
   const dispatchFn = deps.dispatch ?? dispatch;
@@ -120,12 +175,28 @@ export function runCronA(config, deps = {}) {
   const buildScopedEnv = (project, args) =>
     buildScopedEnvFromDiskFn(project, { ...args, homeDir: config.homeDir });
 
+  // Token-bound forum-topic seams + the real obs-outbox seam group, handed DOWN to dispatch. The
+  // token is resolved HERE via resolveNotifyConfig reading ~/.claude/.dev.vars — dispatch never
+  // resolves the token from the session env-file. `deps.fetch` is threaded through to the API calls
+  // (mirroring the existing deps.fetch convention in mainCronA/makeNotifier). Injectable so a test
+  // can override the seams; defaults to the real .dev.vars-reading wiring.
+  const forumTopicSeams = deps.forumTopicSeams ?? makeForumTopicSeams(config, {
+    fetch: deps.fetch,
+    log: deps.log,
+    timeoutMs: deps.timeoutMs,
+    readFileSafe: deps.readFileSafe,
+  });
+  const obsSeam = deps.obs ?? realObsSeam;
+  const observabilityEnabled = forumTopicSeams.enabled;
+
   // The dispatch seam handed to cronASelect: cronASelect calls dispatch(issue, lock); the seam
   // composes the full dispatch opts from config + the already-held lock handle + the wired seams.
   // It also observes dispatch's structured result: a {ok:false} (spawn failure → re-queued) fires
   // the dispatch-failed notification and records the failure so the post-select `picked` is
   // suppressed (a failed dispatch never "started a session"). notify config is threaded down so the
-  // detached session's cron-a-exit can notify session-done/blocked/failed.
+  // detached session's cron-a-exit can notify session-done/blocked/failed. The token-bound
+  // createForumTopic/closeForumTopic + obs seam are threaded so dispatch creates the run's forum
+  // topic and outbox before the spawn (HARNESS_OBSERVABILITY_RUN_PATH set when observability wired).
   let dispatchFailed = false;
   const dispatchSeam = (issue, lock) => {
     const result = dispatchFn(issue, {
@@ -140,8 +211,25 @@ export function runCronA(config, deps = {}) {
       counter,
       buildScopedEnv,
       notify: config.notify,
+      obs: observabilityEnabled ? obsSeam : undefined,
+      createForumTopic: forumTopicSeams.createForumTopic,
+      closeForumTopic: forumTopicSeams.closeForumTopic,
     });
-    if (result && result.ok === false) {
+    // dispatch is async, so in production `result` is a Promise — a sync `result.ok` read sees
+    // undefined and silently drops the dispatch-failed notification on every spawn failure. Chain
+    // on the resolved value when it is a thenable; fall back to the sync check for a non-thenable
+    // result (e.g. an injected sync fake) so the observable wiring stays identical. Fire-and-forget
+    // so the cron's critical path never awaits a notifier.
+    if (result && typeof result.then === "function") {
+      result
+        .then((r) => {
+          if (r && r.ok === false) {
+            dispatchFailed = true;
+            safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number });
+          }
+        })
+        .catch(() => {});
+    } else if (result && result.ok === false) {
       dispatchFailed = true;
       safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number });
     }
@@ -158,8 +246,14 @@ export function runCronA(config, deps = {}) {
   });
 
   // Translate the structured select result into an event (best-effort, off the critical path).
+  // The legacy direct `picked` sendNotification is SUPPRESSED for an observability-enabled run
+  // (HARNESS_OBSERVABILITY_RUN_PATH set): picked flows through the per-run outbox exactly once
+  // (dispatch appended it) and is delivered by the drain to the run's forum topic — never
+  // double-sent. A run without observability keeps the direct picked (unchanged behavior).
   if (selectResult && selectResult.dispatched && selectResult.issue && !dispatchFailed) {
-    safeNotify({ type: "picked", project: config.project, issue: selectResult.issue.number });
+    if (!observabilityEnabled) {
+      safeNotify({ type: "picked", project: config.project, issue: selectResult.issue.number });
+    }
   } else if (selectResult && selectResult.dispatched === false && heartbeat) {
     safeNotify({ type: "idle", project: config.project });
   }

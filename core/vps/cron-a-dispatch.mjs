@@ -123,15 +123,25 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
  * owner. No retry attempt is consumed (the counter is charged only after a successful spawn +
  * registration). Best-effort: any error here is swallowed so the failure path never masks the
  * original spawn failure or leaves the lock held.
+ *
+ *   Observability cleanup (task-4): when a forum topic was already created for this run, prefer
+ *   closing it via the token-bound closeForumTopic seam handed down by the composition root. If the
+ *   seam is unavailable or the close fails, mark the meta status:'orphan' via obs.updateMeta — the
+ *   SOLE writer of status (never a bespoke JSON write) — so the reaper (task-9) can sweep the orphan.
+ *   Fail-open: every step is guarded so an observability hiccup never masks the original spawn failure.
  * @param {object} args
  * @param {object} args.runLock - The run-lock seam (release).
  * @param {string} args.stateDir
  * @param {number} args.acquireTs - acquire_ts of the held holder (ownership guard).
  * @param {object} args.gh - The gh seam.
  * @param {number} args.issueNumber
- * @returns {void}
+ * @param {{ obs?: object, metaPath?: string, threadId?: number|string|null }} [args.obsContext]
+ *   Observability context from the pre-spawn setup; when a topic was created (threadId != null) the
+ *   seam is closed or the meta is marked 'orphan'.
+ * @param {Function} [args.closeForumTopic] - Token-bound seam `({threadId}) => Promise<{ok}>`.
+ * @returns {Promise<void>}
  */
-function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber }) {
+async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
   try {
     runLock.release({ stateDir, acquireTs });
   } catch {
@@ -150,11 +160,48 @@ function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber }) 
   } catch {
     // best-effort: the lock release is the critical observable; a gh hiccup must not strand it
   }
+
+  // Observability cleanup (task-4): when a forum topic was already created for this run, prefer
+  // closing it via the token-bound seam. If the seam is unavailable or the close fails, mark the
+  // meta status 'orphan' so the reaper (task-9) can sweep it. Fail-open: every step is guarded so an
+  // observability hiccup never masks the original spawn failure.
+  let metaPath = null;
+  let obs = null;
+  let threadId = null;
+  if (obsContext) {
+    metaPath = obsContext.metaPath ?? null;
+    obs = obsContext.obs ?? null;
+    threadId = obsContext.threadId ?? null;
+  }
+  if (metaPath && obs && typeof obs.readMeta === "function" && existsSync(metaPath)) {
+    try {
+      const meta = obs.readMeta(metaPath);
+      if (meta && meta.threadId != null) threadId = meta.threadId;
+    } catch {
+      // fail-open: keep the context threadId if the on-disk read fails
+    }
+  }
+  let status = "orphan";
+  if (typeof closeForumTopic === "function" && threadId != null) {
+    try {
+      const closeResult = await closeForumTopic({ threadId });
+      status = closeResult && closeResult.ok ? "closed" : "orphan";
+    } catch {
+      // fall through: status stays 'orphan'
+    }
+  }
+  if (metaPath && obs && typeof obs.updateMeta === "function") {
+    try {
+      obs.updateMeta(metaPath, { status });
+    } catch {
+      // best-effort: a status write failure must never mask the original spawn failure
+    }
+  }
 }
 
 /** @description recoverSpawnFailure wrapped to return the { ok: false } result shape. */
-function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber }) {
-  recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber });
+async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
+  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   return { ok: false };
 }
 
@@ -182,11 +229,127 @@ function defaultBranchExists(branch, { cwd, env }) {
 }
 
 /**
+ * @description Maximum total length (Unicode code points) of a Telegram forum-topic NAME. Telegram
+ * itself caps the name; the TITLE is truncated so the TOTAL name (prefix + ' · ' + title) fits.
+ */
+const TOPIC_NAME_MAX_CODE_POINTS = 128;
+
+/**
+ * @description Builds the run-identity forum-topic name: `#<issue> · <title>` when a title exists,
+ * else `#<issue>`. The `#<issue>` prefix is ALWAYS present (the name is NEVER the bare title —
+ * matches #ac-5.2 and the locked demo thread 707). The TITLE is truncated so the TOTAL name is
+ * <=128 code points (prefix counted); the name is PLAIN TEXT — never HTML-escaped (Telegram does not
+ * parse_mode the topic name). The final <=128 safety truncation is applied inside createForumTopic.
+ * @param {number} issueNumber
+ * @param {string} [title]
+ * @returns {string}
+ */
+function buildTopicName(issueNumber, title) {
+  const prefix = `#${issueNumber}`;
+  const trimmed = typeof title === "string" ? title.trim() : "";
+  if (!trimmed) return prefix;
+  const sep = " · ";
+  const prefixLen = Array.from(prefix).length;
+  const sepLen = Array.from(sep).length;
+  const titleBudget = TOPIC_NAME_MAX_CODE_POINTS - prefixLen - sepLen;
+  const titlePoints = Array.from(trimmed);
+  const truncatedTitle =
+    titlePoints.length > titleBudget && titleBudget > 0
+      ? titlePoints.slice(0, titleBudget).join("")
+      : titlePoints.join("");
+  return `${prefix}${sep}${truncatedTitle}`;
+}
+
+/**
+ * @description Pre-spawn observability setup (task-4). Creates (or idempotently reuses) the per-run
+ * outbox meta `obs-<issue>.json`, creates the run's Telegram forum topic when no open threadId is
+ * already persisted (persisting message_thread_id via obs.updateMeta — never a bespoke JSON write),
+ * and appends the opening border checkpoint `{type:'picked'}` to the outbox append-if-absent so the
+ * run's opening anchor reaches its topic through the exactly-once drain (replacing the legacy direct
+ * 'picked' sendNotification). Fail-open: any error is swallowed so observability never blocks a
+ * dispatch — a null metaPath means the run proceeds without HARNESS_OBSERVABILITY_RUN_PATH.
+ *
+ * Idempotent per issue#: when obs-<issue>.json already exists with a non-closed threadId it is reused
+ * AS-IS — no second createForumTopic, no duplicate 'picked'. On createForumTopic failure the meta is
+ * marked status:'fallback' (threadId null) and 'picked' is STILL appended so events route to the
+ * shared topic with a #<issue> identity prefix (never muted).
+ * @param {object} args
+ * @param {object} args.obs - { createRun, appendEvent, updateMeta, readEvents, readMeta } mirroring
+ *   obs-outbox.mjs's real exports EXACTLY (token-less; dispatch never sees a token).
+ * @param {Function} [args.createForumTopic] - Token-bound seam `({name}) => Promise<{ok,threadId?}|null>`,
+ *   resolved by the composition root; dispatch never resolves the token.
+ * @param {number} args.issueNumber
+ * @param {string} [args.title]
+ * @param {string} args.project
+ * @param {string} args.worktreePath
+ * @param {string} args.stateDir
+ * @returns {Promise<{ metaPath: string|null, threadId: number|string|null, obs: object }>}
+ */
+async function setupObservability({ obs, createForumTopic, issueNumber, title, project, worktreePath, stateDir }) {
+  const metaPath = obs.createRun({ issueNumber, project, worktreePath }, stateDir);
+  if (!metaPath) return { metaPath: null, threadId: null };
+  const meta = (obs.readMeta(metaPath) || {});
+  const CLOSED = "closed";
+  let threadId = meta.threadId ?? null;
+  const hasOpenThread = threadId != null && meta.status !== CLOSED;
+  if (!hasOpenThread && typeof createForumTopic === "function") {
+    const name = buildTopicName(issueNumber, title);
+    let result = null;
+    try {
+      result = await createForumTopic({ name });
+    } catch {
+      // fail-open: a throwing token-bound seam must never block the dispatch
+      result = null;
+    }
+    if (result && result.ok && result.threadId != null) {
+      threadId = result.threadId;
+      try {
+        // Reset status to 'active' on a successful topic creation: a reused run whose meta was
+        // previously 'fallback'/'orphan' (a requeue retry) must not keep routing to the shared
+        // topic nor be sweepable by the reaper — the dedicated topic now exists. The failure path
+        // below still writes status 'fallback' (unchanged).
+        obs.updateMeta(metaPath, { threadId, status: "active" });
+      } catch {
+        // best-effort: threadId persist failure routes to the shared topic instead
+        threadId = null;
+      }
+    } else {
+      try {
+        obs.updateMeta(metaPath, { status: "fallback" });
+      } catch {
+        // best-effort: status write failure never blocks the dispatch
+      }
+      threadId = null;
+    }
+  }
+  // Opening border checkpoint (#ac-2.3) — append-if-absent so an idempotent requeue never duplicates.
+  try {
+    const events = obs.readEvents(metaPath) || [];
+    if (!events.some((e) => e && e.type === "picked")) {
+      obs.appendEvent(metaPath, { type: "picked" });
+    }
+  } catch {
+    // best-effort: a dropped opening anchor is bounded by the next drain — never block the dispatch
+  }
+  return { metaPath, threadId, obs };
+}
+
+/**
  * @description Dispatch the picked issue to a detached autonomous tmux session. See the module
  * header for the full spawn composition and lock/counter contract.
- * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
+ *
+ * Observability (task-4): when an `obs` seam group is injected, the per-run outbox meta + Telegram
+ * forum topic are created and the opening `picked` checkpoint is appended BEFORE the tmux spawn, and
+ * `HARNESS_OBSERVABILITY_RUN_PATH` (the absolute obs-<issue>.json path) is exported into the scoped
+ * env-file alongside the existing HARNESS_NOTIFY_* (non-secret only — never the token). The
+ * createForumTopic/closeForumTopic seams are TOKEN-BOUND and handed down already resolved by the
+ * composition root; dispatch never resolves the token from the session env-file. dispatch is async so
+ * it can await the createForumTopic round-trip before the spawn; a call WITHOUT an `obs` seam stays
+ * fully synchronous (no await reached), so legacy callers that do not `await dispatch(...)` are
+ * byte-identically unaffected.
+ * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string } | Promise<{ ok: boolean, sessionName?: string, worktreePath?: string }>}
  */
-export function dispatch(issue, opts) {
+export async function dispatch(issue, opts) {
   const {
     project,
     projectRoot,
@@ -200,6 +363,9 @@ export function dispatch(issue, opts) {
     buildScopedEnv,
     notify,
     branchExists,
+    obs,
+    createForumTopic,
+    closeForumTopic,
   } = opts;
   const issueNumber = issue.number;
   const branch = `harness/${issueNumber}`;
@@ -211,6 +377,33 @@ export function dispatch(issue, opts) {
   // so git resolves identically for the probe and the worktree-add spawn.
   const probeBranchExists = branchExists ?? ((b) => defaultBranchExists(b, { cwd: projectRoot, env }));
 
+  // Pre-spawn observability setup (task-4): createRun + createForumTopic + append 'picked' all
+  // complete BEFORE the tmux spawn. Fail-open — observability never blocks a dispatch; a null
+  // metaPath means no HARNESS_OBSERVABILITY_RUN_PATH is threaded (legacy behavior). The threadId
+  // captured here is handed to recoverSpawnFailure so a pre-registration spawn failure that already
+  // created a topic either closes it via the token-bound seam or marks the run 'orphan'.
+  let obsContext = null;
+  if (obs && typeof obs.createRun === "function") {
+    try {
+      obsContext = await setupObservability({
+        obs,
+        createForumTopic,
+        issueNumber,
+        title: issue.title,
+        project,
+        worktreePath,
+        stateDir,
+      });
+    } catch {
+      // fail-open: observability setup must never strand the issue in harness:in-progress
+      obsContext = null;
+    }
+  }
+  const obsMetaPath = obsContext ? obsContext.metaPath : null;
+  const obsThreadId = obsContext ? obsContext.threadId : null;
+  // closeForumTopic is handed down token-bound by the composition root; dispatch wires it into the
+  // recover path for the close-on-spawn-failure cleanup — see recoverSpawnFailure.
+
   // Scoped child env: headless-local (no CLAUDE_CODE_REMOTE) so the cheap Ollama hands stay
   // reachable. Kept inside the failure-recovery path so an unreadable .dev.vars or missing stateDir
   // does not strand the issue in harness:in-progress.
@@ -218,7 +411,7 @@ export function dispatch(issue, opts) {
   try {
     scopedEnv = buildScopedEnv(project, { stateDir, projectRoot });
   } catch {
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
   const env = { ...scopedEnv };
   delete env.CLAUDE_CODE_REMOTE;
@@ -235,6 +428,13 @@ export function dispatch(issue, opts) {
     env.HARNESS_NOTIFY_CHATID = String(notify.chatId);
     if (notify.threadId != null) env.HARNESS_NOTIFY_THREADID = String(notify.threadId);
   }
+  // HARNESS_OBSERVABILITY_RUN_PATH: the absolute obs-<issue>.json meta path, threaded NON-SECRET
+  // alongside HARNESS_NOTIFY_* so the detached session + chained cron-a-exit + the drain can locate
+  // the run's outbox. NEVER the token. Only set when observability is wired (obsMetaPath non-null) —
+  // a project without observability writes a byte-identical env-file.
+  if (obsMetaPath) {
+    env.HARNESS_OBSERVABILITY_RUN_PATH = obsMetaPath;
+  }
 
   // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach
   // the tmux session even when a server already exists (spawn env is ignored in that case).
@@ -248,7 +448,7 @@ export function dispatch(issue, opts) {
         .join("\n");
     writeFileSync(envFile, envBody, { encoding: "utf8", mode: 0o600 });
   } catch {
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
   // 1) Per-run worktree on a project-distinct branch (never the primary tree). When branch/<issue>
@@ -284,7 +484,7 @@ export function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup of the short-lived env-file
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
   // 1b) git worktree only checks out TRACKED files. When `.claude` is gitignored (e.g. the harness
@@ -322,7 +522,7 @@ export function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
   // 3) Spawn the detached tmux session running claude -p + the chained graceful-exit handler.
@@ -352,7 +552,7 @@ export function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
   // 4) Second lock phase + attempt charge — only AFTER a successful spawn. dispatch never
