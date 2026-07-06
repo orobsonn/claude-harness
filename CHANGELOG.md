@@ -81,6 +81,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   vazio", podendo pular sem aviso uma checagem extra de segurança em PRs que tocam a própria
   infraestrutura de revisão. Agora a falha é sinalizada de forma distinta e o PR é reenfileirado em
   vez de seguir como se nada tivesse mudado.
+- **Mão barata (cheap hand) deixa de ser falsamente reprovada por um cache interno do próprio
+  harness** — a sessão filha que executa a mão carrega o hook de version-check do projeto, que
+  grava um cache interno periódico e gitignorado (`.claude/.harness-version-check-cache`); a
+  varredura de escopo passava a marcar esse arquivo benigno como violação e reprovava uma entrega
+  correta, exigindo um re-disparo inteiro. Esse cache agora é reconhecido e ignorado pela checagem
+  de escopo (correspondência exata, nunca por prefixo — fecha também um possível escape por nome de
+  arquivo parecido).
 
 ### Removed
 

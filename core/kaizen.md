@@ -194,6 +194,13 @@ Flow:
   (c) is the cheapest and was used as a manual workaround this run — worth making it the default.
 - **Rationale:** A benign, deterministic, harness-owned infra write should never fail a hand's scope
   check. The false positive costs a full re-spawn cycle every time the 6h cache ttl expires mid-run.
+- **DELIVERED by `scope-check-exclude-harness-cache` (branch `harness/84`):** option (a) shipped.
+  `isHarnessInternalPath`/`excludeHarnessInternal` in `dispatch-hand.mjs` exclude the exact two
+  literals (`.claude/.harness-version-check-cache` + `.tmp`) from `touchedPaths` before both the
+  spawn-hand gate and capture-hand's independent capture run `evaluateRun`/scope-check — by EXACT
+  match only, never prefix (closes the escape vector a naive `startsWith` would have opened). See
+  `core/memory/dispatch-hand-contract.md` for the full contract note. Follow-up drift-guard proposal
+  below.
 
 ### 2026-07-05 — spawn-hand: detect Ollama 429 usage-limit distinctly and short-circuit the fallback ceremony
 
@@ -348,3 +355,23 @@ Flow:
 - **Rationale:** kaizen.md's job is to surface recurrence once `findings.md` is gone — a fix this small,
   flagged twice across separate delivery slices, is worth prioritizing rather than deferring a third
   time.
+
+### 2026-07-06 — dispatch-hand: add a drift-guard test linking HARNESS_INTERNAL_PATHS to version-check.mjs's actual writer literals
+
+- **Observed:** During `scope-check-exclude-harness-cache`, the final-review adversary flagged (LOW,
+  fail-safe direction — never a bypass) that the two literals in `dispatch-hand.mjs`'s
+  `HARNESS_INTERNAL_PATHS` (`.claude/.harness-version-check-cache` / `.tmp`) are hand-duplicated from
+  `core/hooks/version-check.mjs::writeCacheToDisk`'s `finalPath`/`tmpPath`, with no shared import and
+  no test asserting the two sides agree. The JSDoc says "grep-traceable" but nothing enforces it
+  mechanically — a future rename of the cache path in `version-check.mjs` alone would silently
+  resurrect the exact false-positive this feature just fixed, and no test would fail to catch it.
+  Deferred from this PR because it requires editing the frozen locked-test file
+  (`dispatch-hand.test.mjs`), which was out of scope for this task.
+- **Proposed change:** add a small drift-guard test (in `dispatch-hand.test.mjs` or a sibling file)
+  that reads `version-check.mjs` as text, extracts the writer's `finalPath`/`tmpPath` literals via a
+  narrow regex (or imports `writeCacheToDisk`'s constants if refactored to export them), and asserts
+  `HARNESS_INTERNAL_PATHS` deep-equals that pair — turning the JSDoc's "grep-traceable" claim into an
+  executable invariant instead of a comment promise.
+- **Rationale:** Two independently-authored literal lists that MUST stay in sync but have no test
+  linking them is a silent-drift trap — cheap to close with one small test, and the cost of missing it
+  is a full recurrence of the false-positive bug this feature exists to fix.
