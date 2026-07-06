@@ -33,7 +33,7 @@ const MAX_TEXT = 80;
 const TOPIC_NAME_MAX_CODE_POINTS = 128;
 
 /** @description Event types that must ping the shared main topic before any cosmetic progress. */
-const CRITICAL_TYPES = new Set(["blocked", "failed", "sniper-high"]);
+const CRITICAL_TYPES = new Set(["blocked", "failed"]);
 
 /** @description Status emoji per event type; a shared destination gets a scannable glyph. */
 const EMOJI = {
@@ -591,6 +591,21 @@ function cosmeticBodyLines(event, meta, isFallback) {
       break;
     case "plan-reviewed":
       lines.push(`plan ${event.verdict ?? ""}`);
+      break;
+    case "picked":
+      lines.push("session started");
+      break;
+    case "pipeline-type":
+      lines.push(`pipeline ${event.mode ?? "?"}`);
+      break;
+    case "final-review-done":
+      lines.push("final review complete");
+      break;
+    case "hand-ran":
+      lines.push(`hand ${event.task ?? "?"}${event.role ? " (" + event.role + ")" : ""} — ${event.model ?? "?"}`);
+      break;
+    case "eye":
+      lines.push(`${event.role ?? "eye"} returned`);
       break;
     default:
       lines.push("checkpoint");
