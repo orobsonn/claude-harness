@@ -73,7 +73,7 @@ export function cronASelect(opts) {
       // `body` is REQUIRED: cron-a-dispatch writes issue.body to the prompt file it feeds `claude -p`.
       // Without it dispatch writes `undefined` and every real spawn fails on the body write (the unit
       // tests inject a body via fakes, so this only surfaced on the first live run).
-      "number,labels,createdAt,body",
+      "number,labels,createdAt,body,title",
     ]);
     const hasLabel = (issue, name) =>
       (issue.labels ?? []).some((label) => (label.name ?? label) === name);
