@@ -583,7 +583,10 @@ function cosmeticBodyLines(event, meta, isFallback) {
       lines.push(`PR ${event.pr ?? ""}`);
       break;
     case "task-executing":
-      lines.push(`task ${event.task ?? ""}`);
+      lines.push(`task ${event.n ?? "?"}/${event.total ?? "?"}`);
+      break;
+    case "plan-reviewed":
+      lines.push(`plan ${event.verdict ?? ""}`);
       break;
     default:
       lines.push("checkpoint");
