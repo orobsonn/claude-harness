@@ -23,6 +23,7 @@ import { parseDevVars } from "./scoped-env.mjs";
 const TELEGRAM_API = "https://api.telegram.org";
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TEXT = 80;
+const TOPIC_NAME_MAX_CODE_POINTS = 128;
 
 /** @description Status emoji per event type; a shared destination gets a scannable glyph. */
 const EMOJI = {
@@ -65,6 +66,31 @@ function escapeHtml(value) {
 function truncate(value, max = MAX_TEXT) {
   const s = String(value);
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
+/**
+ * @description Truncates a string to at most `max` Unicode CODE POINTS (not UTF-16 code units), with
+ * NO ellipsis — the topic NAME contract demands exactly the first `max` code points. Used only for
+ * the forum-topic name, which is plain text and MUST NOT be HTML-escaped.
+ * @param {unknown} value
+ * @param {number} max
+ * @returns {string}
+ */
+function truncateCodePoints(value, max) {
+  return Array.from(String(value ?? "")).slice(0, max).join("");
+}
+
+/**
+ * @description Truncates a string to at most `max` Unicode CODE POINTS (not UTF-16 code units),
+ * adding an ellipsis when truncated. Same approach as `truncateCodePoints` to avoid splitting
+ * surrogate pairs, but keeps the ≤80 bound used by the checkpoint body.
+ * @param {unknown} value
+ * @param {number} [max]
+ * @returns {string}
+ */
+function truncateByCodePoints(value, max = MAX_TEXT) {
+  const points = Array.from(String(value ?? ""));
+  return points.length <= max ? points.join("") : `${points.slice(0, max - 1).join("")}…`;
 }
 
 /**
@@ -181,7 +207,11 @@ export async function sendNotification(event = {}, opts = {}) {
     const payload = {
       chat_id: config.chatId,
       message_thread_id: config.threadId,
-      text: formatEvent(event),
+      // Legacy events ride the unified renderer shape (<b>UPPERCASE TITLE</b>\n\n<i>body</i>) so the
+      // border/ping path honors the LOCKED format. formatEvent already HTML-escapes its dynamic values
+      // AND renders intentional <a href> links, so its output is inserted verbatim — never re-escaped
+      // or run through the body truncator.
+      text: `<b>${escapeHtml(String(type ?? "evento").toUpperCase())}</b>\n\n<i>${formatEvent(event)}</i>`,
       parse_mode: "HTML",
       disable_web_page_preview: true,
     };
@@ -339,17 +369,106 @@ export function makeNotifier(config, deps = {}) {
   };
 }
 
-// --- task-1 scaffold stubs (throwing) — implemented by the task-1 executor against the frozen test.
-// Present only so the frozen test COLLECTS (imports resolve) while staying legitimately RED.
-/** @description Scaffold — replaced by the real unified checkpoint renderer. */
-export function renderCheckpoint() {
-  throw new Error("not implemented");
+// --- task-1: unified checkpoint renderer + forum-topic wrappers.
+// Invariants preserved: zero-dep (Node builtins), fail-open (never throw/retry/delay), token only
+// from the injected config (read off disk upstream), a failure logs ONLY { op, type, status }.
+
+/**
+ * @description PURE. Renders the LOCKED checkpoint HTML format: a bold UPPERCASE title, one blank
+ * line, then an italic body whose every line is HTML-escaped and length-bounded (≤80 chars). The
+ * title is uppercased but NOT escaped (it is a fixed taxonomy/label, never operator free text). This
+ * is the single source of the checkpoint shape — the legacy send path routes through it too.
+ * @param {{ title: string, bodyLines: string[] }} input
+ * @returns {string}
+ */
+export function renderCheckpoint({ title, bodyLines } = {}) {
+  const head = `<b>${escapeHtml(String(title ?? "").toUpperCase())}</b>`;
+  const lines = Array.isArray(bodyLines) ? bodyLines : [];
+  const body = `<i>${lines.map((line) => escapeHtml(truncateByCodePoints(line))).join("\n")}</i>`;
+  return `${head}\n\n${body}`;
 }
-/** @description Scaffold — replaced by the real createForumTopic wrapper. */
-export function createForumTopic() {
-  throw new Error("not implemented");
+
+/**
+ * @description Shared best-effort one-shot POST for the forum-topic methods. NEVER throws, NEVER
+ * retries. Mirrors sendNotification's seam (injected fetch/log) and runtime/abort feature-detect.
+ * Without fetch+AbortSignal.timeout or without token+chatId → `{ ok:false }` with no network call.
+ * Any error / non-2xx logs ONLY `{ op, type, status }` — never the URL (carries `/bot<token>/`),
+ * token, or body. Resolves to `{ ok:true, data }` on 2xx (data is the parsed Telegram response).
+ * @param {string} method - Telegram Bot API method name (`createForumTopic` / `closeForumTopic`).
+ * @param {object} payload - Request body (chat_id + method-specific fields).
+ * @param {object} opts - { config, fetch, log, timeoutMs }.
+ * @param {string} op - Redacted op label for the failure log.
+ * @returns {Promise<{ ok: boolean, data?: object }>}
+ */
+async function callTelegramMethod(method, payload, opts = {}, op) {
+  const { config, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
+  const doFetch = typeof fetchImpl === "function" ? fetchImpl : globalThis.fetch;
+  const canTimeout = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function";
+  if (
+    typeof doFetch !== "function" ||
+    !canTimeout ||
+    !config ||
+    !config.token ||
+    config.chatId == null ||
+    config.chatId === ""
+  ) {
+    return { ok: false };
+  }
+  try {
+    const url = `${TELEGRAM_API}/bot${config.token}/${method}`;
+    const res = await doFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res || !res.ok) {
+      const status = res && res.status != null ? res.status : "no-response";
+      log({ op, type: "forum-topic", status });
+      return { ok: false };
+    }
+    const data = typeof res.json === "function" ? await res.json() : {};
+    return { ok: true, data };
+  } catch {
+    // NEVER log the error message/stack (the rejecting fake in tests carries the token+URL in it).
+    log({ op, type: "forum-topic", status: "error" });
+    return { ok: false };
+  }
 }
-/** @description Scaffold — replaced by the real closeForumTopic wrapper. */
-export function closeForumTopic() {
-  throw new Error("not implemented");
+
+/**
+ * @description Wraps Telegram `createForumTopic`. The NAME is PLAIN TEXT: truncated to ≤128 code
+ * points and NEVER HTML-escaped (Telegram does not parse_mode the topic name). Fail-open: any error
+ * → `{ ok:false }`, never throws. On success resolves `{ ok:true, threadId }` with the new topic's
+ * message_thread_id.
+ * @param {{ name: string }} input
+ * @param {object} opts - { config, fetch, log, timeoutMs }.
+ * @returns {Promise<{ ok: boolean, threadId?: number }>}
+ */
+export async function createForumTopic({ name } = {}, opts = {}) {
+  const payload = {
+    chat_id: opts?.config?.chatId,
+    name: truncateCodePoints(name, TOPIC_NAME_MAX_CODE_POINTS),
+  };
+  const result = await callTelegramMethod("createForumTopic", payload, opts, "createForumTopic");
+  if (!result.ok) {
+    return { ok: false };
+  }
+  return { ok: true, threadId: result.data?.result?.message_thread_id };
+}
+
+/**
+ * @description Wraps Telegram `closeForumTopic`. Fail-open: any error → `{ ok:false }`, never
+ * throws. On success resolves `{ ok:true }`.
+ * @param {{ threadId: number|string }} input
+ * @param {object} opts - { config, fetch, log, timeoutMs }.
+ * @returns {Promise<{ ok: boolean }>}
+ */
+export async function closeForumTopic({ threadId } = {}, opts = {}) {
+  const payload = {
+    chat_id: opts?.config?.chatId,
+    message_thread_id: threadId,
+  };
+  const result = await callTelegramMethod("closeForumTopic", payload, opts, "closeForumTopic");
+  return result.ok ? { ok: true } : { ok: false };
 }
