@@ -216,13 +216,13 @@ the cravado escalation ladder verbatim — three *different* models, weakest at 
 
 ```json
 "model_strategy": {
-  "hand_tiers": { "low": "qwen3-coder-next", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
+  "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
   "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
   "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }
 ```
 
-The `low → medium → high` ladder is a genuine escalation (`qwen3-coder-next` → `glm-5.2` →
+The `low → medium → high` ladder is a genuine escalation (`gemma4` → `glm-5.2` →
 `kimi-k2.7-code`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
 
 **The hand model ids MUST exist in the Ollama endpoint that runs the cheap hands.** A non-existent id (typo, retired version, or a Claude alias accidentally placed in a hand tier) makes every dispatch 404 at spawn time. List the real ids with `GET https://ollama.com/v1/models` (Bearer = the Ollama token) before pinning. **Avoid `gpt-oss:*` for hand tiers** — its tool-calling breaks after a few steps in a multi-step agentic loop (the executor edits files in a loop, so reliable tool-use matters more than raw benchmark).
