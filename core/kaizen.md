@@ -416,3 +416,61 @@ gate-machinery diffs (already manual-merge via the carve-out), never treat a rea
 never blanket. The adversary rejected blanket outage-fail-open (weakenable through the harness's own
 gate, timeout-inducible bypass, silences the stall alarm). Until then: keep codex quota funded, or
 manual-merge the queue.
+
+### 2026-07-06 — spawn-hand: seed workspace trust in the ephemeral CLAUDE_CONFIG_DIR (headless `claude -p` stalls into the 9-min timeout)
+
+- **Observed:** During `hand-429-escalation-shortcut`, the Ollama executor dispatch (deepseek-v4-pro
+  via `spawn-hand.mjs`) hit the 9-min wall-clock ceiling and returned `timedOut: true` → outcome
+  FAILED — even though the independent capture confirmed the work was COMPLETE, in-scope, and the
+  frozen test GREEN (37/37). The child's stderr revealed the cause: `"Ignoring 57 permissions.allow
+  entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code
+  interactively here once and accept the trust dialog, or set projects[...].hasTrustDialogAccepted:
+  true"`. The ephemeral `mkdtemp` CLAUDE_CONFIG_DIR that `spawn-hand` seeds does not mark the
+  workspace trusted, so the headless `claude -p` child stalls (no interactive trust dialog can be
+  answered) and runs its tools crippled / never exits cleanly → guaranteed timeout on this VPS. This
+  made the cheap-hand path effectively non-functional for the whole run (executor AND any sniper), so
+  the orchestrator had to accept the capture-verified work and apply the one surgical adversary fix
+  directly rather than dispatch further Ollama hands that would all time out identically.
+- **Proposed change:** when `spawn-hand.mjs` seeds the ephemeral CLAUDE_CONFIG_DIR, also write a
+  minimal `.claude.json` (or the appropriate key) that marks the target workspace trusted
+  (`projects["<cwd>"].hasTrustDialogAccepted: true`), so the headless child never stalls on the trust
+  dialog. Without it, every cheap-hand dispatch on a non-pre-trusted machine burns the full timeout
+  and reports a false FAILED — silently defeating cheap-hands and, ironically, forcing the exact
+  wasteful behavior the 429-shortcut feature exists to avoid (but for timeouts, not 429s).
+- **Rationale:** this is a systemic, deterministic failure of the cheap-hand path on any machine where
+  the ephemeral config's workspace isn't pre-trusted — high leverage, small fix, and it invalidates
+  the run-record's FAILED signal (a completed run mislabelled as a failure), which downstream
+  escalation logic trusts.
+
+### 2026-07-06 — 429-streak: add a TTL/session key + tier-dedup (accepted fail-safe-direction residuals from hand-429-escalation-shortcut)
+
+- **Observed:** The final-review adversary flagged two residuals in the new consecutive-429 counter,
+  both strictly in the fail-safe direction (they only OVER-route toward the Claude fallback — cost,
+  never corruption or a block), so they were accepted for this PR:
+  1. The streak is freeze-bounded, not time-bounded (no TTL/session key). A task re-queued at the SAME
+     freeze inherits a persisted `count: 2` and shortcuts on the FIRST dispatch even after the Ollama
+     quota has recovered — losing the cheap-hand savings for that task.
+  2. The counter counts DISPATCHES, not TIERS: a transient re-dispatch of the same tier at the same
+     freeze double-counts one tier's 429 (`count 1→2`) → premature shortcut.
+- **Proposed change:** (1) persist a `ts` (or `session_id`) with the streak record and treat it as
+  count 0 once older than a quota-reset window (e.g. ~15 min); (2) persist `lastModel` and only
+  increment when `descriptor.model` differs from the last 429-attributed model, so a same-tier retry
+  doesn't advance the counter but the real LOW→MEDIUM→HIGH progression still does.
+- **Rationale:** both are cheap hardening that recover cheap-hand savings the current freeze-only
+  anchor leaves on the table; neither is a correctness/safety defect, so deferring was safe, but the
+  recurrence signal belongs here now that `findings.md` is gone.
+
+### 2026-07-06 — 429 attribution: parse the `--output-format json` envelope instead of substring-scanning
+
+- **Observed:** `isRateLimited` attributes a 429 by regex over the child stream. The stdout branch had
+  to be hardened (`\berror\b`, drop `api`) because the single-line `claude -p --output-format json`
+  envelope always carries `is_error` and `duration_api_ms`, which a naive marker matched on every
+  line — collapsing the "strictly stronger than a bare \b429\b" guard back to a bare match. The regex
+  fix works but is brittle: a benign `result` narrating a word-boundary "error" beside "429" still
+  attributes (accepted, fail-safe).
+- **Proposed change:** JSON.parse the stdout envelope and key 429 attribution off `is_error === true`
+  plus the error/subtype field, instead of substring-scanning the `result` text; keep the raw-stderr
+  429 check as the transport-channel fallback.
+- **Rationale:** the robust parse removes the whole class of envelope-field false-positives and the
+  narrated-"error" residual, and would also let attribution catch a rate-limit surfaced WITHOUT the
+  literal 429 (e.g. `rate_limit_error`/"Overloaded") — a current blind spot.

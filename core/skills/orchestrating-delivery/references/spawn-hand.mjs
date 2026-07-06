@@ -52,6 +52,46 @@ const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
 const DEFAULT_HAND_TIMEOUT_MS = 540000;
 
 /**
+ * @description Attributes a 429 rate-limit event over the FULL pre-truncation child stream
+ * (dispatchHand's returned stdout/stderr). A 429 is rateLimited ONLY when it co-occurs on
+ * the SAME line with an upstream/transport-error marker (case-insensitive) OR appears on
+ * the stderr error channel. A bare '429' in diff/stdout content with no such marker is
+ * benign (rateLimited false). This is strictly stronger than a bare \b429\b — a task about
+ * HTTP status codes or a fixture value of 429 does NOT degrade cheap-hands to always-Claude.
+ *
+ * The marker set is deliberately narrow: `claude -p --output-format json` emits a single-line
+ * envelope that ALWAYS carries `is_error` and `duration_api_ms`, so a naive `error`/`api`
+ * marker would match every line and collapse the stdout branch back to a bare \b429\b. `error`
+ * is therefore anchored with word boundaries (`\berror\b` does NOT match `is_error` — the `_` is
+ * a word char, so there is no boundary before `error`) and `api` is excluded (it matched
+ * `duration_api_ms`). A real Ollama 429 still carries `429` on the stderr channel or a
+ * `rate`/`too many requests`/`status` marker beside the code. Residual (accepted, fail-safe
+ * per spec constraint 7): a benign `result` narrating a word-boundary "error" beside "429"
+ * would still attribute — it only over-routes toward Claude, never blocks.
+ *
+ * @param {{ stdout: string, stderr: string }} child
+ * @returns {boolean}
+ */
+function isRateLimited(child) {
+  const stdout = child?.stdout ?? "";
+  const stderr = child?.stderr ?? "";
+
+  // Any 429 on the stderr error channel is rate-limited (no co-occurrence marker needed).
+  if (/\b429\b/.test(stderr)) return true;
+
+  // On stdout, 429 must co-occur on the SAME line with an upstream/transport-error marker.
+  // `\berror\b` avoids the always-present `is_error` envelope field; `api` is excluded
+  // because it matched the always-present `duration_api_ms` field.
+  const errorMarker = /\berror\b|status|rate|too many requests|ollama/i;
+  const lines = stdout.split("\n");
+  for (const line of lines) {
+    if (/\b429\b/.test(line) && errorMarker.test(line)) return true;
+  }
+
+  return false;
+}
+
+/**
  * @description Builds the argv array for `claude -p` with the required flags.
  * PURE: no side effects, no token in argv. The token is NEVER an element of this array.
  *
@@ -382,6 +422,54 @@ function defaultWriteRecord(path, content) {
 }
 
 /**
+ * @description Default consecutive-429 streak reader — reads the persisted counter file
+ * keyed by feature_id/task_id. Returns null when no prior streak exists or the file
+ * cannot be read/parsed (best-effort — never throws).
+ *
+ * @param {object} descriptor
+ * @param {string} [stateDir]
+ * @returns {() => { count: number, freezeCommitSha: string } | null}
+ */
+function defaultReadStreak(descriptor, stateDir) {
+  const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-429-streak");
+  const streakPath = join(baseDir, descriptor.feature_id, `${descriptor.task_id}.json`);
+  return () => {
+    try {
+      if (!existsSync(streakPath)) return null;
+      const raw = readFileSync(streakPath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.count === "number" && typeof parsed?.freezeCommitSha === "string") {
+        return { count: parsed.count, freezeCommitSha: parsed.freezeCommitSha };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
+ * @description Default consecutive-429 streak writer — persists the counter file keyed by
+ * feature_id/task_id. Best-effort (never throws — mkdir/write failures are swallowed).
+ *
+ * @param {object} descriptor
+ * @param {string} [stateDir]
+ * @returns {(streak: { count: number, freezeCommitSha: string }) => void}
+ */
+function defaultWriteStreak(descriptor, stateDir) {
+  const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-429-streak");
+  const streakPath = join(baseDir, descriptor.feature_id, `${descriptor.task_id}.json`);
+  return (streak) => {
+    try {
+      mkdirSync(dirname(streakPath), { recursive: true });
+      writeFileSync(streakPath, JSON.stringify(streak, null, 2), "utf8");
+    } catch {
+      // Best-effort — a streak-I/O failure must never throw out of runLiveDispatch.
+    }
+  };
+}
+
+/**
  * @description The live dispatch driver — the missing seam that makes the cheap Ollama hand
  * actually FIRE. Validates the descriptor, fail-closes on a token leaked into the descriptor,
  * reconciles the two git universes (full tree clean + HEAD anchored to the freeze baseline so
@@ -405,6 +493,8 @@ export async function runLiveDispatch(descriptor, {
   snapshotUntracked = defaultSnapshotUntracked,
   env = process.env,
   writeRecord = defaultWriteRecord,
+  readStreak,
+  writeStreak,
   stateDir,
 } = {}) {
   // (1) Validate the descriptor schema — fail closed on anything missing/malformed BEFORE we
@@ -430,6 +520,10 @@ export async function runLiveDispatch(descriptor, {
       "runLiveDispatch: descriptor.feature_id and descriptor.task_id must be safe kebab-case ids (no path separators)"
     );
   }
+
+  // Resolve streak-store seams — defaults are scoped to this descriptor's feature_id/task_id.
+  const resolvedReadStreak = readStreak ?? defaultReadStreak(descriptor, stateDir);
+  const resolvedWriteStreak = writeStreak ?? defaultWriteStreak(descriptor, stateDir);
 
   // (2) Resolve the auth token (env → .dev.vars tiers). Token is env-only — never argv/descriptor.
   const token = resolveAuthToken(env);
@@ -558,6 +652,45 @@ export async function runLiveDispatch(descriptor, {
       record.timedOut = true;
       record.timeoutMs = child.timeoutMs;
       record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms`;
+    }
+
+    // (10b) Consecutive-429 streak tracking — capture-time attribution over the FULL
+    // pre-truncation child stream (dispatchHand's returned stdout/stderr), NEVER the
+    // ~500-char truncated persisted record. A wall-clock timeout is non-429 (rateLimited
+    // false) regardless of stream content. The streak is freeze-anchored: a stored anchor
+    // that differs from the current descriptor.freeze_commit_sha is treated as count 0.
+    // Streak read/write is best-effort — a streak-I/O error MUST NEVER throw out of
+    // runLiveDispatch after a genuine run (read failure => count 0; write failure =>
+    // log-and-continue), so it cannot convert an exit-1 genuine run into an exit-2 config
+    // error (which would reintroduce the entry-gate deadlock route C avoids).
+
+    // Compute rateLimited over the dispatchHand child (full pre-truncation stream).
+    // A wall-clock timeout is explicitly non-429.
+    const rateLimited = child.timedOut ? false : isRateLimited(child);
+
+    // Read prior streak (best-effort — failure => count 0).
+    let priorCount = 0;
+    try {
+      const prior = resolvedReadStreak();
+      if (prior && prior.freezeCommitSha === descriptor.freeze_commit_sha) {
+        priorCount = prior.count;
+      }
+    } catch {
+      // Best-effort — read failure => count 0.
+    }
+
+    // Transition on the rateLimited flag, not the outcome status.
+    const newCount = rateLimited ? priorCount + 1 : 0;
+
+    // Stamp the run-record with the attribution fields.
+    record.rateLimited = rateLimited;
+    record.rateLimitExhausted = newCount >= 2;
+
+    // Persist the new streak (best-effort — write failure => log-and-continue, NEVER throw).
+    try {
+      resolvedWriteStreak({ count: newCount, freezeCommitSha: descriptor.freeze_commit_sha });
+    } catch {
+      // Best-effort — a streak-I/O failure must never throw out of runLiveDispatch.
     }
 
     const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-records");

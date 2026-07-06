@@ -1217,3 +1217,459 @@ describe("runLiveDispatch wall-clock timeout — normal-exit regression guard (#
     assert.equal(result.outcome.status, OUTCOME.NOT_DONE);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Locked test 19 — #ac-2.1 consecutive-429 streak tracking. runLiveDispatch gains two
+// injectable seams (readStreak/writeStreak) and the run-record gains two boolean fields
+// (record.rateLimited / record.rateLimitExhausted). rateLimited is attributed over the
+// `child` object dispatchHand RETURNS (i.e. the raw fakeSpawn stream for the LIVE `claude`
+// invocation), completely independent of the OUTCOME, which is controlled by the injected
+// `capture` fixture. The dry-run (`--test`) probe always reports >=1 collected test so the
+// vacuous-gate guard passes and the genuine run proceeds.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch consecutive-429 streak tracking (#ac-2.1)", () => {
+  const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
+
+  function makeDispatchTestHarness() {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+    return { briefFile, stateDir };
+  }
+
+  function makeDescriptor({ freezeCommitSha, briefFile }) {
+    return {
+      feature_id: "hand-rate-limit-streak",
+      task_id: "task-1",
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: lockedTest,
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+  }
+
+  // OUTCOME fixtures — entirely independent of the 429 stream (they ignore the args passed in).
+  function makeFailedNonScopeCapture() {
+    return () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["core/x/foo.ts"],
+        exitCode: 1,
+        lockedTestExitCode: 1,
+        stdout: "",
+        stderr: "",
+      },
+      captured: true,
+      criticalException: false,
+    });
+  }
+
+  function makeNotDoneEmptyDiffCapture() {
+    return () => ({
+      child: {
+        captured: true,
+        touchedPaths: [],
+        exitCode: 0,
+        lockedTestExitCode: 0,
+        stdout: "",
+        stderr: "",
+      },
+      captured: true,
+      criticalException: false,
+    });
+  }
+
+  function makeDoneCapture() {
+    return () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["core/x/foo.ts"],
+        exitCode: 0,
+        lockedTestExitCode: 0,
+        stdout: "",
+        stderr: "",
+      },
+      captured: true,
+      criticalException: false,
+    });
+  }
+
+  // Stream fixtures — control ONLY the rateLimited attribution over dispatchHand's returned child.
+  function fakeSpawn429Attributed(cmd, args) {
+    if (args?.includes("--test")) {
+      return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+    }
+    return { status: 1, stdout: "", stderr: "Error: 429 Too Many Requests from ollama api", output: [] };
+  }
+
+  function fakeSpawnBenignNo429(cmd, args) {
+    if (args?.includes("--test")) {
+      return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+    }
+    return { status: 0, stdout: "", stderr: "", output: [] };
+  }
+
+  function fakeSpawnBenign429InDiffLine(cmd, args) {
+    if (args?.includes("--test")) {
+      return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+    }
+    return { status: 0, stdout: "+ const MAX = 429;\n", stderr: "", output: [] };
+  }
+
+  function fakeSpawnTimeout(cmd, args) {
+    if (args?.includes("--test")) {
+      return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+    }
+    return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+  }
+
+  it("1) persisted count 1 anchored to the current freeze + a 2nd 429-attributed FAILED dispatch reaches rateLimited && rateLimitExhausted", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000001a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn429Attributed,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeFailedNonScopeCapture(),
+      writeRecord: fakeWriteRecord,
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(capturedRecord.rateLimited, true, "the 429-attributed FAILED run must carry rateLimited === true");
+    assert.equal(
+      capturedRecord.rateLimitExhausted,
+      true,
+      "count reaches the threshold (2) on this FAILED 429 shape"
+    );
+  });
+
+  it("2) no prior streak + a single 429-attributed empty-diff NOT_DONE dispatch increments to 1, below threshold", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000002a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn429Attributed,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeNotDoneEmptyDiffCapture(),
+      writeRecord: fakeWriteRecord,
+      readStreak: () => null,
+      writeStreak: () => {},
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(capturedRecord.rateLimited, true, "a 429-attributed run must carry rateLimited === true");
+    assert.equal(
+      capturedRecord.rateLimitExhausted,
+      false,
+      "count 1 is below the threshold (2) — increment fired on NOT_DONE, not FAILED"
+    );
+  });
+
+  it("3) persisted count 1 + a 2nd 429-attributed empty-diff NOT_DONE increments the counter to 2 and exhausts", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000003a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn429Attributed,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeNotDoneEmptyDiffCapture(),
+      writeRecord: fakeWriteRecord,
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(
+      writeStreakCalls[writeStreakCalls.length - 1].count,
+      2,
+      "the counter must increment from 1 to 2 on the m6 two-empty-diff-429 scenario"
+    );
+    assert.equal(capturedRecord.rateLimitExhausted, true, "count 2 reaches the threshold");
+  });
+
+  it("4) persisted count 1 + a non-429 FAILED dispatch (scope violation) resets the streak to 0", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000004a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    // A scope-violation FAILED fixture — touches a path OUTSIDE scope_paths.
+    const scopeViolationCapture = () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["outside-scope/evil.ts"],
+        exitCode: 0,
+        lockedTestExitCode: 0,
+        stdout: "",
+        stderr: "",
+      },
+      captured: true,
+      criticalException: false,
+    });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawnBenignNo429,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: scopeViolationCapture,
+      writeRecord: fakeWriteRecord,
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(writeStreakCalls[writeStreakCalls.length - 1].count, 0, "a non-429 FAILED run resets the streak to 0");
+    assert.equal(capturedRecord.rateLimitExhausted, false);
+  });
+
+  it("5) persisted count 1 + a DONE dispatch (no 429 in stream) resets the streak to 0", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000005a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawnBenignNo429,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeDoneCapture(),
+      writeRecord: () => {},
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(writeStreakCalls[writeStreakCalls.length - 1].count, 0, "a DONE run resets the streak to 0");
+  });
+
+  it("6) persisted count 1 + a BENIGN empty-diff NOT_DONE with NO 429 in the stream resets the streak to 0", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000006a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawnBenignNo429,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeNotDoneEmptyDiffCapture(),
+      writeRecord: () => {},
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(
+      writeStreakCalls[writeStreakCalls.length - 1].count,
+      0,
+      "a benign empty-diff NOT_DONE with no 429 in the stream must reset the streak to 0"
+    );
+  });
+
+  it("7) a persisted count 1 whose stored freeze_commit_sha DIFFERS from the current descriptor is treated as stale (never inherited)", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000007a";
+    const staleFreezeCommitSha = "streak-STALE-DIFFERENT-0000000000000007z";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn429Attributed,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeNotDoneEmptyDiffCapture(),
+      writeRecord: () => {},
+      readStreak: () => ({ count: 1, freezeCommitSha: staleFreezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(
+      writeStreakCalls[writeStreakCalls.length - 1].count,
+      1,
+      "the stale count anchored to a different freeze_commit_sha must be treated as 0 — the new count is 1, not 2"
+    );
+  });
+
+  it("8) '429' appearing only in a benign diff-line context (no error marker, no stderr channel) does NOT attribute rateLimited and resets the streak", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000008a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawnBenign429InDiffLine,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeNotDoneEmptyDiffCapture(),
+      writeRecord: fakeWriteRecord,
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(
+      capturedRecord.rateLimited,
+      false,
+      "a '429' inside a benign diff line with no error marker must NOT be attributed as rateLimited"
+    );
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(
+      writeStreakCalls[writeStreakCalls.length - 1].count,
+      0,
+      "the non-rate-limited run must reset the counter to 0"
+    );
+  });
+
+  it("9) a persisted count 1 is left UNCHANGED when runLiveDispatch throws a pre-spawn config error (diverged HEAD) and writes no run-record", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000009a";
+    const divergedHeadSha = "streak-DIVERGED-HEAD-0000000000000009z";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await assert.rejects(
+      () => runLiveDispatch(descriptor, {
+        spawn: fakeSpawn429Attributed,
+        env: fakeEnv,
+        gitStatus: () => "",
+        // Deliberately diverge HEAD from the freeze baseline so runLiveDispatch throws
+        // BEFORE the genuine run (a pre-spawn config error — no record is ever written).
+        headSha: () => divergedHeadSha,
+        snapshotUntracked: () => ({}),
+        capture: makeNotDoneEmptyDiffCapture(),
+        writeRecord: () => { throw new Error("writeRecord must not be reached"); },
+        readStreak: () => ({ count: 1, freezeCommitSha }),
+        writeStreak: (streak) => { writeStreakCalls.push(streak); },
+        stateDir,
+      }),
+      /diverged from the freeze baseline/,
+      "runLiveDispatch must throw a pre-spawn config error on HEAD divergence"
+    );
+
+    assert.equal(
+      writeStreakCalls.length,
+      0,
+      "the config-error/pre-spawn-throw path must NEVER mutate the persisted streak"
+    );
+  });
+
+  it("10) an injected writeStreak that THROWS on write does not prevent runLiveDispatch from returning the genuine run-record", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000010a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn429Attributed,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeDoneCapture(),
+      writeRecord: () => {},
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: () => { throw new Error("streak write failed"); },
+      stateDir,
+    });
+
+    assert.ok(result, "runLiveDispatch must resolve, not throw, when writeStreak throws");
+    assert.ok(result.record, "the returned result must carry the genuine run-record");
+    assert.equal(result.record.outcome.status, OUTCOME.DONE, "the genuine outcome must be preserved");
+    assert.equal(result.record.rateLimited, true, "the genuine 429-attributed run must still carry rateLimited === true");
+  });
+
+  it("11) persisted count 1 + a timed-out (non-429) dispatch resets the streak to 0", async () => {
+    const { briefFile, stateDir } = makeDispatchTestHarness();
+    const freezeCommitSha = "streak0000000000000000000000000000011a";
+    const descriptor = makeDescriptor({ freezeCommitSha, briefFile });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => { capturedRecord = JSON.parse(content); };
+    const writeStreakCalls = [];
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawnTimeout,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeDoneCapture(),
+      writeRecord: fakeWriteRecord,
+      readStreak: () => ({ count: 1, freezeCommitSha }),
+      writeStreak: (streak) => { writeStreakCalls.push(streak); },
+      stateDir,
+    });
+
+    assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
+    assert.equal(writeStreakCalls[writeStreakCalls.length - 1].count, 0, "a timed-out non-429 dispatch resets the streak to 0");
+    assert.equal(capturedRecord.rateLimitExhausted, false, "a timed-out non-429 dispatch must not be exhausted");
+  });
+});
