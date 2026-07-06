@@ -429,6 +429,7 @@ export function decide(payload) {
  */
 export function handle(payload, opts = {}) {
   const mergeFn = opts.mergeGateStateFn || mergeGateState;
+  const markCapturedFn = opts.markHandRecordCapturedFn || markHandRecordCaptured;
 
   let decision;
   try {
@@ -569,19 +570,21 @@ export function handle(payload, opts = {}) {
     if (readHandRecord(decision.task_id) === null) {
       return; // intentional no-op guard — no read-back
     }
+    // Durable stamp runs unconditionally AFTER both guards pass — it is idempotent (overwrites
+    // the timestamp) so it self-heals a prior partial failure on every retry.
+    const recordOk = markCapturedFn(decision.task_id, new Date().toISOString());
     const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
     if (!existing.includes(decision.task_id)) {
       mergeFn(decision.session_id, { capture_verified: [...existing, decision.task_id] });
       // Read-back: presence-check that the qualified task_id landed in capture_verified
       const after = readGateState(decision.session_id);
       const cv = Array.isArray(after.capture_verified) ? after.capture_verified : [];
-      const readBackOk = cv.includes(decision.task_id);
-      // Stamp the permanent record too — gate-state.json is session-scoped and does not survive a
-      // session restart/compaction; the hand-record does, closing that asymmetry.
-      markHandRecordCaptured(decision.task_id, new Date().toISOString());
-      return { readBackOk };
+      const cvOk = cv.includes(decision.task_id);
+      return { readBackOk: cvOk && recordOk };
     }
-    return; // idempotent already-present — no write attempted, no read-back
+    // Idempotent already-present: the durable stamp still ran above, so fold its result into
+    // readBackOk — if the durable write is still failing, readBackOk:false fires the loud nudge.
+    return { readBackOk: recordOk };
   }
 
   if (decision.action === "fidelity-pass") {
