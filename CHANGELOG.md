@@ -9,6 +9,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **`test-author` autoverifica formato e evita a armadilha do terminador de block-comment** — o
+  agente agora tem uma auto-checagem de conformidade de formato (passo 5, sem depender de um
+  formatter externo) e uma regra explícita contra escrever qualquer `/* */`/`/** */` cujo texto
+  contenha a sequência que fecha o comentário (ex.: um cron `0 */6` dentro de um JSDoc), que hoje
+  derruba a coleta de testes silenciosamente. Pinado por
+  `core/__tests__/test-author-format-safety.test.mjs`.
 - **Cadência dos crons configurável na instalação** — `install-crons` aceita `--interval-hours-a` e
   `--interval-hours-review` (inteiros 1..24; default 4h/6h). Intervalos menores fazem um roadmap
   encadeado avançar mais rápido sem tocar na garantia de ordem. Injection-safe por construção (só
