@@ -8,7 +8,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,7 +16,9 @@ import { join } from "node:path";
 import {
   buildSpawnArgs,
   dispatchHand,
+  runLiveDispatch,
 } from "./spawn-hand.mjs";
+import { OUTCOME } from "./dispatch-hand.mjs";
 
 // ---------------------------------------------------------------------------
 // Locked test 1 — argv shape + token exclusion
@@ -722,5 +724,484 @@ describe("dispatchHand fail-closed on undefined auth token", () => {
     );
 
     assert.equal(spawnCalled, false, "spawn must NOT be called when no token resolves");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 12 — #ac-1.1 wall-clock timeout: dispatchHand RETURNS a timeout
+// descriptor instead of throwing when the injected spawn reports a timeout-shaped
+// result (status: null, signal: SIGKILL, error.code: ETIMEDOUT).
+// ---------------------------------------------------------------------------
+describe("dispatchHand wall-clock timeout — returns not throws (#ac-1.1)", () => {
+  it("returns { timedOut: true, timeoutMs > 0, exitCode !== 0 } and does not throw when spawn returns a timeout-shaped result", async () => {
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await dispatchHand(dispatch, {
+      spawn: fakeSpawn,
+      gitStatus: () => "",
+      devVarsContent: "",
+      env: fakeEnv,
+    });
+
+    assert.equal(result.timedOut, true, "result.timedOut must be true on a timeout-shaped spawn result");
+    assert.ok(
+      typeof result.timeoutMs === "number" && result.timeoutMs > 0,
+      "result.timeoutMs must be a positive number"
+    );
+    assert.notEqual(result.exitCode, 0, "result.exitCode must be non-zero on a timeout");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 13 — #ac-1.1 the LIVE hand spawn call carries the timeout + killSignal.
+// ---------------------------------------------------------------------------
+describe("dispatchHand wall-clock timeout — live spawn opts carry timeout+killSignal (#ac-1.1)", () => {
+  it("the LIVE hand spawn call's opts.timeout is a positive number and opts.killSignal === 'SIGKILL'", async () => {
+    let liveOpts = null;
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      liveOpts = opts;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(liveOpts, "the live (non-dry-run) spawn call must have been captured");
+    assert.ok(
+      typeof liveOpts.timeout === "number" && liveOpts.timeout > 0,
+      "the live spawn call's opts.timeout must be a positive number"
+    );
+    assert.equal(liveOpts.killSignal, "SIGKILL", "the live spawn call's opts.killSignal must be 'SIGKILL'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 14 — #ac-1.1 / C5 the --test dry-run probe carries NO timeout — the
+// timeout is scoped to the live hand spawn only.
+// ---------------------------------------------------------------------------
+describe("dispatchHand wall-clock timeout — dry-run probe has NO timeout (#ac-1.1, C5)", () => {
+  it("the --test dry-run probe call's opts.timeout is undefined (no timeout/killSignal on the dry-run)", async () => {
+    let dryRunOpts = null;
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        dryRunOpts = opts;
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(dryRunOpts, "the --test dry-run probe call must have been captured");
+    assert.equal(
+      dryRunOpts.timeout,
+      undefined,
+      "the --test dry-run probe call must NOT carry an opts.timeout — the timeout is scoped to the live hand spawn only"
+    );
+    assert.equal(
+      dryRunOpts.killSignal,
+      undefined,
+      "the --test dry-run probe call must NOT carry an opts.killSignal"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 15 — #ac-1.1 / C4 / C7 dispatch.timeout_ms overrides the live-spawn
+// timeout, and the DEFAULT_HAND_TIMEOUT_MS (540000ms) is used when omitted.
+// ---------------------------------------------------------------------------
+describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac-1.1, C4/C7)", () => {
+  it("honors dispatch.timeout_ms when present, and defaults to 540000ms otherwise", async () => {
+    let liveOptsOverride = null;
+    const fakeSpawnOverride = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      liveOptsOverride = opts;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatchWithOverride = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      timeout_ms: 12345,
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatchWithOverride, {
+      spawn: fakeSpawnOverride,
+      gitStatus: () => "",
+      devVarsContent: "",
+      env: fakeEnv,
+    });
+
+    assert.ok(liveOptsOverride, "the live spawn call must have been captured for the override case");
+    assert.equal(
+      liveOptsOverride.timeout,
+      12345,
+      "opts.timeout must equal the dispatch's timeout_ms override"
+    );
+
+    let liveOptsDefault = null;
+    const fakeSpawnDefault = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      liveOptsDefault = opts;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatchNoOverride = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      // timeout_ms intentionally omitted
+    };
+
+    await dispatchHand(dispatchNoOverride, {
+      spawn: fakeSpawnDefault,
+      gitStatus: () => "",
+      devVarsContent: "",
+      env: fakeEnv,
+    });
+
+    assert.ok(liveOptsDefault, "the live spawn call must have been captured for the default case");
+    assert.equal(
+      liveOptsDefault.timeout,
+      540000,
+      "opts.timeout must default to DEFAULT_HAND_TIMEOUT_MS (540000ms) when timeout_ms is omitted"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 16 — #ac-1.2 salvage-hang two-pronged DONE→FAILED. The IDENTICAL
+// DONE-scoring capture fixture must reach DONE under a normal spawn (CONTROL) and
+// flip to FAILED with timedOut:true under a timeout-shaped spawn (TIMEOUT) — proving
+// the timeout override actually flips a genuine DONE, not a mere relabel of a
+// non-DONE run.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE→FAILED (#ac-1.2)", () => {
+  const featureId = "hand-wallclock-timeout";
+  const taskId = "task-1";
+  const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
+
+  function makeDoneFixtureCapture() {
+    return () => ({
+      captured: true,
+      touchedPaths: ["core/x/foo.ts"],
+      exitCode: 1,
+      lockedTestExitCode: 0,
+      stdout: "",
+      stderr: "count_tokens endpoint 404 not found",
+    });
+  }
+
+  it("CONTROL — a non-timeout spawn reaches outcome.status === OUTCOME.DONE and does not throw", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const freezeCommitSha = "fake0000000000000000000000000000000abc";
+    const descriptor = {
+      feature_id: featureId,
+      task_id: taskId,
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: lockedTest,
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeDoneFixtureCapture(),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(
+      capturedRecord.outcome.status,
+      OUTCOME.DONE,
+      "CONTROL prong: the DONE-scoring fixture must genuinely reach DONE"
+    );
+    assert.equal(result.outcome.status, OUTCOME.DONE);
+  });
+
+  it("TIMEOUT — the SAME DONE-scoring fixture flips to outcome.status === OUTCOME.FAILED with timedOut === true, and does not throw", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const freezeCommitSha = "fake0000000000000000000000000000000abc";
+    const descriptor = {
+      feature_id: featureId,
+      task_id: taskId,
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: lockedTest,
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeDoneFixtureCapture(),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(
+      capturedRecord.outcome.status,
+      OUTCOME.FAILED,
+      "TIMEOUT prong: the SAME DONE-scoring fixture must flip to FAILED under a timeout override"
+    );
+    assert.equal(capturedRecord.timedOut, true, "the persisted record must carry timedOut === true");
+    assert.equal(result.outcome.status, OUTCOME.FAILED);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 17 — #ac-1.2 / C6 the token never leaks into the timeout record,
+// and the timeout reason string is exact.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch wall-clock timeout — token never leaks + exact reason string (#ac-1.2, C6)", () => {
+  it("the timeout record contains ZERO occurrences of the token, and carries the exact reason 'hand exceeded wall-clock timeout of <timeoutMs>ms'", async () => {
+    const secretToken = "runlive-secret-token-MUST-NOT-LEAK-7777";
+
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const freezeCommitSha = "fake1111111111111111111111111111111abc";
+    const descriptor = {
+      feature_id: "hand-wallclock-timeout",
+      task_id: "task-1",
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    // The injected capture returns a child whose stdout/stderr contain the resolved token —
+    // the record must scrub it regardless.
+    const fakeCapture = () => ({
+      captured: true,
+      touchedPaths: ["core/x/foo.ts"],
+      exitCode: 1,
+      lockedTestExitCode: 0,
+      stdout: `some output containing the token ${secretToken}`,
+      stderr: `count_tokens endpoint 404 not found — leak attempt ${secretToken}`,
+    });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: secretToken };
+
+    await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: fakeCapture,
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    const serialized = JSON.stringify(capturedRecord);
+    const tokenOccurrences = serialized.split(secretToken).length - 1;
+    assert.equal(
+      tokenOccurrences,
+      0,
+      `the persisted record must contain ZERO occurrences of the token; found ${tokenOccurrences}`
+    );
+
+    const timeoutMs = capturedRecord.timeoutMs;
+    assert.ok(
+      typeof timeoutMs === "number" && timeoutMs > 0,
+      "the record must carry a numeric, positive timeoutMs"
+    );
+    const expectedReason = `hand exceeded wall-clock timeout of ${timeoutMs}ms`;
+    assert.ok(
+      serialized.includes(expectedReason),
+      `the record must contain the exact reason string '${expectedReason}'; record was: ${serialized}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 18 — #ac-1.2 / C1 normal-exit regression guard: a normally-exiting
+// child must NOT carry timedOut:true, and outcome.status must be byte-unchanged
+// from evaluateRun's verdict for the captured child.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch wall-clock timeout — normal-exit regression guard (#ac-1.2, C1)", () => {
+  it("a normally-exiting child carries NO timedOut:true, and outcome.status is exactly evaluateRun's unchanged verdict", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const freezeCommitSha = "fake2222222222222222222222222222222abc";
+    const descriptor = {
+      feature_id: "hand-wallclock-timeout",
+      task_id: "task-1",
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    // An empty-diff (NOT_DONE) fixture — an ordinary, non-timeout outcome that evaluateRun
+    // decides purely from the captured child, independent of the timeout override.
+    const fakeCapture = () => ({
+      captured: true,
+      touchedPaths: [],
+      exitCode: 0,
+      lockedTestExitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: fakeCapture,
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.notEqual(
+      capturedRecord.timedOut,
+      true,
+      "a normal-exit record must NOT carry timedOut === true"
+    );
+    assert.equal(
+      capturedRecord.outcome.status,
+      OUTCOME.NOT_DONE,
+      "the normal-exit path must be byte-unchanged: outcome.status must equal evaluateRun's verdict for the captured child (empty diff → NOT_DONE)"
+    );
+    assert.equal(result.outcome.status, OUTCOME.NOT_DONE);
   });
 });
