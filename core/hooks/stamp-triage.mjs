@@ -103,6 +103,47 @@ function parseLastJsonObject(stdout) {
 }
 
 /**
+ * Counts JSON objects on stdout whose `marker` field equals `markerName`.
+ * Scans ALL lines (not just the last), counting BEFORE any feature_id/task_id validation.
+ * Returns both the count and, when count === 1, the sole matching object.
+ * Never throws.
+ *
+ * @param {string} stdout - The unwrapped, trimmed stdout string
+ * @param {string} markerName - The marker value to match (e.g. 'regate-passed')
+ * @returns {{ count: number, sole: object|null }} count of matches, and the sole object when count === 1
+ */
+function countMarkerObjectsByName(stdout, markerName) {
+  if (typeof stdout !== "string" || stdout.length === 0) {
+    return { count: 0, sole: null };
+  }
+  const lines = stdout.split("\n");
+  let count = 0;
+  let sole = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      parsed.marker === markerName
+    ) {
+      count++;
+      sole = parsed;
+    }
+  }
+  return { count, sole: count === 1 ? sole : null };
+}
+
+/**
  * Interprets a hook payload and returns an action descriptor.
  * Never throws. All validation lives here so decide() is unit-testable.
  *
@@ -115,6 +156,7 @@ function parseLastJsonObject(stdout) {
  *         | { action: 'hand-finished',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'capture-verified', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'fidelity-pass',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'marker-ambiguous' }
  *         | { action: 'none' }}
  */
 export function decide(payload) {
@@ -192,189 +234,176 @@ export function decide(payload) {
 
   // --- mark.mjs brainstorm-done marker ---
   // Agent_id already checked above: reaching here means main-loop context only.
-  // The parse-check guards against ACCIDENTAL substring matches (e.g. `grep brainstorm-done
-  // mark.mjs` echoing the word) — it is NOT forgery-proof: an echo emitting the exact marker
-  // JSON would pass. The real delivery safety is the entry-gate consumer, not this stamp.
+  // Exactly-one marker scan: count JSON objects with marker==='brainstorm-done' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("brainstorm-done")) {
     const responseStr = unwrapStdout(payload);
-
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "brainstorm-done");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "brainstorm-done") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-
     return { action: "brainstorm-done", session_id };
   }
 
   // --- mark.mjs regate-pending marker ---
-  // Same parse-check pattern as brainstorm-done: it filters ACCIDENTAL substring matches,
-  // not deliberate forgery (an echo of the exact marker JSON would pass). The deterministic
-  // delivery safety lives in the entry-gate consumer that blocks the shipper on an unmatched
-  // regate-pending — this stamp only records the marker.
+  // Exactly-one marker scan: count JSON objects with marker==='regate-pending' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("regate-pending")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "regate-pending");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "regate-pending") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-    if (!isSafeFeatureId(parsed.task_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
     // Qualify the marker by feature so two features in the same session can never collide on
     // a bare task_id (e.g. both having a 'task-1'). The qualified id is opaque (never a path).
-    return { action: "regate-pending", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "regate-pending", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs regate-passed marker ---
+  // Exactly-one marker scan: count JSON objects with marker==='regate-passed' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("regate-passed")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "regate-passed");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "regate-passed") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-    if (!isSafeFeatureId(parsed.task_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
     // Qualify by feature to match the regate-pending entry shape (collision-proof across features).
-    return { action: "regate-passed", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "regate-passed", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs escalation-fallback marker ---
-  // Same stateless-mark + stamp-writer pattern: the ticket authorizes the entry-gate to allow a
-  // K=1 Claude executor/sniper fallback dispatch from the main loop. Same parse-check caveat —
-  // it filters ACCIDENTAL substring matches, not deliberate forgery; the deterministic safety is
-  // the entry-gate consumer that denies main-loop Agent(executor|sniper) without a ticket.
+  // Exactly-one marker scan: count JSON objects with marker==='escalation-fallback' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("escalation-fallback")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "escalation-fallback");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "escalation-fallback") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-    if (!isSafeFeatureId(parsed.task_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
     // Qualify by feature to match the regate entry shape (collision-proof across features).
-    return { action: "escalation-fallback", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "escalation-fallback", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs hand-config-error marker ---
-  // The cheap-hand dispatch hit a PRE-SPAWN config error (no token, dirty baseline, gate not armed,
-  // missing test) — NOT a genuine run failure. The orchestrator stamps this so the critical exception
-  // is recorded in gate-state (survives compaction) and surfaced. It NEVER authorizes a Claude hand:
-  // the entry-gate unlock requires an on-disk run-record with outcome FAILED, which a config error
-  // never produces. Same parse-check caveat — filters accidental substring matches, not forgery.
+  // Exactly-one marker scan: count JSON objects with marker==='hand-config-error' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("hand-config-error")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "hand-config-error");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "hand-config-error") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.task_id)) {
-      return { action: "none" };
-    }
-    return { action: "hand-config-error", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "hand-config-error", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs hand-finished marker ---
-  // Producer of the independent-capture rail: records that the cheap hand finished a task.
-  // Same parse-check caveat — filters ACCIDENTAL substring matches, not deliberate forgery; the
-  // deterministic capture safety lives in the entry-gate consumer (decideBash), not this stamp.
+  // Exactly-one marker scan: count JSON objects with marker==='hand-finished' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("hand-finished")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "hand-finished");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "hand-finished") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-    if (!isSafeFeatureId(parsed.task_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
     // Qualify by feature to match the regate entry shape (collision-proof across features).
-    return { action: "hand-finished", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "hand-finished", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs capture-verified marker ---
-  // Consumer-precondition of the independent-capture rail. Only stamped (in handle) when the
-  // qualified id is ALREADY in hand_finished — a capture-verified must never pre-authorize an
-  // un-finished hand (mirrors the regate-passed guard).
+  // Exactly-one marker scan: count JSON objects with marker==='capture-verified' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("capture-verified")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "capture-verified");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "capture-verified") {
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
       return { action: "none" };
     }
-    if (!isSafeFeatureId(parsed.feature_id)) {
-      return { action: "none" };
-    }
-    if (!isSafeFeatureId(parsed.task_id)) {
+    if (!isSafeFeatureId(sole.task_id)) {
       return { action: "none" };
     }
     // Qualify by feature to match the regate entry shape (collision-proof across features).
-    return { action: "capture-verified", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "capture-verified", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   // --- mark.mjs fidelity-pass marker ---
-  // Producer of the fidelity rail: records that the test-author has authored and confirmed a
-  // failing (red) locked test for the task. Consumed by entry-gate to gate spawn-hand.mjs
-  // dispatches (local mode) and headless executor Agent dispatches (cloud mode). IDs are
-  // correlation-only (never used as file paths) so non-empty strings are accepted without the
-  // full kebab-case constraint applied to path-adjacent markers.
+  // Exactly-one marker scan: count JSON objects with marker==='fidelity-pass' BEFORE
+  // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("fidelity-pass")) {
     const responseStr = unwrapStdout(payload);
-    const parsed = parseLastJsonObject(responseStr);
-    if (parsed === null) {
+    const { count, sole } = countMarkerObjectsByName(responseStr, "fidelity-pass");
+    if (count === 0) {
       return { action: "none" };
     }
-    if (parsed.marker !== "fidelity-pass") {
-      return { action: "none" };
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
     }
     // IDs are correlation-only: require non-empty strings, not full kebab-case
-    if (typeof parsed.feature_id !== "string" || parsed.feature_id.length === 0) {
+    if (typeof sole.feature_id !== "string" || sole.feature_id.length === 0) {
       return { action: "none" };
     }
-    if (typeof parsed.task_id !== "string" || parsed.task_id.length === 0) {
+    if (typeof sole.task_id !== "string" || sole.task_id.length === 0) {
       return { action: "none" };
     }
     // Qualify by feature to match the other rail entry shapes (collision-proof across features).
-    return { action: "fidelity-pass", session_id, task_id: `${parsed.feature_id}/${parsed.task_id}` };
+    return { action: "fidelity-pass", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
   return { action: "none" };
@@ -388,11 +417,18 @@ export function decide(payload) {
  * Executes the action returned by decide().
  * Fail-open: all fs errors are swallowed — never propagated to the caller.
  *
+ * Returns a descriptor object so the CLI entry point can build at most one
+ * hookSpecificOutput nudge (read-back-failed). Returns undefined for actions
+ * that do not attempt a gate-state write (triage, none, no-op guards, idempotent skips).
+ *
  * @param {object} payload - The raw hook payload
- * @param {object} [opts] - Reserved for API extensibility (currently unused)
+ * @param {object} [opts] - Extensibility seam for fault injection.
+ *   opts.mergeGateStateFn — replacement for mergeGateState (test seam for root-proof
+ *     read-back fault injection). When absent, the real mergeGateState is used.
+ * @returns {{ readBackOk: boolean } | undefined}
  */
 export function handle(payload, opts = {}) {
-  void opts; // reserved — tests use process.chdir isolation instead
+  const mergeFn = opts.mergeGateStateFn || mergeGateState;
 
   let decision;
   try {
@@ -430,8 +466,10 @@ export function handle(payload, opts = {}) {
   if (decision.action === "brainstorm-done") {
     // mergeGateState from gate-lib: read-merge-write atomic (temp→rename).
     // Never drops adversary_fired written by entry-gate on the allow path.
-    mergeGateState(decision.session_id, { brainstormed: true });
-    return;
+    mergeFn(decision.session_id, { brainstormed: true });
+    // Read-back: presence-check that brainstormed landed
+    const after = readGateState(decision.session_id);
+    return { readBackOk: after.brainstormed === true };
   }
 
   if (decision.action === "regate-pending") {
@@ -439,9 +477,13 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.regate_pending) ? current.regate_pending : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { regate_pending: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { regate_pending: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed
+      const after = readGateState(decision.session_id);
+      const pending = Array.isArray(after.regate_pending) ? after.regate_pending : [];
+      return { readBackOk: pending.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "escalation-fallback") {
@@ -450,9 +492,13 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.escalation_fallback) ? current.escalation_fallback : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { escalation_fallback: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { escalation_fallback: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed
+      const after = readGateState(decision.session_id);
+      const fb = Array.isArray(after.escalation_fallback) ? after.escalation_fallback : [];
+      return { readBackOk: fb.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "hand-config-error") {
@@ -462,9 +508,13 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.hand_config_error) ? current.hand_config_error : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { hand_config_error: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { hand_config_error: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed
+      const after = readGateState(decision.session_id);
+      const hce = Array.isArray(after.hand_config_error) ? after.hand_config_error : [];
+      return { readBackOk: hce.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "regate-passed") {
@@ -474,14 +524,18 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const pending = Array.isArray(current.regate_pending) ? current.regate_pending : [];
     if (!pending.includes(decision.task_id)) {
-      return;
+      return; // intentional no-op guard — no read-back
     }
     // Append task_id to the regate_passed list (dedup — idempotent for the same task_id).
     const existing = Array.isArray(current.regate_passed) ? current.regate_passed : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { regate_passed: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { regate_passed: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed in regate_passed
+      const after = readGateState(decision.session_id);
+      const passed = Array.isArray(after.regate_passed) ? after.regate_passed : [];
+      return { readBackOk: passed.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "hand-finished") {
@@ -490,9 +544,13 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.hand_finished) ? current.hand_finished : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { hand_finished: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { hand_finished: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed
+      const after = readGateState(decision.session_id);
+      const hf = Array.isArray(after.hand_finished) ? after.hand_finished : [];
+      return { readBackOk: hf.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "capture-verified") {
@@ -502,23 +560,28 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const finished = Array.isArray(current.hand_finished) ? current.hand_finished : [];
     if (!finished.includes(decision.task_id)) {
-      return;
+      return; // intentional no-op guard — no read-back
     }
     // Second, independent guard: a real on-disk run-record must exist for this qualified id.
     // hand_finished is a manually-stamped array (prose-driven, proven skippable); the run-record
     // is written unconditionally by spawn-hand.mjs's runLiveDispatch, so requiring BOTH means a
     // forged marker with no genuine dispatch behind it stamps nothing anywhere, ever.
     if (readHandRecord(decision.task_id) === null) {
-      return;
+      return; // intentional no-op guard — no read-back
     }
     const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { capture_verified: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { capture_verified: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed in capture_verified
+      const after = readGateState(decision.session_id);
+      const cv = Array.isArray(after.capture_verified) ? after.capture_verified : [];
+      const readBackOk = cv.includes(decision.task_id);
+      // Stamp the permanent record too — gate-state.json is session-scoped and does not survive a
+      // session restart/compaction; the hand-record does, closing that asymmetry.
+      markHandRecordCaptured(decision.task_id, new Date().toISOString());
+      return { readBackOk };
     }
-    // Stamp the permanent record too — gate-state.json is session-scoped and does not survive a
-    // session restart/compaction; the hand-record does, closing that asymmetry.
-    markHandRecordCaptured(decision.task_id, new Date().toISOString());
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
   if (decision.action === "fidelity-pass") {
@@ -529,12 +592,16 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.fidelity_pass) ? current.fidelity_pass : [];
     if (!existing.includes(decision.task_id)) {
-      mergeGateState(decision.session_id, { fidelity_pass: [...existing, decision.task_id] });
+      mergeFn(decision.session_id, { fidelity_pass: [...existing, decision.task_id] });
+      // Read-back: presence-check that the qualified task_id landed
+      const after = readGateState(decision.session_id);
+      const fp = Array.isArray(after.fidelity_pass) ? after.fidelity_pass : [];
+      return { readBackOk: fp.includes(decision.task_id) };
     }
-    return;
+    return; // idempotent already-present — no write attempted, no read-back
   }
 
-  // action === 'none': nothing to do
+  // action === 'none', 'marker-ambiguous', 'hand-config-error-nudge': nothing to persist
 }
 
 // ---------------------------------------------------------------------------
@@ -568,33 +635,55 @@ if (isDirectCli()) {
     process.exit(0);
   }
 
+  let handleResult;
   try {
-    handle(payload);
+    handleResult = handle(payload);
   } catch {
     // Unexpected error — fail-open, never block a Bash call
   }
 
-  // handle() covers every gate-state write; hand-config-error-nudge is the one action that
-  // instead emits additionalContext, so decide() is called again here (cheap, pure) to build it.
+  // Build at most ONE hookSpecificOutput across the 3 mutually-exclusive nudges.
+  // Precedence: hand-config-error → marker-ambiguous → read-back-failed.
+  let nudge = null;
   try {
     const decision = decide(payload);
     if (decision.action === "hand-config-error-nudge") {
       const qualifiedId =
         decision.feature_id && decision.task_id ? `${decision.feature_id}/${decision.task_id}` : "this task";
-      process.stdout.write(
-        JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: "PostToolUse",
-            additionalContext:
-              `spawn-hand.mjs reported a PRE-SPAWN CONFIG ERROR for ${qualifiedId} — this is not a ` +
-              `network policy, sandbox, or Auto Mode block. The real, verbatim reason: "${decision.reason}". ` +
-              "Surface this exact reason to the operator. Do not invent an alternative explanation.",
-          },
-        }),
-      );
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          `spawn-hand.mjs reported a PRE-SPAWN CONFIG ERROR for ${qualifiedId} — this is not a ` +
+          `network policy, sandbox, or Auto Mode block. The real, verbatim reason: "${decision.reason}". ` +
+          "Surface this exact reason to the operator. Do not invent an alternative explanation.",
+      };
+    } else if (decision.action === "marker-ambiguous") {
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "marker shadowed/duplicated — run mark.mjs alone. " +
+          "Multiple marker JSON objects with the same marker name were detected on stdout. " +
+          "The stamp was NOT persisted. Re-run the mark.mjs command in isolation to resolve.",
+      };
+    } else if (handleResult && handleResult.readBackOk === false) {
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "read-back failed after gate-state write — the marker was processed but the " +
+          "post-write presence check did not confirm the expected id landed in gate-state.json. " +
+          "Re-run the mark.mjs command to retry the persist.",
+      };
     }
   } catch {
     // fail-open — never block a Bash call over a nudge
+  }
+
+  if (nudge) {
+    try {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: nudge }));
+    } catch {
+      // fail-open
+    }
   }
 
   process.exit(0);
