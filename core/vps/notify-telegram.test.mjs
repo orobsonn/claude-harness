@@ -13,6 +13,7 @@ import {
   readTelegramToken,
   resolveNotifyConfig,
   makeNotifier,
+  summarizeIssueBody,
 } from "./notify-telegram.mjs";
 
 const VALID_CONFIG = { token: "SECRET123:abc", chatId: -1003044689525, threadId: 613 };
@@ -54,6 +55,21 @@ test("#ac-1.2 formatEvent: HTML-escapes & < > in dynamic text", () => {
   assert.doesNotMatch(out, /a<b/, "raw < from the title must be escaped");
   assert.match(out, /&lt;/, "< must become &lt;");
   assert.match(out, /&amp;/, "& must become &amp;");
+});
+
+test("summarizeIssueBody: picks the first substantive prose line, skipping headers/metadata", () => {
+  const body = "## Resumo + por quê\nConsolidar três regras de checklist no SKILL.md, do kaizen.\n\n## Escopo\ncore/x";
+  assert.equal(summarizeIssueBody(body), "Consolidar três regras de checklist no SKILL.md, do kaizen.");
+
+  const kaizen = "**Source:** kaizen.md — m2\n**Tier 3** — fail-fast\n\n### Observed\nInvoking cross-family.mjs sem args roda um pass degenerado.";
+  assert.equal(summarizeIssueBody(kaizen), "Invoking cross-family.mjs sem args roda um pass degenerado.");
+
+  assert.equal(summarizeIssueBody(""), "");
+  assert.match(summarizeIssueBody("x".repeat(300)), /…$/, "truncates a very long line");
+
+  // picked message carries the summary as an italic second line.
+  const picked = formatEvent({ type: "picked", project: "demo", issue: 5, issueTitle: "t", summary: "faz X e Y" });
+  assert.match(picked, /<i>faz X e Y<\/i>/);
 });
 
 test("#ac-1.3 formatEvent: truncates a title longer than 80 chars", () => {

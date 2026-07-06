@@ -20,6 +20,38 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - **Escada de modelos baratos (`hand_tiers`) trocada para gemma4/glm-5.2/kimi-k2.7-code** —
   deepseek-v4-pro saiu da escada por custo desproporcional ao ganho de qualidade nas mãos baratas.
 
+## [0.26.1] - 2026-07-06
+
+### Fixed
+
+- Cheap-hand dispatches (`spawn-hand.mjs`) não travam/falham mais por causa do dialogo de confianca do workspace efemero nunca ter sido aceito — o hand agora roda o loop real de teste (red/green) em vez de ser bloqueado no primeiro `Bash` e estourar o timeout (fecha #91).
+
+## [0.26.0] - 2026-07-06
+
+### Added
+
+- **Atalho de escalação em rate-limit de conta (429) do Ollama** — quando duas dispatches
+  consecutivas da mão barata batem no limite de cota da conta Ollama (dois 429 seguidos para a mesma
+  task, ancorados ao mesmo freeze), o orquestrador agora **pula o 3º tier Ollama** — que 429aria de
+  novo por construção, já que todos os tiers dividem a mesma conta — e vai direto para o reforço
+  Claude (K=1), poupando turnos e wall-clock. O `spawn-hand.mjs` atribui `rateLimited` sobre o stream
+  do child (predicado estrito, não um `429` solto), mantém um contador consecutivo freeze-ancorado e
+  expõe `rateLimitExhausted` no run-record; a §escalation do `SKILL.md` consome esse sinal. Route C: o
+  `spawn-hand` nunca pula um spawn internamente (o record da 2ª tier é um run genuíno), então o
+  cinturão de evidência não-forjável do entry-gate fica intacto (sem tocar `entry-gate.mjs`). Pinado
+  por 11 locked tests em `spawn-hand.test.mjs`.
+
+### Fixed
+
+- **Sessão headless em branch tipada (`feat/`/`fix/`/`docs/`) agora fecha a issue certo** — o cron de
+  saída só reconhecia PR pela convenção antiga `harness/<N>`; uma sessão que entregava em branch
+  tipada (padrão `git.md`) tinha o PR invisível e a issue voltava pra fila em vez de fechar. Agora o
+  cron também acha o PR pelo vínculo `Closes/Fixes/Refs #N` no corpo. O aviso Telegram de "pegou a
+  issue #N" passa a incluir título + resumo, não só o número.
+- **`cross-family.mjs` não roda mais um passe degenerado e silencioso** — sem `--task`/`--claude` o
+  CLI antes deixava o Codex vasculhar o repo sem escopo e sem contraponto do Claude; agora exige os
+  dois argumentos e falha rápido (usage + código de saída não-zero) quando faltam.
+
 ## [0.25.0] - 2026-07-06
 
 ### Added
@@ -609,7 +641,8 @@ push.
 ### Added
 - Marco inicial do Claude Harness (entry policy, agents, skills, rules, modelo de memória, model routing barbell).
 
-[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/orobsonn/claude-harness/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/orobsonn/claude-harness/compare/v0.24.0...v0.25.0
 [0.2.0]: https://github.com/orobsonn/claude-harness/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orobsonn/claude-harness/releases/tag/v0.1.0

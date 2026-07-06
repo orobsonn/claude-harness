@@ -81,7 +81,10 @@ const TRIGGER_PROMPT =
   "You are an autonomous VPS cron harness session running headless-local. " +
   "Work the issue delivered below to completion without asking questions or waiting for " +
   "operator input. Follow the vendored .claude/ entry policy and orchestrating-delivery " +
-  "pipeline. Open a draft PR when done; never merge or deploy.";
+  "pipeline. IMPORTANT: you are ALREADY checked out on the correct per-run branch " +
+  "(harness/<issue-number>) — commit and open your draft PR ON THIS BRANCH; do NOT create a new " +
+  "feat/fix/docs branch (the cron tracks your PR by this branch). Add 'Closes #<issue>' to the PR " +
+  "body. Open a draft PR when done; never merge or deploy.";
 
 /**
  * @description Wraps a string in single quotes for safe use in a POSIX shell word, escaping

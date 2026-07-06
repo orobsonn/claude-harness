@@ -198,8 +198,16 @@ function parseArgs(argv) {
   return out;
 }
 
+const USAGE = "usage: cross-family.mjs --task <task.json> --claude <claude-issues.json> [--role <role>]";
+
 function main() {
   const { task, claude, role } = parseArgs(process.argv.slice(2));
+  // Fail fast: a degenerate pass (task={} / claude=[]) lets Codex free-roam with no scope and no
+  // Claude refute-pass — worse than no output. Require both before running.
+  if (!task || !claude) {
+    process.stderr.write(USAGE + "\n");
+    process.exit(1);
+  }
   const taskJson = task ? readFileSync(resolveCwd(task), "utf8") : "{}";
   const shape = (ROLES[role] && ROLES[role].shape) || "findings";
   const claudeInput = shape === "verdict"

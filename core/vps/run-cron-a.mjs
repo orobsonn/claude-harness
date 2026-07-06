@@ -47,6 +47,7 @@ import * as counterModule from "./cron-state.mjs";
 import {
   makeNotifier,
   resolveNotifyConfig,
+  summarizeIssueBody,
   createForumTopic as realCreateForumTopic,
   closeForumTopic as realCloseForumTopic,
 } from "./notify-telegram.mjs";
@@ -252,7 +253,15 @@ export function runCronA(config, deps = {}) {
   // double-sent. A run without observability keeps the direct picked (unchanged behavior).
   if (selectResult && selectResult.dispatched && selectResult.issue && !dispatchFailed) {
     if (!observabilityEnabled) {
-      safeNotify({ type: "picked", project: config.project, issue: selectResult.issue.number });
+      // Observability OFF → the legacy picked ping (with title + one-line body summary so the
+      // operator sees WHAT is being implemented). Observability ON → 'picked' goes to the outbox.
+      safeNotify({
+        type: "picked",
+        project: config.project,
+        issue: selectResult.issue.number,
+        issueTitle: selectResult.issue.title,
+        summary: summarizeIssueBody(selectResult.issue.body),
+      });
     }
   } else if (selectResult && selectResult.dispatched === false && heartbeat) {
     safeNotify({ type: "idle", project: config.project });
