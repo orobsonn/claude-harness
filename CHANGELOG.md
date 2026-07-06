@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.27.0] - 2026-07-06
+
+### Added
+
 - **Observabilidade por run em tópico de fórum Telegram para runs autônomos na VPS** — cada run
   autônomo ganha um tópico de fórum dedicado que transmite checkpoints determinísticos do pipeline
   (tipo do pipeline, spec, plano, plan-reviewer, executor+modelo+eyes por task, revisão final, PR) via
