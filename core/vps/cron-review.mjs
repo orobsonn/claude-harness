@@ -199,7 +199,11 @@ export async function cronReview(opts) {
       // manual merge regardless of a CLEAN verdict. Auto-merge fires ONLY for a non-gate-machinery
       // eligible PR with the rollout lock on. In a downstream (non-harness) project no diff touches
       // the control surface, so everything green auto-merges hands-free.
-      if (autoMergeEnabled === true && !secondPassRequired) {
+      if (autoMergeEnabled === true && !secondPassRequired && changedFiles.length > 0) {
+        // Fail-CLOSED on an empty/unknown changed-file set: a genuinely empty diff, or a malformed
+        // (non-array) `gh pr diff` that already collapsed to [] above, must never slip onto the
+        // auto-merge path (touchesGateMachinery([]) is false — no visibility into what changed). An
+        // empty diff routes to manual merge instead. This guard does NOT force a 2nd review pass.
         // Undraft BEFORE the merge — a headless PR is a draft and `gh pr merge` cannot merge a draft;
         // the undraft is idempotent and its failure never aborts the merge.
         gh(["pr", "ready", String(pr.number)]);

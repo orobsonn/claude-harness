@@ -23,8 +23,20 @@ test("AC-2.3 .github/workflows/ci.yml matches (CI config is control surface)", (
 test("AC-2.3 package.json matches (dep/test-script surface)", () => {
   assert.equal(touchesGateMachinery(["package.json"]), true);
 });
-test("AC-2.3 core/modules/codex-adversary/x.mjs matches (cross-family machinery)", () => {
-  assert.equal(touchesGateMachinery(["core/modules/codex-adversary/references/cross-family.mjs"]), true);
+test("AC-2.3 modules/codex-adversary/... matches (repo-root cross-family machinery imported by the review runtime)", () => {
+  assert.equal(touchesGateMachinery(["modules/codex-adversary/references/cross-family.mjs"]), true);
+});
+test("AC-2.3 .claude/modules/codex-adversary/... matches (vendored cross-family machinery, loaded at runtime)", () => {
+  assert.equal(touchesGateMachinery([".claude/modules/codex-adversary/references/merge-findings.mjs"]), true);
+});
+test("AC-2.3 .claude/skills/... matches (vendored harness pipeline — the downstream/N-projects control surface)", () => {
+  assert.equal(touchesGateMachinery([".claude/skills/orchestrating-delivery/SKILL.md"]), true);
+});
+test("AC-2.3 .claude/hooks/... matches (vendored entry-gate/hooks in a downstream project)", () => {
+  assert.equal(touchesGateMachinery([".claude/hooks/entry-gate.mjs"]), true);
+});
+test("AC-2.3 core/github/... matches (issue form feeds routine selection)", () => {
+  assert.equal(touchesGateMachinery(["core/github/ISSUE_TEMPLATE/harness-task.yml"]), true);
 });
 test("AC-2.3 docs/nested/CLAUDE.md matches (basename at any depth)", () => {
   assert.equal(touchesGateMachinery(["docs/nested/CLAUDE.md"]), true);
@@ -45,6 +57,16 @@ test("AC-2.4 vendor/core/vps/x.mjs does not match (directory-prefix globs are RO
 });
 test("AC-2.4 MYCLAUDE.mdx does not match (final segment is MYCLAUDE.mdx, not CLAUDE.md — exact equality, never prefix/substring)", () => {
   assert.equal(touchesGateMachinery(["MYCLAUDE.mdx"]), false);
+});
+
+// --- deliberate exclusions: harvester knowledge outputs must stay auto-mergeable ---
+// The harvester commits these on EVERY delivered PR; if they were gate machinery, no PR could ever
+// auto-merge. They are NOT control surface and must classify false.
+test("AC-2.4 .claude/memory/MEMORY.md does not match (harvester project memory — auto-mergeable)", () => {
+  assert.equal(touchesGateMachinery([".claude/memory/MEMORY.md"]), false);
+});
+test("AC-2.4 .claude/kaizen.md does not match (harvester kaizen outbox — auto-mergeable)", () => {
+  assert.equal(touchesGateMachinery([".claude/kaizen.md"]), false);
 });
 
 // --- regression: a genuine gate-machinery dir still matches (unchanged behavior) ---

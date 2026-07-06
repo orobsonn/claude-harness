@@ -14,12 +14,25 @@
  * touches any of these — the harness's own delivery/gate machinery — is never auto-merged.
  */
 const GATE_MACHINERY_DIR_GLOBS = [
+  // Harness SOURCE tree (exists only in the harness's own repo).
   "core/vps/",
   "core/skills/",
   "core/agents/",
   "core/rules/",
   "core/hooks/",
-  "core/modules/",
+  "core/github/",
+  "modules/", // repo-root codex/cross-family machinery imported by the review runtime
+  // Vendored harness install — the control surface present in EVERY downstream project. A PR that
+  // edits the vendored pipeline/gates/hooks/cross-family in a product repo is modifying the harness's
+  // own safety machinery and must wait for a manual merge. Deliberately NOT `.claude/` wholesale:
+  // the harvester commits `.claude/memory/` + `.claude/kaizen.md` on every PR, so globbing all of
+  // `.claude/` would make every delivered PR require a manual merge and defeat auto-merge entirely.
+  ".claude/skills/",
+  ".claude/agents/",
+  ".claude/rules/",
+  ".claude/hooks/",
+  ".claude/modules/",
+  // Universal CI control surface.
   ".github/",
 ];
 

@@ -187,6 +187,16 @@ test("AC-2.2 a CLEAN non-gate-machinery PR still auto-merges (common path not re
   assert.equal(mergeSpy.calls.length, 1, "non-gate-machinery eligible PR must auto-merge");
 });
 
+test("AC-2.1 fail-closed: an empty/unknown changed-file set is NEVER auto-merged (routes to manual merge)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(29, { number: 29, headRefName: "harness/65", author: { login: "bot-user" }, labels: [], headSha: "sha-k" });
+  setDiff(29, []); // empty diff — must fail-closed, never slip onto the auto-merge path
+  const mergeSpy = makeMergeFake(true);
+  await cronReview(baseOpts({ gh, mergeAndFinalize: mergeSpy }));
+  assert.equal(mergeSpy.calls.length, 0, "an empty-diff PR must never be auto-merged (fail-closed)");
+  assert.notEqual(idxOf(calls, addsLabel("harness:awaiting-merge")), -1, "empty-diff PR routes to manual merge");
+});
+
 test("AC-3.2 awaiting-merge relabel strips exactly STATE_LABELS, adds awaiting-merge, preserves domain labels", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(28, { number: 28, headRefName: "harness/86", author: { login: "bot-user" }, labels: ["harness:ready", "tier-1", "kaizen"], headSha: "sha-j" });
