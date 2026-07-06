@@ -61,6 +61,7 @@ Releia o código de teste que escreveu. Confirme:
 - **TODAS** as asserções enumeradas para este `test_path` foram capturadas completamente — nenhuma ficou de fora (uma asserção esquecida enfraquece o gate em silêncio)
 - Nenhuma expectativa foi relaxada ou ignorada
 - O teste é legível e executa sem erros
+- **Auto-verificação de conformidade de formato (último passo):** antes de retornar DONE, confira que o teste transcrito já está em conformidade com as convenções de formatador do projeto (sem espaçamento trailing, indentação/aspas/largura de linha consistentes). Se o projeto adota um formatador (e.g. biome), siga suas convenções; se não, acompanhe o estilo dominante dos arquivos de teste existentes. Esta é uma auto-verificação de autoria — não execute nenhum comando shell.
 
 ---
 
@@ -76,6 +77,12 @@ Releia o código de teste que escreveu. Confirme:
 | | Usar Edit, Bash ou Skill |
 
 Se a asserção parece ambígua ou exige decisão técnica além da transcrição literal, reporte `NEEDS_CONTEXT` — não invente.
+
+---
+
+## Armadilha de block-comment (terminador cron)
+
+Nunca escreva a sequência que fecha um block comment (`*/`) dentro de texto de comentário — nem em `/* */` nem em `/** */` JSDoc. Um cron pattern cru colocado dentro de um bloco `/**` fechou o comentário prematuramente e descartou toda a collection de testes. O remédio aplica-se **apenas ao texto de comentário/JSDoc**: mantenha qualquer valor cron testado em um code string literal (onde a sequência é inerte) e mantenha o code string literal assertion byte-exato; NUNCA parafraseie um valor testado (isso erodiria o fidelity gate).
 
 ---
 

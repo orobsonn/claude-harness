@@ -341,6 +341,25 @@ Flow:
 - **Rationale:** Low priority — the issues-array gate already covers the realistic failure mode; this
   closes the theoretical edge case cheaply whenever someone next touches this file.
 
+### 2026-07-06 — RECURRENCE: codex-eye-nudge hang at runtime (see 2026-07-04 cross-family entry above, same fix)
+
+- **Observed:** During `test-author-format-safety`, the `codex-eye-nudge` hook fired deterministically
+  and `checkAvailability` returned ok, but the actual `codex` invocation HANGS at runtime (no working
+  `OPENAI_API_KEY`) at every eye checkpoint — the orchestrator had to kill it manually each time
+  (~90s wasted per checkpoint). Every eye correctly fell back to Claude-only per the fail-open
+  contract; no gate was weakened. This is the same failure class as the 2026-07-04 entry above
+  (codex times out / never returns a verdict), now observed as an outright hang rather than a
+  240–420s timeout — same root cause (no bounded timeout in the cross-family driver), same proposed
+  fix (bound the codex call with its own timeout budget and degrade to a Claude-only passthrough on
+  timeout/hang, rather than relying on the orchestrator to notice and kill it).
+- **Proposed change:** no new proposal — reinforces the existing one. Bumping visibility: this is the
+  second distinct delivery (different feature, two days apart) to hit codex being unreachable at the
+  eye checkpoint with no bounded timeout in the driver, which strengthens the case for prioritizing
+  the timeout-budget fix in the next harness iteration.
+- **Rationale:** Same rationale as the RECURRENCE convention used above — kaizen.md's job is to make
+  cross-run recurrence visible once each run's `findings.md` is gone. A second occurrence of an
+  already-logged proposal is a frequency signal, not a new proposal to draft.
+
 ### 2026-07-05 — RECURRENCE: cron-review 2nd-pass spawn still not re-gated by breakerTripped (pre-existing, now confirmed twice)
 
 - **Observed:** First tracked as an open risk in `independent-pr-review-phase` (#132/#134); reconfirmed
