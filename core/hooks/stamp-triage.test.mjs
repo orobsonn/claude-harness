@@ -1,6 +1,9 @@
 /**
  * @description Test suite for stamp-triage.mjs — PostToolUse(Bash) hook.
- * Tests drive decide() and handle() directly (no subprocess spawn).
+ * Tests drive decide() and handle() directly (no subprocess spawn) for the bulk of the
+ * suite. A subset of CLI-level tests (marker-ambiguous / read-back nudge checks) DOES spawn
+ * `node core/hooks/stamp-triage.mjs` as a real subprocess via runCliSubprocess(), to pin the
+ * exact stdout contract the PostToolUse hook emits on stdin/stdout.
  * All file-system tests use withTempDir() for isolation — same pattern as gate-lib.test.mjs.
  * Run with: node --test core/hooks/stamp-triage.test.mjs
  */
@@ -10,6 +13,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { decide, handle } from "./stamp-triage.mjs";
 import { handRecordPathFor } from "./lib/gate-lib.mjs";
@@ -95,6 +100,24 @@ function makeRegatePayload(sessionId, marker, featureId, taskId, extra = {}) {
     tool_response: JSON.stringify({ marker, feature_id: featureId, task_id: taskId }),
     ...extra,
   };
+}
+
+/**
+ * Spawns the real stamp-triage.mjs CLI as a subprocess, feeding payload as hook stdin JSON.
+ * The CLI resolves gate-state paths from cwd (via gate-lib relative paths), so callers must
+ * pass a cwd where any pre-seeded gate-state.json lives.
+ * @param {object} payload - the hook payload to write to stdin
+ * @param {string} cwd - working directory the subprocess should run in
+ * @returns {{stdout: string, status: number|null}} captured stdout and exit status
+ */
+function runCliSubprocess(payload, cwd) {
+  const hookPath = fileURLToPath(new URL("./stamp-triage.mjs", import.meta.url));
+  const res = spawnSync(process.execPath, [hookPath], {
+    input: JSON.stringify(payload),
+    cwd,
+    encoding: "utf8",
+  });
+  return { stdout: res.stdout ?? "", status: res.status };
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,6 +1095,273 @@ test(
 
       const state = JSON.parse(fs.readFileSync(realPath, "utf8"));
       assert.deepEqual(state.hand_finished, ["feat-a/task-1"]);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Marker-guard: exactly-one scan, readBackOk descriptor, CLI single-emission nudges
+// ---------------------------------------------------------------------------
+
+test(
+  "decide: regate-passed marker with a later non-marker shadow line on stdout → action still regate-passed (single marker match)",
+  () => {
+    const payload = makeRegatePayload("ses_shadow1", "regate-passed", "my-feature", "task-1");
+    payload.tool_response =
+      JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" }) +
+      "\n" +
+      JSON.stringify({ ok: true });
+    const result = decide(payload);
+    assert.equal(result.action, "regate-passed");
+    assert.equal(result.task_id, "my-feature/task-1");
+  },
+);
+
+test(
+  "handle: regate-passed marker with a shadow non-marker line still persists and reports readBackOk:true",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_shadow2";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ regate_pending: ["my-feature/task-1"] }),
+        "utf8",
+      );
+
+      const payload = makeRegatePayload(sessionId, "regate-passed", "my-feature", "task-1");
+      payload.tool_response =
+        JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" }) +
+        "\n" +
+        JSON.stringify({ ok: true });
+
+      const d = handle(payload);
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.deepEqual(state.regate_passed, ["my-feature/task-1"]);
+      assert.equal(d.readBackOk, true);
+    });
+  },
+);
+
+test(
+  "decide: stdout carrying TWO regate-passed marker-shape objects → action:marker-ambiguous",
+  () => {
+    const payload = makeRegatePayload("ses_ambig1", "regate-passed", "my-feature", "task-1");
+    payload.tool_response =
+      JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" }) +
+      "\n" +
+      JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" });
+    const result = decide(payload);
+    assert.equal(result.action, "marker-ambiguous");
+  },
+);
+
+test(
+  "CLI subprocess: two regate-passed marker objects on stdout → exactly one ambiguous nudge, no persist",
+  () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-triage-cli-"));
+    try {
+      const sessionId = "ses_cli_ambig";
+      const stateDir = path.join(tmpDir, ".claude/plans/.state", sessionId);
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ regate_pending: ["my-feature/task-1"] }),
+        "utf8",
+      );
+
+      const payload = makeRegatePayload(sessionId, "regate-passed", "my-feature", "task-1");
+      payload.tool_response =
+        JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" }) +
+        "\n" +
+        JSON.stringify({ marker: "regate-passed", feature_id: "my-feature", task_id: "task-1" });
+
+      const { stdout, status } = runCliSubprocess(payload, tmpDir);
+      assert.equal(status, 0);
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.ok(
+        !(state.regate_passed || []).includes("my-feature/task-1"),
+        "ambiguous marker scan must not persist regate_passed",
+      );
+
+      const hookLines = stdout.split("\n").filter((line) => line.includes("hookSpecificOutput"));
+      assert.equal(hookLines.length, 1, "exactly one hookSpecificOutput line expected");
+      const parsed = JSON.parse(hookLines[0]);
+      const ctx = parsed.hookSpecificOutput.additionalContext;
+      assert.match(ctx, /shadow|duplicat/i);
+      assert.match(ctx, /mark\.mjs alone/i);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "decide/handle: zero marker objects (grep-echo, no JSON) → action:none and no regate_passed persisted",
+  () => {
+    withTempDir(() => {
+      const payload = {
+        session_id: "ses_zero_marker",
+        tool_name: "Bash",
+        tool_input: { command: "grep regate-passed .claude/hooks/mark.mjs" },
+        tool_response: "const MARKER = 'regate-passed';\n",
+      };
+      assert.equal(decide(payload).action, "none");
+
+      handle(payload);
+
+      const gateStatePath = ".claude/plans/.state/ses_zero_marker/gate-state.json";
+      const state = fs.existsSync(gateStatePath)
+        ? JSON.parse(fs.readFileSync(gateStatePath, "utf8"))
+        : {};
+      assert.equal(
+        state.regate_passed,
+        undefined,
+        "no regate_passed should be written for a non-marker echo",
+      );
+    });
+  },
+);
+
+test(
+  "handle: mergeGateStateFn injection that swallows the persist → readBackOk:false and regate_pending untouched",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_fault";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ regate_pending: ["my-feature/task-1"] }),
+        "utf8",
+      );
+
+      const payload = makeRegatePayload(sessionId, "regate-passed", "my-feature", "task-1");
+      const d = handle(payload, { mergeGateStateFn: () => false });
+
+      assert.equal(d.readBackOk, false);
+
+      const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+      assert.deepEqual(state.regate_pending, ["my-feature/task-1"]);
+    });
+  },
+);
+
+test(
+  "CLI subprocess: regate-passed for a never-pending task (intentional no-op) → no read-back-failed nudge on stdout",
+  () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-triage-cli-noop-"));
+    try {
+      const sessionId = "ses_cli_noop";
+      const payload = makeRegatePayload(sessionId, "regate-passed", "my-feature", "task-1");
+
+      const { stdout, status } = runCliSubprocess(payload, tmpDir);
+      assert.equal(status, 0);
+
+      const hookLines = stdout.split("\n").filter((line) => line.includes("hookSpecificOutput"));
+      const readBackFailureLines = hookLines.filter((line) => /read-back|persist/i.test(line));
+      assert.equal(
+        readBackFailureLines.length,
+        0,
+        "intentional no-op must not be reported as a failed read-back/persist",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "decide: stdout carrying TWO fidelity-pass marker-shape objects → action:marker-ambiguous (generalized scan, not regate-specific)",
+  () => {
+    const payload = makeRegatePayload("ses_ambig2", "fidelity-pass", "my-feature", "task-1");
+    payload.tool_response =
+      JSON.stringify({ marker: "fidelity-pass", feature_id: "my-feature", task_id: "task-1" }) +
+      "\n" +
+      JSON.stringify({ marker: "fidelity-pass", feature_id: "my-feature", task_id: "task-1" });
+    const result = decide(payload);
+    assert.equal(result.action, "marker-ambiguous");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Regression: capture-verified durable stamp (markHandRecordCaptured) must be
+// loud on failure and must self-heal on retry, even on the idempotent gate-state path.
+// ---------------------------------------------------------------------------
+
+test(
+  "handle: capture-verified with a failing durable hand-record stamp → readBackOk:false (loud, not silent)",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_cv_durable_fail";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        "utf8",
+      );
+      const recordPath = handRecordPathFor("feat-x/task-1");
+      fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+      fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+      const d = handle(
+        makeRegatePayload(sessionId, "capture-verified", "feat-x", "task-1"),
+        { markHandRecordCapturedFn: () => false },
+      );
+
+      assert.equal(
+        d?.readBackOk,
+        false,
+        "a failing durable hand-record stamp must be folded into readBackOk:false — never reported as silent success",
+      );
+    });
+  },
+);
+
+test(
+  "handle: capture-verified retry re-invokes the durable stamp and heals → readBackOk:true",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_cv_durable_heal";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        "utf8",
+      );
+      const recordPath = handRecordPathFor("feat-x/task-1");
+      fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+      fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+      const payload = makeRegatePayload(sessionId, "capture-verified", "feat-x", "task-1");
+
+      // First call: gate-state may still absorb capture_verified, but the durable stamp fails.
+      handle(payload, { markHandRecordCapturedFn: () => false });
+
+      // Second (idempotent gate-state) call: the durable writer must STILL be invoked — this
+      // is the self-heal path — and its success must be reflected in readBackOk.
+      let called = false;
+      const spy = (id, ts) => {
+        called = true;
+        return true;
+      };
+      const d2 = handle(payload, { markHandRecordCapturedFn: spy });
+
+      assert.equal(
+        called,
+        true,
+        "the durable stamp must be re-invoked on the idempotent gate-state path, healing a prior partial failure",
+      );
+      assert.equal(
+        d2?.readBackOk,
+        true,
+        "once the durable stamp succeeds on retry, readBackOk must report true",
+      );
     });
   },
 );
