@@ -7,6 +7,19 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Atalho de escalação em rate-limit de conta (429) do Ollama** — quando duas dispatches
+  consecutivas da mão barata batem no limite de cota da conta Ollama (dois 429 seguidos para a mesma
+  task, ancorados ao mesmo freeze), o orquestrador agora **pula o 3º tier Ollama** — que 429aria de
+  novo por construção, já que todos os tiers dividem a mesma conta — e vai direto para o reforço
+  Claude (K=1), poupando turnos e wall-clock. O `spawn-hand.mjs` atribui `rateLimited` sobre o stream
+  do child (predicado estrito, não um `429` solto), mantém um contador consecutivo freeze-ancorado e
+  expõe `rateLimitExhausted` no run-record; a §escalation do `SKILL.md` consome esse sinal. Route C: o
+  `spawn-hand` nunca pula um spawn internamente (o record da 2ª tier é um run genuíno), então o
+  cinturão de evidência não-forjável do entry-gate fica intacto (sem tocar `entry-gate.mjs`). Pinado
+  por 11 locked tests em `spawn-hand.test.mjs`.
+
 ## [0.25.0] - 2026-07-06
 
 ### Added
