@@ -46,6 +46,7 @@ import {
   readHandRecord,
   markHandRecordCaptured,
 } from "./lib/gate-lib.mjs";
+import { appendEvent as defaultAppendEvent } from "../vps/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // Pure decision layer — no I/O
@@ -156,6 +157,9 @@ function countMarkerObjectsByName(stdout, markerName) {
  *         | { action: 'hand-finished',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'capture-verified', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'fidelity-pass',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'plan-reviewed',  verdict: 'APPROVE'|'REVISE' }  observability-only (no gate-state write)
+ *         | { action: 'task-executing', n: number, total: number }     observability-only (no gate-state write)
+ *         | { action: 'final-review-done' }                           observability-only (no gate-state write)
  *         | { action: 'marker-ambiguous' }
  *         | { action: 'none' }}
  */
@@ -406,6 +410,78 @@ export function decide(payload) {
     return { action: "fidelity-pass", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
   }
 
+  // --- mark.mjs plan-reviewed marker (observability-only — NO gate-state write) ---
+  // Exactly-one marker scan, mirroring the re-gate rail. task_id is OPTIONAL (the plan verdict is
+  // feature-scoped); verdict must be APPROVE|REVISE. The stamp-triage hook appends a
+  // {type:'plan-reviewed', verdict} checkpoint event to the run's observability outbox — the
+  // deterministic producer for the plan-reviewer verdict checkpoint (no prose sourcing).
+  if (command.includes("mark.mjs") && command.includes("plan-reviewed")) {
+    const responseStr = unwrapStdout(payload);
+    const { count, sole } = countMarkerObjectsByName(responseStr, "plan-reviewed");
+    if (count === 0) {
+      return { action: "none" };
+    }
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
+      return { action: "none" };
+    }
+    if (sole.task_id !== undefined && sole.task_id !== null) {
+      if (!isSafeFeatureId(sole.task_id)) {
+        return { action: "none" };
+      }
+    }
+    if (sole.verdict !== "APPROVE" && sole.verdict !== "REVISE") {
+      return { action: "none" };
+    }
+    return { action: "plan-reviewed", verdict: sole.verdict };
+  }
+
+  // --- mark.mjs task-executing marker (observability-only — NO gate-state write) ---
+  // Exactly-one marker scan. n/total must be positive integers. Appends a
+  // {type:'task-executing', n, total} checkpoint event — the deterministic per-task-loop-top signal.
+  if (command.includes("mark.mjs") && command.includes("task-executing")) {
+    const responseStr = unwrapStdout(payload);
+    const { count, sole } = countMarkerObjectsByName(responseStr, "task-executing");
+    if (count === 0) {
+      return { action: "none" };
+    }
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
+      return { action: "none" };
+    }
+    const n = Number(sole.n);
+    const total = Number(sole.total);
+    if (!Number.isInteger(n) || n < 1) {
+      return { action: "none" };
+    }
+    if (!Number.isInteger(total) || total < 1) {
+      return { action: "none" };
+    }
+    return { action: "task-executing", n, total };
+  }
+
+  // --- mark.mjs final-review-done marker (observability-only — NO gate-state write) ---
+  // Exactly-one marker scan, feature-scoped (no task_id). Appends a {type:'final-review-done'}
+  // checkpoint event — the deterministic final-dual-review-join signal.
+  if (command.includes("mark.mjs") && command.includes("final-review-done")) {
+    const responseStr = unwrapStdout(payload);
+    const { count, sole } = countMarkerObjectsByName(responseStr, "final-review-done");
+    if (count === 0) {
+      return { action: "none" };
+    }
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
+      return { action: "none" };
+    }
+    return { action: "final-review-done" };
+  }
+
   return { action: "none" };
 }
 
@@ -414,22 +490,52 @@ export function decide(payload) {
 // ---------------------------------------------------------------------------
 
 /**
+ * @description Appends one checkpoint event to the run's observability outbox (the
+ * obs-<issue>.events.jsonl derived from the meta path). STRICTLY ADDITIVE + FAIL-OPEN:
+ * a cheap no-op when HARNESS_OBSERVABILITY_RUN_PATH is unset or points at a nonexistent
+ * meta (existsSync-guarded), and an appendEvent that throws is swallowed — it NEVER blocks
+ * the triage.json / gate-state write. Performs NO fetch. The session-side appendEvent is
+ * disjoint from the cron-side meta rewrite (no two-writer race).
+ * @param {object} event - The checkpoint event to append.
+ * @param {(metaPath: string, event: object) => void} appendFn - obs-outbox appendEvent seam.
+ * @returns {void}
+ */
+function obsAppend(event, appendFn) {
+  const metaPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+  if (typeof metaPath !== "string" || metaPath.length === 0) {
+    return;
+  }
+  try {
+    if (!fs.existsSync(metaPath)) {
+      return;
+    }
+    appendFn(metaPath, event);
+  } catch {
+    // fail-open: an outbox append never blocks the gate-state write / triage persist
+  }
+}
+
+/**
  * Executes the action returned by decide().
  * Fail-open: all fs errors are swallowed — never propagated to the caller.
  *
  * Returns a descriptor object so the CLI entry point can build at most one
  * hookSpecificOutput nudge (read-back-failed). Returns undefined for actions
- * that do not attempt a gate-state write (triage, none, no-op guards, idempotent skips).
+ * that do not attempt a gate-state write (triage, none, no-op guards, idempotent skips,
+ * and the observability-only markers plan-reviewed / task-executing / final-review-done).
  *
  * @param {object} payload - The raw hook payload
  * @param {object} [opts] - Extensibility seam for fault injection.
  *   opts.mergeGateStateFn — replacement for mergeGateState (test seam for root-proof
  *     read-back fault injection). When absent, the real mergeGateState is used.
+ *   opts.appendEventFn — replacement for obs-outbox appendEvent (test seam for the
+ *     fail-open append contract). When absent, the real appendEvent is used.
  * @returns {{ readBackOk: boolean } | undefined}
  */
 export function handle(payload, opts = {}) {
   const mergeFn = opts.mergeGateStateFn || mergeGateState;
   const markCapturedFn = opts.markHandRecordCapturedFn || markHandRecordCaptured;
+  const appendEventFn = opts.appendEventFn || defaultAppendEvent;
 
   let decision;
   try {
@@ -461,6 +567,9 @@ export function handle(payload, opts = {}) {
     } catch {
       // fail-open: a failed write never surfaces as an error
     }
+    // Observability: append a {type:'pipeline-type', mode} checkpoint AFTER the triage write +
+    // gate-state reset so an appendEvent failure (swallowed by obsAppend) NEVER blocks them.
+    obsAppend({ type: "pipeline-type", mode }, appendEventFn);
     return;
   }
 
@@ -474,6 +583,14 @@ export function handle(payload, opts = {}) {
   }
 
   if (decision.action === "regate-pending") {
+    // Observability: CRITICAL sniper-HIGH safety signal — the deterministic producer for #ac-3.1
+    // (unmatched regate-pending). `matched:false` marks it unmatched so the drain's critical path
+    // routes it to the shared config threadId. Appended BEFORE the gate-state stamp; obsAppend
+    // swallows any throw so the existing regate-pending stamping below is untouched. The bare
+    // task_id (un-qualified) is the signal payload — the qualified id stays in gate-state.
+    const bareTaskId = decision.task_id.split("/").pop();
+    obsAppend({ type: "regate-pending", task: bareTaskId, matched: false }, appendEventFn);
+
     // Append task_id to the regate_pending list (dedup — idempotent for the same task_id).
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.regate_pending) ? current.regate_pending : [];
@@ -602,6 +719,22 @@ export function handle(payload, opts = {}) {
       return { readBackOk: fp.includes(decision.task_id) };
     }
     return; // idempotent already-present — no write attempted, no read-back
+  }
+
+  // --- observability-only markers: append the checkpoint event, no gate-state write ---
+  if (decision.action === "plan-reviewed") {
+    obsAppend({ type: "plan-reviewed", verdict: decision.verdict }, appendEventFn);
+    return;
+  }
+
+  if (decision.action === "task-executing") {
+    obsAppend({ type: "task-executing", n: decision.n, total: decision.total }, appendEventFn);
+    return;
+  }
+
+  if (decision.action === "final-review-done") {
+    obsAppend({ type: "final-review-done" }, appendEventFn);
+    return;
   }
 
   // action === 'none', 'marker-ambiguous', 'hand-config-error-nudge': nothing to persist

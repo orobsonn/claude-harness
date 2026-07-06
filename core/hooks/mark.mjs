@@ -3,6 +3,9 @@
  * Model-invoked CLI for marking key points in the triage/delivery pipeline.
  * Supports:
  *   - brainstorm-done    --feature-id <id>
+ *   - plan-reviewed     --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE
+ *   - task-executing     --feature-id <id> --n <n> --total <N>
+ *   - final-review-done  --feature-id <id>
  *   - regate-pending     --feature-id <id> --task-id <id>
  *   - regate-passed      --feature-id <id> --task-id <id>
  *   - escalation-fallback --feature-id <id> --task-id <id>
@@ -12,6 +15,9 @@
  * Validates feature_id (and task_id, where required) via gate-lib, and on success
  * echoes a single JSON line to stdout with exit 0:
  *   {marker:'brainstorm-done', feature_id}
+ *   {marker:'plan-reviewed', feature_id, [task_id], verdict}
+ *   {marker:'task-executing', feature_id, n, total}
+ *   {marker:'final-review-done', feature_id}
  *   {marker:'regate-pending', feature_id, task_id}
  *   {marker:'regate-passed',  feature_id, task_id}
  *   {marker:'escalation-fallback', feature_id, task_id}
@@ -64,9 +70,21 @@ const TASK_SCOPED_MARKERS = new Set([
 const REASON_MARKERS = new Set(["hand-config-error"]);
 
 /**
+ * Observability-only markers (no gate-state write — the stamp-triage hook appends a checkpoint
+ * event to the run's observability outbox instead). plan-reviewed carries an OPTIONAL --task-id
+ * (the plan verdict is feature-scoped, not task-scoped) plus a required --verdict APPROVE|REVISE;
+ * task-executing carries --n/--total (the 1-based task index and total task count).
+ */
+const OBSERVABILITY_MARKERS = new Set(["plan-reviewed", "task-executing", "final-review-done"]);
+
+/**
  * All supported marker commands.
  */
-const SUPPORTED_MARKERS = new Set(["brainstorm-done", ...TASK_SCOPED_MARKERS]);
+const SUPPORTED_MARKERS = new Set([
+  "brainstorm-done",
+  ...OBSERVABILITY_MARKERS,
+  ...TASK_SCOPED_MARKERS,
+]);
 
 /**
  * Finds the value following a flag in argv, or null when absent.
@@ -109,6 +127,32 @@ export function parseArgs(argv) {
     return null;
   }
 
+  // plan-reviewed: optional --task-id (feature-scoped verdict) + required --verdict APPROVE|REVISE.
+  if (marker === "plan-reviewed") {
+    const task_id = findFlag(argv, "--task-id");
+    const verdict = findFlag(argv, "--verdict");
+    if (verdict === null) {
+      return null;
+    }
+    const parsed = { marker, feature_id, verdict };
+    if (task_id !== null) {
+      parsed.task_id = task_id;
+    }
+    return parsed;
+  }
+
+  // task-executing: required --n <n> --total <N> (validated as positive integers in run()).
+  if (marker === "task-executing") {
+    const n = findFlag(argv, "--n");
+    const total = findFlag(argv, "--total");
+    if (n === null || total === null) {
+      return null;
+    }
+    return { marker, feature_id, n, total };
+  }
+
+  // final-review-done: feature-scoped (no --task-id), mirrors brainstorm-done.
+
   if (TASK_SCOPED_MARKERS.has(marker)) {
     const task_id = findFlag(argv, "--task-id");
     if (task_id === null) {
@@ -133,7 +177,7 @@ export function parseArgs(argv) {
  * @returns {{success: boolean, output?: {marker: string, feature_id: string, task_id?: string}, error?: string}}
  */
 export function run(args) {
-  const { marker, feature_id, task_id, reason } = args;
+  const { marker, feature_id, task_id, reason, verdict } = args;
 
   // fidelity-pass: IDs are correlation-only (never used as file paths) — any non-empty string
   // is valid. parseArgs already ensures --feature-id and --task-id were present. This bypass is
@@ -161,6 +205,48 @@ export function run(args) {
       success: false,
       error: `invalid feature_id: "${feature_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only). Path separators, uppercase, and underscores are rejected.`,
     };
+  }
+
+  // plan-reviewed: optional task_id (kebab) + verdict in {APPROVE, REVISE}. Observability-only.
+  if (marker === "plan-reviewed") {
+    if (task_id !== undefined) {
+      if (!isSafeFeatureId(task_id)) {
+        return {
+          success: false,
+          error: `invalid task_id: "${task_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only). Path separators, uppercase, and underscores are rejected.`,
+        };
+      }
+    }
+    if (verdict !== "APPROVE" && verdict !== "REVISE") {
+      return {
+        success: false,
+        error: `invalid verdict: "${verdict}" must be APPROVE or REVISE.`,
+      };
+    }
+    const output = { marker, feature_id, verdict };
+    if (task_id !== undefined) {
+      output.task_id = task_id;
+    }
+    return { success: true, output };
+  }
+
+  // task-executing: n/total must be positive integers. Observability-only.
+  if (marker === "task-executing") {
+    const n = Number(args.n);
+    const total = Number(args.total);
+    if (!Number.isInteger(n) || n < 1) {
+      return {
+        success: false,
+        error: `invalid n: "${args.n}" must be a positive integer.`,
+      };
+    }
+    if (!Number.isInteger(total) || total < 1) {
+      return {
+        success: false,
+        error: `invalid total: "${args.total}" must be a positive integer.`,
+      };
+    }
+    return { success: true, output: { marker, feature_id, n, total } };
   }
 
   if (TASK_SCOPED_MARKERS.has(marker)) {
@@ -203,7 +289,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | plan-reviewed --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE | task-executing --feature-id <id> --n <n> --total <N> | final-review-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
     );
     process.exit(1);
   }
