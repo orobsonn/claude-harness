@@ -9,6 +9,21 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Auto-merge autônomo que fecha de verdade + trava de segurança da própria máquina** — três
+  correções que destravam o auto-merge de PRs verdes e impedem retrabalho: (1) o review cron agora
+  **tira o PR do rascunho** (`gh pr ready`) nas duas rotas limpas antes de mergear — sem isso o
+  `gh pr merge` nunca fechava um PR headless (que nasce draft), então nada auto-merjava mesmo verde;
+  (2) **carve-out de gate-machinery**: um PR que toca a própria máquina de controle do harness — no
+  repo do harness (`core/{vps,skills,agents,rules,hooks,github,__tests__}/`, `modules/codex-adversary/`)
+  **e, crucialmente, o harness vendorizado em qualquer projeto downstream** (`.claude/{skills,agents,rules,hooks,modules}/`,
+  `settings.json`/`CLAUDE.md`) — **nunca** auto-merjar, vai pra merge manual; num projeto normal nada
+  disso é tocado, então tudo verde auto-merjar hands-free (matcher corrigido pra casar por segmento
+  de path, não `startsWith` cru; saídas do harvester `.claude/memory/`/`kaizen.md` ficam de fora pra
+  não travar todo PR); (3) **estados de label mutuamente exclusivos** via a fonte única `STATE_LABELS`
+  — todo relabel strippa o conjunto completo de estados, então uma issue nunca carrega `harness:ready`
+  junto de um estado posterior (o bug que fez uma issue já entregue ser re-despachada), e o seletor
+  passa a excluir `awaiting-merge`/`queued`/`done`. Diff vazio/malformado **fail-closed** pra merge
+  manual. Refs #86.
 - **Timeout wall-clock na mão barata do spawn-hand** — um `claude -p` que trava numa chamada de
   rede sem fim (observado 28+ min a CPU quase zero) agora se autotermina no prazo (default 9 min,
   configurável por tier via `dispatch.timeout_ms`) e degrada sozinho para o caminho de reforço
