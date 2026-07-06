@@ -35,7 +35,8 @@
  * @returns {{ ok: boolean, dispatched?: boolean, issue?: { number: number, labels: string[] } }}
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, openSync, closeSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import { cronASelect } from "./cron-a-select.mjs";
 import { dispatch } from "./cron-a-dispatch.mjs";
@@ -44,6 +45,7 @@ import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
 import { makeNotifier } from "./notify-telegram.mjs";
+import { readEvents, readMeta, advanceCursor, updateMeta } from "./obs-outbox.mjs";
 
 /** @description Required fields every per-project VPS cron config must supply. */
 export const REQUIRED_CONFIG_FIELDS = [
@@ -172,11 +174,73 @@ export function runCronA(config, deps = {}) {
  * @param {object} config
  * @returns {Promise<void>}
  */
-export async function mainCronA(config) {
-  const notifier = makeNotifier(config, { homeDir: config.homeDir });
+export async function mainCronA(config, deps = {}) {
+  const notifier = makeNotifier(config, {
+    homeDir: config.homeDir,
+    readFileSafe: deps.readFileSafe,
+    fetch: deps.fetch,
+    log: deps.log,
+    timeoutMs: deps.timeoutMs,
+  });
+
+  const drainOutbox = deps.drainOutbox
+    ? (opts) =>
+        deps.drainOutbox(opts, {
+          readEvents,
+          readMeta,
+          advanceCursor,
+          updateMeta,
+        })
+    : notifier.drainOutbox;
+
   try {
-    runCronA(config, { notify: notifier.notify, heartbeat: notifier.heartbeat });
+    runCronA(config, {
+      notify: notifier.notify,
+      heartbeat: notifier.heartbeat,
+      cronASelect: deps.cronASelect,
+      dispatch: deps.dispatch,
+      buildScopedEnvFromDisk: deps.buildScopedEnvFromDisk,
+      ghExec: deps.ghExec,
+      runLock: deps.runLock,
+      spawn: deps.spawn,
+      counter: deps.counter,
+      tmuxHasSession: deps.tmuxHasSession,
+    });
   } finally {
+    // Best-effort file lock so two overlapping cron-A drains cannot double-append
+    // spec-created/plan-created checkpoints nor double-send cosmetics. Fail-open: if the lock is
+    // already held (another drain in progress) or cannot be created, this tick skips the drain —
+    // the next tick drains. NEVER throws, NEVER blocks the cron.
+    const lockPath = join(config.stateDir, "drain.lock");
+    let lockFd = null;
+    try {
+      lockFd = openSync(lockPath, "wx");
+    } catch {
+      // lock busy or stateDir missing — skip the drain this tick (next tick drains)
+    }
+    if (lockFd !== null) {
+      try {
+        await drainOutbox({
+          stateDir: config.stateDir,
+          homeDir: config.homeDir,
+          chatId: notifier.config?.chatId,
+          limitPerMinute: config.notify?.limitPerMinute ?? 30,
+        });
+      } catch {
+        // fail-open: a drain failure never throws or delays the cron
+      } finally {
+        try {
+          closeSync(lockFd);
+        } catch {
+          // best-effort fd close
+        }
+        try {
+          rmSync(lockPath, { force: true });
+        } catch {
+          // best-effort lock cleanup
+        }
+      }
+    }
     try {
       await notifier.drain();
     } catch {

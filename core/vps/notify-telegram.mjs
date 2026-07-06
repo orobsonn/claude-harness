@@ -16,14 +16,24 @@
  * body, the URL (which carries `/bot<token>/`), the token, or the chat_id.
  */
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 import { parseDevVars } from "./scoped-env.mjs";
+import {
+  readEvents as defaultReadEvents,
+  readMeta as defaultReadMeta,
+  advanceCursor as defaultAdvanceCursor,
+  updateMeta as defaultUpdateMeta,
+  appendEvent as defaultAppendEvent,
+} from "./obs-outbox.mjs";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TEXT = 80;
 const TOPIC_NAME_MAX_CODE_POINTS = 128;
+
+/** @description Event types that must ping the shared main topic before any cosmetic progress. */
+const CRITICAL_TYPES = new Set(["blocked", "failed", "sniper-high"]);
 
 /** @description Status emoji per event type; a shared destination gets a scannable glyph. */
 const EMOJI = {
@@ -326,7 +336,7 @@ export function resolveNotifyConfig(config, deps = {}) {
  * @param {typeof fetch} [deps.fetch]
  * @param {(entry: object) => void} [deps.log]
  * @param {number} [deps.timeoutMs]
- * @returns {{ notify: (event: object) => Promise<void>, drain: () => Promise<unknown>, enabled: boolean, heartbeat: boolean }}
+ * @returns {{ notify: (event: object) => Promise<void>, drain: () => Promise<unknown>, drainOutbox: (opts?: object) => Promise<void>, enabled: boolean, heartbeat: boolean, config: object }}
  */
 export function makeNotifier(config, deps = {}) {
   const homeDir = deps.homeDir ?? config?.homeDir;
@@ -338,7 +348,14 @@ export function makeNotifier(config, deps = {}) {
   }
 
   if (!resolved) {
-    return { notify: async () => {}, drain: async () => {}, enabled: false, heartbeat: false };
+    return {
+      notify: async () => {},
+      drain: async () => {},
+      drainOutbox: async () => {},
+      enabled: false,
+      heartbeat: false,
+      config: null,
+    };
   }
 
   const pending = new Set();
@@ -361,11 +378,43 @@ export function makeNotifier(config, deps = {}) {
     return p;
   };
 
+  const send = async ({ event, text, chatId: msgChatId, threadId: msgThreadId }) => {
+    const result = await sendRenderedMessage({
+      config: { token: resolved.token, chatId: msgChatId, threadId: msgThreadId },
+      text,
+      fetch: deps.fetch,
+      log: deps.log,
+      timeoutMs: deps.timeoutMs,
+    });
+    return { sent: result.ok };
+  };
+
+  const drainOutbox = (drainOpts = {}) =>
+    drainTelegramOutbox(
+      {
+        stateDir: drainOpts.stateDir ?? config?.stateDir,
+        homeDir: drainOpts.homeDir ?? homeDir,
+        chatId: drainOpts.chatId ?? resolved.chatId,
+        threadId: drainOpts.threadId ?? resolved.threadId,
+        limitPerMinute: drainOpts.limitPerMinute ?? resolved.limitPerMinute ?? 30,
+      },
+      {
+        readEvents: defaultReadEvents,
+        readMeta: defaultReadMeta,
+        advanceCursor: defaultAdvanceCursor,
+        updateMeta: defaultUpdateMeta,
+        appendEvent: defaultAppendEvent,
+        send,
+      },
+    );
+
   return {
     notify,
     drain: () => Promise.allSettled([...pending]),
+    drainOutbox,
     enabled: true,
     heartbeat: resolved.heartbeat,
+    config: resolved,
   };
 }
 
@@ -473,7 +522,251 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
   return result.ok ? { ok: true } : { ok: false };
 }
 
-/** @description Scaffold — implemented by the task-5 executor (the cron-side outbox drain). */
-export function drainTelegramOutbox() {
-  throw new Error("not implemented");
+// --- task-5: cron-side outbox drain.
+// Invariants preserved: zero-dep, fail-open (never throw/retry/delay a cron), token only from the
+// resolved notify config, a failure logs only { op, type, status }.
+
+/** @description Simple per-minute token bucket for outbound Telegram sends. */
+const outboxRateLimiter = { limit: 0, tokens: 0, lastRefill: 0 };
+
+/** @description Refills the per-minute send budget from the module-global token bucket. */
+function refillBudget(limitPerMinute) {
+  if (typeof limitPerMinute !== "number" || limitPerMinute <= 0) return Infinity;
+  const now = Date.now();
+  if (outboxRateLimiter.limit !== limitPerMinute) {
+    outboxRateLimiter.limit = limitPerMinute;
+    outboxRateLimiter.tokens = limitPerMinute;
+    outboxRateLimiter.lastRefill = now;
+    return limitPerMinute;
+  }
+  const elapsedMinutes = (now - outboxRateLimiter.lastRefill) / 60000;
+  outboxRateLimiter.tokens = Math.min(
+    limitPerMinute,
+    outboxRateLimiter.tokens + elapsedMinutes * limitPerMinute,
+  );
+  outboxRateLimiter.lastRefill = now;
+  return Math.floor(outboxRateLimiter.tokens);
+}
+
+/** @description Consumes one token from the module-global send bucket (no-op when empty). */
+function consumeBudget() {
+  if (outboxRateLimiter.tokens > 0) outboxRateLimiter.tokens -= 1;
+}
+
+/** @description True for events that must take the separate critical path. */
+function isCriticalEvent(event) {
+  if (!event || typeof event.type !== "string") return false;
+  const type = event.type;
+  if (CRITICAL_TYPES.has(type)) return true;
+  if (type === "regate-pending" && event.matched === false) return true;
+  return false;
+}
+
+/** @description Title for an outbox checkpoint message (UPPERCASE taxonomy label). */
+function checkpointTitle(event) {
+  return String(event?.type ?? "evento").toUpperCase();
+}
+
+/** @description Body lines for a run's cosmetic checkpoint. The fallback/shared path prefixes the
+ * first line with `#<issue>` so interleaved runs stay legible. */
+function cosmeticBodyLines(event, meta, isFallback) {
+  const issue = meta.issueNumber;
+  const lines = [];
+  switch (event.type) {
+    case "spec-created":
+      lines.push("spec.md ready");
+      break;
+    case "plan-created":
+      lines.push(`execution plan with ${event.tasks} tasks ready`);
+      break;
+    case "pr":
+      lines.push(`PR ${event.pr ?? ""}`);
+      break;
+    case "task-executing":
+      lines.push(`task ${event.task ?? ""}`);
+      break;
+    default:
+      lines.push("checkpoint");
+  }
+  if (event.reason) lines.push(String(event.reason));
+  if (isFallback && lines.length) {
+    lines[0] = `#${issue} ${lines[0]}`;
+  }
+  return lines;
+}
+
+/** @description Body lines for a critical ping: references the run topic so the operator can jump. */
+function criticalBodyLines(event, meta) {
+  const issue = meta.issueNumber;
+  const thread = meta.threadId ?? "shared";
+  const lines = [`Run #${issue} (topic ${thread})`];
+  if (event.reason) lines.push(String(event.reason));
+  return lines;
+}
+
+/** @description Sends a pre-rendered HTML message through the Telegram sendMessage endpoint. */
+async function sendRenderedMessage({ config, text, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+  const payload = {
+    chat_id: config?.chatId,
+    message_thread_id: config?.threadId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  };
+  const result = await callTelegramMethod("sendMessage", payload, { config, fetch: fetchImpl, log, timeoutMs }, "sendMessage");
+  return { ok: result.ok };
+}
+
+/** @description Derives the two cron-sourced border checkpoints from the run's worktree and
+ * appends them idempotently (append-if-absent) to the events JSONL. */
+function deriveBorderCheckpoints(metaPath, meta, seams) {
+  const read = seams.readEvents ?? defaultReadEvents;
+  const append = seams.appendEvent ?? defaultAppendEvent;
+  const events = read(metaPath);
+  const worktreePath = meta?.worktreePath;
+  if (typeof worktreePath !== "string" || !worktreePath) return;
+
+  const plansDir = join(worktreePath, ".claude", "plans");
+  let hasSpec = false;
+  let taskCount = null;
+  try {
+    const entries = readdirSync(plansDir);
+    for (const entry of entries) {
+      const subPath = join(plansDir, entry);
+      let st;
+      try {
+        st = statSync(subPath);
+      } catch {
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+
+      const specPath = join(subPath, "spec.md");
+      try {
+        if (statSync(specPath).isFile()) hasSpec = true;
+      } catch {}
+
+      const planPath = join(subPath, "execution-plan.json");
+      try {
+        const raw = readFileSync(planPath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.tasks)) taskCount = parsed.tasks.length;
+      } catch {}
+    }
+  } catch {
+    // fail-open: missing or unreadable plans dir is not an error
+  }
+
+  if (hasSpec && !events.some((event) => event.type === "spec-created")) {
+    append(metaPath, { type: "spec-created" });
+  }
+  if (taskCount != null && !events.some((event) => event.type === "plan-created")) {
+    append(metaPath, { type: "plan-created", tasks: taskCount });
+  }
+}
+
+/** @description Best-effort send with swallowed exceptions (429 / network failure / throwing fake). */
+async function trySend(send, message) {
+  try {
+    const result = await send(message);
+    return result && result.sent === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @description Cron-side outbox drain. Enumerates every obs-<issue>.json in stateDir, derives
+ * border checkpoints from the run worktree, then sends unsent events. Critical events (blocked /
+ * failed / unmatched regate-pending / sniper-HIGH) are sent FIRST on a separate best-effort path to
+ * the shared main topic; cosmetic events advance the contiguous cursor only after an ack
+ * (`{sent:true}`). A fallback run (or any run without a threadId) routes every message to the
+ * shared config threadId and prefixes each body with `#<issue>`. A closed run with a remaining
+ * cursor is still drained. Fail-open: never throws and never delays the cron.
+ *
+ * @param {{ stateDir: string, homeDir: string, chatId: number|string, limitPerMinute?: number }} opts
+ * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function }} seams
+ * @returns {Promise<void>}
+ */
+export async function drainTelegramOutbox(opts = {}, seams = {}) {
+  const { stateDir, chatId, limitPerMinute, threadId: sharedThreadId } = opts;
+  const readEvents = seams.readEvents ?? defaultReadEvents;
+  const readMeta = seams.readMeta ?? defaultReadMeta;
+  const advanceCursor = seams.advanceCursor ?? defaultAdvanceCursor;
+  const updateMeta = seams.updateMeta ?? defaultUpdateMeta;
+  const appendEvent = seams.appendEvent ?? defaultAppendEvent;
+  const send = seams.send ?? (async () => ({ sent: false }));
+
+  if (!stateDir || chatId == null || chatId === "") return;
+
+  let budget = refillBudget(limitPerMinute);
+  const runs = [];
+
+  try {
+    for (const file of readdirSync(stateDir)) {
+      if (!file.startsWith("obs-") || !file.endsWith(".json")) continue;
+      const metaPath = join(stateDir, file);
+      const meta = readMeta(metaPath);
+      if (!meta) continue;
+      deriveBorderCheckpoints(metaPath, meta, { readEvents, appendEvent });
+      const events = readEvents(metaPath);
+      runs.push({ metaPath, meta, events });
+    }
+  } catch {
+    return;
+  }
+
+  // Critical-first pass: shared main topic (config chatId, shared threadId).
+  for (const { metaPath, meta, events } of runs) {
+    const sent = Array.isArray(meta.criticalSent) ? [...meta.criticalSent] : [];
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      if (!isCriticalEvent(event)) continue;
+      if (sent.includes(i)) continue;
+      if (budget <= 0) break;
+      const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: criticalBodyLines(event, meta) });
+      const ack = await trySend(send, { event, text, chatId, threadId: sharedThreadId });
+      if (ack) {
+        consumeBudget();
+        budget -= 1;
+        sent.push(i);
+        try {
+          updateMeta(metaPath, { criticalSent: sent });
+        } catch {
+          // best-effort marker; a lost update may cause a duplicate critical ping
+        }
+      }
+    }
+  }
+
+  // Cosmetic pass: contiguous cursor advances only on ack.
+  for (const { metaPath, meta, events } of runs) {
+    const isFallback = meta.status === "fallback" || meta.threadId == null;
+    const runThreadId = isFallback ? sharedThreadId : meta.threadId;
+    const startCursor = typeof meta.cursor === "number" ? meta.cursor : 0;
+    let newCursor = startCursor;
+
+    for (let i = startCursor; i < events.length; i++) {
+      const event = events[i];
+      if (isCriticalEvent(event)) continue;
+      if (budget <= 0) break;
+      const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: cosmeticBodyLines(event, meta, isFallback) });
+      const ack = await trySend(send, { event, text, chatId, threadId: runThreadId });
+      if (ack) {
+        consumeBudget();
+        budget -= 1;
+        newCursor = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    if (newCursor !== startCursor) {
+      try {
+        advanceCursor(metaPath, newCursor);
+      } catch {
+        // fail-open: a cursor write failure must not propagate
+      }
+    }
+  }
 }
