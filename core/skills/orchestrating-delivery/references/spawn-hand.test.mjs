@@ -168,6 +168,113 @@ describe("dispatchHand ephemeral dir + child env", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Locked test 3b — .claude.json trust file keyed by the verbatim process.cwd()
+// (not a canonicalized/realpath'd form, not the ephemeral tmp dir path) — pins
+// that the ephemeral-dir trust dialog is pre-accepted against the real project
+// cwd at dispatch time, read directly from disk while the ephemeral dir still
+// exists (during the real, non-dry-run spawn call).
+// ---------------------------------------------------------------------------
+describe("dispatchHand ephemeral .claude.json trust keyed by process.cwd()", () => {
+  it("the ephemeral dir's .claude.json exists and deep-equals { projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } }", async () => {
+    let capturedClaudeJsonContent = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      const configDir = opts?.env?.CLAUDE_CONFIG_DIR;
+      const claudeJsonPath = join(configDir, ".claude.json");
+      if (configDir && existsSync(claudeJsonPath)) {
+        capturedClaudeJsonContent = readFileSync(claudeJsonPath, "utf8");
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets here",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    const fakeToken = "fake-dispatch-token-claudejson";
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: fakeToken };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(
+      capturedClaudeJsonContent,
+      ".claude.json must exist in the ephemeral dir during the real (non-dry-run) spawn call"
+    );
+
+    const parsed = JSON.parse(capturedClaudeJsonContent);
+    assert.deepEqual(
+      parsed,
+      { projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } },
+      ".claude.json must deep-equal { projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } }, keyed by the verbatim process.cwd() at dispatch time — NOT a canonicalized/realpath'd form, NOT the ephemeral tmp dir path"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 3c — .claude.json trust is scoped to a SINGLE project key (the real
+// project cwd) — proves trust can never leak to unrelated projects: not a
+// wildcard, not the ephemeral tmp dir path, not a parent path.
+// ---------------------------------------------------------------------------
+describe("dispatchHand ephemeral .claude.json trust is scoped to a single project key", () => {
+  it("Object.keys(parsed) equals ['projects'] and Object.keys(parsed.projects) equals [process.cwd()]", async () => {
+    let capturedClaudeJsonContent = null;
+
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      const configDir = opts?.env?.CLAUDE_CONFIG_DIR;
+      const claudeJsonPath = join(configDir, ".claude.json");
+      if (configDir && existsSync(claudeJsonPath)) {
+        capturedClaudeJsonContent = readFileSync(claudeJsonPath, "utf8");
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets here",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+    };
+
+    const fakeToken = "fake-dispatch-token-claudejson-shape";
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: fakeToken };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(
+      capturedClaudeJsonContent,
+      ".claude.json must exist in the ephemeral dir during the real (non-dry-run) spawn call"
+    );
+
+    const parsed = JSON.parse(capturedClaudeJsonContent);
+    assert.deepEqual(
+      Object.keys(parsed),
+      ["projects"],
+      "the top-level shape must be exactly { projects: ... } — a single key"
+    );
+    assert.deepEqual(
+      Object.keys(parsed.projects),
+      [process.cwd()],
+      "projects must carry exactly one key — the verbatim process.cwd() — never a wildcard, the ephemeral tmp dir, or a parent path"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Locked test 4 — brief/system-prompt file has ZERO occurrences of the token
 // ---------------------------------------------------------------------------
 describe("dispatchHand Claude-alias guard", () => {

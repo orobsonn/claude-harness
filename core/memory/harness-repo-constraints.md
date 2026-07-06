@@ -7,10 +7,10 @@ metadata:
 
 **Why:** The harness source repo has several non-obvious constraints that silently break tests or
 ship incomplete changes: (1) the local Claude sandbox blocks `.env.*` reads, causing EPERM in tests
-that create `.env.example` fixtures; (2) every global rule/skill exists in two mirrors — `core/`
-(git-committed, seen by CI) and `~/.claude/` (live, seen by the running agent) — and both must be
-edited in the same change; (3) there is no `package.json`, so standard Node tooling commands must
-not be run unconditionally.
+that create `.env.example` fixtures; (2) global rule/skill/agent content now lives **only** in
+`core/` — the former `~/.claude/` global mirror was retired (see below, "Dual-mirror edit rule is
+STALE"); (3) there is no `package.json`, so standard Node tooling commands must not be run
+unconditionally.
 
 **How to apply:**
 
@@ -24,11 +24,19 @@ not be run unconditionally.
   pass normally. Full suite: `node --test "core/**/*.test.mjs"` with sandbox off is the CI-equivalent
   local gate.
 
-- **Dual-mirror edit rule** — `core/rules/<file>.md` + `~/.claude/rules/<file>.md` (and
-  `core/skills/<skill>/SKILL.md` + live mirror) are two mirrors of the same content. Edit both in
-  the same change. CI only sees the `core/` copy (`~/.claude` is absent on the runner), so locked
-  tests assert the core file only. Diverged mirrors are a silent bug — the agent uses the live copy,
-  CI enforces the core copy, and they drift undetected until a test catches a stale value.
+- **Dual-mirror edit rule is STALE — do not chase a phantom `~/.claude/` copy.** This bullet used to
+  say `core/rules/<file>.md` + `~/.claude/rules/<file>.md` (and `core/skills/<skill>/SKILL.md` +
+  live mirror) were two mirrors of the same content that both needed editing. That stopped being
+  true when the harness was **removed from the global `~/.claude/` mirror** (2026-06-28,
+  `harness-distribution` decision — vendored-only distribution, `core/` is the sole source). Verified
+  live during `spawn-hand-trust-stamp` (2026-07-06): `~/.claude/skills/` and `~/.claude/rules/`
+  contain zero harness content (only the operator's unrelated personal-domain skills, e.g.
+  `cloudflare`, `blog-post`, `quiz` — no `orchestrating-delivery`, no `triaging-requests`, no
+  harness rule files). **How to apply:** for a fix scoped to a harness rule/skill/agent, edit
+  `core/` only. The only remaining mirror pattern is one level down — `core/` (this source repo,
+  git) vs. a **consuming project's** vendored `.claude/` tree (written by `npx claude-harness init`/
+  update, in that project's own repo) — never this repo's own global `~/.claude/`. Do not spend a
+  verification step hunting for a second copy in `~/.claude/`; it no longer exists.
 
 - **The project-local `.claude/` tree is itself gitignored in this SOURCE repo** (see
   `.git/info/exclude`) — only `core/` and `modules/` ship in git; `.claude/` is the locally-vendored
