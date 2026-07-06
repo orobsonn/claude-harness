@@ -17,8 +17,32 @@
  * cron-b.mjs, cron-state.mjs).
  */
 
+import { STATE_LABELS } from "./review-labels.mjs";
+
 /** @description Non-terminal harness labels scanned by reconcile() when opts.labels is not given. */
 const DEFAULT_NON_TERMINAL_LABELS = ["harness:in-progress", "harness:in-review", "harness:awaiting-merge"];
+
+/**
+ * @description The full set of lifecycle state labels stripped when an issue transitions to
+ * harness:done — the shared STATE_LABELS plus the terminal harness:awaiting-merge. Removing the whole
+ * set (not just the one scanned/current label) guarantees no residual state label leaks onto a done
+ * issue (the defect that left a stray harness:ready alongside harness:done and re-triggered select).
+ */
+const DONE_STRIP_LABELS = [...STATE_LABELS, "harness:awaiting-merge"];
+
+/**
+ * @description Builds the `gh issue edit` argv that strips EVERY lifecycle state label and adds
+ * harness:done — mutually exclusive by construction, and it never touches domain labels (tier/kaizen/
+ * priority) because it only ever names harness:* state labels.
+ * @param {number|string} issueNumber
+ * @returns {string[]}
+ */
+function relabelToDoneArgs(issueNumber) {
+  const args = ["issue", "edit", String(issueNumber)];
+  for (const label of DONE_STRIP_LABELS) args.push("--remove-label", label);
+  args.push("--add-label", "harness:done");
+  return args;
+}
 
 /**
  * @description True when a `gh` seam result indicates success. Undefined/null or `{ok:false}` are
@@ -88,7 +112,7 @@ export function mergeAndFinalize(pr, sha, opts) {
     return { merged: false };
   }
 
-  const relabelResult = gh(["issue", "edit", String(issueNumber), "--remove-label", "harness:in-review", "--add-label", "harness:done"]);
+  const relabelResult = gh(relabelToDoneArgs(issueNumber));
   counter.reset(issueNumber, { stateDir });
   if (isOk(relabelResult)) {
     recordReviewed(pr.number, sha, { stateDir });
@@ -132,7 +156,7 @@ export function reconcile(opts) {
         continue;
       }
 
-      const editResult = gh(["issue", "edit", String(number), "--remove-label", label, "--add-label", "harness:done"]);
+      const editResult = gh(relabelToDoneArgs(number));
 
       if (!isOk(editResult)) {
         continue;

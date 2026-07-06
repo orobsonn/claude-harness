@@ -177,16 +177,22 @@ function findMergeCall(calls, { number, sha }) {
   );
 }
 
-/** @description Finds a `gh issue edit <n> --remove-label X --add-label Y` call in a calls log. */
+/**
+ * @description Finds a `gh issue edit <n> ... --add-label Y` relabel call in a calls log where
+ * `removeLabel` is AMONG the stripped labels. The transition-to-done relabel now strips the full
+ * mutually-exclusive state set in one call, so `removeLabel` may not be the FIRST `--remove-label`
+ * pair — scan every pair for membership rather than only the first.
+ */
 function findRelabelCallIndex(calls, { number, removeLabel, addLabel }) {
+  const stripsLabel = (args, label) =>
+    args.some((tok, i) => tok === "--remove-label" && args[i + 1] === label);
   return calls.findIndex(
     (args) =>
       Array.isArray(args) &&
       args[0] === "issue" &&
       args[1] === "edit" &&
       args[2] === String(number) &&
-      args.includes("--remove-label") &&
-      args[args.indexOf("--remove-label") + 1] === removeLabel &&
+      stripsLabel(args, removeLabel) &&
       args.includes("--add-label") &&
       args[args.indexOf("--add-label") + 1] === addLabel
   );

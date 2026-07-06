@@ -82,7 +82,14 @@ export function cronASelect(opts) {
         (issue) =>
           !hasLabel(issue, "harness:in-progress") &&
           !hasLabel(issue, "harness:blocked") &&
-          !hasLabel(issue, "harness:in-review")
+          !hasLabel(issue, "harness:in-review") &&
+          // A shipped issue whose PR is awaiting merge or already done, or one still gated behind a
+          // dependency (queued), must NEVER be re-selected — even if a stray harness:ready lingers on
+          // it. This is defense-in-depth against the #86 re-dispatch (a shipped issue carrying both
+          // harness:ready and harness:awaiting-merge was picked and re-dispatched onto its own branch).
+          !hasLabel(issue, "harness:awaiting-merge") &&
+          !hasLabel(issue, "harness:queued") &&
+          !hasLabel(issue, "harness:done")
       )
       .sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;

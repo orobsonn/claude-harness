@@ -8,29 +8,57 @@
  */
 
 /**
- * @description Glob patterns that identify the harness's own gate machinery. A PR whose diff
- * touches any of these paths requires a second independent fresh-eyes pass before merge.
+ * @description Directory-prefix globs identifying the harness control surface. ROOT-anchored and
+ * segment-aligned: the trailing "/" guarantees a segment boundary, so a file matches only when its
+ * path STARTS at the repo root with the glob (`vendor/core/vps/x` does NOT match). A PR whose diff
+ * touches any of these — the harness's own delivery/gate machinery — is never auto-merged.
  */
-const GATE_MACHINERY_GLOBS = [
+const GATE_MACHINERY_DIR_GLOBS = [
   "core/vps/",
   "core/skills/",
   "core/agents/",
   "core/rules/",
-  "verdict-block",
-  "settings.json",
-  "CLAUDE.md",
+  "core/hooks/",
+  "core/modules/",
+  ".github/",
 ];
 
 /**
- * @description Returns true when ANY entry in `changedFiles` matches a gate-machinery glob.
+ * @description Basename globs identifying a control-surface FILE at any depth. Matched by exact
+ * equality of the file's FINAL path segment (`a/b/CLAUDE.md` matches, `MYCLAUDE.mdx` and
+ * `user-settings.json` do NOT — segment equality, never substring/prefix). `core/settings.json` and
+ * `core/CLAUDE.md` are covered here by their basenames; `package.json` matches at any depth (a dep
+ * change in any package is a supply-chain surface).
+ */
+const GATE_MACHINERY_BASENAMES = [
+  "settings.json",
+  "CLAUDE.md",
+  "verdict-block",
+  "package.json",
+];
+
+/**
+ * @description True when a single changed-file path is on the harness control surface — a
+ * directory-prefix root-anchored match OR a final-segment basename match. Never a bare startsWith on
+ * a basename (which would leak `core/settings.json` past a root-only `settings.json` glob), never a
+ * substring match.
+ * @param {string} file — repo-relative path
+ * @returns {boolean}
+ */
+function fileTouchesGateMachinery(file) {
+  if (GATE_MACHINERY_DIR_GLOBS.some((glob) => file.startsWith(glob))) return true;
+  const finalSegment = file.slice(file.lastIndexOf("/") + 1);
+  return GATE_MACHINERY_BASENAMES.includes(finalSegment);
+}
+
+/**
+ * @description Returns true when ANY entry in `changedFiles` is on the harness control surface.
  * Pure, synchronous, no I/O — `changedFiles` is caller-supplied (e.g. from the PR diff listing).
  * @param {string[]} changedFiles — repo-relative paths of files changed in the PR diff
  * @returns {boolean}
  */
 export function touchesGateMachinery(changedFiles) {
-  return changedFiles.some((file) =>
-    GATE_MACHINERY_GLOBS.some((glob) => file.startsWith(glob))
-  );
+  return changedFiles.some(fileTouchesGateMachinery);
 }
 
 /**
