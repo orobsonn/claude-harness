@@ -42,3 +42,19 @@ not be run unconditionally.
   `resolve(dirname(fileURLToPath(import.meta.url)), '../...')`. Hardcoded absolute paths
   (`/Users/robson/...`) pass locally and always fail in GitHub Actions (different checkout path).
   The compliance eye should scan new test files for `/Users/` or `/home/` literals as a gate check.
+
+- **Pinning a prompt/mandate rule in an agent `.md`** — the established pattern (see
+  `core/__tests__/test-author-agent.test.mjs`, `core/__tests__/test-author-format-safety.test.mjs`)
+  is a content-assertion `node --test` that reads the agent's markdown body and asserts specific
+  substrings are present (or absent) in a named section window, not the whole file. A locked test
+  that greps the **whole body** for its target tokens is a weak pin: it can pass vacuously if the
+  tokens already exist elsewhere pre-edit (caught by plan-reviewer round 1 on `#ac-1.1`), and it can
+  keep passing even after a future edit deletes the section that motivated the rule, as long as the
+  same tokens survive scattered elsewhere (flagged LOW by the final-review adversary on
+  `test-author-format-safety`, Test 2). **How to apply:** extract the specific section window first
+  (e.g. a helper like `extractStep5Window` / bounded by a `## <heading>` marker) and assert
+  co-occurrence of the target tokens **within that window only** — never a bare whole-body
+  `.includes()`/regex search for a rule that is scoped to one section. When the test's own search
+  tokens are themselves hazardous strings (a block-comment terminator, `/**` opener, or any pattern
+  that could prematurely close the test file's own comments), build them via string-literal
+  concatenation so they never appear as a literal token inside the test file's own comments.

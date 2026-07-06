@@ -50,3 +50,19 @@ Scope-check and per-dispatch allowed-write sets enforce containment without a gi
   tool call issued *after* the freeze-commit — not chained into the same compound command as the
   spawn/commit — so the `PostToolUse` hook fires on it individually instead of only seeing the last
   command in a `&&` chain.
+
+- **Harness-internal infra writes (e.g. the version-check cache) must be excluded from the
+  scope/gitignored-escape sweep by EXACT match, never prefix.** The child `claude -p` session loads
+  the project's own `.claude/settings.json`, whose `SessionStart` hook can write a benign,
+  harness-owned file (`.claude/.harness-version-check-cache` + `.tmp` sibling) that is gitignored —
+  `capture-hand`'s unscoped-escape sweep (`git ls-files --others`, no `--exclude-standard`) correctly
+  detects it as untracked, but it is NOT a hand violation. `isHarnessInternalPath`/
+  `excludeHarnessInternal` in `dispatch-hand.mjs` filter exactly these two literals (mirrored by hand
+  from `version-check.mjs::writeCacheToDisk` finalPath/tmpPath — no shared import, so a future rename
+  of the cache path must update both sides) out of `touchedPaths` before `evaluateRun`'s scope check
+  runs. **Exact string equality only (`Array.includes`), never `startsWith`/prefix** — a prefix match
+  would let an untrusted hand escape scope-checking by naming an out-of-scope file
+  `.claude/.harness-version-check-cache-evil.ts`. A diff that touches ONLY this cache file (no other
+  change) must still resolve `NOT_DONE`, never `DONE` — the empty-diff anti-prose guard runs before
+  the exclusion, so excluding the cache path never accidentally manufactures a "done" verdict out of
+  nothing.

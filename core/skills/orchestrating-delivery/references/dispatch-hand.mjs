@@ -236,6 +236,42 @@ export function checkFrozen(touchedPaths = [], frozenPaths = []) {
 }
 
 /**
+ * @description The two module-level literal paths that are harness-internal version-check cache
+ * files. These literals MIRROR `version-check.mjs::writeCacheToDisk` finalPath/tmpPath
+ * (`.claude/.harness-version-check-cache` / `.claude/.harness-version-check-cache.tmp`) so a
+ * future rename is grep-traceable: if those paths change, update them here too. EXACT string
+ * equality only — never a prefix match (a prefix would let an untrusted cheap hand name an
+ * out-of-scope write `.claude/.harness-version-check-cache-evil.ts` to escape the checks).
+ */
+const HARNESS_INTERNAL_PATHS = [
+  ".claude/.harness-version-check-cache",
+  ".claude/.harness-version-check-cache.tmp",
+];
+
+/**
+ * @description True iff `path` is EXACTLY one of the harness-internal version-check cache paths.
+ * Matches by EXACT string equality (Array.includes), NEVER by prefix — so a sibling like
+ * `.claude/.harness-version-check-cache-evil.ts` is NOT recognised. The two literals MIRROR
+ * `version-check.mjs::writeCacheToDisk` finalPath/tmpPath so a future rename is grep-traceable.
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function isHarnessInternalPath(path) {
+  return HARNESS_INTERNAL_PATHS.includes(path);
+}
+
+/**
+ * @description Returns the input paths minus any harness-internal version-check cache path
+ * (the exact `.claude/.harness-version-check-cache` and its `.tmp` sibling). Additive filter:
+ * no behavior change for any path that is not the exact cache file or its exact .tmp sibling.
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+export function excludeHarnessInternal(paths = []) {
+  return paths.filter((p) => !isHarnessInternalPath(p));
+}
+
+/**
  * @description Decides a run's outcome from the scope-checked diff + locked-test exit code
  * + child exit code — NEVER the prose. Order of judgment:
  *   1. untrusted child (model prose, not independently captured) → NOT_DONE
@@ -265,7 +301,7 @@ export function evaluateRun({ dispatch, child }) {
     return { status: OUTCOME.NOT_DONE, scopeViolations: [], frozenViolations: [], allowedWriteViolations: [], reasons };
   }
 
-  const touched = child.touchedPaths ?? [];
+  const touched = excludeHarnessInternal(child.touchedPaths ?? []);
 
   const scopeViolations = checkScope(touched, dispatch.scope_paths ?? []);
   const frozenViolations = checkFrozen(touched, dispatch.frozen_paths ?? []);

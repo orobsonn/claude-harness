@@ -14,6 +14,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   configurável por tier via `dispatch.timeout_ms`) e degrada sozinho para o caminho de reforço
   (Claude, K=1) — sem exigir `kill -9` manual e sem travar a entrega autônoma, especialmente em
   headless sem ninguém observando. O contrato de saída normal (0/1/2) fica inalterado.
+- **`test-author` autoverifica formato e evita a armadilha do terminador de block-comment** — o
+  agente agora tem uma auto-checagem de conformidade de formato (passo 5, sem depender de um
+  formatter externo) e uma regra explícita contra escrever qualquer `/* */`/`/** */` cujo texto
+  contenha a sequência que fecha o comentário (ex.: um cron `0 */6` dentro de um JSDoc), que hoje
+  derruba a coleta de testes silenciosamente. Pinado por
+  `core/__tests__/test-author-format-safety.test.mjs`.
 - **Cadência dos crons configurável na instalação** — `install-crons` aceita `--interval-hours-a` e
   `--interval-hours-review` (inteiros 1..24; default 4h/6h). Intervalos menores fazem um roadmap
   encadeado avançar mais rápido sem tocar na garantia de ordem. Injection-safe por construção (só
@@ -64,6 +70,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Marcador de `mark.mjs` encadeado com outro comando deixava de ser gravado em silêncio** —
+  `stamp-triage.mjs` agora exige exatamente um objeto JSON com o marcador esperado antes de gravar
+  (dois ou mais, ex.: `mark.mjs` encadeado com outro comando na mesma chamada, disparam um aviso
+  alto em vez de gravação ambígua) e confere, por leitura de volta, que toda gravação tentada
+  realmente persistiu — uma falha de gravação agora dispara aviso alto em vez de sucesso silencioso,
+  e uma nova tentativa se auto-corrige.
 - **A notificação "revisão iniciada" volta a chegar** — antes o aviso de que a análise de um PR
   começou era disparado logo antes de um `spawn` bloqueante de vários minutos; o tempo-limite de 5s
   do envio estourava durante o bloqueio e a notificação nunca chegava, o operador só via o resultado.
@@ -86,6 +98,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   vazio", podendo pular sem aviso uma checagem extra de segurança em PRs que tocam a própria
   infraestrutura de revisão. Agora a falha é sinalizada de forma distinta e o PR é reenfileirado em
   vez de seguir como se nada tivesse mudado.
+- **Mão barata (cheap hand) deixa de ser falsamente reprovada por um cache interno do próprio
+  harness** — a sessão filha que executa a mão carrega o hook de version-check do projeto, que
+  grava um cache interno periódico e gitignorado (`.claude/.harness-version-check-cache`); a
+  varredura de escopo passava a marcar esse arquivo benigno como violação e reprovava uma entrega
+  correta, exigindo um re-disparo inteiro. Esse cache agora é reconhecido e ignorado pela checagem
+  de escopo (correspondência exata, nunca por prefixo — fecha também um possível escape por nome de
+  arquivo parecido).
 
 ### Removed
 

@@ -23,6 +23,8 @@ import {
   checkFrozen,
   evaluateRun,
   buildRunRecord,
+  isHarnessInternalPath,
+  excludeHarnessInternal,
 } from "./dispatch-hand.mjs";
 
 const SCOPE = ["src/feature.ts", "src/feature.test.ts"];
@@ -631,4 +633,134 @@ test("resolveAuthToken: returns undefined when env and both files are empty", ()
     { cwd: "/fake-cwd", homeDir: "/fake-home", readFileSafe }
   );
   assert.equal(result, undefined, "must return undefined when no source has the token");
+});
+
+// ---- #ac-1.1: harness-internal cache path excluded from scope check — DONE ----
+
+test("#ac-1.1: a harness-internal cache write alongside an in-scope write is excluded from scope check => DONE", () => {
+  const dispatch = baseDispatch({
+    scope_paths: ["core/skills/orchestrating-delivery/references/dispatch-hand.mjs"],
+    allowed_writes: ["core/skills/orchestrating-delivery/references/dispatch-hand.mjs"],
+  });
+  const child = baseChild({
+    touchedPaths: [
+      "core/skills/orchestrating-delivery/references/dispatch-hand.mjs",
+      ".claude/.harness-version-check-cache",
+    ],
+  });
+
+  const outcome = evaluateRun({ dispatch, child });
+  assert.deepEqual(
+    outcome.scopeViolations,
+    [],
+    "the harness-internal cache path must be excluded from scope violations"
+  );
+  assert.equal(outcome.status, OUTCOME.DONE);
+});
+
+// ---- #ac-1.2: genuine out-of-scope write is still flagged even alongside the cache path — FAILED ----
+
+test("#ac-1.2: a genuine out-of-scope write is still flagged even alongside the harness-internal cache path => FAILED", () => {
+  const dispatch = baseDispatch({
+    scope_paths: ["core/skills/orchestrating-delivery/references/dispatch-hand.mjs"],
+  });
+  const child = baseChild({
+    touchedPaths: [
+      "core/skills/orchestrating-delivery/references/dispatch-hand.mjs",
+      "some/genuine/out-of-scope.js",
+      ".claude/.harness-version-check-cache",
+    ],
+  });
+
+  const outcome = evaluateRun({ dispatch, child });
+  assert.deepEqual(
+    outcome.scopeViolations,
+    ["some/genuine/out-of-scope.js"],
+    "the cache path is excluded but the genuine out-of-scope write is retained"
+  );
+  assert.equal(outcome.status, OUTCOME.FAILED);
+});
+
+// ---- #ac-1.3: a cache-only run stays NOT_DONE (post-exclusion empty diff never DONE) ----
+
+test("#ac-1.3: a run that ONLY touched harness-internal cache paths stays NOT_DONE (post-exclusion empty diff)", () => {
+  const dispatch = baseDispatch();
+  const child = baseChild({
+    touchedPaths: [
+      ".claude/.harness-version-check-cache",
+      ".claude/.harness-version-check-cache.tmp",
+    ],
+  });
+
+  const outcome = evaluateRun({ dispatch, child });
+  assert.deepEqual(
+    outcome.scopeViolations,
+    [],
+    "harness-internal cache paths are excluded, never flagged as scope violations"
+  );
+  assert.equal(outcome.status, OUTCOME.NOT_DONE);
+  assert.ok(
+    outcome.reasons.some((r) => /empty diff/.test(r)),
+    "the post-exclusion empty diff must still trip the anti-prose guard — never DONE"
+  );
+});
+
+// ---- #ac-1.4: a prefix sibling of the cache path is STILL a violation (exact-match boundary) ----
+
+test("#ac-1.4: a prefix sibling of the harness-internal cache path is STILL a scope violation (exact-match boundary)", () => {
+  const dispatch = baseDispatch({
+    scope_paths: ["core/skills/orchestrating-delivery/references/dispatch-hand.mjs"],
+  });
+  const child = baseChild({
+    touchedPaths: [".claude/.harness-version-check-cache-evil.ts"],
+  });
+
+  const outcome = evaluateRun({ dispatch, child });
+  assert.deepEqual(
+    outcome.scopeViolations,
+    [".claude/.harness-version-check-cache-evil.ts"],
+    "a string-prefix sibling of the cache path must NOT be excluded — exact match only"
+  );
+  assert.equal(outcome.status, OUTCOME.FAILED);
+});
+
+// ---- predicate: isHarnessInternalPath / excludeHarnessInternal exact-equality boundary ----
+
+test("isHarnessInternalPath / excludeHarnessInternal: exact-equality only, never a prefix match", () => {
+  assert.equal(
+    isHarnessInternalPath(".claude/.harness-version-check-cache"),
+    true,
+    "the exact cache path must be recognised as harness-internal"
+  );
+  assert.equal(
+    isHarnessInternalPath(".claude/.harness-version-check-cache.tmp"),
+    true,
+    "the exact .tmp cache path must be recognised as harness-internal"
+  );
+  assert.equal(
+    isHarnessInternalPath(".claude/.harness-version-check-cache-evil.ts"),
+    false,
+    "a string-prefix sibling must NOT be treated as harness-internal"
+  );
+  assert.equal(
+    isHarnessInternalPath(".claude/.harness-version-check-cache/x.ts"),
+    false,
+    "a path nested under the cache path must NOT be treated as harness-internal"
+  );
+  assert.equal(
+    isHarnessInternalPath(".claude/.harness-version-check-cach"),
+    false,
+    "a truncated prefix must NOT be treated as harness-internal — exact equality, never a prefix"
+  );
+
+  assert.deepEqual(
+    excludeHarnessInternal([
+      "a.js",
+      ".claude/.harness-version-check-cache",
+      ".claude/.harness-version-check-cache.tmp",
+      "b.js",
+    ]),
+    ["a.js", "b.js"],
+    "excludeHarnessInternal must strip only the exact harness-internal cache paths"
+  );
 });
