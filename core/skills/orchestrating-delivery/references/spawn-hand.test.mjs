@@ -937,12 +937,16 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE�
 
   function makeDoneFixtureCapture() {
     return () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["core/x/foo.ts"],
+        exitCode: 1,
+        lockedTestExitCode: 0,
+        stdout: "",
+        stderr: "count_tokens endpoint 404 not found",
+      },
       captured: true,
-      touchedPaths: ["core/x/foo.ts"],
-      exitCode: 1,
-      lockedTestExitCode: 0,
-      stdout: "",
-      stderr: "count_tokens endpoint 404 not found",
+      criticalException: false,
     });
   }
 
@@ -1085,12 +1089,16 @@ describe("runLiveDispatch wall-clock timeout — token never leaks + exact reaso
     // The injected capture returns a child whose stdout/stderr contain the resolved token —
     // the record must scrub it regardless.
     const fakeCapture = () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["core/x/foo.ts"],
+        exitCode: 1,
+        lockedTestExitCode: 0,
+        stdout: `some output containing the token ${secretToken}`,
+        stderr: `count_tokens endpoint 404 not found — leak attempt ${secretToken}`,
+      },
       captured: true,
-      touchedPaths: ["core/x/foo.ts"],
-      exitCode: 1,
-      lockedTestExitCode: 0,
-      stdout: `some output containing the token ${secretToken}`,
-      stderr: `count_tokens endpoint 404 not found — leak attempt ${secretToken}`,
+      criticalException: false,
     });
 
     let capturedRecord = null;
@@ -1166,12 +1174,16 @@ describe("runLiveDispatch wall-clock timeout — normal-exit regression guard (#
     // An empty-diff (NOT_DONE) fixture — an ordinary, non-timeout outcome that evaluateRun
     // decides purely from the captured child, independent of the timeout override.
     const fakeCapture = () => ({
+      child: {
+        captured: true,
+        touchedPaths: [],
+        exitCode: 0,
+        lockedTestExitCode: 0,
+        stdout: "",
+        stderr: "",
+      },
       captured: true,
-      touchedPaths: [],
-      exitCode: 0,
-      lockedTestExitCode: 0,
-      stdout: "",
-      stderr: "",
+      criticalException: false,
     });
 
     let capturedRecord = null;
