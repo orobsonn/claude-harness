@@ -70,9 +70,25 @@
  * @param {(branch: string, projectRoot: string) => void} [opts.gitBranchDelete] - best-effort prune the orphan
  *   harness/<n> branch after removing a dead holder's worktree. Default: `git -C <projectRoot> branch -D <branch>`
  *   with failures swallowed.
- * @returns {void}
+ * @param {() => Array<{ metaPath: string, meta: object }>} [opts.listObsRuns] - zero-arg producer of pre-read
+ *   obs-<issue>.json runs to sweep for orphan topic closes (decoupled from the per-worktree holder-liveness
+ *   scan). Each entry is { metaPath, meta } where meta is the already-parsed obs-<issue>.json. The composition
+ *   root wires the real readdir+readMeta enumeration; reaper.mjs never touches fs directly.
+ * @param {() => Array<string>} [opts.liveWorktreePaths] - zero-arg producer of the live worktree paths. A run
+ *   whose meta.worktreePath is present here is LIVE — its topic is never closed by the orphan sweep.
+ *   Decoupled from listWorktrees so the orphan sweep composes with the holder-liveness scan without
+ *   conflating the two.
+ * @param {(input: { threadId: number|string }, opts: object) => Promise<{ ok: boolean }>} [opts.closeForumTopic] -
+ *   token-bound (upstream) forum-topic close seam. Fire-and-forget by the sweep: the returned promise is
+ *   collected into topicCloses so the composition root can await it before the process exits.
+ * @param {(metaPath: string, partial: object) => void} [opts.updateMeta] - obs-outbox updateMeta; the SOLE writer
+ *   of status:'closed' for an orphan run (never a bespoke JSON rewrite).
+ * @returns {Array<object>} the per-worktree action descriptors. The array also carries a
+ *   `topicCloses` property (Array<Promise>) — the orphan topic-close promises the composition root
+ *   awaits before exit. Attached as a property so the array return contract stays byte-stable.
  */
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 
 const DEFAULT_LIVENESS_CEILING_HOURS = 2;
 const DEFAULT_REGISTRATION_GRACE_SECONDS = 120;
@@ -82,6 +98,24 @@ const LABEL_IN_PROGRESS = "harness:in-progress";
 const LABEL_IN_REVIEW = "harness:in-review";
 const LABEL_READY = "harness:ready";
 const LABEL_BLOCKED = "harness:blocked";
+
+/**
+ * @description Canonicalizes a worktree path via realpathSync so a symlink in worktreeRoot cannot
+ * make a LIVE run's meta.worktreePath (a join() string) differ from the git-worktree-list path
+ * (realpath-canonicalized) and get its topic closed by the orphan sweep. A missing path (the orphan
+ * side, or a test's /fake/... path that does not exist on disk) falls back to the raw string —
+ * preserving the frozen test's path-based seam contract byte-for-byte.
+ * @param {string} p
+ * @returns {string}
+ */
+function normalizeWorktreePath(p) {
+  if (typeof p !== "string" || !p) return p;
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 /**
  * @description Best-effort default for pruning an orphan harness/<n> branch. Runs in the
@@ -221,6 +255,80 @@ function actionOf(worktree, action) {
   return { project: worktree.project, issueNumber: worktree.issueNumber, action };
 }
 
+/**
+ * @description Orphan forum-topic sweep (task-9). Decoupled from the per-worktree holder-liveness
+ * scan above: reads pre-enumerated obs-<issue>.json runs and closes the topic for any run whose
+ * worktree is NO LONGER a live worktree (meta status 'active' AND worktreePath absent from the live
+ * worktree list). No double-close: a run already 'closed' is skipped. A live run (worktree present)
+ * is NEVER closed. The closeForumTopic token is bound upstream (composition root); the sweep calls
+ * it fire-and-forget and collects the returned promise into topicCloses so mainReaper can await it
+ * before exit. status:'closed' is written via the CANONICAL obs-outbox updateMeta seam — never a
+ * bespoke JSON rewrite. Fail-open: a close/update failure never blocks the sweep.
+ * @param {object} opts - resolved opts (spread ...opts like the existing seams).
+ * @returns {Array<Promise>} close promises for mainReaper to await.
+ */
+function sweepOrphanTopics(opts) {
+  const { listObsRuns, liveWorktreePaths, closeForumTopic, updateMeta } = opts;
+  const topicCloses = [];
+  if (
+    typeof listObsRuns !== "function" ||
+    typeof liveWorktreePaths !== "function" ||
+    typeof closeForumTopic !== "function" ||
+    typeof updateMeta !== "function"
+  ) {
+    return topicCloses;
+  }
+
+  let livePaths;
+  try {
+    // realpath-canonicalize each live path so a symlink in worktreeRoot cannot make a LIVE run's
+    // meta.worktreePath (a join() string) differ from the git-worktree-list path and get its topic
+    // closed. A missing path (the orphan side, or a test's /fake/... path) falls back to the raw
+    // string — preserving the frozen test's path-based seam contract byte-for-byte.
+    livePaths = new Set((liveWorktreePaths() ?? []).map(normalizeWorktreePath));
+  } catch {
+    return topicCloses;
+  }
+  let runs;
+  try {
+    runs = listObsRuns();
+  } catch {
+    return topicCloses;
+  }
+
+  for (const run of runs) {
+    try {
+      const meta = run && run.meta;
+      if (!meta) continue;
+      if (meta.status === "closed") continue; // no double-close
+      if (meta.threadId == null) continue; // no forum topic was created — nothing to close
+      if (livePaths.has(normalizeWorktreePath(meta.worktreePath))) continue; // a live run's topic is never closed
+      const closePromise = closeForumTopic({ threadId: meta.threadId });
+      if (closePromise && typeof closePromise.then === "function") {
+        topicCloses.push(closePromise);
+      }
+      // Optimistic 'closed' (synchronous). The fire-and-forget sweep cannot await the close ack the
+      // way cron-a-exit's async notifyExit does, so we mirror its ok-gate by REVERTING to 'active'
+      // when the ack is missing/failed: a transient 429/timeout leaves the run 'active' for the next
+      // cycle to retry instead of a permanent on-disk 'closed' orphan. The frozen orphan-sweep test
+      // pins the synchronous 'closed' write (its close fake resolves {ok:true} -> no revert).
+      updateMeta(run.metaPath, { status: "closed" });
+      if (closePromise && typeof closePromise.then === "function") {
+        closePromise
+          .then((r) => {
+            if (!r || !r.ok) updateMeta(run.metaPath, { status: "active" });
+          })
+          .catch(() => {
+            updateMeta(run.metaPath, { status: "active" });
+          });
+      }
+    } catch {
+      // fail-open: one orphan's close failure never blocks the rest of the sweep
+    }
+  }
+  return topicCloses;
+}
+
 export function reaper(opts) {
   const {
     listWorktrees,
@@ -250,5 +358,11 @@ export function reaper(opts) {
       console.error(`reaper: failed to process ${worktree.project} ${worktree.worktreePath}: ${message}`);
     }
   }
+
+  // Composes with the worktree scan above WITHOUT closing a live run's topic. The orphan close
+  // promises are attached to the returned actions array as a `topicCloses` property so the existing
+  // array return contract stays byte-stable (reaper.test.mjs / notify-wiring.test.mjs assert
+  // Array.isArray and actions[0]) while the composition root can still await them before exit.
+  actions.topicCloses = sweepOrphanTopics(resolved);
   return actions;
 }

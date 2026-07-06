@@ -572,7 +572,10 @@ function checkpointTitle(event) {
 function cosmeticBodyLines(event, meta, isFallback) {
   const issue = meta.issueNumber;
   const lines = [];
-  switch (event.type) {
+  // Normalize so cron-a-exit's {type:'PR'} (task-9) and the drain test's {type:'pr'} (task-5) both
+  // render the PR line — without this, 'PR' fell through to the default 'checkpoint' branch.
+  const type = String(event?.type ?? "").toLowerCase();
+  switch (type) {
     case "spec-created":
       lines.push("spec.md ready");
       break;
@@ -581,6 +584,7 @@ function cosmeticBodyLines(event, meta, isFallback) {
       break;
     case "pr":
       lines.push(`PR ${event.pr ?? ""}`);
+      if (event.url) lines.push(String(event.url));
       break;
     case "task-executing":
       lines.push(`task ${event.n ?? "?"}/${event.total ?? "?"}`);

@@ -38,6 +38,8 @@
  * @returns {void}
  */
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { loadConfig } from "./run-cron-a.mjs";
 import { reaper } from "./reaper.mjs";
@@ -46,7 +48,8 @@ import { readHolder } from "./run-lock.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as counterModule from "./cron-state.mjs";
 import * as runLockModule from "./run-lock.mjs";
-import { makeNotifier } from "./notify-telegram.mjs";
+import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
+import { readMeta as realReadMeta, updateMeta as realUpdateMeta } from "./obs-outbox.mjs";
 
 /** @description Real `git -C <projectRoot> worktree list --porcelain` stdout. Fail-soft -> "". */
 function defaultRunGitWorktreeList(projectRoot) {
@@ -71,6 +74,48 @@ function defaultTmuxKillSession(sessionId) {
   } catch {
     // best-effort watchdog kill
   }
+}
+
+/**
+ * @description Default listObsRuns producer: sweeps every configured project's stateDir for
+ * obs-<issue>.json files and returns { metaPath, meta } pairs (meta pre-read via the canonical
+ * obs-outbox readMeta). reaper.mjs never touches fs directly — this is the composition-root wiring.
+ * Fail-soft per project: an unreadable stateDir contributes no runs (the shared cron never aborts
+ * every other project because one stateDir is unreadable).
+ * @param {Array<{ project: string, projectRoot: string, stateDir: string }>} projects
+ * @param {(metaPath: string) => object|null} readMetaFn
+ * @returns {Array<{ metaPath: string, meta: object }>}
+ */
+function defaultListObsRuns(projects, readMetaFn) {
+  const runs = [];
+  for (const project of projects ?? []) {
+    let files;
+    try {
+      files = readdirSync(project.stateDir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.startsWith("obs-") || !file.endsWith(".json")) continue;
+      const metaPath = join(project.stateDir, file);
+      const meta = readMetaFn(metaPath);
+      if (meta) runs.push({ metaPath, meta });
+    }
+  }
+  return runs;
+}
+
+/**
+ * @description Default liveWorktreePaths producer: the set of harness worktree paths that still
+ * exist on disk across every configured project (via the same listWorktrees producer the
+ * holder-liveness scan uses). Decoupled from listWorktrees at the SEAM level (a test injects it
+ * directly); the production wiring shares the producer so a run whose worktree is still live is
+ * never mistaken for an orphan.
+ * @param {object} producerOpts - threaded straight to listWorktreesFn.
+ * @returns {Array<string>}
+ */
+function defaultLiveWorktreePaths(producerOpts) {
+  return listWorktrees(producerOpts).map((entry) => entry.worktreePath);
 }
 
 /**
@@ -108,6 +153,8 @@ export function runReaper(config, deps = {}) {
   const tmuxKillSession = deps.tmuxKillSession ?? defaultTmuxKillSession;
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const kill = deps.kill ?? process.kill;
+  const readMetaFn = deps.readMeta ?? realReadMeta;
+  const updateMetaFn = deps.updateMeta ?? realUpdateMeta;
 
   const gh = scopedGh(config.owner, config.repo, ghExec);
   const prExists = deps.prExists ?? defaultPrExists(gh);
@@ -127,18 +174,41 @@ export function runReaper(config, deps = {}) {
   // (the reaper is a shared cron over many projects), never a single fleet value.
   const notify = deps.notify ?? (() => {});
 
-  const actions =
-    reaperFn({
-      listWorktrees: listWorktreesSeam,
-      tmuxHasSession,
-      kill,
-      now,
-      prExists,
-      gh,
-      runLock,
-      counter,
-      tmuxKillSession,
-    }) || [];
+  // Orphan topic-close seams (task-9). listObsRuns/liveWorktreePaths default to real fs/git
+  // enumeration over config.projects; closeForumTopic is the token-bound seam mainReaper builds
+  // (the token is resolved there via makeNotifier reading ~/.claude/.dev.vars — never the session
+  // env). When closeForumTopic is NOT injected (e.g. a run-crons test that only exercises the
+  // worktree scan), sweepOrphanTopics no-ops.
+  const listObsRunsSeam = deps.listObsRuns ?? (() => defaultListObsRuns(config.projects, readMetaFn));
+  const liveWorktreePathsSeam =
+    deps.liveWorktreePaths ?? (() => defaultLiveWorktreePaths({
+      projects: config.projects,
+      runGitWorktreeList,
+      readHolder: readHolderFn,
+    }));
+  const closeForumTopicFn = deps.closeForumTopic ?? null;
+  const updateMetaSeam = deps.updateMeta ?? updateMetaFn;
+
+  const result = reaperFn({
+    listWorktrees: listWorktreesSeam,
+    tmuxHasSession,
+    kill,
+    now,
+    prExists,
+    gh,
+    runLock,
+    counter,
+    tmuxKillSession,
+    listObsRuns: listObsRunsSeam,
+    liveWorktreePaths: liveWorktreePathsSeam,
+    closeForumTopic: closeForumTopicFn,
+    updateMeta: closeForumTopicFn ? updateMetaSeam : undefined,
+  });
+
+  // reaper returns the actions array with a `topicCloses` property attached; a fake/injected
+  // reaper may return undefined or a bare array (backward compatible with the existing tests).
+  const actions = Array.isArray(result) ? result : (result?.actions ?? []);
+  const topicCloses = (result && result.topicCloses) || (result?.actions?.topicCloses) || [];
 
   const ACTION_TYPE = {
     "watchdog-killed": "reaper-killed",
@@ -153,19 +223,44 @@ export function runReaper(config, deps = {}) {
       // fail-open — a notify failure never blocks the sweep
     }
   }
+
+  // Return the orphan close promises so mainReaper can await them before the process exits.
+  return topicCloses;
 }
 
 /**
  * @description CLI wrapper: builds the real FLEET-level notifier, runs runReaper with it injected,
- * and awaits drain() before the shared reaper process exits so its notifications are not dropped.
+ * and awaits drain() — AND the orphan topic-close promises — before the shared reaper process
+ * exits so its notifications and topic closes are not dropped. The closeForumTopic token is
+ * resolved HERE via makeNotifier(config,{homeDir}) reading ~/.claude/.dev.vars at runtime (mirrors
+ * the task-4 token judgment) — never from the session env-file or a threaded secret. When notify is
+ * unconfigured the token-bound closeForumTopic resolves to a no-op { ok:false } so the orphan sweep
+ * still records status:'closed' on disk (the close is best-effort, fail-open).
  * @param {object} config
  * @returns {Promise<void>}
  */
 export async function mainReaper(config) {
   const notifier = makeNotifier(config, { homeDir: config.homeDir });
+  // Token-bound closeForumTopic: the token lives on notifier.config (resolved from ~/.claude/.dev.vars).
+  // Bound here so the reaper logic never resolves the token itself; it only receives this seam.
+  const closeForumTopic = notifier.config
+    ? (input) => realCloseForumTopic(input, {
+        config: notifier.config,
+        fetch: config.fetch,
+        log: config.log,
+        timeoutMs: config.timeoutMs,
+      })
+    : async () => ({ ok: false });
+
+  let topicCloses = [];
   try {
-    runReaper(config, { notify: notifier.notify });
+    topicCloses = runReaper(config, { notify: notifier.notify, closeForumTopic }) ?? [];
   } finally {
+    try {
+      await Promise.allSettled(topicCloses);
+    } catch {
+      // fail-open: a close failure never blocks the reaper exit
+    }
     try {
       await notifier.drain();
     } catch {
