@@ -13,7 +13,7 @@ import { runCronA } from "./run-cron-a.mjs";
 import { runCronB } from "./run-cron-b.mjs";
 import { runReaper } from "./run-reaper.mjs";
 import { dispatch } from "./cron-a-dispatch.mjs";
-import { cronAExit, notifyExit } from "./cron-a-exit.mjs";
+import { cronAExit, notifyExit, prLinksIssue, pickSessionPr } from "./cron-a-exit.mjs";
 import { cronB } from "./cron-b.mjs";
 import { reaper } from "./reaper.mjs";
 import { validateInstallCoordinates, generateProjectConfig, reconcileFleet, runCli } from "./install-crons.mjs";
@@ -298,6 +298,34 @@ test("notifyExit never rejects even if the notifier throws (fail-open exit handl
     threw = true;
   }
   assert.equal(threw, false, "notifyExit must swallow all failures");
+});
+
+// ---------------------------------------------------------------------------
+// cron-a-exit PR recognition — branch-mismatch fix (harness/<N> OR issue link)
+// ---------------------------------------------------------------------------
+
+test("prLinksIssue: matches GitHub closing/reference keywords for the issue", () => {
+  assert.equal(prLinksIssue("...\nCloses #105", 105), true);
+  assert.equal(prLinksIssue("Fixes #105 and more", 105), true);
+  assert.equal(prLinksIssue("Refs #105", 105), true);
+  assert.equal(prLinksIssue("Resolves #105", 105), true);
+  assert.equal(prLinksIssue("mentions #1050 only", 105), false, "must not match #1050 for issue 105");
+  assert.equal(prLinksIssue("no link here", 105), false);
+});
+
+test("pickSessionPr: prefers the harness/<N> branch, else an issue-linked PR (typed branch)", () => {
+  const prs = [
+    { number: 1, headRefName: "fix/other", url: "u1", body: "unrelated" },
+    { number: 2, headRefName: "harness/105", url: "u2", body: "" },
+  ];
+  assert.deepEqual(pickSessionPr(prs, 105), { number: 2, url: "u2" }, "harness/105 branch wins");
+
+  // No harness/<N> branch — the session delivered on a typed branch that links the issue.
+  const typed = [{ number: 9, headRefName: "fix/cross-family-fail-fast-args", url: "u9", body: "fix ...\n\nCloses #105" }];
+  assert.deepEqual(pickSessionPr(typed, 105), { number: 9, url: "u9" }, "issue-linked typed branch is recognized");
+
+  assert.equal(pickSessionPr([{ number: 3, headRefName: "feat/x", body: "no link" }], 105), null);
+  assert.equal(pickSessionPr(null, 105), null);
 });
 
 // ---------------------------------------------------------------------------

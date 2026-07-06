@@ -212,19 +212,61 @@ function realGh(args) {
  * @param {number} issueNumber
  * @returns {boolean}
  */
-function realPrExists(issueNumber) {
+/**
+ * @description True when a PR body links the issue via a GitHub closing/reference keyword
+ * (Closes/Fixes/Resolves/Refs #N). Used to recognize a session's PR even when it delivered on a
+ * typed feat/fix/docs branch instead of the per-run harness/<N> branch.
+ * @param {string} body
+ * @param {number} issueNumber
+ * @returns {boolean}
+ */
+export function prLinksIssue(body, issueNumber) {
+  return new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|ref(?:s|erences)?)\\s+#${issueNumber}\\b`, "i").test(
+    String(body ?? "")
+  );
+}
+
+/**
+ * @description Picks the PR this session produced for the issue from a PR list: preferring the
+ * per-run branch `harness/<N>`, else any PR whose body links the issue. Returns {number,url} or null.
+ * @param {Array<{number:number,headRefName?:string,url?:string,body?:string}>} prs
+ * @param {number} issueNumber
+ * @returns {{number:number,url:string}|null}
+ */
+export function pickSessionPr(prs, issueNumber) {
+  if (!Array.isArray(prs)) return null;
+  const byBranch = prs.find((p) => p && p.headRefName === `harness/${issueNumber}`);
+  const match = byBranch || prs.find((p) => p && prLinksIssue(p.body, issueNumber));
+  return match ? { number: match.number, url: match.url } : null;
+}
+
+/**
+ * @description Real PR lookup: lists open/merged PRs and picks this session's one by branch
+ * (harness/<N>) or issue link. Fail-soft → null on any gh/parse error.
+ * @param {number} issueNumber
+ * @returns {{number:number,url:string}|null}
+ */
+function realPrLookup(issueNumber) {
   try {
     const { stdout, status } = spawnSync(
       "gh",
-      ["pr", "list", "--head", `harness/${issueNumber}`, "--state", "open", "--json", "number"],
+      ["pr", "list", "--state", "all", "--json", "number,headRefName,url,body", "--limit", "50"],
       { encoding: "utf8" }
     );
-    if (status !== 0) return false;
-    const list = JSON.parse(stdout || "[]");
-    return Array.isArray(list) && list.length > 0;
+    if (status !== 0) return null;
+    return pickSessionPr(JSON.parse(stdout || "[]"), issueNumber);
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * @description prExists seam: a PR (branch harness/<N> OR issue-linked) exists for the issue.
+ * @param {number} issueNumber
+ * @returns {boolean}
+ */
+function realPrExists(issueNumber) {
+  return realPrLookup(issueNumber) !== null;
 }
 
 /**
@@ -238,27 +280,6 @@ function realBlockingFinding(worktree) {
   try {
     const text = readFileSync(blockingMarkerPath(worktree), "utf8").trim();
     return text || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * @description Best-effort PR lookup for the session-done notification: the open/merged harness PR
- * for `harness/<issueNumber>`, returning its number + url or null. Fail-soft on any gh/parse error.
- * @param {number} issueNumber
- * @returns {{ number: number, url: string } | null}
- */
-function realPrLookup(issueNumber) {
-  try {
-    const { stdout, status } = spawnSync(
-      "gh",
-      ["pr", "list", "--head", `harness/${issueNumber}`, "--state", "all", "--json", "number,url"],
-      { encoding: "utf8" }
-    );
-    if (status !== 0) return null;
-    const list = JSON.parse(stdout || "[]");
-    return Array.isArray(list) && list.length > 0 ? { number: list[0].number, url: list[0].url } : null;
   } catch {
     return null;
   }
