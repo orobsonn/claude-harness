@@ -21,7 +21,8 @@ const GATE_MACHINERY_DIR_GLOBS = [
   "core/rules/",
   "core/hooks/",
   "core/github/",
-  "modules/", // repo-root codex/cross-family machinery imported by the review runtime
+  "core/__tests__/", // harness's own contract/security suite — weakening it is a gate change
+  "modules/codex-adversary/", // repo-root codex/cross-family machinery imported by the review runtime
   // Vendored harness install — the control surface present in EVERY downstream project. A PR that
   // edits the vendored pipeline/gates/hooks/cross-family in a product repo is modifying the harness's
   // own safety machinery and must wait for a manual merge. Deliberately NOT `.claude/` wholesale:
@@ -46,7 +47,7 @@ const GATE_MACHINERY_DIR_GLOBS = [
 const GATE_MACHINERY_BASENAMES = [
   "settings.json",
   "CLAUDE.md",
-  "verdict-block",
+  "verdict-block.mjs",
   "package.json",
 ];
 

@@ -38,6 +38,12 @@ test("AC-2.3 .claude/hooks/... matches (vendored entry-gate/hooks in a downstrea
 test("AC-2.3 core/github/... matches (issue form feeds routine selection)", () => {
   assert.equal(touchesGateMachinery(["core/github/ISSUE_TEMPLATE/harness-task.yml"]), true);
 });
+test("AC-2.3 core/__tests__/... matches (harness's own contract/security suite)", () => {
+  assert.equal(touchesGateMachinery(["core/__tests__/escalation.test.mjs"]), true);
+});
+test("AC-2.3 a verdict-block.mjs at any depth matches (basename, exact final segment)", () => {
+  assert.equal(touchesGateMachinery(["some/where/verdict-block.mjs"]), true);
+});
 test("AC-2.3 docs/nested/CLAUDE.md matches (basename at any depth)", () => {
   assert.equal(touchesGateMachinery(["docs/nested/CLAUDE.md"]), true);
 });
