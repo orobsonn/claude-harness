@@ -48,6 +48,9 @@ const OLLAMA_BASE_URL = "https://ollama.com";
  */
 const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
 
+/** @description Default wall-clock timeout for hand spawn in milliseconds (9 minutes) */
+const DEFAULT_HAND_TIMEOUT_MS = 540000;
+
 /**
  * @description Builds the argv array for `claude -p` with the required flags.
  * PURE: no side effects, no token in argv. The token is NEVER an element of this array.
@@ -281,16 +284,36 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
       CLAUDE_CONFIG_DIR: ephemeralDir,
     };
 
+    // Determine timeout value: dispatch.timeout_ms when positive number, else DEFAULT_HAND_TIMEOUT_MS
+    const timeoutMs = (typeof dispatch.timeout_ms === 'number' && dispatch.timeout_ms > 0)
+      ? dispatch.timeout_ms
+      : DEFAULT_HAND_TIMEOUT_MS;
+
     // Spawn the process (injectable for unit tests).
     // The scrubbed brief is delivered to the child's STDIN so it becomes the hand's USER
     // prompt — without it `claude -p` has no user turn, exits 1, and the hand does NOTHING.
     // The brief is already token-scrubbed (scrubbedBrief = redact(rawBrief, token)), so no
     // auth token reaches stdin. --append-system-prompt-file stays as domain/context belt.
-    const result = spawn("claude", argv, { env: childEnv, input: Buffer.from(scrubbedBrief, "utf8") });
+    const result = spawn("claude", argv, {
+      env: childEnv,
+      input: Buffer.from(scrubbedBrief, "utf8"),
+      timeout: timeoutMs,
+      killSignal: "SIGKILL"
+    });
 
-    const exitCode = result?.status ?? result?.exitCode ?? 1;
+    // Check if the spawn timed out
+    const timedOut = (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL");
+
+    const exitCode = timedOut
+      ? 1 // Non-zero, non-benign-404 exitCode for timeout
+      : result?.status ?? result?.exitCode ?? 1;
     const stdout = result?.stdout ? String(result.stdout) : "";
     const stderr = result?.stderr ? String(result.stderr) : "";
+
+    // Return timeout information when applicable
+    if (timedOut) {
+      return { exitCode, stdout, stderr, timedOut: true, timeoutMs };
+    }
 
     return { exitCode, stdout, stderr };
   } finally {
@@ -527,6 +550,16 @@ export async function runLiveDispatch(descriptor, {
     // entry-gate cross-checks this against the current HEAD, so a STALE record from a prior run
     // (a different freeze) can never authorize a Claude hand escape for a later, unfailed run.
     const record = { ...buildRunRecord({ dispatch, child: captured.child, token, logs: [] }), freezeCommitSha: descriptor.freeze_commit_sha };
+
+    // C3 override: unconditional FAILED override when child timed out
+    // Keyed on dispatchHand return's child.timedOut (NOT captured.child)
+    if (child.timedOut) {
+      record.outcome.status = "FAILED";
+      record.timedOut = true;
+      record.timeoutMs = child.timeoutMs;
+      record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms`;
+    }
+
     const baseDir = stateDir ?? join(process.cwd(), ".claude", "plans", ".state", "hand-records");
     const recordPath = join(baseDir, descriptor.feature_id, `${descriptor.task_id}.json`);
     writeRecord(recordPath, JSON.stringify(record, null, 2));
