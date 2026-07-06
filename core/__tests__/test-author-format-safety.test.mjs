@@ -2,8 +2,10 @@
 // @description Contract tests for test-author agent definition body:
 // (1) the step-5 self-check window mentions a formatter/format-conformance
 //     concept alongside a final-step self-check marker;
-// (2) the body documents the block-comment terminator footgun rule for
-//     cron/early-close hazards.
+// (2) the block-comment-terminator-footgun-rule SECTION WINDOW documents a
+//     block-comment-form reference co-occurring with a cron mention AND a
+//     hazard word, all within that isolated section — not scattered
+//     anywhere in the whole body.
 // Tests run under node:test. The hazardous comment-terminator and
 // comment-opener token strings used for searching are built as string
 // literals only (never written as an actual comment delimiter in this
@@ -79,19 +81,17 @@ function parseFrontmatter(content) {
 }
 
 /**
- * Isolates the "### 5. Verifique a transcricao" section window from the
- * agent body: from that heading (tolerating the accented
- * "transcrição" spelling) up to the next section boundary — a line that
- * is exactly "---", or the next "## " / "### " heading — whichever comes
- * first. Returns null if the heading is not found.
+ * Isolates a section window from the agent body: from the first line
+ * matching headingRegex up to the next section boundary — a line that is
+ * exactly "---", or the next "## " / "### " heading — whichever comes
+ * first. Returns null if no line matches headingRegex.
  */
-function extractStep5Window(body) {
+function extractSectionWindow(body, headingRegex) {
   const lines = body.split("\n");
-  const headingPattern = /^###\s*5\.\s*Verifique a transcri[cç][aã]o/i;
 
   let startIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (headingPattern.test(lines[i].trim())) {
+    if (headingRegex.test(lines[i].trim())) {
       startIdx = i;
       break;
     }
@@ -108,6 +108,27 @@ function extractStep5Window(body) {
   }
 
   return lines.slice(startIdx, endIdx).join("\n");
+}
+
+/**
+ * Isolates the "### 5. Verifique a transcricao" section window from the
+ * agent body (tolerating the accented "transcrição" spelling).
+ */
+function extractStep5Window(body) {
+  return extractSectionWindow(
+    body,
+    /^###\s*5\.\s*Verifique a transcri[cç][aã]o/i
+  );
+}
+
+// Isolates the "## Armadilha de block-comment" section window from the
+// agent body (tolerates the trailing scheduling-pattern qualifier in
+// parentheses and reasonable spelling variance in the heading text after
+// the anchor). Kept as a // line comment, not a JSDoc block, so this
+// docstring can freely mention the scheduling-pattern hazard token without
+// tripping this file's own block-comment self-footgun guard.
+function extractBlockCommentTrapWindow(body) {
+  return extractSectionWindow(body, /^##\s*Armadilha de block-comment/i);
 }
 
 /**
@@ -160,26 +181,39 @@ test("test-author.md: step-5 window mentions formatter self-check as the last st
   );
 });
 
-// Test 2 (#ac-1.2): Given test-author.md, when the full body is searched,
-// then it MUST document the block-comment terminator footgun rule: a
-// reference to the block-comment form (the opener or the terminator
-// sequence) co-occurring with the scheduling-pattern early-close hazard
-// mention (the token asserted below, plus a hazard word such as
-// fechar/fecha/encerra/close/terminator/terminador).
+// Test 2 (#ac-1.2): Given test-author.md, when the block-comment-terminator
+// footgun rule SECTION WINDOW is isolated (from the heading "## Armadilha
+// de block-comment" up to the next section boundary), then that window —
+// and only that window, not the whole body — MUST co-occur: a reference to
+// the block-comment form (the opener or the terminator sequence), the
+// scheduling-pattern hazard token "cron", AND a hazard word (e.g.
+// fechar/fecha/encerra/close/terminator/terminador). Scoping to the section
+// window (rather than searching the full body independently per token)
+// means a future edit that deletes this rule's section cannot keep the
+// test green just because "cron" or a hazard word happens to appear
+// elsewhere in the file.
 test("test-author.md: body documents the block-comment terminator cron footgun rule", () => {
   const content = readFileSync(agentMdPath, "utf8");
   const { body } = parseFrontmatter(content);
-  const bodyLower = body.toLowerCase();
 
-  const hasBlockCommentReference =
-    body.includes(BLOCK_COMMENT_OPENER) || body.includes(BLOCK_COMMENT_TERMINATOR);
+  const window = extractBlockCommentTrapWindow(body);
   assert(
-    hasBlockCommentReference,
-    "body must reference the block-comment form (the /** opener or the comment-terminator sequence)"
+    window,
+    "block-comment-terminator footgun rule section ('## Armadilha de block-comment') must exist in the body"
   );
 
-  const hasCronMention = bodyLower.includes("cron");
-  assert(hasCronMention, "body must mention 'cron'");
+  const windowLower = window.toLowerCase();
+
+  const hasBlockCommentReference =
+    window.includes(BLOCK_COMMENT_OPENER) ||
+    window.includes(BLOCK_COMMENT_TERMINATOR);
+  assert(
+    hasBlockCommentReference,
+    "block-comment footgun section must reference the block-comment form (the /** opener or the comment-terminator sequence)"
+  );
+
+  const hasCronMention = windowLower.includes("cron");
+  assert(hasCronMention, "block-comment footgun section must mention 'cron'");
 
   const hazardWords = [
     "fechar",
@@ -189,9 +223,9 @@ test("test-author.md: body documents the block-comment terminator cron footgun r
     "terminator",
     "terminador",
   ];
-  const hasHazardWord = hazardWords.some((word) => bodyLower.includes(word));
+  const hasHazardWord = hazardWords.some((word) => windowLower.includes(word));
   assert(
     hasHazardWord,
-    `body must mention a hazard word (one of: ${hazardWords.join(", ")})`
+    `block-comment footgun section must mention a hazard word (one of: ${hazardWords.join(", ")})`
   );
 });
