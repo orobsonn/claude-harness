@@ -9,6 +9,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Timeout wall-clock na mão barata do spawn-hand** — um `claude -p` que trava numa chamada de
+  rede sem fim (observado 28+ min a CPU quase zero) agora se autotermina no prazo (default 9 min,
+  configurável por tier via `dispatch.timeout_ms`) e degrada sozinho para o caminho de reforço
+  (Claude, K=1) — sem exigir `kill -9` manual e sem travar a entrega autônoma, especialmente em
+  headless sem ninguém observando. O contrato de saída normal (0/1/2) fica inalterado.
 - **`test-author` autoverifica formato e evita a armadilha do terminador de block-comment** — o
   agente agora tem uma auto-checagem de conformidade de formato (passo 5, sem depender de um
   formatter externo) e uma regra explícita contra escrever qualquer `/* */`/`/** */` cujo texto
