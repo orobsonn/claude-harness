@@ -7,6 +7,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-06
+
 ### Added
 
 - **Auto-merge autônomo que fecha de verdade + trava de segurança da própria máquina** — três
@@ -594,6 +596,7 @@ push.
 ### Added
 - Marco inicial do Claude Harness (entry policy, agents, skills, rules, modelo de memória, model routing barbell).
 
-[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/orobsonn/claude-harness/compare/v0.24.0...v0.25.0
 [0.2.0]: https://github.com/orobsonn/claude-harness/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orobsonn/claude-harness/releases/tag/v0.1.0
