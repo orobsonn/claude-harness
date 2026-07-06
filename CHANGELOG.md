@@ -9,6 +9,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Timeout wall-clock na mão barata do spawn-hand** — um `claude -p` que trava numa chamada de
+  rede sem fim (observado 28+ min a CPU quase zero) agora se autotermina no prazo (default 9 min,
+  configurável por tier via `dispatch.timeout_ms`) e degrada sozinho para o caminho de reforço
+  (Claude, K=1) — sem exigir `kill -9` manual e sem travar a entrega autônoma, especialmente em
+  headless sem ninguém observando. O contrato de saída normal (0/1/2) fica inalterado.
 - **Cadência dos crons configurável na instalação** — `install-crons` aceita `--interval-hours-a` e
   `--interval-hours-review` (inteiros 1..24; default 4h/6h). Intervalos menores fazem um roadmap
   encadeado avançar mais rápido sem tocar na garantia de ordem. Injection-safe por construção (só
