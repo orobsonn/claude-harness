@@ -51,8 +51,8 @@ test("AC1 — creating-plans Step 7 presents hand_tiers as the only shape and pi
     "Step 7 must present hand_tiers as the only valid shape",
   );
   assert.ok(
-    step7.includes("qwen3-coder-next"),
-    "Step 7 must pin the cravado ladder value qwen3-coder-next (low)",
+    step7.includes("gemma4"),
+    "Step 7 must pin the cravado ladder value gemma4 (low)",
   );
   assert.ok(
     step7.includes("glm-5.2"),

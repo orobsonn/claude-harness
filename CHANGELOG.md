@@ -9,11 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Observabilidade por run em tópico de fórum Telegram para runs autônomos na VPS** — cada run
+  autônomo ganha um tópico de fórum dedicado que transmite checkpoints determinísticos do pipeline
+  (tipo do pipeline, spec, plano, plan-reviewer, executor+modelo+eyes por task, revisão final, PR) via
+  uma outbox drenada pelo cron, com prioridade crítica (bloqueado/falhou) sinalizada, fallback pro
+  tópico compartilhado quando a criação falha, e fechamento do tópico pelo lado do cron ao terminar.
+
 ### Changed
 
-### Fixed
-
-### Removed
+- **Escada de modelos baratos (`hand_tiers`) trocada para gemma4/glm-5.2/kimi-k2.7-code** —
+  deepseek-v4-pro saiu da escada por custo desproporcional ao ganho de qualidade nas mãos baratas.
 
 ## [0.26.1] - 2026-07-06
 

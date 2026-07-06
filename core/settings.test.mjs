@@ -312,3 +312,57 @@ test("settings.env has no secret-shaped keys or values", () => {
     );
   }
 });
+
+/**
+ * @description Given the wired core/settings.json, When the PostToolUse[Agent] hooks array is
+ * read, Then it contains BOTH codex-eye-nudge.mjs AND obs-eye-append.mjs (coexisting, neither
+ * replacing the other), and the PreToolUse[Agent] array still contains entry-gate.mjs.
+ */
+test("hooks.PostToolUse Agent matcher wires BOTH codex-eye-nudge.mjs and obs-eye-append.mjs (coexisting), and PreToolUse Agent still wires entry-gate.mjs", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  ok(settings.hooks, "hooks object exists");
+  ok(settings.hooks.PostToolUse, "hooks.PostToolUse exists");
+  ok(Array.isArray(settings.hooks.PostToolUse), "PostToolUse is an array");
+
+  const agentPostHook = settings.hooks.PostToolUse.find(
+    (h) => h.matcher === "Agent"
+  );
+  ok(agentPostHook, "PostToolUse Agent matcher found");
+  ok(Array.isArray(agentPostHook.hooks), "PostToolUse Agent matcher has a hooks array");
+
+  ok(
+    agentPostHook.hooks.some(
+      (h) => h.command && h.command.includes("codex-eye-nudge.mjs")
+    ),
+    "PostToolUse Agent hooks still include codex-eye-nudge.mjs (not replaced)"
+  );
+  ok(
+    agentPostHook.hooks.some(
+      (h) => h.command && h.command.includes("obs-eye-append.mjs")
+    ),
+    "PostToolUse Agent hooks include obs-eye-append.mjs (coexisting alongside codex-eye-nudge.mjs)"
+  );
+  ok(
+    agentPostHook.hooks.every(
+      (h) => h.command && h.command.includes("${CLAUDE_PROJECT_DIR}")
+    ),
+    "every PostToolUse Agent hook command uses ${CLAUDE_PROJECT_DIR} variable"
+  );
+
+  ok(settings.hooks.PreToolUse, "hooks.PreToolUse exists");
+  ok(Array.isArray(settings.hooks.PreToolUse), "PreToolUse is an array");
+
+  const agentPreHook = settings.hooks.PreToolUse.find(
+    (h) => h.matcher === "Agent"
+  );
+  ok(agentPreHook, "PreToolUse Agent matcher found");
+  ok(
+    agentPreHook.hooks &&
+      agentPreHook.hooks[0] &&
+      agentPreHook.hooks[0].command &&
+      agentPreHook.hooks[0].command.includes("entry-gate.mjs"),
+    "PreToolUse Agent entry-gate.mjs preserved — the nudge/append hooks never touched the entry-gate"
+  );
+});

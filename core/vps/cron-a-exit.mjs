@@ -31,14 +31,19 @@
  * / blockingFinding seams. The frozen oracle (cron-a-exit.test.mjs) exercises cronAExit() with
  * every seam INJECTED as a fake; the CLI wrapper is the thin production wiring.
  */
-import { rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 
 import { release as releaseLock, readHolder } from "./run-lock.mjs";
 import { read as readCounter, reset as resetCounter, increment as incrementCounter } from "./cron-state.mjs";
 import { isDirectCli } from "../skills/orchestrating-delivery/references/cli-flags.mjs";
-import { makeNotifier } from "./notify-telegram.mjs";
+import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
+import {
+  appendEvent as defaultAppendEvent,
+  readMeta as defaultReadMeta,
+  updateMeta as defaultUpdateMeta,
+} from "./obs-outbox.mjs";
 
 const LABEL_IN_PROGRESS = "harness:in-progress";
 const LABEL_IN_REVIEW = "harness:in-review";
@@ -286,29 +291,63 @@ function realBlockingFinding(worktree) {
 }
 
 /**
- * @description Translates the cron-a-exit structured outcome into a best-effort Telegram
- * notification. The notify coordinates (chatId/threadId/project) arrive via HARNESS_NOTIFY_* env
- * vars the dispatch step wrote into the sourced env-file (non-secret); the token is read from
- * ~/.claude/.dev.vars by makeNotifier. Entirely wrapped: a notify/gh/drain failure NEVER changes
- * the exit handler's outcome (the critical relabel/lock-release/cleanup already ran synchronously
- * inside cronAExit). Numeric coercion keeps chat_id typed like the module path.
+/**
+ * @description Translates the cron-a-exit structured outcome into the run's terminal lifecycle
+ * signal. Two paths, existsSync-guarded on HARNESS_OBSERVABILITY_RUN_PATH:
+ *
+ *   OBSERVABILITY PATH (guard set — HARNESS_OBSERVABILITY_RUN_PATH points at a live obs-<issue>.json):
+ *     (a) PRODUCE the run's terminal checkpoint into the outbox via appendEvent, BEFORE the close:
+ *           - 'done'     -> { type:'PR', pr, url }     (border checkpoint, routed by the drain to the run topic)
+ *           - 'blocked'  -> { type:'blocked', reason } (CRITICAL — the drain sends it first to the shared topic)
+ *           - 'failed'   -> { type:'failed' }         (CRITICAL — same critical-first path as 'blocked')
+ *         This REPLACES the legacy direct sendNotification: the run-cron-a drain delivers it
+ *         exactly-once through the cursor, so NO direct notify() is issued here. cron-a-exit
+ *         NEVER drains (single-drainer invariant) — the closed forum topic stays admin-bot-writable
+ *         so the drain still delivers the PR event on the next tick.
+ *     (b) THEN close the run's forum topic reading the threadId from obs-<issue>.json (NEVER the
+ *         session) and set status 'closed' via obs-outbox updateMeta. The close token is resolved via
+ *         makeNotifier(config, { homeDir }) reading ~/.claude/.dev.vars at runtime — NEVER from the
+ *         session env-file or a threaded secret (mirrors the task-4 token judgment).
+ *
+ *   LEGACY PATH (guard unset): byte-identical to the pre-observability behavior — a direct
+ *   sendNotification (session-done / blocked / failed / session-requeued) + drain. Backward compatible.
+ *
+ * Entirely wrapped: an append/close/notify/gh/drain failure NEVER changes the exit handler's outcome
+ * (the critical relabel/lock-release/cleanup already ran synchronously inside cronAExit). Numeric
+ * coercion keeps chat_id typed like the module path.
+ *
  * @param {{ outcome: string, issueNumber: number, finding: string|null }} outcome
  * @param {object} [deps]
+ * @param {object} [deps.env]
+ * @param {(issueNumber: number) => ({ number: number, url: string } | null)} [deps.prLookup]
+ * @param {(config: object, deps: object) => object} [deps.makeNotifier]
+ * @param {(metaPath: string, event: object) => void} [deps.appendEvent]
+ * @param {(input: { threadId: number|string }, opts: object) => Promise<{ ok: boolean }>} [deps.closeForumTopic]
+ * @param {(metaPath: string) => object|null} [deps.readMeta]
+ * @param {(metaPath: string, partial: object) => void} [deps.updateMeta]
+ * @param {typeof fetch} [deps.fetch]
+ * @param {(entry: object) => void} [deps.log]
  * @returns {Promise<void>}
  */
 export async function notifyExit(outcome, deps = {}) {
   const env = deps.env ?? process.env;
   const prLookup = deps.prLookup ?? realPrLookup;
   const makeNotifierFn = deps.makeNotifier ?? makeNotifier;
+  const appendEventFn = deps.appendEvent ?? defaultAppendEvent;
+  const closeForumTopicFn = deps.closeForumTopic ?? realCloseForumTopic;
+  const readMetaFn = deps.readMeta ?? defaultReadMeta;
+  const updateMetaFn = deps.updateMeta ?? defaultUpdateMeta;
   try {
     if (!outcome) return;
-    const project = env.HARNESS_NOTIFY_PROJECT;
-    if (!project) return; // not an engine-dispatched session (no project threaded) — no-op
+
+    const runPath = env.HARNESS_OBSERVABILITY_RUN_PATH;
+    const obsEnabled = typeof runPath === "string" && runPath.length > 0 && existsSync(runPath);
+
+    // The notify config block is built from the (non-secret) HARNESS_NOTIFY_* env vars the dispatch
+    // step threaded; the token is resolved by makeNotifier from ~/.claude/.dev.vars at runtime.
     const chatId = env.HARNESS_NOTIFY_CHATID;
     const config = {
       homeDir: env.HOME,
-      // config.notify (from the env-file) overrides; when the chat/thread were NOT threaded, makeNotifier
-      // falls back to ~/.claude/.dev.vars (TELEGRAM_CHAT_ID/THREAD_ID) — so putting them in .dev.vars works.
       notify: chatId
         ? {
             chatId: Number(chatId),
@@ -316,6 +355,65 @@ export async function notifyExit(outcome, deps = {}) {
           }
         : undefined,
     };
+
+    if (obsEnabled) {
+      // A 'requeued' run is NON-terminal (it will retry): keep status 'active' and the topic OPEN so
+      // the next createRun reuses this run (pending events are drained before the retry). Closing here
+      // would make the next createRun truncate the events log — erasing undelivered events (incl. a
+      // possible critical) — and churn a fresh topic per retry. The legacy notify for requeued (guard
+      // unset) stays as-is; this gate is observability-path only.
+      if (outcome.outcome === "requeued") return;
+      // The close token comes from makeNotifier(config,{homeDir}) reading ~/.claude/.dev.vars — never
+      // the session env-file. Built here (obs path) so the LEGACY path's project guard still gates
+      // makeNotifier for an unconfigured session (no project threaded, no run-path guard).
+      const notifier = makeNotifierFn(config, { homeDir: env.HOME });
+
+      // (a) PRODUCE the terminal checkpoint into the outbox BEFORE the close. cron-a-exit NEVER
+      // drains — the run-cron-a tick is the single drainer.
+      const metaPath = runPath;
+      try {
+        if (outcome.outcome === "done") {
+          const pr = prLookup(outcome.issueNumber);
+          appendEventFn(metaPath, { type: "PR", pr: pr?.number, url: pr?.url });
+        } else if (outcome.outcome === "blocked") {
+          appendEventFn(metaPath, { type: "blocked", reason: outcome.finding });
+        } else if (outcome.outcome === "failed") {
+          appendEventFn(metaPath, { type: "failed" });
+        }
+      } catch {
+        // fail-open: an append failure never blocks the close or the exit.
+      }
+
+      // (b) Close the run's forum topic reading the threadId from obs-<issue>.json (never the
+      // session), then set status 'closed' via obs-outbox updateMeta. No double-close: skip when
+      // already closed.
+      try {
+        const meta = readMetaFn(metaPath);
+        if (meta && meta.status !== "closed") {
+          if (meta.threadId != null) {
+            const closeResult = await closeForumTopicFn(
+              { threadId: meta.threadId },
+              { config: notifier?.config ?? null, fetch: deps.fetch, log: deps.log }
+            );
+            if (closeResult && closeResult.ok) {
+              updateMetaFn(metaPath, { status: "closed" });
+            }
+          } else {
+            // No forum topic was created for this run (createForumTopic failed at dispatch): nothing
+            // to close, but the run is terminal — mark it closed so the reaper orphan sweep skips it.
+            updateMetaFn(metaPath, { status: "closed" });
+          }
+        }
+      } catch {
+        // fail-open: a close failure never blocks the exit.
+      }
+      return;
+    }
+
+    // LEGACY path (guard unset) — byte-identical to the pre-observability behavior: direct
+    // sendNotification + drain. Backward compatible.
+    const project = env.HARNESS_NOTIFY_PROJECT;
+    if (!project) return; // not an engine-dispatched session (no project threaded) — no-op
     const { notify, drain } = makeNotifierFn(config, { homeDir: env.HOME });
     try {
       if (outcome.outcome === "done") {
