@@ -338,3 +338,18 @@ export function makeNotifier(config, deps = {}) {
     heartbeat: resolved.heartbeat,
   };
 }
+
+// --- task-1 scaffold stubs (throwing) — implemented by the task-1 executor against the frozen test.
+// Present only so the frozen test COLLECTS (imports resolve) while staying legitimately RED.
+/** @description Scaffold — replaced by the real unified checkpoint renderer. */
+export function renderCheckpoint() {
+  throw new Error("not implemented");
+}
+/** @description Scaffold — replaced by the real createForumTopic wrapper. */
+export function createForumTopic() {
+  throw new Error("not implemented");
+}
+/** @description Scaffold — replaced by the real closeForumTopic wrapper. */
+export function closeForumTopic() {
+  throw new Error("not implemented");
+}
