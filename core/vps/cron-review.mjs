@@ -13,6 +13,8 @@
  */
 import { join } from "node:path";
 
+import { STATE_LABELS } from "./review-labels.mjs";
+
 /**
  * @description Extracts the root issue number from a `harness/<N>` branch name.
  * @param {string} headRefName
@@ -96,6 +98,33 @@ export async function cronReview(opts) {
     }
   }
 
+  /**
+   * @description Shared terminal-CLEAN "manual merge" route. Ensures the awaiting-merge label exists,
+   * UNDRAFTS the PR (`gh pr ready` — headless PRs are drafts; undrafting gives the operator a
+   * one-click merge on a non-draft PR; idempotent and a failure never aborts the route), strips every
+   * lifecycle STATE label and adds harness:awaiting-merge in ONE mutually-exclusive relabel (domain
+   * labels preserved because only harness:* state labels are named), records the review as terminal
+   * (so a same-SHA re-review is a no-op — the PR is not re-processed every cycle), and notifies.
+   * Reused by the autoMerge-off route, the gate-machinery carve-out, the cross-family-absent residual,
+   * and the permanent-merge-failure route (AC-1.4).
+   * @param {object} pr
+   * @param {string} sha
+   * @param {{ notifyType?: string }} [o]
+   */
+  function routeToAwaitingMerge(pr, sha, { notifyType = "pr-awaiting-merge" } = {}) {
+    ensureAwaitingMergeLabel();
+    gh(["pr", "ready", String(pr.number)]);
+    const root = extractRoot(pr.headRefName);
+    if (root !== null) {
+      const args = ["issue", "edit", String(root)];
+      for (const label of STATE_LABELS) args.push("--remove-label", label);
+      args.push("--add-label", "harness:awaiting-merge");
+      gh(args);
+    }
+    recordReviewed(pr.number, sha, { stateDir });
+    notify({ type: notifyType, pr: pr.number, url: pr.url });
+  }
+
   for (const pr of prs) {
    try {
     // Origin gate — single self-contained eligibility source (review-origin-gate.mjs).
@@ -165,23 +194,32 @@ export async function cronReview(opts) {
     // Route at the composition decision boundary. Every routine outcome notifies the operator so a
     // non-dev never has to poll GitHub to learn what the autonomous review did (HR: observability).
     if (decision.eligible) {
-      if (autoMergeEnabled === true) {
-        // All conditions met — merge.
+      // Gate-machinery carve-out: the harness NEVER auto-merges a change to its OWN control surface
+      // (`secondPassRequired` === touchesGateMachinery(changedFiles)) — those wait for the operator's
+      // manual merge regardless of a CLEAN verdict. Auto-merge fires ONLY for a non-gate-machinery
+      // eligible PR with the rollout lock on. In a downstream (non-harness) project no diff touches
+      // the control surface, so everything green auto-merges hands-free.
+      if (autoMergeEnabled === true && !secondPassRequired && changedFiles.length > 0) {
+        // Fail-CLOSED on an empty/unknown changed-file set: a genuinely empty diff, or a malformed
+        // (non-array) `gh pr diff` that already collapsed to [] above, must never slip onto the
+        // auto-merge path (touchesGateMachinery([]) is false — no visibility into what changed). An
+        // empty diff routes to manual merge instead. This guard does NOT force a 2nd review pass.
+        // Undraft BEFORE the merge — a headless PR is a draft and `gh pr merge` cannot merge a draft;
+        // the undraft is idempotent and its failure never aborts the merge.
+        gh(["pr", "ready", String(pr.number)]);
         const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
         if (merged) {
           notify({ type: "pr-merged", pr: pr.number, url: pr.url });
         } else {
-          notify({ type: "pr-merge-failed", pr: pr.number, url: pr.url });
+          // Permanent merge failure (conflict / head moved) — route to manual merge as a genuinely
+          // TERMINAL state (routeToAwaitingMerge records the review) so it is not re-reviewed and
+          // re-merge-attempted every cycle.
+          routeToAwaitingMerge(pr, sha, { notifyType: "pr-merge-failed" });
         }
       } else {
-        // Auto-merge rollout lock is OFF — route to harness:awaiting-merge.
-        ensureAwaitingMergeLabel();
-        const root = extractRoot(pr.headRefName);
-        if (root !== null) {
-          gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
-        }
-        recordReviewed(pr.number, sha, { stateDir });
-        notify({ type: "pr-awaiting-merge", pr: pr.number, url: pr.url });
+        // Eligible but not auto-mergeable here: the rollout lock is OFF, OR this is a gate-machinery
+        // PR (carve-out) — either way route to manual merge (undraft + awaiting-merge) via the helper.
+        routeToAwaitingMerge(pr, sha);
       }
     } else if (!freshVerdictClean) {
       // Fresh verdict is not CLEAN — reject (advance chain, re-queue or block). routeReject owns its
@@ -197,15 +235,8 @@ export async function cronReview(opts) {
       recordReviewed(pr.number, sha, { stateDir });
       notify({ type: "pr-blocked", pr: pr.number, reason: "gate-machinery 2nd-pass BLOCKED", url: pr.url });
     } else {
-      // Residual: cross-family absent/ineligible — route to harness:awaiting-merge.
-      // Ensure the label exists BEFORE the first relabel (fail-closed route never fails on a missing label).
-      ensureAwaitingMergeLabel();
-      const root = extractRoot(pr.headRefName);
-      if (root !== null) {
-        gh(["issue", "edit", String(root), "--add-label", "harness:awaiting-merge"]);
-      }
-      recordReviewed(pr.number, sha, { stateDir });
-      notify({ type: "pr-awaiting-merge", pr: pr.number, url: pr.url });
+      // Residual: cross-family absent/ineligible — route to harness:awaiting-merge (undraft included).
+      routeToAwaitingMerge(pr, sha);
     }
    } catch (err) {
     // Isolate one PR's failure — a throw here must not skip the remaining PRs or reconcile().

@@ -394,3 +394,25 @@ Flow:
 - **Rationale:** Two independently-authored literal lists that MUST stay in sync but have no test
   linking them is a silent-drift trap — cheap to close with one small test, and the cost of missing it
   is a full recurrence of the false-positive bug this feature exists to fix.
+
+---
+
+## cross-family as a HARD auto-merge precondition freezes the pipeline on a codex outage (deferred PR-2)
+
+**Context:** automerge-hardening (#86) fixed the auto-merge undraft + gate-machinery carve-out + label
+hygiene, but deliberately LEFT cross-family (Codex 2nd family) as a REQUIRED precondition of auto-merge.
+
+**Problem observed live:** the Codex ChatGPT subscription hit its usage quota. `checkAvailability`
+passed (auth valid) but every `codex exec` exited non-zero ("usage limit"), so `crossFamilyEligible`
+was fail-closed BLOCKED for every PR → no PR ever auto-merged → the whole roadmap froze until the quota
+reset, with no operator signal distinguishing "codex found a real problem (BLOCKED)" from "codex could
+not run (quota/outage)".
+
+**Proposed PR-2 (adversary-endorsed shape, NOT blanket fail-open):** make cross-family an OPTIONAL
+enhancement for the auto-merge gate — fail-open ONLY for non-gate-machinery diffs when codex CANNOT RUN
+(quota/timeout/unavailable, distinct from a real BLOCKED verdict), gated behind an explicit opt-in
+config, emitting a LOUD operator notify each time it degrades to Claude-only. NEVER fail-open for
+gate-machinery diffs (already manual-merge via the carve-out), never treat a real BLOCKED as absent,
+never blanket. The adversary rejected blanket outage-fail-open (weakenable through the harness's own
+gate, timeout-inducible bypass, silences the stall alarm). Until then: keep codex quota funded, or
+manual-merge the queue.
