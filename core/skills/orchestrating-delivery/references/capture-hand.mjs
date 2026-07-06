@@ -55,6 +55,7 @@ import {
   checkScope,
   checkFrozen,
   checkAllowedWrites,
+  excludeHarnessInternal,
   resolveAuthToken,
 } from "./dispatch-hand.mjs";
 import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
@@ -277,7 +278,7 @@ export function captureResult({
       ? git.hashObject([...new Set([...rawUntracked, ...rawAllOthers])])
       : new Map();
   const untrackedPaths = subtractUnchanged(rawUntracked, preUntracked, currentHashes);
-  const touchedPaths = [...new Set([...diffPaths, ...untrackedPaths])];
+  let touchedPaths = [...new Set([...diffPaths, ...untrackedPaths])];
 
   // Gitignore restriction-escape sweep: a NEW file written into a gitignored path (dist/, *.log)
   // is invisible to `ls-files --others --exclude-standard`. Recover those via a no-exclude sweep
@@ -296,6 +297,15 @@ export function captureResult({
   for (const p of flagged) {
     if (!touchedPaths.includes(p)) touchedPaths.push(p);
   }
+
+  // Exclude harness-internal version-check cache paths (`.claude/.harness-version-check-cache`
+  // and its `.tmp` sibling) from the FULL touchedPaths union, regardless of which capture channel
+  // surfaced them — the gitignored cache enters via the allOthers sweep above, the non-gitignored
+  // `.tmp` enters via the exclude-standard untracked channel. Both are harness infra, never hand
+  // work, so they must never reach the persisted artifact or evaluateRun. Additive: only the two
+  // exact paths are dropped; every other path is unaffected. Mirrors excludeNodeModules but tighter
+  // (exact equality, not prefix — see isHarnessInternalPath in dispatch-hand.mjs).
+  touchedPaths = excludeHarnessInternal(touchedPaths);
 
   // Live tee: redact each child line BEFORE the sink.
   for (const line of streamLines(child.stdout)) teeLine(line, token, logSink);
