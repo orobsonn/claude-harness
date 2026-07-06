@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.26.0] - 2026-07-06
+
+### Added
+
 - **Atalho de escalação em rate-limit de conta (429) do Ollama** — quando duas dispatches
   consecutivas da mão barata batem no limite de cota da conta Ollama (dois 429 seguidos para a mesma
   task, ancorados ao mesmo freeze), o orquestrador agora **pula o 3º tier Ollama** — que 429aria de
@@ -19,6 +29,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `spawn-hand` nunca pula um spawn internamente (o record da 2ª tier é um run genuíno), então o
   cinturão de evidência não-forjável do entry-gate fica intacto (sem tocar `entry-gate.mjs`). Pinado
   por 11 locked tests em `spawn-hand.test.mjs`.
+
+### Fixed
+
+- **Sessão headless em branch tipada (`feat/`/`fix/`/`docs/`) agora fecha a issue certo** — o cron de
+  saída só reconhecia PR pela convenção antiga `harness/<N>`; uma sessão que entregava em branch
+  tipada (padrão `git.md`) tinha o PR invisível e a issue voltava pra fila em vez de fechar. Agora o
+  cron também acha o PR pelo vínculo `Closes/Fixes/Refs #N` no corpo. O aviso Telegram de "pegou a
+  issue #N" passa a incluir título + resumo, não só o número.
+- **`cross-family.mjs` não roda mais um passe degenerado e silencioso** — sem `--task`/`--claude` o
+  CLI antes deixava o Codex vasculhar o repo sem escopo e sem contraponto do Claude; agora exige os
+  dois argumentos e falha rápido (usage + código de saída não-zero) quando faltam.
 
 ## [0.25.0] - 2026-07-06
 
@@ -609,7 +630,8 @@ push.
 ### Added
 - Marco inicial do Claude Harness (entry policy, agents, skills, rules, modelo de memória, model routing barbell).
 
-[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/orobsonn/claude-harness/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/orobsonn/claude-harness/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/orobsonn/claude-harness/compare/v0.24.0...v0.25.0
 [0.2.0]: https://github.com/orobsonn/claude-harness/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orobsonn/claude-harness/releases/tag/v0.1.0
