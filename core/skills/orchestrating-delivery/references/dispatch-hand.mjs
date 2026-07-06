@@ -236,6 +236,26 @@ export function checkFrozen(touchedPaths = [], frozenPaths = []) {
 }
 
 /**
+ * @description Scaffold stub — un-vacuums the frozen gate (the frozen test imports this symbol,
+ * so it must exist for the test file to COLLECT >0 tests) while staying legitimately RED. The
+ * executor replaces this body with the real exact-match predicate.
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function isHarnessInternalPath(path) {
+  throw new Error("not implemented");
+}
+
+/**
+ * @description Scaffold stub — see isHarnessInternalPath. Replaced by the executor.
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+export function excludeHarnessInternal(paths) {
+  throw new Error("not implemented");
+}
+
+/**
  * @description Decides a run's outcome from the scope-checked diff + locked-test exit code
  * + child exit code — NEVER the prose. Order of judgment:
  *   1. untrusted child (model prose, not independently captured) → NOT_DONE

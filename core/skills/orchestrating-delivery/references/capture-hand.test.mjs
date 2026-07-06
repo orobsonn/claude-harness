@@ -490,3 +490,56 @@ test("captureResult: a hand EDITING a pre-existing gitignored file is still caug
   );
   assert.notEqual(result.outcome.status, OUTCOME.DONE);
 });
+
+// ---- 10. harness cache paths are excluded from touchedPaths regardless of the git channel
+//          they surface through (gitignored allOthers sweep, or non-gitignored untracked sweep) ----
+
+// #ac-1.1 capture path — gitignored cache via the allOthers sweep is excluded.
+test("gitignored harness cache path surfaced only via lsFilesAllOthers is excluded from touchedPaths and never flagged as a scope violation", () => {
+  const result = captureResult(
+    baseArgs({
+      dispatch: baseDispatch({
+        scope_paths: ["core/x/new.mjs"],
+        allowed_writes: ["core/x/new.mjs"],
+        frozen_paths: [],
+      }),
+      git: fakeGit({
+        diffNameOnly: () => ["core/x/new.mjs"],
+        // The gitignored cache surfaces ONLY via the no-exclude-standard lsFilesAllOthers
+        // channel, never via lsFilesOthers (default: () => []).
+        lsFilesAllOthers: () => [".claude/.harness-version-check-cache"],
+      }),
+      testRunner: () => fakeTestRunner(),
+    })
+  );
+  assert.ok(
+    !result.child.touchedPaths.includes(".claude/.harness-version-check-cache"),
+    "gitignored harness cache path must be excluded from touchedPaths, not misattributed to the hand"
+  );
+  assert.deepEqual(result.outcome.scopeViolations, []);
+});
+
+// #ac (tmp channel) — the non-gitignored .tmp via the untracked (--exclude-standard) channel is excluded.
+test("non-gitignored harness cache .tmp path surfaced via the exclude-standard untracked channel is excluded from touchedPaths and never flagged as a scope violation", () => {
+  const result = captureResult(
+    baseArgs({
+      dispatch: baseDispatch({
+        scope_paths: ["core/x/new.mjs"],
+        allowed_writes: ["core/x/new.mjs"],
+        frozen_paths: [],
+      }),
+      git: fakeGit({
+        // The .tmp cache file is NOT gitignored, so it arrives via the exclude-standard
+        // untracked channel (lsFilesOthers) alongside the hand's real in-scope work — not via
+        // the allOthers sweep used for the gitignore-escape recovery.
+        lsFilesOthers: () => ["core/x/new.mjs", ".claude/.harness-version-check-cache.tmp"],
+      }),
+      testRunner: () => fakeTestRunner(),
+    })
+  );
+  assert.ok(
+    !result.child.touchedPaths.includes(".claude/.harness-version-check-cache.tmp"),
+    "the harness cache .tmp path must be excluded from the full touchedPaths union, not only from the gitignored-escape flagged set"
+  );
+  assert.deepEqual(result.outcome.scopeViolations, []);
+});
