@@ -59,6 +59,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Marcador de `mark.mjs` encadeado com outro comando deixava de ser gravado em silêncio** —
+  `stamp-triage.mjs` agora exige exatamente um objeto JSON com o marcador esperado antes de gravar
+  (dois ou mais, ex.: `mark.mjs` encadeado com outro comando na mesma chamada, disparam um aviso
+  alto em vez de gravação ambígua) e confere, por leitura de volta, que toda gravação tentada
+  realmente persistiu — uma falha de gravação agora dispara aviso alto em vez de sucesso silencioso,
+  e uma nova tentativa se auto-corrige.
 - **A notificação "revisão iniciada" volta a chegar** — antes o aviso de que a análise de um PR
   começou era disparado logo antes de um `spawn` bloqueante de vários minutos; o tempo-limite de 5s
   do envio estourava durante o bloqueio e a notificação nunca chegava, o operador só via o resultado.
