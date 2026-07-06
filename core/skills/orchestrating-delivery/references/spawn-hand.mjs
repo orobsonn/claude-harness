@@ -309,6 +309,16 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
       );
     }
 
+    // Pre-accept the trust dialog for the real project cwd inside the ephemeral
+    // CLAUDE_CONFIG_DIR: without this, the hand's first tool call would block on an
+    // interactive trust prompt it can never answer (non-interactive `claude -p`).
+    // Keyed by the VERBATIM process.cwd() at dispatch time (never canonicalized/realpath'd,
+    // never the ephemeral tmp path) — dispatchHand passes no cwd override, so the child
+    // inherits this same real project directory.
+    const claudeJsonDst = join(ephemeralDir, ".claude.json");
+    const trustConfig = { projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } };
+    writeFileSync(claudeJsonDst, JSON.stringify(trustConfig, null, 2), "utf8");
+
     // Write the scrubbed brief file into the ephemeral dir
     briefFile = join(ephemeralDir, "brief.txt");
     writeFileSync(briefFile, scrubbedBrief, "utf8");
