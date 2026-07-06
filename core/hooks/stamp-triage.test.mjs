@@ -1286,3 +1286,82 @@ test(
     assert.equal(result.action, "marker-ambiguous");
   },
 );
+
+// ---------------------------------------------------------------------------
+// Regression: capture-verified durable stamp (markHandRecordCaptured) must be
+// loud on failure and must self-heal on retry, even on the idempotent gate-state path.
+// ---------------------------------------------------------------------------
+
+test(
+  "handle: capture-verified with a failing durable hand-record stamp → readBackOk:false (loud, not silent)",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_cv_durable_fail";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        "utf8",
+      );
+      const recordPath = handRecordPathFor("feat-x/task-1");
+      fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+      fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+      const d = handle(
+        makeRegatePayload(sessionId, "capture-verified", "feat-x", "task-1"),
+        { markHandRecordCapturedFn: () => false },
+      );
+
+      assert.equal(
+        d?.readBackOk,
+        false,
+        "a failing durable hand-record stamp must be folded into readBackOk:false — never reported as silent success",
+      );
+    });
+  },
+);
+
+test(
+  "handle: capture-verified retry re-invokes the durable stamp and heals → readBackOk:true",
+  () => {
+    withTempDir(() => {
+      const sessionId = "ses_cv_durable_heal";
+      const stateDir = `.claude/plans/.state/${sessionId}`;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "gate-state.json"),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        "utf8",
+      );
+      const recordPath = handRecordPathFor("feat-x/task-1");
+      fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+      fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+      const payload = makeRegatePayload(sessionId, "capture-verified", "feat-x", "task-1");
+
+      // First call: gate-state may still absorb capture_verified, but the durable stamp fails.
+      handle(payload, { markHandRecordCapturedFn: () => false });
+
+      // Second (idempotent gate-state) call: the durable writer must STILL be invoked — this
+      // is the self-heal path — and its success must be reflected in readBackOk.
+      let called = false;
+      const spy = (id, ts) => {
+        called = true;
+        return true;
+      };
+      const d2 = handle(payload, { markHandRecordCapturedFn: spy });
+
+      assert.equal(
+        called,
+        true,
+        "the durable stamp must be re-invoked on the idempotent gate-state path, healing a prior partial failure",
+      );
+      assert.equal(
+        d2?.readBackOk,
+        true,
+        "once the durable stamp succeeds on retry, readBackOk must report true",
+      );
+    });
+  },
+);
