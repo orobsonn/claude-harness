@@ -472,3 +472,8 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
   const result = await callTelegramMethod("closeForumTopic", payload, opts, "closeForumTopic");
   return result.ok ? { ok: true } : { ok: false };
 }
+
+/** @description Scaffold — implemented by the task-5 executor (the cron-side outbox drain). */
+export function drainTelegramOutbox() {
+  throw new Error("not implemented");
+}
