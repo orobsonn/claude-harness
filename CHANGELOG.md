@@ -13,9 +13,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
-- Cheap-hand dispatches (`spawn-hand.mjs`) não travam/falham mais por causa do dialogo de confianca do workspace efemero nunca ter sido aceito — o hand agora roda o loop real de teste (red/green) em vez de ser bloqueado no primeiro `Bash` e estourar o timeout (fecha #91).
-
 ### Removed
+
+## [0.26.1] - 2026-07-06
+
+### Fixed
+
+- Cheap-hand dispatches (`spawn-hand.mjs`) não travam/falham mais por causa do dialogo de confianca do workspace efemero nunca ter sido aceito — o hand agora roda o loop real de teste (red/green) em vez de ser bloqueado no primeiro `Bash` e estourar o timeout (fecha #91).
 
 ## [0.26.0] - 2026-07-06
 
