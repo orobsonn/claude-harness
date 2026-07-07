@@ -366,3 +366,40 @@ test("hooks.PostToolUse Agent matcher wires BOTH codex-eye-nudge.mjs and obs-eye
     "PreToolUse Agent entry-gate.mjs preserved — the nudge/append hooks never touched the entry-gate"
   );
 });
+
+/**
+ * @description Given the wired core/settings.json, When the PostToolUse[Agent] hooks array is
+ * read, Then it contains a command that wires agent-idle-nudge.mjs (as a command, alongside
+ * the existing codex-eye-nudge.mjs and obs-eye-append.mjs entries), using the
+ * ${CLAUDE_PROJECT_DIR} variable like every other wired hook.
+ */
+test("hooks.PostToolUse Agent matcher wires agent-idle-nudge.mjs as a command", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  ok(settings.hooks, "hooks object exists");
+  ok(settings.hooks.PostToolUse, "hooks.PostToolUse exists");
+  ok(Array.isArray(settings.hooks.PostToolUse), "PostToolUse is an array");
+
+  const agentHook = settings.hooks.PostToolUse.find(
+    (h) => h.matcher === "Agent"
+  );
+  ok(agentHook, "PostToolUse Agent matcher found");
+  ok(Array.isArray(agentHook.hooks), "PostToolUse Agent matcher has a hooks array");
+
+  ok(
+    agentHook.hooks.some(
+      (h) => h.command && h.command.includes("agent-idle-nudge.mjs")
+    ),
+    "PostToolUse Agent hooks include agent-idle-nudge.mjs"
+  );
+  ok(
+    agentHook.hooks.some(
+      (h) =>
+        h.command &&
+        h.command.includes("agent-idle-nudge.mjs") &&
+        h.command.includes("${CLAUDE_PROJECT_DIR}")
+    ),
+    "agent-idle-nudge.mjs command uses ${CLAUDE_PROJECT_DIR} variable"
+  );
+});

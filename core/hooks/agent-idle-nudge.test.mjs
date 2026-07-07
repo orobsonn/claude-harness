@@ -257,3 +257,66 @@ test(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// Test 12 — falsy-but-present agent_id ('') is a nested dispatch => none (F1)
+// ---------------------------------------------------------------------------
+
+test(
+  "falsy-but-present agent_id ('') is a nested dispatch => none (presence-check, not truthiness)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const payload = {
+      tool_name: "Agent",
+      tool_input: { subagent_type: "compliance" },
+      agent_id: "",
+      tool_response: "",
+    };
+    const res = decide(payload, {});
+
+    assert.equal(res.action, "none");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Test 13 — falsy-but-present agent_id (0) is a nested dispatch => none (F1)
+// ---------------------------------------------------------------------------
+
+test(
+  "falsy-but-present agent_id (0) is a nested dispatch => none",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const payload = {
+      tool_name: "Agent",
+      tool_input: {},
+      agent_id: 0,
+      tool_response: "",
+    };
+    const res = decide(payload, {});
+
+    assert.equal(res.action, "none");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Test 14 — empty tool_response but a real report in tool_output => none (F2)
+// ---------------------------------------------------------------------------
+
+test(
+  "empty tool_response but a real report in tool_output => none (report delivered, not idle)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const payload = {
+      tool_name: "Agent",
+      tool_input: {},
+      tool_response: "",
+      tool_output: "Here is my full structured report.",
+    };
+    const res = decide(payload, {});
+
+    assert.equal(res.action, "none");
+  },
+);
