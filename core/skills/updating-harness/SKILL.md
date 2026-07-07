@@ -53,11 +53,22 @@ test -f .claude/skills/initializing-projects/references/vendor-core.mjs && echo 
 ```
 
 - **update** (installer already vendored — the common case): run it directly, **pinned to the latest
-  release tag** for a reproducible sync:
+  release tag** for a reproducible sync. **Run it TWICE** — the first pass may execute a STALE
+  vendored `vendor-core` (an old copy that predates a step, e.g. the `vps/` mirroring); that pass
+  overwrites the installer itself with the current version, so the **second pass always runs the
+  current logic** (mirroring + the integrity self-check) and self-heals the stale-jump. The second
+  pass is idempotent — a no-op when the first was already current:
   ```bash
+  node .claude/skills/initializing-projects/references/vendor-core.mjs \
+    --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target . &&
   node .claude/skills/initializing-projects/references/vendor-core.mjs \
     --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target .
   ```
+  The current `vendor-core` ends with an **integrity gate**: if any vendored hook imports a
+  `../vps/<mod>.mjs` that was NOT mirrored into `.claude/vps/`, it exits **non-zero with a loud
+  FATAL** instead of silently shipping a hook that crashes on load (ERR_MODULE_NOT_FOUND) and blocks
+  the entry-gate. If the second pass still fails the gate, STOP and surface it — do not commit a
+  broken `.claude/`.
 
 - **install** (first time — no installer in the project yet): invoke the **`initializing-projects`**
   skill and hand it the baked `SOURCE_URL` and the latest tag. It bootstraps the clone and runs the

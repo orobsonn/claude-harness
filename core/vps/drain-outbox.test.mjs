@@ -907,6 +907,47 @@ test("run-cron-a wires sendDelayMs > 0 and limitPerMinute 20 into the drain (spa
   assert.strictEqual(seenOpts.limitPerMinute, 20, "run-cron-a must cap sends at 20/min (Telegram's per-group limit)");
 });
 
+/**
+ * @description #25 (global-group attribution) — Given a 'failed' critical event whose run meta carries
+ * project 'proj-x', When the critical ping is rendered for the shared global topic, Then its body
+ * leads with '[proj-x]' so the operator knows WHICH project the error came from (the global topic mixes
+ * every project's error/extraordinary events).
+ */
+test("drainTelegramOutbox's critical ping (shared global topic) leads with the [project] tag", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141, project: "proj-x", worktreePath: "/tmp/wt-141-px", threadId: 707, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "failed", reason: "retries exhausted" }]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  const body = String(calls.find((c) => c.event?.type === "failed")?.text ?? "");
+  assert.ok(body.includes("[proj-x]"), "the critical ping must lead with the [project] tag");
+  assert.ok(body.includes("141"), "the critical ping still references the run topic");
+});
+
+/**
+ * @description #26 (fallback attribution) — Given a fallback-status run for project 'proj-y', When a
+ * cosmetic event is routed to the shared topic, Then the body prefix is '[proj-y] #<issue>' so a
+ * fallback (per-run topic creation failed) is still attributable to its project.
+ */
+test("drainTelegramOutbox's fallback cosmetic body prefixes '[project] #issue'", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 142, {
+    issueNumber: 142, project: "proj-y", worktreePath: "/tmp/wt-142-py", threadId: null, cursor: 0, status: "fallback",
+  });
+  writeEvents(stateDir, 142, [{ type: "pipeline-type", mode: "LIGHT" }]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.ok(String(calls[0]?.text ?? "").includes("[proj-y] #142"), "fallback body must carry '[project] #issue'");
+});
+
 /** @description Builds a minimal valid cron config + a homeDir carrying a fake token. */
 function cronConfigWith(stateDir) {
   const homeDir = mkdtempSync(join(tmpdir(), "drain-outbox-home-"));

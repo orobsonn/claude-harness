@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.28.5] - 2026-07-07
+
+### Added
+
 - **Gate de entrega reproduz o suite de CI inteiro, não só o config default** — o Phase 3 (revisão
   final) agora enumera e roda TODO comando de teste que o CI declara (`package.json` scripts +
   cada `--config`/workflow do `.github/workflows/`) via `ci-test-commands.mjs`, e só declara a
@@ -21,7 +31,22 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **Nome do projeto no tópico do Telegram (multi-projeto)** — com N projetos compartilhando um grupo,
+  o tópico de cada run agora se chama `[<projeto>] #<issue> · <título>`, então você lê o dono no
+  título sem abrir. Dentro do tópico o feed segue sem a tag (o título já identifica). Os pings de
+  erro/extraordinário que sobem pro grupo global levam `[<projeto>]` na frente. O nome do projeto vem
+  do campo `project` no config do cron de cada projeto.
+
 ### Fixed
+
+- **`vendor-core` não espelhava `vps/` em updates a partir de uma cópia velha (stale-jump)** — um
+  projeto cujo `vendor-core` vendorizado era anterior à etapa de espelhamento de `vps/` atualizava os
+  hooks pro import novo `../vps/…` **sem** criar `.claude/vps/`, deixando 3 hooks quebrando na carga
+  (`ERR_MODULE_NOT_FOUND`) de forma invisível (o único sintoma era o entry-gate bloqueando todo
+  subagente de entrega). Agora o `vendor-core` termina com um **portão de integridade** que **falha
+  alto (exit 1)** se algum hook importa um `../vps/<mod>` ausente de `.claude/vps/`, e a skill
+  `updating-harness` roda o vendor **duas vezes** (a 2ª sempre usa a cópia já atualizada) — auto-cura
+  o stale-jump em vez de shippar hook quebrado em silêncio.
 
 ### Removed
 
