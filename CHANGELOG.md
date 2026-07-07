@@ -15,6 +15,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.28.8] - 2026-07-07
+
+### Fixed
+
+- **Feed do Telegram só atualizava 1x/hora (P7)** — só o Cron A (de hora em hora) drenava o outbox de
+  observabilidade; um run que começava e terminava entre dois ticks não mostrava nada no tópico até a
+  próxima hora. Agora o cron de review (a cada 15 min) também drena — compartilhando o mesmo
+  `drain.lock` do Cron A (sem double-send) e com stale-reclaim de 15 min. O feed passa a atualizar a
+  cada 15 min.
+
 ## [0.28.7] - 2026-07-07
 
 ### Fixed

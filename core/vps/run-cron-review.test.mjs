@@ -51,11 +51,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCronReview } from "./run-cron-review.mjs";
+import { runCronReview, mainCronReview } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
 
@@ -142,6 +142,27 @@ test("run-cron-review: safeNotify keeps the shared global topic actionable — s
   assert.ok(passedTypes.includes("pr-awaiting-merge"), "pr-awaiting-merge (actionable) must still reach the global topic");
   assert.ok(passedTypes.includes("pr-blocked"), "error events must still reach the global topic");
   assert.ok(passedTypes.includes("failed"), "error events must still reach the global topic");
+});
+
+test("mainCronReview: drains the observability outbox each tick (P7) with spacing, sharing Cron A's drain.lock", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "harness-review-drain-"));
+  const homeDir = mkdtempSync(join(tmpdir(), "harness-review-home-"));
+  mkdirSync(join(homeDir, ".claude"), { recursive: true });
+  writeFileSync(join(homeDir, ".claude", ".dev.vars"), "TELEGRAM_BOT_TOKEN=fake\nTELEGRAM_CHAT_ID=999\n", "utf8");
+
+  const config = { project: "demo", stateDir, homeDir, notify: { chatId: 999 } };
+
+  let drainCalls = 0;
+  let seenOpts = null;
+  await mainCronReview(config, {
+    runCronReview: async () => {}, // stub the review — we only assert the drain wiring
+    drainOutbox: async (opts) => { drainCalls += 1; seenOpts = opts; },
+  });
+
+  assert.strictEqual(drainCalls, 1, "the review cron must drain the outbox exactly once per tick");
+  assert.strictEqual(seenOpts.stateDir, stateDir, "the drain targets the run stateDir");
+  assert.ok(seenOpts.sendDelayMs > 0, "sends are spaced (same as Cron A)");
+  assert.ok(!existsSync(join(stateDir, "drain.lock")), "the drain.lock is released after the drain");
 });
 
 /** @description Creates a fresh temp stateDir for a test, and returns a cleanup callback. */
