@@ -13,6 +13,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Marcos `spec pronta` / `plano criado` aparecem na ordem certa no feed** — antes eram derivados
+  pelo drain (varredura de arquivo, com atraso de um tick), então caíam FORA DE ORDEM em relação aos
+  eventos imediatos do run (podia mostrar "spec atacada" antes de "spec pronta"). Um hook novo
+  `obs-plan-write` (PostToolUse Write) emite `spec-created`/`plan-created` **no momento em que o
+  planner escreve o arquivo**, pondo o feed em ordem real de pipeline (classificação → spec →
+  adversarial da spec → plano → revisão do plano → …). A varredura do drain permanece como fallback
+  (dedupe append-if-absent, nunca duplica).
+
 ### Removed
 
 ## [0.28.1] - 2026-07-07

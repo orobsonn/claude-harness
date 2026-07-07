@@ -134,6 +134,15 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/obs-eye-append.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/obs-plan-write.mjs"
+          }
+        ]
       }
     ],
     "SessionStart": [
