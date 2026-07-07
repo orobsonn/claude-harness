@@ -15,6 +15,15 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.29.0] - 2026-07-07
+
+### Added
+- Auto-update do motor na VPS (blue/green): quando a `main` avança após um merge autônomo, um clone da nova versão é preparado numa pasta isolada e o motor troca para ela via symlink atômico — sem lock, sem instante meio-atualizado, com fallback seguro que nunca mexe num motor que não é gerenciado. Mecanismo entregue; a ativação automática no onboarding é o próximo passo.
+- Recuperação automática de PR travado por branch desatualizada: em vez de mandar direto para a fila de merge manual, o harness sincroniza a branch com a base (operação nativa do GitHub, sem force) e a esteira de revisão reprocessa o PR do zero antes de tentar mergear de novo — com teto de tentativas para dois PRs que se invalidam mutuamente não entrarem em loop.
+
+### Changed
+- Auto-merge deixa de ficar refém da segunda família (Codex): quando o Codex não está disponível, a elegibilidade do merge passa a depender só do veredito do Claude (risco aceito e documentado). Um veredito do Codex que de fato rodou continua governando incondicionalmente — um `BLOCKED` sempre bloqueia. Quando o Codex voltar a rodar, a trava mais forte volta sozinha.
+
 ## [0.28.10] - 2026-07-07
 
 ### Added
