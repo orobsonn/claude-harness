@@ -8,7 +8,7 @@
  *   - `pr diff <n> --name-only` (no `--json`) returns a `string[]` of changed file paths,
  *     blank/trailing lines filtered out. A failing invocation returns the DISTINCT sentinel
  *     `{ ok: false, diffFailed: true }` — fail-closed so a transient diff-fetch failure
- *     signals the failure distinctly and forces the 2nd pass / re-queue the PR. A genuinely
+ *     signals the failure distinctly and re-queues the PR. A genuinely
  *     empty diff (status 0, empty stdout) stays `[]`.
  *   - `pr diff <n>` (without `--name-only` and without `--json`) returns the full patch as a
  *     STRING on success, or the same `{ ok: false, diffFailed: true }` sentinel on failure.

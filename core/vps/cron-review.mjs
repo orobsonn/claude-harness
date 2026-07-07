@@ -3,7 +3,7 @@
  * via review-origin-gate.mjs (isReviewEligible — the SINGLE self-contained eligibility source),
  * checks pr:sha idempotency, spawns the reviewing-pull-requests session, reads the
  * engine-controlled verdict artifact, enforces the merge conjunction at the boundary
- * (HR-9 / #ac-2.3 + #ac-3.2), and drives per-cycle reconciliation (HR-3 / #ac-7.1).
+ * (fresh CLEAN AND cross-family — HR-2 / #ac-2.3), and drives per-cycle reconciliation (HR-3 / #ac-7.1).
  *
  * Reads the PR diff via `gh pr diff <n>` / `gh api` (or a detached SHA worktree) and NEVER
  * checks out branch harness/<N> — no worktree collision with a concurrent repair (HR-7).
@@ -11,8 +11,6 @@
  * Every external seam is injected so this module is hermetic under test and runtime-pluggable
  * in production, following this repo's seam-injection style (see cron-b.mjs, cron-state.mjs).
  */
-import { join } from "node:path";
-
 import { STATE_LABELS } from "./review-labels.mjs";
 
 /**
@@ -38,8 +36,6 @@ function extractRoot(headRefName) {
  * @param {(pr: object, sha: string, o: object) => {merged: boolean}} opts.mergeAndFinalize
  * @param {() => Array<{issue: number, from: string}>} opts.reconcile zero-arg reconciliation driver
  * @param {(pr: object, sha: string, o: object) => void} opts.routeReject
- * @param {(changedFiles: string[]) => boolean} opts.touchesGateMachinery
- * @param {(inputs: {freshVerdictClean: boolean, crossFamilyEligible: boolean, secondPassRequired: boolean, secondPassClean: boolean}) => {eligible: boolean, second_pass_required: boolean}} opts.mergeEligible
  * @param {(pr: object, meta: object) => void} opts.spawnReviewSession
  * @param {(event: object) => void} opts.notify
  * @param {string} opts.stateDir engine-controlled review state directory
@@ -48,7 +44,7 @@ function extractRoot(headRefName) {
  * @param {(o: {stateDir: string}) => void} opts.recordReviewSession breaker increment
  * @param {(o: {stateDir: string}) => boolean} opts.breakerTripped windowed-cap gate
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
- * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge and 2nd-pass-blocked routes
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge route
  * @param {boolean} [opts.autoMergeEnabled] - only strict `=== true` auto-merges eligible PRs; default/false routes to awaiting-merge
  * @returns {Promise<void>}
  */
@@ -61,8 +57,6 @@ export async function cronReview(opts) {
     mergeAndFinalize,
     reconcile,
     routeReject,
-    touchesGateMachinery,
-    mergeEligible,
     spawnReviewSession,
     notify,
     stateDir,
@@ -105,8 +99,8 @@ export async function cronReview(opts) {
    * lifecycle STATE label and adds harness:awaiting-merge in ONE mutually-exclusive relabel (domain
    * labels preserved because only harness:* state labels are named), records the review as terminal
    * (so a same-SHA re-review is a no-op — the PR is not re-processed every cycle), and notifies.
-   * Reused by the autoMerge-off route, the gate-machinery carve-out, the cross-family-absent residual,
-   * and the permanent-merge-failure route (AC-1.4).
+   * Reused by the autoMerge-off route, the cross-family-absent residual, and the
+   * permanent-merge-failure route (AC-1.4).
    * @param {object} pr
    * @param {string} sha
    * @param {{ notifyType?: string }} [o]
@@ -172,38 +166,18 @@ export async function cronReview(opts) {
     // Cross-family eligibility (HR-2 / #ac-2.3).
     const crossFamilyOk = crossFamilyEligible(pr, { changedFiles, sha, stateDir });
 
-    // Gate-machinery 2nd pass (HR-9 / #ac-3.2).
-    const secondPassRequired = touchesGateMachinery(changedFiles);
-    let secondPassClean = true;
-    if (secondPassRequired) {
-      const secondPassStateDir = join(stateDir, "second-pass");
-      spawnReviewSession(pr, { stateDir: secondPassStateDir, changedFiles, secondPass: true });
-      recordReviewSession({ stateDir });
-      const secondVerdict = getFreshVerdict(pr, sha, secondPassStateDir);
-      secondPassClean = Boolean(secondVerdict && secondVerdict.status === "CLEAN");
-    }
-
-    // Merge-eligible conjunction (HR-9): fresh-CLEAN AND cross-family AND (gate diff → 2nd-pass CLEAN).
-    const decision = mergeEligible({
-      freshVerdictClean,
-      crossFamilyEligible: crossFamilyOk,
-      secondPassRequired,
-      secondPassClean,
-    });
+    // Merge-eligible = fresh CLEAN AND cross-family. A flaky CLEAN alone never merges because
+    // cross-family is always required. A change to the harness's own engine is treated like any
+    // other PR — one clean review is enough; there is no separate control-surface carve-out.
+    const eligible = freshVerdictClean && crossFamilyOk;
 
     // Route at the composition decision boundary. Every routine outcome notifies the operator so a
     // non-dev never has to poll GitHub to learn what the autonomous review did (HR: observability).
-    if (decision.eligible) {
-      // Gate-machinery carve-out: the harness NEVER auto-merges a change to its OWN control surface
-      // (`secondPassRequired` === touchesGateMachinery(changedFiles)) — those wait for the operator's
-      // manual merge regardless of a CLEAN verdict. Auto-merge fires ONLY for a non-gate-machinery
-      // eligible PR with the rollout lock on. In a downstream (non-harness) project no diff touches
-      // the control surface, so everything green auto-merges hands-free.
-      if (autoMergeEnabled === true && !secondPassRequired && changedFiles.length > 0) {
+    if (eligible) {
+      if (autoMergeEnabled === true && changedFiles.length > 0) {
         // Fail-CLOSED on an empty/unknown changed-file set: a genuinely empty diff, or a malformed
         // (non-array) `gh pr diff` that already collapsed to [] above, must never slip onto the
-        // auto-merge path (touchesGateMachinery([]) is false — no visibility into what changed). An
-        // empty diff routes to manual merge instead. This guard does NOT force a 2nd review pass.
+        // auto-merge path — no visibility into what changed. An empty diff routes to manual merge instead.
         // Undraft BEFORE the merge — a headless PR is a draft and `gh pr merge` cannot merge a draft;
         // the undraft is idempotent and its failure never aborts the merge.
         gh(["pr", "ready", String(pr.number)]);
@@ -224,25 +198,15 @@ export async function cronReview(opts) {
           routeToAwaitingMerge(pr, sha, { notifyType: "pr-merge-failed" });
         }
       } else {
-        // Eligible but not auto-mergeable here: the rollout lock is OFF, OR this is a gate-machinery
-        // PR (carve-out) — either way route to manual merge (undraft + awaiting-merge) via the helper.
+        // Eligible but the rollout lock is OFF — route to manual merge (undraft + awaiting-merge).
         routeToAwaitingMerge(pr, sha);
       }
     } else if (!freshVerdictClean) {
       // Fresh verdict is not CLEAN — reject (advance chain, re-queue or block). routeReject owns its
       // own notify (chain-ceiling blocked); a plain re-queue is reported by the fix session's own run.
       routeReject(pr, sha, { gh, stateDir, findings: verdict });
-    } else if (secondPassRequired && !secondPassClean) {
-      // Gate-machinery diff whose 2nd pass is BLOCKED — route to harness:blocked.
-      gh(["label", "create", "harness:blocked", "--force"]);
-      const root = extractRoot(pr.headRefName);
-      if (root !== null) {
-        gh(["issue", "edit", String(root), "--add-label", "harness:blocked"]);
-      }
-      recordReviewed(pr.number, sha, { stateDir });
-      notify({ type: "pr-blocked", pr: pr.number, reason: "gate-machinery 2nd-pass BLOCKED", url: pr.url });
     } else {
-      // Residual: cross-family absent/ineligible — route to harness:awaiting-merge (undraft included).
+      // Residual: fresh CLEAN but cross-family absent/ineligible — route to harness:awaiting-merge.
       routeToAwaitingMerge(pr, sha);
     }
    } catch (err) {

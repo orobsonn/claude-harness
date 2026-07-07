@@ -1,23 +1,22 @@
 /**
  * @description Frozen contract tests for the automerge-hardening changes to cron-review.mjs:
  *   - AC-1.1  undraft (gh pr ready) runs BEFORE the merge on the auto-merge path.
- *   - AC-1.2  undraft also runs on the CLEAN awaiting-merge routes (autoMerge-off + gate carve-out),
- *             and NEVER on a reject/BLOCKED route.
+ *   - AC-1.2  undraft also runs on the CLEAN awaiting-merge route (autoMerge-off), and NEVER on a
+ *             reject route.
  *   - AC-1.3  a failed gh pr ready does not abort the merge.
  *   - AC-1.4  mergeAndFinalize returns {merged:false} -> awaiting-merge + recordReviewed + pr-merge-failed.
- *   - AC-2.1  a CLEAN gate-machinery PR is NEVER auto-merged (routes to awaiting-merge); a BLOCKED
- *             gate-machinery 2nd pass still routes to harness:blocked (NOT awaiting-merge).
- *   - AC-2.2  a CLEAN non-gate-machinery PR still auto-merges (common path not regressed).
+ *   - AC-2.1  a harness-engine diff is treated like any other PR — a CLEAN one auto-merges (no
+ *             control-surface carve-out, no 2nd pass); an empty/unknown diff still fails closed.
+ *   - AC-2.2  a CLEAN non-engine PR auto-merges (common path not regressed).
  *   - AC-3.2  the awaiting-merge relabel strips exactly the STATE_LABELS set and preserves domain labels.
- * Hermetic: every gh/notify/mergeAndFinalize seam is an injected fake; the REAL isReviewEligible,
- * mergeEligible and touchesGateMachinery are used so a mis-routed input is caught by real gate logic.
+ * Hermetic: every gh/notify/mergeAndFinalize seam is an injected fake; the REAL isReviewEligible is
+ * used so a mis-routed origin-gate input is caught by real gate logic.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { cronReview } from "./cron-review.mjs";
 import { isReviewEligible } from "./review-origin-gate.mjs";
-import { mergeEligible, touchesGateMachinery } from "./review-gate-hardening.mjs";
 
 function makeFakeGh({ readyResult = { ok: true } } = {}) {
   const calls = [];
@@ -67,8 +66,6 @@ function baseOpts(overrides = {}) {
     mergeAndFinalize: makeMergeFake(true),
     reconcile: makeSpy(() => []),
     routeReject: makeSpy(),
-    touchesGateMachinery,
-    mergeEligible,
     spawnReviewSession: makeSpy(),
     notify: makeSpy(),
     stateDir: "/fake/state/review",
@@ -105,16 +102,6 @@ test("AC-1.2 undraft runs on the awaiting-merge route (autoMerge off)", async ()
   setDiff(20, ["src/bar.js"]);
   await cronReview(baseOpts({ gh, autoMergeEnabled: false }));
   assert.notEqual(idxOf(calls, isReady(20)), -1, "awaiting-merge route must undraft the PR");
-});
-
-test("AC-1.2 undraft runs on the gate-machinery carve-out route", async () => {
-  const { gh, calls, setPr, setDiff } = makeFakeGh();
-  setPr(21, { number: 21, headRefName: "harness/56", author: { login: "bot-user" }, labels: [], headSha: "sha-c" });
-  setDiff(21, ["core/vps/cron-review.mjs"]); // gate machinery
-  const mergeSpy = makeMergeFake(true);
-  await cronReview(baseOpts({ gh, mergeAndFinalize: mergeSpy }));
-  assert.notEqual(idxOf(calls, isReady(21)), -1, "carve-out route must undraft");
-  assert.equal(mergeSpy.calls.length, 0, "gate-machinery PR must NEVER be auto-merged");
 });
 
 test("AC-1.2 a non-CLEAN reject route NEVER undrafts (PR stays draft)", async () => {
@@ -155,27 +142,14 @@ test("AC-1.4 mergeAndFinalize merged:false -> awaiting-merge + recordReviewed on
   assert.ok(notify.calls.some((c) => c[0] && c[0].type === "pr-merge-failed"), "must notify pr-merge-failed");
 });
 
-test("AC-2.1 a CLEAN gate-machinery PR is NEVER auto-merged, routes to awaiting-merge", async () => {
+test("AC-2.1 a CLEAN harness-engine PR is treated like any other PR and auto-merges (no carve-out)", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(25, { number: 25, headRefName: "harness/62", author: { login: "bot-user" }, labels: [], headSha: "sha-g" });
-  setDiff(25, ["core/vps/x.mjs"]);
+  setDiff(25, ["core/vps/x.mjs"]); // formerly gate-machinery — now no special treatment
   const mergeSpy = makeMergeFake(true);
   await cronReview(baseOpts({ gh, mergeAndFinalize: mergeSpy }));
-  assert.equal(mergeSpy.calls.length, 0, "gate-machinery PR must never be auto-merged");
-  assert.notEqual(idxOf(calls, addsLabel("harness:awaiting-merge")), -1, "gate-machinery PR routes to awaiting-merge");
-});
-
-test("AC-2.1 a gate-machinery PR whose 2nd pass is BLOCKED routes to harness:blocked (NOT awaiting-merge)", async () => {
-  const { gh, calls, setPr, setDiff } = makeFakeGh();
-  setPr(26, { number: 26, headRefName: "harness/63", author: { login: "bot-user" }, labels: [], headSha: "sha-h" });
-  setDiff(26, ["core/vps/cron-review.mjs"]);
-  const mergeSpy = makeMergeFake(true);
-  const getFreshVerdict = (pr, sha, stateDir) =>
-    String(stateDir).includes("second-pass") ? { status: "BLOCKED" } : { status: "CLEAN" };
-  await cronReview(baseOpts({ gh, getFreshVerdict, mergeAndFinalize: mergeSpy }));
-  assert.equal(mergeSpy.calls.length, 0, "must never merge a BLOCKED gate PR");
-  assert.notEqual(idxOf(calls, addsLabel("harness:blocked")), -1, "BLOCKED gate PR routes to harness:blocked");
-  assert.equal(idxOf(calls, addsLabel("harness:awaiting-merge")), -1, "carve-out must NOT convert a BLOCKED PR to awaiting-merge");
+  assert.equal(mergeSpy.calls.length, 1, "an engine-diff PR must auto-merge like any other CLEAN eligible PR");
+  assert.equal(idxOf(calls, addsLabel("harness:awaiting-merge")), -1, "an auto-merged engine PR must NOT route to awaiting-merge");
 });
 
 test("AC-2.2 a CLEAN non-gate-machinery PR still auto-merges (common path not regressed)", async () => {

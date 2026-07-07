@@ -20,7 +20,7 @@
  * BREAKER_MAX_SESSIONS-per-window cap is what actually gates production spawns.
  *
  * Every other seam cron-review.mjs's `cronReview(opts)` contract needs (`gh`, `isReviewEligible`,
- * `getFreshVerdict`, `touchesGateMachinery`, `mergeEligible`, `alreadyReviewed`, `authenticatedUser`)
+ * `getFreshVerdict`, `alreadyReviewed`, `authenticatedUser`)
  * defaults to its real, already-implemented sibling module, wired exactly as cronReview calls it.
  * `mergeAndFinalize` and `reconcile` need MORE context than cronReview's own call site passes
  * through (a `counter`/`recordReviewed` adapter onto ./cron-state.mjs) — this composition root
@@ -71,7 +71,6 @@ import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-f
 import { mergeAndFinalize, reconcile } from "./review-merge.mjs";
 import { releaseChainedDependents } from "./chain-release.mjs";
 import { routeReject } from "./review-routing.mjs";
-import { touchesGateMachinery, mergeEligible } from "./review-gate-hardening.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import { makeNotifier } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
@@ -335,8 +334,6 @@ export async function runCronReview(config, deps = {}) {
       mergeAndFinalize: mergeAndFinalizeFn,
       reconcile: reconcileFn,
       routeReject: routeRejectFn,
-      touchesGateMachinery: deps.touchesGateMachinery ?? touchesGateMachinery,
-      mergeEligible: deps.mergeEligible ?? mergeEligible,
       spawnReviewSession:
         deps.spawnReviewSession ??
         ((pr, meta) =>

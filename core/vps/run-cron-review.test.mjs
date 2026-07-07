@@ -21,7 +21,7 @@
  *   - Otherwise, runCronReview acquires the review lock (via `deps.runLock.acquire` on
  *     `join(config.stateDir, "review")`) and calls `deps.cronReview(opts)` — every other seam
  *     (`gh`, `isReviewEligible`, `getFreshVerdict`, `crossFamilyEligible`, `mergeAndFinalize`,
- *     `reconcile`, `routeReject`, `touchesGateMachinery`, `mergeEligible`, `spawnReviewSession`,
+ *     `reconcile`, `routeReject`, `spawnReviewSession`,
  *     `notify`, `stateDir`, `authenticatedUser`, `engineKnows`, `recordReviewSession`,
  *     `breakerTripped`, `alreadyReviewed`, `autoMergeEnabled`) is wired for cron-review.mjs's
  *     contract (see cron-review.test.mjs) — then releases the lock.
