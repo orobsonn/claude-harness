@@ -8,10 +8,11 @@
  *   Qualifying idle transition (all must hold):
  *     - `payload` is an object with a present `tool_input` object      (well-formed dispatch)
  *     - `payload.tool_name === 'Agent'`
- *     - `payload.agent_id` absent/falsy                                (main-loop only)
- *     - report text = `payload.tool_response ?? payload.tool_output` is a string that trims
- *       to '' OR is null/undefined                                    (idle: no report text)
- *   Any non-string non-null report value (number, boolean, object, array) is NOT idle.
+ *     - `payload.agent_id` absent                                     (main-loop only; presence = nested)
+ *     - idle ONLY when BOTH `payload.tool_response` AND `payload.tool_output` are idle —
+ *       a field is idle when it is null/undefined OR a string that trims to ''         (no report text)
+ *   Any non-string non-null field value (number, boolean, object, array) is a report (NOT idle),
+ *   so an empty-string tool_response does not mask a real report delivered in tool_output.
  *   On inject: `context` (a single string) contains BOTH a single-nudge directive (send
  *   exactly one SendMessage re-prompt to extract the report) AND a fallback/no-loop
  *   directive (if still no report, record unresolved, do not loop / re-dispatch).

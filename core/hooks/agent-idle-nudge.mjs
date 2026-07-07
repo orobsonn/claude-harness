@@ -8,6 +8,12 @@
  * (send exactly one SendMessage re-prompt to extract the report) AND the fallback
  * directive (if still no report, record it as unresolved and do NOT loop /
  * do NOT re-dispatch). There is NO second automatic retry loop.
+ *
+ * Runtime contract (load-bearing): a main-loop Agent dispatch OMITS the `agent_id`
+ * key; a nested/subagent dispatch INCLUDES it. This hook keys "main-loop only" off
+ * that presence (hasOwnProperty), matching the harness gate convention
+ * (entry-gate.mjs / stamp-triage.mjs / plan-write-gate.mjs), NOT truthiness — so a
+ * falsy-but-present agent_id ('' / 0 / null) is correctly read as a nested dispatch.
  */
 
 import fs from 'node:fs';
