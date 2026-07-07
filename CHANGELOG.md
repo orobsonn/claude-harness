@@ -9,6 +9,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Hook `agent-idle-nudge` (PostToolUse[Agent])** — nudge automático quando um agente despachado
+  encerra sem entregar o relatório estrutural final: injeta uma diretiva única de re-prompt (um só
+  `SendMessage`) e, se ainda assim não vier relatório, marca a tarefa como não resolvida sem re-loop
+  nem re-despacho. (#90)
+
 ### Changed
 
 ### Fixed
