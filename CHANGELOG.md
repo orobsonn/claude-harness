@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.28.0] - 2026-07-07
+
+### Added
+
 - **Feed curado de notificações no Telegram por run** — o tópico de cada run passa a mostrar só os
   marcos que o operador quer (sessão iniciada, classificação, spec, adversarial da spec, plano,
   revisão/aprovação do plano, loop das tasks + modelos, revisão final, PR), com rótulos em pt-br e
