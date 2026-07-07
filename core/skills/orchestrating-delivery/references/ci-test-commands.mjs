@@ -20,6 +20,8 @@ import { isDirectCli, parseFlags } from "./cli-flags.mjs";
 
 const RUNNERS = new Set(["vitest", "jest", "mocha"]);
 const BLOCK_SCALAR_INDICATORS = new Set(["|", ">", "|-", ">-", "|+", ">+"]);
+const FOLDED_BLOCK_INDICATORS = new Set([">", ">-", ">+"]);
+const UNSPLIT_SHELL_METACHARACTERS = /[$`|<>()]/;
 
 /** @description Default node:fs backing `enumerateCiTestCommands` when no `fsImpl` is injected. */
 const NODE_FS = { existsSync, readFileSync, readdirSync };
@@ -48,7 +50,7 @@ function collapseWhitespace(s) {
 function stripEnvPrefixes(cmd) {
   let out = cmd;
   for (;;) {
-    const match = out.match(/^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+/);
+    const match = out.match(/^([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S*)\s+/);
     if (!match) break;
     out = out.slice(match[0].length);
   }
@@ -169,7 +171,24 @@ function collectRunCommandsFromYaml(text) {
         if (contentIndent === null) contentIndent = blockIndent;
         blockLines.push(blockLine.slice(contentIndent));
       }
-      out.push(blockLines.join("\n"));
+      if (FOLDED_BLOCK_INDICATORS.has(rest)) {
+        const segments = [];
+        let current = [];
+        for (const line of blockLines) {
+          if (line === "") {
+            if (current.length) {
+              segments.push(current.join(" "));
+              current = [];
+            }
+          } else {
+            current.push(line);
+          }
+        }
+        if (current.length) segments.push(current.join(" "));
+        out.push(segments.join("\n"));
+      } else {
+        out.push(blockLines.join("\n"));
+      }
       i = j - 1;
     } else if (rest !== "") {
       out.push(rest);
@@ -201,8 +220,8 @@ function collectCiRunCommands(projectRoot, fs) {
     return [];
   }
   const out = [];
-  for (const name of entries) {
-    if (!name.endsWith(".yml")) continue;
+  for (const name of entries.sort()) {
+    if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
     const path = join(dir, name);
     try {
       out.push(...collectRunCommandsFromYaml(fs.readFileSync(path, "utf8")));
@@ -236,6 +255,10 @@ function classifyCommand(raw, source, scripts, commands, unresolved, seen) {
   const resolved = resolveScript(cmd, scripts);
   if (resolved !== null) {
     const recognized = recognizeRunnerOrNode(resolved);
+    if (recognized && UNSPLIT_SHELL_METACHARACTERS.test(recognized)) {
+      unresolved.push({ command: recognized, source });
+      return;
+    }
     if (recognized && !seen.has(recognized)) {
       seen.add(recognized);
       commands.push({ command: recognized, source });
@@ -244,6 +267,10 @@ function classifyCommand(raw, source, scripts, commands, unresolved, seen) {
   }
 
   const recognized = recognizeRunnerOrNode(stripLauncher(cmd));
+  if (recognized && UNSPLIT_SHELL_METACHARACTERS.test(recognized)) {
+    unresolved.push({ command: recognized, source });
+    return;
+  }
   if (recognized && !seen.has(recognized)) {
     seen.add(recognized);
     commands.push({ command: recognized, source });
