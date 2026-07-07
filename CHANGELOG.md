@@ -13,6 +13,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+### Removed
+
+## [0.28.2] - 2026-07-07
+
+### Fixed
+
 - **Marcos `spec pronta` / `plano criado` aparecem na ordem certa no feed** — antes eram derivados
   pelo drain (varredura de arquivo, com atraso de um tick), então caíam FORA DE ORDEM em relação aos
   eventos imediatos do run (podia mostrar "spec atacada" antes de "spec pronta"). Um hook novo
