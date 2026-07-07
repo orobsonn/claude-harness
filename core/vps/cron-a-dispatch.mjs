@@ -43,18 +43,22 @@
  * best-effort pruned during worktree-add failure recovery so the retry ceiling can eventually
  * fire instead of looping forever.
  *
- * Resume mode (HR-1/#ac-4.2): a `branchExists(branch)` seam probes whether harness/<issue> already
- * exists (e.g. a prior run already opened a PR on it). When it does, `git worktree add` attaches
- * the EXISTING branch (no `-b`), and the failure-recovery path never runs `git branch -D` against
- * it — deleting an already-existing branch would destroy a delivered PR. When it does not exist,
- * the fresh `-b` path is unchanged, including the branch-D prune on failure. In production, when
- * `opts.branchExists` is not injected, it defaults to a real `git rev-parse --verify --quiet
- * refs/heads/<branch>` probe against `projectRoot`.
+ * Resume mode (HR-1/#ac-4.2): RESUME (attach the EXISTING branch, no `-b`) happens ONLY when
+ * harness/<issue> exists AND carries an OPEN PR — a genuine prior delivery, so a re-dispatch updates
+ * the SAME PR instead of orphaning it, and the failure-recovery path never `git branch -D`s it. A
+ * branch that EXISTS but has NO open PR is an ORPHAN from a died run: resurrecting its stale,
+ * un-re-gated commits into a fresh PR opens a PR in seconds without running the pipeline (a real
+ * incident), so dispatch DELETES the orphan branch and rebuilds FRESH with `-b`. Two probes gate
+ * this: `branchExists(branch)` (defaults to `git rev-parse --verify --quiet refs/heads/<branch>`) and
+ * `hasOpenPr(branch)` (defaults to `gh pr list --head <branch> --state open`). `hasOpenPr` is
+ * FAIL-SAFE toward preservation — on any gh error it returns true (resume, never delete) so an
+ * unreachable gh can never destroy a delivered branch.
  *
  * @param {{ number: number, body: string }} issue - The picked issue.
  * @param {object} opts - Injected seams: project, projectRoot, worktreeRoot, stateDir,
  *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment,
- *   branchExists (optional; defaults to a real git probe in production).
+ *   branchExists (optional; defaults to a real git probe), hasOpenPr (optional; defaults to a real
+ *   gh open-PR probe in production).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
 import { writeFileSync, rmSync, existsSync } from "node:fs";
@@ -234,6 +238,32 @@ function defaultBranchExists(branch, { cwd, env }) {
 }
 
 /**
+ * @description Real "does this branch carry an OPEN PR?" probe used in production. A per-run branch
+ * with an open PR is a genuine prior delivery to RESUME (reuse it so a re-dispatch updates the SAME
+ * PR); a branch that exists WITHOUT an open PR is an ORPHAN from a died run whose stale, un-re-gated
+ * commits must NOT be resurrected into a fresh PR. FAIL-SAFE toward data preservation: on any gh
+ * error / unparseable output it returns TRUE (treat as "has an open PR" → resume, never delete) so an
+ * unreachable gh can never destroy a real delivered branch — the cost is only that a genuine orphan
+ * is occasionally resumed (non-destructive; the review still gates it), never that work is lost.
+ * @param {string} branch
+ * @param {{ cwd: string, env: object }} io
+ * @returns {boolean}
+ */
+function defaultHasOpenPr(branch, { cwd, env }) {
+  try {
+    const result = spawnSync(
+      "gh",
+      ["pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", "length"],
+      { cwd, env, encoding: "utf8" },
+    );
+    if (result.status !== 0) return true; // cannot confirm → fail safe: do not delete a possibly-delivered branch
+    return Number(String(result.stdout ?? "").trim()) > 0;
+  } catch {
+    return true; // fail safe: never delete on uncertainty
+  }
+}
+
+/**
  * @description Maximum total length (Unicode code points) of a Telegram forum-topic NAME. Telegram
  * itself caps the name; the TITLE is truncated so the TOTAL name (prefix + ' · ' + title) fits.
  */
@@ -373,6 +403,7 @@ export async function dispatch(issue, opts) {
     buildScopedEnv,
     notify,
     branchExists,
+    hasOpenPr,
     obs,
     createForumTopic,
     closeForumTopic,
@@ -386,6 +417,7 @@ export async function dispatch(issue, opts) {
   // but is only read when probeBranchExists is actually invoked below, AFTER `env` is built —
   // so git resolves identically for the probe and the worktree-add spawn.
   const probeBranchExists = branchExists ?? ((b) => defaultBranchExists(b, { cwd: projectRoot, env }));
+  const probeHasOpenPr = hasOpenPr ?? ((b) => defaultHasOpenPr(b, { cwd: projectRoot, env }));
 
   // Pre-spawn observability setup (task-4): createRun + createForumTopic + append 'picked' all
   // complete BEFORE the tmux spawn. Fail-open — observability never blocks a dispatch; a null
@@ -461,13 +493,25 @@ export async function dispatch(issue, opts) {
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
-  // 1) Per-run worktree on a project-distinct branch (never the primary tree). When branch/<issue>
-  //    already exists (resume/repair of a run whose branch may already carry an open PR), attach
-  //    the EXISTING branch (no -b) instead of creating a fresh one, so repair never orphans the PR.
+  // 1) Per-run worktree on a project-distinct branch (never the primary tree). RESUME (attach the
+  //    EXISTING branch, no -b) ONLY when it carries an OPEN PR — a genuine prior delivery, so a
+  //    re-dispatch updates the SAME PR instead of orphaning it. A branch that exists WITHOUT an open
+  //    PR is an ORPHAN from a died run: resurrecting its stale, un-re-gated commits into a fresh PR is
+  //    a bug (it opens a PR in seconds without running the pipeline), so DELETE it and rebuild fresh
+  //    with -b. The delete is guarded by the fail-safe probe (defaultHasOpenPr returns true on any gh
+  //    uncertainty) so an unreachable gh can never destroy a real delivered branch.
   const branchAlreadyExisted = probeBranchExists(branch);
-  const branchWasFreshlyCreated = !branchAlreadyExisted;
+  const resumeExistingBranch = branchAlreadyExisted && probeHasOpenPr(branch);
+  if (branchAlreadyExisted && !resumeExistingBranch) {
+    try {
+      spawn("git", ["branch", "-D", branch], { cwd: projectRoot, env });
+    } catch {
+      // best-effort: if the orphan branch cannot be deleted, the -b below will surface the collision
+    }
+  }
+  const branchWasFreshlyCreated = !resumeExistingBranch;
   try {
-    if (branchAlreadyExisted) {
+    if (resumeExistingBranch) {
       spawn("git", ["worktree", "add", worktreePath, branch], { cwd: projectRoot, env });
     } else {
       spawn("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: projectRoot, env });

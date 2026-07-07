@@ -15,6 +15,18 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.28.7] - 2026-07-07
+
+### Fixed
+
+- **Resume-mode ressuscitava branch órfã de run morto (abria PR falso sem rodar o pipeline)** — o
+  dispatch reusava QUALQUER branch `harness/<issue>` já existente, mesmo uma órfã deixada por uma
+  tentativa que morreu antes de abrir PR. Um re-dispatch pegava os commits velhos e abria um PR em
+  segundos, pulando spec/plano/build/review (com `regate-pending` sem resolver). Agora o resume só
+  acontece quando a branch tem **PR aberto** (entrega real a preservar); uma branch órfã sem PR é
+  **deletada e reconstruída do zero** (`-b`). O probe de PR é fail-safe: em qualquer erro do `gh` ele
+  resume (nunca deleta), pra um `gh` inacessível jamais destruir uma entrega real.
+
 ## [0.28.6] - 2026-07-07
 
 ### Changed
