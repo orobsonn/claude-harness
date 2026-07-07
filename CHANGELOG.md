@@ -13,6 +13,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Feed mostra só UMA linha de classificação por run** — subagentes dispatchados que rodam o próprio
+  triaging classificavam a sub-tarefa com modos variados (LIGHT/QUICK/no-ceremony) no outbox
+  compartilhado; o dedupe por `(tipo, modo)` deixava os 4+ passarem. Agora o `pipeline-type` dedupa
+  por **tipo** — a sessão top-level classifica a issue uma vez (antes de dispatchar qualquer
+  subagente), então só a classificação real sobrevive; as dos subagentes são suprimidas.
+
 ### Removed
 
 ## [0.28.2] - 2026-07-07

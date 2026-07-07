@@ -677,8 +677,14 @@ export function handle(payload, opts = {}) {
     }
     // Observability: append a {type:'pipeline-type', mode} checkpoint AFTER the triage write +
     // gate-state reset so an appendEvent failure (swallowed by obsAppend) NEVER blocks them.
+    // Dedupe by TYPE (not type+mode): the top-level session classifies the ISSUE once, BEFORE it
+    // dispatches any subagent — so the FIRST pipeline-type is the real classification. Dispatched
+    // subagents that run their own triaging classify their sub-task with varied modes
+    // (LIGHT/QUICK/no-ceremony); keying on type suppresses all of those (the shared outbox would
+    // otherwise show 4+ "classificação" lines). Trade-off: a genuine re-classification of the SAME
+    // session to a different mode keeps the first mode — rare, and far less noisy than the subagent spam.
     obsAppend({ type: "pipeline-type", mode }, appendEventFn, {
-      dedupeFn: (e) => e.type === "pipeline-type" && e.mode === mode,
+      dedupeFn: (e) => e.type === "pipeline-type",
     });
     return;
   }

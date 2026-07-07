@@ -268,9 +268,11 @@ test("stamp-triage handle(): mark.mjs plan-reviewed dedupes a same-verdict event
   });
 });
 
-// M1: pipeline-type dedupe keys on (type, mode) — a repeat of the SAME mode (a subagent sharing the
-// outbox) is suppressed, but a genuine re-classification to a DIFFERENT mode must still reach the feed.
-test("stamp-triage handle(): pipeline-type dedupes a repeat mode but appends a re-classification to a different mode", () => {
+// pipeline-type dedupe keys on TYPE: the top-level session classifies the issue ONCE (before it
+// dispatches any subagent), so the first pipeline-type is the real classification. Dispatched
+// subagents that run their own triaging classify their sub-task with varied modes — all suppressed,
+// so the shared outbox never shows 4+ "classificação" lines.
+test("stamp-triage handle(): pipeline-type keeps ONLY the first classification; subagent modes are suppressed", () => {
   withTempDir(() => {
     const featureId = "vps-run-observability";
     const obsDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
@@ -285,14 +287,13 @@ test("stamp-triage handle(): pipeline-type dedupes a repeat mode but appends a r
         tool_response: JSON.stringify({ mode, feature_id: featureId }),
       });
 
-      handle(classifyPayload("FULL"));
-      handle(classifyPayload("FULL")); // same mode (e.g. a subagent) → deduped
-      let modes = readEvents(metaPath).filter((e) => e.type === "pipeline-type").map((e) => e.mode);
-      assert.deepEqual(modes, ["FULL"], `a repeat of the same mode must be deduped, got ${JSON.stringify(modes)}`);
+      handle(classifyPayload("FULL")); // top-level classifies the issue first
+      handle(classifyPayload("LIGHT")); // a subagent classifies its sub-task → suppressed
+      handle(classifyPayload("QUICK")); // another subagent → suppressed
+      handle(classifyPayload("no-ceremony")); // → suppressed
 
-      handle(classifyPayload("LIGHT")); // genuine re-classification → appends
-      modes = readEvents(metaPath).filter((e) => e.type === "pipeline-type").map((e) => e.mode);
-      assert.deepEqual(modes, ["FULL", "LIGHT"], "a different mode must still append");
+      const modes = readEvents(metaPath).filter((e) => e.type === "pipeline-type").map((e) => e.mode);
+      assert.deepEqual(modes, ["FULL"], `only the first pipeline-type must survive, got ${JSON.stringify(modes)}`);
     } finally {
       delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
       fs.rmSync(obsDir, { recursive: true, force: true });
