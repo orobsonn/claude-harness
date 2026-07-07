@@ -814,6 +814,29 @@ test("drainTelegramOutbox renders 'revisão N — <verdict>' when a plan-reviewe
 });
 
 /**
+ * @description #19b (plural agreement) — Given plan-created events with 1 and with 3 tasks, When
+ * rendered, Then the body reads "1 tarefa" (singular) and "3 tarefas" (plural) — no "1 tarefas".
+ */
+test("drainTelegramOutbox renders 'plano criado' with correct singular/plural task agreement", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 167, {
+    issueNumber: 167, project: "demo", worktreePath: "/tmp/wt-167-a", threadId: 727, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 167, [
+    { type: "plan-created", tasks: 1 },
+    { type: "plan-created", tasks: 3 },
+  ]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  const [one, three] = calls.map((c) => String(c.text ?? ""));
+  assert.ok(one.includes("1 tarefa") && !one.includes("1 tarefas"), "1 task → singular 'tarefa'");
+  assert.ok(three.includes("3 tarefas"), "3 tasks → plural 'tarefas'");
+});
+
+/**
  * @description #20 (send spacing) — Given N unsent events and opts.sendDelayMs > 0 with an injected
  * `sleep` spy, When the drain runs, Then `sleep` is called BETWEEN sends (N-1 times), each with the
  * configured delay — spacing the burst so it never trips Telegram's rate limit.
