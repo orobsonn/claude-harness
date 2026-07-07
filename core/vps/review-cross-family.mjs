@@ -1,9 +1,19 @@
 /**
  * @description VPS cross-family auto-merge eligibility gate (HR-2 + HR-9 / #ac-2.3).
- * `crossFamilyEligible(pr, opts)` is a POSITIVE assertion: auto-merge eligibility requires the
- * second-family (Codex/GPT) verdict artifact to EXIST and be CLEAN. Any absence — unavailable,
- * missing/null verdict, or a non-CLEAN status — returns false (fail-closed), routing the caller
- * to harness:awaiting-merge. Never derive eligibility from a fail-open "Claude ran ok" signal.
+ * `crossFamilyEligible(pr, opts)` is fail-open ONLY on a genuinely absent verdict artifact — no
+ * verdict at all means Codex never produced a result (no subscription, switch off, unreachable,
+ * stale head, empty diff — see run-cron-review.mjs's true-absence branches, which always pair
+ * `available:false` with `secondFamilyVerdict:null`). This is a deliberate, accepted trade-off:
+ * the operator's Codex budget does not sustain running it on every PR, and auto-merge should not
+ * be permanently hostage to that (previously it was — #137 made this hard fail-closed). The
+ * moment ANY verdict object exists, the original guarantee is unconditional and unchanged: a
+ * non-CLEAN status always blocks, and a verdict paired with `available:false` (a suspicious or
+ * stale-looking CLEAN — the anti-spoof guard) is never trusted either. This distinction matters
+ * because run-cron-review.mjs's wiring can produce `available:false` together with a REAL
+ * `BLOCKED` verdict (one Codex eye failed structurally while the other ran and found a problem —
+ * `available = advOk && secOk` folds both eyes into one flag) — that case must still block, it is
+ * not the same as genuine absence, even though both share `available:false`. Checking the verdict
+ * BEFORE the availability flag is what keeps these two cases apart.
  * `opts.available` and `opts.secondFamilyVerdict` are injected seams (boolean or zero/one-arg fn)
  * so this module never hard-imports the gitignored codex driver.
  */
@@ -32,11 +42,11 @@ function resolveVerdict(secondFamilyVerdict, pr) {
  * @returns {boolean}
  */
 export function crossFamilyEligible(pr, opts) {
-  const isAvailable = resolveAvailable(opts.available);
-  if (!isAvailable) return false;
-
   const verdict = resolveVerdict(opts.secondFamilyVerdict, pr);
-  if (!verdict) return false;
+  if (!verdict) return true; // genuine absence — no artifact at all — fail-open (accepted trade-off)
+
+  const isAvailable = resolveAvailable(opts.available);
+  if (!isAvailable) return false; // a verdict exists but isn't trustworthy — never fail-open on this
 
   return verdict.status === "CLEAN";
 }

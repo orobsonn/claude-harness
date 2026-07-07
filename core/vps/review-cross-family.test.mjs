@@ -1,9 +1,12 @@
 /**
  * @description Frozen oracle for the VPS cross-family auto-merge eligibility gate
- * (review-cross-family.mjs). `crossFamilyEligible(pr, opts)` is a POSITIVE assertion: auto-merge
- * eligibility requires a distinct second-family (Codex/GPT) verdict artifact that EXISTS and is
- * CLEAN — never derived from a fail-open "Claude ran ok". Both seams (`opts.available` and
- * `opts.secondFamilyVerdict`) are INJECTED so the module never hard-depends on the gitignored
+ * (review-cross-family.mjs). `crossFamilyEligible(pr, opts)` is fail-open ONLY on genuine
+ * absence of a verdict artifact (Codex never ran — no subscription, switch off, unreachable):
+ * with no verdict at all, eligibility no longer blocks on the missing second family. The moment
+ * ANY verdict artifact exists, the original guarantee is unconditional: a non-CLEAN verdict
+ * always blocks, and an `available:false` verdict (a suspicious/forged-looking CLEAN paired with
+ * an availability flag saying otherwise) is never trusted either. Both seams (`opts.available`
+ * and `opts.secondFamilyVerdict`) are INJECTED so the module never hard-depends on the gitignored
  * codex driver and every test stays deterministic — ZERO real availability probe, ZERO real
  * codex call.
  *
@@ -23,12 +26,20 @@ const PR = { number: 42, headRefName: "harness/feat-x", headSha: "abc123", url: 
 
 const fakeSecurityVerdict = (issues = []) => (issues.some((i) => i.severity === "high" || i.severity === "medium") ? "UNSAFE" : "SECURE");
 
-test("Given the second family is UNAVAILABLE, When crossFamilyEligible runs, Then it returns false even with a CLEAN verdict present (fail-closed)", () => {
+test("Given a verdict artifact is genuinely ABSENT (available false, no verdict), When crossFamilyEligible runs, Then true (fail-open — Codex never ran)", () => {
+  const absent = crossFamilyEligible(PR, { available: false, secondFamilyVerdict: null });
+  assert.equal(absent, true, "no verdict at all must fail-open — the operator accepted this trade-off (no Codex budget)");
+
+  const absentViaFn = crossFamilyEligible(PR, { available: () => false, secondFamilyVerdict: () => null });
+  assert.equal(absentViaFn, true, "genuine absence via seam functions must also fail-open");
+});
+
+test("Given availability is FALSE but a verdict object IS present (forged/stale-looking CLEAN), When crossFamilyEligible runs, Then it still returns false (anti-spoof guard, unchanged)", () => {
   const unavailableButClean = crossFamilyEligible(PR, {
     available: false,
     secondFamilyVerdict: { status: "CLEAN" },
   });
-  assert.equal(unavailableButClean, false, "unavailable must return false even when a CLEAN verdict object is also present");
+  assert.equal(unavailableButClean, false, "a verdict object paired with available:false is never trusted — this is not the same as genuine absence");
 
   const unavailableViaFn = crossFamilyEligible(PR, {
     available: () => false,
@@ -37,18 +48,18 @@ test("Given the second family is UNAVAILABLE, When crossFamilyEligible runs, The
   assert.equal(unavailableViaFn, false, "unavailable via a checkAvailability() fn must also return false with a CLEAN verdict present");
 });
 
-test("Given availability is TRUE but there is NO CLEAN second-family verdict object, When crossFamilyEligible runs, Then false", () => {
+test("Given availability is TRUE but there is NO CLEAN second-family verdict object, When crossFamilyEligible runs, Then behavior depends on whether a verdict exists at all", () => {
   const withNullVerdict = crossFamilyEligible(PR, {
     available: true,
     secondFamilyVerdict: null,
   });
-  assert.equal(withNullVerdict, false, "a null verdict is absence of a positive artifact — never treated as a pass");
+  assert.equal(withNullVerdict, true, "no verdict object at all is genuine absence — fail-open, regardless of the available flag");
 
   const withBlockedVerdict = crossFamilyEligible(PR, {
     available: true,
     secondFamilyVerdict: { status: "BLOCKED" },
   });
-  assert.equal(withBlockedVerdict, false, "a non-CLEAN status must never be treated as a pass");
+  assert.equal(withBlockedVerdict, false, "a non-CLEAN status must never be treated as a pass — Codex ran and found a problem, unconditional block");
 
   const withGetterReturningNull = crossFamilyEligible(PR, {
     available: () => true,
@@ -57,7 +68,19 @@ test("Given availability is TRUE but there is NO CLEAN second-family verdict obj
       return null;
     },
   });
-  assert.equal(withGetterReturningNull, false, "a getSecondFamilyVerdict(pr) fn returning null must also return false");
+  assert.equal(withGetterReturningNull, true, "a getSecondFamilyVerdict(pr) fn returning null is genuine absence — fail-open");
+});
+
+test("Given availability is FALSE and a real BLOCKED verdict is present (one codex eye failed structurally, the other produced a real BLOCKED fold — run-cron-review.mjs's available=advOk&&secOk wiring), When crossFamilyEligible runs, Then false — never confused with genuine absence", () => {
+  const partialRunBlocked = crossFamilyEligible(PR, {
+    available: false,
+    secondFamilyVerdict: { status: "BLOCKED" },
+  });
+  assert.equal(
+    partialRunBlocked,
+    false,
+    "a present BLOCKED verdict always blocks regardless of the available flag — this is the case a naive available-only fail-open check would get wrong",
+  );
 });
 
 test("Given availability is TRUE AND a real second-family CLEAN verdict object exists, When crossFamilyEligible runs, Then true", () => {
@@ -109,10 +132,6 @@ test("deriveSecondFamilyVerdict: a missing/null eye output → BLOCKED (absent e
     deriveSecondFamilyVerdict({ adversary: { issues: [] }, security: null }, { securityVerdict: fakeSecurityVerdict }).status,
     "BLOCKED",
   );
-});
-
-test("crossFamilyEligible pre-existing fail-closed seam unchanged: available false + CLEAN verdict → false", () => {
-  assert.equal(crossFamilyEligible(PR, { available: false, secondFamilyVerdict: { status: "CLEAN" } }), false);
 });
 
 test("deriveSecondFamilyVerdict: an eye envelope carrying available:false (unavailable, never ran) is BLOCKED even with empty issues (no false-CLEAN from an unrun eye)", () => {

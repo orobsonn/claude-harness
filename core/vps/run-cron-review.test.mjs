@@ -454,7 +454,7 @@ test("run-cron-review: crossFamilyEligible closure returns a plain boolean (neve
     const capturedAbsent = await captureCronReviewOpts({ stateDir }, { gh: ghClean, loadCodexDriver: async () => null });
     const r2 = capturedAbsent.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
     assert.equal(typeof r2, "boolean");
-    assert.equal(r2, false, "driver absent => fail-open false");
+    assert.equal(r2, true, "driver absent => genuine absence => fail-open true (operator accepted this trade-off, no Codex budget)");
   } finally {
     cleanup();
   }
@@ -479,7 +479,7 @@ test("run-cron-review: the codex runner receives the REAL full-patch text, never
   }
 });
 
-test("run-cron-review: a headRefOid that drifted from sha runs NO codex eye and resolves false (re-queue)", async () => {
+test("run-cron-review: a headRefOid that drifted from sha runs NO codex eye and resolves true (genuine absence, fail-open — still re-reviewed next cycle at the new sha)", async () => {
   const { stateDir, cleanup } = withTempStateDir("harness-xfam-drift-");
   try {
     const { driver, runCodexRole } = makeFakeCodexDriver({ available: true });
@@ -487,14 +487,36 @@ test("run-cron-review: a headRefOid that drifted from sha runs NO codex eye and 
     const reviewStateDir = join(stateDir, "review");
     const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
     const result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
-    assert.equal(result, false, "head drift => not eligible");
+    assert.equal(result, true, "head drift => no verdict produced => genuine absence => fail-open true");
     assert.equal(runCodexRole.calls.length, 0, "no codex eye may run when the head drifted");
   } finally {
     cleanup();
   }
 });
 
-test("run-cron-review: driver-absent (or checkAvailability not-ok) fails open to false and records available:false, never throws", async () => {
+test("run-cron-review: a transient patch-fetch failure ({ok:false,diffFailed:true}) fails CLOSED (false) — infra flakiness is NOT the operator's accepted Codex-absent fail-open", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-difffail-");
+  try {
+    const { driver, runCodexRole } = makeFakeCodexDriver({ available: true });
+    // driver available + head matches, but the FULL-patch fetch (gh pr diff <n>, no --name-only) returns
+    // the gh-exec fail-closed sentinel. This must NOT be confused with a genuinely empty diff / absent driver.
+    const gh = makeSpy((args) =>
+      args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? { ok: false, diffFailed: true } : { ok: true })
+    );
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a diff-fetch failure is infra failure — must stay fail-closed, never hand out a no-second-family auto-merge");
+    assert.equal(runCodexRole.calls.length, 0, "no codex eye may run when the patch fetch failed");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.equal(artifact.available, false);
+    assert.equal(artifact.diffFailed, true, "the artifact records the infra-failure cause for traceability, distinct from accepted absence");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: driver-absent (or checkAvailability not-ok) is genuine absence — resolves true (fail-open), still records available:false, never throws", async () => {
   const { stateDir, cleanup } = withTempStateDir("harness-xfam-absent-");
   try {
     const gh = makeSpy((args) => (args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "PATCH" : { ok: true })));
@@ -504,7 +526,7 @@ test("run-cron-review: driver-absent (or checkAvailability not-ok) fails open to
     assert.doesNotThrow(() => {
       result = captured.crossFamilyEligible(PR, { changedFiles: [], sha: "deadbeef1", stateDir: reviewStateDir });
     });
-    assert.equal(result, false);
+    assert.equal(result, true, "genuine absence must fail-open — the artifact still records available:false for traceability");
     const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
     assert.equal(artifact.available, false);
   } finally {
