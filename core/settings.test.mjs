@@ -127,7 +127,7 @@ test("SessionStart startup wires version-check.mjs but compact does NOT (no re-n
   );
 });
 
-test("NO Skill matcher in PreToolUse and exactly 7 hooks total", () => {
+test("NO Skill matcher in PreToolUse and exactly 8 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
 
@@ -150,7 +150,7 @@ test("NO Skill matcher in PreToolUse and exactly 7 hooks total", () => {
     totalHooks += settings.hooks.SessionStart.length;
   }
 
-  strictEqual(totalHooks, 7, "exactly 7 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash + Agent for PostToolUse, compact + startup for SessionStart)");
+  strictEqual(totalHooks, 8, "exactly 8 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash + Agent + Write for PostToolUse, compact + startup for SessionStart)");
 });
 
 test("hooks.PreToolUse has Bash matcher with entry-gate.mjs command", () => {
