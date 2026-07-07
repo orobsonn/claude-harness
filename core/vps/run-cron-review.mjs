@@ -225,10 +225,13 @@ export async function runCronReview(config, deps = {}) {
       return healed;
     });
 
-  // crossFamilyEligible is a POSITIVE assertion (fail-closed by its own contract): the default
-  // closure runs the vendored Codex 2nd family synchronously per PR, writes a sibling artifact, and
-  // returns a plain boolean. The driver is loaded ONCE above; the closure itself stays sync so the
-  // cron-review boolean conjunction never accidentally truthy-coerces a Promise.
+  // crossFamilyEligible is fail-open ONLY on a genuinely absent verdict (no Codex result at all —
+  // driver absent, head drift, empty diff): the operator accepted that trade-off (Codex budget does
+  // not sustain running it on every PR). A verdict that actually ran always governs, and an INFRA
+  // failure (the diff-fetch sentinel below) is forced fail-CLOSED — flaky infra must never hand out a
+  // no-second-family auto-merge. The default closure runs the vendored Codex 2nd family synchronously
+  // per PR, writes a sibling artifact, and returns a plain boolean. The driver is loaded ONCE above;
+  // the closure itself stays sync so the cron-review boolean conjunction never truthy-coerces a Promise.
   const crossFamilyEligibleFn =
     deps.crossFamilyEligible ??
     ((pr, { changedFiles, sha, stateDir: sd }) => {
@@ -255,6 +258,13 @@ export async function runCronReview(config, deps = {}) {
       }
 
       const patch = gh(["pr", "diff", String(pr.number)]);
+      // A transient patch-fetch failure (gh-exec's {ok:false, diffFailed:true} sentinel) is an INFRA
+      // failure, NOT the operator's accepted "Codex never ran" absence — it must stay fail-CLOSED, or a
+      // flaky `gh` call would silently make a PR auto-merge-eligible with zero second-family check.
+      if (patch && patch.diffFailed) {
+        writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false, diffFailed: true });
+        return false;
+      }
       if (typeof patch !== "string" || patch.length === 0) {
         writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
         return crossFamilyEligible(pr, { available: false });
