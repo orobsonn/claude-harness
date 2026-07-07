@@ -57,7 +57,7 @@
  * @returns {Promise<void>}
  */
 import { spawnSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, openSync, closeSync, rmSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -355,11 +355,58 @@ export async function runCronReview(config, deps = {}) {
  * @param {object} config
  * @returns {Promise<void>}
  */
-export async function mainCronReview(config) {
+export async function mainCronReview(config, deps = {}) {
   const notifier = makeNotifier(config, { homeDir: config.homeDir });
+  const runCronReviewFn = deps.runCronReview ?? runCronReview;
   try {
-    await runCronReview(config, { notify: notifier.notify });
+    await runCronReviewFn(config, { notify: notifier.notify });
   } finally {
+    // Drain the per-run observability outbox here too (not only Cron A): the review cron ticks every
+    // 15 min, so a run that starts AND finishes between two hourly Cron-A ticks would otherwise show
+    // nothing in its topic until the next hour. Uses the SAME `drain.lock` as Cron A so the two crons
+    // can never double-send; fail-open with a stale-reclaim (15 min) so an orphaned lock never mutes
+    // the feed forever. Injectable seam (deps.drainOutbox) for tests.
+    if (notifier.enabled) {
+      const drainOutbox = deps.drainOutbox ?? notifier.drainOutbox;
+      const lockPath = join(config.stateDir, "drain.lock");
+      const LOCK_STALE_MS = 15 * 60 * 1000;
+      let lockFd = null;
+      try {
+        lockFd = openSync(lockPath, "wx");
+      } catch {
+        try {
+          if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+            rmSync(lockPath, { force: true });
+            lockFd = openSync(lockPath, "wx");
+          }
+        } catch {
+          // still busy / unreadable — skip the drain this tick, the next drains
+        }
+      }
+      if (lockFd !== null) {
+        try {
+          await drainOutbox({
+            stateDir: config.stateDir,
+            homeDir: config.homeDir,
+            limitPerMinute: config.notify?.limitPerMinute ?? 20,
+            sendDelayMs: config.notify?.sendDelayMs ?? 1100,
+          });
+        } catch {
+          // fail-open: a drain failure never throws or delays the cron
+        } finally {
+          try {
+            closeSync(lockFd);
+          } catch {
+            // best-effort fd close
+          }
+          try {
+            rmSync(lockPath, { force: true });
+          } catch {
+            // best-effort lock cleanup
+          }
+        }
+      }
+    }
     try {
       await notifier.drain();
     } catch {
