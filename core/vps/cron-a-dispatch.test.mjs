@@ -147,6 +147,7 @@ function baseOpts({
   buildScopedEnv = () => ({ PATH: "/usr/bin", OLLAMA_HAND_TOKEN: "oll-token" }),
   lock = { acquireTs: 1000 },
   branchExists = () => false,
+  hasOpenPr = () => true,
 }) {
   return {
     project,
@@ -160,6 +161,7 @@ function baseOpts({
     counter,
     buildScopedEnv,
     branchExists,
+    hasOpenPr,
   };
 }
 
@@ -573,28 +575,57 @@ test("dispatch: two dispatches for the SAME issue number in DIFFERENT projects p
   }
 });
 
-test("dispatch: given branch harness/<n> already EXISTS (the branch-existence probe succeeds), the git worktree add argv checks it out WITHOUT -b", () => {
+test("dispatch: branch harness/<n> EXISTS and carries an OPEN PR → resume it (worktree add WITHOUT -b), never deleted", () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
     const fake = makeFakeSpawn();
     dispatch(
       { number: 42, body: "hi" },
-      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => true })
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => true, hasOpenPr: () => true })
     );
 
     const gitCall = fake.calls.find(
       (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
     );
-    assert.ok(gitCall, "dispatch must run `git worktree add` when resuming an already-existing branch");
+    assert.ok(gitCall, "dispatch must run `git worktree add` when resuming a branch with an open PR");
     assert.deepEqual(
       gitCall.args,
       ["worktree", "add", gitCall.args[2], "harness/42"],
-      "resuming an existing branch must check it out with exactly `worktree add <path> harness/42` — no -b flag"
+      "resuming a branch with an open PR must check it out with exactly `worktree add <path> harness/42` — no -b flag"
     );
-    assert.equal(
-      gitCall.args.includes("-b"),
-      false,
-      "the -b flag must be absent from the worktree-add argv when the branch already exists"
+    const branchDelete = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "branch" && c.args[1] === "-D"
+    );
+    assert.equal(branchDelete, undefined, "a branch carrying an open PR must NEVER be deleted (would orphan the PR)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: branch harness/<n> EXISTS but has NO open PR (orphan from a died run) → delete it, then rebuild FRESH with -b (no stale resurrection)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => true, hasOpenPr: () => false })
+    );
+
+    const branchDelete = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "branch" && c.args[1] === "-D" && c.args[2] === "harness/42"
+    );
+    assert.ok(branchDelete, "an orphan branch (exists, no open PR) must be deleted before rebuilding");
+
+    const addCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.ok(addCall, "dispatch must run `git worktree add`");
+    assert.ok(addCall.args.includes("-b"), "an orphan branch must be rebuilt FRESH with -b, never resumed onto stale commits");
+    assert.equal(addCall.args[addCall.args.indexOf("-b") + 1], "harness/42", "the fresh -b must target harness/42");
+    // Ordering: the delete must precede the worktree-add rebuild.
+    assert.ok(
+      fake.calls.indexOf(branchDelete) < fake.calls.indexOf(addCall),
+      "the orphan branch must be deleted BEFORE the fresh worktree add",
     );
   } finally {
     cleanup();
