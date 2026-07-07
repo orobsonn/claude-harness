@@ -132,6 +132,20 @@ A sessão de revisão soma cross-family (segunda família de modelo, **Codex via
 
 ---
 
+## 7. Auto-update do motor na VPS (blue/green)
+
+Com o auto-merge ligado, PRs entram na `main` sem intervenção humana — então o código que os crons da VPS executam (o *motor*, em `<engineDir>/core/vps/`) precisa acompanhar a `main`, senão os crons rodam uma versão estagnada do dia do setup. O mecanismo é uma troca **blue/green por symlink**:
+
+- O motor é publicado como um symlink `~/.claude/harness-core` → `~/.claude/harness-core-versions/<sha>` (cada versão é um clone imutável).
+- O cron `run-cron-update.mjs` (fleet-level, um só para a VPS inteira, como o reaper) faz `git ls-remote` da `main`; se avançou, **clona a nova sha** numa pasta separada e **troca o symlink atomicamente** (`rename` de symlink é atômico). Nenhum lock é necessário: um cron que já resolveu o symlink no spawn continua na árvore antiga (inteira e consistente); o próximo spawn pega a nova. Nunca existe um instante meio-atualizado.
+- **Fail-safe:** se o motor **não** é um symlink gerenciado (instalação legada em pasta real, ou o clone de dev do operador), o cron faz **no-op** — nunca mexe num motor que não é dono.
+- **Grace de prune:** mantém as 3 versões mais recentes e **nunca** apaga uma versão criada há menos de 2h (uma sessão de review longa pode importar o módulo do motor tardiamente).
+- **Notificações:** `engine-updated` (motor atualizado de X→Y) e `engine-update-failed` (falha, VPS segue na versão anterior) via Telegram.
+
+> **Estado:** o mecanismo (`engine-update.mjs` + `run-cron-update.mjs`) está entregue e testado. A **ativação automática no onboarding** — o `install-crons` registrar o cron de update e o `setup-vps` estabelecer o symlink versionado, migrando a frota — é o próximo passo (design validado; requer só o caminho `stableEngineDir`, o clone de dev do operador nunca é auto-atualizado).
+
+---
+
 ## Modelo do orquestrador
 
 Setar **Sonnet** como modelo da sessão (`/model` no Claude Code, ou o modelo padrão da routine). O orquestrador é o maior consumidor de tokens do harness — é onde está a economia real. Os modelos superiores (Opus, Fable) são chamados **só nos pontos certos**, automaticamente, pelos sub-agentes: `planner` (Opus), `plan-reviewer` e `adversary` do gate final (Fable), `security`/`adversary` por-task (Opus). A tabela autoritativa está em `core/skills/orchestrating-delivery/SKILL.md`.
