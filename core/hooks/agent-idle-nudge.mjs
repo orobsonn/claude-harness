@@ -18,23 +18,26 @@ import { fileURLToPath } from 'node:url';
 // ---------------------------------------------------------------------------
 
 /**
- * Coerces the report text out of a payload. Idle = a string that trims to '' OR
- * null/undefined. Any non-string non-null value (number, boolean, object, array)
- * counts as a report (NOT idle).
+ * Coerces the report text out of a payload. The payload is idle ONLY when BOTH
+ * tool_response and tool_output are idle. A field is idle when it is null/undefined
+ * OR a string that trims to ''. Any non-string non-null value (number, boolean,
+ * object, array) counts as a report (NOT idle) — so an empty-string tool_response
+ * does not mask a real report in tool_output (and vice versa).
  *
- * Branches on `typeof x === 'string'` (then trim) BEFORE the non-string branch —
- * never on truthiness — so `0`/`false` fall into the report branch literally.
+ * Branches on `typeof v === 'string'` (then trim) BEFORE the null check — never on
+ * truthiness — so `0`/`false` fall into the report branch literally.
  *
  * @param {unknown} payload - The hook payload
- * @returns {boolean} true when the report text is idle (absent or blank)
+ * @returns {boolean} true when BOTH report fields are idle (absent or blank)
  */
 function isIdleReport(payload) {
-  const raw = payload.tool_response ?? payload.tool_output;
-  if (typeof raw === 'string') {
-    return raw.trim() === '';
-  }
-  // null / undefined => idle; any other non-string (number, boolean, object, array) => report.
-  return raw === null || raw === undefined;
+  // A field is idle when null/undefined OR a string that trims to ''. Any non-string
+  // non-null value (number 0, boolean false, object, array) is a report (NOT idle).
+  // The payload is idle ONLY when BOTH fields are idle — an empty-string tool_response
+  // must not mask a real report present in tool_output (and vice versa).
+  const isFieldIdle = (v) =>
+    v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+  return isFieldIdle(payload.tool_response) && isFieldIdle(payload.tool_output);
 }
 
 /**
@@ -56,8 +59,9 @@ export function decide(payload, _env, _deps) {
     return { action: 'none' };
   }
 
-  // (b) payload.agent_id is truthy — main-loop only
-  if (payload.agent_id) {
+  // (b) payload.agent_id present — nested dispatch (main-loop only). Presence, not
+  // truthiness: a falsy-but-present agent_id ('' or 0) is still a nested dispatch.
+  if (Object.prototype.hasOwnProperty.call(payload, 'agent_id')) {
     return { action: 'none' };
   }
 
