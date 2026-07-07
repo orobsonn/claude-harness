@@ -14,12 +14,42 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   cada `--config`/workflow do `.github/workflows/`) via `ci-test-commands.mjs`, e só declara a
   entrega verde quando todos passam. Fecha a classe de furo onde um projeto com mais de um config
   de teste passava local rodando só o default, enquanto um config inteiro do CI nunca era exercitado.
+- **Hook `agent-idle-nudge` (PostToolUse[Agent])** — nudge automático quando um agente despachado
+  encerra sem entregar o relatório estrutural final: injeta uma diretiva única de re-prompt (um só
+  `SendMessage`) e, se ainda assim não vier relatório, marca a tarefa como não resolvida sem re-loop
+  nem re-despacho. (#90)
 
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.28.4] - 2026-07-07
+
+### Changed
+
+- **Feed do Telegram em uma linha só** — cada checkpoint agora é `<emoji> <label> — <info>` numa
+  única linha (`🚀 Classificação — modo LIGHT`), ou só o label quando não há info (`📝 Spec criada`).
+  Antes eram duas linhas (título em negrito + corpo em itálico). Escape de HTML e truncação preservados.
+- **Cron A espaça e limita os envios do Telegram** — o drain agora espaça os sends (~1,1 s entre cada,
+  críticos e cosméticos) e o teto passou de 30 → 20 msg/min (o limite real por grupo do Telegram),
+  para nunca disparar em rajada.
+
+### Fixed
+
+- **`spec-adversary` sem emoji** — o marco de adversarial da spec caía no emoji fallback `🔔`; agora
+  usa `🛡️`.
+- **Revisões do plano numeradas** — várias "Revisão do plano" apareciam sem distinção; agora cada
+  round é numerado (`revisão 1 — requer revisão`, `revisão 2 — aprovado`), contado deterministicamente
+  pelo produtor no retorno de cada `plan-reviewer`.
+- **Repetição no feed** — sob o rate-limit do Telegram, o último send de uma rajada estourava o timeout
+  de 5 s **depois** da mensagem já ter sido entregue → o cursor não avançava → reenvio no tick seguinte
+  (duplicata). O espaçamento dos sends mata a causa (sem rajada, sem timeout-após-entrega); o timeout
+  global do módulo não foi tocado.
+- **`drain.lock` órfão silenciava o feed pra sempre** — um kill/OOM no meio do drain deixava o lock sem
+  dono e todo tick futuro pulava o drain. Agora um lock com mtime além do TTL (15 min) é reivindicado;
+  um lock fresco (drain concorrente real) é respeitado.
 
 ## [0.28.3] - 2026-07-07
 

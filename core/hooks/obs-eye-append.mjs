@@ -142,10 +142,18 @@ export function decide(payload, env, deps) {
   //    falls through to a raw eye.
   //  - anything else  → {type:'eye', role} — audit-only; the drain allowlist suppresses it from the feed.
   const hasEvent = deps && typeof deps.hasEvent === 'function' ? deps.hasEvent : () => false;
+  const countEvents = deps && typeof deps.countEvents === 'function' ? deps.countEvents : () => 0;
 
   if (role === 'plan-reviewer') {
     const verdict = parseVerdict(payload);
-    const event = verdict ? { type: 'plan-reviewed', verdict } : { type: 'plan-reviewed' };
+    // Number the review round (1-based) so the feed shows "revisão 1", "revisão 2"… A REVISE→re-plan
+    // cycle dispatches the plan-reviewer again; each return counts the plan-reviewed events already in
+    // the outbox and stamps round = count + 1. This is the deterministic producer of the round — the
+    // stamp-triage mark.mjs fallback (no round) is deduped away by (type, verdict) when this fires.
+    const round = countEvents(metaPath, 'plan-reviewed') + 1;
+    const event = verdict
+      ? { type: 'plan-reviewed', verdict, round }
+      : { type: 'plan-reviewed', round };
     return { action: 'append', role, metaPath, event };
   }
   if (role === 'adversary') {
@@ -194,8 +202,15 @@ export function processInput(rawStr, deps) {
         return false;
       }
     };
+    const countEvents = (mp, type) => {
+      try {
+        return (readEvents(mp) || []).filter((e) => e && e.type === type).length;
+      } catch {
+        return 0;
+      }
+    };
 
-    const d = decide(payload, env, { existsSync, planExists, hasEvent });
+    const d = decide(payload, env, { existsSync, planExists, hasEvent, countEvents });
 
     if (d.action === 'append') {
       appendEvent(d.metaPath, d.event);
