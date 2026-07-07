@@ -124,6 +124,26 @@ async function captureCronReviewOpts(configOverrides, depsOverrides) {
   return captured;
 }
 
+test("run-cron-review: safeNotify keeps the shared global topic actionable — suppresses review-started/pr-merged, passes pr-awaiting-merge and errors", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "harness-review-safenotify-"));
+  const notifySpy = makeSpy();
+  const captured = await captureCronReviewOpts({ stateDir }, { notify: notifySpy });
+  const safeNotify = captured.notify;
+
+  safeNotify({ type: "review-started", pr: 1 });
+  safeNotify({ type: "pr-merged", pr: 2 });
+  safeNotify({ type: "pr-awaiting-merge", pr: 3 });
+  safeNotify({ type: "pr-blocked", pr: 4 });
+  safeNotify({ type: "failed", pr: 5 });
+
+  const passedTypes = notifySpy.calls.map(([e]) => e.type);
+  assert.ok(!passedTypes.includes("review-started"), "review-started must be suppressed from the global topic");
+  assert.ok(!passedTypes.includes("pr-merged"), "pr-merged must be suppressed from the global topic");
+  assert.ok(passedTypes.includes("pr-awaiting-merge"), "pr-awaiting-merge (actionable) must still reach the global topic");
+  assert.ok(passedTypes.includes("pr-blocked"), "error events must still reach the global topic");
+  assert.ok(passedTypes.includes("failed"), "error events must still reach the global topic");
+});
+
 /** @description Creates a fresh temp stateDir for a test, and returns a cleanup callback. */
 function withTempStateDir(prefix) {
   const stateDir = mkdtempSync(join(tmpdir(), prefix));
