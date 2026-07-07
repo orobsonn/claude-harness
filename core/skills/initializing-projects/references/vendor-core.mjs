@@ -26,6 +26,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -162,6 +163,52 @@ function copyFrameworkOwned(coreDir, claudeDir) {
     const src = join(coreDir, file);
     if (existsSync(src)) cpSync(src, join(claudeDir, file));
   }
+}
+
+/**
+ * @description The hooks vendored into `.claude/hooks/` import runtime modules from `core/vps/`
+ * (e.g. `stamp-triage.mjs` and `obs-eye-append.mjs` both `import "../vps/obs-outbox.mjs"` for the
+ * observability outbox). `vps/` is NOT framework-owned, so without this the vendored hook resolves
+ * an `import` path that does not exist under `.claude/` → ERR_MODULE_NOT_FOUND → the hook crashes on
+ * load → `stamp-triage` never writes `triage.json` → the entry-gate blocks every delivery subagent.
+ * This mirrors ONLY the vps modules the hooks actually import (transitive closure of their `./`
+ * siblings inside `vps/`) into `.claude/vps/` — never the whole cron runtime.
+ * @param {string} coreDir
+ * @param {string} claudeDir
+ * @returns {string} status string
+ */
+function copyHookVpsDeps(coreDir, claudeDir) {
+  const hooksDir = join(coreDir, "hooks");
+  if (!existsSync(hooksDir)) return "none (no hooks/)";
+  const VPS_IMPORT = /from\s+['"]\.\.\/vps\/([\w.-]+\.mjs)['"]/g;
+  const SIBLING_IMPORT = /from\s+['"]\.\/([\w.-]+\.mjs)['"]/g;
+
+  // Seed the worklist from the hooks' direct `../vps/` imports. Only the hooks that are actually
+  // vendored count — exclude `*.test.mjs` (same rule as isFrameworkCopyIncluded), whose imports
+  // never ship, so a test-only import of a heavy vps module is not needlessly mirrored.
+  const queue = [];
+  for (const file of readdirSync(hooksDir)) {
+    if (!file.endsWith(".mjs") || !isFrameworkCopyIncluded(file)) continue;
+    const text = readFileSync(join(hooksDir, file), "utf8");
+    for (const m of text.matchAll(VPS_IMPORT)) queue.push(m[1]);
+  }
+
+  // Transitive closure INSIDE vps/: an imported vps module may import a sibling vps module.
+  const copied = [];
+  const seen = new Set();
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const src = join(coreDir, "vps", name);
+    if (!existsSync(src) || src.endsWith(".test.mjs")) continue;
+    mkdirSync(join(claudeDir, "vps"), { recursive: true });
+    cpSync(src, join(claudeDir, "vps", name));
+    copied.push(name);
+    const text = readFileSync(src, "utf8");
+    for (const m of text.matchAll(SIBLING_IMPORT)) queue.push(m[1]);
+  }
+  return copied.length ? copied.sort().join(", ") : "none (hooks import no vps modules)";
 }
 
 /**
@@ -312,6 +359,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     mkdirSync(claudeDir, { recursive: true });
     copyFrameworkOwned(coreDir, claudeDir);
+    const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir);
     const modules = copyModules(join(coreDir, "..", "modules"), claudeDir, Boolean(args["with-codex"]));
     seedAccumulated(coreDir, claudeDir);
     const claudeMd = mergeClaudeMd(coreDir, claudeDir);
@@ -331,6 +379,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       [
         `[vendor-core] OK — harness ${version} → ${claudeDir}`,
         `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
+        `  hooks' vps deps → .claude/vps/: ${hookVpsDeps}`,
         `  modules: ${modules}`,
         `  memory/MEMORY.md, kaizen.md: seeded if absent`,
         `  CLAUDE.md: ${claudeMd}`,
