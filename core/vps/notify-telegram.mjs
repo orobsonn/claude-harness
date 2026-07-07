@@ -75,6 +75,8 @@ const EMOJI = {
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
   "reaper-orphan-cleaned": "🧹",
+  "engine-updated": "⬆️",
+  "engine-update-failed": "❗",
   "chain-released": "🔗",
   "chain-stranded": "⛓️‍💥",
   "pipeline-type": "🚀",
@@ -227,6 +229,14 @@ export function formatEvent(event = {}) {
       return `${prefix} run da issue ${issueRef} recuperado de crash`;
     case "reaper-orphan-cleaned":
       return `${prefix} worktree órfão da issue ${issueRef} limpo`;
+    case "engine-updated": {
+      const range = event.from && event.to ? ` (${escapeHtml(String(event.from).slice(0, 7))} → ${escapeHtml(String(event.to).slice(0, 7))})` : "";
+      return `${prefix} motor do harness atualizado com a main${range} — próximos crons já rodam a versão nova`;
+    }
+    case "engine-update-failed": {
+      const detail = event.message ? `: ${escapeHtml(truncate(String(event.message)))}` : "";
+      return `${prefix} falha ao atualizar o motor do harness${detail} — a VPS segue na versão anterior`;
+    }
     case "chain-released": {
       const deps = Array.isArray(event.deps) && event.deps.length ? ` (dependências #${event.deps.join(", #")} merjadas)` : "";
       return `${prefix} issue ${issueRef} liberada da fila → pronta pra execução${deps}`;
