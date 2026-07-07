@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isFrameworkCopyIncluded, shouldVendorModule } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -74,6 +74,49 @@ test("vendor-core: all required hook files are copied to target", async (t) => {
         `${file} should exist in vendored target`
       );
     }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: mirrors the vps modules the hooks import so vendored hooks resolve (P1 regression)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" }
+    );
+    if (result.status !== 0) {
+      throw new Error(`vendor-core failed: ${result.stderr || result.stdout}`);
+    }
+
+    // stamp-triage.mjs / obs-eye-append.mjs import `../vps/obs-outbox.mjs`; vps/ is not
+    // framework-owned, so without the mirror the vendored hook crashes on load
+    // (ERR_MODULE_NOT_FOUND) → triage.json never writes → the entry-gate blocks every subagent.
+    assert.ok(
+      existsSync(join(tempDir, ".claude/vps/obs-outbox.mjs")),
+      "obs-outbox.mjs must be mirrored into .claude/vps/"
+    );
+
+    // The real regression guard: the vendored hook must actually resolve its ../vps import.
+    const hookUrl = pathToFileURL(join(tempDir, ".claude/hooks/stamp-triage.mjs")).href;
+    await assert.doesNotReject(
+      import(hookUrl),
+      "vendored stamp-triage.mjs must resolve its ../vps/obs-outbox.mjs import"
+    );
+
+    // Only what the hooks import — cron-only vps runtime must NOT leak into .claude/vps/.
+    assert.ok(
+      !existsSync(join(tempDir, ".claude/vps/cron-a-dispatch.mjs")),
+      "cron-only vps modules must not be vendored"
+    );
+    // A test-only import of a heavy vps module (notify-telegram.mjs, imported by hooks/*.test.mjs)
+    // must NOT drag it in — *.test.mjs are not vendored, so their imports never ship.
+    assert.ok(
+      !existsSync(join(tempDir, ".claude/vps/notify-telegram.mjs")),
+      "vps modules imported only by test files must not be vendored"
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
