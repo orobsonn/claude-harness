@@ -13,6 +13,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+### Removed
+
+## [0.27.1] - 2026-07-07
+
+### Added
+
+### Changed
+
+### Fixed
+
 - **Rastro de auditoria da captura fecha no despacho, não por lembrete do orquestrador** — o
   `spawn-hand.mjs` agora carimba `capturedVerifiedAt` no run-record que ele já grava, no mesmo passo
   do despacho e apenas quando a captura interna fica verde (`DONE`). Como o gate de entrega já bloqueia
@@ -20,6 +30,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   verificação em aberto — fechando o buraco em que os marcadores eram pulados silenciosamente e só
   apareciam no gate final, depois do HEAD já ter passado do ponto de captura. Green-only por
   construção: run que falha ou estoura tempo nunca recebe o carimbo.
+- **Hooks vendorizados voltam a carregar (`vendor-core` espelha as deps vps)** — os hooks
+  `stamp-triage` e `obs-eye-append` importam `../vps/obs-outbox.mjs`, mas o `vendor-core` não copiava
+  `vps/` para o `.claude/` vendorizado. Resultado: `ERR_MODULE_NOT_FOUND` ao carregar o hook →
+  `triage.json` nunca gravava → o entry-gate bloqueava todo subagent do pipeline (todo `.claude`
+  vendorizado da 0.27.0 nascia com os hooks quebrados). O `vendor-core` agora espelha só os módulos
+  que os hooks de produção realmente importam (fecho transitivo, `*.test.mjs` e cron runtime
+  excluídos).
 
 ### Removed
 
