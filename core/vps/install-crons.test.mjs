@@ -1162,9 +1162,12 @@ test("[review-phase] a50: renderProjectBlock: the 0 */6 line invokes run-cron-re
   assert.equal(block.includes("run-cron-b.mjs"), false, "run-cron-b.mjs must no longer appear anywhere in the block");
   assert.match(block, /0 \*\/4 \* \* \*.*run-cron-a\.mjs/);
 
+  // The dedicated drain-only cron is a lightweight third line (feed cadence), NOT the retired Cron B.
+  assert.match(block, /\*\/3 \* \* \* \*.*run-drain\.mjs/, "a step-3-minute drain-only cron line invokes run-drain.mjs");
+
   const lines = block.split("\n");
   const cronLines = lines.slice(1, -1); // exclude the two fence lines
-  assert.equal(cronLines.length, 2, "exactly 2 project cron lines (Cron A + review), never a third");
+  assert.equal(cronLines.length, 3, "exactly 3 project cron lines (Cron A + review + drain), never a run-cron-b line");
 });
 
 test("[review-phase] a51: runCli: the review-phase kill switch (\"reviewEnabled\") defaults OFF when no flag is passed, and an explicit --review-enabled false flag resolves to false", async () => {

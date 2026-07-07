@@ -15,6 +15,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.28.10] - 2026-07-07
+
+### Added
+
+- **Cron dedicado só-drenar (feed quase ao vivo)** — novo `run-drain.mjs` que roda APENAS o drain do
+  outbox (sem dispatch, sem review), pra agendar num intervalo curto (default 3 min) e deixar o feed
+  do Telegram quase ao vivo sem disparar os efeitos pesados dos outros crons. O `install-crons` passa
+  a gerar essa 3ª linha (`intervalMinutesDrain`, default 3). O bloco de drain+lock virou um helper
+  compartilhado (`drain-lock.mjs`) usado pelo cron de drain e pelo de review (mesmo `drain.lock`, sem
+  double-send).
+
 ## [0.28.9] - 2026-07-07
 
 ### Fixed

@@ -187,6 +187,9 @@ export function generateProjectConfig(coords) {
 /** @description Default hour interval for Cron A (select/dispatch) and the review phase. */
 const DEFAULT_INTERVAL_HOURS_A = 4;
 const DEFAULT_INTERVAL_HOURS_REVIEW = 6;
+/** @description Default MINUTE interval for the dedicated drain-only cron — the Telegram feed
+ * updates this often (drain is lightweight; dispatch/review keep their hourly cadence). */
+const DEFAULT_INTERVAL_MINUTES_DRAIN = 3;
 
 /**
  * @description Renders the five-field cron schedule prefix for an every-N-hours cadence
@@ -206,6 +209,21 @@ function everyNHoursSchedule(hours, label) {
 }
 
 /**
+ * @description Renders the five-field cron schedule for an every-N-MINUTES cadence (a step-N minute
+ * field), validating N is an integer in [1,59]. Injection-safe by construction (an integer). Used
+ * only for the lightweight drain-only cron.
+ * @param {number} minutes
+ * @param {string} label
+ * @returns {string}
+ */
+function everyNMinutesSchedule(minutes, label) {
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 59) {
+    throw new Error(`invalid ${label} (must be an integer 1..59)`);
+  }
+  return `*/${minutes} * * * *`;
+}
+
+/**
  * @description Renders the fenced crontab block for a project: Cron A (run-cron-a.mjs) and the
  * review phase (run-cron-review.mjs — REPLACES the old Cron B slot, not a third line) invoking the
  * run-cron scripts with absolute paths, wrapped in literal `# >>> harness:<project> >>>` /
@@ -222,18 +240,23 @@ export function renderProjectBlock({
   configPath,
   intervalHoursA = DEFAULT_INTERVAL_HOURS_A,
   intervalHoursReview = DEFAULT_INTERVAL_HOURS_REVIEW,
+  intervalMinutesDrain = DEFAULT_INTERVAL_MINUTES_DRAIN,
 }) {
   const scriptA = join(scriptDir, "run-cron-a.mjs");
   const scriptReview = join(scriptDir, "run-cron-review.mjs");
+  const scriptDrain = join(scriptDir, "run-drain.mjs");
   assertCronSafe(nodeBin, "nodeBin");
   assertCronSafe(scriptA, "script path");
   assertCronSafe(scriptReview, "script path");
+  assertCronSafe(scriptDrain, "script path");
   assertCronSafe(configPath, "configPath");
   const scheduleA = everyNHoursSchedule(intervalHoursA, "intervalHoursA");
   const scheduleReview = everyNHoursSchedule(intervalHoursReview, "intervalHoursReview");
+  const scheduleDrain = everyNMinutesSchedule(intervalMinutesDrain, "intervalMinutesDrain");
   const cronA = `${scheduleA} ${nodeBin} ${scriptA} --config ${configPath}`;
   const cronReview = `${scheduleReview} ${nodeBin} ${scriptReview} --config ${configPath}`;
-  return [`# >>> harness:${project} >>>`, cronA, cronReview, `# <<< harness:${project} <<<`].join("\n");
+  const cronDrain = `${scheduleDrain} ${nodeBin} ${scriptDrain} --config ${configPath}`;
+  return [`# >>> harness:${project} >>>`, cronA, cronReview, cronDrain, `# <<< harness:${project} <<<`].join("\n");
 }
 
 /**
