@@ -174,7 +174,7 @@ function buildReviewSpawnEnv() {
  * file, fails closed: unlinks any canonical, notifies exactly once, and writes nothing. On a
  * clean spawn with valid eye-outputs, derives the canonical verdict and writes it atomically.
  * @param {{number: number, headSha: string}} pr
- * @param {{stateDir: string, changedFiles: string[], secondPass?: boolean}} meta
+ * @param {{stateDir: string, changedFiles: string[]}} meta
  * @param {{spawn: Function, gh: Function, projectRoot: string, notify?: Function, reviewTimeoutMs?: number}} deps
  * @returns {void}
  */

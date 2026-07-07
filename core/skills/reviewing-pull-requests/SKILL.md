@@ -1,6 +1,6 @@
 ---
 name: reviewing-pull-requests
-description: "Machine-only skill that runs a fresh-eyes review session over a PR diff — adversary, compliance (via the diff-adapter), and security eyes. Eyes only, Claude tier, no write-hand. Emits raw eye-outputs to the engine-controlled stateDir; Node (cron-review) derives the canonical merge verdict from them and orchestrates cross-family eligibility and the gate-hardening 2nd pass."
+description: "Machine-only skill that runs a fresh-eyes review session over a PR diff — adversary, compliance (via the diff-adapter), and security eyes. Eyes only, Claude tier, no write-hand. Emits raw eye-outputs to the engine-controlled stateDir; Node (cron-review) derives the canonical merge verdict from them and orchestrates cross-family eligibility."
 ---
 
 # Reviewing-Pull-Requests — Fresh-eyes PR review session
@@ -22,12 +22,10 @@ Node review layer (cron-b / cron-review.mjs)
     → session emits raw eye-outputs to session-out/eyes-<pr>-<sha>.json
   ← Node derives the canonical merge verdict from the eye-outputs (strict conjunction)
   ← Node orchestrates cross-family eligibility (when available)
-  ← Node orchestrates the gate-hardening 2nd pass — a SECOND spawn of this session
-    (secondPass: true, isolated second-pass stateDir) — when diff touches gate machinery
   ← Node writes the canonical verdict artifact to the engine-controlled stateDir
 ```
 
-The Node layer owns the lock, origin-gate, idempotency, chain counter, circuit-breaker, cross-family orchestration, the gate-hardening 2nd-pass dispatch, the merge decision, relabel, and notify. This skill session owns **only the per-invocation judgment** — it reads the diff, runs the three eyes, and emits its raw eye-outputs; it never derives or writes the canonical merge verdict itself. It never mutates the worktree, never checks out a branch, and never invokes a write-capable hand.
+The Node layer owns the lock, origin-gate, idempotency, chain counter, circuit-breaker, cross-family orchestration, the merge decision, relabel, and notify. This skill session owns **only the per-invocation judgment** — it reads the diff, runs the three eyes, and emits its raw eye-outputs; it never derives or writes the canonical merge verdict itself. It never mutates the worktree, never checks out a branch, and never invokes a write-capable hand.
 
 ---
 
@@ -99,7 +97,7 @@ per-task `driveCrossFamily`/policy-B refute-loop used elsewhere in the harness. 
 - **Compliance stays Claude-only** (it is not run cross-family).
 - **Fail-closed if absent:** when the module is absent, the switch is off, `codex` is unauthenticated, or
   `codex` is unreachable, the closure resolves `crossFamilyEligible: false` (never fabricates `available`),
-  and the merge-eligible conjunction (HR-9) requires it. Absence → awaiting-merge, never fail-open "ok" (HR-2).
+  and the merge-eligible conjunction requires it. Absence → awaiting-merge, never fail-open "ok" (HR-2).
 - **Auto-merge rollout lock:** even with the full conjunction CLEAN, a PR auto-merges ONLY when
   `config.autoMergeEnabled === true` (default OFF) — otherwise it routes to awaiting-merge. This decouples
   "cross-family validated running" from "auto-merge fires" (operator enables it after validating).
@@ -108,21 +106,15 @@ per-task `driveCrossFamily`/policy-B refute-loop used elsewhere in the harness. 
 
 This session itself has no cross-family role in a given invocation — it only ever runs the 3 eyes from Step 3 and emits their raw outputs (Step 6). Node decides, per PR, whether and when cross-family runs.
 
-### Step 5 — Gate-hardening 2nd pass (Node-orchestrated, when diff touches gate machinery)
+### Step 5 — Merge-eligible conjunction (Node-computed)
 
-When the PR's `changedFiles` touch the harness's own gate machinery (detected by `core/vps/review-gate-hardening.mjs` → `touchesGateMachinery(changedFiles)` — globs: `core/vps/`, `core/skills/`, `core/agents/`, `core/rules/`, `verdict-block`, `settings.json`, `CLAUDE.md`), **Node (cron-review) orchestrates a second independent fresh-eyes pass** before merge (HR-9) — the session does not loop or re-dispatch itself internally.
-
-Node does this with a **second, independent Node-driven spawn of this same session** (`spawnReviewSession` called again with `secondPass: true`), pointed at an **isolated second-pass stateDir** (e.g. `join(stateDir, "second-pass")`) so its eye-outputs and derived verdict never collide with the first pass's. That second spawn is a fresh session (opus, virgin, no prior verdicts) running the same Step 1–3 flow against the same diff — a distinct dispatch, not a re-run of Step 3a from within the first session.
-
-The merge-eligible conjunction (HR-9), computed by Node from the (possibly two) derived verdicts, is:
+Node (cron-review) computes the merge-eligible verdict from the derived verdicts as:
 
 ```
-eligible = freshVerdictClean
-  && crossFamilyEligible
-  && (secondPassRequired ? secondPassClean : true)
+eligible = freshVerdictClean && crossFamilyEligible
 ```
 
-A single flaky CLEAN is never sufficient on its own. The `second_pass_required` flag is observable at the routing decision (HR-10: BLOCKED → awaiting-merge), not at the merge.
+A single flaky CLEAN is never sufficient on its own — cross-family eligibility is always required. A change to the harness's own engine is treated like any other PR: one clean review is enough. There is no separate control-surface carve-out and no second pass — a change to the gate machinery auto-merges on a clean review just like a downstream PR.
 
 ### Step 6 — Emit the eye-outputs; Node derives and writes the verdict
 
@@ -170,7 +162,6 @@ The Node layer reads its own Node-derived artifact to determine merge eligibilit
 | adversary | **opus** | Strongest available tier for the fresh-eyes attack — the core of the review |
 | compliance | **sonnet** | Spec-vs-diff check; the pseudo-contract is simpler than a full plan |
 | security | **opus** | Conditional auditor; security findings are load-bearing for the merge gate |
-| gate-hardening 2nd pass | **opus** | Second virgin adversary — same tier as the first, independent perspective |
 | cross-family (adversary) | GPT via Codex | Second model family; read-only eye, never a cheap hand |
 | cross-family (security) | GPT via Codex | Second model family; read-only eye, never a cheap hand |
 
@@ -184,6 +175,6 @@ The Node layer reads its own Node-derived artifact to determine merge eligibilit
 - It does **not** merge, relabel, or notify — the Node review layer owns those actions.
 - It does **not** check out branches or mutate the worktree — it reads via `gh pr diff` only (HR-7).
 - It does **not** derive or write the canonical merge verdict — it emits raw eye-outputs to the engine-controlled `session-out/` path (HR-5); Node derives and writes `review-<pr>-<sha>.json` exclusively.
-- It does **not** decide cross-family eligibility or dispatch the gate-hardening 2nd pass on its own — Node (cron-review) orchestrates both, per invocation; absence of cross-family is recorded by Node as `crossFamilyEligible: false`, never fail-open (HR-2).
+- It does **not** decide cross-family eligibility on its own — Node (cron-review) orchestrates it, per invocation; absence of cross-family is recorded by Node as `crossFamilyEligible: false`, never fail-open (HR-2).
 - It is **not** invoked by `triaging-requests` — it is machine-only, spawned by the Node review layer.
 - It does **not** use `parseVerdictBlock` or any body-parsed verdict — the Node-derived verdict artifact is the single source of truth.

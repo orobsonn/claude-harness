@@ -19,35 +19,26 @@
  *   4. Fresh verdict: `opts.getFreshVerdict(pr, sha, stateDir)` → `freshVerdictClean`.
  *   5. Cross-family: `opts.crossFamilyEligible(pr)` (pre-bound `pr -> boolean` by the composition
  *      root) → `crossFamilyEligible`.
- *   6. Gate-machinery 2nd pass: `secondPassRequired = opts.touchesGateMachinery(changedFiles)`.
- *      When required, a SECOND review session is spawned and its verdict is read via
- *      `opts.getFreshVerdict(pr, sha, <a stateDir path containing the substring "second-pass">)`
- *      (e.g. `join(stateDir, "second-pass")`) → `secondPassClean`.
- *   7. `decision = opts.mergeEligible({freshVerdictClean, crossFamilyEligible, secondPassRequired,
- *      secondPassClean})` — THE conjunction (review-gate-hardening.mjs).
- *   8. Routing on `decision.eligible`:
- *        - `true`  → `opts.mergeAndFinalize(pr, sha, {...})`.
+ *   6. Merge-eligible = `freshVerdictClean && crossFamilyEligible` — a flaky CLEAN alone never
+ *      merges because cross-family is always required. A harness-engine diff is treated like any
+ *      other PR (no control-surface carve-out, no 2nd pass).
+ *   7. Routing on `eligible`:
+ *        - `true`  → `opts.mergeAndFinalize(pr, sha, {...})` (autoMerge on + non-empty diff).
  *        - `false` && `!freshVerdictClean` → `opts.routeReject(pr, sha, {...})`.
- *        - `false` && `secondPassRequired && !secondPassClean` → `gh(["label","create",
- *          "harness:blocked","--force"])` THEN `gh(["issue","edit", <root>, ...,
- *          "--add-label","harness:blocked"])`, AND `opts.recordReviewed(pr.number, sha,
- *          {stateDir})` — a same-SHA re-review of a still-blocked PR must be a no-op.
  *        - `false` (residual: cross-family absent) → `gh(["label","create",
  *          "harness:awaiting-merge","--force"])` THEN `gh(["issue","edit", <root>, ...,
  *          "--add-label","harness:awaiting-merge"])`, AND `opts.recordReviewed(pr.number, sha,
  *          {stateDir})` — same idempotency guarantee while the PR sits awaiting merge.
  *
  * Every seam is injected as an in-memory fake/spy — no real `gh`/`git` process is ever spawned.
- * `isReviewEligible`, `touchesGateMachinery` and `mergeEligible` are the REAL modules (not fakes)
- * so a miscomputed input to the merge-boundary conjunction is caught by the real gate logic
- * instead of being hidden behind a permissive fake.
+ * `isReviewEligible` is the REAL module (not a fake) so a miscomputed origin-gate input is caught
+ * by the real gate logic instead of being hidden behind a permissive fake.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { cronReview } from "./cron-review.mjs";
 import { isReviewEligible } from "./review-origin-gate.mjs";
-import { mergeEligible, touchesGateMachinery } from "./review-gate-hardening.mjs";
 
 /**
  * @description Fake `gh` seam. Records every invocation's argv into `calls` (call order).
@@ -116,8 +107,6 @@ function baseOpts(overrides = {}) {
     mergeAndFinalize: makeSpy(),
     reconcile: makeSpy(() => []),
     routeReject: makeSpy(),
-    touchesGateMachinery,
-    mergeEligible,
     spawnReviewSession: makeSpy(),
     notify: makeSpy(),
     stateDir: "/fake/state/review",
@@ -194,64 +183,31 @@ test("cronReview: awaiting-merge label-create happens BEFORE the first relabel t
   );
 });
 
-test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVER invoked unless fresh-CLEAN AND cross-family AND (2nd pass when required) all hold", async () => {
-  // Sub-case A: fresh verdict CLEAN but crossFamilyEligible=false -> never merges, routes to awaiting-merge.
-  {
-    const { gh, calls, setPr, setDiff } = makeFakeGh();
-    setPr(30, { number: 30, headRefName: "harness/60", author: { login: "bot-user" }, labels: [], headSha: "sha-c" });
-    setDiff(30, ["src/baz.js"]); // not gate machinery
-    const mergeAndFinalizeSpy = makeSpy();
+test("cronReview: CONJUNCTION at the merge boundary — mergeAndFinalize is NEVER invoked unless fresh-CLEAN AND cross-family both hold", async () => {
+  // fresh verdict CLEAN but crossFamilyEligible=false -> never merges, routes to awaiting-merge.
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(30, { number: 30, headRefName: "harness/60", author: { login: "bot-user" }, labels: [], headSha: "sha-c" });
+  setDiff(30, ["src/baz.js"]); // not gate machinery
+  const mergeAndFinalizeSpy = makeSpy();
 
-    await cronReview(
-      baseOpts({
-        gh,
-        crossFamilyEligible: () => false,
-        mergeAndFinalize: mergeAndFinalizeSpy,
-      })
-    );
+  await cronReview(
+    baseOpts({
+      gh,
+      crossFamilyEligible: () => false,
+      mergeAndFinalize: mergeAndFinalizeSpy,
+    })
+  );
 
-    assert.equal(
-      mergeAndFinalizeSpy.calls.length,
-      0,
-      "[cross-family absent] mergeAndFinalize must NEVER be invoked on a fresh-CLEAN-alone verdict"
-    );
-    const routedAwaitingMerge = calls.some(
-      (args) =>
-        args[0] === "issue" && args[1] === "edit" && args.includes("--add-label") && args.includes("harness:awaiting-merge")
-    );
-    assert.ok(routedAwaitingMerge, "[cross-family absent] the PR's issue must be routed to harness:awaiting-merge");
-  }
-
-  // Sub-case B: a gate-machinery diff whose 2nd pass is BLOCKED -> never merges, routes to blocked.
-  {
-    const { gh, calls, setPr, setDiff } = makeFakeGh();
-    setPr(31, { number: 31, headRefName: "harness/61", author: { login: "bot-user" }, labels: [], headSha: "sha-d" });
-    setDiff(31, ["core/vps/cron-review.mjs"]); // matches the "core/vps/" gate-machinery glob
-    const mergeAndFinalizeSpy = makeSpy();
-    const getFreshVerdictTwoPass = (pr, sha, stateDir) =>
-      stateDir.includes("second-pass")
-        ? { status: "BLOCKED", finding: "gate-machinery regression" }
-        : { status: "CLEAN" };
-
-    await cronReview(
-      baseOpts({
-        gh,
-        crossFamilyEligible: () => true, // present — isolates the 2nd-pass BLOCKED verdict as the sole blocker
-        getFreshVerdict: getFreshVerdictTwoPass,
-        mergeAndFinalize: mergeAndFinalizeSpy,
-      })
-    );
-
-    assert.equal(
-      mergeAndFinalizeSpy.calls.length,
-      0,
-      "[gate diff + 2nd pass BLOCKED] mergeAndFinalize must NEVER be invoked"
-    );
-    const routedBlocked = calls.some(
-      (args) => args[0] === "issue" && args[1] === "edit" && args.includes("--add-label") && args.includes("harness:blocked")
-    );
-    assert.ok(routedBlocked, "[gate diff + 2nd pass BLOCKED] the PR's issue must be routed to harness:blocked");
-  }
+  assert.equal(
+    mergeAndFinalizeSpy.calls.length,
+    0,
+    "[cross-family absent] mergeAndFinalize must NEVER be invoked on a fresh-CLEAN-alone verdict"
+  );
+  const routedAwaitingMerge = calls.some(
+    (args) =>
+      args[0] === "issue" && args[1] === "edit" && args.includes("--add-label") && args.includes("harness:awaiting-merge")
+  );
+  assert.ok(routedAwaitingMerge, "[cross-family absent] the PR's issue must be routed to harness:awaiting-merge");
 });
 
 test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is a no-op", async () => {
@@ -295,44 +251,6 @@ test("cronReview: awaiting-merge route records pr:sha so a same-SHA re-review is
     1,
     "across BOTH cycles spawnReviewSession must be invoked EXACTLY ONCE — cycle 2 short-circuits via alreadyReviewed"
   );
-});
-
-test("cronReview: 2nd-pass-blocked route records pr:sha", async () => {
-  const stateDir = "/fake/state/review";
-  const { gh, calls, setPr, setDiff } = makeFakeGh();
-  const pr = { number: 41, headRefName: "harness/71", author: { login: "bot-user" }, labels: [], headSha: "sha-f" };
-  setPr(pr.number, pr);
-  setDiff(pr.number, ["core/vps/cron-review.mjs"]); // matches the "core/vps/" gate-machinery glob
-
-  const getFreshVerdictTwoPass = (prArg, sha, sd) =>
-    sd.includes("second-pass") ? { status: "BLOCKED", finding: "x" } : { status: "CLEAN" };
-  const mergeAndFinalizeSpy = makeSpy();
-  const recordReviewed = makeSpy();
-
-  await cronReview(
-    baseOpts({
-      gh,
-      stateDir,
-      crossFamilyEligible: () => true, // present — isolates the 2nd-pass-blocked route as the sole blocker
-      getFreshVerdict: getFreshVerdictTwoPass,
-      mergeAndFinalize: mergeAndFinalizeSpy,
-      recordReviewed,
-    })
-  );
-
-  assert.equal(recordReviewed.calls.length, 1, "recordReviewed must be called once after the 2nd-pass-blocked route");
-  const [recordedPrNumber, recordedSha, recordedMeta] = recordReviewed.calls[0];
-  assert.equal(recordedPrNumber, pr.number, "recordReviewed must receive the PR number as the first arg");
-  assert.equal(recordedSha, pr.headSha, "recordReviewed must receive the head SHA as the second arg");
-  assert.equal(typeof recordedMeta, "object", "recordReviewed's third arg must be an object");
-  assert.equal(recordedMeta.stateDir, stateDir, "recordReviewed's third arg must carry the stateDir");
-  assert.equal(recordReviewed.calls[0].length, 3, "recordReviewed must be called with exactly 3 args");
-
-  assert.equal(mergeAndFinalizeSpy.calls.length, 0, "mergeAndFinalize must NEVER be invoked on a 2nd-pass BLOCKED verdict");
-  const routedBlocked = calls.some(
-    (args) => args[0] === "issue" && args[1] === "edit" && args.includes("--add-label") && args.includes("harness:blocked")
-  );
-  assert.ok(routedBlocked, "the PR's issue must be routed to harness:blocked");
 });
 
 test("cronReview: requests headRefOid (not the invalid headSha field) in `gh pr list --json` — regression for the blank-cycle bug", async () => {

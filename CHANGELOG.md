@@ -14,6 +14,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Fixed
 
 ### Removed
+- **Tratamento especial de PRs que tocam o próprio motor do harness (gate-machinery carve-out + 2ª revisão).** Antes, um PR cujo diff mexia na maquinaria de controle do harness (`core/vps/`, `core/skills/`, `.github/`, etc.) nunca era auto-mergeado — esperava merge manual do operador — e ainda passava por uma segunda revisão independente. Isso empilhava PRs de infra parados indefinidamente e dobrava o consumo de token nessas revisões. Agora mudança no motor é tratada **igual a qualquer PR**: uma revisão limpa (fresh CLEAN + cross-family) → auto-merge. A elegibilidade cross-family e o fail-closed de diff vazio permanecem intactos. Removidos `review-gate-hardening.mjs` (+ testes) e a lógica de 2nd pass do `cron-review`.
 
 ## [0.29.0] - 2026-07-07
 

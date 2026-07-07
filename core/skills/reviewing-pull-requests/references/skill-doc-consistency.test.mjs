@@ -12,7 +12,7 @@
  *   3. The body states that NODE derives the merge verdict and the session only EMITS
  *      raw eye-outputs (the session does not self-report the merge verdict).
  *   4. The body states that Node (cron-review) orchestrates cross-family eligibility
- *      AND the gate-hardening 2nd pass — the session runs only the 3 eyes per invocation.
+ *      — the session runs only the 3 eyes per invocation.
  *
  * Tests run under node:test.
  */
@@ -201,20 +201,19 @@ test("SKILL.md: states that NODE derives the merge verdict and the session EMITS
 /**
  * Given: the SKILL.md body.
  * When: scanned.
- * Then: it states that Node (cron-review) orchestrates BOTH cross-family
- * eligibility AND the gate-hardening 2nd pass — the session itself runs only
- * the 3 eyes per invocation, it does not decide cross-family dispatch or the
- * 2nd pass on its own.
+ * Then: it states that Node (cron-review) orchestrates cross-family eligibility
+ * — the session itself runs only the 3 eyes per invocation, it does not decide
+ * cross-family dispatch on its own.
  */
-test("SKILL.md: states that Node (cron-review) orchestrates cross-family eligibility AND the gate-hardening 2nd pass", () => {
+test("SKILL.md: states that Node (cron-review) orchestrates cross-family eligibility", () => {
   const skillMd = readSkillMd();
   const body = skillMd.slice(skillMd.indexOf("---", 3) + 3);
 
-  const nodeOrchestratesCrossFamilyAndSecondPass =
-    /node[\s\S]{0,120}(cross-family|2nd pass|second pass)/i.test(body);
+  const nodeOrchestratesCrossFamily =
+    /node[\s\S]{0,120}cross-family/i.test(body);
   assert.equal(
-    nodeOrchestratesCrossFamilyAndSecondPass,
+    nodeOrchestratesCrossFamily,
     true,
-    "SKILL.md body must state that Node (cron-review) orchestrates cross-family eligibility and the gate-hardening 2nd pass — the session runs only the 3 eyes per invocation."
+    "SKILL.md body must state that Node (cron-review) orchestrates cross-family eligibility — the session runs only the 3 eyes per invocation."
   );
 });
