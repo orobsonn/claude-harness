@@ -35,7 +35,7 @@
  * @returns {{ ok: boolean, dispatched?: boolean, issue?: { number: number, labels: string[] } }}
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, openSync, closeSync, rmSync } from "node:fs";
+import { readFileSync, openSync, closeSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { cronASelect } from "./cron-a-select.mjs";
@@ -315,11 +315,25 @@ export async function mainCronA(config, deps = {}) {
     // already held (another drain in progress) or cannot be created, this tick skips the drain —
     // the next tick drains. NEVER throws, NEVER blocks the cron.
     const lockPath = join(config.stateDir, "drain.lock");
+    // A drain now spaces its sends (~1.1s each) to respect Telegram's rate limit, so it runs longer
+    // than the old instant burst — widening the window in which a SIGKILL/OOM/reboot mid-drain can
+    // leave an ORPHAN drain.lock. Without reclaim, one orphan lock silences the feed on every future
+    // tick (fail-open masks it). Reclaim a lock whose mtime is older than the stale TTL.
+    const LOCK_STALE_MS = 15 * 60 * 1000;
     let lockFd = null;
     try {
       lockFd = openSync(lockPath, "wx");
     } catch {
-      // lock busy or stateDir missing — skip the drain this tick (next tick drains)
+      // Lock exists — reclaim it only if it is stale (a prior drain died without cleanup). A fresh
+      // lock (another drain in progress) is left alone: this tick skips the drain, the next drains.
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+          rmSync(lockPath, { force: true });
+          lockFd = openSync(lockPath, "wx");
+        }
+      } catch {
+        // still busy, unreadable, or a reclaim raced another drain — skip this tick, next tick drains
+      }
     }
     if (lockFd !== null) {
       try {
@@ -327,7 +341,8 @@ export async function mainCronA(config, deps = {}) {
           stateDir: config.stateDir,
           homeDir: config.homeDir,
           chatId: notifier.config?.chatId,
-          limitPerMinute: config.notify?.limitPerMinute ?? 30,
+          limitPerMinute: config.notify?.limitPerMinute ?? 20,
+          sendDelayMs: config.notify?.sendDelayMs ?? 1100,
         });
       } catch {
         // fail-open: a drain failure never throws or delays the cron

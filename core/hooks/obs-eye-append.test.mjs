@@ -242,7 +242,23 @@ test(
     assert.equal(decision.action, "append");
     assert.equal(decision.role, "plan-reviewer");
     assert.equal(decision.metaPath, META_PATH);
-    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE" });
+    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE", round: 1 });
+  },
+);
+
+test(
+  "decide: plan-reviewer stamps a 1-based round = countEvents('plan-reviewed') + 1 (REVISE→re-plan cycle)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    // Two plan-reviewed already in the outbox → this return is the 3rd review round.
+    const decision = decide(
+      agentPayload("plan-reviewer", { tool_response: "Verdict: APPROVE" }),
+      ENV,
+      eyeDeps({ countEvents: (mp, type) => (mp === META_PATH && type === "plan-reviewed" ? 2 : 0) }),
+    );
+
+    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE", round: 3 });
   },
 );
 
@@ -256,7 +272,7 @@ test(
       ENV,
       eyeDeps(),
     );
-    assert.deepEqual(revised.event, { type: "plan-reviewed", verdict: "REVISE" });
+    assert.deepEqual(revised.event, { type: "plan-reviewed", verdict: "REVISE", round: 1 });
 
     const both = decide(
       agentPayload("plan-reviewer", {
@@ -267,7 +283,7 @@ test(
     );
     assert.deepEqual(
       both.event,
-      { type: "plan-reviewed", verdict: "REVISE" },
+      { type: "plan-reviewed", verdict: "REVISE", round: 1 },
       "REVISE must win when both tokens appear (conservative — surface 'needs work')",
     );
   },
@@ -285,7 +301,7 @@ test(
     );
 
     assert.equal(decision.action, "append");
-    assert.deepEqual(decision.event, { type: "plan-reviewed" });
+    assert.deepEqual(decision.event, { type: "plan-reviewed", round: 1 });
     assert.equal(
       Object.prototype.hasOwnProperty.call(decision.event, "verdict"),
       false,
@@ -308,7 +324,7 @@ test(
       eyeDeps(),
     );
 
-    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE" });
+    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE", round: 1 });
   },
 );
 

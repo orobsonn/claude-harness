@@ -31,6 +31,29 @@ const TELEGRAM_API = "https://api.telegram.org";
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TEXT = 80;
 const TOPIC_NAME_MAX_CODE_POINTS = 128;
+/** @description Hard cap on the inter-send pacing delay so a bad `sendDelayMs` can never hang the
+ * drain (and thus the cron) unbounded — the cron's exposure to a mid-drain kill stays bounded. */
+const MAX_SEND_DELAY_MS = 3000;
+
+/**
+ * @description Default bounded sleep used to space out Telegram sends. Zero-dep (setTimeout), never
+ * throws. `ms` is clamped to [0, MAX_SEND_DELAY_MS]; ≤0 resolves immediately with no timer. The timer
+ * is NOT unref'd on purpose: this sleep sits on the drain's critical path (it is awaited between
+ * sends), so it must keep the short-lived cron process alive until it resolves — otherwise node could
+ * exit mid-pace and truncate the remaining sends. The ≤3s clamp bounds how long it can hold the loop.
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function defaultSleep(ms) {
+  return new Promise((resolve) => {
+    const bounded = Math.min(Math.max(0, Number(ms) || 0), MAX_SEND_DELAY_MS);
+    if (bounded <= 0) {
+      resolve();
+      return;
+    }
+    setTimeout(resolve, bounded);
+  });
+}
 
 /** @description Event types that must ping the shared main topic before any cosmetic progress. */
 const CRITICAL_TYPES = new Set(["blocked", "failed"]);
@@ -55,6 +78,7 @@ const EMOJI = {
   "chain-stranded": "⛓️‍💥",
   "pipeline-type": "🚀",
   "spec-created": "📝",
+  "spec-adversary": "🛡️",
   "plan-created": "📋",
   "plan-reviewed": "🧐",
   "task-executing": "⚙️",
@@ -427,7 +451,8 @@ export function makeNotifier(config, deps = {}) {
         homeDir: drainOpts.homeDir ?? homeDir,
         chatId: drainOpts.chatId ?? resolved.chatId,
         threadId: drainOpts.threadId ?? resolved.threadId,
-        limitPerMinute: drainOpts.limitPerMinute ?? resolved.limitPerMinute ?? 30,
+        limitPerMinute: drainOpts.limitPerMinute ?? resolved.limitPerMinute ?? 20,
+        sendDelayMs: drainOpts.sendDelayMs ?? resolved.sendDelayMs ?? 0,
       },
       {
         readEvents: defaultReadEvents,
@@ -454,18 +479,24 @@ export function makeNotifier(config, deps = {}) {
 // from the injected config (read off disk upstream), a failure logs ONLY { op, type, status }.
 
 /**
- * @description PURE. Renders the LOCKED checkpoint HTML format: a bold UPPERCASE title, one blank
- * line, then an italic body whose every line is HTML-escaped and length-bounded (≤80 chars). The
- * title is uppercased but NOT escaped (it is a fixed taxonomy/label, never operator free text). This
- * is the single source of the checkpoint shape — the legacy send path routes through it too.
+ * @description PURE. Renders a checkpoint as a SINGLE line: a bold `<emoji> <label>` title followed
+ * by ` — <info>` when the body carries any info (`🚀 Classificação — modo LIGHT`), or the title
+ * alone when it does not (`📝 Spec criada`). The title keeps its natural case (it already carries the
+ * emoji + pt-br label from `checkpointTitle`). Every body line is HTML-escaped and length-bounded
+ * (≤80 code points); empty lines are dropped so the ` — ` joiner never doubles. This is the single
+ * source of the checkpoint shape — the critical path routes through it too.
  * @param {{ title: string, bodyLines: string[] }} input
  * @returns {string}
  */
 export function renderCheckpoint({ title, bodyLines } = {}) {
-  const head = `<b>${escapeHtml(String(title ?? "").toUpperCase())}</b>`;
+  const head = `<b>${escapeHtml(String(title ?? ""))}</b>`;
   const lines = Array.isArray(bodyLines) ? bodyLines : [];
-  const body = `<i>${lines.map((line) => escapeHtml(truncateByCodePoints(line))).join("\n")}</i>`;
-  return `${head}\n\n${body}`;
+  const info = lines
+    .map((line) => truncateByCodePoints(line))
+    .filter((line) => line.length > 0)
+    .map((line) => escapeHtml(line))
+    .join(" — ");
+  return info ? `${head} — ${info}` : head;
 }
 
 /**
@@ -655,23 +686,28 @@ function cosmeticBodyLines(event, meta, isFallback) {
       lines.push(`modo ${event.mode ?? "?"}`);
       break;
     case "spec-created":
-      lines.push("spec pronta");
+      // No info line: the label ("Spec criada") already says everything → title-only checkpoint.
       break;
     case "spec-adversary":
-      lines.push("spec revisada pelo adversário");
+      // No info line: the label ("Adversarial da spec") already says everything → title-only.
       break;
     case "plan-created":
       lines.push(`${event.tasks ?? "?"} tarefas`);
       break;
-    case "plan-reviewed":
-      lines.push(
+    case "plan-reviewed": {
+      const verdictLabel =
         event.verdict === "APPROVE"
           ? "aprovado"
           : event.verdict === "REVISE"
             ? "requer revisão"
-            : "revisado"
-      );
+            : "revisado";
+      // `round` (1-based) is stamped by the obs-eye-append producer per plan-reviewer return so the
+      // operator sees "revisão 1", "revisão 2"… A plan-reviewed without a round (legacy / mark.mjs
+      // fallback) renders the verdict alone.
+      const round = Number(event.round);
+      lines.push(Number.isInteger(round) && round > 0 ? `revisão ${round} — ${verdictLabel}` : verdictLabel);
       break;
+    }
     case "task-executing":
       lines.push(`tarefa ${event.n ?? "?"}/${event.total ?? "?"}`);
       break;
@@ -681,14 +717,14 @@ function cosmeticBodyLines(event, meta, isFallback) {
       );
       break;
     case "final-review-done":
-      lines.push("revisão final concluída");
+      // No info line: the label ("Revisão final concluída") already says everything → title-only.
       break;
     case "pr":
       lines.push(`PR ${event.pr ?? ""}`);
       if (event.url) lines.push(String(event.url));
       break;
     case "picked":
-      lines.push("sessão iniciada");
+      // No info line: the label ("Sessão iniciada") already says everything → title-only.
       break;
     case "eye":
       lines.push(`${event.role ?? "eye"} returned`);
@@ -697,8 +733,11 @@ function cosmeticBodyLines(event, meta, isFallback) {
       lines.push("checkpoint");
   }
   if (event.reason) lines.push(String(event.reason));
-  if (isFallback && lines.length) {
-    lines[0] = `#${issue} ${lines[0]}`;
+  // Fallback (shared topic): prefix the run identity so interleaved runs stay legible — even for a
+  // title-only checkpoint with no info line (seed the `#<issue>` so identity is never lost).
+  if (isFallback) {
+    if (lines.length) lines[0] = `#${issue} ${lines[0]}`;
+    else lines.push(`#${issue}`);
   }
   return lines;
 }
@@ -792,8 +831,8 @@ async function trySend(send, message) {
  * shared config threadId and prefixes each body with `#<issue>`. A closed run with a remaining
  * cursor is still drained. Fail-open: never throws and never delays the cron.
  *
- * @param {{ stateDir: string, homeDir: string, chatId: number|string, limitPerMinute?: number }} opts
- * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function }} seams
+ * @param {{ stateDir: string, homeDir: string, chatId: number|string, limitPerMinute?: number, sendDelayMs?: number }} opts
+ * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function, sleep?: Function }} seams
  * @returns {Promise<void>}
  */
 export async function drainTelegramOutbox(opts = {}, seams = {}) {
@@ -804,8 +843,23 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   const updateMeta = seams.updateMeta ?? defaultUpdateMeta;
   const appendEvent = seams.appendEvent ?? defaultAppendEvent;
   const send = seams.send ?? (async () => ({ sent: false }));
+  const sleep = typeof seams.sleep === "function" ? seams.sleep : defaultSleep;
 
   if (!stateDir || chatId == null || chatId === "") return;
+
+  // Space consecutive sends (critical AND cosmetic) so a burst never trips the Telegram ~1 msg/s
+  // per-chat / ~20 msg/min per-group limit — the rate-limit that made the last send of a burst time
+  // out AFTER Telegram already delivered it, jamming the contiguous cursor into a re-send next tick.
+  // Opt-in via opts.sendDelayMs (the cron passes it; tests default to 0 = no spacing, so the frozen
+  // drain tests stay fast). Clamped to MAX_SEND_DELAY_MS in the drain itself, never trusting the seam.
+  const sendDelayMs = typeof opts.sendDelayMs === "number" ? opts.sendDelayMs : 0;
+  let sendsAttempted = 0;
+  const pace = async () => {
+    if (sendsAttempted > 0 && sendDelayMs > 0) {
+      await sleep(Math.min(sendDelayMs, MAX_SEND_DELAY_MS));
+    }
+    sendsAttempted += 1;
+  };
 
   let budget = refillBudget(limitPerMinute);
   const runs = [];
@@ -833,6 +887,7 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
       if (sent.includes(i)) continue;
       if (budget <= 0) break;
       const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: criticalBodyLines(event, meta) });
+      await pace();
       const ack = await trySend(send, { event, text, chatId, threadId: sharedThreadId });
       if (ack) {
         consumeBudget();
@@ -866,6 +921,7 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
       }
       if (budget <= 0) break;
       const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: cosmeticBodyLines(event, meta, isFallback) });
+      await pace();
       const ack = await trySend(send, { event, text, chatId, threadId: runThreadId });
       if (ack) {
         consumeBudget();
