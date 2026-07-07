@@ -71,6 +71,7 @@ const EMOJI = {
   "pr-merged": "🟢",
   "pr-awaiting-merge": "🟡",
   "pr-blocked": "🔴",
+  "pr-branch-updated-retry": "🔄",
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
   "reaper-orphan-cleaned": "🧹",
@@ -216,6 +217,8 @@ export function formatEvent(event = {}) {
     }
     case "pr-awaiting-merge":
       return `${prefix} PR ${prRef} revisado CLEAN → aguardando seu merge manual${reason}`;
+    case "pr-branch-updated-retry":
+      return `${prefix} PR ${prRef} estava desatualizado com a base — branch sincronizada; nova revisão + merge no próximo ciclo`;
     case "pr-blocked":
       return `${prefix} PR ${prRef} BLOQUEADO${reason}`;
     case "reaper-killed":

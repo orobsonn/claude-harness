@@ -78,20 +78,73 @@ function issueNumberFromHeadRefName(headRefName) {
 }
 
 /**
+ * @description Reads the PR's current merge-state classification. Returns the `mergeStateStatus`
+ * string (e.g. "BEHIND", "DIRTY", "CLEAN") or "" when the view call failed/was malformed. `gh pr
+ * view --json` returns a parsed object on success or `[]` (fail-closed) on failure — an array or
+ * a falsy value both yield "".
+ * @param {(args: string[]) => any} gh
+ * @param {number} prNumber
+ * @returns {string}
+ */
+function mergeStateStatusOf(gh, prNumber) {
+  const view = gh(["pr", "view", String(prNumber), "--json", "mergeStateStatus,mergeable"]);
+  if (!view || Array.isArray(view)) return "";
+  return typeof view.mergeStateStatus === "string" ? view.mergeStateStatus : "";
+}
+
+/**
  * @description Merges a harness PR with the `--match-head-commit` TOCTOU guard, then finalizes the
- * issue (relabel -> reset counter -> record reviewed) only when the merge actually succeeded. A
- * rejected merge (the head moved under the guard) is left untouched so it stays re-reviewable.
+ * issue (relabel -> reset counters -> record reviewed) only when the merge actually succeeded.
+ *
+ * A merge that fails after the mergeability retries is CLASSIFIED, not immediately given up on. A
+ * branch that is only BEHIND its base (a "require branches up to date" protection, common once
+ * auto-merge lands more PRs onto main) is auto-recovered with GitHub's native, non-force
+ * `gh pr update-branch`: that changes the head sha, so the review cron re-reviews the PR from
+ * scratch next cycle (alreadyReviewed is keyed by sha) before re-attempting the merge — no new
+ * "fix and re-merge" pipeline, just the existing loop re-triggered. An update-attempt CEILING keeps
+ * two PRs that keep invalidating each other from looping forever. Any other failure (a real content
+ * conflict, a head that moved, checks blocked) is TERMINAL and routes to manual merge upstream.
  * @param {{number: number, headRefName: string}} pr
  * @param {string} sha head SHA cron-b already fetched fresh for this PR
  * @param {object} opts
  * @param {(args: string[]) => any} opts.gh injected `gh` seam
- * @param {{reset(issueNumber: number, o: {stateDir: string}): void}} opts.counter
+ * @param {{reset(issueNumber: number, o: {stateDir: string}): void, readUpdateAttempts(pr: number, o: {stateDir: string}): number, incrementUpdateAttempt(pr: number, o: {stateDir: string}): void, resetUpdateAttempts(pr: number, o: {stateDir: string}): void}} opts.counter
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed
  * @param {string} opts.stateDir
- * @returns {{merged: boolean}}
+ * @param {number} [opts.maxUpdateAttempts] update-branch retry ceiling (default 3)
+ * @returns {{merged: boolean, updateAttempted?: boolean, terminal?: boolean}}
  */
+/**
+ * @description Classifies a merge that failed after the mergeability retries and, for the only
+ * auto-recoverable case, acts on it. A branch that is only BEHIND its base (a "require branches up
+ * to date" protection) is refreshed with GitHub's native, non-force `gh pr update-branch` — bounded
+ * by an update-attempt ceiling so two mutually-invalidating PRs cannot loop forever. Everything else
+ * (real conflict, head moved, checks blocked, an unreadable merge-state) is terminal. Fail-closed:
+ * any non-BEHIND status routes to manual merge.
+ * @param {{number: number}} pr
+ * @param {{gh: (args: string[]) => any, counter: object, stateDir: string, maxUpdateAttempts: number}} o
+ * @returns {{terminal: true} | {updateAttempted: true, terminal: false}}
+ */
+function classifyFailedMerge(pr, { gh, counter, stateDir, maxUpdateAttempts }) {
+  if (mergeStateStatusOf(gh, pr.number) !== "BEHIND") {
+    return { terminal: true };
+  }
+  if (counter.readUpdateAttempts(pr.number, { stateDir }) >= maxUpdateAttempts) {
+    return { terminal: true };
+  }
+  const updateResult = gh(["pr", "update-branch", String(pr.number)]);
+  if (!isOk(updateResult)) {
+    // A real conflict surfaced while merging the base into the head — terminal, human resolves it.
+    return { terminal: true };
+  }
+  counter.incrementUpdateAttempt(pr.number, { stateDir });
+  // The head sha changes under update-branch, so the review cron re-reviews the PR at its new sha
+  // next cycle before re-attempting the merge — hence NO recordReviewed / NO relabel here.
+  return { updateAttempted: true, terminal: false };
+}
+
 export function mergeAndFinalize(pr, sha, opts) {
-  const { gh, counter, recordReviewed, stateDir, sleep = defaultSleep, maxMergeAttempts = 3 } = opts;
+  const { gh, counter, recordReviewed, stateDir, sleep = defaultSleep, maxMergeAttempts = 3, maxUpdateAttempts = 3 } = opts;
 
   const issueNumber = issueNumberFromHeadRefName(pr.headRefName);
 
@@ -109,11 +162,12 @@ export function mergeAndFinalize(pr, sha, opts) {
   }
 
   if (!isOk(mergeResult)) {
-    return { merged: false };
+    return { merged: false, ...classifyFailedMerge(pr, { gh, counter, stateDir, maxUpdateAttempts }) };
   }
 
   const relabelResult = gh(relabelToDoneArgs(issueNumber));
   counter.reset(issueNumber, { stateDir });
+  counter.resetUpdateAttempts(pr.number, { stateDir });
   if (isOk(relabelResult)) {
     recordReviewed(pr.number, sha, { stateDir });
   }
