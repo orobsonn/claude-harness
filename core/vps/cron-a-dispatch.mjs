@@ -240,17 +240,22 @@ function defaultBranchExists(branch, { cwd, env }) {
 const TOPIC_NAME_MAX_CODE_POINTS = 128;
 
 /**
- * @description Builds the run-identity forum-topic name: `#<issue> · <title>` when a title exists,
- * else `#<issue>`. The `#<issue>` prefix is ALWAYS present (the name is NEVER the bare title —
- * matches #ac-5.2 and the locked demo thread 707). The TITLE is truncated so the TOTAL name is
- * <=128 code points (prefix counted); the name is PLAIN TEXT — never HTML-escaped (Telegram does not
- * parse_mode the topic name). The final <=128 safety truncation is applied inside createForumTopic.
+ * @description Builds the run-identity forum-topic name: `[<project>] #<issue> · <title>`. The
+ * `[<project>] #<issue>` prefix is ALWAYS present (the name is NEVER the bare title) so that, with N
+ * projects sharing one Telegram group, every per-run topic self-identifies WHICH project it belongs
+ * to — you read the owner off the topic title, no need to open it. `[<project>] ` is omitted only
+ * when no project is given (falls back to the historical `#<issue>` shape). The TITLE is truncated so
+ * the TOTAL name is <=128 code points (the whole prefix counted); the name is PLAIN TEXT — never
+ * HTML-escaped (Telegram does not parse_mode the topic name). The final <=128 safety truncation is
+ * applied inside createForumTopic.
  * @param {number} issueNumber
  * @param {string} [title]
+ * @param {string} [project]
  * @returns {string}
  */
-function buildTopicName(issueNumber, title) {
-  const prefix = `#${issueNumber}`;
+function buildTopicName(issueNumber, title, project) {
+  const tag = typeof project === "string" && project.trim() ? `[${project.trim()}] ` : "";
+  const prefix = `${tag}#${issueNumber}`;
   const trimmed = typeof title === "string" ? title.trim() : "";
   if (!trimmed) return prefix;
   const sep = " · ";
@@ -298,7 +303,7 @@ async function setupObservability({ obs, createForumTopic, issueNumber, title, p
   let threadId = meta.threadId ?? null;
   const hasOpenThread = threadId != null && meta.status !== CLOSED;
   if (!hasOpenThread && typeof createForumTopic === "function") {
-    const name = buildTopicName(issueNumber, title);
+    const name = buildTopicName(issueNumber, title, project);
     let result = null;
     try {
       result = await createForumTopic({ name });

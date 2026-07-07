@@ -733,20 +733,25 @@ function cosmeticBodyLines(event, meta, isFallback) {
       lines.push("checkpoint");
   }
   if (event.reason) lines.push(String(event.reason));
-  // Fallback (shared topic): prefix the run identity so interleaved runs stay legible — even for a
-  // title-only checkpoint with no info line (seed the `#<issue>` so identity is never lost).
+  // Fallback routes to the SHARED global topic (per-run topic creation failed), which mixes every
+  // project — so prefix `[<project>] #<issue>` so interleaved runs stay attributable, even for a
+  // title-only checkpoint with no info line (the identity is never lost).
   if (isFallback) {
-    if (lines.length) lines[0] = `#${issue} ${lines[0]}`;
-    else lines.push(`#${issue}`);
+    const ident = `${meta.project ? `[${meta.project}] ` : ""}#${issue}`;
+    if (lines.length) lines[0] = `${ident} ${lines[0]}`;
+    else lines.push(ident);
   }
   return lines;
 }
 
-/** @description Body lines for a critical ping: references the run topic so the operator can jump. */
+/** @description Body lines for a critical ping. These land in the SHARED global topic, which mixes
+ * error/extraordinary events from EVERY project — so the line leads with `[<project>]` to name the
+ * owner, then references the run topic so the operator can jump. */
 function criticalBodyLines(event, meta) {
   const issue = meta.issueNumber;
   const thread = meta.threadId ?? "shared";
-  const lines = [`Run #${issue} (topic ${thread})`];
+  const project = meta.project ? `[${meta.project}] ` : "";
+  const lines = [`${project}Run #${issue} (topic ${thread})`];
   if (event.reason) lines.push(String(event.reason));
   return lines;
 }

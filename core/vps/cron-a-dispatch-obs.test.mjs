@@ -556,7 +556,7 @@ test("assertion 7: dispatch appends a {type:'picked'} event to obs-141.events.js
   }
 });
 
-test("assertion 8: the topic name built for issue 141 with title 'fix billing race' STARTS WITH '#141' — never the bare title with no prefix", async () => {
+test("assertion 8: the topic name built for issue 141 with title 'fix billing race' STARTS WITH '[demo-project] #141' — the project + run identity prefix, never the bare title", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
     const order = [];
@@ -576,20 +576,20 @@ test("assertion 8: the topic name built for issue 141 with title 'fix billing ra
     assert.equal(fakeTopic.calls.length, 1, "createForumTopic must have been called exactly once");
     const { name } = fakeTopic.calls[0];
     assert.ok(
-      typeof name === "string" && name.startsWith("#141"),
-      "the topic name must START WITH the '#141' run-identity prefix"
+      typeof name === "string" && name.startsWith("[demo-project] #141"),
+      "the topic name must START WITH the '[<project>] #141' project + run-identity prefix"
     );
     assert.notEqual(
       name,
       "fix billing race",
-      "the topic name must NEVER be the bare title with no '#141' prefix"
+      "the topic name must NEVER be the bare title with no '[<project>] #141' prefix"
     );
   } finally {
     cleanup();
   }
 });
 
-test("assertion 9: given a 300-code-point title, the built topic name is <=128 code points AND still begins with '#141 · ' — the prefix is preserved, the TITLE is what gets truncated", async () => {
+test("assertion 9: given a 300-code-point title, the built topic name is <=128 code points AND still begins with '[demo-project] #141 · ' — the prefix is preserved, the TITLE is what gets truncated", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
     const order = [];
@@ -617,8 +617,8 @@ test("assertion 9: given a 300-code-point title, the built topic name is <=128 c
       "the topic name must be truncated to at most 128 Unicode code points"
     );
     assert.ok(
-      name.startsWith("#141 · "),
-      "the '#141 · ' run-identity prefix must be preserved — the TITLE is what gets truncated, never the prefix"
+      name.startsWith("[demo-project] #141 · "),
+      "the '[<project>] #141 · ' project + run-identity prefix must be preserved — the TITLE is what gets truncated, never the prefix"
     );
   } finally {
     cleanup();

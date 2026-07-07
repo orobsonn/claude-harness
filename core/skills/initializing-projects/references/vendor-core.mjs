@@ -212,6 +212,33 @@ function copyHookVpsDeps(coreDir, claudeDir) {
 }
 
 /**
+ * @description Post-vendor integrity check over the FINAL vendored state: every `../vps/<mod>.mjs`
+ * a vendored hook imports MUST exist under `.claude/vps/`. Catches the stale-jump — a project whose
+ * ALREADY-vendored vendor-core predates the vps-mirroring step runs the OLD logic on an update: it
+ * refreshes the hooks to a new `../vps/` import WITHOUT creating `.claude/vps/`, shipping a hook that
+ * dies with ERR_MODULE_NOT_FOUND on load (invisibly, since PostToolUse hooks are fire-and-forget — the
+ * only symptom is the entry-gate silently blocking every delivery subagent). Pure read-only. Returns
+ * the list of `{ hook, module }` pairs still missing (empty ⇒ complete).
+ * @param {string} claudeDir
+ * @returns {{ hook: string, module: string }[]}
+ */
+export function findMissingHookVpsDeps(claudeDir) {
+  const hooksDir = join(claudeDir, "hooks");
+  const vpsDir = join(claudeDir, "vps");
+  const missing = [];
+  if (!existsSync(hooksDir)) return missing;
+  const VPS_IMPORT = /from\s+['"]\.\.\/vps\/([\w.-]+\.mjs)['"]/g;
+  for (const file of readdirSync(hooksDir)) {
+    if (!file.endsWith(".mjs") || !isFrameworkCopyIncluded(file)) continue;
+    const text = readFileSync(join(hooksDir, file), "utf8");
+    for (const m of text.matchAll(VPS_IMPORT)) {
+      if (!existsSync(join(vpsDir, m[1]))) missing.push({ hook: file, module: m[1] });
+    }
+  }
+  return missing;
+}
+
+/**
  * @description Pure predicate: should this opt-in module be vendored? True when the operator opts in
  * (`--with-codex`) OR the module is ALREADY vendored in the target (so an update refreshes it instead
  * of leaving it stale — without the flag, but never against the operator's prior choice). Safe
@@ -368,6 +395,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const devVarsIgnore = existsSync(join(coreDir, "dev.vars.example"))
       ? ensureDevVarsIgnored(target)
       : "skipped (no dev.vars.example source)";
+
+    // Integrity gate: FAIL LOUD (never ship a hook that will crash on load) if the final vendored
+    // state is missing a `../vps/` module a hook imports. This catches the stale-jump — an update
+    // driven by an OLD vendored vendor-core that refreshed the hooks but did not mirror vps/. Runs
+    // BEFORE the version stamp so a broken vendor never records success.
+    const missingVpsDeps = findMissingHookVpsDeps(claudeDir);
+    if (missingVpsDeps.length > 0) {
+      const lines = missingVpsDeps.map((m) => `    ${m.hook} imports ../vps/${m.module} — MISSING in .claude/vps/`);
+      fail(
+        [
+          "FATAL — vendored hooks import vps modules that were not mirrored to .claude/vps/:",
+          ...lines,
+          "  A hook with a missing ../vps/ import crashes on load (ERR_MODULE_NOT_FOUND) and silently",
+          "  blocks the entry-gate. Re-run vendor-core (this same, current copy) to mirror them.",
+        ].join("\n"),
+      );
+    }
 
     writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
     writeFileSync(

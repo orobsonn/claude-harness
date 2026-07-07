@@ -24,7 +24,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isFrameworkCopyIncluded, shouldVendorModule } from "./vendor-core.mjs";
+import { isFrameworkCopyIncluded, shouldVendorModule, findMissingHookVpsDeps } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,6 +33,37 @@ const __dirname = dirname(__filename);
 // Resolve paths relative to the test location
 const vendorCoreScript = join(__dirname, "vendor-core.mjs");
 const harnessRoot = join(__dirname, "../../../..");
+
+test("findMissingHookVpsDeps: flags a hook whose ../vps import has no file in .claude/vps, and passes when present", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "stamp-triage.mjs"),
+    'import { appendEvent } from "../vps/obs-outbox.mjs";\n',
+    "utf8",
+  );
+
+  // vps/ absent → the import is reported missing (the stale-jump state)
+  const missing = findMissingHookVpsDeps(claudeDir);
+  assert.equal(missing.length, 1);
+  assert.deepEqual(missing[0], { hook: "stamp-triage.mjs", module: "obs-outbox.mjs" });
+
+  // once the module is mirrored, the check passes clean
+  mkdirSync(join(claudeDir, "vps"), { recursive: true });
+  writeFileSync(join(claudeDir, "vps", "obs-outbox.mjs"), "export const x = 1;\n", "utf8");
+  assert.deepEqual(findMissingHookVpsDeps(claudeDir), []);
+});
+
+test("findMissingHookVpsDeps: ignores *.test.mjs hook imports (their imports never ship)", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "foo.test.mjs"),
+    'import { readEvents } from "../vps/heavy-only-in-tests.mjs";\n',
+    "utf8",
+  );
+  assert.deepEqual(findMissingHookVpsDeps(claudeDir), [], "a test-only ../vps import is never a vendor defect");
+});
 
 test("vendor-core: hooks are included in FRAMEWORK_OWNED", (t) => {
   const scriptContent = readFileSync(vendorCoreScript, "utf8");
