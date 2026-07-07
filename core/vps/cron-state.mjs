@@ -12,8 +12,10 @@ const REVIEWED_FILE_NAME = "cron-reviewed.json";
 const CHAIN_FILE_NAME = "cron-chain.json";
 const BREAKER_FILE_NAME = "cron-breaker.json";
 const UPDATE_ATTEMPTS_FILE_NAME = "cron-update-attempts.json";
+const INFRA_FAILURE_FILE_NAME = "cron-review-infra-failures.json";
 
 const CHAIN_CEILING = 3;
+const INFRA_FAILURE_CEILING = 3;
 const BREAKER_WINDOW_SECONDS = 21_600;
 const BREAKER_MAX_SESSIONS = 12;
 
@@ -35,6 +37,10 @@ function breakerFilePath(stateDir) {
 
 function updateAttemptsFilePath(stateDir) {
   return join(stateDir, UPDATE_ATTEMPTS_FILE_NAME);
+}
+
+function infraFailureFilePath(stateDir) {
+  return join(stateDir, INFRA_FAILURE_FILE_NAME);
 }
 
 function readJsonRecord(filePath) {
@@ -331,4 +337,55 @@ export function breakerTripped(opts) {
   }
 
   return record.count >= BREAKER_MAX_SESSIONS;
+}
+
+// --- pr:sha-keyed review infra-failure store (cron-review-infra-failures.json) ---
+// Keyed by `${pr}:${sha}`. Incremented once per review cycle in which the review session produced
+// NO verdict artifact (it crashed / timed out) — an INFRA failure, DISTINCT from a real BLOCKED
+// review reject (which lives in cron-chain.json). A dedicated file so the operator never conflates
+// "the review session kept dying" with "the code was rejected". Keyed by pr:sha on purpose: a new
+// push (sha change) yields a new key and the counter zeroes naturally — no explicit reset needed.
+
+/**
+ * @description Increments the infra-failure count for the given PR at the given head SHA by 1.
+ * @param {number} pr
+ * @param {string} sha
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function incrementInfraFailure(pr, sha, opts) {
+  const filePath = infraFailureFilePath(opts.stateDir);
+  const failures = readJsonRecord(filePath);
+  const key = `${pr}:${sha}`;
+  failures[key] = (failures[key] ?? 0) + 1;
+  writeJsonRecord(filePath, failures);
+}
+
+/**
+ * @description Reads the current infra-failure count for the given PR at the given head SHA (0 if
+ * never incremented).
+ * @param {number} pr
+ * @param {string} sha
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {number}
+ */
+export function readInfraFailure(pr, sha, opts) {
+  const failures = readJsonRecord(infraFailureFilePath(opts.stateDir));
+  return failures[`${pr}:${sha}`] ?? 0;
+}
+
+/**
+ * @description Returns true when the infra-failure count for the given PR at the given head SHA has
+ * REACHED the ceiling (>= 3) — the review session has crashed/timed out enough times that the issue
+ * should be blocked for the operator instead of retried forever.
+ * @param {number} pr
+ * @param {string} sha
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {boolean}
+ */
+export function atInfraFailureCeiling(pr, sha, opts) {
+  return readInfraFailure(pr, sha, opts) >= INFRA_FAILURE_CEILING;
 }

@@ -45,6 +45,8 @@ function extractRoot(headRefName) {
  * @param {(o: {stateDir: string}) => boolean} opts.breakerTripped windowed-cap gate
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge route
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.incrementInfraFailure per-pr:sha count of review sessions that crashed without a verdict
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.atInfraFailureCeiling true once the infra-failure count for this pr:sha has reached the ceiling
  * @param {boolean} [opts.autoMergeEnabled] - only strict `=== true` auto-merges eligible PRs; default/false routes to awaiting-merge
  * @returns {Promise<void>}
  */
@@ -66,6 +68,8 @@ export async function cronReview(opts) {
     breakerTripped,
     alreadyReviewed,
     recordReviewed,
+    incrementInfraFailure,
+    atInfraFailureCeiling,
     autoMergeEnabled,
   } = opts;
 
@@ -161,6 +165,24 @@ export async function cronReview(opts) {
 
     // Fresh verdict from the engine-controlled artifact (HR-5 / #ac-2.1).
     const verdict = getFreshVerdict(pr, sha, stateDir);
+
+    // The review session produced NO verdict artifact — it crashed / timed out, NOT a real BLOCKED.
+    // Do NOT routeReject: that re-queues the WHOLE issue for an expensive from-scratch re-dispatch over
+    // a finding that does not exist. Count this per pr:sha and let the NEXT (cheap) review cycle retry
+    // the review of this same PR — until a per-pr:sha ceiling, then block the issue + notify the operator.
+    if (verdict === null) {
+      incrementInfraFailure(number, sha, { stateDir });
+      if (atInfraFailureCeiling(number, sha, { stateDir })) {
+        gh(["label", "create", "harness:blocked", "--force"]);
+        const root = extractRoot(pr.headRefName);
+        if (root !== null) gh(["issue", "edit", String(root), "--add-label", "harness:blocked"]);
+        recordReviewed(number, sha, { stateDir }); // stop re-reviewing this dead sha
+        notify({ type: "pr-review-infra-blocked", pr: number, url: pr.url });
+      }
+      // else: alreadyReviewed is deliberately NOT recorded, so the next cycle retries the review.
+      continue;
+    }
+
     const freshVerdictClean = Boolean(verdict && verdict.status === "CLEAN");
 
     // Cross-family eligibility (HR-2 / #ac-2.3).
