@@ -13,6 +13,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+### Removed
+
+## [0.28.1] - 2026-07-07
+
+### Fixed
+
 - **Runs autônomos do cron voltam a subir (aspas simples no gatilho quebravam o comando de sessão)** —
   o `TRIGGER_PROMPT` continha `'Closes #<issue>'`; ao ser embutido cru dentro de aspas simples no
   comando do tmux, a aspa fechava a string no meio e o `#` transformava o resto (incluindo
