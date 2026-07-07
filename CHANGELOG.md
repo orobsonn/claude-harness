@@ -13,6 +13,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Runs autônomos do cron voltam a subir (aspas simples no gatilho quebravam o comando de sessão)** —
+  o `TRIGGER_PROMPT` continha `'Closes #<issue>'`; ao ser embutido cru dentro de aspas simples no
+  comando do tmux, a aspa fechava a string no meio e o `#` transformava o resto (incluindo
+  `| claude -p`) em comentário de shell — **todo run do cron morria no arranque**, antes de rodar o
+  pipeline. Agora o gatilho passa pelo `shellQuoteSingle`, blindando contra qualquer aspa. (P10)
+- **Feed de observação para de mostrar spec/plano de outra feature** — o `cp -a .claude` para o
+  worktree de cada run arrastava o `plans/` histórico (efêmero); o drain detectava um plano antigo e
+  emitia `spec-created`/`plan-created` falsos, além de fazer o `spec-adversary` sumir. O
+  `cron-a-dispatch` agora descarta `.claude/plans/` no worktree após copiar o harness, como um
+  checkout de projeto normal já faz. (P11)
+
 ### Removed
 
 ## [0.28.0] - 2026-07-07

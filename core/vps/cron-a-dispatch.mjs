@@ -74,8 +74,10 @@ const CRON_A_EXIT_PATH = join(dirname(fileURLToPath(import.meta.url)), "cron-a-e
 /**
  * @description Fixed autonomous-trigger prefix prepended to the issue body on claude's stdin.
  * Headless-local autonomy is declared HERE (never via $CLAUDE_CODE_REMOTE, which would disable
- * the cheap Ollama hands). No single quotes and no `<` so it is safe to inline inside the
- * single-quoted printf argument within the composed session command.
+ * the cheap Ollama hands). Passed through shellQuoteSingle in composeSessionCommand, so single
+ * quotes (e.g. "Add 'Closes #N'") are escaped correctly — an earlier version inlined it inside a
+ * bare single-quoted printf arg, and the `'` in 'Closes' closed the string early while the `#`
+ * turned the rest (including `| claude -p`) into a shell comment, killing every run at startup (P10).
  */
 const TRIGGER_PROMPT =
   "You are an autonomous VPS cron harness session running headless-local. " +
@@ -114,7 +116,7 @@ function shellQuoteSingle(s) {
 function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath }) {
   return (
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
-    `{ printf '%s\\n\\n' '${TRIGGER_PROMPT}'; cat < ${shellQuoteSingle(bodyFile)}; } | ` +
+    `{ printf '%s\\n\\n' ${shellQuoteSingle(TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | ` +
     `claude -p --permission-mode auto; ` +
     `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
@@ -502,6 +504,13 @@ export async function dispatch(issue, opts) {
     const claudeDst = join(worktreePath, ".claude");
     if (existsSync(claudeSrc) && !existsSync(claudeDst)) {
       spawn("cp", ["-a", claudeSrc, claudeDst], { cwd: projectRoot, env });
+      // The physical `cp -a` ignores .gitignore and drags in the ephemeral per-run `plans/` HISTORY
+      // (a `git worktree add` in a normal project never would — `plans/` is gitignored, so the
+      // checkout leaves it out). Drop it so the run starts with an empty plans dir: otherwise the
+      // drain's deriveBorderCheckpoints and the spec-adversary phase-probe scan the worktree and pick
+      // a STALE foreign plan, emitting false spec-created/plan-created and mislabeling the spec
+      // adversary (P11). `memory/` and `kaizen.md` are NOT dropped — the shipper commits them back.
+      rmSync(join(claudeDst, "plans"), { recursive: true, force: true });
     }
   } catch {
     // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails

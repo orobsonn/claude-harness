@@ -44,9 +44,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, cpSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
 
@@ -210,6 +211,61 @@ test("dispatch: creates the git worktree at a path distinct from the project roo
     assert.ok(git43);
     assert.equal(git43.args[4], "harness/43");
     assert.notEqual(git43.args[2], path42, "two different issues must get distinct worktree paths");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: drops the ephemeral .claude/plans/ from the copied worktree harness, keeping skills/ and memory/ (P11)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    // projectRoot .claude: a STALE plan dir (a past feature's history the physical `cp -a` would drag
+    // in), plus skills/ and memory/ that MUST survive (the shipper commits memory back).
+    mkdirSync(join(projectRoot, ".claude", "plans", "old-feature"), { recursive: true });
+    writeFileSync(join(projectRoot, ".claude", "plans", "old-feature", "execution-plan.json"), '{"tasks":[1,2,3]}');
+    mkdirSync(join(projectRoot, ".claude", "skills"), { recursive: true });
+    writeFileSync(join(projectRoot, ".claude", "skills", "keep.md"), "skill");
+    mkdirSync(join(projectRoot, ".claude", "memory"), { recursive: true });
+    writeFileSync(join(projectRoot, ".claude", "memory", "MEMORY.md"), "mem");
+
+    // Spawn seam that REALLY runs the fs ops the P11 fix depends on: `git worktree add` creates the
+    // worktree path, `cp -a` copies .claude into it. Everything else is a no-op.
+    const calls = [];
+    const spawn = (command, args = []) => {
+      calls.push({ command, args });
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+        mkdirSync(args[2], { recursive: true });
+      } else if (command === "cp") {
+        cpSync(args[1], args[2], { recursive: true });
+      }
+      return { ok: true };
+    };
+
+    dispatch({ number: 77, body: "b" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }));
+
+    const claudeDst = calls.find((c) => c.command === "cp").args[2];
+    assert.ok(!existsSync(join(claudeDst, "plans")), "the ephemeral plans/ must be dropped from the worktree");
+    assert.ok(existsSync(join(claudeDst, "skills", "keep.md")), "skills/ must survive the copy");
+    assert.ok(existsSync(join(claudeDst, "memory", "MEMORY.md")), "memory/ must survive (the shipper commits it back)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: the composed tmux session command is shell-syntax-valid despite TRIGGER_PROMPT containing single quotes (P10 — no early-close / # comment truncation)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    dispatch({ number: 92, body: "b" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand, "a tmux session command must exist");
+    // The `claude -p` invocation must survive — the old bug let a single quote in the TRIGGER close
+    // the printf string early and a `#` (from "Closes #<issue>") comment out the rest of the pipe.
+    assert.ok(sessionCommand.includes("claude -p"), "the claude -p invocation must not be swallowed");
+    // Syntax-check the WHOLE command without executing it. `sh -n` returns non-zero on the broken
+    // quoting; it passes only when the single quotes are properly escaped.
+    const res = spawnSync("sh", ["-n", "-c", sessionCommand], { encoding: "utf8" });
+    assert.equal(res.status, 0, `composed session command must be shell-syntax-valid; sh -n said: ${res.stderr}`);
   } finally {
     cleanup();
   }
