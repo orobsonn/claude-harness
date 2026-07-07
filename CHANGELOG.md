@@ -13,6 +13,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **Rastro de auditoria da captura fecha no despacho, não por lembrete do orquestrador** — o
+  `spawn-hand.mjs` agora carimba `capturedVerifiedAt` no run-record que ele já grava, no mesmo passo
+  do despacho e apenas quando a captura interna fica verde (`DONE`). Como o gate de entrega já bloqueia
+  qualquer run-record `DONE` sem esse campo, o HEAD não avança mais para a próxima tarefa com a
+  verificação em aberto — fechando o buraco em que os marcadores eram pulados silenciosamente e só
+  apareciam no gate final, depois do HEAD já ter passado do ponto de captura. Green-only por
+  construção: run que falha ou estoura tempo nunca recebe o carimbo.
+
 ### Removed
 
 ## [0.27.0] - 2026-07-06

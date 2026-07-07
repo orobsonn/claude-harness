@@ -664,6 +664,18 @@ export async function runLiveDispatch(descriptor, {
       record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms`;
     }
 
+    // (10a) INLINE capture-verified stamp (#89): the independent capture ran INSIDE this dispatch
+    // (step 9, the injected `capture` seam — capture-hand's `captureResult` by default), so the
+    // producer — never a later orchestrator-remembered `mark
+    // capture-verified` — closes the audit trail. Stamped ONLY on a green DONE outcome (the exact
+    // condition the entry-gate real-file capture rail reads: a DONE record with no
+    // `capturedVerifiedAt` blocks delivery / HEAD advancement). Green-only by construction: a
+    // FAILED/NOT_DONE or timed-out run never carries the stamp, so it can never certify a capture
+    // that was not verified green. Keyed off the FINAL status (after the timeout override above).
+    if (record.outcome.status === "DONE") {
+      record.capturedVerifiedAt = new Date().toISOString();
+    }
+
     // (10b) Consecutive-429 streak tracking — capture-time attribution over the FULL
     // pre-truncation child stream (dispatchHand's returned stdout/stderr), NEVER the
     // ~500-char truncated persisted record. A wall-clock timeout is non-429 (rateLimited

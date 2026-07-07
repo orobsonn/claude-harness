@@ -1162,6 +1162,204 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE�
 });
 
 // ---------------------------------------------------------------------------
+// Locked test — #89 inline capture-verified stamp: runLiveDispatch itself writes
+// `capturedVerifiedAt` onto the run-record when (and ONLY when) its internal capture
+// reaches a green DONE outcome. This is the structural audit-close the orchestrator can
+// never omit — the entry-gate real-file capture rail blocks delivery/HEAD advancement on
+// a DONE record with no `capturedVerifiedAt`. Green-only by construction: a FAILED/NOT_DONE
+// or timed-out run must NOT carry the stamp (never certify a capture that was not green).
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch inline capture-verified stamp (#89)", () => {
+  const featureId = "inline-capture-stamping";
+  const taskId = "task-1";
+  const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
+  const freezeCommitSha = "fake0000000000000000000000000000000abc";
+
+  function makeDescriptor(briefFile) {
+    return {
+      feature_id: featureId,
+      task_id: taskId,
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: lockedTest,
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+  }
+
+  function makeGreenSpawn() {
+    return (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+  }
+
+  function makeCapture({ childExitCode, lockedTestExitCode, touchedPaths }) {
+    return () => ({
+      child: {
+        captured: true,
+        touchedPaths,
+        exitCode: childExitCode,
+        lockedTestExitCode,
+        stdout: "",
+        stderr: "",
+      },
+      captured: true,
+      criticalException: false,
+    });
+  }
+
+  it("GREEN — a DONE run stamps `capturedVerifiedAt` as an ISO-8601 string on the persisted record", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "implement feature", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+
+    const result = await runLiveDispatch(makeDescriptor(briefFile), {
+      spawn: makeGreenSpawn(),
+      env: { ANTHROPIC_AUTH_TOKEN: "fake-token" },
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeCapture({ childExitCode: 0, lockedTestExitCode: 0, touchedPaths: ["core/x/foo.ts"] }),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(capturedRecord.outcome.status, OUTCOME.DONE, "precondition: the fixture must reach DONE");
+    assert.equal(
+      typeof capturedRecord.capturedVerifiedAt,
+      "string",
+      "a green DONE run must stamp capturedVerifiedAt on the persisted record"
+    );
+    assert.ok(
+      capturedRecord.capturedVerifiedAt.length > 0 &&
+        !Number.isNaN(Date.parse(capturedRecord.capturedVerifiedAt)),
+      "capturedVerifiedAt must be a non-empty, parseable ISO-8601 timestamp"
+    );
+    assert.equal(
+      typeof result.record.capturedVerifiedAt,
+      "string",
+      "the returned record must carry the same stamp"
+    );
+  });
+
+  it("FAILED — a genuine non-green capture (lockedTestExitCode != 0) does NOT stamp capturedVerifiedAt", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "implement feature", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+
+    await runLiveDispatch(makeDescriptor(briefFile), {
+      spawn: makeGreenSpawn(),
+      env: { ANTHROPIC_AUTH_TOKEN: "fake-token" },
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeCapture({ childExitCode: 0, lockedTestExitCode: 1, touchedPaths: ["core/x/foo.ts"] }),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.notEqual(capturedRecord.outcome.status, OUTCOME.DONE, "precondition: the fixture must NOT reach DONE");
+    assert.equal(
+      capturedRecord.capturedVerifiedAt,
+      undefined,
+      "a non-green run must never carry capturedVerifiedAt"
+    );
+  });
+
+  it("TIMEOUT — a DONE-scoring fixture flipped to FAILED by the wall-clock override carries NO capturedVerifiedAt", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "implement feature", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const timeoutSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+
+    await runLiveDispatch(makeDescriptor(briefFile), {
+      spawn: timeoutSpawn,
+      env: { ANTHROPIC_AUTH_TOKEN: "fake-token" },
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeCapture({ childExitCode: 0, lockedTestExitCode: 0, touchedPaths: ["core/x/foo.ts"] }),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(capturedRecord.outcome.status, OUTCOME.FAILED, "precondition: the timeout override must flip to FAILED");
+    assert.equal(
+      capturedRecord.capturedVerifiedAt,
+      undefined,
+      "a timed-out run must never carry capturedVerifiedAt"
+    );
+  });
+
+  it("NOT_DONE — an empty-diff run does NOT stamp capturedVerifiedAt (pins the exact `=== DONE` boundary)", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "implement feature", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+
+    await runLiveDispatch(makeDescriptor(briefFile), {
+      spawn: makeGreenSpawn(),
+      env: { ANTHROPIC_AUTH_TOKEN: "fake-token" },
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      // Empty diff → evaluateRun scores NOT_DONE (prose ignored, no work captured).
+      capture: makeCapture({ childExitCode: 0, lockedTestExitCode: 0, touchedPaths: [] }),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(
+      capturedRecord.outcome.status,
+      OUTCOME.NOT_DONE,
+      "precondition: an empty-diff run must score NOT_DONE, not DONE"
+    );
+    assert.equal(
+      capturedRecord.capturedVerifiedAt,
+      undefined,
+      "a NOT_DONE run must never carry capturedVerifiedAt — the stamp is green-DONE-only, not merely non-FAILED"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Locked test 17 — #ac-1.2 / C6 the token never leaks into the timeout record,
 // and the timeout reason string is exact.
 // ---------------------------------------------------------------------------
