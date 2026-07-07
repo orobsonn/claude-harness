@@ -474,3 +474,30 @@ manual-merge the queue.
 - **Rationale:** the robust parse removes the whole class of envelope-field false-positives and the
   narrated-"error" residual, and would also let attribution catch a rate-limit surfaced WITHOUT the
   literal 429 (e.g. `rate_limit_error`/"Overloaded") — a current blind spot.
+
+### 2026-07-07 — codex-eye-nudge / obs-eye-append: align "main-loop only" guard to hasOwnProperty presence-check
+
+- **Observed:** building `agent-idle-nudge.mjs` (#90), the adversary flagged that the payload contract
+  for a PostToolUse[Agent] hook is: a **main-loop** Agent dispatch OMITS the `agent_id` key entirely; a
+  **nested/subagent** dispatch INCLUDES it. The three gates that police this boundary
+  (`entry-gate.mjs:749`, `stamp-triage.mjs`, `plan-write-gate.mjs`) correctly key "main-loop only" off
+  `Object.prototype.hasOwnProperty.call(payload, 'agent_id')` — presence, not truthiness — so a
+  falsy-but-present `agent_id` (`''` / `0`) is still read as a nested dispatch, per contract. The two
+  existing sibling PostToolUse[Agent] hooks instead guard with plain truthiness —
+  `codex-eye-nudge.mjs:79` (`if (payload.agent_id) return { action: 'none' }`) and
+  `obs-eye-append.mjs:111` (same pattern) — which would silently misclassify a nested dispatch carrying
+  a falsy-but-present `agent_id` as main-loop, and fire on it. `agent-idle-nudge.mjs` was built with the
+  presence-check from the start to match the gate convention. Separately, `obs-eye-append.mjs:43` reads
+  the report text as `payload.tool_response ?? payload.tool_output ?? ''` — `??` only falls through on
+  `null`/`undefined`, so an empty-string `tool_response` (`''`) short-circuits and masks a real report
+  sitting in `tool_output`. `agent-idle-nudge.mjs` closed the equivalent gap by treating a payload as
+  idle only when BOTH fields independently trim to empty/absent.
+- **Proposed change:** (1) change `codex-eye-nudge.mjs:79` and `obs-eye-append.mjs:111` from the
+  truthiness guard to the presence-check (`hasOwnProperty`), matching the gate convention and
+  `agent-idle-nudge.mjs`; (2) in `obs-eye-append.mjs:43`, replace the `??` chain with a symmetric
+  "idle only if both fields are idle" check (or equivalent) so an empty-string `tool_response` cannot
+  mask a real `tool_output` report.
+- **Rationale:** both are narrow, low-risk fixes to two hooks already in production that share the
+  exact defect class this feature just fixed once; leaving the inconsistency means three different
+  "main-loop only" implementations coexist in the same hook family, one of them (fix #1) provably
+  wrong on a falsy-but-present `agent_id`, and one (fix #2) able to silently swallow a real eye report.
