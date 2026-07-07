@@ -1,0 +1,148 @@
+/**
+ * @description PostToolUse(Agent) hook that nudges a main-loop agent which idled
+ * without delivering its final structured report. Mirrors codex-eye-nudge.mjs
+ * literally: pure decide() + processInput() + a guarded CLI entry. NO statefile.
+ *
+ * Fail-open: exits 0 on ANY error. Never blocks an Agent dispatch.
+ * The single injected additionalContext carries BOTH the single-nudge directive
+ * (send exactly one SendMessage re-prompt to extract the report) AND the fallback
+ * directive (if still no report, record it as unresolved and do NOT loop /
+ * do NOT re-dispatch). There is NO second automatic retry loop.
+ */
+
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// ---------------------------------------------------------------------------
+// Pure decision layer — no I/O
+// ---------------------------------------------------------------------------
+
+/**
+ * Coerces the report text out of a payload. Idle = a string that trims to '' OR
+ * null/undefined. Any non-string non-null value (number, boolean, object, array)
+ * counts as a report (NOT idle).
+ *
+ * Branches on `typeof x === 'string'` (then trim) BEFORE the non-string branch —
+ * never on truthiness — so `0`/`false` fall into the report branch literally.
+ *
+ * @param {unknown} payload - The hook payload
+ * @returns {boolean} true when the report text is idle (absent or blank)
+ */
+function isIdleReport(payload) {
+  const raw = payload.tool_response ?? payload.tool_output;
+  if (typeof raw === 'string') {
+    return raw.trim() === '';
+  }
+  // null / undefined => idle; any other non-string (number, boolean, object, array) => report.
+  return raw === null || raw === undefined;
+}
+
+/**
+ * Decides whether to inject an idle-nudge context. Pure. Never throws.
+ * Returns {action:'inject', context} on a qualifying idle transition, else {action:'none'}.
+ *
+ * @param {unknown} payload - The hook payload
+ * @param {object} _env - Env object (unused; kept for signature parity with siblings)
+ * @param {object} [_deps] - Injectable dependencies (unused; kept for parity)
+ * @returns {{ action: 'inject', context: string } | { action: 'none' }}
+ */
+export function decide(payload, _env, _deps) {
+  // (a) payload is null/not an object, or payload.tool_input is missing/non-object
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return { action: 'none' };
+  }
+  const ti = payload.tool_input;
+  if (typeof ti !== 'object' || ti === null || Array.isArray(ti)) {
+    return { action: 'none' };
+  }
+
+  // (b) payload.agent_id is truthy — main-loop only
+  if (payload.agent_id) {
+    return { action: 'none' };
+  }
+
+  // (c) payload.tool_name !== 'Agent'
+  if (payload.tool_name !== 'Agent') {
+    return { action: 'none' };
+  }
+
+  // (d) report text non-empty — a delivered report is not nudged
+  if (!isIdleReport(payload)) {
+    return { action: 'none' };
+  }
+
+  // Qualifying idle transition — inject the combined single-nudge + no-loop directive.
+  const context =
+    'Agent idle nudge: this Agent dispatch returned without a final structured report. ' +
+    'Send EXACTLY ONE SendMessage re-prompt to the same agent to extract its report — ' +
+    'do not send more than one, and do not re-dispatch the Agent tool. ' +
+    'If the single re-prompt still yields no report, record the task as UNRESOLVED ' +
+    'and do NOT loop and do NOT re-dispatch.';
+
+  return { action: 'inject', context };
+}
+
+// ---------------------------------------------------------------------------
+// processInput — production entry point (stdin → stdout)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses raw stdin, calls decide, and returns the hook output shape.
+ * Never throws — any error yields { exitCode: 0, output: null }.
+ *
+ * @param {string} rawStr - Raw stdin string (JSON payload)
+ * @param {object} [_deps] - Injectable dependencies (kept for parity; unused)
+ * @returns {{ exitCode: number, output: string|null }}
+ */
+export function processInput(rawStr, _deps) {
+  try {
+    const payload = JSON.parse(rawStr);
+
+    const d = decide(payload, {}, {});
+
+    if (d.action === 'inject') {
+      return {
+        exitCode: 0,
+        output: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PostToolUse',
+            additionalContext: d.context,
+          },
+        }),
+      };
+    }
+
+    return { exitCode: 0, output: null };
+  } catch {
+    return { exitCode: 0, output: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CLI entry point — guarded so imports from tests do not trigger side effects
+// ---------------------------------------------------------------------------
+
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
+if (isDirectCli()) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(0, 'utf8');
+  } catch {
+    process.exit(0);
+  }
+
+  const result = processInput(raw);
+  if (result.output !== null) {
+    process.stdout.write(result.output);
+  }
+  process.exit(0);
+}
