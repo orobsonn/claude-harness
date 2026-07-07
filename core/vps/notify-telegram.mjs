@@ -53,6 +53,16 @@ const EMOJI = {
   "reaper-orphan-cleaned": "🧹",
   "chain-released": "🔗",
   "chain-stranded": "⛓️‍💥",
+  "pipeline-type": "🚀",
+  "spec-created": "📝",
+  "plan-created": "📋",
+  "plan-reviewed": "🧐",
+  "task-executing": "⚙️",
+  "final-review-done": "🏁",
+  "hand-ran": "✋",
+  eye: "👁️",
+  "regate-pending": "🔒",
+  pr: "🔗",
 };
 
 /**
@@ -574,18 +584,62 @@ function consumeBudget() {
   if (outboxRateLimiter.tokens > 0) outboxRateLimiter.tokens -= 1;
 }
 
-/** @description True for events that must take the separate critical path. */
-function isCriticalEvent(event) {
-  if (!event || typeof event.type !== "string") return false;
-  const type = event.type;
-  if (CRITICAL_TYPES.has(type)) return true;
-  if (type === "regate-pending" && event.matched === false) return true;
-  return false;
+/**
+ * @description The curated per-run checkpoint feed: ONLY these types reach the Telegram topic. The
+ * operator's wished milestones — session start, classify, spec, spec-adversary, plan, plan
+ * review/approval, task loop, models per task (hand-ran), final review, PR. Everything else in the
+ * outbox (raw `eye`, `regate-pending`, and any lifecycle/reaper/chain events) is audit-only:
+ * suppressed at DRAIN/RENDER time, never at append time (the JSONL stays the full audit trail;
+ * `criticalSent`/`cursor` indices are positional and must not be renumbered).
+ */
+const CURATED_FEED_TYPES = new Set([
+  "picked",
+  "pipeline-type",
+  "spec-created",
+  "spec-adversary",
+  "plan-created",
+  "plan-reviewed",
+  "task-executing",
+  "hand-ran",
+  "final-review-done",
+  "pr",
+]);
+
+/** @description True when an event belongs in the curated Telegram feed (case-insensitive). */
+function isCuratedFeedEvent(event) {
+  const type = String(event?.type ?? "").toLowerCase();
+  return CURATED_FEED_TYPES.has(type);
 }
 
-/** @description Title for an outbox checkpoint message (UPPERCASE taxonomy label). */
+/** @description True for events that must take the separate critical path (blocked/failed lifecycle
+ * alerts). `regate-pending` is deliberately NOT critical for the feed — the operator does not want it,
+ * and its delivery-blocking obligation is gate-state-enforced (entry-gate), independent of any ping. */
+function isCriticalEvent(event) {
+  if (!event || typeof event.type !== "string") return false;
+  return CRITICAL_TYPES.has(event.type);
+}
+
+/** @description Operator-facing pt-br label per curated checkpoint type. */
+const CHECKPOINT_LABELS = {
+  picked: "Sessão iniciada",
+  "pipeline-type": "Classificação",
+  "spec-created": "Spec criada",
+  "spec-adversary": "Adversarial da spec",
+  "plan-created": "Plano criado",
+  "plan-reviewed": "Revisão do plano",
+  "task-executing": "Tarefa",
+  "hand-ran": "Tarefa implementada",
+  "final-review-done": "Revisão final concluída",
+  pr: "PR aberto",
+};
+
+/** @description Title for an outbox checkpoint message: status emoji + friendly pt-br label (falls
+ * back to the UPPERCASE taxonomy key for any non-curated type that still reaches the renderer). */
 function checkpointTitle(event) {
-  return String(event?.type ?? "evento").toUpperCase();
+  const type = String(event?.type ?? "evento").toLowerCase();
+  const emoji = EMOJI[type] ?? "🔔";
+  const label = CHECKPOINT_LABELS[type] ?? type.toUpperCase();
+  return `${emoji} ${label}`;
 }
 
 /** @description Body lines for a run's cosmetic checkpoint. The fallback/shared path prefixes the
@@ -597,33 +651,44 @@ function cosmeticBodyLines(event, meta, isFallback) {
   // render the PR line — without this, 'PR' fell through to the default 'checkpoint' branch.
   const type = String(event?.type ?? "").toLowerCase();
   switch (type) {
+    case "pipeline-type":
+      lines.push(`modo ${event.mode ?? "?"}`);
+      break;
     case "spec-created":
-      lines.push("spec.md ready");
+      lines.push("spec pronta");
+      break;
+    case "spec-adversary":
+      lines.push("spec revisada pelo adversário");
       break;
     case "plan-created":
-      lines.push(`execution plan with ${event.tasks} tasks ready`);
+      lines.push(`${event.tasks ?? "?"} tarefas`);
+      break;
+    case "plan-reviewed":
+      lines.push(
+        event.verdict === "APPROVE"
+          ? "aprovado"
+          : event.verdict === "REVISE"
+            ? "requer revisão"
+            : "revisado"
+      );
+      break;
+    case "task-executing":
+      lines.push(`tarefa ${event.n ?? "?"}/${event.total ?? "?"}`);
+      break;
+    case "hand-ran":
+      lines.push(
+        `${event.task ?? "tarefa"}${event.role ? " (" + event.role + ")" : ""} — modelo ${event.model ?? "?"}`
+      );
+      break;
+    case "final-review-done":
+      lines.push("revisão final concluída");
       break;
     case "pr":
       lines.push(`PR ${event.pr ?? ""}`);
       if (event.url) lines.push(String(event.url));
       break;
-    case "task-executing":
-      lines.push(`task ${event.n ?? "?"}/${event.total ?? "?"}`);
-      break;
-    case "plan-reviewed":
-      lines.push(`plan ${event.verdict ?? ""}`);
-      break;
     case "picked":
-      lines.push("session started");
-      break;
-    case "pipeline-type":
-      lines.push(`pipeline ${event.mode ?? "?"}`);
-      break;
-    case "final-review-done":
-      lines.push("final review complete");
-      break;
-    case "hand-ran":
-      lines.push(`hand ${event.task ?? "?"}${event.role ? " (" + event.role + ")" : ""} — ${event.model ?? "?"}`);
+      lines.push("sessão iniciada");
       break;
     case "eye":
       lines.push(`${event.role ?? "eye"} returned`);
@@ -792,6 +857,13 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
     for (let i = startCursor; i < events.length; i++) {
       const event = events[i];
       if (isCriticalEvent(event)) continue;
+      // Suppress non-curated checkpoints (raw eye / regate-pending / lifecycle events) from the feed but
+      // ACK by advancing the cursor — a contiguous cursor that skipped WITHOUT advancing would jam the
+      // outbox and starve every later milestone. The JSONL audit trail is never rewritten.
+      if (!isCuratedFeedEvent(event)) {
+        newCursor = i + 1;
+        continue;
+      }
       if (budget <= 0) break;
       const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: cosmeticBodyLines(event, meta, isFallback) });
       const ack = await trySend(send, { event, text, chatId, threadId: runThreadId });

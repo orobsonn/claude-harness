@@ -12,15 +12,75 @@
  */
 
 import fs from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bareRole } from './lib/gate-lib.mjs';
-import { appendEvent as defaultAppendEvent } from '../vps/obs-outbox.mjs';
+import {
+  appendEvent as defaultAppendEvent,
+  readMeta as defaultReadMeta,
+  readEvents as defaultReadEvents,
+} from '../vps/obs-outbox.mjs';
 
 // ---------------------------------------------------------------------------
 // Eye roles that trigger an observability append
 // ---------------------------------------------------------------------------
 
 const EYE_ROLES = new Set(['compliance', 'adversary', 'security', 'plan-reviewer']);
+
+/**
+ * @description Extracts the plan-reviewer verdict from the Agent's returned text. The plan-reviewer's
+ * contract is to return exactly one of APPROVE|REVISE. Prefers the anchored contract form
+ * ("verdict: APPROVE") so casual prose ("no need to revise — APPROVE") does not false-positive;
+ * falls back to a bare UPPERCASE token only (a lowercase "revise" in prose is not a verdict). REVISE
+ * wins if both appear (conservative — surface "needs work"). Tolerant of string or object
+ * `tool_response` shapes. Returns null when neither is present (the event is still emitted, just
+ * without a verdict). Pure, never throws.
+ * @param {object} payload
+ * @returns {'APPROVE'|'REVISE'|null}
+ */
+function parseVerdict(payload) {
+  try {
+    const resp = payload.tool_response ?? payload.tool_output ?? '';
+    const text = typeof resp === 'string' ? resp : JSON.stringify(resp);
+    const anchored = text.match(/\bverdict\b[:\s]*["']?(APPROVE|REVISE)\b/i);
+    if (anchored) return anchored[1].toUpperCase();
+    // Fallback: a bare token, UPPERCASE-only (the reviewer writes the verdict in caps).
+    if (/\bREVISE\b/.test(text)) return 'REVISE';
+    if (/\bAPPROVE\b/.test(text)) return 'APPROVE';
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Fail-open probe: has the run already produced an execution plan? Reads the meta's
+ * worktreePath and looks for any `.claude/plans/<feature>/execution-plan.json`. Used to tell a
+ * SPEC-phase adversary (before any plan) from a per-task / final-review adversary. Any error → false
+ * (treat as spec phase is NOT assumed — a throw means we cannot confirm the plan, so we return false
+ * only when the dir is genuinely empty/unreadable; callers combine this with a dedupe guard).
+ * @param {string} metaPath
+ * @param {{ readMeta: Function, readdirSync: Function, statSync: Function }} io
+ * @returns {boolean}
+ */
+function planExistsFor(metaPath, io) {
+  try {
+    const meta = io.readMeta(metaPath);
+    const wt = meta && meta.worktreePath;
+    if (typeof wt !== 'string' || !wt) return false;
+    const plansDir = join(wt, '.claude', 'plans');
+    for (const entry of io.readdirSync(plansDir)) {
+      try {
+        if (io.statSync(join(plansDir, entry, 'execution-plan.json')).isFile()) return true;
+      } catch {
+        // entry has no plan file — keep scanning
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Pure decision layer — no I/O
@@ -75,7 +135,28 @@ export function decide(payload, env, deps) {
     return { action: 'none' };
   }
 
-  return { action: 'append', role, metaPath };
+  // Compute the CURATED event for this eye return (see B1/B3):
+  //  - plan-reviewer  → {type:'plan-reviewed', verdict?} — covers "plan review" + "plan approved".
+  //  - adversary in the SPEC phase (no execution-plan.json yet AND no spec-adversary already recorded)
+  //    → {type:'spec-adversary'} — the operator's wish #3. A later adversary (per-task / final review)
+  //    falls through to a raw eye.
+  //  - anything else  → {type:'eye', role} — audit-only; the drain allowlist suppresses it from the feed.
+  const hasEvent = deps && typeof deps.hasEvent === 'function' ? deps.hasEvent : () => false;
+
+  if (role === 'plan-reviewer') {
+    const verdict = parseVerdict(payload);
+    const event = verdict ? { type: 'plan-reviewed', verdict } : { type: 'plan-reviewed' };
+    return { action: 'append', role, metaPath, event };
+  }
+  if (role === 'adversary') {
+    // Phase probe (readMeta + readdir sweep) only where it matters — never on compliance/security/
+    // plan-reviewer returns in this hot PostToolUse hook.
+    const planExists = deps && typeof deps.planExists === 'function' ? deps.planExists(metaPath) : false;
+    if (!planExists && !hasEvent(metaPath, 'spec-adversary')) {
+      return { action: 'append', role, metaPath, event: { type: 'spec-adversary' } };
+    }
+  }
+  return { action: 'append', role, metaPath, event: { type: 'eye', role } };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,11 +182,23 @@ export function processInput(rawStr, deps) {
     const existsSync = (deps && deps.existsSync) ? deps.existsSync : fs.existsSync;
     const env = (deps && deps.env) ? deps.env : process.env;
     const appendEvent = (deps && deps.appendEvent) ? deps.appendEvent : defaultAppendEvent;
+    const readMeta = (deps && deps.readMeta) ? deps.readMeta : defaultReadMeta;
+    const readEvents = (deps && deps.readEvents) ? deps.readEvents : defaultReadEvents;
 
-    const d = decide(payload, env, { existsSync });
+    const planExists = (mp) =>
+      planExistsFor(mp, { readMeta, readdirSync: fs.readdirSync, statSync: fs.statSync });
+    const hasEvent = (mp, type) => {
+      try {
+        return (readEvents(mp) || []).some((e) => e && e.type === type);
+      } catch {
+        return false;
+      }
+    };
+
+    const d = decide(payload, env, { existsSync, planExists, hasEvent });
 
     if (d.action === 'append') {
-      appendEvent(d.metaPath, { type: 'eye', role: d.role });
+      appendEvent(d.metaPath, d.event);
     }
 
     return { exitCode: 0 };

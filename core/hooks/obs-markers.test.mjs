@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseArgs, run } from "./mark.mjs";
 import { handle } from "./stamp-triage.mjs";
-import { createRun, readEvents, updateMeta } from "../vps/obs-outbox.mjs";
+import { createRun, readEvents, updateMeta, appendEvent } from "../vps/obs-outbox.mjs";
 import { drainTelegramOutbox } from "../vps/notify-telegram.mjs";
 
 // ---------------------------------------------------------------------------
@@ -227,6 +227,79 @@ test("stamp-triage handle(): mark.mjs plan-reviewed --verdict APPROVE appends {t
   });
 });
 
+// H1: plan-reviewed has TWO producers (obs-eye-append when the plan-reviewer returns + the
+// SKILL.md-prose mark.mjs). The stamp-triage mark side must dedupe against an existing same-verdict
+// event so a review does not emit two identical feed lines — but a genuine second review with a
+// DIFFERENT verdict (REVISE→re-plan→APPROVE) must still get through.
+test("stamp-triage handle(): mark.mjs plan-reviewed dedupes a same-verdict event but appends a different verdict", () => {
+  withTempDir(() => {
+    const featureId = "vps-run-observability";
+    const obsDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
+    try {
+      const metaPath = createRun({ issueNumber: 20, project: "proj", worktreePath: obsDir }, obsDir);
+      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
+
+      // The deterministic obs-eye-append producer already recorded the plan-reviewer's APPROVE.
+      appendEvent(metaPath, { type: "plan-reviewed", verdict: "APPROVE" });
+
+      const markPayload = (verdict) => ({
+        session_id: "ses_h1",
+        tool_name: "Bash",
+        tool_input: {
+          command: `node .claude/hooks/mark.mjs plan-reviewed --feature-id ${featureId} --task-id task-1 --verdict ${verdict}`,
+        },
+        tool_response: JSON.stringify({ marker: "plan-reviewed", feature_id: featureId, task_id: "task-1", verdict }),
+      });
+
+      // Same verdict via the prose mark → deduped (no double feed line).
+      handle(markPayload("APPROVE"));
+      let reviewed = readEvents(metaPath).filter((e) => e.type === "plan-reviewed");
+      assert.equal(reviewed.length, 1, `same-verdict plan-reviewed must not duplicate, got ${JSON.stringify(reviewed)}`);
+
+      // A genuine second review with a different verdict still appends.
+      handle(markPayload("REVISE"));
+      reviewed = readEvents(metaPath).filter((e) => e.type === "plan-reviewed");
+      assert.equal(reviewed.length, 2, "a different-verdict review must still append");
+      assert.ok(reviewed.some((e) => e.verdict === "REVISE"), "the REVISE review must be recorded");
+    } finally {
+      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+      fs.rmSync(obsDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// M1: pipeline-type dedupe keys on (type, mode) — a repeat of the SAME mode (a subagent sharing the
+// outbox) is suppressed, but a genuine re-classification to a DIFFERENT mode must still reach the feed.
+test("stamp-triage handle(): pipeline-type dedupes a repeat mode but appends a re-classification to a different mode", () => {
+  withTempDir(() => {
+    const featureId = "vps-run-observability";
+    const obsDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
+    try {
+      const metaPath = createRun({ issueNumber: 21, project: "proj", worktreePath: obsDir }, obsDir);
+      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
+
+      const classifyPayload = (mode) => ({
+        session_id: "ses_m1",
+        tool_name: "Bash",
+        tool_input: { command: `node .claude/hooks/classify.mjs --mode ${mode} --feature-id ${featureId}` },
+        tool_response: JSON.stringify({ mode, feature_id: featureId }),
+      });
+
+      handle(classifyPayload("FULL"));
+      handle(classifyPayload("FULL")); // same mode (e.g. a subagent) → deduped
+      let modes = readEvents(metaPath).filter((e) => e.type === "pipeline-type").map((e) => e.mode);
+      assert.deepEqual(modes, ["FULL"], `a repeat of the same mode must be deduped, got ${JSON.stringify(modes)}`);
+
+      handle(classifyPayload("LIGHT")); // genuine re-classification → appends
+      modes = readEvents(metaPath).filter((e) => e.type === "pipeline-type").map((e) => e.mode);
+      assert.deepEqual(modes, ["FULL", "LIGHT"], "a different mode must still append");
+    } finally {
+      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+      fs.rmSync(obsDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 5. HARNESS_OBSERVABILITY_RUN_PATH unset/nonexistent -> cheap no-op
 // ---------------------------------------------------------------------------
@@ -407,12 +480,14 @@ test("stamp-triage handle(): mark.mjs regate-pending appends a CRITICAL {type:'r
 // ---------------------------------------------------------------------------
 
 /**
- * @description Given stamp-triage appends the {type:'regate-pending', task:'task-5'}
- * critical event AND the REAL drainTelegramOutbox (notify-telegram.mjs) then runs,
- * then the regate-pending signal is sent to the SHARED config threadId (critical
- * destination) — produced->consumed proof for the sniper-HIGH safety signal.
+ * @description Given stamp-triage appends the {type:'regate-pending', task:'task-5'} audit event
+ * AND the REAL drainTelegramOutbox (notify-telegram.mjs) then runs, then the regate-pending event
+ * is SUPPRESSED from the Telegram feed (no critical ping — it is no longer a CRITICAL type — and
+ * no cosmetic send — it is not curated) while the contiguous cursor STILL ADVANCES past it, so a
+ * suppressed audit event can never jam the outbox and starve later milestones. Its
+ * delivery-blocking obligation stays gate-state-enforced (entry-gate), independent of any ping.
  */
-test("regate-pending critical event: produced by stamp-triage, delivered to the SHARED config threadId via the real drainTelegramOutbox", async () => {
+test("regate-pending event: produced by stamp-triage as an audit record, SUPPRESSED by the real drainTelegramOutbox while the cursor advances past it", async () => {
   await withTempDirAsync(async () => {
     const sessionId = "ses_obs9";
     const featureId = "vps-run-observability";
@@ -421,9 +496,6 @@ test("regate-pending critical event: produced by stamp-triage, delivered to the 
     const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-worktree-"));
     try {
       const metaPath = createRun({ issueNumber: 9, project: "proj", worktreePath }, obsStateDir);
-      // Give the run its OWN (non-shared) thread so a critical delivery landing on the
-      // SHARED thread is unambiguous proof of the critical-first path, not an artifact
-      // of the no-threadId fallback case.
       updateMeta(metaPath, { threadId: 555 });
       process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
 
@@ -437,27 +509,31 @@ test("regate-pending critical event: produced by stamp-triage, delivered to the 
       };
       handle(payload);
 
+      // The audit trail keeps the event — suppression happens at drain time, never at append time.
+      const appended = readEvents(metaPath).filter((e) => e.type === "regate-pending");
+      assert.equal(appended.length, 1, "the regate-pending audit event must still be appended to the JSONL");
+
       const sendCalls = [];
       const fakeSend = async (message) => {
         sendCalls.push(message);
         return { sent: true };
       };
-      const SHARED_THREAD_ID = 999;
 
       await drainTelegramOutbox(
-        { stateDir: obsStateDir, chatId: "shared-chat", threadId: SHARED_THREAD_ID },
+        { stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 },
         { send: fakeSend },
       );
 
-      const delivered = sendCalls.some(
-        (call) =>
-          call.event?.type === "regate-pending" &&
-          call.event?.task === taskId &&
-          call.threadId === SHARED_THREAD_ID,
+      assert.equal(
+        sendCalls.filter((call) => call.event?.type === "regate-pending").length,
+        0,
+        `regate-pending must be suppressed from the feed (no critical ping, no cosmetic send), got ${JSON.stringify(sendCalls)}`,
       );
-      assert.ok(
-        delivered,
-        `expected the regate-pending event delivered to the shared threadId ${SHARED_THREAD_ID}, got ${JSON.stringify(sendCalls)}`,
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      assert.equal(
+        meta.cursor,
+        readEvents(metaPath).length,
+        "the cursor must still advance past the suppressed regate-pending — never jam the outbox",
       );
     } finally {
       delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
@@ -584,6 +660,109 @@ test("plan-reviewed APPROVE event: produced by stamp-triage, delivered by exactl
       delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
       fs.rmSync(obsStateDir, { recursive: true, force: true });
       fs.rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. obsAppend dedupe: pipeline-type is append-if-absent (once per outbox)
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Given a classify.mjs triage payload already appended a
+ * {type:'pipeline-type'} event to the outbox, when a SECOND classify payload is
+ * handled against the SAME outbox (the outbox is shared by the main loop and every
+ * subagent inheriting HARNESS_OBSERVABILITY_RUN_PATH), then NO second pipeline-type
+ * event is appended — obsAppend's dedupeFn (by type) skips it. The triage.json write
+ * itself still happens for the second session (dedupe is outbox-only).
+ */
+test("stamp-triage obsAppend dedupe: a second classify against the same outbox appends NO second {type:'pipeline-type'} event", () => {
+  withTempDir(() => {
+    const featureId = "vps-run-observability";
+    const obsDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
+    try {
+      const metaPath = createRun({ issueNumber: 12, project: "proj", worktreePath: obsDir }, obsDir);
+      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
+
+      const classifyPayload = (sessionId) => ({
+        session_id: sessionId,
+        tool_name: "Bash",
+        tool_input: {
+          command: `node .claude/hooks/classify.mjs --mode FULL --feature-id ${featureId}`,
+        },
+        tool_response: JSON.stringify({ mode: "FULL", feature_id: featureId }),
+      });
+
+      handle(classifyPayload("ses_obs12a"));
+      handle(classifyPayload("ses_obs12b"));
+
+      const pipelineEvents = readEvents(metaPath).filter((e) => e.type === "pipeline-type");
+      assert.equal(
+        pipelineEvents.length,
+        1,
+        `pipeline-type must be appended exactly once per outbox (append-if-absent), got ${JSON.stringify(pipelineEvents)}`,
+      );
+      assert.equal(pipelineEvents[0].mode, "FULL");
+
+      // The second triage.json write itself still happened — dedupe is outbox-only.
+      assert.ok(
+        fs.existsSync(path.join(".claude/plans/.state", "ses_obs12b", "triage.json")),
+        "the second classify must still write its own triage.json",
+      );
+    } finally {
+      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+      fs.rmSync(obsDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. obsAppend dedupe: regate-pending is per-task (same task skipped, new task appended)
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Given a regate-pending marker for task-5 already appended its outbox
+ * event, when a SECOND regate-pending for the SAME task-5 is handled, then no
+ * duplicate event is appended (dedupeFn matches type AND task); when a regate-pending
+ * for a DIFFERENT task-6 is handled, then its event IS appended — the dedupe is
+ * per-task, never a blanket once-per-type.
+ */
+test("stamp-triage obsAppend dedupe: regate-pending is deduped per task — same task skipped, different task appended", () => {
+  withTempDir(() => {
+    const sessionId = "ses_obs13";
+    const featureId = "vps-run-observability";
+    const obsDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
+    try {
+      const metaPath = createRun({ issueNumber: 13, project: "proj", worktreePath: obsDir }, obsDir);
+      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
+
+      const regatePayload = (taskId) => ({
+        session_id: sessionId,
+        tool_name: "Bash",
+        tool_input: {
+          command: `node .claude/hooks/mark.mjs regate-pending --feature-id ${featureId} --task-id ${taskId}`,
+        },
+        tool_response: JSON.stringify({ marker: "regate-pending", feature_id: featureId, task_id: taskId }),
+      });
+
+      handle(regatePayload("task-5"));
+      handle(regatePayload("task-5")); // duplicate for the SAME task → skipped
+      handle(regatePayload("task-6")); // DIFFERENT task → appended
+
+      const regateEvents = readEvents(metaPath).filter((e) => e.type === "regate-pending");
+      assert.equal(
+        regateEvents.filter((e) => e.task === "task-5").length,
+        1,
+        `a second regate-pending for the SAME task must be skipped, got ${JSON.stringify(regateEvents)}`,
+      );
+      assert.equal(
+        regateEvents.filter((e) => e.task === "task-6").length,
+        1,
+        `a regate-pending for a DIFFERENT task must still be appended, got ${JSON.stringify(regateEvents)}`,
+      );
+    } finally {
+      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+      fs.rmSync(obsDir, { recursive: true, force: true });
     }
   });
 });
