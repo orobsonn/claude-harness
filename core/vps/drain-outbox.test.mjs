@@ -570,3 +570,174 @@ test("run-cron-a's composition root invokes drainTelegramOutbox exactly once per
     "the pending event was sent and the cursor advanced through the PRODUCTION wiring, not a direct test call",
   );
 });
+
+/**
+ * @description #13 (curated feed) — Given events [curated, regate-pending, curated] and cursor 0,
+ * When the drain runs, Then `regate-pending` is neither sent via the critical path (it is no longer
+ * a CRITICAL type) nor via the cosmetic path (it is not curated) — ONLY the 2 curated events are
+ * sent — AND the cursor still advances past all three. The critical invariant: a suppressed event
+ * must ack-advance the contiguous cursor, never jam the outbox and starve later milestones.
+ */
+test("drainTelegramOutbox suppresses a regate-pending between two curated events (no critical ping, no cosmetic send) while the cursor advances past all three", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 150, {
+    issueNumber: 150,
+    project: "demo",
+    worktreePath: "/tmp/wt-150-a",
+    threadId: 710,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 150, [
+    { type: "pipeline-type", mode: "FULL" },
+    { type: "regate-pending", task: "task-5", matched: false },
+    { type: "pr", pr: 55 },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.deepStrictEqual(
+    calls.map((call) => call.event?.type),
+    ["pipeline-type", "pr"],
+    "only the two curated events are sent — regate-pending is suppressed from the feed entirely",
+  );
+  assert.strictEqual(
+    calls.filter((call) => call.event?.type === "regate-pending").length,
+    0,
+    "regate-pending must NOT ride the critical path either — it is no longer a critical type",
+  );
+  assert.strictEqual(
+    readMetaRaw(stateDir, 150).cursor,
+    3,
+    "the cursor must advance past the suppressed regate-pending — a suppressed event never jams the contiguous cursor",
+  );
+});
+
+/**
+ * @description #14 (curated feed) — Given only non-curated events ('eye', 'picked') and cursor 0,
+ * When the drain runs, Then NO send is made but the cursor advances past both (suppress-but-ack).
+ */
+test("drainTelegramOutbox suppresses non-curated types (eye, regate-pending) with zero sends while still ack-advancing the cursor", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 151, {
+    issueNumber: 151,
+    project: "demo",
+    worktreePath: "/tmp/wt-151-a",
+    threadId: 711,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 151, [
+    { type: "eye", role: "compliance" },
+    { type: "regate-pending", task: "task-1", matched: false },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.strictEqual(calls.length, 0, "non-curated audit events must never reach the feed");
+  assert.strictEqual(
+    readMetaRaw(stateDir, 151).cursor,
+    2,
+    "the cursor must advance past every suppressed event",
+  );
+});
+
+/**
+ * @description #15 (curated feed) — Given one event of EVERY curated type, When the drain runs,
+ * Then all of them are sent, in order, and the cursor advances past all of them.
+ */
+test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created, spec-adversary, plan-created, plan-reviewed, task-executing, hand-ran, final-review-done, pr)", async () => {
+  const stateDir = makeStateDir();
+  const curatedEvents = [
+    { type: "pipeline-type", mode: "FULL" },
+    { type: "spec-created" },
+    { type: "spec-adversary" },
+    { type: "plan-created", tasks: 4 },
+    { type: "plan-reviewed", verdict: "APPROVE" },
+    { type: "task-executing", n: 1, total: 4 },
+    { type: "hand-ran", task: "task-1", model: "glm-5.2" },
+    { type: "final-review-done" },
+    { type: "pr", pr: 88 },
+  ];
+  writeMeta(stateDir, 152, {
+    issueNumber: 152,
+    project: "demo",
+    worktreePath: "/tmp/wt-152-a",
+    threadId: 712,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 152, curatedEvents);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.deepStrictEqual(
+    calls.map((call) => call.event?.type),
+    curatedEvents.map((event) => event.type),
+    "every curated type must be sent, in outbox order",
+  );
+  assert.strictEqual(readMetaRaw(stateDir, 152).cursor, curatedEvents.length);
+});
+
+/**
+ * @description #16 (curated renderer) — Given plan-reviewed (APPROVE and REVISE) and hand-ran
+ * events, When the drain renders them, Then each title is the status emoji + the pt-br label
+ * ('Revisão do plano' / 'Tarefa implementada'), the plan-reviewed body reflects the verdict
+ * ('aprovado' / 'requer revisão'), and the hand-ran body carries the model.
+ */
+test("drainTelegramOutbox renders emoji + pt-br titles, verdict-aware plan-reviewed bodies, and the model in the hand-ran body", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 153, {
+    issueNumber: 153,
+    project: "demo",
+    worktreePath: "/tmp/wt-153-a",
+    threadId: 713,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 153, [
+    { type: "plan-reviewed", verdict: "APPROVE" },
+    { type: "plan-reviewed", verdict: "REVISE" },
+    { type: "hand-ran", task: "task-3", model: "glm-5.2" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.strictEqual(calls.length, 3);
+
+  // The locked checkpoint format uppercases the title (<b>🧐 REVISÃO DO PLANO</b>), so the
+  // pt-br label is asserted case-insensitively.
+  const [approve, revise, handRan] = calls.map((call) => String(call.text ?? "").toLowerCase());
+  assert.ok(approve.includes("🧐"), "the plan-reviewed title must carry its status emoji");
+  assert.ok(approve.includes("revisão do plano"), "the plan-reviewed title must carry the pt-br label");
+  assert.ok(approve.includes("aprovado"), "the APPROVE body must read 'aprovado'");
+  assert.ok(revise.includes("requer revisão"), "the REVISE body must read 'requer revisão'");
+  assert.ok(handRan.includes("✋"), "the hand-ran title must carry its status emoji");
+  assert.ok(handRan.includes("tarefa implementada"), "the hand-ran title must carry the pt-br label");
+  assert.ok(handRan.includes("glm-5.2"), "the hand-ran body must carry the model");
+  assert.ok(handRan.includes("task-3"), "the hand-ran body must carry the task");
+});

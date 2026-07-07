@@ -210,3 +210,235 @@ test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// Curated-event decision layer — decide() now returns {action, role, metaPath, event}
+// ---------------------------------------------------------------------------
+
+const META_PATH = "/state/obs-1.json";
+const ENV = { HARNESS_OBSERVABILITY_RUN_PATH: META_PATH };
+
+/** Decide-layer deps: meta exists, no plan yet, no prior spec-adversary — overridable per test. */
+function eyeDeps(overrides = {}) {
+  return {
+    existsSync: () => true,
+    planExists: () => false,
+    hasEvent: () => false,
+    ...overrides,
+  };
+}
+
+test(
+  "decide: plan-reviewer whose tool_response contains 'APPROVE' => " +
+    "{action:'append'} carrying event {type:'plan-reviewed', verdict:'APPROVE'}",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const payload = agentPayload("plan-reviewer", {
+      tool_response: "Verdict: APPROVE — the plan is sound.",
+    });
+    const decision = decide(payload, ENV, eyeDeps());
+
+    assert.equal(decision.action, "append");
+    assert.equal(decision.role, "plan-reviewer");
+    assert.equal(decision.metaPath, META_PATH);
+    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE" });
+  },
+);
+
+test(
+  "decide: plan-reviewer 'REVISE' => verdict 'REVISE'; when BOTH tokens appear, REVISE wins",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const revised = decide(
+      agentPayload("plan-reviewer", { tool_response: "Verdict: REVISE — task-3 scope is wrong." }),
+      ENV,
+      eyeDeps(),
+    );
+    assert.deepEqual(revised.event, { type: "plan-reviewed", verdict: "REVISE" });
+
+    const both = decide(
+      agentPayload("plan-reviewer", {
+        tool_response: "I would APPROVE most of it, but the verdict is REVISE.",
+      }),
+      ENV,
+      eyeDeps(),
+    );
+    assert.deepEqual(
+      both.event,
+      { type: "plan-reviewed", verdict: "REVISE" },
+      "REVISE must win when both tokens appear (conservative — surface 'needs work')",
+    );
+  },
+);
+
+test(
+  "decide: plan-reviewer with NO verdict token => event {type:'plan-reviewed'} without a verdict key",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const decision = decide(
+      agentPayload("plan-reviewer", { tool_response: "returned without a usable token" }),
+      ENV,
+      eyeDeps(),
+    );
+
+    assert.equal(decision.action, "append");
+    assert.deepEqual(decision.event, { type: "plan-reviewed" });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(decision.event, "verdict"),
+      false,
+      "the event must carry NO verdict key when neither token is present",
+    );
+  },
+);
+
+test(
+  "decide: plan-reviewer verdict parsing tolerates an OBJECT-shaped tool_response " +
+    "(parseVerdict is module-private — exercised via decide)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const decision = decide(
+      agentPayload("plan-reviewer", {
+        tool_response: { content: [{ type: "text", text: "APPROVE" }] },
+      }),
+      ENV,
+      eyeDeps(),
+    );
+
+    assert.deepEqual(decision.event, { type: "plan-reviewed", verdict: "APPROVE" });
+  },
+);
+
+test(
+  "decide: adversary with planExists=false AND no prior spec-adversary => event {type:'spec-adversary'}",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const hasEventCalls = [];
+    const decision = decide(
+      agentPayload("adversary"),
+      ENV,
+      eyeDeps({
+        planExists: (mp) => {
+          assert.equal(mp, META_PATH, "planExists must be probed with the run's metaPath");
+          return false;
+        },
+        hasEvent: (mp, type) => {
+          hasEventCalls.push({ mp, type });
+          return false;
+        },
+      }),
+    );
+
+    assert.equal(decision.action, "append");
+    assert.equal(decision.role, "adversary");
+    assert.deepEqual(decision.event, { type: "spec-adversary" });
+    assert.ok(
+      hasEventCalls.some((c) => c.mp === META_PATH && c.type === "spec-adversary"),
+      "the dedupe guard must probe hasEvent(metaPath, 'spec-adversary')",
+    );
+  },
+);
+
+test(
+  "decide: adversary with planExists=true => raw {type:'eye', role:'adversary'} " +
+    "(per-task / final-review adversary is NOT a spec-adversary)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const decision = decide(
+      agentPayload("adversary"),
+      ENV,
+      eyeDeps({ planExists: () => true }),
+    );
+
+    assert.equal(decision.action, "append");
+    assert.deepEqual(decision.event, { type: "eye", role: "adversary" });
+  },
+);
+
+test(
+  "decide: adversary with a spec-adversary ALREADY in the outbox => raw {type:'eye', role:'adversary'} " +
+    "(dedupe: never a second spec-adversary)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const decision = decide(
+      agentPayload("adversary"),
+      ENV,
+      eyeDeps({ hasEvent: (mp, type) => type === "spec-adversary" }),
+    );
+
+    assert.equal(decision.action, "append");
+    assert.deepEqual(decision.event, { type: "eye", role: "adversary" });
+  },
+);
+
+test(
+  "decide: compliance and security stay raw {type:'eye', role} events (unchanged)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    for (const role of ["compliance", "security"]) {
+      const decision = decide(agentPayload(role), ENV, eyeDeps());
+      assert.equal(decision.action, "append", `${role} must still append`);
+      assert.deepEqual(decision.event, { type: "eye", role });
+    }
+  },
+);
+
+test(
+  "decide: agent_id present => {action:'none'} (subagent skip, unchanged by the event field)",
+  async () => {
+    const { decide } = await import(MODULE_URL);
+
+    const decision = decide(
+      agentPayload("plan-reviewer", { agent_id: "ag_xyz", tool_response: "APPROVE" }),
+      ENV,
+      eyeDeps(),
+    );
+
+    assert.deepEqual(decision, { action: "none" });
+  },
+);
+
+test(
+  "processInput fail-open: throwing readMeta/readEvents/existsSync/appendEvent deps " +
+    "still yield {exitCode:0} and never throw",
+  async () => {
+    const { processInput } = await import(MODULE_URL);
+
+    const boom = () => {
+      throw new Error("boom");
+    };
+    const raw = JSON.stringify(agentPayload("adversary"));
+
+    // Throwing readMeta + readEvents: swallowed inside the planExists/hasEvent probes.
+    let result;
+    assert.doesNotThrow(() => {
+      result = processInput(raw, {
+        env: ENV,
+        existsSync: () => true,
+        readMeta: boom,
+        readEvents: boom,
+        appendEvent: () => {},
+      });
+    });
+    assert.deepEqual(result, { exitCode: 0 });
+
+    // Throwing existsSync: swallowed by the processInput try/catch.
+    assert.doesNotThrow(() => {
+      result = processInput(raw, { env: ENV, existsSync: boom, appendEvent: () => {} });
+    });
+    assert.deepEqual(result, { exitCode: 0 });
+
+    // Throwing appendEvent: swallowed by the processInput try/catch.
+    assert.doesNotThrow(() => {
+      result = processInput(raw, { env: ENV, existsSync: () => true, appendEvent: boom });
+    });
+    assert.deepEqual(result, { exitCode: 0 });
+  },
+);

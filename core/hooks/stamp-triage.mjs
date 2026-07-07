@@ -46,7 +46,7 @@ import {
   readHandRecord,
   markHandRecordCaptured,
 } from "./lib/gate-lib.mjs";
-import { appendEvent as defaultAppendEvent } from "../vps/obs-outbox.mjs";
+import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from "../vps/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // Pure decision layer — no I/O
@@ -554,11 +554,20 @@ export function decide(payload) {
  * meta (existsSync-guarded), and an appendEvent that throws is swallowed — it NEVER blocks
  * the triage.json / gate-state write. Performs NO fetch. The session-side appendEvent is
  * disjoint from the cron-side meta rewrite (no two-writer race).
+ *
+ * Append-if-absent (`opts.dedupeFn`): the SAME outbox is shared by the main loop and every
+ * dispatched subagent (they inherit HARNESS_OBSERVABILITY_RUN_PATH), so an event emitted once per
+ * session — e.g. `pipeline-type`, or a per-task `regate-pending` — would otherwise be written N times
+ * (once per subagent's own triage/mark), spamming the Telegram drain. When `dedupeFn` is supplied the
+ * current outbox is read and the append is skipped if any existing event matches. BEST-EFFORT: the
+ * read→append is not atomic, so two writers racing in the same instant may both observe "absent" and
+ * both append — fail-open, the cost is at most one duplicate feed line, never a blocked pipeline.
  * @param {object} event - The checkpoint event to append.
  * @param {(metaPath: string, event: object) => void} appendFn - obs-outbox appendEvent seam.
+ * @param {{ dedupeFn?: (existing: object) => boolean, readEventsFn?: (metaPath: string) => object[] }} [opts]
  * @returns {void}
  */
-function obsAppend(event, appendFn) {
+function obsAppend(event, appendFn, opts = {}) {
   const metaPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
   if (typeof metaPath !== "string" || metaPath.length === 0) {
     return;
@@ -566,6 +575,13 @@ function obsAppend(event, appendFn) {
   try {
     if (!fs.existsSync(metaPath)) {
       return;
+    }
+    if (typeof opts.dedupeFn === "function") {
+      const readFn = opts.readEventsFn || defaultReadEvents;
+      const existing = readFn(metaPath) || [];
+      if (existing.some((e) => e && opts.dedupeFn(e))) {
+        return;
+      }
     }
     appendFn(metaPath, event);
   } catch {
@@ -661,7 +677,9 @@ export function handle(payload, opts = {}) {
     }
     // Observability: append a {type:'pipeline-type', mode} checkpoint AFTER the triage write +
     // gate-state reset so an appendEvent failure (swallowed by obsAppend) NEVER blocks them.
-    obsAppend({ type: "pipeline-type", mode }, appendEventFn);
+    obsAppend({ type: "pipeline-type", mode }, appendEventFn, {
+      dedupeFn: (e) => e.type === "pipeline-type" && e.mode === mode,
+    });
     return;
   }
 
@@ -675,13 +693,17 @@ export function handle(payload, opts = {}) {
   }
 
   if (decision.action === "regate-pending") {
-    // Observability: CRITICAL sniper-HIGH safety signal — the deterministic producer for #ac-3.1
-    // (unmatched regate-pending). `matched:false` marks it unmatched so the drain's critical path
-    // routes it to the shared config threadId. Appended BEFORE the gate-state stamp; obsAppend
-    // swallows any throw so the existing regate-pending stamping below is untouched. The bare
-    // task_id (un-qualified) is the signal payload — the qualified id stays in gate-state.
+    // Observability + audit: the deterministic producer for #ac-3.1 (unmatched regate-pending).
+    // `matched:false` records it in the JSONL audit trail. NOTE: this is AUDIT-ONLY — the Telegram
+    // drain suppresses regate-pending from the curated feed (it is not a milestone the operator
+    // wants); the delivery block stays gate-state-enforced, independent of any ping. Appended BEFORE
+    // the gate-state stamp; obsAppend swallows any throw so the regate-pending stamping below is
+    // untouched. The bare task_id (un-qualified) is the signal payload — the qualified id stays in
+    // gate-state.
     const bareTaskId = decision.task_id.split("/").pop();
-    obsAppend({ type: "regate-pending", task: bareTaskId, matched: false }, appendEventFn);
+    obsAppend({ type: "regate-pending", task: bareTaskId, matched: false }, appendEventFn, {
+      dedupeFn: (e) => e.type === "regate-pending" && e.task === bareTaskId,
+    });
 
     // Append task_id to the regate_pending list (dedup — idempotent for the same task_id).
     const current = readGateState(decision.session_id);
@@ -815,7 +837,14 @@ export function handle(payload, opts = {}) {
 
   // --- observability-only markers: append the checkpoint event, no gate-state write ---
   if (decision.action === "plan-reviewed") {
-    obsAppend({ type: "plan-reviewed", verdict: decision.verdict }, appendEventFn);
+    // Dedupe against the obs-eye-append producer (which appends plan-reviewed deterministically when
+    // the plan-reviewer subagent returns): the orchestrator ALSO runs `mark.mjs plan-reviewed` per
+    // SKILL.md, so without this every review would emit TWO identical feed lines. Keyed on
+    // (type, verdict) so a genuine second review after a REVISE→re-plan (different verdict) still
+    // gets through, while the same-verdict duplicate is suppressed.
+    obsAppend({ type: "plan-reviewed", verdict: decision.verdict }, appendEventFn, {
+      dedupeFn: (e) => e.type === "plan-reviewed" && e.verdict === decision.verdict,
+    });
     return;
   }
 

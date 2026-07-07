@@ -9,6 +9,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Feed curado de notificações no Telegram por run** — o tópico de cada run passa a mostrar só os
+  marcos que o operador quer (sessão iniciada, classificação, spec, adversarial da spec, plano,
+  revisão/aprovação do plano, loop das tasks + modelos, revisão final, PR), com rótulos em pt-br e
+  emoji. O ruído interno (eye cru, `regate-pending`) e o spam de eventos duplicados por subagente
+  ficam só no trilho de auditoria (JSONL), suprimidos do feed. `spec-adversary` e `plan-reviewed`
+  (com verdict) passam a ser emitidos deterministicamente pelos hooks, sem depender de o orquestrador
+  lembrar de marcar. A trava de entrega (gate-state) segue intacta — a supressão é só no feed.
+
 ### Changed
 
 ### Fixed
