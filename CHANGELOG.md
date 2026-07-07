@@ -15,6 +15,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.28.6] - 2026-07-07
+
+### Changed
+
+- **Grupo global do Telegram só recebe ação/erro, não a tagarelice de PR** — o cron de review deixou
+  de mandar `review-started` e `pr-merged` (eventos não-acionáveis) pro tópico global compartilhado,
+  que com N projetos viraria spam. Continuam subindo: `pr-awaiting-merge` (o "mergeia isso" — sua
+  ação) e todos os eventos de erro/bloqueio. (Rotear o ciclo completo pro tópico do próprio run exige
+  refactor de lifecycle do tópico — rastreado em issue à parte.)
+
 ## [0.28.5] - 2026-07-07
 
 ### Added

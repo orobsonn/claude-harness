@@ -145,8 +145,18 @@ export async function runCronReview(config, deps = {}) {
   const reviewStateDir = join(config.stateDir, "review");
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const notify = deps.notify ?? (() => {});
+  // The shared global topic is for ACTIONABLE + ERROR events only — not the normal PR-lifecycle
+  // chatter, which would turn it into spam across N projects. These two non-actionable types are
+  // suppressed from the global topic: `review-started` (pure "began reviewing" noise) and `pr-merged`
+  // (after-the-fact informational). Everything else still pings — crucially `pr-awaiting-merge` (the
+  // operator's "merge this" signal) and every error/blocked/failed type. (The richer option — routing
+  // the full lifecycle into each run's own topic — needs a topic-lifecycle refactor; tracked separately.)
+  const GLOBAL_TOPIC_SUPPRESSED = new Set(["review-started", "pr-merged"]);
   const safeNotify = (event) => {
     try {
+      if (event && GLOBAL_TOPIC_SUPPRESSED.has(event.type)) {
+        return undefined; // non-actionable PR-lifecycle chatter — kept out of the shared global topic
+      }
       // Inject the project slug so every review-cron notification renders `[<project>]` instead of
       // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
       // Returns the underlying notify promise so a caller that needs the send to COMPLETE before a
