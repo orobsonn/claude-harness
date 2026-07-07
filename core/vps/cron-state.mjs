@@ -11,6 +11,7 @@ const COUNTERS_FILE_NAME = "cron-counters.json";
 const REVIEWED_FILE_NAME = "cron-reviewed.json";
 const CHAIN_FILE_NAME = "cron-chain.json";
 const BREAKER_FILE_NAME = "cron-breaker.json";
+const UPDATE_ATTEMPTS_FILE_NAME = "cron-update-attempts.json";
 
 const CHAIN_CEILING = 3;
 const BREAKER_WINDOW_SECONDS = 21_600;
@@ -30,6 +31,10 @@ function chainFilePath(stateDir) {
 
 function breakerFilePath(stateDir) {
   return join(stateDir, BREAKER_FILE_NAME);
+}
+
+function updateAttemptsFilePath(stateDir) {
+  return join(stateDir, UPDATE_ATTEMPTS_FILE_NAME);
 }
 
 function readJsonRecord(filePath) {
@@ -156,6 +161,52 @@ export function recordReviewed(pr, sha, opts) {
 export function alreadyReviewed(pr, sha, opts) {
   const reviewed = readJsonRecord(reviewedFilePath(opts.stateDir));
   return Boolean(reviewed[`${pr}:${sha}`]);
+}
+
+// --- PR-keyed update-branch attempt store (cron-update-attempts.json) ---
+// Keyed by PR number. Incremented once per successful `gh pr update-branch` on a merge that
+// failed because the branch was only BEHIND its base. A dedicated store (not the fix-attempt
+// cron-counters.json nor the reject-chain cron-chain.json) because "how many times did we
+// auto-refresh this stale branch" is an independent dimension from fix attempts and reject depth.
+
+/**
+ * @description Increments the update-branch attempt counter for the given PR by 1.
+ * @param {number} pr
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function incrementUpdateAttempt(pr, opts) {
+  const filePath = updateAttemptsFilePath(opts.stateDir);
+  const attempts = readJsonRecord(filePath);
+  attempts[pr] = (attempts[pr] ?? 0) + 1;
+  writeJsonRecord(filePath, attempts);
+}
+
+/**
+ * @description Reads the current update-branch attempt count for the given PR (0 if never bumped).
+ * @param {number} pr
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {number}
+ */
+export function readUpdateAttempts(pr, opts) {
+  const attempts = readJsonRecord(updateAttemptsFilePath(opts.stateDir));
+  return attempts[pr] ?? 0;
+}
+
+/**
+ * @description Resets the update-branch attempt count for the given PR back to 0 (called on merge).
+ * @param {number} pr
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function resetUpdateAttempts(pr, opts) {
+  const filePath = updateAttemptsFilePath(opts.stateDir);
+  const attempts = readJsonRecord(filePath);
+  attempts[pr] = 0;
+  writeJsonRecord(filePath, attempts);
 }
 
 // --- Root-keyed chain-depth store (cron-chain.json) ---

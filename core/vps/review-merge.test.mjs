@@ -21,10 +21,22 @@
  *          by `opts.sleep(ms)` (injectable; a real sync sleep in prod, a no-op in tests). This
  *          absorbs GitHub's async mergeability lag (a clean PR can report NOT-mergeable for a few
  *          seconds right after the review) without waiting a whole cron cycle.
- *       2. If the merge call is STILL NOT ok after the retries (`{ok:false}` or falsy): returns
- *          `{merged:false}`. Does NOT relabel the issue, does NOT call counter.reset, does NOT call
- *          recordReviewed for this sha (a head that moved under `--match-head-commit` must stay
- *          re-reviewable next pass).
+ *       2. If the merge call is STILL NOT ok after the retries (`{ok:false}` or falsy): it classifies
+ *          the failure via `gh(["pr", "view", String(pr.number), "--json", "mergeStateStatus,mergeable"])`.
+ *          - `mergeStateStatus === "BEHIND"` (base advanced under a "require branches up to date"
+ *            protection) is the ONLY auto-recoverable case: if the PR is under its update-attempt
+ *            ceiling (`opts.counter.readUpdateAttempts(pr.number, {stateDir})` < `opts.maxUpdateAttempts`,
+ *            default 3), it calls `gh(["pr", "update-branch", String(pr.number)])` (GitHub's native,
+ *            non-force base-merge). On success it bumps `counter.incrementUpdateAttempt(pr.number,
+ *            {stateDir})` and returns `{merged:false, updateAttempted:true, terminal:false}` — the head
+ *            sha WILL change, so `alreadyReviewed` (keyed by sha) re-reviews the PR from scratch next
+ *            cycle. It does NOT relabel, does NOT recordReviewed (stays re-reviewable). At/over the
+ *            ceiling, OR if update-branch itself fails (a real conflict surfaced), it returns
+ *            `{merged:false, terminal:true}`.
+ *          - Any other failure (real conflict `DIRTY`/`CONFLICTING`, head moved, checks BLOCKED,
+ *            unknown) returns `{merged:false, terminal:true}` WITHOUT attempting update-branch.
+ *          In every non-merge outcome it does NOT relabel the issue, does NOT call counter.reset, does
+ *          NOT call recordReviewed for this sha.
  *       3. If the merge call IS ok: derives the issue number from `pr.headRefName` (pattern
  *          `harness/<digits>`), then calls
  *          `gh(["issue", "edit", String(issueNumber), "--remove-label", "harness:in-review",
@@ -70,35 +82,63 @@ const STATE_DIR = "/fake/state";
 
 /**
  * @description Fake `gh` seam for mergeAndFinalize tests. Records every invocation's argv into
- * `calls` (in call order). `gh pr merge ... --match-head-commit <sha>` answers with
- * `mergeResult` (test-supplied); every other subcommand (`issue edit`, etc.) is just recorded
- * and answers `{ok:true}`.
+ * `calls` (in call order). `gh pr merge ... --match-head-commit <sha>` answers with `mergeResult`.
+ * `gh pr view <n> --json mergeStateStatus,mergeable` answers with `opts.viewResult` (the merge-
+ * failure classification), and `gh pr update-branch <n>` with `opts.updateResult`. Every other
+ * subcommand (`issue edit`, etc.) is just recorded and answers `{ok:true}`.
  * @param {{ok: boolean}} mergeResult
+ * @param {{viewResult?: object, updateResult?: {ok: boolean}}} [opts]
  */
-function makeFakeMergeGh(mergeResult) {
+function makeFakeMergeGh(mergeResult, { viewResult = { ok: true }, updateResult = { ok: true } } = {}) {
   const calls = [];
   function gh(args) {
     calls.push(args);
-    if (args[0] === "pr" && args[1] === "merge") {
-      return mergeResult;
-    }
+    if (args[0] === "pr" && args[1] === "merge") return mergeResult;
+    if (args[0] === "pr" && args[1] === "view") return viewResult;
+    if (args[0] === "pr" && args[1] === "update-branch") return updateResult;
     return { ok: true };
   }
   return { gh, calls };
 }
 
 /**
- * @description Fake counter seam exposing only reset() — mirrors cron-state.mjs's reset(issue,
- * opts) contract. Tracks every reset() call so a test can assert it fired (or did not).
+ * @description Fake counter seam mirroring cron-state.mjs's reset(issue, opts) contract PLUS the
+ * update-branch attempt counter (readUpdateAttempts / incrementUpdateAttempt / resetUpdateAttempts,
+ * keyed by PR number). Tracks every call so a test can assert what fired. `updateAttemptsSeed` sets
+ * the starting count so a test can drive the ceiling path without looping.
+ * @param {{updateAttemptsSeed?: number}} [o]
  */
-function makeFakeCounter() {
+function makeFakeCounter({ updateAttemptsSeed = 0 } = {}) {
   const resetCalls = [];
+  let updateAttempts = updateAttemptsSeed;
+  const incrementUpdateCalls = [];
+  const resetUpdateCalls = [];
   return {
     reset(issueNumber, opts) {
       resetCalls.push({ issueNumber, opts });
     },
+    readUpdateAttempts() {
+      return updateAttempts;
+    },
+    incrementUpdateAttempt(prNumber, opts) {
+      updateAttempts += 1;
+      incrementUpdateCalls.push({ prNumber, opts });
+    },
+    resetUpdateAttempts(prNumber, opts) {
+      updateAttempts = 0;
+      resetUpdateCalls.push({ prNumber, opts });
+    },
     resetCalls,
+    incrementUpdateCalls,
+    resetUpdateCalls,
   };
+}
+
+/** @description Finds a `gh pr update-branch <n>` call index in a calls log. */
+function findUpdateBranchCall(calls, number) {
+  return calls.findIndex(
+    (args) => Array.isArray(args) && args[0] === "pr" && args[1] === "update-branch" && args[2] === String(number)
+  );
 }
 
 /**
@@ -246,37 +286,103 @@ test("mergeAndFinalize: CLEAN verdict + unchanged head -> merge --match-head-com
   );
 });
 
-test("mergeAndFinalize: head moved (gh pr merge --match-head-commit rejects) -> merge is attempted but recordReviewed is NOT called for that sha, and the issue is NOT relabeled to done", () => {
+test("mergeAndFinalize: head moved (merge rejects, not BEHIND) -> terminal:true, NO update-branch, recordReviewed NOT called, issue NOT relabeled", () => {
   const sha = "stale-sha-0000";
   const pr = { number: 9, headRefName: "harness/99" };
-  const { gh, calls } = makeFakeMergeGh({ ok: false });
+  // viewResult carries no BEHIND status (head moved / unknown) — must not attempt update-branch.
+  const { gh, calls } = makeFakeMergeGh({ ok: false }, { viewResult: { mergeStateStatus: "UNKNOWN" } });
   const counter = makeFakeCounter();
   const { recordReviewed, calls: recordedCalls } = makeFakeRecordReviewed();
 
   const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {} });
 
   assert.equal(result.merged, false, "a rejected merge must report merged:false");
+  assert.equal(result.terminal, true, "a non-BEHIND merge failure is terminal — routes to manual merge");
 
   const mergeIndex = findMergeCall(calls, { number: pr.number, sha });
-  assert.notEqual(
-    mergeIndex,
-    -1,
-    "the merge command must still be ATTEMPTED with --match-head-commit even though it will fail"
-  );
+  assert.notEqual(mergeIndex, -1, "the merge command must still be ATTEMPTED with --match-head-commit even though it will fail");
 
-  assert.equal(
-    recordedCalls.length,
-    0,
-    "recordReviewed must NOT be called for this sha — the stuck PR must stay re-reviewable next pass"
-  );
-
-  assert.equal(
-    anyRelabelAdds(calls, "harness:done"),
-    false,
-    "the issue must NOT be relabeled to harness:done when the merge was rejected"
-  );
-
+  assert.equal(findUpdateBranchCall(calls, pr.number), -1, "update-branch must NOT be attempted for a non-BEHIND failure");
+  assert.equal(recordedCalls.length, 0, "recordReviewed must NOT be called for this sha — the PR must stay re-reviewable next pass");
+  assert.equal(anyRelabelAdds(calls, "harness:done"), false, "the issue must NOT be relabeled to harness:done when the merge was rejected");
   assert.equal(counter.resetCalls.length, 0, "counter.reset must NOT be called when the merge was rejected");
+});
+
+test("mergeAndFinalize: merge fails with mergeStateStatus BEHIND -> calls update-branch, returns {updateAttempted:true, terminal:false}, bumps update counter, does NOT recordReviewed/relabel", () => {
+  const sha = "behind-sha-1";
+  const pr = { number: 21, headRefName: "harness/210" };
+  const { gh, calls } = makeFakeMergeGh({ ok: false }, { viewResult: { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" }, updateResult: { ok: true } });
+  const counter = makeFakeCounter();
+  const { recordReviewed, calls: recordedCalls } = makeFakeRecordReviewed();
+
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {} });
+
+  assert.equal(result.merged, false, "the PR did not merge this pass");
+  assert.equal(result.updateAttempted, true, "a BEHIND branch must have update-branch attempted");
+  assert.equal(result.terminal, false, "a successful update-branch is NOT terminal — the PR re-reviews next cycle at its new sha");
+  assert.notEqual(findUpdateBranchCall(calls, pr.number), -1, "must call `gh pr update-branch 21`");
+  assert.equal(counter.incrementUpdateCalls.length, 1, "the update-branch attempt counter must be bumped once");
+  assert.equal(counter.incrementUpdateCalls[0].prNumber, pr.number, "the update-attempt counter is keyed by PR number");
+  assert.equal(recordedCalls.length, 0, "recordReviewed must NOT fire — the sha will change, alreadyReviewed must re-review it");
+  assert.equal(anyRelabelAdds(calls, "harness:done"), false, "an update-branch retry must NOT relabel the issue to done");
+});
+
+test("mergeAndFinalize: merge fails with a real conflict (DIRTY) -> terminal:true, update-branch NOT attempted", () => {
+  const sha = "dirty-sha-1";
+  const pr = { number: 22, headRefName: "harness/220" };
+  const { gh, calls } = makeFakeMergeGh({ ok: false }, { viewResult: { mergeStateStatus: "DIRTY", mergeable: "CONFLICTING" } });
+  const counter = makeFakeCounter();
+  const { recordReviewed, calls: recordedCalls } = makeFakeRecordReviewed();
+
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {} });
+
+  assert.equal(result.merged, false);
+  assert.equal(result.terminal, true, "a real content conflict is terminal — only a human resolves it");
+  assert.equal(findUpdateBranchCall(calls, pr.number), -1, "update-branch must NOT be attempted on a real conflict (it would fail anyway)");
+  assert.equal(recordedCalls.length, 0);
+});
+
+test("mergeAndFinalize: BEHIND but update-branch itself fails (a conflict surfaced while merging the base) -> terminal:true", () => {
+  const sha = "behind-then-conflict";
+  const pr = { number: 23, headRefName: "harness/230" };
+  const { gh, calls } = makeFakeMergeGh({ ok: false }, { viewResult: { mergeStateStatus: "BEHIND" }, updateResult: { ok: false } });
+  const counter = makeFakeCounter();
+  const { recordReviewed } = makeFakeRecordReviewed();
+
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {} });
+
+  assert.notEqual(findUpdateBranchCall(calls, pr.number), -1, "update-branch must be attempted for a BEHIND branch");
+  assert.equal(result.terminal, true, "a failed update-branch (real conflict emerged) is terminal");
+  assert.equal(result.updateAttempted, undefined, "a FAILED update-branch is not a successful retry — do not signal updateAttempted");
+  assert.equal(counter.incrementUpdateCalls.length, 0, "a failed update-branch must not bump the retry counter");
+});
+
+test("mergeAndFinalize: BEHIND but already at the update-attempt ceiling -> terminal:true, update-branch NOT attempted again (two colliding PRs cannot loop forever)", () => {
+  const sha = "behind-at-ceiling";
+  const pr = { number: 24, headRefName: "harness/240" };
+  const { gh, calls } = makeFakeMergeGh({ ok: false }, { viewResult: { mergeStateStatus: "BEHIND" }, updateResult: { ok: true } });
+  const counter = makeFakeCounter({ updateAttemptsSeed: 3 }); // already at the default ceiling of 3
+  const { recordReviewed } = makeFakeRecordReviewed();
+
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR, sleep: () => {}, maxUpdateAttempts: 3 });
+
+  assert.equal(result.terminal, true, "at the update-attempt ceiling the PR becomes terminal (manual merge)");
+  assert.equal(findUpdateBranchCall(calls, pr.number), -1, "update-branch must NOT be attempted once the ceiling is reached");
+  assert.equal(counter.incrementUpdateCalls.length, 0, "no further update-attempt is counted at the ceiling");
+});
+
+test("mergeAndFinalize: a successful merge also resets the update-attempt counter for the PR", () => {
+  const sha = "clean-sha-reset";
+  const pr = { number: 25, headRefName: "harness/250" };
+  const { gh } = makeFakeMergeGh({ ok: true });
+  const counter = makeFakeCounter({ updateAttemptsSeed: 2 });
+  const { recordReviewed } = makeFakeRecordReviewed();
+
+  const result = mergeAndFinalize(pr, sha, { gh, counter, recordReviewed, stateDir: STATE_DIR });
+
+  assert.equal(result.merged, true);
+  assert.equal(counter.resetUpdateCalls.length, 1, "a merged PR must reset its update-attempt counter so a future re-use starts clean");
+  assert.equal(counter.resetUpdateCalls[0].prNumber, pr.number);
 });
 
 test("reconcile: harness PR observed MERGED while its issue is still harness:in-review -> relabels ->done + counter reset; a repeat run is a no-op", () => {

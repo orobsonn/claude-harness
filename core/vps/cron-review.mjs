@@ -207,13 +207,20 @@ export async function cronReview(opts) {
         // Undraft BEFORE the merge — a headless PR is a draft and `gh pr merge` cannot merge a draft;
         // the undraft is idempotent and its failure never aborts the merge.
         gh(["pr", "ready", String(pr.number)]);
-        const { merged } = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
-        if (merged) {
+        const mergeOutcome = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
+        if (mergeOutcome.merged) {
           notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+        } else if (mergeOutcome.updateAttempted && !mergeOutcome.terminal) {
+          // Branch was only BEHIND its base: mergeAndFinalize ran GitHub's native (non-force)
+          // update-branch, which changes the head sha. Do NOT relabel and do NOT recordReviewed — the
+          // review loop re-picks this PR up next cycle at its new sha (alreadyReviewed is keyed by sha)
+          // and re-reviews it from scratch before re-attempting the merge. Progress notify only, never
+          // the pr-merge-failed "needs a human" signal.
+          notify({ type: "pr-branch-updated-retry", pr: pr.number, url: pr.url });
         } else {
-          // Permanent merge failure (conflict / head moved) — route to manual merge as a genuinely
-          // TERMINAL state (routeToAwaitingMerge records the review) so it is not re-reviewed and
-          // re-merge-attempted every cycle.
+          // Permanent merge failure (real conflict / head moved / update-branch ceiling) — route to
+          // manual merge as a genuinely TERMINAL state (routeToAwaitingMerge records the review) so it
+          // is not re-reviewed and re-merge-attempted every cycle.
           routeToAwaitingMerge(pr, sha, { notifyType: "pr-merge-failed" });
         }
       } else {

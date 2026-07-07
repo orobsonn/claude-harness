@@ -474,13 +474,32 @@ test("cronReview: crossFamilyEligible is called with (pr, {changedFiles, sha, st
   assert.ok(routedAwaiting, "a synchronous boolean false must route to awaiting-merge (proves no await/Promise truthiness)");
 });
 
-test("cronReview: a rejected auto-merge (mergeAndFinalize returns {merged:false}) notifies pr-merge-failed so the operator sees the stuck merge", async () => {
-  const { gh, setPr, setDiff } = makeFakeGh();
+test("cronReview: a terminal rejected auto-merge (mergeAndFinalize returns {merged:false, terminal:true}) notifies pr-merge-failed and routes to awaiting-merge", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(80, { number: 80, headRefName: "harness/120", author: { login: "bot-user" }, labels: [], headSha: "sha-mf", url: "u80" });
   setDiff(80, ["src/z.js"]); // not gate machinery
   const notify = makeSpy();
-  await cronReview(baseOpts({ gh, notify, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false })) }));
+  const recordReviewed = makeSpy();
+  await cronReview(baseOpts({ gh, notify, recordReviewed, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false, terminal: true })) }));
   const types = notify.calls.map((a) => a[0] && a[0].type);
-  assert.ok(types.includes("pr-merge-failed"), "a rejected auto-merge must notify pr-merge-failed");
+  assert.ok(types.includes("pr-merge-failed"), "a terminal rejected auto-merge must notify pr-merge-failed");
   assert.ok(!types.includes("pr-merged"), "a rejected merge must NOT notify pr-merged");
+  const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
+  assert.ok(routedAwaiting, "a terminal merge failure routes the issue to harness:awaiting-merge");
+});
+
+test("cronReview: a BEHIND-branch auto-merge (mergeAndFinalize returns {updateAttempted:true, terminal:false}) notifies pr-branch-updated-retry, does NOT relabel to awaiting-merge, does NOT recordReviewed (re-reviews next cycle at the new sha)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(81, { number: 81, headRefName: "harness/121", author: { login: "bot-user" }, labels: [], headSha: "sha-behind", url: "u81" });
+  setDiff(81, ["src/z.js"]); // not gate machinery
+  const notify = makeSpy();
+  const recordReviewed = makeSpy();
+  await cronReview(baseOpts({ gh, notify, recordReviewed, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize: makeSpy(() => ({ merged: false, updateAttempted: true, terminal: false })) }));
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-branch-updated-retry"), "a BEHIND-branch update must notify pr-branch-updated-retry (progress, not failure)");
+  assert.ok(!types.includes("pr-merge-failed"), "a self-healing update-branch is NOT a merge failure — must not notify pr-merge-failed");
+  assert.ok(!types.includes("pr-merged"), "the PR did not merge this pass — must not notify pr-merged");
+  const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
+  assert.ok(!routedAwaiting, "an update-branch retry must NOT relabel the issue to awaiting-merge — the review loop re-picks it up");
+  assert.equal(recordReviewed.calls.length, 0, "an update-branch retry must NOT record the (pr, sha) as reviewed — the sha changes and must re-review");
 });

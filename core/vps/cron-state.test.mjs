@@ -21,6 +21,9 @@ import {
   atCeiling,
   recordReviewSession,
   breakerTripped,
+  incrementUpdateAttempt,
+  readUpdateAttempts,
+  resetUpdateAttempts,
 } from "./cron-state.mjs";
 
 /** @description Makes a fresh temp dir for one test and returns a cleanup callback. */
@@ -56,6 +59,29 @@ test("cron-state reviewed-SHA marker: recorded head SHA is remembered per PR, ot
 
     assert.equal(alreadyReviewed(7, "abc", opts), true, "the exact recorded (pr, sha) pair must read back as reviewed");
     assert.equal(alreadyReviewed(7, "def", opts), false, "a different sha for the same PR must not be reviewed");
+  } finally {
+    cleanup();
+  }
+});
+
+test("cron-state update-attempt counter: increments per PR, resets to 0, keyed independently from the attempt/chain counters", () => {
+  const { dir: stateDir, cleanup } = makeStateDir();
+  try {
+    const opts = { stateDir };
+
+    assert.equal(readUpdateAttempts(21, opts), 0, "a fresh PR must read back 0 update-attempts");
+
+    incrementUpdateAttempt(21, opts);
+    incrementUpdateAttempt(21, opts);
+    assert.equal(readUpdateAttempts(21, opts), 2, "two update-attempt increments for the same PR must read back 2");
+    assert.equal(readUpdateAttempts(99, opts), 0, "a different PR must have an independent update-attempt count");
+
+    // Must not bleed into the plain attempt counter or the chain counter (distinct stores).
+    assert.equal(read(21, opts), 0, "incrementUpdateAttempt must not touch cron-counters.json");
+    assert.equal(readChain(21, opts), 0, "incrementUpdateAttempt must not touch cron-chain.json");
+
+    resetUpdateAttempts(21, opts);
+    assert.equal(readUpdateAttempts(21, opts), 0, "resetUpdateAttempts must bring the PR's update-attempt count back to 0");
   } finally {
     cleanup();
   }

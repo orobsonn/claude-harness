@@ -50,7 +50,7 @@ test("AC-3.3 reconcile strips the full state set + awaiting-merge, adds done, pr
     }
     return { ok: true };
   }
-  const counter = { reset: () => {} };
+  const counter = { reset: () => {}, resetUpdateAttempts: () => {}, incrementUpdateAttempt: () => {}, readUpdateAttempts: () => 0 };
 
   reconcile({ gh, counter, stateDir: "/tmp/rm-automerge", labels: ["harness:awaiting-merge"] });
 
@@ -71,7 +71,7 @@ test("AC-3.3 mergeAndFinalize strips the full state set on the auto-merge happy 
     }
     return { ok: true };
   }
-  const counter = { reset: () => {} };
+  const counter = { reset: () => {}, resetUpdateAttempts: () => {}, incrementUpdateAttempt: () => {}, readUpdateAttempts: () => 0 };
   const recordReviewed = () => {};
 
   const out = mergeAndFinalize(

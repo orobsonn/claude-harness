@@ -135,10 +135,12 @@ test("run-cron-review: safeNotify keeps the shared global topic actionable — s
   safeNotify({ type: "pr-awaiting-merge", pr: 3 });
   safeNotify({ type: "pr-blocked", pr: 4 });
   safeNotify({ type: "failed", pr: 5 });
+  safeNotify({ type: "pr-branch-updated-retry", pr: 6 });
 
   const passedTypes = notifySpy.calls.map(([e]) => e.type);
   assert.ok(!passedTypes.includes("review-started"), "review-started must be suppressed from the global topic");
   assert.ok(!passedTypes.includes("pr-merged"), "pr-merged must be suppressed from the global topic");
+  assert.ok(!passedTypes.includes("pr-branch-updated-retry"), "pr-branch-updated-retry (self-healing progress) must be suppressed from the global topic");
   assert.ok(passedTypes.includes("pr-awaiting-merge"), "pr-awaiting-merge (actionable) must still reach the global topic");
   assert.ok(passedTypes.includes("pr-blocked"), "error events must still reach the global topic");
   assert.ok(passedTypes.includes("failed"), "error events must still reach the global topic");
