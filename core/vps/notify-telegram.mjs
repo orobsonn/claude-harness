@@ -691,9 +691,11 @@ function cosmeticBodyLines(event, meta, isFallback) {
     case "spec-adversary":
       // No info line: the label ("Adversarial da spec") already says everything → title-only.
       break;
-    case "plan-created":
-      lines.push(`${event.tasks ?? "?"} tarefas`);
+    case "plan-created": {
+      const n = event.tasks;
+      lines.push(Number(n) === 1 ? "1 tarefa" : `${n ?? "?"} tarefas`);
       break;
+    }
     case "plan-reviewed": {
       const verdictLabel =
         event.verdict === "APPROVE"

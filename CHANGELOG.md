@@ -15,6 +15,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.28.9] - 2026-07-07
+
+### Fixed
+
+- **"1 tarefas" no feed** — o checkpoint de plano criado dizia "1 tarefas" (plural com singular); agora
+  concorda: "1 tarefa" / "N tarefas".
+
 ## [0.28.8] - 2026-07-07
 
 ### Fixed
