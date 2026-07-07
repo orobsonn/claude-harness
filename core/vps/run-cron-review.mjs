@@ -57,7 +57,7 @@
  * @returns {Promise<void>}
  */
 import { spawnSync } from "node:child_process";
-import { writeFileSync, mkdirSync, openSync, closeSync, rmSync, statSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,6 +75,7 @@ import { touchesGateMachinery, mergeEligible } from "./review-gate-hardening.mjs
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import { makeNotifier } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
+import { drainWithLock } from "./drain-lock.mjs";
 
 /**
  * @description Real authenticated-gh-user lookup: `gh api user --jq .login`. Returns "" on
@@ -361,51 +362,11 @@ export async function mainCronReview(config, deps = {}) {
   try {
     await runCronReviewFn(config, { notify: notifier.notify });
   } finally {
-    // Drain the per-run observability outbox here too (not only Cron A): the review cron ticks every
-    // 15 min, so a run that starts AND finishes between two hourly Cron-A ticks would otherwise show
-    // nothing in its topic until the next hour. Uses the SAME `drain.lock` as Cron A so the two crons
-    // can never double-send; fail-open with a stale-reclaim (15 min) so an orphaned lock never mutes
-    // the feed forever. Injectable seam (deps.drainOutbox) for tests.
+    // Drain the per-run observability outbox here too (belt alongside the dedicated drain cron and
+    // Cron A): a run that finishes between drain ticks still reaches its topic. Shared `drain.lock`
+    // (via drainWithLock) means the crons never double-send; fail-open. Injectable seam for tests.
     if (notifier.enabled) {
-      const drainOutbox = deps.drainOutbox ?? notifier.drainOutbox;
-      const lockPath = join(config.stateDir, "drain.lock");
-      const LOCK_STALE_MS = 15 * 60 * 1000;
-      let lockFd = null;
-      try {
-        lockFd = openSync(lockPath, "wx");
-      } catch {
-        try {
-          if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
-            rmSync(lockPath, { force: true });
-            lockFd = openSync(lockPath, "wx");
-          }
-        } catch {
-          // still busy / unreadable — skip the drain this tick, the next drains
-        }
-      }
-      if (lockFd !== null) {
-        try {
-          await drainOutbox({
-            stateDir: config.stateDir,
-            homeDir: config.homeDir,
-            limitPerMinute: config.notify?.limitPerMinute ?? 20,
-            sendDelayMs: config.notify?.sendDelayMs ?? 1100,
-          });
-        } catch {
-          // fail-open: a drain failure never throws or delays the cron
-        } finally {
-          try {
-            closeSync(lockFd);
-          } catch {
-            // best-effort fd close
-          }
-          try {
-            rmSync(lockPath, { force: true });
-          } catch {
-            // best-effort lock cleanup
-          }
-        }
-      }
+      await drainWithLock(config, { drainOutbox: deps.drainOutbox ?? notifier.drainOutbox });
     }
     try {
       await notifier.drain();
