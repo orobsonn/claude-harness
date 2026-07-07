@@ -9,6 +9,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Gate de entrega reproduz o suite de CI inteiro, não só o config default** — o Phase 3 (revisão
+  final) agora enumera e roda TODO comando de teste que o CI declara (`package.json` scripts +
+  cada `--config`/workflow do `.github/workflows/`) via `ci-test-commands.mjs`, e só declara a
+  entrega verde quando todos passam. Fecha a classe de furo onde um projeto com mais de um config
+  de teste passava local rodando só o default, enquanto um config inteiro do CI nunca era exercitado.
+
 ### Changed
 
 ### Fixed
