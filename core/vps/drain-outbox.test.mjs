@@ -17,7 +17,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -729,8 +729,7 @@ test("drainTelegramOutbox renders emoji + pt-br titles, verdict-aware plan-revie
 
   assert.strictEqual(calls.length, 3);
 
-  // The locked checkpoint format uppercases the title (<b>🧐 REVISÃO DO PLANO</b>), so the
-  // pt-br label is asserted case-insensitively.
+  // Titles keep natural case (<b>🧐 Revisão do plano</b> — …); asserted case-insensitively.
   const [approve, revise, handRan] = calls.map((call) => String(call.text ?? "").toLowerCase());
   assert.ok(approve.includes("🧐"), "the plan-reviewed title must carry its status emoji");
   assert.ok(approve.includes("revisão do plano"), "the plan-reviewed title must carry the pt-br label");
@@ -740,4 +739,250 @@ test("drainTelegramOutbox renders emoji + pt-br titles, verdict-aware plan-revie
   assert.ok(handRan.includes("tarefa implementada"), "the hand-ran title must carry the pt-br label");
   assert.ok(handRan.includes("glm-5.2"), "the hand-ran body must carry the model");
   assert.ok(handRan.includes("task-3"), "the hand-ran body must carry the task");
+});
+
+/**
+ * @description #17 (one-line format) — Given a curated event with body info, When rendered, Then the
+ * message is a SINGLE line `<b><emoji> <label></b> — <info>` (no blank line, no <i> body block); an
+ * event with no info renders the title alone.
+ */
+test("drainTelegramOutbox renders each checkpoint as a single line (title — info), no multi-line body block", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 160, {
+    issueNumber: 160, project: "demo", worktreePath: "/tmp/wt-160-a", threadId: 720, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 160, [
+    { type: "pipeline-type", mode: "LIGHT" },
+    { type: "spec-created" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  const [classify, spec] = calls.map((call) => String(call.text ?? ""));
+  assert.strictEqual(classify, "<b>🚀 Classificação</b> — modo LIGHT", "classify is one line: title — info");
+  assert.strictEqual(spec, "<b>📝 Spec criada</b>", "an info-less checkpoint is the title alone");
+  assert.ok(!classify.includes("\n") && !spec.includes("\n"), "no checkpoint may span multiple lines");
+  assert.ok(!classify.includes("<i>"), "the single-line format carries no <i> body block");
+});
+
+/**
+ * @description #18 (spec-adversary emoji) — Given a spec-adversary checkpoint, When rendered, Then
+ * the title carries the 🛡️ emoji (regression: it used to fall through to the 🔔 fallback).
+ */
+test("drainTelegramOutbox renders spec-adversary with the 🛡️ emoji, not the 🔔 fallback", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 161, {
+    issueNumber: 161, project: "demo", worktreePath: "/tmp/wt-161-a", threadId: 721, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 161, [{ type: "spec-adversary" }]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  const text = String(calls[0]?.text ?? "");
+  assert.ok(text.includes("🛡️"), "spec-adversary must carry the 🛡️ emoji");
+  assert.ok(!text.includes("🔔"), "spec-adversary must NOT fall through to the 🔔 fallback emoji");
+});
+
+/**
+ * @description #19 (numbered plan review) — Given plan-reviewed events carrying a `round`, When
+ * rendered, Then the body reads "revisão N — <verdict>"; a plan-reviewed with no round renders the
+ * verdict alone (legacy / mark.mjs fallback).
+ */
+test("drainTelegramOutbox renders 'revisão N — <verdict>' when a plan-reviewed carries a round", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 162, {
+    issueNumber: 162, project: "demo", worktreePath: "/tmp/wt-162-a", threadId: 722, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 162, [
+    { type: "plan-reviewed", verdict: "REVISE", round: 1 },
+    { type: "plan-reviewed", verdict: "APPROVE", round: 2 },
+    { type: "plan-reviewed", verdict: "APPROVE" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  const [r1, r2, noRound] = calls.map((call) => String(call.text ?? ""));
+  assert.ok(r1.includes("revisão 1 — requer revisão"), "round-1 REVISE reads 'revisão 1 — requer revisão'");
+  assert.ok(r2.includes("revisão 2 — aprovado"), "round-2 APPROVE reads 'revisão 2 — aprovado'");
+  assert.ok(noRound.endsWith("aprovado") && !noRound.includes("revisão 3"), "a round-less plan-reviewed renders the verdict alone");
+});
+
+/**
+ * @description #20 (send spacing) — Given N unsent events and opts.sendDelayMs > 0 with an injected
+ * `sleep` spy, When the drain runs, Then `sleep` is called BETWEEN sends (N-1 times), each with the
+ * configured delay — spacing the burst so it never trips Telegram's rate limit.
+ */
+test("drainTelegramOutbox paces sends: sleep is called between consecutive sends when sendDelayMs > 0", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 163, {
+    issueNumber: 163, project: "demo", worktreePath: "/tmp/wt-163-a", threadId: 723, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 163, [
+    { type: "task-executing", n: 1, total: 3 },
+    { type: "task-executing", n: 2, total: 3 },
+    { type: "task-executing", n: 3, total: 3 },
+  ]);
+
+  const sleepCalls = [];
+  const sleep = async (ms) => { sleepCalls.push(ms); };
+  const send = async () => ({ sent: true });
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, sendDelayMs: 1100 },
+    { ...seams, send, sleep },
+  );
+
+  assert.strictEqual(sleepCalls.length, 2, "3 sends → sleep is called 2 times (between, never before the first)");
+  assert.ok(sleepCalls.every((ms) => ms === 1100), "each pace uses the configured delay");
+});
+
+/**
+ * @description #21 (spacing off by default) — Given events and NO sendDelayMs, When the drain runs
+ * with an injected sleep spy, Then sleep is NEVER called (default = no spacing keeps the frozen drain
+ * tests fast); and the delay passed to sleep is clamped so a huge sendDelayMs cannot hang the cron.
+ */
+test("drainTelegramOutbox does not pace when sendDelayMs is absent, and clamps an oversized delay", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 164, {
+    issueNumber: 164, project: "demo", worktreePath: "/tmp/wt-164-a", threadId: 724, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 164, [{ type: "task-executing", n: 1, total: 1 }, { type: "pr", pr: 9 }]);
+
+  const noDelayCalls = [];
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999 },
+    { ...seams, send: async () => ({ sent: true }), sleep: async (ms) => noDelayCalls.push(ms) },
+  );
+  assert.strictEqual(noDelayCalls.length, 0, "no spacing when sendDelayMs is absent (default 0)");
+
+  const stateDir2 = makeStateDir();
+  writeMeta(stateDir2, 165, {
+    issueNumber: 165, project: "demo", worktreePath: "/tmp/wt-165-a", threadId: 725, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir2, 165, [{ type: "task-executing", n: 1, total: 1 }, { type: "pr", pr: 9 }]);
+  const clampCalls = [];
+  await drainTelegramOutbox(
+    { stateDir: stateDir2, homeDir: stateDir2, chatId: 999, sendDelayMs: 999999 },
+    { ...seams, send: async () => ({ sent: true }), sleep: async (ms) => clampCalls.push(ms) },
+  );
+  assert.ok(clampCalls.length >= 1 && clampCalls.every((ms) => ms <= 3000), "an oversized sendDelayMs is clamped to <= 3000ms");
+});
+
+/**
+ * @description #22 (production wiring — FURO 7 guard) — Given the run-cron-a composition root runs a
+ * tick, Then it passes a positive sendDelayMs AND limitPerMinute:20 to the drain — so spacing can
+ * never silently regress to a burst by someone forgetting to wire it.
+ */
+test("run-cron-a wires sendDelayMs > 0 and limitPerMinute 20 into the drain (spacing cannot silently regress)", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141, project: "demo", worktreePath: "/tmp/wt-141-g", threadId: 707, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "task-executing", n: 1, total: 1 }]);
+
+  const homeDir = mkdtempSync(join(tmpdir(), "drain-outbox-home-"));
+  mkdirSync(join(homeDir, ".claude"), { recursive: true });
+  writeFileSync(join(homeDir, ".claude", ".dev.vars"), "TELEGRAM_BOT_TOKEN=fake-token\n", "utf8");
+
+  const config = {
+    project: "demo", owner: "acme", repo: "widgets", projectRoot: "/tmp/demo-root",
+    stateDir, worktreeRoot: "/tmp/demo-worktrees", homeDir, notify: { chatId: 999 },
+  };
+
+  let seenOpts = null;
+  const drainOutboxSpy = async (drainOpts) => { seenOpts = drainOpts; };
+
+  await mainCronA(config, {
+    cronASelect: () => ({ ok: true, dispatched: false }),
+    drainOutbox: drainOutboxSpy,
+  });
+
+  assert.ok(seenOpts, "the drain was invoked");
+  assert.ok(typeof seenOpts.sendDelayMs === "number" && seenOpts.sendDelayMs > 0, "run-cron-a must wire a positive sendDelayMs");
+  assert.strictEqual(seenOpts.limitPerMinute, 20, "run-cron-a must cap sends at 20/min (Telegram's per-group limit)");
+});
+
+/** @description Builds a minimal valid cron config + a homeDir carrying a fake token. */
+function cronConfigWith(stateDir) {
+  const homeDir = mkdtempSync(join(tmpdir(), "drain-outbox-home-"));
+  mkdirSync(join(homeDir, ".claude"), { recursive: true });
+  writeFileSync(join(homeDir, ".claude", ".dev.vars"), "TELEGRAM_BOT_TOKEN=fake-token\n", "utf8");
+  return {
+    project: "demo", owner: "acme", repo: "widgets", projectRoot: "/tmp/demo-root",
+    stateDir, worktreeRoot: "/tmp/demo-worktrees", homeDir, notify: { chatId: 999 },
+  };
+}
+
+/**
+ * @description #22b (real default sleep settles) — Given sendDelayMs > 0 and NO injected sleep seam
+ * (the real defaultSleep runs), When the drain runs, Then it settles and delivers every event with
+ * the cursor advanced — a regression guard that the pacing timer keeps the process alive on the
+ * critical path (a mid-pace early exit would truncate the remaining sends).
+ */
+test("drainTelegramOutbox settles with the REAL default sleep on the critical path and delivers every event", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 166, {
+    issueNumber: 166, project: "demo", worktreePath: "/tmp/wt-166-a", threadId: 726, cursor: 0, status: "active",
+  });
+  writeEvents(stateDir, 166, [
+    { type: "task-executing", n: 1, total: 3 },
+    { type: "task-executing", n: 2, total: 3 },
+    { type: "task-executing", n: 3, total: 3 },
+  ]);
+
+  const calls = [];
+  const send = async (message) => { calls.push(message); return { sent: true }; };
+  // Real defaultSleep (no sleep seam), tiny delay so the test stays fast.
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, sendDelayMs: 5 },
+    { ...seams, send },
+  );
+
+  assert.strictEqual(calls.length, 3, "every event was delivered — the drain did not truncate mid-pace");
+  assert.strictEqual(readMetaRaw(stateDir, 166).cursor, 3, "the cursor advanced past all events");
+});
+
+/**
+ * @description #23 (drain.lock stale-reclaim) — Given an ORPHAN drain.lock whose mtime is older than
+ * the stale TTL (a prior drain died mid-run without cleanup), When run-cron-a runs a tick, Then the
+ * stale lock is reclaimed and the drain still runs — an orphan lock can never silence the feed forever.
+ */
+test("run-cron-a reclaims a stale drain.lock (old mtime) so an orphaned lock cannot silence the feed forever", async () => {
+  const stateDir = makeStateDir();
+  const lockPath = join(stateDir, "drain.lock");
+  writeFileSync(lockPath, "", "utf8");
+  const stale = new Date(Date.now() - 30 * 60 * 1000); // 30 min ago — past the 15-min TTL
+  utimesSync(lockPath, stale, stale);
+
+  let drainCalled = 0;
+  await mainCronA(cronConfigWith(stateDir), {
+    cronASelect: () => ({ ok: true, dispatched: false }),
+    drainOutbox: async () => { drainCalled += 1; },
+  });
+
+  assert.strictEqual(drainCalled, 1, "the stale lock was reclaimed and the drain ran");
+});
+
+/**
+ * @description #24 (drain.lock fresh-lock respected) — Given a FRESH drain.lock (current mtime, a
+ * real concurrent drain), When run-cron-a runs a tick, Then the drain is SKIPPED this tick (the fresh
+ * lock is left alone; the next tick drains) — stale-reclaim must not trample a live lock.
+ */
+test("run-cron-a leaves a FRESH drain.lock alone and skips the drain this tick", async () => {
+  const stateDir = makeStateDir();
+  writeFileSync(join(stateDir, "drain.lock"), "", "utf8"); // just created → mtime = now
+
+  let drainCalled = 0;
+  await mainCronA(cronConfigWith(stateDir), {
+    cronASelect: () => ({ ok: true, dispatched: false }),
+    drainOutbox: async () => { drainCalled += 1; },
+  });
+
+  assert.strictEqual(drainCalled, 0, "a fresh lock is respected — the drain is skipped this tick");
+  assert.ok(existsSync(join(stateDir, "drain.lock")), "the fresh lock is left in place for the holder to clean up");
 });

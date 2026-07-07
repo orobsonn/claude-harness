@@ -27,14 +27,24 @@ function makeFakeFetch(response = { ok: true, status: 200 }) {
 // renderCheckpoint — pure
 // ---------------------------------------------------------------------------
 
-test("#1 renderCheckpoint: uppercases the title and joins body lines inside <i>, exact shape", () => {
-  const result = renderCheckpoint({ title: "task 1 executor", bodyLines: ["Ollama: glm", "OK"] });
-  assert.equal(result, "<b>TASK 1 EXECUTOR</b>\n\n<i>Ollama: glm\nOK</i>");
+test("#1 renderCheckpoint: single line — bold title (natural case) + ' — ' joined body, exact shape", () => {
+  const result = renderCheckpoint({ title: "🚀 Classificação", bodyLines: ["modo LIGHT"] });
+  assert.equal(result, "<b>🚀 Classificação</b> — modo LIGHT");
+});
+
+test("#1b renderCheckpoint: title alone when there is no body info, and empty lines are dropped from the joiner", () => {
+  assert.equal(renderCheckpoint({ title: "📝 Spec criada", bodyLines: [] }), "<b>📝 Spec criada</b>");
+  assert.equal(renderCheckpoint({ title: "📝 Spec criada", bodyLines: [""] }), "<b>📝 Spec criada</b>");
+  assert.equal(
+    renderCheckpoint({ title: "t", bodyLines: ["a", "", "b"] }),
+    "<b>t</b> — a — b",
+    "empty body lines must not create a doubled ' —  — ' joiner",
+  );
 });
 
 test("#2 renderCheckpoint: HTML-escapes every dynamic body line (&, <, >)", () => {
   const result = renderCheckpoint({ title: "x", bodyLines: ["a<b&c>d"] });
-  assert.equal(result, "<b>X</b>\n\n<i>a&lt;b&amp;c&gt;d</i>");
+  assert.equal(result, "<b>x</b> — a&lt;b&amp;c&gt;d");
 });
 
 // ---------------------------------------------------------------------------
