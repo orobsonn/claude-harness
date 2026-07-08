@@ -9,6 +9,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.30.0] - 2026-07-08
+
+### Added
+
 - **Adversário per-task revê notas de risco adiado de tarefas anteriores** — em modo FULL, quando uma
   tarefa fecha com um risco explicitamente adiado ("seguro porque X ainda não acontece") sobre uma
   entidade de estado nomeada, o orquestrador casa deterministicamente essa entidade contra o diff de
