@@ -9,6 +9,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 - **Testes travados não podem mais depender de caminho absoluto do computador de quem escreveu.** A orientação pros agentes que criam e implementam testes agora exige caminho relativo ao próprio arquivo (em vez de `/Users/...` ou `/home/...` hardcoded), e a revisão de conformidade passa a barrar esse tipo de caminho hardcoded antes do teste travar — evitando que um teste passe na máquina de quem escreveu e quebre no checkout de outra máquina ou da nuvem.
+- **Correção sugerida pelo revisor adversarial não quebra mais um teste já travado de outra tarefa por engano.** Antes de aceitar como definitiva uma correção que o agente aplicou por sugestão do revisor adversarial, o sistema agora reexecuta todos os testes travados já verdes das tarefas concluídas — e, se a correção quebrar um deles, ela é refeita sem tocar no teste travado, preservando o contrato já fechado.
 
 ### Changed
 
