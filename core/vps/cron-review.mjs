@@ -67,7 +67,7 @@ function resolveRoot(pr) {
  * @param {(pr: object, sha: string, stateDir: string) => {status: string, finding?: string}|null} opts.getFreshVerdict
  * @param {(pr: object, o: {changedFiles: string[], sha: string, stateDir: string}) => boolean} opts.crossFamilyEligible pre-bound cross-family eligibility check
  * @param {(pr: object, sha: string, o: object) => {merged: boolean}} opts.mergeAndFinalize
- * @param {() => Array<{issue: number, from: string}>} opts.reconcile zero-arg reconciliation driver
+ * @param {() => (Array<{issue: number, from: string}>|Promise<Array<{issue: number, from: string}>>)} opts.reconcile zero-arg reconciliation driver (awaited — may be sync or async)
  * @param {(pr: object, sha: string, o: object) => void} opts.routeReject
  * @param {(pr: object, meta: object) => void} opts.spawnReviewSession
  * @param {(event: object) => void} opts.notify
@@ -276,7 +276,7 @@ export async function cronReview(opts) {
         const mergeOutcome = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
         if (mergeOutcome.merged) {
           const rootIssue = resolveRoot(pr);
-          notify({ type: "pr-merged", pr: pr.number, url: pr.url, root: rootIssue });
+          await notify({ type: "pr-merged", pr: pr.number, url: pr.url, root: rootIssue });
         } else if (mergeOutcome.updateAttempted && !mergeOutcome.terminal) {
           // Branch was only BEHIND its base: mergeAndFinalize ran GitHub's native (non-force)
           // update-branch, which changes the head sha. Do NOT relabel and do NOT recordReviewed — the
@@ -312,6 +312,12 @@ export async function cronReview(opts) {
   }
 
   // Reconciliation driver (HR-3 / #ac-7.1): invoked EVERY cycle, independent of the open-PR loop,
-  // so operator manual-merge / transient-relabel self-heal actually has a per-cycle caller.
-  reconcile();
+  // so operator manual-merge / transient-relabel self-heal actually has a per-cycle caller. A
+  // reconcile throw (e.g. a `gh` call inside it) must never reject the whole cronReview cycle —
+  // the open-PR loop above already completed and its outcomes must not be discarded.
+  try {
+    await reconcile();
+  } catch {
+    // fail-open — reconciliation retries next cycle
+  }
 }
