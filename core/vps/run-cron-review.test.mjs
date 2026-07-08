@@ -862,3 +862,32 @@ test("run-cron-review: the captured opts.routeReject is a function whose bound r
     cleanup();
   }
 });
+
+test("run-cron-review: opts.stalledNotified/recordStalledNotified are bound to the REAL cron-state — recordStalledNotified persists cron-review-stalled-notified.json and stalledNotified subsequently returns true", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-stallednotified-");
+  try {
+    const reviewStateDir = join(stateDir, "review");
+    // deps.stalledNotified / deps.recordStalledNotified intentionally OMITTED — they must default
+    // to the REAL cron-state functions scoped to join(stateDir, "review"), mirroring the
+    // alreadyReviewed/recordReviewed pair, so this test proves the real binding (never a stub).
+    const captured = await captureCronReviewOpts({ stateDir }, {});
+
+    captured.recordStalledNotified(9, "ff01");
+    const result = captured.stalledNotified(9, "ff01");
+
+    assert.equal(
+      result,
+      true,
+      "opts.stalledNotified(9,'ff01') must return true after opts.recordStalledNotified(9,'ff01') wrote the REAL cron-state — proving the real binding, not a stub"
+    );
+
+    const filePath = join(reviewStateDir, "cron-review-stalled-notified.json");
+    assert.ok(existsSync(filePath), "recordStalledNotified must persist cron-review-stalled-notified.json under the review stateDir");
+    const record = JSON.parse(readFileSync(filePath, "utf8"));
+    assert.equal(typeof record, "object");
+    assert.equal(record["9:ff01"], true, "the persisted record must key on `${pr}:${sha}`, exactly like the alreadyReviewed/recordReviewed pair");
+  } finally {
+    cleanup();
+  }
+});
+</content>
