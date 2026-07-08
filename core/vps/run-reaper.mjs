@@ -50,6 +50,7 @@ import * as counterModule from "./cron-state.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
 import { readMeta as realReadMeta, updateMeta as realUpdateMeta } from "./obs-outbox.mjs";
+import { pickSessionPr } from "./cron-a-exit.mjs";
 
 /** @description Real `git -C <projectRoot> worktree list --porcelain` stdout. Fail-soft -> "". */
 function defaultRunGitWorktreeList(projectRoot) {
@@ -141,6 +142,71 @@ function defaultPrExists(gh) {
   };
 }
 
+/**
+ * @description Builds the real prOpen seam for the orphan-topic sweep: true iff the issue has an
+ * OPEN PR (branch harness/<N> OR a body Closes/Fixes/Resolves/Refs #N link). DISTINCT from
+ * defaultPrExists: open-STATE only (not open-OR-merged), no --head scoping (so a typed-branch PR
+ * with a body-link is still recognized), and reuses pickSessionPr from cron-a-exit.mjs rather than
+ * re-implementing the recognition regex.
+ *
+ * Uses a RAW spawn seam (spawnSync shape: {status, stdout, error}) — NOT the normalized gh/ghExec
+ * seam — because the normalized seam returns [] on BOTH a gh error and a genuine empty result,
+ * which are indistinguishable. On a gh outage that ambiguity would make every run look PR-less ->
+ * the sweep would close every open PR's topic (the grave silence-regression). The raw seam exposes
+ * status/error so we can FAIL OPEN: a gh error / non-zero status / unparseable stdout returns TRUE
+ * (assume OPEN -> the sweep SKIPS, never closing a live topic under uncertainty). Only a SUCCEEDED
+ * fetch with no matching PR returns false (close).
+ *
+ * MEMOIZED per predicate instance: one gh fetch per sweep, not one per orphan-candidate run. The
+ * predicate is constructed once per runReaper call and closed over the `cache` slot.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {(issueNumber: number) => boolean}
+ */
+function makeDefaultPrOpen(spawn, owner, repo) {
+  let cache; // undefined = unfetched; { prs } = ok; { error: true } = failed
+  return (issueNumber) => {
+    if (cache === undefined) {
+      let res;
+      try {
+        res = spawn(
+          "gh",
+          [
+            "pr",
+            "list",
+            "--repo",
+            `${owner}/${repo}`,
+            "--state",
+            "open",
+            "--json",
+            "number,headRefName,url,body",
+            "--limit",
+            "100",
+          ],
+          { encoding: "utf8" }
+        );
+      } catch {
+        cache = { error: true };
+      }
+      if (cache === undefined) {
+        if (!res || res.status !== 0 || res.error) cache = { error: true };
+        else {
+          try {
+            cache = { prs: JSON.parse(res.stdout) };
+          } catch {
+            cache = { error: true };
+          }
+        }
+      }
+    }
+    // FAIL-OPEN: a gh outage -> assume OPEN -> the sweep SKIPS (never close a live topic under
+    // uncertainty). Only a succeeded fetch with no matching PR returns false.
+    if (cache.error) return true;
+    return pickSessionPr(cache.prs, issueNumber) !== null;
+  };
+}
+
 export function runReaper(config, deps = {}) {
   const reaperFn = deps.reaper ?? reaper;
   const listWorktreesFn = deps.listWorktrees ?? listWorktrees;
@@ -158,6 +224,10 @@ export function runReaper(config, deps = {}) {
 
   const gh = scopedGh(config.owner, config.repo, ghExec);
   const prExists = deps.prExists ?? defaultPrExists(gh);
+  // Open-PR predicate for the orphan-topic sweep (F2). FAIL-OPEN on a gh outage, memoized per sweep,
+  // --state open + --json body + no --head so a typed-branch body-link PR is still recognized.
+  // DISTINCT from prExists (open-OR-merged, --head harness/<N>) above — left unchanged.
+  const prOpen = deps.prOpen ?? makeDefaultPrOpen(deps.spawn ?? spawnSync, config.owner, config.repo);
 
   // The zero-arg listWorktrees seam handed to the reaper logic: delegates to the injected producer
   // over config.projects (every project the shared cron sweeps in one invocation), bound to the
@@ -203,6 +273,7 @@ export function runReaper(config, deps = {}) {
     liveWorktreePaths: liveWorktreePathsSeam,
     closeForumTopic: closeForumTopicFn,
     updateMeta: closeForumTopicFn ? updateMetaSeam : undefined,
+    prOpen,
   });
 
   // reaper returns the actions array with a `topicCloses` property attached; a fake/injected
