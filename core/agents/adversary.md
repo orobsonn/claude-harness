@@ -46,6 +46,8 @@ The checklist is a **FLOOR, not a ceiling** — sweep all 8 AND attack freely be
 ### 3. Read the implementation
 Use Read/Glob/Grep on all files in `scope_paths`. Follow call sites and data flows across boundaries — an attack rarely lives in one function. When the task is a bug fix, check the **sibling-caller blind spot** explicitly: a fix that patches one path but leaves other callers of the same shared function broken is a symptom fix at a call site, not a root-cause fix.
 
+**Rendered-output caveat — regex / escape sequences.** The Read tool can misrender a binary or hex literal: the `0x00-0x1f` control-char range shows on screen as a literal space-hyphen, and a valid hex/unicode escape can look malformed when the source is actually correct. When you flag a **regex or escape sequence as malformed based on rendered Read-tool output**, you MUST hedge the finding explicitly — say "verify by running; the empirical gate (test suite + successful write), not rendered text, is the arbiter" — and you MUST NOT assert a test outcome (e.g. "all tests red") from rendered text alone. A false HIGH from a misrendered literal burns sniper cycles; the correct posture is flag + hedge + let the gate decide.
+
 ### 4. For each issue: a surgical fix_hint
 The sniper reads `fix_hint` literally. Name the file, function, and exact change. Vague hints like "add validation" are rejected — write "in `src/handlers/delete-slug.ts` line 14, replace `token === env.ADMIN_TOKEN` with `crypto.subtle.timingSafeEqual(...)` because the current `===` leaks token length via timing."
 
