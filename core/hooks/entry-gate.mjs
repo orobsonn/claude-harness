@@ -409,6 +409,65 @@ export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists)
 }
 
 // ---------------------------------------------------------------------------
+// Re-gate rail read/validate — shared by the Bash and shipper consumers
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads regate_pending from a gate-state object, distinguishing a legit-empty state
+ * (key absent → no pending re-gate) from CORRUPT state (key present but not an array).
+ *
+ * A corrupt regate_pending is NOT an infra error: the file was readable and parsed to an
+ * object — readGateState already fails OPEN (returns {}) on a missing/unparseable file, so
+ * a defined-but-non-array value can only mean malformed content. Treating it as an empty
+ * array (the old `Array.isArray(x) ? x : []`) would silently mask a pending re-gate
+ * obligation, so the consumer must fail CLOSED instead. Both call sites route through this
+ * so they can never drift on what counts as corrupt.
+ *
+ * @param {Record<string, unknown>} gateState - The gate-state object (never null; {} on infra error)
+ * @returns {{ corrupt: false, pending: string[] } | { corrupt: true, raw: unknown }}
+ *   corrupt:false with the pending array (or [] when the key is absent), or corrupt:true
+ *   carrying the raw offending value for the deny reason / log.
+ */
+function readRegatePending(gateState) {
+  const value = gateState?.regate_pending;
+  if (value === undefined) return { corrupt: false, pending: [] };
+  if (Array.isArray(value)) return { corrupt: false, pending: value };
+  return { corrupt: true, raw: value };
+}
+
+/**
+ * Builds the fail-CLOSED deny verdict for a corrupt regate_pending and logs the raw
+ * offending value to stderr (never stdout — stdout carries the hook's JSON contract).
+ *
+ * @param {unknown} raw - The offending non-array regate_pending value
+ * @returns {{ allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
+ */
+function denyCorruptRegatePending(raw) {
+  let rawStr;
+  try {
+    rawStr = JSON.stringify(raw);
+  } catch {
+    rawStr = String(raw);
+  }
+  if (typeof rawStr !== "string") rawStr = String(raw);
+  const rawTruncated = rawStr.slice(0, 200);
+  console.error(`[entry-gate] gate-state corrupted: regate_pending is not an array — raw value: ${rawTruncated}`);
+  return {
+    allow: false,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason:
+        "[entry-gate] Blocked: gate-state corrupted — regate_pending is present but not an array " +
+        `(raw value: ${rawTruncated}). This is malformed state, not an infra error: a ` +
+        "non-array regate_pending would silently mask a pending re-gate obligation, so delivery " +
+        "fails CLOSED. Inspect and repair gate-state.json (regate_pending must be an array of " +
+        "task ids) before retrying any delivery command.",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Bash gate — decideBash (internal)
 // ---------------------------------------------------------------------------
 
@@ -624,7 +683,9 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   } catch {
     gateState = {};
   }
-  const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+  const regate = readRegatePending(gateState);
+  if (regate.corrupt) return denyCorruptRegatePending(regate.raw);
+  const pending = regate.pending;
   const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
   const unmatched = pending.filter((t) => !passed.includes(t));
   if (unmatched.length > 0) {
@@ -958,7 +1019,9 @@ export function decide(payload, deps = {}) {
     } catch {
       gateState = {};
     }
-    const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+    const regate = readRegatePending(gateState);
+    if (regate.corrupt) return denyCorruptRegatePending(regate.raw);
+    const pending = regate.pending;
     const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
     const unmatched = pending.filter((t) => !passed.includes(t));
     if (unmatched.length > 0) {

@@ -723,6 +723,68 @@ test("decide: shipper with no re-gate markers at all → allow (nothing to consu
 });
 
 // ---------------------------------------------------------------------------
+// LOCKED TESTS — corrupt-regate-fail-closed (#uj-1)
+// A readable gate-state whose regate_pending is present but NOT an array is CORRUPT
+// content, not an infra error → the consumer must fail CLOSED with an explicit
+// gate-state-corrupted error (ac-1.1), while a genuinely unreadable state stays
+// fail-OPEN (ac-1.2). Covered at BOTH consumer sites (shipper Agent + delivery Bash).
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED C1: shipper with corrupt regate_pending (string, not array) → deny with gate-state-corrupted error",
+  () => {
+    const payload = makeAgentPayload("ses_ship_corrupt", "shipper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ regate_pending: "task-1" }); // corrupt: string, not array
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+    assert.equal(verdict.allow, false, "corrupt regate_pending must fail CLOSED, not open");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("corrupt"),
+      `deny reason must state gate-state is corrupted — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+  },
+);
+
+test(
+  "LOCKED C2: shipper with corrupt regate_pending (object, not array) → deny, raw value in reason",
+  () => {
+    const payload = makeAgentPayload("ses_ship_corrupt_obj", "shipper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ regate_pending: { task: "task-1" } }); // corrupt: object
+
+    const verdict = decide(payload, { readTriage, readGateStateFn });
+    assert.equal(verdict.allow, false, "a non-array regate_pending object must fail CLOSED");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("task-1"),
+      "deny reason must surface the raw offending value",
+    );
+  },
+);
+
+test(
+  "LOCKED C3: shipper with UNREADABLE gate-state (infra error) → allow (fail-open, ac-1.2)",
+  () => {
+    const payload = makeAgentPayload("ses_ship_infra", "shipper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => {
+      throw new Error("EIO: file not readable");
+    };
+
+    let verdict;
+    assert.doesNotThrow(() => {
+      verdict = decide(payload, { readTriage, readGateStateFn });
+    }, "an unreadable gate-state must not throw");
+    assert.equal(
+      verdict.allow,
+      true,
+      "an infra error (unreadable state) stays fail-OPEN — distinct from corrupt content",
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
 // LOCKED TESTS — delivery-bash-gate
 // PreToolUse(Bash) gate: deny delivery commands when regate_pending is unmatched.
 // ---------------------------------------------------------------------------
@@ -853,6 +915,60 @@ test(
       verdict = decide(payload, { readGateStateFn });
     }, "decide must not throw on empty gate-state");
     assert.equal(verdict.allow, true, "delivery command allowed when gate-state has no regate_pending");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B5 (#uj-1, ac-1.1)
+// Given gate-state readable but regate_pending is not an array (corrupt),
+// When a delivery Bash command is decided,
+// Then deny with an explicit gate-state-corrupted error (fail CLOSED).
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B5: Bash 'git push' with corrupt regate_pending → deny with gate-state-corrupted error",
+  () => {
+    const payload = makeBashPayload("ses_bash_corrupt", "git push origin main");
+    const readGateStateFn = () => ({ regate_pending: 42 }); // corrupt: number, not array
+
+    const verdict = decide(payload, { readGateStateFn });
+    assert.equal(verdict.allow, false, "corrupt regate_pending must block delivery (fail CLOSED)");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("corrupt"),
+      `deny reason must state gate-state is corrupted — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+    assert.ok(
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("42"),
+      "deny reason must log/surface the raw offending value",
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LOCKED TEST B6 (#uj-1, ac-1.2)
+// Given gate-state is UNREADABLE (infra error — readGateStateFn throws),
+// When a delivery Bash command is decided,
+// Then allow (fail-OPEN, unchanged) — distinct from the corrupt-content case.
+// ---------------------------------------------------------------------------
+
+test(
+  "LOCKED B6: Bash delivery command with unreadable gate-state (infra) → allow (fail-open)",
+  () => {
+    const payload = makeBashPayload("ses_bash_infra", "git push origin main");
+    const readGateStateFn = () => {
+      throw new Error("EIO: file not readable");
+    };
+
+    let verdict;
+    assert.doesNotThrow(() => {
+      verdict = decide(payload, { readGateStateFn });
+    }, "an unreadable gate-state must not throw");
+    assert.equal(
+      verdict.allow,
+      true,
+      "an infra error stays fail-OPEN — only corrupt CONTENT fails closed",
+    );
   },
 );
 
