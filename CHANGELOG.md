@@ -15,6 +15,11 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Removed
 
+## [0.31.1] - 2026-07-08
+
+### Added
+- `npx claude-harness init` mostra progresso em tempo real (check por etapa concluída + progresso ao vivo do `git clone`) em vez de um resumo silencioso só no final
+
 ## [0.31.0] - 2026-07-08
 
 ### Added
