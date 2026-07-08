@@ -90,6 +90,27 @@ function makeTmuxKillSession() {
   return { tmuxKillSession: (sessionId) => calls.push(sessionId), calls };
 }
 
+/** @description Fake token-bound closeForumTopic seam; records every `{threadId}` call and resolves with `ack`. */
+function makeCloseForumTopic(ack = { ok: true }) {
+  const calls = [];
+  return {
+    closeForumTopic: (input) => {
+      calls.push(input);
+      return Promise.resolve(ack);
+    },
+    calls,
+  };
+}
+
+/** @description Fake obs-outbox updateMeta seam; records every `{metaPath, partial}` call. */
+function makeUpdateMeta() {
+  const calls = [];
+  return {
+    updateMeta: (metaPath, partial) => calls.push({ metaPath, partial }),
+    calls,
+  };
+}
+
 /** @description Builds one listWorktrees() entry with sensible defaults, overridable per test. */
 function makeEntry(overrides = {}) {
   return {
@@ -439,5 +460,109 @@ test("reaper: a genuinely orphaned harness:in-progress worktree with NO PR is st
   assert.ok(
     releaseCalls.some((args) => args.acquireTs === 50_000),
     "the stale run-lock holder must still be released for a true orphan"
+  );
+});
+
+test("reaper: sweepOrphanTopics SKIPS closing the topic when the issue's PR is still OPEN (#ac-1.2)", () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-900.json",
+    meta: {
+      issueNumber: 900,
+      threadId: 900,
+      worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-900",
+      status: "awaiting-review",
+    },
+  };
+
+  const { closeForumTopic, calls: closeCalls } = makeCloseForumTopic();
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [], // the run's worktree is NOT live -> genuine orphan candidate
+      prOpen: (issueNumber) => issueNumber === 900,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  assert.equal(closeCalls.length, 0, "an open PR must SKIP the forum-topic close entirely");
+  assert.ok(
+    !updateCalls.some((c) => c.partial.status === "closed"),
+    "an open PR must NEVER cause updateMeta to write status:'closed'"
+  );
+});
+
+test("reaper: sweepOrphanTopics CLOSES the topic when the issue's PR is NOT open (#ac-1.6)", () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-901.json",
+    meta: {
+      issueNumber: 901,
+      threadId: 900,
+      worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-901",
+      status: "awaiting-review",
+    },
+  };
+
+  const { closeForumTopic, calls: closeCalls } = makeCloseForumTopic();
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [], // the run's worktree is NOT live -> genuine orphan candidate
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  assert.ok(
+    closeCalls.some((c) => c.threadId === 900),
+    "a non-open PR must close the forum topic with the run's threadId"
+  );
+  assert.ok(
+    updateCalls.some((c) => c.partial.status === "closed"),
+    "a non-open PR must write status:'closed' via updateMeta"
+  );
+});
+
+test("reaper: sweepOrphanTopics reverts a FAILED close to the CAPTURED prior status, never the hardcoded literal 'active' (H6)", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-902.json",
+    meta: {
+      issueNumber: 902,
+      threadId: 900,
+      worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-902",
+      status: "awaiting-review", // the PRIOR status the revert must restore
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: false }); // failed close ack
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [], // the run's worktree is NOT live -> genuine orphan candidate
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  assert.ok(
+    updateCalls.some((c) => c.partial.status === "awaiting-review"),
+    "a failed close must revert to the CAPTURED prior status ('awaiting-review'), not a hardcoded literal"
+  );
+  assert.ok(
+    !updateCalls.some((c) => c.partial.status === "active"),
+    "a failed close must NEVER revert to the hardcoded literal 'active'"
   );
 });

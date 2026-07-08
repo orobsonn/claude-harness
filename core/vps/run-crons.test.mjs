@@ -258,3 +258,140 @@ test("run-cron-a builds the gh seam scoped to config.owner/config.repo (--repo o
     "the --repo value must be the configured owner/repo — never the wrong project's repo"
   );
 });
+
+test("[integration HIGH closed] run-reaper wires defaultPrOpen (--state open, raw spawn seam) distinct from prExists", () => {
+  const config = { ...BASE_CONFIG };
+
+  let capturedReaperOpts;
+  const fakeReaperLogic = (opts) => {
+    capturedReaperOpts = opts;
+  };
+
+  const spawnCalls = [];
+  const fakeSpawn = (cmd, args, opts) => {
+    spawnCalls.push({ cmd, args, opts });
+    if (cmd === "gh" && args.includes("--state") && args.includes("open")) {
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          { number: 7, headRefName: "harness/42", url: "https://github.com/acme/demo-repo/pull/7", body: "" },
+        ]),
+      };
+    }
+    return { status: 0, stdout: "[]" };
+  };
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    spawn: fakeSpawn,
+  });
+
+  assert.equal(
+    typeof capturedReaperOpts.prOpen,
+    "function",
+    "runReaper must wire a prOpen seam into the reaper logic's opts (defaultPrOpen)"
+  );
+
+  assert.notEqual(
+    capturedReaperOpts.prOpen,
+    capturedReaperOpts.prExists,
+    "prOpen must be a DISTINCT function from prExists — an open-only query, never the closed-inclusive one"
+  );
+
+  const result = capturedReaperOpts.prOpen(42);
+
+  assert.equal(result, true, "prOpen(42) must be true for the harness/42 branch PR");
+
+  const openCall = spawnCalls.find(
+    (call) =>
+      call.cmd === "gh" &&
+      call.args.includes("pr") &&
+      call.args.includes("list") &&
+      call.args.includes("--state") &&
+      call.args.includes("open")
+  );
+  assert.notEqual(openCall, undefined, "prOpen must issue a gh pr list --state open call via the raw spawn seam");
+  assert.ok(
+    !openCall.args.includes("--head"),
+    "prOpen's gh call must NOT scope by --head — it must sweep every open PR to also catch body-links"
+  );
+  const limitFlagIndex = openCall.args.indexOf("--limit");
+  assert.notEqual(limitFlagIndex, -1, "prOpen's gh call must cap the sweep with --limit 100");
+  assert.notEqual(openCall.args[limitFlagIndex + 1], undefined, "--limit must carry a value");
+  const jsonFlagIndex = openCall.args.indexOf("--json");
+  assert.notEqual(jsonFlagIndex, -1, "prOpen's gh call must request --json fields");
+  assert.ok(
+    openCall.args[jsonFlagIndex + 1].includes("body"),
+    "prOpen's --json field list must include body (needed for body-link recognition)"
+  );
+});
+
+test("[integration HIGH closed] run-reaper's prOpen recognizes a body-link Closes/Fixes/Resolves/Refs on a typed branch", () => {
+  const config = { ...BASE_CONFIG };
+
+  let capturedReaperOpts;
+  const fakeReaperLogic = (opts) => {
+    capturedReaperOpts = opts;
+  };
+
+  const fakeSpawn = (cmd, args) => {
+    if (cmd === "gh" && args.includes("--state") && args.includes("open")) {
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          { number: 7, headRefName: "feat/x", url: "https://github.com/acme/demo-repo/pull/7", body: "Closes #42" },
+        ]),
+      };
+    }
+    return { status: 0, stdout: "[]" };
+  };
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    spawn: fakeSpawn,
+  });
+
+  assert.equal(
+    typeof capturedReaperOpts.prOpen,
+    "function",
+    "opts.prOpen must be a defined function before invoking it"
+  );
+
+  const result = capturedReaperOpts.prOpen(42);
+
+  assert.equal(
+    result,
+    true,
+    "prOpen(42) must recognize the body-link (Closes #42) even though the PR's head is not harness/42"
+  );
+});
+
+test("run-reaper's prOpen FAILS OPEN on a gh error — returns true (skip) so the sweep never closes a live PR's topic during a gh outage", () => {
+  const config = { ...BASE_CONFIG };
+
+  let capturedReaperOpts;
+  const fakeReaperLogic = (opts) => {
+    capturedReaperOpts = opts;
+  };
+
+  const fakeSpawn = () => ({ status: 1, stdout: "" });
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    spawn: fakeSpawn,
+  });
+
+  assert.equal(
+    typeof capturedReaperOpts.prOpen,
+    "function",
+    "opts.prOpen must be a defined function before invoking it"
+  );
+
+  const result = capturedReaperOpts.prOpen(42);
+
+  assert.equal(
+    result,
+    true,
+    "a gh error must make prOpen assume the PR is OPEN (skip the close) — never false, which would close a live topic"
+  );
+});
