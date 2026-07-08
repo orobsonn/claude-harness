@@ -501,3 +501,59 @@ manual-merge the queue.
   exact defect class this feature just fixed once; leaving the inconsistency means three different
   "main-loop only" implementations coexist in the same hook family, one of them (fix #1) provably
   wrong on a falsy-but-present `agent_id`, and one (fix #2) able to silently swallow a real eye report.
+
+### 2026-07-08 — orchestrating-delivery/sniper: consider broadening the frozen-test re-gate to ALL sniper fixes, not just adversary-suggested
+
+- **Observed:** `sniper-frozen-test-gate` (issue source: m6 task-4's adversary-suggested `dedup_key` fix
+  breaking a pinned fixture) scoped the new step-5 re-gate to **adversary-suggested** sniper fixes only
+  — faithful to the source learning and the issue's ACs. Both the spec-adversary and the plan-reviewer
+  independently flagged the same residual gap: the sniper actually applies a **batch** (the union of
+  compliance + adversary + security + gate findings) in one reconciliation pass, and **compliance is
+  equally blind** to sibling frozen fixtures (a compliance finding is generated with the same
+  no-visibility-into-other-tasks constraint as an adversary finding). So a compliance-, security-, or
+  gate-driven sniper fix to a file shared with a completed task's frozen fixture has the identical
+  cross-task blind spot the whole feature was built to close, and today it is caught only by the
+  Phase-3 all-configs backstop (after the fact, not before acceptance) rather than the new step-5 gate.
+- **Proposed change:** broaden the step-5 deterministic re-gate's trigger condition from
+  "adversary-suggested sniper fix" to "any sniper fix" (drop the source-of-finding filter). The gate
+  criterion itself (already-green frozen tests of completed tasks) does not need to change — only the
+  condition that decides whether the gate runs. The step-5 prose was deliberately written so this is a
+  one-line scope change.
+- **Rationale:** two independent eyes (spec-adversary + plan-reviewer) converged on the same gap in the
+  same run, which is the systemic-signal bar this file exists for. The narrower scope was kept
+  deliberately for THIS PR (faithful-to-issue, minimal delta) and the broadening is recorded here plus
+  as an explicit open risk in `spec.md` for the human to decide at PR review — not a silent gap.
+
+### 2026-07-08 — orchestrating-delivery: Phase 3 does not re-anchor the new step-5 frozen-test-gate block by name
+
+- **Observed:** `sniper-frozen-test-gate` added a named, deterministic re-gate block to Phase 2 step 5.
+  Phase 3 (final dual review) already delegates its own frozen-test handling to "same rules as step 5"
+  in prose, but that delegation predates this feature and does not explicitly re-anchor the new block —
+  a reader auditing Phase 3 in isolation has to infer that "same rules as step 5" now also covers the
+  frozen-test re-gate, rather than seeing it named. Flagged by the final-review adversary; no functional
+  gap (Phase 3's all-configs backstop still exercises every frozen test regardless), purely a
+  documentation-clarity residual.
+- **Proposed change:** in `core/skills/orchestrating-delivery/SKILL.md` Phase 3, add a one-clause
+  explicit reference to the step-5 frozen-test re-gate by name (e.g. "...same rules as step 5,
+  including the frozen-test re-gate added for adversary-suggested fixes") so the delegation is
+  self-documenting rather than requiring the reader to trace it back.
+- **Rationale:** low-cost, improves auditability of a prose pipeline where the only enforcement is the
+  prose itself being followed correctly; worth a one-line fix next time Phase 3 is touched rather than
+  a dedicated PR on its own.
+
+### 2026-07-08 — test-author: harden the frozen `sniper-frozen-test-gate.test.mjs` vacuous-predicate discriminator beyond the `intersect` token
+
+- **Observed:** to avoid an unsatisfiable broken-red (per `fidelity-gate-misses-broken-red`), the new
+  frozen test's FORBID assertion discriminates the vacuous `frozen_paths`-intersection gate criterion by
+  requiring the token `intersect` co-located with `frozen_paths` on the gate line, rather than a
+  section-wide "must not contain `frozen_paths`" check (which would false-positive on Phase 2's
+  legitimate uses of `frozen_paths` as a manifest field name). This is correct for the current prose, but
+  the discriminator is narrow: a future edit that re-introduces the same vacuous criterion using a
+  synonym key phrase (e.g. "frozen_paths overlap" or "frozen_paths intersection" reworded without the
+  literal substring `intersect`) would not trip this specific guard.
+- **Proposed change:** when this frozen test is next touched (never edit it now — freeze integrity), widen
+  the FORBID discriminator to a small synonym set co-located with `frozen_paths` on the gate line (e.g.
+  `intersect|overlap|shares? (a )?path`), still scoped to the single gate line, not the whole section.
+- **Rationale:** low severity (no known live instance of the synonym gap), but a real hardening
+  candidate cheap to apply the next time a test-author touches this file; flagged by final-review, not
+  actioned now to preserve frozen-test integrity.
