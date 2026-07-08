@@ -52,7 +52,7 @@ Se uma asserção refere a um arquivo dentro do projeto (por ex., "Given core/ag
 
 Escreva um teste **executável** na linguagem do projeto (Node + node:test + assert/strict):
 - Uma função `test()` por asserção enumerada — **todas** as asserções pinadas para este `test_path` no mesmo arquivo
-- JSDoc com `@description` breve
+- JSDoc com `@description` breve, **em tempo verbal neutro** — descreva o contrato que o teste fixa ("fixa o contrato de X", "pina o comportamento de Y"), **nunca** o estado transitório de implementação ("X ainda não implementado", "espera RED"). Você escreve o header no momento RED, mas o arquivo será congelado e não poderá ser editado depois que passar a verde — um header neutro continua verdadeiro antes e depois do feature entrar; um header "espera RED" contradiz o próprio arquivo assim que o teste fica verde
 - Sem imports ou requires externos além dos builtins
 - Sem dependências adicionadas
 
