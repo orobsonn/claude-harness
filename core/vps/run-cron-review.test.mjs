@@ -58,6 +58,7 @@ import { join } from "node:path";
 import { runCronReview, mainCronReview } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
+import { createRun, updateMeta } from "./obs-outbox.mjs";
 
 const BASE_CONFIG = {
   project: "demo",
@@ -124,7 +125,7 @@ async function captureCronReviewOpts(configOverrides, depsOverrides) {
   return captured;
 }
 
-test("run-cron-review: safeNotify keeps the shared global topic actionable — suppresses review-started/pr-merged, passes pr-awaiting-merge and errors", async () => {
+test("run-cron-review: safeNotify sends every UNROUTABLE event (no resolvable run topic) to the global thread — suppression applies only to successfully-routed lifecycle", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "harness-review-safenotify-"));
   const notifySpy = makeSpy();
   const captured = await captureCronReviewOpts({ stateDir }, { notify: notifySpy });
@@ -138,12 +139,12 @@ test("run-cron-review: safeNotify keeps the shared global topic actionable — s
   safeNotify({ type: "pr-branch-updated-retry", pr: 6 });
 
   const passedTypes = notifySpy.calls.map(([e]) => e.type);
-  assert.ok(!passedTypes.includes("review-started"), "review-started must be suppressed from the global topic");
-  assert.ok(!passedTypes.includes("pr-merged"), "pr-merged must be suppressed from the global topic");
-  assert.ok(!passedTypes.includes("pr-branch-updated-retry"), "pr-branch-updated-retry (self-healing progress) must be suppressed from the global topic");
+  assert.ok(passedTypes.includes("review-started"), "an unroutable review-started (no resolvable root/threadId) must still reach the global topic");
+  assert.ok(passedTypes.includes("pr-merged"), "an unroutable pr-merged must still reach the global topic");
   assert.ok(passedTypes.includes("pr-awaiting-merge"), "pr-awaiting-merge (actionable) must still reach the global topic");
   assert.ok(passedTypes.includes("pr-blocked"), "error events must still reach the global topic");
   assert.ok(passedTypes.includes("failed"), "error events must still reach the global topic");
+  assert.ok(passedTypes.includes("pr-branch-updated-retry"), "an unroutable pr-branch-updated-retry must still reach the global topic — suppression only applies once an event is successfully routed to a run topic");
 });
 
 test("mainCronReview: drains the observability outbox each tick (P7) with spacing, sharing Cron A's drain.lock", async () => {
@@ -886,6 +887,217 @@ test("run-cron-review: opts.stalledNotified/recordStalledNotified are bound to t
     const record = JSON.parse(readFileSync(filePath, "utf8"));
     assert.equal(typeof record, "object");
     assert.equal(record["9:ff01"], true, "the persisted record must key on `${pr}:${sha}`, exactly like the alreadyReviewed/recordReviewed pair");
+  } finally {
+    cleanup();
+  }
+});
+
+// --- H1/H2: safeNotify resolves a run's own Telegram thread via a base-stateDir obs-reader seam
+// (`deps.resolveRunThreadId`), and a global-suppression rule keeps ONLY successfully-routed
+// normal-lifecycle events (review-started, pr-awaiting-merge, pr-merged, pr-branch-updated-retry)
+// out of the shared global topic — every actionable/error event still always reaches global, and an
+// unresolved/erroring root falls back to global rather than dropping the event. The fake cronReview
+// below emits events by calling `opts.notify` (mirroring production cronReview's real call sites),
+// so these tests exercise safeNotify's real routing/suppression logic end to end, never a shortcut
+// that hand-builds the final notify payload. Several of these are RED until the production change
+// lands — expected.
+
+/**
+ * @description Runs runCronReview with a fake cronReview that emits `events` via `opts.notify`, and
+ * returns the raw `notify` spy capturing exactly what safeNotify forwards (or withholds).
+ */
+async function runReviewAndCaptureNotify(configOverrides, depsOverrides, events) {
+  const notifySpy = makeSpy();
+  await runCronReview(
+    { ...BASE_CONFIG, ...configOverrides },
+    {
+      cronReview: (opts) => {
+        for (const event of events) opts.notify(event);
+      },
+      runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+      breakerTripped: () => false,
+      recordReviewSession: () => {},
+      notify: notifySpy,
+      ...depsOverrides,
+    }
+  );
+  return notifySpy;
+}
+
+test("run-cron-review: an injected base-stateDir obs-reader resolves root 42 -> threadId 900, routing pr-awaiting-merge to the run's own thread", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-injected-");
+  try {
+    const resolveRunThreadId = makeSpy((rootIssue) => (rootIssue === 42 ? 900 : null));
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "the event must carry the resolved run threadId, routing it to the run topic");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: the DEFAULT obs-reader (no injected resolveRunThreadId) resolves threadId from a REAL obs-<root>.json under the BASE config.stateDir, never reviewStateDir (H1 regression pin)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-default-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900 });
+    assert.ok(!existsSync(join(stateDir, "review")), "precondition: join(stateDir,'review') must stay empty — the default reader must never look there");
+
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      {},
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "the DEFAULT reader must resolve the real obs-42.json seeded under the BASE config.stateDir, never reviewStateDir");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: an injected obs-reader that resolves null (root unresolved) still delivers pr-awaiting-merge to the global thread — never dropped (H2 fallback)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-unresolved-");
+  try {
+    const resolveRunThreadId = makeSpy(() => null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const fallback = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(fallback, "an unresolved root must never cause the event to be dropped");
+    assert.ok(!fallback[0].threadId, "with the root unresolved, the event stays on the global thread (no threadId set)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: a resolved pr-merged is routed to the run thread and stays OUT of the global thread once routed", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-prmerged-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-merged", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const prMergedCalls = notifySpy.calls.filter(([event]) => event.type === "pr-merged");
+    assert.ok(prMergedCalls.length >= 1, "the routed pr-merged event must still reach notify");
+    assert.ok(prMergedCalls.every(([event]) => event.threadId === 900), "every pr-merged call must carry the resolved run threadId");
+    assert.ok(
+      !prMergedCalls.some(([event]) => !event.threadId),
+      "no pr-merged event may reach notify lacking a threadId — normal lifecycle stays out of the global thread once routed"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-blocked (error event) always reaches the global thread, even when the root resolves a run threadId", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-blocked-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-blocked", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const blocked = notifySpy.calls.find(([event]) => event.type === "pr-blocked");
+    assert.ok(blocked, "pr-blocked must still reach notify");
+    assert.ok(!blocked[0].threadId, "error events are never routed away from the global thread");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-diff-fetch-failed (actionable/error event) always reaches the global thread — not suppressed", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-difffail-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-diff-fetch-failed", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const diffFailed = notifySpy.calls.find(([event]) => event.type === "pr-diff-fetch-failed");
+    assert.ok(diffFailed, "pr-diff-fetch-failed must still reach notify");
+    assert.ok(!diffFailed[0].threadId, "an actionable/error event stays on the global thread even when the root resolves");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-review-infra-blocked (actionable/error event) always reaches the global thread — explicit keep-in-global rule", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-infrablocked-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-review-infra-blocked", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const infraBlocked = notifySpy.calls.find(([event]) => event.type === "pr-review-infra-blocked");
+    assert.ok(infraBlocked, "pr-review-infra-blocked must still reach notify");
+    assert.ok(!infraBlocked[0].threadId, "a second actionable/error event type stays on the global thread even when the root resolves");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: safeNotify resolves the run thread via event.root when already enriched, never by re-extracting from a non-matchable headRefName", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-eventroot-");
+  try {
+    const resolveRunThreadId = makeSpy((rootIssue) => (rootIssue === 42 ? 900 : null));
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, root: 42, headRefName: "feat/x" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "safeNotify must resolve via the already-enriched event.root, not by re-parsing the non-matchable headRefName 'feat/x'");
+    assert.ok(
+      resolveRunThreadId.calls.some(([rootArg]) => rootArg === 42),
+      "the obs-reader must be invoked with event.root (42), never a value derived from 'feat/x'"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: safeNotify fails open when the injected obs-reader THROWS while resolving — the event still reaches the global thread and safeNotify never throws", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-throws-");
+  try {
+    const resolveRunThreadId = () => {
+      throw new Error("obs-reader boom");
+    };
+
+    let notifySpy;
+    await assert.doesNotReject(async () => {
+      notifySpy = await runReviewAndCaptureNotify(
+        { stateDir },
+        { resolveRunThreadId },
+        [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+      );
+    }, "a throwing obs-reader must never propagate out of safeNotify / runCronReview");
+
+    const delivered = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(delivered, "the event must still be delivered even though resolution threw");
+    assert.ok(!delivered[0].threadId, "on a throwing resolver, the event fails open to the global thread (no threadId)");
   } finally {
     cleanup();
   }
