@@ -85,6 +85,14 @@ function defaultHeadSha() {
   return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
 }
 
+/**
+ * @description Scaffold stub — replaced by the real implementation (task-2). Structurally emits the
+ * task-executing observability checkpoint from the execution plan. Throwing until implemented.
+ */
+export function emitTaskExecuting() {
+  throw new Error('emitTaskExecuting not implemented');
+}
+
 // ---------- thin CLI: the runnable descriptor entrypoint SKILL.md promises ----------
 // "The spawn-hand descriptor and freeze_commit_sha are emitted automatically by the
 // descriptor-emitter helper, never hand-typed" — this is that runnable command, mirroring the
