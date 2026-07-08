@@ -12,6 +12,7 @@ const INITIAL_CURSOR = 0;
 const INITIAL_STATUS = "active";
 const INITIAL_THREAD_ID = null;
 const CLOSED_STATUS = "closed";
+const AWAITING_REVIEW_STATUS = "awaiting-review";
 const TEMP_SUFFIX = `.${process.pid}.tmp`;
 // PIPE_BUF (4096 on Linux) is the largest write guaranteed atomic per-line across concurrent
 // writers. Appends beyond it can tear a MIDDLE line under contention — best-effort: we still
@@ -63,6 +64,26 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
   const metaPath = join(stateDir, `obs-${issueNumber}.json`);
   const existing = readMetaRecord(metaPath);
   if (existing && existing.status !== CLOSED_STATUS) {
+    // DISTINCT branch for awaiting-review: reuse-with-truncate
+    if (existing.status === AWAITING_REVIEW_STATUS) {
+      // Preserve threadId, reset cursor to 0, truncate events log, set status to active
+      const updatedMeta = {
+        ...existing,
+        cursor: INITIAL_CURSOR,
+        status: INITIAL_STATUS,
+      };
+      atomicWriteMeta(metaPath, updatedMeta);
+
+      // Truncate the events log - fail-open (mirror the existing try/catch around the fresh-branch truncate)
+      try {
+        writeFileSync(eventsPathFor(metaPath), "", "utf8");
+      } catch {
+        // best-effort: a failed truncate must never propagate to the caller
+      }
+
+      return metaPath;
+    }
+
     // Idempotent reuse: never reset events/cursor/threadId on a still-active (or fallback/orphan) run.
     // The reuse branch MUST NEVER touch the events log.
     return metaPath;
