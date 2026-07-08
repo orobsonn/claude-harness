@@ -157,3 +157,44 @@ test("#7 readEvents: a truncated last line (in-flight append, no trailing newlin
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test("#8 createRun: re-dispatch on an 'awaiting-review' meta truncates events + resets cursor, but preserves threadId (reuse-with-truncate)", () => {
+  const stateDir = makeStateDir();
+  try {
+    const metaPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
+    updateMeta(metaPath, { status: "awaiting-review", threadId: 777, cursor: 2 });
+    appendEvent(metaPath, { type: "e", n: 0 });
+    appendEvent(metaPath, { type: "e", n: 1 });
+    assert.equal(readEvents(metaPath).length, 2, "sanity: 2 events must be seeded before the re-dispatch");
+
+    const returnedPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
+    assert.equal(returnedPath, metaPath, "createRun must resolve to the same meta path");
+
+    assert.deepEqual(readEvents(metaPath), [], "events log must be truncated on an awaiting-review re-dispatch");
+    const meta = readMeta(metaPath);
+    assert.equal(meta.cursor, 0, "cursor must be reset to 0 on an awaiting-review re-dispatch");
+    assert.equal(meta.threadId, 777, "threadId must be PRESERVED across an awaiting-review re-dispatch");
+    assert.equal(meta.status, "active", "status must transition back to active on re-dispatch");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#9 createRun: re-dispatch on an 'active' meta is unchanged — events and cursor are NOT reset (no regression)", () => {
+  const stateDir = makeStateDir();
+  try {
+    const metaPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
+    appendEvent(metaPath, { type: "e", n: 0 });
+    appendEvent(metaPath, { type: "e", n: 1 });
+    advanceCursor(metaPath, 1);
+    assert.equal(readMeta(metaPath).status, "active", "sanity: meta must be active before the re-dispatch");
+
+    const returnedPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
+    assert.equal(returnedPath, metaPath, "createRun must resolve to the same meta path");
+
+    assert.equal(readEvents(metaPath).length, 2, "events must NOT be truncated on an active re-dispatch");
+    assert.equal(readMeta(metaPath).cursor, 1, "cursor must be unchanged on an active re-dispatch");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
