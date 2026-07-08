@@ -84,6 +84,17 @@ function parseLastJsonObject(stdout) {
   if (typeof stdout !== "string" || stdout.length === 0) {
     return null;
   }
+
+  const trimmed = stdout.trim();
+  try {
+    const whole = JSON.parse(trimmed);
+    if (typeof whole === "object" && whole !== null && !Array.isArray(whole)) {
+      return whole;
+    }
+  } catch {
+    // fall back to line-by-line
+  }
+
   const lines = stdout.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -855,7 +866,9 @@ export function handle(payload, opts = {}) {
   }
 
   if (decision.action === "task-executing") {
-    obsAppend({ type: "task-executing", n: decision.n, total: decision.total }, appendEventFn);
+    obsAppend({ type: "task-executing", n: decision.n, total: decision.total }, appendEventFn, {
+      dedupeFn: (e) => e.type === "task-executing" && e.n === decision.n,
+    });
     return;
   }
 
