@@ -53,6 +53,9 @@ Use Edit. Change only what `fix_hint` prescribes. Preserve surrounding code exac
 ### 5. Verify consistency
 Re-read the edited region mentally. Confirm the fix addresses the defect without introducing new issues in the immediate vicinity.
 
+### 4b. Frozen locked_test conflict (adversary-suggested fixes)
+If applying an adversary-suggested fix would break a frozen locked_test, NEVER edit the frozen test to accommodate the suggestion — instead produce an alternative production fix that keeps the frozen test green AND still addresses the adversary's underlying concern.
+
 ---
 
 ## Severity escalation note
