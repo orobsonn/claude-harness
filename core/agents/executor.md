@@ -57,6 +57,9 @@ When the executor runs as the Ollama cheap hand, it is spawned as `claude -p` (N
 ### JSDoc on every new file
 New `.ts` / `.tsx` files require `/** @description ... */` at the top per project code-quality rules.
 
+### Test path resolution (no hardcoded absolute paths)
+A test that references a repo file by path MUST resolve it module-relative: `resolve(dirname(fileURLToPath(import.meta.url)), "../...")`. NEVER hardcode an absolute path rooted at `/Users/` or `/home/` — it passes on the author's machine but reddens dogfood CI and cloud checkouts (the checkout path differs). This is the convention already used across `core/__tests__/` (e.g. `dogfood-ci-workflow.test.mjs`). The hazard is ONLY a `/Users/` or `/home/` literal in a filesystem-access position (readFileSync / resolve / import). Synthetic fixture data (`homeDir: "/home/harness"`), a literal inside a comment, or a search needle like `content.includes("/Users/")` are NOT the hazard.
+
 ### Self-check before DONE
 Before emitting the final status, verify each `criterion_ref` in the task against what you implemented. If any criterion is not met, fix it or escalate.
 

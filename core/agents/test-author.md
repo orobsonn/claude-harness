@@ -68,6 +68,9 @@ Releia o código de teste que escreveu. Confirme:
 - O teste é legível e executa sem erros
 - **Auto-verificação de conformidade de formato (último passo):** antes de retornar DONE, confira que o teste transcrito já está em conformidade com as convenções de formatador do projeto (sem espaçamento trailing, indentação/aspas/largura de linha consistentes). Se o projeto adota um formatador (e.g. biome), siga suas convenções; se não, acompanhe o estilo dominante dos arquivos de teste existentes. Esta é uma auto-verificação de autoria — não execute nenhum comando shell.
 
+### 6. Resolução de path em teste (sem path absoluto hardcoded)
+Um teste que referencia um arquivo do repo por path DEVE resolvê-lo relativo ao módulo: `resolve(dirname(fileURLToPath(import.meta.url)), "../...")`. NUNCA hardcode um path absoluto começando em `/Users/` ou `/home/` — passa na máquina do autor mas avermelha o CI dogfood e checkouts de nuvem (o path de checkout difere). Padrão já usado em `core/__tests__/`. O hazard é APENAS um literal `/Users/` ou `/home/` em posição de acesso a filesystem (readFileSync / resolve / import). Carve-outs — o seguinte NÃO é o hazard (`not the hazard`): synthetic fixture data passada a função pura (`homeDir: "/home/harness"`); um literal dentro de um comment ou JSDoc; um search needle como `content.includes("/Users/")`.
+
 ---
 
 ## Anti-escopo-creep (blindado)
