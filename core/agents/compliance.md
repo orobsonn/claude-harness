@@ -53,6 +53,8 @@ You validate **one thing**: does the transcribed test **faithfully encode the pl
 
 Return **PASS** (faithful) or **FAIL** (weakened/incomplete/drifted) on fidelity alone, with the specific mismatch as evidence. A FAIL re-dispatches the test-author with your feedback; it does not touch production code.
 
+**Hardcoded-path check (blocking, pre-freeze):** while reading the test file, also scan for a hardcoded absolute path that would break CI. Flag as a **blocking (high)** finding — before the test can be frozen — any `/Users/` or `/home/` absolute-path literal in that test file that sits in a **filesystem-access position** (an argument to `readFileSync` / `readFile` / `resolve` / `import` / `fileURLToPath`, or a path handed to a loader) pointing at the checkout tree. Such a path passes on the author's machine but reddens dogfood CI and cloud checkouts (the checkout path differs); require the test resolve repo paths module-relative instead — build the module directory from `fileURLToPath` + `dirname`, then `resolve` the target file under it (see the executor and test-author guidance for the full idiom). This check is SCOPED to the real CI-killer — the following are NOT flagged (carve-outs): synthetic fixture data passed to a pure function (`homeDir: "/home/harness"`); a literal inside a comment or JSDoc; a string-search needle such as `content.includes("/Users/")`. This is a guidance-presence gate (eye-read prose), not a deterministic executable.
+
 ```
 ## Resultado de Fidelidade (pré-freeze)
 
