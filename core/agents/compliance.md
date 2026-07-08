@@ -117,6 +117,12 @@ A green happy-path test does NOT clear a race — the test must exercise the haz
 - Security: no hardcoded secrets, error messages sanitized, input validated at the boundary.
 - Scope: no writes outside `scope_paths`.
 
+### 9. Documented-CLI entry-block check
+- Grep the task's docs (SKILL.md, a README, a nested CLAUDE.md, or a CI comment — any doc the operator would follow) for a documented runnable invocation of the module (`node <path>.mjs`, or an npm-script / shell wrapper that resolves to it).
+- **Only** for each module referenced that way, require a real CLI entry block that gates execution on the module being the entry point — the canonical form is `if (process.argv[1] === fileURLToPath(import.meta.url))`, but any equivalent guard (`import.meta.main`, a `pathToFileURL(process.argv[1])` comparison, a `main()` dispatch) satisfies it.
+- If that entry block is **absent** from a module documented as a runnable CLI → **FAIL** the check.
+- Doc-driven, **never module-driven**: a module with **no** `node <path>.mjs` doc reference is **import-only** and is **NOT flagged**. A dual-purpose module (exports + a real entry block) documented as a CLI is a PASS.
+
 ---
 
 ## Output format

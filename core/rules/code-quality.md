@@ -59,6 +59,10 @@ Universal — sem `paths:`, carrega em toda conversa.
 - Ordenar: builtins → externos → aliases → relativos. ESLint `import/order` cuida
 - Sem import circular — sinaliza acoplamento ruim
 
+### CLI vs import-only modules
+- When a skill / SKILL.md / CI comment documents a module as `node <module>.mjs [args]`, the author must ensure the module has a real CLI **entry block** (canonical form `if (process.argv[1] === fileURLToPath(import.meta.url))`, or an equivalent entry guard).
+- If the module is **import-only**, document it as **import-and-call** (an `import` plus a call to `fn()`) — **never** present a `node <module>.mjs` bash invocation as a valid usage example.
+
 ## Patterns
 
 - **Util puro testavel**:
