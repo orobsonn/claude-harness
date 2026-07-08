@@ -62,7 +62,8 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { cronReview } from "./cron-review.mjs";
+import { cronReview, extractRoot } from "./cron-review.mjs";
+import { readMeta } from "./obs-outbox.mjs";
 import { spawnReviewSession } from "./spawn-review-session.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import * as cronState from "./cron-state.mjs";
@@ -147,25 +148,50 @@ export async function runCronReview(config, deps = {}) {
   const reviewStateDir = join(config.stateDir, "review");
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const notify = deps.notify ?? (() => {});
-  // The shared global topic is for ACTIONABLE + ERROR events only — not the normal PR-lifecycle
-  // chatter, which would turn it into spam across N projects. These non-actionable types are
-  // suppressed from the global topic: `review-started` (pure "began reviewing" noise), `pr-merged`
-  // (after-the-fact informational), and `pr-branch-updated-retry` (a self-healing stale-branch refresh
-  // that resolves itself next cycle — not a "needs a human" signal). Everything else still pings —
-  // crucially `pr-awaiting-merge` (the operator's "merge this" signal) and every error/blocked/failed
-  // type. (The richer option — routing the full lifecycle into each run's own topic — needs a
-  // topic-lifecycle refactor; tracked separately.)
-  const GLOBAL_TOPIC_SUPPRESSED = new Set(["review-started", "pr-merged", "pr-branch-updated-retry"]);
+
+  // Add a base-stateDir obs-reader seam for resolving run thread IDs
+  const resolveRunThreadId = deps.resolveRunThreadId ?? ((rootIssue) => {
+    try {
+      const meta = readMeta(join(config.stateDir, `obs-${rootIssue}.json`));
+      return meta && meta.threadId != null ? meta.threadId : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Normal lifecycle event types that should be routed to run topics when possible
+  const NORMAL_LIFECYCLE_TYPES = new Set([
+    "review-started",
+    "pr-awaiting-merge",
+    "pr-merged",
+    "pr-branch-updated-retry"
+  ]);
+
   const safeNotify = (event) => {
     try {
-      if (event && GLOBAL_TOPIC_SUPPRESSED.has(event.type)) {
-        return undefined; // non-actionable PR-lifecycle chatter — kept out of the shared global topic
+      // Check if this is a normal lifecycle event that should be routed to a run topic
+      const root = event && (event.root ?? extractRoot(event.headRefName));
+      if (event && NORMAL_LIFECYCLE_TYPES.has(event.type) && root != null) {
+        // Try to resolve the threadId for this root issue
+        let threadId;
+        try {
+          threadId = resolveRunThreadId(root);
+        } catch {
+          // fail-open: if resolveRunThreadId throws, fall through to global notification
+          threadId = null;
+        }
+
+        // If we successfully resolved a threadId, route the event to that run topic ONLY
+        // (suppress from global topic - this is the new routing rule)
+        const routed = threadId != null;
+        if (routed) {
+          // Notify with threadId so it gets routed to the run topic ONLY
+          return notify({ project: config.project, ...event, threadId });
+        }
+        // If we didn't resolve a threadId, fall through to global notification (H2 requirement)
       }
-      // Inject the project slug so every review-cron notification renders `[<project>]` instead of
-      // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
-      // Returns the underlying notify promise so a caller that needs the send to COMPLETE before a
-      // blocking spawn (cronReview's awaited review-started) can await it; fire-and-forget callers
-      // simply ignore the return.
+
+      // All other events (including unrouted normal lifecycle events) go to global topic
       return notify({ project: config.project, ...event });
     } catch {
       // fail-open — a notify failure never masks the breaker's stall or blocks the cycle
