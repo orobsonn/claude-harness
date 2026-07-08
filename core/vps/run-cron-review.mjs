@@ -344,6 +344,7 @@ export async function runCronReview(config, deps = {}) {
   };
   const reviewed = {
     alreadyReviewed: (prNumber, sha) => cronState.alreadyReviewed(prNumber, sha, { stateDir: reviewStateDir }),
+    recordReviewed: (prNumber, sha) => cronState.recordReviewed(prNumber, sha, { stateDir: reviewStateDir }),
   };
   const routeRejectFn =
     deps.routeReject ??
