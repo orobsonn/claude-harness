@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isSafeFeatureId } from '../../../hooks/lib/gate-lib.mjs';
 import { readRunnerConfig as defaultReadRunnerConfig } from './runner-adapters.mjs';
 import { parseFlags, isDirectCli } from './cli-flags.mjs';
 import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../vps/obs-outbox.mjs';
@@ -115,6 +116,7 @@ function defaultHeadSha() {
  */
 export function emitTaskExecuting({ featureId, taskId, plansDir, appendFn, readEventsFn } = {}) {
   const root = plansDir ?? '.claude/plans';
+  if (!isSafeFeatureId(featureId)) { return; }
   const planPath = join(root, featureId, 'execution-plan.json');
 
   let plan;
@@ -147,6 +149,7 @@ export function emitTaskExecuting({ featureId, taskId, plansDir, appendFn, readE
     }
     const readFn = readEventsFn ?? defaultReadEvents;
     const existing = readFn(metaPath) || [];
+    // Invariant: one execution-plan per outbox (obs keyed by issue#), so n is unique within a run — (type,n) is a safe dedupe key.
     if (existing.some((e) => e && e.type === 'task-executing' && e.n === n)) {
       // Dedupe by (type, n): a re-dispatch / per-task sniper re-running the emitter never doubles the line.
       return;
