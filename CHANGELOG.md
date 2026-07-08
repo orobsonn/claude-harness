@@ -12,6 +12,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Changed
 
 ### Fixed
+- **Feed de acompanhamento da run não fica mais mudo entre a aprovação do plano e a revisão final.** Dois checkpoints de progresso ("tarefa em execução" e "agente barato terminou") paravam de aparecer silenciosamente: um porque o registro da tarefa vinha formatado em várias linhas e o parser só entendia linha única; o outro porque dependia de um comando manual que podia ser esquecido no meio da run. O checkpoint de "tarefa em execução" agora é emitido automaticamente pelo próprio despacho da tarefa, sem depender de lembrete.
 
 ### Removed
 
