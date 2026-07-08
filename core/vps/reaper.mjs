@@ -268,7 +268,7 @@ function actionOf(worktree, action) {
  * @returns {Array<Promise>} close promises for mainReaper to await.
  */
 function sweepOrphanTopics(opts) {
-  const { listObsRuns, liveWorktreePaths, closeForumTopic, updateMeta } = opts;
+  const { listObsRuns, liveWorktreePaths, closeForumTopic, updateMeta, prOpen } = opts;
   const topicCloses = [];
   if (
     typeof listObsRuns !== "function" ||
@@ -303,23 +303,33 @@ function sweepOrphanTopics(opts) {
       if (meta.status === "closed") continue; // no double-close
       if (meta.threadId == null) continue; // no forum topic was created — nothing to close
       if (livePaths.has(normalizeWorktreePath(meta.worktreePath))) continue; // a live run's topic is never closed
+      // Open-PR gate (#ac-1.2): a run whose PR is still OPEN is mid-review — its topic must NEVER be
+      // swept. Only a NOT-open PR (merged-but-close-missed OR abandoned) proceeds to close (#ac-1.6).
+      // When prOpen is not wired the gate is skipped (production always wires it via the composition
+      // root's makeDefaultPrOpen — see run-reaper.mjs); the sweep then falls back to its pre-feature
+      // close semantics rather than crash.
+      if (typeof prOpen === "function" && prOpen(meta.issueNumber)) continue;
+      // H6: capture the PRIOR status BEFORE the optimistic close so a failed close reverts to the
+      // run's actual prior state (e.g. 'awaiting-review'), never the hardcoded literal 'active'.
+      const priorStatus = meta.status;
       const closePromise = closeForumTopic({ threadId: meta.threadId });
       if (closePromise && typeof closePromise.then === "function") {
         topicCloses.push(closePromise);
       }
       // Optimistic 'closed' (synchronous). The fire-and-forget sweep cannot await the close ack the
-      // way cron-a-exit's async notifyExit does, so we mirror its ok-gate by REVERTING to 'active'
-      // when the ack is missing/failed: a transient 429/timeout leaves the run 'active' for the next
-      // cycle to retry instead of a permanent on-disk 'closed' orphan. The frozen orphan-sweep test
-      // pins the synchronous 'closed' write (its close fake resolves {ok:true} -> no revert).
+      // way cron-a-exit's async notifyExit does, so we mirror its ok-gate by REVERTING to the
+      // captured priorStatus when the ack is missing/failed: a transient 429/timeout leaves the run
+      // back where it was for the next cycle to retry instead of a permanent on-disk 'closed'
+      // orphan. The frozen orphan-sweep test pins the synchronous 'closed' write (its close fake
+      // resolves {ok:true} -> no revert).
       updateMeta(run.metaPath, { status: "closed" });
       if (closePromise && typeof closePromise.then === "function") {
         closePromise
           .then((r) => {
-            if (!r || !r.ok) updateMeta(run.metaPath, { status: "active" });
+            if (!r || !r.ok) updateMeta(run.metaPath, { status: priorStatus });
           })
           .catch(() => {
-            updateMeta(run.metaPath, { status: "active" });
+            updateMeta(run.metaPath, { status: priorStatus });
           });
       }
     } catch {

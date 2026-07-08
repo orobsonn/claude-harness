@@ -12,15 +12,48 @@
  * in production, following this repo's seam-injection style (see cron-b.mjs, cron-state.mjs).
  */
 import { STATE_LABELS } from "./review-labels.mjs";
+import { prLinksIssue } from "./cron-a-exit.mjs";
 
 /**
  * @description Extracts the root issue number from a `harness/<N>` branch name.
  * @param {string} headRefName
  * @returns {number|null}
  */
-function extractRoot(headRefName) {
+export function extractRoot(headRefName) {
   const match = /^harness\/(\d+)$/.exec(headRefName ?? "");
   return match ? Number(match[1]) : null;
+}
+
+/**
+ * @description Resolves the root issue number from PR headRefName or body.
+ * First tries to extract from branch name, falls back to parsing body for issue link.
+ * @param {object} pr
+ * @returns {number|null}
+ */
+function resolveRoot(pr) {
+  // Try branch name first
+  let root = extractRoot(pr.headRefName);
+  if (root !== null) {
+    return root;
+  }
+
+  // Fallback to parsing body for issue link
+  if (pr.body) {
+    // Match ALL GitHub closing/reference keywords followed by #N — a body can carry more than one
+    // link (e.g. "Refs #10 (epic parent). Closes #12 (this issue)"), and a single first-match `.exec`
+    // would misroute to the epic instead of the PR's actual close target. Prefer the first CLOSING
+    // keyword match over a bare reference; fall back to the first match only when no closing keyword
+    // is present (preserves prior behavior for bare-ref-only bodies).
+    const linkPattern = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?|ref(?:s|erences)?)\s+#(\d+)\b/gi;
+    const matches = [...pr.body.matchAll(linkPattern)];
+    const closingMatch = matches.find((m) => /^close[sd]?$|^fix(?:e[sd])?$|^resolve[sd]?$/i.test(m[1]));
+    const chosen = closingMatch ?? matches[0];
+    if (chosen && prLinksIssue(pr.body, Number(chosen[2]))) {
+      return Number(chosen[2]);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -34,7 +67,7 @@ function extractRoot(headRefName) {
  * @param {(pr: object, sha: string, stateDir: string) => {status: string, finding?: string}|null} opts.getFreshVerdict
  * @param {(pr: object, o: {changedFiles: string[], sha: string, stateDir: string}) => boolean} opts.crossFamilyEligible pre-bound cross-family eligibility check
  * @param {(pr: object, sha: string, o: object) => {merged: boolean}} opts.mergeAndFinalize
- * @param {() => Array<{issue: number, from: string}>} opts.reconcile zero-arg reconciliation driver
+ * @param {() => (Array<{issue: number, from: string}>|Promise<Array<{issue: number, from: string}>>)} opts.reconcile zero-arg reconciliation driver (awaited — may be sync or async)
  * @param {(pr: object, sha: string, o: object) => void} opts.routeReject
  * @param {(pr: object, meta: object) => void} opts.spawnReviewSession
  * @param {(event: object) => void} opts.notify
@@ -81,7 +114,8 @@ export async function cronReview(opts) {
   // invalid field makes gh exit non-zero, which normalizeGhResult turns into `[]`, silently
   // blanking the whole review cycle). Fetch `headRefOid` and normalize it onto `headSha` so every
   // downstream consumer (and the frozen test fakes, which supply `headSha`) keeps working.
-  const prs = (gh(["pr", "list", "--json", "number,headRefName,headRefOid,author,labels,url", "--state", "open"]) || [])
+  // Added 'body' field to support root issue extraction from PR body for typed branches.
+  const prs = (gh(["pr", "list", "--json", "number,headRefName,headRefOid,author,labels,url,body", "--state", "open"]) || [])
     .map((pr) => (pr && pr.headSha == null && pr.headRefOid != null ? { ...pr, headSha: pr.headRefOid } : pr));
 
   // Track whether the harness:awaiting-merge label has been ensured to exist.
@@ -124,7 +158,8 @@ export async function cronReview(opts) {
       gh(args);
     }
     recordReviewed(pr.number, sha, { stateDir });
-    notify({ type: notifyType, pr: pr.number, url: pr.url });
+    const rootIssue = resolveRoot(pr);
+    notify({ type: notifyType, pr: pr.number, url: pr.url, root: rootIssue });
   }
 
   for (const pr of prs) {
@@ -162,7 +197,8 @@ export async function cronReview(opts) {
           // Record BEFORE notify — fail-closed against spam: even a notify failure can never cause a
           // re-notify, because the marker is already durable.
           recordStalledNotified(number, sha, { stateDir });
-          notify({ type: "pr-review-stalled", pr: number, url: pr.url });
+          const rootIssue = resolveRoot(pr);
+          notify({ type: "pr-review-stalled", pr: number, url: pr.url, root: rootIssue });
         }
       }
       continue;
@@ -171,14 +207,16 @@ export async function cronReview(opts) {
     // Read the diff via `gh pr diff <n> --name-only` — NEVER checkout branch harness/<N>.
     const rawDiff = gh(["pr", "diff", String(number), "--name-only"]);
     if (rawDiff && rawDiff.diffFailed) {
-      notify({ type: "pr-diff-fetch-failed", pr: number, url: pr.url });
+      const rootIssue = resolveRoot(pr);
+      notify({ type: "pr-diff-fetch-failed", pr: number, url: pr.url, root: rootIssue });
       continue;
     }
     const changedFiles = Array.isArray(rawDiff) ? rawDiff : [];
 
     // Circuit-breaker gate BEFORE spawning the review session (HR-8 / #ac-6.2).
     if (breakerTripped({ stateDir })) {
-      notify({ type: "breaker-stall", pr: number });
+      const rootIssue = resolveRoot(pr);
+      notify({ type: "breaker-stall", pr: number, root: rootIssue });
       continue;
     }
 
@@ -187,7 +225,8 @@ export async function cronReview(opts) {
     // send actually completes while the event loop is free: the next line is a blocking spawnSync
     // that would otherwise stall the event loop for minutes, expiring the send's AbortSignal timeout
     // before its promise ever settles — the review-started ping would silently never arrive.
-    await notify({ type: "review-started", pr: number, url: pr.url });
+    const rootIssue = resolveRoot(pr);
+    await notify({ type: "review-started", pr: number, url: pr.url, root: rootIssue });
 
     // Spawn the review session, then record it for the breaker cap.
     spawnReviewSession(pr, { stateDir, changedFiles });
@@ -207,7 +246,8 @@ export async function cronReview(opts) {
         const root = extractRoot(pr.headRefName);
         if (root !== null) gh(["issue", "edit", String(root), "--add-label", "harness:blocked"]);
         recordReviewed(number, sha, { stateDir }); // stop re-reviewing this dead sha
-        notify({ type: "pr-review-infra-blocked", pr: number, url: pr.url });
+        const rootIssue = resolveRoot(pr);
+        notify({ type: "pr-review-infra-blocked", pr: number, url: pr.url, root: rootIssue });
       }
       // else: alreadyReviewed is deliberately NOT recorded, so the next cycle retries the review.
       continue;
@@ -235,14 +275,16 @@ export async function cronReview(opts) {
         gh(["pr", "ready", String(pr.number)]);
         const mergeOutcome = mergeAndFinalize(pr, sha, { gh, stateDir }) || {};
         if (mergeOutcome.merged) {
-          notify({ type: "pr-merged", pr: pr.number, url: pr.url });
+          const rootIssue = resolveRoot(pr);
+          await notify({ type: "pr-merged", pr: pr.number, url: pr.url, root: rootIssue });
         } else if (mergeOutcome.updateAttempted && !mergeOutcome.terminal) {
           // Branch was only BEHIND its base: mergeAndFinalize ran GitHub's native (non-force)
           // update-branch, which changes the head sha. Do NOT relabel and do NOT recordReviewed — the
           // review loop re-picks this PR up next cycle at its new sha (alreadyReviewed is keyed by sha)
           // and re-reviews it from scratch before re-attempting the merge. Progress notify only, never
           // the pr-merge-failed "needs a human" signal.
-          notify({ type: "pr-branch-updated-retry", pr: pr.number, url: pr.url });
+          const rootIssue = resolveRoot(pr);
+          notify({ type: "pr-branch-updated-retry", pr: pr.number, url: pr.url, root: rootIssue });
         } else {
           // Permanent merge failure (real conflict / head moved / update-branch ceiling) — route to
           // manual merge as a genuinely TERMINAL state (routeToAwaitingMerge records the review) so it
@@ -263,12 +305,19 @@ export async function cronReview(opts) {
     }
    } catch (err) {
     // Isolate one PR's failure — a throw here must not skip the remaining PRs or reconcile().
-    notify({ type: "pr-review-error", pr: pr.number, message: err instanceof Error ? err.message : String(err) });
+    const rootIssue = resolveRoot(pr);
+    notify({ type: "pr-review-error", pr: pr.number, message: err instanceof Error ? err.message : String(err), root: rootIssue });
     continue;
    }
   }
 
   // Reconciliation driver (HR-3 / #ac-7.1): invoked EVERY cycle, independent of the open-PR loop,
-  // so operator manual-merge / transient-relabel self-heal actually has a per-cycle caller.
-  reconcile();
+  // so operator manual-merge / transient-relabel self-heal actually has a per-cycle caller. A
+  // reconcile throw (e.g. a `gh` call inside it) must never reject the whole cronReview cycle —
+  // the open-PR loop above already completed and its outcomes must not be discarded.
+  try {
+    await reconcile();
+  } catch {
+    // fail-open — reconciliation retries next cycle
+  }
 }

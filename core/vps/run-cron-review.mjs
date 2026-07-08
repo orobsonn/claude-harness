@@ -62,7 +62,8 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { cronReview } from "./cron-review.mjs";
+import { cronReview, extractRoot } from "./cron-review.mjs";
+import { readMeta, updateMeta as realUpdateMeta } from "./obs-outbox.mjs";
 import { spawnReviewSession } from "./spawn-review-session.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import * as cronState from "./cron-state.mjs";
@@ -74,7 +75,7 @@ import { mergeAndFinalize, reconcile } from "./review-merge.mjs";
 import { releaseChainedDependents } from "./chain-release.mjs";
 import { routeReject } from "./review-routing.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
-import { makeNotifier } from "./notify-telegram.mjs";
+import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
 import { drainWithLock } from "./drain-lock.mjs";
 
@@ -147,25 +148,50 @@ export async function runCronReview(config, deps = {}) {
   const reviewStateDir = join(config.stateDir, "review");
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const notify = deps.notify ?? (() => {});
-  // The shared global topic is for ACTIONABLE + ERROR events only — not the normal PR-lifecycle
-  // chatter, which would turn it into spam across N projects. These non-actionable types are
-  // suppressed from the global topic: `review-started` (pure "began reviewing" noise), `pr-merged`
-  // (after-the-fact informational), and `pr-branch-updated-retry` (a self-healing stale-branch refresh
-  // that resolves itself next cycle — not a "needs a human" signal). Everything else still pings —
-  // crucially `pr-awaiting-merge` (the operator's "merge this" signal) and every error/blocked/failed
-  // type. (The richer option — routing the full lifecycle into each run's own topic — needs a
-  // topic-lifecycle refactor; tracked separately.)
-  const GLOBAL_TOPIC_SUPPRESSED = new Set(["review-started", "pr-merged", "pr-branch-updated-retry"]);
+
+  // Add a base-stateDir obs-reader seam for resolving run thread IDs
+  const resolveRunThreadId = deps.resolveRunThreadId ?? ((rootIssue) => {
+    try {
+      const meta = readMeta(join(config.stateDir, `obs-${rootIssue}.json`));
+      return meta && meta.threadId != null ? meta.threadId : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Normal lifecycle event types that should be routed to run topics when possible
+  const NORMAL_LIFECYCLE_TYPES = new Set([
+    "review-started",
+    "pr-awaiting-merge",
+    "pr-merged",
+    "pr-branch-updated-retry"
+  ]);
+
   const safeNotify = (event) => {
     try {
-      if (event && GLOBAL_TOPIC_SUPPRESSED.has(event.type)) {
-        return undefined; // non-actionable PR-lifecycle chatter — kept out of the shared global topic
+      // Check if this is a normal lifecycle event that should be routed to a run topic
+      const root = event && (event.root ?? extractRoot(event.headRefName));
+      if (event && NORMAL_LIFECYCLE_TYPES.has(event.type) && root != null) {
+        // Try to resolve the threadId for this root issue
+        let threadId;
+        try {
+          threadId = resolveRunThreadId(root);
+        } catch {
+          // fail-open: if resolveRunThreadId throws, fall through to global notification
+          threadId = null;
+        }
+
+        // If we successfully resolved a threadId, route the event to that run topic ONLY
+        // (suppress from global topic - this is the new routing rule)
+        const routed = threadId != null;
+        if (routed) {
+          // Notify with threadId so it gets routed to the run topic ONLY
+          return notify({ project: config.project, ...event, threadId });
+        }
+        // If we didn't resolve a threadId, fall through to global notification (H2 requirement)
       }
-      // Inject the project slug so every review-cron notification renders `[<project>]` instead of
-      // `[?]` (cronReview's events carry only {type, pr, url}); an event's own project still wins.
-      // Returns the underlying notify promise so a caller that needs the send to COMPLETE before a
-      // blocking spawn (cronReview's awaited review-started) can await it; fire-and-forget callers
-      // simply ignore the return.
+
+      // All other events (including unrouted normal lifecycle events) go to global topic
       return notify({ project: config.project, ...event });
     } catch {
       // fail-open — a notify failure never masks the breaker's stall or blocks the cycle
@@ -199,6 +225,49 @@ export async function runCronReview(config, deps = {}) {
 
   const codexDriver = await (deps.loadCodexDriver ?? defaultLoadCodexDriver)();
 
+  // Close-on-merge helper: reads base obs meta and closes forum topic when merged and not already closed.
+  // `notifyConfig` is the RESOLVED notifier config (carrying the real bot token), never the token-less
+  // project `config` — closeForumTopic -> callTelegramMethod early-returns {ok:false} without a network
+  // call when `!config.token`, so passing the bare project config makes the close a guaranteed no-op.
+  const closeForumTopic = deps.closeForumTopic ?? realCloseForumTopic;
+  const notifyConfig = deps.notifyConfig ?? makeNotifier(config, { homeDir: config.homeDir }).config;
+  const readMetaBound = (metaPath) => {
+    try {
+      return (deps.readMeta ?? readMeta)(metaPath);
+    } catch {
+      return null;
+    }
+  };
+  const updateMeta = deps.updateMeta ?? realUpdateMeta;
+
+  // Close is CONFIRMED before persisting 'closed': closeForumTopic is async and fail-open
+  // ({ok:false} on 429/timeout/network/no-token). Persisting 'closed' unconditionally on a
+  // transient send failure would leave the topic OPEN forever while the meta lies 'closed' — the
+  // reaper skips a status:'closed' meta, so that PR would never be re-closed. Only an explicit
+  // {ok:true} settlement writes the terminal status; anything else (ok:false or a throw) leaves
+  // the meta as-is ('awaiting-review') so a later reconcile/reaper sweep can retry the close.
+  const closeRunTopicOnMerge = async (issueNumber, { fetch, log } = {}) => {
+    try {
+      const metaPath = join(config.stateDir, `obs-${issueNumber}.json`);
+      const meta = readMetaBound(metaPath);
+
+      // Idempotent: only close when status is not 'closed' AND threadId is present
+      if (meta && meta.status !== 'closed' && meta.threadId != null) {
+        // Fail-open: wrap in try/catch so a close/update failure never throws
+        try {
+          const res = await closeForumTopic({ threadId: meta.threadId }, { config: notifyConfig, fetch, log });
+          if (res && res.ok === true) {
+            updateMeta(metaPath, { status: 'closed', closedAt: Math.floor(Date.now() / 1000) });
+          }
+        } catch {
+          // Silent fail - never break reconcile/chain-release/the cycle
+        }
+      }
+    } catch {
+      // Silent fail - never break reconcile/chain-release/the cycle
+    }
+  };
+
   const ghExec = deps.ghExec ?? defaultGhExec;
   const gh = deps.gh ?? scopedGh(config.owner, config.repo, ghExec);
   const authenticatedUser = deps.authenticatedUser ?? defaultGetAuthenticatedGhUser;
@@ -206,27 +275,53 @@ export async function runCronReview(config, deps = {}) {
 
   // mergeAndFinalize / reconcile need MORE context than cronReview's own call site passes through
   // (a counter/recordReviewed adapter) — supplied here via a bound closure.
-  const mergeAndFinalizeFn =
+  // For auto-path close-on-merge: collect auto-merged issues so the post-loop close (in the
+  // `finally` below) fires for them too. This wraps the RESOLVED mergeAndFinalize — whether
+  // `deps.mergeAndFinalize` was injected OR the default real one — so an injected mergeAndFinalize
+  // (as the test fakes do) still gets its {merged:true} results collected.
+  const autoMergedIssues = [];
+  const resolvedMergeAndFinalize =
     deps.mergeAndFinalize ??
     ((pr, sha, o) => mergeAndFinalize(pr, sha, { ...o, counter: cronState, recordReviewed: cronState.recordReviewed }));
+  const mergeAndFinalizeFn = (pr, sha, o) => {
+    const result = resolvedMergeAndFinalize(pr, sha, o);
+    if (result && result.merged === true) {
+      const rootIssue = extractRoot(pr.headRefName);
+      if (rootIssue !== null) {
+        autoMergedIssues.push(rootIssue);
+      }
+    }
+    return result;
+  };
   // The per-cycle reconcile closure does TWO merge-driven things, both keyed on merged-PR ground
   // truth and both merge-mode-agnostic (auto-merge OR operator manual-merge): (1) self-heal any
   // issue whose PR merged but whose done relabel was missed, and (2) release the roadmap's chained
   // dependents whose dependencies have all merged (or strand a subtree under a dead dependency).
   // Chaining lives HERE — not on the auto-merge-only mergeAndFinalize path — so a manual merge (the
   // shipped default) still advances the roadmap. Best-effort: a chaining failure never breaks the
-  // self-heal or the review cycle.
-  const reconcileFn =
-    deps.reconcile ??
-    (() => {
-      const healed = reconcile({ gh, counter: cronState, stateDir: reviewStateDir });
-      try {
-        releaseChainedDependents({ gh, notify: safeNotify });
-      } catch {
-        // fail-open — the roadmap simply doesn't advance this cycle; it retries next cycle
+  // self-heal or the review cycle. Close-on-merge runs ONCE per issue here — never double-wrapped
+  // on top of an injected `deps.reconcile`, since this closure already honors that seam.
+  const reconcileFn = async () => {
+    const healed = deps.reconcile
+      ? await deps.reconcile()
+      : reconcile({ gh, counter: cronState, stateDir: reviewStateDir });
+
+    // Close run topics for manually merged issues (close-on-merge, shipped default path)
+    // Iterate the healed list which contains merged issues [{issue, from}]. AWAITED so the close
+    // send actually settles (and the meta transition is observable) before reconcile resolves.
+    if (Array.isArray(healed)) {
+      for (const { issue } of healed) {
+        await closeRunTopicOnMerge(issue, { fetch: globalThis.fetch, log: () => {} });
       }
-      return healed;
-    });
+    }
+
+    try {
+      releaseChainedDependents({ gh, notify: safeNotify });
+    } catch {
+      // fail-open — the roadmap simply doesn't advance this cycle; it retries next cycle
+    }
+    return healed;
+  };
 
   // crossFamilyEligible is fail-open ONLY on a genuinely absent verdict (no Codex result at all —
   // driver absent, head drift, empty diff): the operator accepted that trade-off (Codex budget does
@@ -393,6 +488,17 @@ export async function runCronReview(config, deps = {}) {
       autoMergeEnabled,
     });
   } finally {
+    // AUTO path close-on-merge: iterate autoMergedIssues and call closeRunTopicOnMerge for each —
+    // in `finally` so a cronReviewFn rejection (e.g. reconcile()'s gh throws) never orphans an
+    // already-merged (irreversible) issue's forum topic. Own try/catch so a close failure never
+    // masks the lock release below.
+    try {
+      for (const issue of autoMergedIssues) {
+        await closeRunTopicOnMerge(issue, { fetch: globalThis.fetch, log: () => {} });
+      }
+    } catch {
+      // fail-open — the close is best-effort and must never block the lock release
+    }
     runLock.release({ stateDir: reviewStateDir, acquireTs: lock.acquireTs });
   }
 }
@@ -408,7 +514,7 @@ export async function mainCronReview(config, deps = {}) {
   const notifier = makeNotifier(config, { homeDir: config.homeDir });
   const runCronReviewFn = deps.runCronReview ?? runCronReview;
   try {
-    await runCronReviewFn(config, { notify: notifier.notify });
+    await runCronReviewFn(config, { notify: notifier.notify, notifyConfig: notifier.config });
   } finally {
     // Drain the per-run observability outbox here too (belt alongside the dedicated drain cron and
     // Cron A): a run that finishes between drain ticks still reaches its topic. Shared `drain.lock`

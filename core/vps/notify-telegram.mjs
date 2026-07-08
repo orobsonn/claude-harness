@@ -433,8 +433,12 @@ export function makeNotifier(config, deps = {}) {
   const notify = (event) => {
     const p = (async () => {
       try {
+        // Per-event threadId override: when event.threadId != null, use it as message_thread_id
+        // instead of resolved.threadId (the global default). Falls back to resolved.threadId when
+        // event.threadId is absent/undefined/null.
+        const config = event.threadId != null ? { ...resolved, threadId: event.threadId } : resolved;
         await sendNotification(event, {
-          config: resolved,
+          config,
           fetch: deps.fetch,
           log: deps.log,
           timeoutMs: deps.timeoutMs,

@@ -58,6 +58,7 @@ import { join } from "node:path";
 import { runCronReview, mainCronReview } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
+import { createRun, updateMeta, readMeta } from "./obs-outbox.mjs";
 
 const BASE_CONFIG = {
   project: "demo",
@@ -124,7 +125,7 @@ async function captureCronReviewOpts(configOverrides, depsOverrides) {
   return captured;
 }
 
-test("run-cron-review: safeNotify keeps the shared global topic actionable — suppresses review-started/pr-merged, passes pr-awaiting-merge and errors", async () => {
+test("run-cron-review: safeNotify sends every UNROUTABLE event (no resolvable run topic) to the global thread — suppression applies only to successfully-routed lifecycle", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "harness-review-safenotify-"));
   const notifySpy = makeSpy();
   const captured = await captureCronReviewOpts({ stateDir }, { notify: notifySpy });
@@ -138,12 +139,12 @@ test("run-cron-review: safeNotify keeps the shared global topic actionable — s
   safeNotify({ type: "pr-branch-updated-retry", pr: 6 });
 
   const passedTypes = notifySpy.calls.map(([e]) => e.type);
-  assert.ok(!passedTypes.includes("review-started"), "review-started must be suppressed from the global topic");
-  assert.ok(!passedTypes.includes("pr-merged"), "pr-merged must be suppressed from the global topic");
-  assert.ok(!passedTypes.includes("pr-branch-updated-retry"), "pr-branch-updated-retry (self-healing progress) must be suppressed from the global topic");
+  assert.ok(passedTypes.includes("review-started"), "an unroutable review-started (no resolvable root/threadId) must still reach the global topic");
+  assert.ok(passedTypes.includes("pr-merged"), "an unroutable pr-merged must still reach the global topic");
   assert.ok(passedTypes.includes("pr-awaiting-merge"), "pr-awaiting-merge (actionable) must still reach the global topic");
   assert.ok(passedTypes.includes("pr-blocked"), "error events must still reach the global topic");
   assert.ok(passedTypes.includes("failed"), "error events must still reach the global topic");
+  assert.ok(passedTypes.includes("pr-branch-updated-retry"), "an unroutable pr-branch-updated-retry must still reach the global topic — suppression only applies once an event is successfully routed to a run topic");
 });
 
 test("mainCronReview: drains the observability outbox each tick (P7) with spacing, sharing Cron A's drain.lock", async () => {
@@ -886,6 +887,550 @@ test("run-cron-review: opts.stalledNotified/recordStalledNotified are bound to t
     const record = JSON.parse(readFileSync(filePath, "utf8"));
     assert.equal(typeof record, "object");
     assert.equal(record["9:ff01"], true, "the persisted record must key on `${pr}:${sha}`, exactly like the alreadyReviewed/recordReviewed pair");
+  } finally {
+    cleanup();
+  }
+});
+
+// --- H1/H2: safeNotify resolves a run's own Telegram thread via a base-stateDir obs-reader seam
+// (`deps.resolveRunThreadId`), and a global-suppression rule keeps ONLY successfully-routed
+// normal-lifecycle events (review-started, pr-awaiting-merge, pr-merged, pr-branch-updated-retry)
+// out of the shared global topic — every actionable/error event still always reaches global, and an
+// unresolved/erroring root falls back to global rather than dropping the event. The fake cronReview
+// below emits events by calling `opts.notify` (mirroring production cronReview's real call sites),
+// so these tests exercise safeNotify's real routing/suppression logic end to end, never a shortcut
+// that hand-builds the final notify payload. Several of these are RED until the production change
+// lands — expected.
+
+/**
+ * @description Runs runCronReview with a fake cronReview that emits `events` via `opts.notify`, and
+ * returns the raw `notify` spy capturing exactly what safeNotify forwards (or withholds).
+ */
+async function runReviewAndCaptureNotify(configOverrides, depsOverrides, events) {
+  const notifySpy = makeSpy();
+  await runCronReview(
+    { ...BASE_CONFIG, ...configOverrides },
+    {
+      cronReview: (opts) => {
+        for (const event of events) opts.notify(event);
+      },
+      runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+      breakerTripped: () => false,
+      recordReviewSession: () => {},
+      notify: notifySpy,
+      ...depsOverrides,
+    }
+  );
+  return notifySpy;
+}
+
+test("run-cron-review: an injected base-stateDir obs-reader resolves root 42 -> threadId 900, routing pr-awaiting-merge to the run's own thread", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-injected-");
+  try {
+    const resolveRunThreadId = makeSpy((rootIssue) => (rootIssue === 42 ? 900 : null));
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "the event must carry the resolved run threadId, routing it to the run topic");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: the DEFAULT obs-reader (no injected resolveRunThreadId) resolves threadId from a REAL obs-<root>.json under the BASE config.stateDir, never reviewStateDir (H1 regression pin)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-default-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900 });
+    assert.ok(!existsSync(join(stateDir, "review")), "precondition: join(stateDir,'review') must stay empty — the default reader must never look there");
+
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      {},
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "the DEFAULT reader must resolve the real obs-42.json seeded under the BASE config.stateDir, never reviewStateDir");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: an injected obs-reader that resolves null (root unresolved) still delivers pr-awaiting-merge to the global thread — never dropped (H2 fallback)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-unresolved-");
+  try {
+    const resolveRunThreadId = makeSpy(() => null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const fallback = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(fallback, "an unresolved root must never cause the event to be dropped");
+    assert.ok(!fallback[0].threadId, "with the root unresolved, the event stays on the global thread (no threadId set)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: a resolved pr-merged is routed to the run thread and stays OUT of the global thread once routed", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-prmerged-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-merged", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const prMergedCalls = notifySpy.calls.filter(([event]) => event.type === "pr-merged");
+    assert.ok(prMergedCalls.length >= 1, "the routed pr-merged event must still reach notify");
+    assert.ok(prMergedCalls.every(([event]) => event.threadId === 900), "every pr-merged call must carry the resolved run threadId");
+    assert.ok(
+      !prMergedCalls.some(([event]) => !event.threadId),
+      "no pr-merged event may reach notify lacking a threadId — normal lifecycle stays out of the global thread once routed"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-blocked (error event) always reaches the global thread, even when the root resolves a run threadId", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-blocked-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-blocked", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const blocked = notifySpy.calls.find(([event]) => event.type === "pr-blocked");
+    assert.ok(blocked, "pr-blocked must still reach notify");
+    assert.ok(!blocked[0].threadId, "error events are never routed away from the global thread");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-diff-fetch-failed (actionable/error event) always reaches the global thread — not suppressed", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-difffail-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-diff-fetch-failed", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const diffFailed = notifySpy.calls.find(([event]) => event.type === "pr-diff-fetch-failed");
+    assert.ok(diffFailed, "pr-diff-fetch-failed must still reach notify");
+    assert.ok(!diffFailed[0].threadId, "an actionable/error event stays on the global thread even when the root resolves");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: pr-review-infra-blocked (actionable/error event) always reaches the global thread — explicit keep-in-global rule", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-infrablocked-");
+  try {
+    const resolveRunThreadId = (rootIssue) => (rootIssue === 42 ? 900 : null);
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-review-infra-blocked", pr: 7, headRefName: "harness/42" }]
+    );
+
+    const infraBlocked = notifySpy.calls.find(([event]) => event.type === "pr-review-infra-blocked");
+    assert.ok(infraBlocked, "pr-review-infra-blocked must still reach notify");
+    assert.ok(!infraBlocked[0].threadId, "a second actionable/error event type stays on the global thread even when the root resolves");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: safeNotify resolves the run thread via event.root when already enriched, never by re-extracting from a non-matchable headRefName", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-eventroot-");
+  try {
+    const resolveRunThreadId = makeSpy((rootIssue) => (rootIssue === 42 ? 900 : null));
+    const notifySpy = await runReviewAndCaptureNotify(
+      { stateDir },
+      { resolveRunThreadId },
+      [{ type: "pr-awaiting-merge", pr: 7, root: 42, headRefName: "feat/x" }]
+    );
+
+    const routed = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(routed, "the pr-awaiting-merge event must still reach notify");
+    assert.equal(routed[0].threadId, 900, "safeNotify must resolve via the already-enriched event.root, not by re-parsing the non-matchable headRefName 'feat/x'");
+    assert.ok(
+      resolveRunThreadId.calls.some(([rootArg]) => rootArg === 42),
+      "the obs-reader must be invoked with event.root (42), never a value derived from 'feat/x'"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: safeNotify fails open when the injected obs-reader THROWS while resolving — the event still reaches the global thread and safeNotify never throws", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-threadroute-throws-");
+  try {
+    const resolveRunThreadId = () => {
+      throw new Error("obs-reader boom");
+    };
+
+    let notifySpy;
+    await assert.doesNotReject(async () => {
+      notifySpy = await runReviewAndCaptureNotify(
+        { stateDir },
+        { resolveRunThreadId },
+        [{ type: "pr-awaiting-merge", pr: 7, headRefName: "harness/42" }]
+      );
+    }, "a throwing obs-reader must never propagate out of safeNotify / runCronReview");
+
+    const delivered = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
+    assert.ok(delivered, "the event must still be delivered even though resolution threw");
+    assert.ok(!delivered[0].threadId, "on a throwing resolver, the event fails open to the global thread (no threadId)");
+  } finally {
+    cleanup();
+  }
+});
+
+// --- Close-on-merge (#ac-1.4/#ac-1.7): once an issue is detected merged — either via the
+// per-cycle reconcile closure (the manual/shipped-default merge path, autoMerge OFF) or via the
+// auto-merge path's mergeAndFinalize — run-cron-review reads the issue's BASE obs meta and, if its
+// status is not already 'closed', AWAITS `deps.closeForumTopic({threadId}, opts)`. Only when the
+// close resolves `{ok:true}` does it mark the meta `{status:'closed', closedAt:<epoch>}` — on
+// `{ok:false}` (or a throw) the meta STAYS 'awaiting-review' so a later reaper can re-close a
+// merged PR's topic instead of lying 'closed' on a transient send failure (no permanent orphan).
+// The close is driven from the per-cycle reconcile closure (called unconditionally at the end of
+// every cronReview cycle, on BOTH the manual and auto-merge paths) — NOT from inside the
+// mergeAndFinalizeFn closure itself. These tests are RED until the close-on-merge production
+// change lands — expected.
+
+test("run-cron-review: close-on-merge (manual/reconcile default path) — closes the forum topic and marks obs meta closed with a numeric closedAt (#ac-1.4)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-manual-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (arg) => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.ok(
+      closeForumTopicSpy.calls.some(([arg]) => arg && arg.threadId === 900),
+      "closeForumTopic must be called with {threadId:900} for the merged issue 42 detected by reconcile"
+    );
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "closed", "the BASE obs meta must transition to status 'closed'");
+    assert.equal(typeof meta.closedAt, "number", "the BASE obs meta must record a NUMERIC closedAt");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge ORDERING G1 (auto-merge path) — notify({type:'pr-merged', threadId:900}) fires BEFORE closeForumTopic({threadId:900})", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-order-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const order = [];
+    const notifySpy = makeSpy((event) => {
+      if (event && event.type === "pr-merged") order.push({ what: "notify-pr-merged", threadId: event.threadId });
+    });
+    const closeForumTopicFake = makeSpy(async (arg) => {
+      order.push({ what: "close", threadId: arg && arg.threadId });
+      return { ok: true };
+    });
+
+    const pr = { number: 70, headRefName: "harness/42", headRefOid: "deadbeef1", author: { login: "harness" }, labels: [], url: "u70", body: "" };
+    const gh = (args) => {
+      if (args[0] === "pr" && args[1] === "list") return [pr];
+      if (args[0] === "pr" && args[1] === "diff") return ["file.js"];
+      return { ok: true };
+    };
+
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir, autoMergeEnabled: true },
+      {
+        gh,
+        isReviewEligible: () => true,
+        getFreshVerdict: () => ({ status: "CLEAN" }),
+        crossFamilyEligible: () => true,
+        mergeAndFinalize: () => ({ merged: true }),
+        reconcile: () => [{ issue: 42, from: "harness:in-review" }],
+        closeForumTopic: closeForumTopicFake,
+        spawnReviewSession: () => {},
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: notifySpy,
+      }
+    );
+
+    const notifyIndex = order.findIndex((e) => e.what === "notify-pr-merged");
+    const closeIndex = order.findIndex((e) => e.what === "close" && e.threadId === 900);
+    assert.ok(notifyIndex !== -1, "the pr-merged notify must be recorded in the shared order log");
+    assert.equal(order[notifyIndex].threadId, 900, "the routed pr-merged notify must carry threadId 900 (the run's own forum topic)");
+    assert.ok(closeIndex !== -1, "the closeForumTopic call for threadId 900 must be recorded in the shared order log");
+    assert.ok(notifyIndex < closeIndex, "notify({type:'pr-merged', threadId:900}) must occur BEFORE closeForumTopic({threadId:900})");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge is NOT wired inside the mergeAndFinalizeFn closure — closeForumTopic has not fired the instant mergeAndFinalize returns {merged:true} (auto-merge path)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-notinmerge-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const order = [];
+    const closeForumTopicFake = makeSpy((arg) => {
+      order.push({ what: "close", threadId: arg && arg.threadId });
+    });
+
+    let closeCalledAtMergeReturn = null;
+
+    const pr = { number: 70, headRefName: "harness/42", headRefOid: "deadbeef1", author: { login: "harness" }, labels: [], url: "u70", body: "" };
+    const gh = (args) => {
+      if (args[0] === "pr" && args[1] === "list") return [pr];
+      if (args[0] === "pr" && args[1] === "diff") return ["file.js"];
+      return { ok: true };
+    };
+
+    const mergeAndFinalizeFake = () => {
+      const result = { merged: true };
+      closeCalledAtMergeReturn = order.some((e) => e.what === "close" && e.threadId === 900);
+      return result;
+    };
+
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir, autoMergeEnabled: true },
+      {
+        gh,
+        isReviewEligible: () => true,
+        getFreshVerdict: () => ({ status: "CLEAN" }),
+        crossFamilyEligible: () => true,
+        mergeAndFinalize: mergeAndFinalizeFake,
+        reconcile: () => [{ issue: 42, from: "harness:in-review" }],
+        closeForumTopic: closeForumTopicFake,
+        spawnReviewSession: () => {},
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(
+      closeCalledAtMergeReturn,
+      false,
+      "closeForumTopic must NOT have been called at the instant mergeAndFinalize returns {merged:true} — the close-on-merge is wired outside the mergeAndFinalizeFn closure (e.g. the per-cycle reconcile), not inside it"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge is idempotent — an obs meta already status 'closed' is never re-closed (closeForumTopic keyed on status !== 'closed')", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-idempotent-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "closed" });
+
+    const closeForumTopicSpy = makeSpy();
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    assert.equal(
+      closeForumTopicSpy.calls.length,
+      0,
+      "closeForumTopic must NOT be called when the merged issue's obs meta is already status 'closed'"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge fails open — a throwing closeForumTopic never breaks the reconcile closure, which still returns its healed list (#ac-1.7)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-failopen-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicThrows = () => {
+      throw new Error("forum boom");
+    };
+    const healedList = [{ issue: 42, from: "harness:awaiting-merge" }];
+    const reconcileFake = () => healedList;
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicThrows,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    let result;
+    await assert.doesNotReject(async () => {
+      result = await captured.reconcile();
+    }, "a throwing closeForumTopic must never propagate out of the reconcile closure");
+
+    assert.deepEqual(
+      result,
+      healedList,
+      "the reconcile closure must still return its healed list even when closeForumTopic throws for a merged issue"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge passes the token-carrying notifier config to closeForumTopic (not the token-less project config)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-notifyconfig-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (input, opts) => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.equal(
+      closeForumTopicSpy.calls.length,
+      1,
+      "closeForumTopic must be called exactly once for the merged issue 42 detected by reconcile"
+    );
+    const [, opts] = closeForumTopicSpy.calls[0];
+    assert.ok(
+      opts && opts.config,
+      "closeForumTopic must be invoked with a SECOND argument (opts) carrying a config object — closeForumTopic(input, opts)"
+    );
+    assert.equal(
+      opts.config.token,
+      "BOT-TOKEN-XYZ",
+      "the SECOND argument (opts) reaching closeForumTopic must carry the RESOLVED notifier config (with the token from deps.notifyConfig) — not a token-less project config"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge does NOT mark the meta 'closed' when closeForumTopic fails (ok:false) — meta stays 'awaiting-review' so a later sweep can re-close (no permanent orphan)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-okfalse-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (arg) => ({ ok: false }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.ok(
+      closeForumTopicSpy.calls.some(([arg]) => arg && arg.threadId === 900),
+      "closeForumTopic must still be called with {threadId:900} for the merged issue 42 detected by reconcile"
+    );
+
+    const meta = readMeta(metaPath);
+    assert.equal(
+      meta.status,
+      "awaiting-review",
+      "the BASE obs meta must STAY 'awaiting-review' when the close send fails (ok:false) — no permanent orphan lying 'closed'"
+    );
+    assert.ok(
+      meta.closedAt === undefined,
+      "closedAt must be absent when the close send failed"
+    );
   } finally {
     cleanup();
   }

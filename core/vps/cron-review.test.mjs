@@ -356,6 +356,47 @@ test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", asy
   assert.ok(types.includes("pr-merged"), "must notify pr-merged on a successful autonomous merge");
 });
 
+test("cronReview: AWAITS the pr-merged send (it SETTLES) before reconcile() runs (mirrors the already-awaited review-started)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(110, { number: 110, headRefName: "harness/210", author: { login: "bot-user" }, labels: [], headSha: "sha-z", url: "u110" });
+  setDiff(110, ["src/merged.js"]);
+
+  const order = [];
+  // pr-merged's send resolves on a LATER microtask. If cronReview does NOT await it, the
+  // post-loop reconcile() call runs first and "reconcile" precedes "pr-merged:settled" — the same
+  // dropped-ping shape as the already-fixed review-started bug, just on the merged branch instead.
+  const notify = (event) => {
+    if (event && event.type === "pr-merged") {
+      return Promise.resolve().then(() => order.push("pr-merged:settled"));
+    }
+    return undefined;
+  };
+  const reconcile = makeSpy(() => {
+    order.push("reconcile");
+    return [];
+  });
+
+  await cronReview(
+    baseOpts({
+      gh,
+      notify,
+      reconcile,
+      autoMergeEnabled: true,
+      crossFamilyEligible: () => true,
+      mergeAndFinalize: makeSpy(() => ({ merged: true })),
+    })
+  );
+
+  const settledIdx = order.indexOf("pr-merged:settled");
+  const reconcileIdx = order.indexOf("reconcile");
+  assert.notEqual(settledIdx, -1, "the pr-merged send must settle");
+  assert.notEqual(reconcileIdx, -1, "reconcile must run during the cycle");
+  assert.ok(
+    settledIdx < reconcileIdx,
+    "pr-merged must be AWAITED — its send has to SETTLE before reconcile() runs, never after"
+  );
+});
+
 test("cronReview: a diff-fetch failure sentinel {ok:false,diffFailed:true} re-queues (notify pr-diff-fetch-failed, NO spawn, NO recordReviewed)", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(60, { number: 60, headRefName: "harness/90", author: { login: "bot-user" }, labels: [], headSha: "sha-k" });
@@ -750,4 +791,29 @@ test("cronReview: the stalled backstop excludes a harness:in-progress root issue
   assert.equal(stalledNotifies.length, 0, "a PR whose repair is in progress is not stalled — no pr-review-stalled notify");
   assert.equal(recordStalledNotified.calls.length, 0, "recordStalledNotified must never be called for an in-progress issue");
   assert.equal(spawnReviewSession.calls.length, 0, "spawnReviewSession must never run for an alreadyReviewed sha");
+});
+
+test("cronReview: a feat/x-branch PR's emitted lifecycle event carries root===42 resolved via the prLinksIssue body-link fallback (#ac-1.3) — extractRoot alone yields null for a non-harness/<N> branch", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(200, {
+    number: 200,
+    headRefName: "feat/x",
+    author: { login: "bot-user" },
+    labels: [{ name: "harness:autoreview" }],
+    headSha: "sha-root",
+    url: "u200",
+    body: "Some description. Closes #42",
+  });
+  setDiff(200, ["src/feat.js"]);
+
+  const notify = makeSpy();
+  await cronReview(baseOpts({ gh, notify }));
+
+  const reviewStarted = notify.calls.find((a) => a[0] && a[0].type === "review-started");
+  assert.ok(reviewStarted, "review-started must be emitted for the eligible feat/x PR (harness:autoreview + engineKnows)");
+  assert.equal(
+    reviewStarted[0].root,
+    42,
+    "the emitted event must carry root===42 — resolved via the prLinksIssue('Closes #42') body-link fallback, since headRefName 'feat/x' is not harness/<N> and extractRoot alone would yield null"
+  );
 });

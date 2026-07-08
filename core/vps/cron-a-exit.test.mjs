@@ -18,6 +18,12 @@
  * tests are fully hermetic: no real gh/git process is ever spawned. The body-file/env-file
  * unlink assertions use REAL temp files (mkdtemp under os.tmpdir()) so file removal is an
  * observable via fs.existsSync, per this repo's hermetic style (see run-lock.test.mjs).
+ *
+ * notifyExit() tests (below the cronAExit contract tests) exercise the observability path — the
+ * translation of a cronAExit structured outcome into the run's terminal lifecycle signal — with
+ * every seam (env, prLookup, makeNotifier, appendEvent, closeForumTopic, readMeta, updateMeta)
+ * injected as a fake, and a REAL temp meta file backing HARNESS_OBSERVABILITY_RUN_PATH so the
+ * production existsSync guard observes a real file (per this file's hermetic style).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,7 +31,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { cronAExit } from "./cron-a-exit.mjs";
+import { cronAExit, notifyExit } from "./cron-a-exit.mjs";
 
 const RETRY_CEILING_K = 2;
 
@@ -125,6 +131,57 @@ function anyRelabelAdds(calls, label) {
   return calls.some(
     (args) => Array.isArray(args) && args.includes("--add-label") && args[args.indexOf("--add-label") + 1] === label
   );
+}
+
+/** @description Fake appendEvent seam for notifyExit; records every (metaPath, event) call. */
+function makeFakeAppendEvent() {
+  const calls = [];
+  function appendEvent(metaPath, event) {
+    calls.push({ metaPath, event });
+  }
+  return { appendEvent, calls };
+}
+
+/** @description Fake closeForumTopic seam for notifyExit; records every (input, opts) call. */
+function makeFakeCloseForumTopic(result = { ok: true }) {
+  const calls = [];
+  async function closeForumTopic(input, opts) {
+    calls.push({ input, opts });
+    return result;
+  }
+  return { closeForumTopic, calls };
+}
+
+/** @description Fake readMeta seam for notifyExit; always returns the given meta object. */
+function makeFakeReadMeta(meta) {
+  return () => meta;
+}
+
+/** @description Fake updateMeta seam for notifyExit; records every (metaPath, partial) call. */
+function makeFakeUpdateMeta() {
+  const calls = [];
+  function updateMeta(metaPath, partial) {
+    calls.push({ metaPath, partial });
+  }
+  return { updateMeta, calls };
+}
+
+/** @description Fake makeNotifier seam for notifyExit; returns a stable stub notifier. */
+function makeFakeMakeNotifier() {
+  return () => ({ config: {}, notify: () => {}, drain: async () => {} });
+}
+
+/**
+ * @description Creates a REAL temp meta file (so the production existsSync guard on
+ * HARNESS_OBSERVABILITY_RUN_PATH observes a real file) and returns its path plus cleanup. The
+ * file's contents are irrelevant to these tests — readMeta is always injected as a fake — only
+ * its existence matters for the obsEnabled gate.
+ */
+function makeObsRunPath() {
+  const root = mkdtempSync(join(tmpdir(), "cron-a-exit-obs-"));
+  const runPath = join(root, "obs-42.json");
+  writeFileSync(runPath, JSON.stringify({ threadId: 555, status: "active" }), "utf8");
+  return { runPath, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("cronAExit: PR exists on harness/42 -> relabels harness:in-progress -> harness:in-review; no path leaves the issue in harness:in-progress", () => {
@@ -450,6 +507,108 @@ test("cronAExit: PR exists on harness/42 -> `gh label create harness:in-review -
       labelCreateIndex < relabelIndex,
       "the label-create call must happen BEFORE the issue-edit relabel call"
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("notifyExit: 'done' outcome on the observability path keeps the forum topic OPEN (never calls closeForumTopic) and sets status 'awaiting-review'", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic, calls: closeCalls } = makeFakeCloseForumTopic();
+    const readMeta = makeFakeReadMeta({ threadId: 555, status: "active" });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "done", issueNumber: 42, hadPr: true, finding: null },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => ({ number: 7, url: "https://example.test/pr/7" }),
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+      }
+    );
+
+    assert.equal(
+      closeCalls.length,
+      0,
+      "the 'done' outcome must never close the forum topic — it stays open pending review"
+    );
+
+    const awaitingReviewCall = updateCalls.find(
+      (call) => call.partial && call.partial.status === "awaiting-review"
+    );
+    assert.ok(
+      awaitingReviewCall,
+      "updateMeta must be called with a partial whose status === 'awaiting-review' on the 'done' outcome"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("notifyExit: 'done' outcome still produces the PR checkpoint via appendEvent", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent, calls: appendCalls } = makeFakeAppendEvent();
+    const { closeForumTopic } = makeFakeCloseForumTopic();
+    const readMeta = makeFakeReadMeta({ threadId: 555, status: "active" });
+    const { updateMeta } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "done", issueNumber: 42, hadPr: true, finding: null },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => ({ number: 7, url: "https://example.test/pr/7" }),
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+      }
+    );
+
+    const prEventCall = appendCalls.find((call) => call.event && call.event.type === "PR");
+    assert.ok(prEventCall, "appendEvent must be called with an event whose type === 'PR' on the 'done' outcome");
+  } finally {
+    cleanup();
+  }
+});
+
+test("notifyExit: 'blocked' outcome with no PR STILL closes the forum topic and sets status 'closed' (no regression)", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic, calls: closeCalls } = makeFakeCloseForumTopic();
+    const readMeta = makeFakeReadMeta({ threadId: 555, status: "active" });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+    const findingMessage = "Adversary flagged an unresolved security risk in the payment handler.";
+
+    await notifyExit(
+      { outcome: "blocked", issueNumber: 42, hadPr: false, finding: findingMessage },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+      }
+    );
+
+    const closeCall = closeCalls.find((call) => call.input && call.input.threadId === 555);
+    assert.ok(closeCall, "closeForumTopic must be called with an input whose threadId === 555 on the 'blocked' outcome");
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(closedCall, "updateMeta must be called with a partial whose status === 'closed' on the 'blocked' outcome");
   } finally {
     cleanup();
   }

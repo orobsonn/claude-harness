@@ -120,10 +120,12 @@ function makeSpyUpdateMeta() {
 
 // --- assertion 1 ------------------------------------------------------------------------------
 
-/** @description Assertion 1: Given obs-141.json with threadId 707 and status 'active' and a
- * graceful exit, When cron-a-exit's close step runs, Then closeForumTopic was called with 707 and
- * obs-141.json.status==='closed' (written via the CANONICAL obs-outbox updateMeta seam). */
-test("cron-a-exit close step: obs-141.json threadId 707 status 'active' + graceful exit -> closeForumTopic called with 707 and obs-141.json.status becomes 'closed' via obs-outbox updateMeta", async () => {
+/** @description Assertion 1 (updated for pr-lifecycle-run-topic): Given obs-141.json with threadId
+ * 707 and status 'active' and a 'done' (PR) outcome, When cron-a-exit's close step runs, Then
+ * closeForumTopic is NOT called and obs-141.json.status becomes 'awaiting-review' (written via the
+ * CANONICAL obs-outbox updateMeta seam) — the topic stays open for human review on a graceful PR
+ * exit. */
+test("cron-a-exit close step: obs-141.json threadId 707 status 'active' + 'done' outcome -> closeForumTopic is NOT called and obs-141.json.status becomes 'awaiting-review' via obs-outbox updateMeta", async () => {
   const { root, cleanup } = makeTempRoot("obs-topic-close-1-");
   try {
     const stateDir = join(root, "state");
@@ -145,16 +147,21 @@ test("cron-a-exit close step: obs-141.json threadId 707 status 'active' + gracef
       closeForumTopic: fakeClose,
     });
 
-    assert.ok(
-      fakeClose.calls.some((call) => call.input && call.input.threadId === 707),
-      "closeForumTopic must be called with the obs-141.json threadId (707) on a graceful exit"
+    assert.equal(
+      fakeClose.calls.length,
+      0,
+      "closeForumTopic must NOT be called on a 'done' outcome — the topic stays open for review"
     );
     assert.ok(
-      updateMetaSpy.calls.some((call) => call.metaPath === metaPath && call.partial && call.partial.status === "closed"),
-      "the CANONICAL obs-outbox updateMeta seam must be called with { status: 'closed' } for obs-141.json"
+      updateMetaSpy.calls.some((call) => call.metaPath === metaPath && call.partial && call.partial.status === "awaiting-review"),
+      "the CANONICAL obs-outbox updateMeta seam must be called with { status: 'awaiting-review' } for obs-141.json"
     );
     const finalMeta = readMeta(metaPath);
-    assert.equal(finalMeta && finalMeta.status, "closed", "obs-141.json.status must be 'closed' after the close step");
+    assert.equal(
+      finalMeta && finalMeta.status,
+      "awaiting-review",
+      "obs-141.json.status must be 'awaiting-review' after a 'done' outcome"
+    );
   } finally {
     cleanup();
   }
@@ -266,11 +273,12 @@ test("reaper orphan sweep: obs-141.json status 'active' thread 707 whose worktre
 
 // --- assertion 5 ------------------------------------------------------------------------------
 
-/** @description Assertion 5: Given cron-a-exit closes the run topic on graceful exit, When the
- * close token is resolved, Then it comes from makeNotifier(config,{homeDir}) reading
- * ~/.claude/.dev.vars (never a value read from the session env-file) and no token literal appears
- * in any log line. */
-test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir}) reading ~/.claude/.dev.vars at runtime (never the session env-file), and no token literal appears in any log line", async () => {
+/** @description Assertion 5 (updated for pr-lifecycle-run-topic): Given cron-a-exit closes the run
+ * topic on a 'blocked' outcome (the 'done' outcome no longer closes — it now leaves the topic open
+ * for review), When the close token is resolved, Then it comes from makeNotifier(config,{homeDir})
+ * reading ~/.claude/.dev.vars (never a value read from the session env-file) and no token literal
+ * appears in any log line. */
+test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir}) reading ~/.claude/.dev.vars at runtime (never the session env-file), and no token literal appears in any log line — driven via the 'blocked' outcome, which still closes the topic", async () => {
   const { root, cleanup } = makeTempRoot("obs-topic-close-5-");
   try {
     const stateDir = join(root, "state");
@@ -283,7 +291,7 @@ test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir
 
     const fakeFetch = makeFakeFetch({ ok: false, status: 403 }); // force the failure log path
     const logCalls = [];
-    const outcome = { outcome: "done", issueNumber: 141, hadPr: true, finding: null };
+    const outcome = { outcome: "blocked", issueNumber: 141, hadPr: false, finding: "adversary flagged a risk" };
 
     await notifyExit(outcome, {
       env: {
@@ -291,7 +299,6 @@ test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir
         // Simulates a bogus token threaded through the session env-file — must NEVER be the source.
         TELEGRAM_BOT_TOKEN: sessionEnvToken,
       },
-      prLookup: () => ({ number: 7, url: "https://github.com/x/y/pull/7" }),
       readMeta,
       updateMeta,
       appendEvent,
@@ -302,7 +309,7 @@ test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir
 
     assert.ok(
       fakeFetch.calls.length >= 1,
-      "the close step must issue a real closeForumTopic HTTP call once HARNESS_OBSERVABILITY_RUN_PATH is set"
+      "the close step must issue a real closeForumTopic HTTP call on a 'blocked' outcome (which still closes the topic)"
     );
     assert.ok(
       fakeFetch.calls.some((call) => call.url.includes(devVarsToken)),
@@ -321,12 +328,13 @@ test("cron-a-exit close: the close token comes from makeNotifier(config,{homeDir
 
 // --- assertion 6 ------------------------------------------------------------------------------
 
-/** @description Assertion 6: Given cron-a-exit's main()/notifyExit() composition root runs the
- * 'done' outcome for issue 141 with HARNESS_OBSERVABILITY_RUN_PATH set, When it produces the
- * terminal checkpoint, Then a {type:'PR', pr, url} event is appended to obs-141.events.jsonl BEFORE
- * the topic close, and NO direct session-done sendNotification is issued on the observability
- * path. */
-test("cron-a-exit terminal checkpoint: 'done' outcome for issue 141 with HARNESS_OBSERVABILITY_RUN_PATH set -> {type:'PR', pr, url} appended to the outbox BEFORE the topic close, and no direct session-done sendNotification is issued", async () => {
+/** @description Assertion 6 (updated for pr-lifecycle-run-topic): Given cron-a-exit's
+ * main()/notifyExit() composition root runs the 'done' outcome for issue 141 with
+ * HARNESS_OBSERVABILITY_RUN_PATH set, When it produces the terminal checkpoint, Then a
+ * {type:'PR', pr, url} event is appended to obs-141.events.jsonl, the topic is NOT closed and the
+ * meta status becomes 'awaiting-review' (via the CANONICAL obs-outbox updateMeta seam), and NO
+ * direct session-done sendNotification is issued on the observability path. */
+test("cron-a-exit terminal checkpoint: 'done' outcome for issue 141 with HARNESS_OBSERVABILITY_RUN_PATH set -> {type:'PR', pr, url} appended to the outbox, the topic is NOT closed, status becomes 'awaiting-review', and no direct session-done sendNotification is issued", async () => {
   const { root, cleanup } = makeTempRoot("obs-topic-close-6-");
   try {
     const stateDir = join(root, "state");
@@ -334,17 +342,13 @@ test("cron-a-exit terminal checkpoint: 'done' outcome for issue 141 with HARNESS
     const homeDir = join(root, "home");
     const metaPath = writeObsMeta(stateDir, 141, { threadId: 707, status: "active" });
 
-    const order = [];
     const appendCalls = [];
     const wrappedAppendEvent = (path, event) => {
-      order.push("append");
       appendCalls.push({ path, event });
       return appendEvent(path, event);
     };
-    const wrappedClose = (input, opts) => {
-      order.push("close");
-      return Promise.resolve({ ok: true });
-    };
+    const wrappedClose = makeFakeCloseForumTopic({ ok: true });
+    const updateMetaSpy = makeSpyUpdateMeta();
     const notifyCalls = [];
     const fakeMakeNotifier = () => ({
       notify: (event) => {
@@ -360,7 +364,7 @@ test("cron-a-exit terminal checkpoint: 'done' outcome for issue 141 with HARNESS
       env: baseEnv({ homeDir, metaPath }),
       prLookup: () => ({ number: 99, url: "https://github.com/x/y/pull/99" }),
       readMeta,
-      updateMeta,
+      updateMeta: updateMetaSpy,
       appendEvent: wrappedAppendEvent,
       closeForumTopic: wrappedClose,
       makeNotifier: fakeMakeNotifier,
@@ -372,9 +376,14 @@ test("cron-a-exit terminal checkpoint: 'done' outcome for issue 141 with HARNESS
       ),
       "a {type:'PR', pr, url} event must be appended to the outbox on the 'done' outcome"
     );
+    assert.equal(
+      wrappedClose.calls.length,
+      0,
+      "closeForumTopic must NOT be called on the 'done' outcome — the topic stays open for review"
+    );
     assert.ok(
-      order.includes("append") && order.includes("close") && order.indexOf("append") < order.indexOf("close"),
-      "the terminal event append must happen BEFORE the topic close"
+      updateMetaSpy.calls.some((call) => call.metaPath === metaPath && call.partial && call.partial.status === "awaiting-review"),
+      "the meta status must become 'awaiting-review' (via the CANONICAL obs-outbox updateMeta seam) on the 'done' outcome"
     );
     assert.ok(
       !notifyCalls.some((event) => event.type === "session-done"),
