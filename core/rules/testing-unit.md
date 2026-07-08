@@ -46,7 +46,7 @@ Carrega em arquivos de teste unit/integration e config de Vitest. Stack default:
 - Mockar: `fetch`, IO de DB, clock (`vi.useFakeTimers()`), `crypto.randomUUID`, APIs do navegador
 - NAO mockar: logica interna do proprio modulo, types, classes do projeto
 - Preferir injecao de dependencia em vez de mock global quando possivel
-- Mockar fetch via `vi.spyOn(globalThis, "fetch").mockResolvedValue(...)` — restaurar com `vi.restoreAllMocks()` no `beforeEach`
+- Mockar fetch via `vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(body, init))` — o body de um Response e single-use (ReadableStream consumido uma unica vez); a mesma instancia entrega um body ja consumido na 2a chamada, entao construa o body fresco dentro do closure (string re-materializavel ou `JSON.stringify(...)`), nunca uma instancia pre-construida — restaurar com `vi.restoreAllMocks()` no `beforeEach`
 
 ### Cobertura — pragmatica
 - Testar: logica de negocio, parsers, validators, agregadores, hooks com side-effect, error handling
@@ -94,7 +94,7 @@ Carrega em arquivos de teste unit/integration e config de Vitest. Stack default:
     beforeEach(() => vi.restoreAllMocks());
 
     it("retorna user quando upstream responde 200", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
         new Response(JSON.stringify({ id: "1", name: "Ada" }), { status: 200 }),
       );
 
@@ -103,7 +103,7 @@ Carrega em arquivos de teste unit/integration e config de Vitest. Stack default:
     });
 
     it("lanca erro quando upstream responde 500", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("boom", { status: 500 }));
       await expect(fetchUser("1")).rejects.toThrow();
     });
   });
@@ -156,6 +156,7 @@ Carrega em arquivos de teste unit/integration e config de Vitest. Stack default:
 
 ## Gotchas
 
+- **`mockResolvedValue(new Response(...))` em mock de fetch**: nunca. O body de um Response e single-use (ReadableStream lido uma unica vez); a mesma instancia entrega um body ja consumido na 2a chamada. O caso mais agudo e no `vitest-pool-workers`, que reproduz com `Cannot perform I/O on behalf of a different request`. Use `mockImplementation(async () => new Response(body, init))` com o body construido fresco dentro do closure (string ou `JSON.stringify(...)`)
 - **Mock que vaza entre testes**: `vi.spyOn` sem `restoreAllMocks` em `beforeEach` polui outros testes
 - **Testar implementacao em vez de comportamento**: `expect(component.state.foo).toBe(...)` quebra em refactor. Testar API publica / o que o usuario ve
 - **`waitFor` sem condicao**: `waitFor(() => true)` nao espera nada. Sempre afirmar condicao concreta
