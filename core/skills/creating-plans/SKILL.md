@@ -97,6 +97,8 @@ Rules:
 - The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
 - An invariant with multiple branches/roles/states needs a locked_test per branch (one observable assertion each) — its locked_tests must cover ALL branches; a happy-path-only freeze is a gap.
 
+> **Test path resolution:** a locked_test's test file must resolve repo paths module-relative via `resolve(dirname(fileURLToPath(import.meta.url)), "../...")` — never a hardcoded absolute path rooted at `/Users/` or `/home/`, which passes locally but reddens CI. See the executor / test-author guidance.
+
   > **Supersedes §3.7 'Chosen UX':** the orchestrator+compliance flow supersedes any prior description of the planner validating the test in-run. The planner's sole role is assertion-pinning; per-task fidelity validation belongs to compliance (a Claude eye).
 
 ---

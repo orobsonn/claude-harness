@@ -8,6 +8,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- **Testes travados não podem mais depender de caminho absoluto do computador de quem escreveu.** A orientação pros agentes que criam e implementam testes agora exige caminho relativo ao próprio arquivo (em vez de `/Users/...` ou `/home/...` hardcoded), e a revisão de conformidade passa a barrar esse tipo de caminho hardcoded antes do teste travar — evitando que um teste passe na máquina de quem escreveu e quebre no checkout de outra máquina ou da nuvem.
 
 ### Changed
 
