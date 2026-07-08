@@ -11,8 +11,10 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - **Revisão de conformidade passa a pegar CLI documentada que na prática nunca roda.** Quando um guia (skill, comentário de CI, etc.) descreve um módulo `.mjs` como comando de terminal (`node arquivo.mjs`) mas o arquivo não tem o bloco real que o habilita a rodar assim, o resultado era um comando "fantasma" — parece funcional na documentação, mas executa e não faz nada. A revisão agora detecta essa inconsistência e bloqueia; módulos que são só biblioteca (chamados via `import`, nunca documentados como comando de terminal) nunca são sinalizados por engano.
 
 ### Changed
+- **Tarefa de agente barato (cheap-hand) tem mais tempo pra terminar antes de ser considerada travada.** O teto de espera subiu de 9 para 15 minutos, e um trabalho que estoura o teto mas termina corretamente (teste travado passa) agora é aproveitado em vez de descartado como falha — evita re-tentativas desnecessárias em tarefas médias/grandes.
 
 ### Fixed
+- **Revisão automática de PR não flipa mais de "bloqueado" pra "aprovado" no mesmo commit.** Um PR marcado como bloqueado por uma revisão podia, no ciclo seguinte, ser reavaliado do zero e liberado por engano — auto-mergeando um defeito que já tinha sido rejeitado. Agora um bloqueio é definitivo até o commit mudar. Também corrigido: o aviso de "PR travado" não dispara mais por engano enquanto o PR ainda está sendo corrigido normalmente.
 
 ### Removed
 

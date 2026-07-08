@@ -46,7 +46,7 @@ function relabelIssue(gh, root, removeLabel, addLabel) {
  * @param {object} opts
  * @param {(argv: string[]) => unknown} opts.gh
  * @param {{ increment(root: number): void, atCeiling(root: number): boolean, reset(root: number): void, read(root: number): number }} opts.chain
- * @param {{ alreadyReviewed(prNumber: number, sha: string): boolean }} opts.reviewed
+ * @param {{ alreadyReviewed(prNumber: number, sha: string): boolean, recordReviewed(prNumber: number, sha: string): void }} opts.reviewed
  * @param {(root: number, findings: unknown) => void} opts.recordFindings
  * @param {(event: object) => void} opts.notify
  * @param {unknown} opts.findings
@@ -57,12 +57,13 @@ export function routeReject(pr, sha, opts) {
   const root = extractRootIssue(pr.headRefName);
 
   if (chain.atCeiling(root)) {
+    reviewed.recordReviewed(pr.number, sha);
     relabelIssue(gh, root, "harness:in-review", "harness:blocked");
     notify({ type: "blocked", issue: root, pr: pr.number, reason: "chain-ceiling" });
     return;
   }
 
-  reviewed.alreadyReviewed(pr.number, sha);
+  reviewed.recordReviewed(pr.number, sha);
 
   chain.increment(root);
   recordFindings(root, findings);

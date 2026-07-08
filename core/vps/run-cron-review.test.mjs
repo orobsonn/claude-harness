@@ -800,3 +800,93 @@ test("run-cron-review: the DEFAULT reconcile closure releases chained dependents
     cleanup();
   }
 });
+
+// --- F2: routeReject's bound `reviewed` object must actually expose recordReviewed ---
+// The composition root binds `reviewed = { alreadyReviewed }` (today) at the routeReject closure's
+// definition site, and routeReject.mjs unconditionally calls `reviewed.recordReviewed(pr.number,
+// sha)` on BOTH its ceiling and re-queue branches. These two tests deliberately drive the REAL
+// default `routeRejectFn` (deps.routeReject is NEVER overridden below) so a broken real binding is
+// caught here instead of being masked by a fake-injected routeReject. They are pinned RED against
+// the contract until a separate production change adds `recordReviewed` to the bound `reviewed`
+// object.
+
+test("run-cron-review: routeReject's REAL binding persists the reviewed pr:sha key to cron-reviewed.json via reviewed.recordReviewed (F2)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-routereject-real-");
+  try {
+    const reviewStateDir = join(stateDir, "review");
+    // Fresh stateDir => the real chain depth for root 42 is 0 (below the ceiling of 3), so
+    // routeReject takes the re-queue branch (not the atCeiling branch) — no extra chain seeding
+    // is needed to stay below ceiling.
+    const gh = makeSpy(() => ({ ok: true }));
+
+    const captured = await captureCronReviewOpts({ stateDir }, { gh });
+
+    captured.routeReject(
+      { number: 501, headRefName: "harness/42" },
+      "deadbeef",
+      { gh, stateDir: reviewStateDir, findings: { status: "BLOCKED" } }
+    );
+
+    const reviewedRecord = JSON.parse(readFileSync(join(reviewStateDir, "cron-reviewed.json"), "utf8"));
+    assert.equal(
+      reviewedRecord["501:deadbeef"],
+      true,
+      "the REAL reviewed.recordReviewed binding (invoked from inside routeReject.mjs) must have written the 501:deadbeef key to cron-reviewed.json"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: the captured opts.routeReject is a function whose bound reviewed object exposes a callable recordReviewed (no TypeError)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-routereject-nothrow-");
+  try {
+    const reviewStateDir = join(stateDir, "review");
+    const gh = makeSpy(() => ({ ok: true }));
+
+    const captured = await captureCronReviewOpts({ stateDir }, { gh });
+
+    assert.equal(typeof captured.routeReject, "function", "cronReview must receive a routeReject closure");
+
+    assert.doesNotThrow(
+      () => {
+        captured.routeReject(
+          { number: 501, headRefName: "harness/42" },
+          "deadbeef",
+          { gh, stateDir: reviewStateDir, findings: { status: "BLOCKED" } }
+        );
+      },
+      "invoking the real routeReject must not throw a TypeError about reviewed.recordReviewed being undefined — the bound reviewed object must expose a callable recordReviewed"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: opts.stalledNotified/recordStalledNotified are bound to the REAL cron-state — recordStalledNotified persists cron-review-stalled-notified.json and stalledNotified subsequently returns true", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-stallednotified-");
+  try {
+    const reviewStateDir = join(stateDir, "review");
+    // deps.stalledNotified / deps.recordStalledNotified intentionally OMITTED — they must default
+    // to the REAL cron-state functions scoped to join(stateDir, "review"), mirroring the
+    // alreadyReviewed/recordReviewed pair, so this test proves the real binding (never a stub).
+    const captured = await captureCronReviewOpts({ stateDir }, {});
+
+    captured.recordStalledNotified(9, "ff01");
+    const result = captured.stalledNotified(9, "ff01");
+
+    assert.equal(
+      result,
+      true,
+      "opts.stalledNotified(9,'ff01') must return true after opts.recordStalledNotified(9,'ff01') wrote the REAL cron-state — proving the real binding, not a stub"
+    );
+
+    const filePath = join(reviewStateDir, "cron-review-stalled-notified.json");
+    assert.ok(existsSync(filePath), "recordStalledNotified must persist cron-review-stalled-notified.json under the review stateDir");
+    const record = JSON.parse(readFileSync(filePath, "utf8"));
+    assert.equal(typeof record, "object");
+    assert.equal(record["9:ff01"], true, "the persisted record must key on `${pr}:${sha}`, exactly like the alreadyReviewed/recordReviewed pair");
+  } finally {
+    cleanup();
+  }
+});

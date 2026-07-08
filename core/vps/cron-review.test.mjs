@@ -30,6 +30,18 @@
  *          "--add-label","harness:awaiting-merge"])`, AND `opts.recordReviewed(pr.number, sha,
  *          {stateDir})` — same idempotency guarantee while the PR sits awaiting merge.
  *
+ * Stalled backstop (at the `alreadyReviewed` branch, BEFORE the silent `continue`): (a) resolve the
+ * root issue via `extractRoot(pr.headRefName)` — a non-matching branch name just continues; (b) gate
+ * on the cheap marker `opts.stalledNotified(number, sha, {stateDir})` so the (expensive) issue-view
+ * lookup and notify only ever run once per pr:sha; (c) read the root issue's labels via
+ * `gh(["issue","view", String(root), "--json","labels"])`; (d) if the issue is in the ACTIVE state
+ * harness:in-review (and NOT in a terminal-ish state — awaiting-merge / blocked / done — nor an
+ * actively-repairing state — harness:ready / harness:in-progress, where a freshly-rejected PR sits
+ * at its OLD sha for minutes during normal auto-repair), call `opts.recordStalledNotified(number,
+ * sha, {stateDir})` BEFORE emitting exactly one `opts.notify({type:'pr-review-stalled', pr, url})`;
+ * (e) this branch NEVER re-reviews — `spawnReviewSession` must never run for an already-reviewed
+ * sha, stalled or not.
+ *
  * Every seam is injected as an in-memory fake/spy — no real `gh`/`git` process is ever spawned.
  * `isReviewEligible` is the REAL module (not a fake) so a miscomputed origin-gate input is caught
  * by the real gate logic instead of being hidden behind a permissive fake.
@@ -95,6 +107,21 @@ function makeStatefulReviewedStore() {
   });
   const alreadyReviewed = makeSpy((prNumber, sha) => seen.has(`${prNumber}:${sha}`));
   return { recordReviewed, alreadyReviewed, seen };
+}
+
+/**
+ * @description Wraps a fake `gh` so `gh(["issue","view", String(issueNumber), "--json","labels"])`
+ * answers with the given label set (in `gh issue view --json labels` shape — `{labels:[{name},...]}`),
+ * recorded into the SAME `calls` array as the wrapped `gh`. Every other call delegates unchanged.
+ */
+function withIssueViewLabels(gh, calls, issueNumber, labelNames) {
+  return (args) => {
+    if (args[0] === "issue" && args[1] === "view" && args[2] === String(issueNumber)) {
+      calls.push(args);
+      return { labels: labelNames.map((name) => ({ name })) };
+    }
+    return gh(args);
+  };
 }
 
 /** @description Assembles a full cronReview() opts object from defaults + per-test overrides. */
@@ -512,4 +539,215 @@ test("cronReview: verdict {status:'BLOCKED'} (non-null) STILL calls routeReject 
   assert.equal(routeReject.calls[0][0].number, 92, "routeReject receives the pr");
   assert.equal(routeReject.calls[0][1], "sha-block", "routeReject receives the head sha");
   assert.equal(incrementInfraFailure.calls.length, 0, "a non-null verdict must NOT count as an infra-failure");
+});
+
+test("cronReview: an already-reviewed PR is NEVER re-reviewed — spawnReviewSession never runs even with an active-labeled root issue (kills the BLOCKED->CLEAN same-sha flip)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 100, headRefName: "harness/200", author: { login: "bot-user" }, labels: [], headSha: "sha-q", url: "u100" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/x.js"]);
+  const spawnReviewSession = makeSpy();
+  const ghWithLabels = withIssueViewLabels(gh, calls, 200, ["harness:awaiting-merge"]);
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      spawnReviewSession,
+    })
+  );
+
+  assert.equal(spawnReviewSession.calls.length, 0, "an already-reviewed PR at the same sha must never be re-reviewed");
+});
+
+test("cronReview: a fresh CLEAN verdict with autoMergeEnabled false still records reviewed via the awaiting-merge route (regression preserved)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 101, headRefName: "harness/201", author: { login: "bot-user" }, labels: [], headSha: "sha-r" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/y.js"]);
+  const recordReviewed = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      getFreshVerdict: () => ({ status: "CLEAN" }),
+      crossFamilyEligible: () => true,
+      autoMergeEnabled: false,
+      recordReviewed,
+    })
+  );
+
+  assert.equal(recordReviewed.calls.length, 1, "recordReviewed must be called once on the awaiting-merge route");
+  assert.equal(recordReviewed.calls[0][0], pr.number, "recordReviewed receives the pr number");
+  assert.equal(recordReviewed.calls[0][1], pr.headSha, "recordReviewed receives the head sha");
+});
+
+test("cronReview: a crashed review (null verdict) below the infra-failure ceiling does NOT record reviewed (regression preserved)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 102, headRefName: "harness/202", author: { login: "bot-user" }, labels: [], headSha: "sha-s" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/z.js"]);
+  const recordReviewed = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      getFreshVerdict: () => null,
+      atInfraFailureCeiling: () => false,
+      alreadyReviewed: () => false,
+      recordReviewed,
+    })
+  );
+
+  assert.equal(recordReviewed.calls.length, 0, "a crashed review below the ceiling must not be recorded reviewed for that pr:sha");
+});
+
+test("cronReview: the stalled backstop notifies pr-review-stalled exactly once for an active in-review issue and records the stalled marker (spawnReviewSession never runs)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 103, headRefName: "harness/203", author: { login: "bot-user" }, labels: [], headSha: "sha-t", url: "u103" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/w.js"]);
+  const ghWithLabels = withIssueViewLabels(gh, calls, 203, ["harness:in-review"]);
+  const notify = makeSpy();
+  const recordStalledNotified = makeSpy();
+  const spawnReviewSession = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      stalledNotified: () => false,
+      notify,
+      recordStalledNotified,
+      spawnReviewSession,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled" && a[0].pr === pr.number);
+  assert.equal(stalledNotifies.length, 1, "exactly one pr-review-stalled notify must be emitted for this pr");
+  assert.equal(recordStalledNotified.calls.length, 1, "recordStalledNotified must be called once");
+  assert.equal(recordStalledNotified.calls[0][0], pr.number, "recordStalledNotified receives the pr number");
+  assert.equal(recordStalledNotified.calls[0][1], pr.headSha, "recordStalledNotified receives the head sha");
+  assert.equal(spawnReviewSession.calls.length, 0, "spawnReviewSession must never run for an alreadyReviewed sha");
+});
+
+test("cronReview: the stalled backstop is rate-limited to one notify per pr:sha — stalledNotified=true skips both the notify and the issue-view lookup", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 104, headRefName: "harness/204", author: { login: "bot-user" }, labels: [], headSha: "sha-u", url: "u104" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/v.js"]);
+  const notify = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      alreadyReviewed: () => true,
+      stalledNotified: () => true,
+      notify,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled");
+  assert.equal(stalledNotifies.length, 0, "no pr-review-stalled notify must be emitted once the pr:sha is already marked stalled-notified");
+  const issueViewCalled = calls.some((a) => a[0] === "issue" && a[1] === "view");
+  assert.ok(!issueViewCalled, "gh issue view need not even be called once the cheap stalledNotified marker gates the check");
+});
+
+test("cronReview: the stalled backstop excludes an awaiting-merge issue — no pr-review-stalled notify", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 105, headRefName: "harness/205", author: { login: "bot-user" }, labels: [], headSha: "sha-v", url: "u105" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/u.js"]);
+  const ghWithLabels = withIssueViewLabels(gh, calls, 205, ["harness:awaiting-merge"]);
+  const notify = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      stalledNotified: () => false,
+      notify,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled");
+  assert.equal(stalledNotifies.length, 0, "an awaiting-merge issue must never emit a pr-review-stalled notify");
+});
+
+test("cronReview: the stalled backstop excludes a done issue — no notify and recordStalledNotified never called (same allowlist as awaiting-merge/blocked)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 106, headRefName: "harness/206", author: { login: "bot-user" }, labels: [], headSha: "sha-w", url: "u106" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/t.js"]);
+  const ghWithLabels = withIssueViewLabels(gh, calls, 206, ["harness:done"]);
+  const notify = makeSpy();
+  const recordStalledNotified = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      stalledNotified: () => false,
+      notify,
+      recordStalledNotified,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled");
+  assert.equal(stalledNotifies.length, 0, "a done issue must never emit a pr-review-stalled notify");
+  assert.equal(recordStalledNotified.calls.length, 0, "recordStalledNotified must never be called for a done issue");
+});
+
+test("cronReview: the stalled backstop excludes a harness:ready root issue — a freshly re-queued PR being repaired is not stalled (no notify, no re-review)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 107, headRefName: "harness/207", author: { login: "bot-user" }, labels: [], headSha: "sha-x", url: "u107" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/s.js"]);
+  const ghWithLabels = withIssueViewLabels(gh, calls, 207, ["harness:ready"]);
+  const notify = makeSpy();
+  const recordStalledNotified = makeSpy();
+  const spawnReviewSession = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      stalledNotified: () => false,
+      notify,
+      recordStalledNotified,
+      spawnReviewSession,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled");
+  assert.equal(stalledNotifies.length, 0, "a freshly re-queued PR is being repaired, not stalled — no pr-review-stalled notify");
+  assert.equal(recordStalledNotified.calls.length, 0, "recordStalledNotified must never be called for a ready issue");
+  assert.equal(spawnReviewSession.calls.length, 0, "spawnReviewSession must never run for an alreadyReviewed sha");
+});
+
+test("cronReview: the stalled backstop excludes a harness:in-progress root issue — a PR whose repair is in progress is not stalled (no notify, no re-review)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 108, headRefName: "harness/208", author: { login: "bot-user" }, labels: [], headSha: "sha-y", url: "u108" };
+  setPr(pr.number, pr);
+  setDiff(pr.number, ["src/r.js"]);
+  const ghWithLabels = withIssueViewLabels(gh, calls, 208, ["harness:in-progress"]);
+  const notify = makeSpy();
+  const recordStalledNotified = makeSpy();
+  const spawnReviewSession = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh: ghWithLabels,
+      alreadyReviewed: () => true,
+      stalledNotified: () => false,
+      notify,
+      recordStalledNotified,
+      spawnReviewSession,
+    })
+  );
+
+  const stalledNotifies = notify.calls.filter((a) => a[0] && a[0].type === "pr-review-stalled");
+  assert.equal(stalledNotifies.length, 0, "a PR whose repair is in progress is not stalled — no pr-review-stalled notify");
+  assert.equal(recordStalledNotified.calls.length, 0, "recordStalledNotified must never be called for an in-progress issue");
+  assert.equal(spawnReviewSession.calls.length, 0, "spawnReviewSession must never run for an alreadyReviewed sha");
 });
