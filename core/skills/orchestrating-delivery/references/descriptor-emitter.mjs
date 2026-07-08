@@ -1,7 +1,9 @@
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { readRunnerConfig as defaultReadRunnerConfig } from './runner-adapters.mjs';
 import { parseFlags, isDirectCli } from './cli-flags.mjs';
+import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../vps/obs-outbox.mjs';
 
 /**
  * @description Emits the spawn-hand descriptor object deterministically at freeze-commit,
@@ -86,11 +88,74 @@ function defaultHeadSha() {
 }
 
 /**
- * @description Scaffold stub — replaced by the real implementation (task-2). Structurally emits the
- * task-executing observability checkpoint from the execution plan. Throwing until implemented.
+ * @description Structurally emits the `task-executing` observability checkpoint from the
+ * execution plan, so the orchestrator can never forget a prose `mark.mjs` command and let the
+ * feed go dark between plan approval and final review (#96 root cause). Producer-stamped in the
+ * spirit of #89: the descriptor-emitter CLI calls this right after persisting the descriptor, so
+ * the checkpoint is a structural side-effect of dispatch, not an orchestrator-remembered step.
+ *
+ * The plan key is **`id`**, NEVER `task_id` — `tasks.findIndex(t => t.id === taskId)`. A `t.task_id`
+ * lookup would never match (-1) and, behind fail-open, silently emit nothing (a born-dead false
+ * green). A taskId absent from the plan returns WITHOUT emitting — no bogus `{n:0}` event.
+ *
+ * STRICTLY ADDITIVE + FAIL-OPEN (the obsAppend guard replicated INLINE — not imported from
+ * stamp-triage; duplicating the ~10-line guard across the 2 call-sites is within the DRY limit):
+ * a cheap no-op when `HARNESS_OBSERVABILITY_RUN_PATH` is unset/empty or points at a nonexistent
+ * meta (existsSync-guarded); dedupe by `(type, n)` so a K=1 re-dispatch or a per-task sniper
+ * re-running the emitter never doubles the feed line; an append that throws is swallowed and never
+ * reaches the caller. Performs NO fetch.
+ *
+ * @param {object} params
+ * @param {string} params.featureId - Feature identifier (the plan lives at `<plansDir>/<featureId>/execution-plan.json`).
+ * @param {string} params.taskId - Task identifier matched against `tasks[].id`.
+ * @param {string} [params.plansDir] - Plans root; defaults to `.claude/plans` (resolved from `process.cwd()`).
+ * @param {(metaPath: string, event: object) => void} [params.appendFn] - obs-outbox appendEvent seam.
+ * @param {(metaPath: string) => object[]} [params.readEventsFn] - obs-outbox readEvents seam.
+ * @returns {void}
  */
-export function emitTaskExecuting() {
-  throw new Error('emitTaskExecuting not implemented');
+export function emitTaskExecuting({ featureId, taskId, plansDir, appendFn, readEventsFn } = {}) {
+  const root = plansDir ?? '.claude/plans';
+  const planPath = join(root, featureId, 'execution-plan.json');
+
+  let plan;
+  try {
+    plan = JSON.parse(readFileSync(planPath, 'utf8'));
+  } catch {
+    // fail-open: a missing/unreadable plan never blocks the caller (the CLI dispatch continues).
+    return;
+  }
+
+  const tasks = Array.isArray(plan?.tasks) ? plan.tasks : [];
+  // CRITICAL: the plan key is `id`, NOT `task_id`. `t.task_id` would never match → -1 → a
+  // born-dead false green behind fail-open.
+  const idx = tasks.findIndex((t) => t?.id === taskId);
+  if (idx < 0) {
+    // No bogus {n:0} event for a taskId absent from the plan.
+    return;
+  }
+  const n = idx + 1;
+  const total = tasks.length;
+
+  // --- obsAppend guard INLINE (mirrors stamp-triage.mjs obsAppend, NOT imported) ---
+  const metaPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+  if (typeof metaPath !== 'string' || metaPath.length === 0) {
+    return;
+  }
+  try {
+    if (!existsSync(metaPath)) {
+      return;
+    }
+    const readFn = readEventsFn ?? defaultReadEvents;
+    const existing = readFn(metaPath) || [];
+    if (existing.some((e) => e && e.type === 'task-executing' && e.n === n)) {
+      // Dedupe by (type, n): a re-dispatch / per-task sniper re-running the emitter never doubles the line.
+      return;
+    }
+    const append = appendFn ?? defaultAppendEvent;
+    append(metaPath, { type: 'task-executing', n, total });
+  } catch {
+    // fail-open: an outbox append never blocks the dispatch / CLI exit code.
+  }
 }
 
 // ---------- thin CLI: the runnable descriptor entrypoint SKILL.md promises ----------
@@ -135,4 +200,13 @@ if (isDirectCli(import.meta.url)) {
 
   writeFileSync(args.out, `${JSON.stringify(descriptor, null, 2)}\n`, 'utf8');
   process.stdout.write(`[descriptor-emitter] wrote ${args.out}\n`);
+
+  // Structural task-executing checkpoint (#89): emitted as a side-effect of dispatch right after
+  // the descriptor is persisted, so the orchestrator can never forget a prose `mark.mjs` command.
+  // Swallow-all: a plan read/parse/append throw can NEVER abort the dispatch or change the exit code.
+  try {
+    emitTaskExecuting({ featureId: args['feature-id'], taskId: args['task-id'] });
+  } catch {
+    // fail-open: emission never changes the CLI exit code.
+  }
 }
