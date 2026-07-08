@@ -58,7 +58,7 @@ import { join } from "node:path";
 import { runCronReview, mainCronReview } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
-import { createRun, updateMeta } from "./obs-outbox.mjs";
+import { createRun, updateMeta, readMeta } from "./obs-outbox.mjs";
 
 const BASE_CONFIG = {
   project: "demo",
@@ -1098,6 +1098,339 @@ test("run-cron-review: safeNotify fails open when the injected obs-reader THROWS
     const delivered = notifySpy.calls.find(([event]) => event.type === "pr-awaiting-merge");
     assert.ok(delivered, "the event must still be delivered even though resolution threw");
     assert.ok(!delivered[0].threadId, "on a throwing resolver, the event fails open to the global thread (no threadId)");
+  } finally {
+    cleanup();
+  }
+});
+
+// --- Close-on-merge (#ac-1.4/#ac-1.7): once an issue is detected merged — either via the
+// per-cycle reconcile closure (the manual/shipped-default merge path, autoMerge OFF) or via the
+// auto-merge path's mergeAndFinalize — run-cron-review reads the issue's BASE obs meta and, if its
+// status is not already 'closed', AWAITS `deps.closeForumTopic({threadId}, opts)`. Only when the
+// close resolves `{ok:true}` does it mark the meta `{status:'closed', closedAt:<epoch>}` — on
+// `{ok:false}` (or a throw) the meta STAYS 'awaiting-review' so a later reaper can re-close a
+// merged PR's topic instead of lying 'closed' on a transient send failure (no permanent orphan).
+// The close is driven from the per-cycle reconcile closure (called unconditionally at the end of
+// every cronReview cycle, on BOTH the manual and auto-merge paths) — NOT from inside the
+// mergeAndFinalizeFn closure itself. These tests are RED until the close-on-merge production
+// change lands — expected.
+
+test("run-cron-review: close-on-merge (manual/reconcile default path) — closes the forum topic and marks obs meta closed with a numeric closedAt (#ac-1.4)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-manual-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (arg) => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.ok(
+      closeForumTopicSpy.calls.some(([arg]) => arg && arg.threadId === 900),
+      "closeForumTopic must be called with {threadId:900} for the merged issue 42 detected by reconcile"
+    );
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "closed", "the BASE obs meta must transition to status 'closed'");
+    assert.equal(typeof meta.closedAt, "number", "the BASE obs meta must record a NUMERIC closedAt");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge ORDERING G1 (auto-merge path) — notify({type:'pr-merged', threadId:900}) fires BEFORE closeForumTopic({threadId:900})", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-order-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const order = [];
+    const notifySpy = makeSpy((event) => {
+      if (event && event.type === "pr-merged") order.push({ what: "notify-pr-merged", threadId: event.threadId });
+    });
+    const closeForumTopicFake = makeSpy(async (arg) => {
+      order.push({ what: "close", threadId: arg && arg.threadId });
+      return { ok: true };
+    });
+
+    const pr = { number: 70, headRefName: "harness/42", headRefOid: "deadbeef1", author: { login: "harness" }, labels: [], url: "u70", body: "" };
+    const gh = (args) => {
+      if (args[0] === "pr" && args[1] === "list") return [pr];
+      if (args[0] === "pr" && args[1] === "diff") return ["file.js"];
+      return { ok: true };
+    };
+
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir, autoMergeEnabled: true },
+      {
+        gh,
+        isReviewEligible: () => true,
+        getFreshVerdict: () => ({ status: "CLEAN" }),
+        crossFamilyEligible: () => true,
+        mergeAndFinalize: () => ({ merged: true }),
+        reconcile: () => [{ issue: 42, from: "harness:in-review" }],
+        closeForumTopic: closeForumTopicFake,
+        spawnReviewSession: () => {},
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: notifySpy,
+      }
+    );
+
+    const notifyIndex = order.findIndex((e) => e.what === "notify-pr-merged");
+    const closeIndex = order.findIndex((e) => e.what === "close" && e.threadId === 900);
+    assert.ok(notifyIndex !== -1, "the pr-merged notify must be recorded in the shared order log");
+    assert.equal(order[notifyIndex].threadId, 900, "the routed pr-merged notify must carry threadId 900 (the run's own forum topic)");
+    assert.ok(closeIndex !== -1, "the closeForumTopic call for threadId 900 must be recorded in the shared order log");
+    assert.ok(notifyIndex < closeIndex, "notify({type:'pr-merged', threadId:900}) must occur BEFORE closeForumTopic({threadId:900})");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge is NOT wired inside the mergeAndFinalizeFn closure — closeForumTopic has not fired the instant mergeAndFinalize returns {merged:true} (auto-merge path)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-notinmerge-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const order = [];
+    const closeForumTopicFake = makeSpy((arg) => {
+      order.push({ what: "close", threadId: arg && arg.threadId });
+    });
+
+    let closeCalledAtMergeReturn = null;
+
+    const pr = { number: 70, headRefName: "harness/42", headRefOid: "deadbeef1", author: { login: "harness" }, labels: [], url: "u70", body: "" };
+    const gh = (args) => {
+      if (args[0] === "pr" && args[1] === "list") return [pr];
+      if (args[0] === "pr" && args[1] === "diff") return ["file.js"];
+      return { ok: true };
+    };
+
+    const mergeAndFinalizeFake = () => {
+      const result = { merged: true };
+      closeCalledAtMergeReturn = order.some((e) => e.what === "close" && e.threadId === 900);
+      return result;
+    };
+
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir, autoMergeEnabled: true },
+      {
+        gh,
+        isReviewEligible: () => true,
+        getFreshVerdict: () => ({ status: "CLEAN" }),
+        crossFamilyEligible: () => true,
+        mergeAndFinalize: mergeAndFinalizeFake,
+        reconcile: () => [{ issue: 42, from: "harness:in-review" }],
+        closeForumTopic: closeForumTopicFake,
+        spawnReviewSession: () => {},
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(
+      closeCalledAtMergeReturn,
+      false,
+      "closeForumTopic must NOT have been called at the instant mergeAndFinalize returns {merged:true} — the close-on-merge is wired outside the mergeAndFinalizeFn closure (e.g. the per-cycle reconcile), not inside it"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge is idempotent — an obs meta already status 'closed' is never re-closed (closeForumTopic keyed on status !== 'closed')", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-idempotent-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "closed" });
+
+    const closeForumTopicSpy = makeSpy();
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    assert.equal(
+      closeForumTopicSpy.calls.length,
+      0,
+      "closeForumTopic must NOT be called when the merged issue's obs meta is already status 'closed'"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge fails open — a throwing closeForumTopic never breaks the reconcile closure, which still returns its healed list (#ac-1.7)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-failopen-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicThrows = () => {
+      throw new Error("forum boom");
+    };
+    const healedList = [{ issue: 42, from: "harness:awaiting-merge" }];
+    const reconcileFake = () => healedList;
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicThrows,
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    let result;
+    await assert.doesNotReject(async () => {
+      result = await captured.reconcile();
+    }, "a throwing closeForumTopic must never propagate out of the reconcile closure");
+
+    assert.deepEqual(
+      result,
+      healedList,
+      "the reconcile closure must still return its healed list even when closeForumTopic throws for a merged issue"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge passes the token-carrying notifier config to closeForumTopic (not the token-less project config)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-notifyconfig-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (input, opts) => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.equal(
+      closeForumTopicSpy.calls.length,
+      1,
+      "closeForumTopic must be called exactly once for the merged issue 42 detected by reconcile"
+    );
+    const [, opts] = closeForumTopicSpy.calls[0];
+    assert.ok(
+      opts && opts.config,
+      "closeForumTopic must be invoked with a SECOND argument (opts) carrying a config object — closeForumTopic(input, opts)"
+    );
+    assert.equal(
+      opts.config.token,
+      "BOT-TOKEN-XYZ",
+      "the SECOND argument (opts) reaching closeForumTopic must carry the RESOLVED notifier config (with the token from deps.notifyConfig) — not a token-less project config"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: close-on-merge does NOT mark the meta 'closed' when closeForumTopic fails (ok:false) — meta stays 'awaiting-review' so a later sweep can re-close (no permanent orphan)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-okfalse-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async (arg) => ({ ok: false }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    assert.equal(typeof captured.reconcile, "function", "cronReview must receive a reconcile closure");
+    await captured.reconcile();
+
+    assert.ok(
+      closeForumTopicSpy.calls.some(([arg]) => arg && arg.threadId === 900),
+      "closeForumTopic must still be called with {threadId:900} for the merged issue 42 detected by reconcile"
+    );
+
+    const meta = readMeta(metaPath);
+    assert.equal(
+      meta.status,
+      "awaiting-review",
+      "the BASE obs meta must STAY 'awaiting-review' when the close send fails (ok:false) — no permanent orphan lying 'closed'"
+    );
+    assert.ok(
+      meta.closedAt === undefined,
+      "closedAt must be absent when the close send failed"
+    );
   } finally {
     cleanup();
   }

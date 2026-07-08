@@ -356,6 +356,47 @@ test("cronReview: notifies pr-merged when mergeAndFinalize reports a merge", asy
   assert.ok(types.includes("pr-merged"), "must notify pr-merged on a successful autonomous merge");
 });
 
+test("cronReview: AWAITS the pr-merged send (it SETTLES) before reconcile() runs (mirrors the already-awaited review-started)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(110, { number: 110, headRefName: "harness/210", author: { login: "bot-user" }, labels: [], headSha: "sha-z", url: "u110" });
+  setDiff(110, ["src/merged.js"]);
+
+  const order = [];
+  // pr-merged's send resolves on a LATER microtask. If cronReview does NOT await it, the
+  // post-loop reconcile() call runs first and "reconcile" precedes "pr-merged:settled" — the same
+  // dropped-ping shape as the already-fixed review-started bug, just on the merged branch instead.
+  const notify = (event) => {
+    if (event && event.type === "pr-merged") {
+      return Promise.resolve().then(() => order.push("pr-merged:settled"));
+    }
+    return undefined;
+  };
+  const reconcile = makeSpy(() => {
+    order.push("reconcile");
+    return [];
+  });
+
+  await cronReview(
+    baseOpts({
+      gh,
+      notify,
+      reconcile,
+      autoMergeEnabled: true,
+      crossFamilyEligible: () => true,
+      mergeAndFinalize: makeSpy(() => ({ merged: true })),
+    })
+  );
+
+  const settledIdx = order.indexOf("pr-merged:settled");
+  const reconcileIdx = order.indexOf("reconcile");
+  assert.notEqual(settledIdx, -1, "the pr-merged send must settle");
+  assert.notEqual(reconcileIdx, -1, "reconcile must run during the cycle");
+  assert.ok(
+    settledIdx < reconcileIdx,
+    "pr-merged must be AWAITED — its send has to SETTLE before reconcile() runs, never after"
+  );
+});
+
 test("cronReview: a diff-fetch failure sentinel {ok:false,diffFailed:true} re-queues (notify pr-diff-fetch-failed, NO spawn, NO recordReviewed)", async () => {
   const { gh, setPr, setDiff } = makeFakeGh();
   setPr(60, { number: 60, headRefName: "harness/90", author: { login: "bot-user" }, labels: [], headSha: "sha-k" });
