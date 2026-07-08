@@ -8,14 +8,19 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
-- **Testes travados não podem mais depender de caminho absoluto do computador de quem escreveu.** A orientação pros agentes que criam e implementam testes agora exige caminho relativo ao próprio arquivo (em vez de `/Users/...` ou `/home/...` hardcoded), e a revisão de conformidade passa a barrar esse tipo de caminho hardcoded antes do teste travar — evitando que um teste passe na máquina de quem escreveu e quebre no checkout de outra máquina ou da nuvem.
-- **Correção sugerida pelo revisor adversarial não quebra mais um teste já travado de outra tarefa por engano.** Antes de aceitar como definitiva uma correção que o agente aplicou por sugestão do revisor adversarial, o sistema agora reexecuta todos os testes travados já verdes das tarefas concluídas — e, se a correção quebrar um deles, ela é refeita sem tocar no teste travado, preservando o contrato já fechado.
 
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.32.0] - 2026-07-08
+
+### Added
+- **Você volta a acompanhar a revisão dos PRs — no tópico do run, do começo ao merge.** Cada run mantém seu próprio tópico no Telegram aberto até o PR merjar, e o ciclo de revisão inteiro (revisão iniciada → pronto pra merjar → merjado) é narrado ali dentro, em vez de sumir. O grupo global fica limpo, só com erro/ação. O reaper nunca fecha o tópico de um PR ainda em revisão (e reconhece PRs de branch atípica pelo corpo), e o fechamento no merge só grava "fechado" depois de confirmar o fechamento no Telegram — um soluço de rede não deixa mais um tópico órfão. Substitui a supressão interina da 0.28.6, que era a causa de você não receber nada sobre a revisão dos PRs. (#180)
+- **Testes travados não podem mais depender de caminho absoluto do computador de quem escreveu.** A orientação pros agentes que criam e implementam testes agora exige caminho relativo ao próprio arquivo (em vez de `/Users/...` ou `/home/...` hardcoded), e a revisão de conformidade passa a barrar esse tipo de caminho hardcoded antes do teste travar — evitando que um teste passe na máquina de quem escreveu e quebre no checkout de outra máquina ou da nuvem.
+- **Correção sugerida pelo revisor adversarial não quebra mais um teste já travado de outra tarefa por engano.** Antes de aceitar como definitiva uma correção que o agente aplicou por sugestão do revisor adversarial, o sistema agora reexecuta todos os testes travados já verdes das tarefas concluídas — e, se a correção quebrar um deles, ela é refeita sem tocar no teste travado, preservando o contrato já fechado.
 
 ## [0.31.2] - 2026-07-08
 
