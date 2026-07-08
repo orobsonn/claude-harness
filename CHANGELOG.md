@@ -13,6 +13,10 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+### Security
+
+- **Gate de entrega agora barra a entrega se o estado de re-triagem estiver corrompido, em vez de liberar por engano.** Se o arquivo interno que controla pendências de correção grave (`regate_pending`) existir mas estiver num formato inválido (corrompido), a entrega agora é **negada** com um motivo diagnosticável (em vez de tratar como "nada pendente" e liberar silenciosamente). Continua liberando normalmente quando o arquivo está simplesmente ausente (situação de infraestrutura, comportamento inalterado). Vale nos dois pontos onde essa checagem acontece antes de um push/entrega. (#100)
+
 ### Fixed
 
 ### Removed

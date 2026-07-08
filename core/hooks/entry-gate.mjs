@@ -4,6 +4,16 @@
  * Fail-open contract: exits 0 on ANY infra error. DENY is emitted ONLY in the deliberate
  * gate-decision branch. A buggy gate must never brick delivery work.
  *
+ * Deliberate-DENY exception — corrupt gate-state CONTENT (not an infra error): a READABLE
+ * gate-state whose `regate_pending` is present but NOT a JSON array (null/string/number/object)
+ * is a data bug, not an unreadable-file infra error, and is DENIED fail-closed with a
+ * diagnosable reason (token "gate-state corrupted" + the truncated raw value + a repair/delete
+ * instruction), via the shared classifyRegatePending / corruptRegatePendingDeny helpers at both
+ * read sites. The infra-error path (readGateState → {}) leaves regate_pending ABSENT (undefined)
+ * and stays fail-OPEN — only a present-but-non-array value fails closed. This is the explicit
+ * exception to the "readable file → fail open" line above: silently coercing a corrupt non-array
+ * to [] would re-open the regate-pending delivery door the gate exists to hold.
+ *
  * Bash gate (delivery-bash-gate + issue-form advisory):
  *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
  *   EITHER (a) any unmatched regate_pending (a regate_pending task_id with no matching
@@ -58,6 +68,79 @@ import {
  * record, so it never matches → it routes to the critical-exception path instead.
  */
 const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
+
+/**
+ * @description Classifies a gate-state's regate_pending as ABSENT/CORRUPT. Pure single source of
+ * truth shared by BOTH gate-evaluation read sites (decideBash delivery-bash-gate + the shipper
+ * Agent gate) so the two can never drift on what counts as "corrupt". ABSENT (regate_pending ===
+ * undefined — the normal case AND the infra-error {} case, since readGateState returns {} on any
+ * read failure) → { corrupt:false, pending:[] } → fail OPEN, unchanged. CORRUPT (present but not
+ * an array — null/string/number/object) → { corrupt:true, raw } → fail CLOSED at the call site.
+ * Mirrors the existing checkRealFileCaptureRail shared-helper pattern. Does NOT touch
+ * regate_passed handling — that stays an independent array-coercion at the call sites.
+ * @param {object} [gateState]
+ * @returns {{ corrupt: false, pending: string[] } | { corrupt: true, raw: unknown }}
+ */
+export function classifyRegatePending(gateState) {
+  const raw = gateState?.regate_pending;
+  if (raw === undefined) return { corrupt: false, pending: [] };
+  if (Array.isArray(raw)) return { corrupt: false, pending: raw };
+  return { corrupt: true, raw };
+}
+
+/**
+ * @description Serializes a corrupt regate_pending raw value for the deny reason / stderr log,
+ * NEVER throwing: JSON.stringify first (catches circular/huge/BigInt), then String(raw) (catches
+ * a throwing toString), then a generic label. Capped at 200 chars BEFORE the caller assembles the
+ * reason, so a 5000-char blob (or worse) can never produce an unbounded deny reason — and a throw
+ * here can never bubble to the outer fail-open branch (which would reopen the very bug this closes).
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function serializeRawRegatePending(raw) {
+  let text;
+  try {
+    text = JSON.stringify(raw);
+  } catch {
+    try {
+      text = String(raw);
+    } catch {
+      text = "<unserializable regate_pending>";
+    }
+  }
+  if (text.length > 200) text = text.slice(0, 200);
+  return text;
+}
+
+/**
+ * @description Builds the deliberate-DENY verdict for a CORRUPT regate_pending and logs the raw
+ * value to stderr (stdout stays reserved for the decision JSON). Shared by both read sites so the
+ * corrupt-case reason can never drift. The reason carries the stable greppable token
+ * "gate-state corrupted", the truncated (≤200 char) raw value, and a REPAIR/DELETE instruction
+ * (regate_pending must be a JSON array, then re-stamp the pending re-gate) — deliberately DISTINCT
+ * from the normal unmatched-regate deny: it does NOT tell the operator to "stamp regate-passed",
+ * which is a no-op on a corrupt non-array value.
+ * @param {unknown} raw
+ * @returns {{ allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
+ */
+function corruptRegatePendingDeny(raw) {
+  const truncated = serializeRawRegatePending(raw);
+  console.error(
+    `[entry-gate] gate-state corrupted: regate_pending is not a JSON array (raw=${truncated}). ` +
+      "Repair or delete gate-state.json (regate_pending must be a JSON array), then re-stamp the pending re-gate.",
+  );
+  return {
+    allow: false,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason:
+        "[entry-gate] Blocked: gate-state corrupted — regate_pending is not a JSON array " +
+        `(raw value: ${truncated}). Repair or delete gate-state.json (regate_pending must be a ` +
+        "JSON array), then re-stamp the pending re-gate before proceeding.",
+    },
+  };
+}
 
 /**
  * @description Detects HEADLESS (cloud routine) mode. Cheap hands is a LOCAL-only capability; in
@@ -624,7 +707,15 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   } catch {
     gateState = {};
   }
-  const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+  // CORRUPT regate_pending (present but not a JSON array) → deliberate fail-CLOSED deny. This is
+  // the explicit exception to the readable-file-fail-open contract (see header docstring): a
+  // readable-but-malformed gate-state is a data bug, not an infra error, so it denies with a
+  // diagnosable reason instead of being silently coerced to [] (the old fail-open).
+  const regate = classifyRegatePending(gateState);
+  if (regate.corrupt) {
+    return corruptRegatePendingDeny(regate.raw);
+  }
+  const pending = regate.pending;
   const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
   const unmatched = pending.filter((t) => !passed.includes(t));
   if (unmatched.length > 0) {
@@ -958,7 +1049,13 @@ export function decide(payload, deps = {}) {
     } catch {
       gateState = {};
     }
-    const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
+    // CORRUPT regate_pending (present but not a JSON array) → deliberate fail-CLOSED deny, the
+    // explicit exception to the readable-file-fail-open contract (see header docstring).
+    const regate = classifyRegatePending(gateState);
+    if (regate.corrupt) {
+      return corruptRegatePendingDeny(regate.raw);
+    }
+    const pending = regate.pending;
     const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
     const unmatched = pending.filter((t) => !passed.includes(t));
     if (unmatched.length > 0) {
