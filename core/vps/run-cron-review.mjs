@@ -385,6 +385,9 @@ export async function runCronReview(config, deps = {}) {
       breakerTripped: breakerTrippedFn,
       alreadyReviewed: alreadyReviewedFn,
       recordReviewed: deps.recordReviewed ?? cronState.recordReviewed,
+      stalledNotified: deps.stalledNotified ?? ((pr, sha) => cronState.stalledNotified(pr, sha, { stateDir: reviewStateDir })),
+      recordStalledNotified:
+        deps.recordStalledNotified ?? ((pr, sha) => cronState.recordStalledNotified(pr, sha, { stateDir: reviewStateDir })),
       incrementInfraFailure: deps.incrementInfraFailure ?? ((pr, sha, o) => incrementInfraFailure(pr, sha, o)),
       atInfraFailureCeiling: deps.atInfraFailureCeiling ?? ((pr, sha, o) => atInfraFailureCeiling(pr, sha, o)),
       autoMergeEnabled,

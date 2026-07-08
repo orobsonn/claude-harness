@@ -9,6 +9,7 @@ import { join, dirname } from "node:path";
 
 const COUNTERS_FILE_NAME = "cron-counters.json";
 const REVIEWED_FILE_NAME = "cron-reviewed.json";
+const STALLED_NOTIFIED_FILE_NAME = "cron-review-stalled-notified.json";
 const CHAIN_FILE_NAME = "cron-chain.json";
 const BREAKER_FILE_NAME = "cron-breaker.json";
 const UPDATE_ATTEMPTS_FILE_NAME = "cron-update-attempts.json";
@@ -25,6 +26,10 @@ function countersFilePath(stateDir) {
 
 function reviewedFilePath(stateDir) {
   return join(stateDir, REVIEWED_FILE_NAME);
+}
+
+function stalledNotifiedFilePath(stateDir) {
+  return join(stateDir, STALLED_NOTIFIED_FILE_NAME);
 }
 
 function chainFilePath(stateDir) {
@@ -167,6 +172,37 @@ export function recordReviewed(pr, sha, opts) {
 export function alreadyReviewed(pr, sha, opts) {
   const reviewed = readJsonRecord(reviewedFilePath(opts.stateDir));
   return Boolean(reviewed[`${pr}:${sha}`]);
+}
+
+/**
+ * @description Records that a pr-review-stalled notification has been emitted for the given PR at
+ * the given head SHA — a cheap pr:sha-keyed marker so an orphaned-but-already-reviewed PR pays the
+ * (expensive) gh issue-view label read at most once per pr:sha.
+ * @param {number} pr
+ * @param {string} sha
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {void}
+ */
+export function recordStalledNotified(pr, sha, opts) {
+  const filePath = stalledNotifiedFilePath(opts.stateDir);
+  const stalledNotified = readJsonRecord(filePath);
+  stalledNotified[`${pr}:${sha}`] = true;
+  writeJsonRecord(filePath, stalledNotified);
+}
+
+/**
+ * @description Returns whether a pr-review-stalled notification has already been emitted for the
+ * given PR at the given head SHA.
+ * @param {number} pr
+ * @param {string} sha
+ * @param {object} opts
+ * @param {string} opts.stateDir
+ * @returns {boolean}
+ */
+export function stalledNotified(pr, sha, opts) {
+  const stalledNotified = readJsonRecord(stalledNotifiedFilePath(opts.stateDir));
+  return Boolean(stalledNotified[`${pr}:${sha}`]);
 }
 
 // --- PR-keyed update-branch attempt store (cron-update-attempts.json) ---

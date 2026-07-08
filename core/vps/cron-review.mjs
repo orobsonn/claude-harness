@@ -45,6 +45,8 @@ function extractRoot(headRefName) {
  * @param {(o: {stateDir: string}) => boolean} opts.breakerTripped windowed-cap gate
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.alreadyReviewed
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed idempotency handoff for the awaiting-merge route
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.stalledNotified one-shot pr:sha marker gating the stalled-notify backstop
+ * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordStalledNotified durably marks a pr:sha as already stalled-notified (recorded BEFORE the notify)
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.incrementInfraFailure per-pr:sha count of review sessions that crashed without a verdict
  * @param {(pr: number, sha: string, o: {stateDir: string}) => boolean} opts.atInfraFailureCeiling true once the infra-failure count for this pr:sha has reached the ceiling
  * @param {boolean} [opts.autoMergeEnabled] - only strict `=== true` auto-merges eligible PRs; default/false routes to awaiting-merge
@@ -68,6 +70,8 @@ export async function cronReview(opts) {
     breakerTripped,
     alreadyReviewed,
     recordReviewed,
+    stalledNotified,
+    recordStalledNotified,
     incrementInfraFailure,
     atInfraFailureCeiling,
     autoMergeEnabled,
@@ -133,8 +137,36 @@ export async function cronReview(opts) {
     const number = pr.number;
     const sha = pr.headSha;
 
-    // Idempotency: a PR already reviewed at its current head SHA is a no-op.
+    // Idempotency: a PR already reviewed at its current head SHA is a no-op — it is NEVER
+    // re-reviewed. But a long-lived orphan (reviewed, then left sitting in an ACTIVE review state
+    // with no terminal relabel) would otherwise sit silent forever. Emit a ONE-SHOT stalled notify
+    // per pr:sha so the operator learns the review never resolved — gated on a cheap pr:sha marker
+    // so the gh issue-view label read runs at most once per pr:sha, and only for a genuinely ACTIVE
+    // issue (never awaiting-merge/blocked/done). spawnReviewSession must NEVER run here.
     if (alreadyReviewed(number, sha, { stateDir })) {
+      const root = extractRoot(pr.headRefName);
+      if (root === null) {
+        continue;
+      }
+      if (!stalledNotified(number, sha, { stateDir })) {
+        const view = gh(["issue", "view", String(root), "--json", "labels"]);
+        const labelNames = new Set(
+          Array.isArray(view && view.labels) ? view.labels.map((l) => (l && l.name) || "").filter(Boolean) : []
+        );
+        const isActive =
+          (labelNames.has("harness:ready") ||
+            labelNames.has("harness:in-progress") ||
+            labelNames.has("harness:in-review")) &&
+          !labelNames.has("harness:awaiting-merge") &&
+          !labelNames.has("harness:blocked") &&
+          !labelNames.has("harness:done");
+        if (isActive) {
+          // Record BEFORE notify — fail-closed against spam: even a notify failure can never cause a
+          // re-notify, because the marker is already durable.
+          recordStalledNotified(number, sha, { stateDir });
+          notify({ type: "pr-review-stalled", pr: number, url: pr.url });
+        }
+      }
       continue;
     }
 

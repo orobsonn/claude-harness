@@ -15,7 +15,7 @@ test("AC-3.4 routeReject below ceiling relabels in-review -> ready (no accumulat
     return { ok: true };
   }
   const chain = { atCeiling: () => false, increment: () => {}, reset: () => {}, read: () => 0 };
-  const reviewed = { alreadyReviewed: () => false };
+  const reviewed = { alreadyReviewed: () => false, recordReviewed: () => {} };
 
   routeReject(
     { number: 149, headRefName: "harness/86" },
