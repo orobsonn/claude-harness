@@ -955,10 +955,10 @@ describe("dispatchHand wall-clock timeout — dry-run probe has NO timeout (#ac-
 
 // ---------------------------------------------------------------------------
 // Locked test 15 — #ac-1.1 / C4 / C7 dispatch.timeout_ms overrides the live-spawn
-// timeout, and the DEFAULT_HAND_TIMEOUT_MS (540000ms) is used when omitted.
+// timeout, and the DEFAULT_HAND_TIMEOUT_MS (900000ms) is used when omitted.
 // ---------------------------------------------------------------------------
 describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac-1.1, C4/C7)", () => {
-  it("honors dispatch.timeout_ms when present, and defaults to 540000ms otherwise", async () => {
+  it("honors dispatch.timeout_ms when present, and defaults to 900000ms otherwise", async () => {
     let liveOptsOverride = null;
     const fakeSpawnOverride = (cmd, args, opts) => {
       if (args?.includes("--test")) {
@@ -1024,8 +1024,46 @@ describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac
     assert.ok(liveOptsDefault, "the live spawn call must have been captured for the default case");
     assert.equal(
       liveOptsDefault.timeout,
-      540000,
-      "opts.timeout must default to DEFAULT_HAND_TIMEOUT_MS (540000ms) when timeout_ms is omitted"
+      900000,
+      "opts.timeout must default to DEFAULT_HAND_TIMEOUT_MS (900000ms) when timeout_ms is omitted"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test — #ac-1.1 the per-task timeout_ms override is clamped to the 900000ms
+// ceiling — a plan cannot smuggle an unbounded wait past the hand's timeout envelope.
+// ---------------------------------------------------------------------------
+describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 900000ms ceiling (#ac-1.1)", () => {
+  it("clamps an over-ceiling dispatch.timeout_ms down to 900000ms", async () => {
+    let liveOpts = null;
+    const fakeSpawn = (cmd, args, opts) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      liveOpts = opts;
+      return { status: 0, stdout: "", stderr: "", output: [] };
+    };
+
+    const dispatch = {
+      model: "glm-5.1",
+      brief: "do the thing",
+      shared_context: "no secrets",
+      scope_paths: ["core/"],
+      frozen_paths: [],
+      allowed_writes: ["core/"],
+      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      timeout_ms: 1_800_000, // over the 900000ms ceiling
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env: fakeEnv });
+
+    assert.ok(liveOpts, "the live spawn call must have been captured");
+    assert.equal(
+      liveOpts.timeout,
+      900000,
+      "an over-ceiling dispatch.timeout_ms must be clamped down to the 900000ms ceiling"
     );
   });
 });
@@ -1037,7 +1075,7 @@ describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac
 // the timeout override actually flips a genuine DONE, not a mere relabel of a
 // non-DONE run.
 // ---------------------------------------------------------------------------
-describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE→FAILED (#ac-1.2)", () => {
+describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-classify (#ac-1.2/#ac-1.4)", () => {
   const featureId = "hand-wallclock-timeout";
   const taskId = "task-1";
   const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
@@ -1051,6 +1089,21 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE�
         lockedTestExitCode: 0,
         stdout: "",
         stderr: "count_tokens endpoint 404 not found",
+      },
+      captured: true,
+      criticalException: false,
+    });
+  }
+
+  function makeRedFixtureCapture() {
+    return () => ({
+      child: {
+        captured: true,
+        touchedPaths: ["core/x/foo.ts"],
+        exitCode: 1,
+        lockedTestExitCode: 1,
+        stdout: "",
+        stderr: "locked_test failed",
       },
       captured: true,
       criticalException: false,
@@ -1108,7 +1161,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE�
     assert.equal(result.outcome.status, OUTCOME.DONE);
   });
 
-  it("TIMEOUT — the SAME DONE-scoring fixture flips to outcome.status === OUTCOME.FAILED with timedOut === true, and does not throw", async () => {
+  it("TIMEOUT-GREEN — a DONE-scoring fixture that times out STAYS DONE (capture is source of truth) with timedOut === true, and does not throw", async () => {
     const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
     const briefFile = join(briefDir, "brief.txt");
     writeFileSync(briefFile, "Create out.txt with hello", "utf8");
@@ -1153,8 +1206,60 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang two-pronged DONE�
     assert.ok(capturedRecord, "writeRecord must have been called with a record");
     assert.equal(
       capturedRecord.outcome.status,
+      OUTCOME.DONE,
+      "TIMEOUT-GREEN prong (#ac-1.2): a wall-clock kill AFTER the frozen locked_test landed green must NOT flip the outcome — the tree is the source of truth, so it stays DONE"
+    );
+    assert.equal(capturedRecord.timedOut, true, "the persisted record must still carry timedOut === true");
+    assert.equal(result.outcome.status, OUTCOME.DONE);
+  });
+
+  it("TIMEOUT-RED — a genuinely non-green fixture (locked_test red) that times out is FAILED with timedOut === true, and does not throw", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Create out.txt with hello", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const freezeCommitSha = "fake0000000000000000000000000000000abc";
+    const descriptor = {
+      feature_id: featureId,
+      task_id: taskId,
+      model: "glm-5.1",
+      brief_file: briefFile,
+      locked_test: lockedTest,
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+
+    const fakeSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+    const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
+
+    const result = await runLiveDispatch(descriptor, {
+      spawn: fakeSpawn,
+      env: fakeEnv,
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeRedFixtureCapture(),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(
+      capturedRecord.outcome.status,
       OUTCOME.FAILED,
-      "TIMEOUT prong: the SAME DONE-scoring fixture must flip to FAILED under a timeout override"
+      "TIMEOUT-RED prong (#ac-1.4): a timeout with a red frozen locked_test is a genuine failure — must be FAILED, so the change never masks real failure"
     );
     assert.equal(capturedRecord.timedOut, true, "the persisted record must carry timedOut === true");
     assert.equal(result.outcome.status, OUTCOME.FAILED);
@@ -1284,7 +1389,7 @@ describe("runLiveDispatch inline capture-verified stamp (#89)", () => {
     );
   });
 
-  it("TIMEOUT — a DONE-scoring fixture flipped to FAILED by the wall-clock override carries NO capturedVerifiedAt", async () => {
+  it("TIMEOUT-GREEN — a DONE-scoring fixture that times out STAYS DONE and DOES stamp capturedVerifiedAt (#ac-1.2/#ac-1.3)", async () => {
     const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
     const briefFile = join(briefDir, "brief.txt");
     writeFileSync(briefFile, "implement feature", "utf8");
@@ -1314,11 +1419,53 @@ describe("runLiveDispatch inline capture-verified stamp (#89)", () => {
     });
 
     assert.ok(capturedRecord, "writeRecord must have been called with a record");
-    assert.equal(capturedRecord.outcome.status, OUTCOME.FAILED, "precondition: the timeout override must flip to FAILED");
+    assert.equal(capturedRecord.outcome.status, OUTCOME.DONE, "precondition: a timeout with a green locked_test stays DONE (capture is the source of truth)");
+    assert.equal(
+      typeof capturedRecord.capturedVerifiedAt,
+      "string",
+      "a survive-timeout DONE run MUST stamp capturedVerifiedAt so the entry-gate real-file rail does not block the next commit (#ac-1.3)"
+    );
+    assert.ok(
+      capturedRecord.capturedVerifiedAt.length > 0 && !Number.isNaN(Date.parse(capturedRecord.capturedVerifiedAt)),
+      "capturedVerifiedAt must be a non-empty, parseable ISO-8601 timestamp"
+    );
+  });
+
+  it("TIMEOUT-RED — a genuinely red fixture that times out is FAILED and carries NO capturedVerifiedAt (#ac-1.4)", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "implement feature", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-state-"));
+
+    const timeoutSpawn = (cmd, args) => {
+      if (args?.includes("--test")) {
+        return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
+      }
+      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" };
+    };
+
+    let capturedRecord = null;
+    const fakeWriteRecord = (path, content) => {
+      capturedRecord = JSON.parse(content);
+    };
+
+    await runLiveDispatch(makeDescriptor(briefFile), {
+      spawn: timeoutSpawn,
+      env: { ANTHROPIC_AUTH_TOKEN: "fake-token" },
+      gitStatus: () => "",
+      headSha: () => freezeCommitSha,
+      snapshotUntracked: () => ({}),
+      capture: makeCapture({ childExitCode: 0, lockedTestExitCode: 1, touchedPaths: ["core/x/foo.ts"] }),
+      writeRecord: fakeWriteRecord,
+      stateDir,
+    });
+
+    assert.ok(capturedRecord, "writeRecord must have been called with a record");
+    assert.equal(capturedRecord.outcome.status, OUTCOME.FAILED, "precondition: a timeout with a red locked_test is a genuine FAILED");
     assert.equal(
       capturedRecord.capturedVerifiedAt,
       undefined,
-      "a timed-out run must never carry capturedVerifiedAt"
+      "a genuinely failed (red) run must never carry capturedVerifiedAt"
     );
   });
 

@@ -48,8 +48,15 @@ const OLLAMA_BASE_URL = "https://ollama.com";
  */
 const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
 
-/** @description Default wall-clock timeout for hand spawn in milliseconds (9 minutes) */
-const DEFAULT_HAND_TIMEOUT_MS = 540000;
+/** @description Default wall-clock timeout for hand spawn in milliseconds (15 minutes) */
+const DEFAULT_HAND_TIMEOUT_MS = 900000;
+
+/**
+ * @description Hard ceiling for the wall-clock timeout, in milliseconds. `dispatch.timeout_ms`
+ * (per-task override) may lower the wall-clock but must never raise it above this ceiling —
+ * a plan cannot smuggle an unbounded wait past the hand's designed timeout envelope.
+ */
+const HAND_TIMEOUT_CEILING_MS = DEFAULT_HAND_TIMEOUT_MS;
 
 /**
  * @description Attributes a 429 rate-limit event over the FULL pre-truncation child stream
@@ -334,9 +341,11 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
       CLAUDE_CONFIG_DIR: ephemeralDir,
     };
 
-    // Determine timeout value: dispatch.timeout_ms when positive number, else DEFAULT_HAND_TIMEOUT_MS
+    // Determine timeout value: dispatch.timeout_ms when positive number (clamped to the
+    // ceiling so a per-task override can only lower the wall-clock, never raise it past
+    // HAND_TIMEOUT_CEILING_MS), else DEFAULT_HAND_TIMEOUT_MS.
     const timeoutMs = (typeof dispatch.timeout_ms === 'number' && dispatch.timeout_ms > 0)
-      ? dispatch.timeout_ms
+      ? Math.min(dispatch.timeout_ms, HAND_TIMEOUT_CEILING_MS)
       : DEFAULT_HAND_TIMEOUT_MS;
 
     // Spawn the process (injectable for unit tests).
@@ -655,13 +664,22 @@ export async function runLiveDispatch(descriptor, {
     // (a different freeze) can never authorize a Claude hand escape for a later, unfailed run.
     const record = { ...buildRunRecord({ dispatch, child: captured.child, token, logs: [] }), freezeCommitSha: descriptor.freeze_commit_sha };
 
-    // C3 override: unconditional FAILED override when child timed out
-    // Keyed on dispatchHand return's child.timedOut (NOT captured.child)
+    // Survive-timeout capture-then-classify (#ac-1.2/#ac-1.4): the independent capture (step 9)
+    // already ran against the frozen locked_test regardless of the wall-clock outcome, so
+    // `record.outcome.status` above already reflects whether the hand's work is genuinely
+    // green. A SIGTERM/SIGKILL by wall-clock after the work landed is not, by itself, a quality
+    // failure — only override to FAILED when the capture did NOT already reach DONE (the frozen
+    // test is red, or the diff/scope/frozen/allowed-write checks failed). Keyed on dispatchHand
+    // return's child.timedOut (NOT captured.child).
     if (child.timedOut) {
-      record.outcome.status = "FAILED";
       record.timedOut = true;
       record.timeoutMs = child.timeoutMs;
-      record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms`;
+      if (record.outcome.status !== "DONE") {
+        record.outcome.status = "FAILED";
+        record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms`;
+      } else {
+        record.reason = `hand exceeded wall-clock timeout of ${child.timeoutMs}ms but the frozen locked_test was green on independent capture — treated as DONE`;
+      }
     }
 
     // (10a) INLINE capture-verified stamp (#89): the independent capture ran INSIDE this dispatch
