@@ -640,6 +640,106 @@ test("run-cron-review: the codex eye spawn env is scrubbed of hand-token credent
   }
 });
 
+// A driver whose runCodexRole returns a caller-supplied FULL envelope per role (available + output),
+// so a test can model "this eye RAN, that eye rate-limited/hung" independently — the crux of the
+// fail-open-on-codex-crash change. checkAvailability is ok (authed) so the eyes are actually attempted.
+function makeEyeDriver({ adv, sec }) {
+  const runCodexRole = makeSpy(({ role }) => (role === "security" ? sec : adv));
+  return {
+    driver: {
+      runCodexRole,
+      checkAvailability: () => ({ ok: true, reason: "" }),
+      securityVerdict: (issues = []) => (issues.some((i) => i.severity === "high" || i.severity === "medium") ? "UNSAFE" : "SECURE"),
+      composeRolePrompt: ({ role }) => `CODEX ${role} PROMPT`,
+    },
+    runCodexRole,
+  };
+}
+
+const ghHeadPatch = makeSpy((args) => (args[1] === "view" ? { headRefOid: "deadbeef1" } : (args[1] === "diff" ? "REAL PATCH" : { ok: true })));
+
+test("run-cron-review: BOTH codex eyes failed to run (available:false, rate-limit) and none flagged → GENUINE ABSENCE → fail-open true (operator's Codex-budget case)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-both-ratelimited-");
+  try {
+    const { driver } = makeEyeDriver({
+      adv: { available: false, reason: "codex run failed: rate limit" },
+      sec: { available: false, reason: "codex run failed: rate limit" },
+    });
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh: ghHeadPatch, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, true, "a Codex that can't run (rate-limit) must NOT hold auto-merge hostage — genuine absence fails OPEN");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.equal(artifact.available, false, "absence records available:false");
+    assert.equal(artifact.verdict, null, "absence writes verdict:null DIRECT (never the derived BLOCKED) so fail-open is reachable");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: adversary ran clean but security failed to run (rate-limit) → not a full clean, nothing flagged → fail-open true", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-partial-ran-");
+  try {
+    const { driver } = makeEyeDriver({
+      adv: { available: true, output: { issues: [] } },
+      sec: { available: false, reason: "codex run failed: timeout" },
+    });
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh: ghHeadPatch, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, true, "one eye clean + one eye that never ran (and no flag) is a genuine absence → fail-open");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.equal(artifact.verdict, null, "the partial-run absence writes verdict:null");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: a codex eye that RAN and returned UNSAFE (available:true) BLOCKS — a real finding is NEVER swallowed by the fail-open (safety regression guard)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-ran-unsafe-");
+  try {
+    const { driver } = makeEyeDriver({
+      adv: { available: true, output: { verdict: "UNSAFE", issues: [] } },
+      sec: { available: false, reason: "codex run failed: rate limit" }, // even with the OTHER eye down
+    });
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh: ghHeadPatch, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a real UNSAFE (available:true) must BLOCK — the fail-open must never swallow a genuine finding");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.notEqual(artifact.verdict, null, "a flagged eye writes the derived (BLOCKED) verdict, NOT the verdict:null absence");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: an eye that RAN with verdict SECURE but a HIGH issue (securityVerdict→UNSAFE) BLOCKS — the dangerous collapse cannot fail-open", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-ran-high-issue-");
+  try {
+    const { driver } = makeEyeDriver({
+      adv: { available: true, output: { verdict: "SECURE", issues: [{ severity: "high", scope: "core/x.mjs", evidence: "e" }] } },
+      sec: { available: true, output: { issues: [] } },
+    });
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh: ghHeadPatch, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, false, "a SECURE verdict hiding a HIGH issue is NOT clean — adversaryClean=false → block, never fail-open");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.notEqual(artifact.verdict, null, "a flagged (HIGH-issue) eye must not take the verdict:null absence path");
+  } finally { cleanup(); }
+});
+
+test("run-cron-review: BOTH eyes ran fully clean → real cross-family CLEAN → eligible true, artifact verdict CLEAN", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-xfam-both-clean-");
+  try {
+    const { driver } = makeEyeDriver({
+      adv: { available: true, output: { issues: [] } },
+      sec: { available: true, output: { verdict: "SECURE", issues: [] } },
+    });
+    const reviewStateDir = join(stateDir, "review");
+    const captured = await captureCronReviewOpts({ stateDir }, { gh: ghHeadPatch, loadCodexDriver: async () => driver });
+    const result = captured.crossFamilyEligible(PR, { changedFiles: ["f"], sha: "deadbeef1", stateDir: reviewStateDir });
+    assert.equal(result, true, "both eyes fully clean is a real CLEAN — eligible");
+    const artifact = JSON.parse(readFileSync(join(reviewStateDir, "review-70-deadbeef1.crossfamily.json"), "utf8"));
+    assert.equal(artifact.available, true, "a full clean records available:true");
+    assert.equal(artifact.verdict, "CLEAN", "a full clean records the derived CLEAN verdict");
+  } finally { cleanup(); }
+});
+
 test("run-cron-review: the DEFAULT reconcile closure releases chained dependents whose dependencies have merged (queued->ready + chain-released notify)", async () => {
   const { stateDir, cleanup } = withTempStateDir("harness-review-chain-");
   try {

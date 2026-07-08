@@ -12,6 +12,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Changed
 
 ### Fixed
+- **Auto-merge deixa de ficar refém da segunda família (Codex/GPT) quando ela não roda por limite de assinatura.** No servidor do operador o Codex estoura o rate-limit e trava na maioria das revisões; quando isso acontecia, o gate tratava a falha como "segunda família reprovou" e bloqueava o auto-merge — mesmo com o Claude tendo aprovado —, empilhando PRs indefinidamente. Agora um Codex que **não conseguiu rodar** (rate-limit, timeout, hang, sem login) é tratado como ausência genuína → o veredito do Claude decide sozinho (fail-open, auto-merge). O Codex só **bloqueia** quando de fato roda e aponta um problema real (UNSAFE / issue grave). Segurança preservada: um achado real sempre acompanha `available:true`, então esse caminho nunca engole uma reprovação legítima.
 - **Sessão de revisão que trava não vira mais loop de re-processamento caro.** Quando a revisão automática de um PR crashava/timeoutava sem produzir veredito, o sistema tratava isso como "revisão rejeitou" e devolvia a issue inteira pra fila — re-executando spec+plano+código do zero (caríssimo) pra corrigir um problema que não existia. Agora um crash de revisão é distinguido de uma rejeição real: o sistema apenas re-tenta a revisão (barata) do mesmo PR no próximo ciclo e, após 3 falhas seguidas de infraestrutura no mesmo commit, bloqueia a issue e avisa o operador de forma acionável, em vez de retentar pra sempre.
 
 ### Removed

@@ -299,8 +299,39 @@ export async function runCronReview(config, deps = {}) {
       const adversaryClean = advOk && codexDriver.securityVerdict(advIssues ?? []) === "SECURE";
       const securitySecure = secOk && codexDriver.securityVerdict(secIssues ?? []) === "SECURE";
 
-      writeArtifact({ available, verdict: verdict.status, adversaryClean, securitySecure });
-      return crossFamilyEligible(pr, { available, secondFamilyVerdict: verdict });
+      // RAW execution signal — did the eye actually RUN (spawn ok + status 0 + parseable)? This is the
+      // codex-adversary `available` flag STRAIGHT off runCodexRole, NOT the collapsed advOk/secOk (which
+      // conflate "did not run" with "ran and failed UNSAFE"). Absence must be decided on "did it run?".
+      const advRan = adv.available === true;
+      const secRan = sec.available === true;
+      // A Codex eye BLOCKS only if it RAN and is not FULLY clean — includes an UNSAFE verdict, a HIGH
+      // issue behind a SECURE verdict (securityVerdict of the issues), or a malformed output.
+      const advFlagged = advRan && !adversaryClean;
+      const secFlagged = secRan && !securitySecure;
+
+      if (advFlagged || secFlagged) {
+        // A Codex eye ran and flagged a real problem — a genuine second-family BLOCK. Preserve today's
+        // behavior: write the derived (BLOCKED) verdict + available:false → crossFamilyEligible blocks.
+        writeArtifact({ available, verdict: verdict.status, adversaryClean, securitySecure });
+        return crossFamilyEligible(pr, { available, secondFamilyVerdict: verdict });
+      }
+
+      if (adversaryClean && securitySecure) {
+        // Both eyes ran FULLY clean — a real cross-family CLEAN.
+        writeArtifact({ available, verdict: verdict.status, adversaryClean, securitySecure });
+        return crossFamilyEligible(pr, { available, secondFamilyVerdict: verdict });
+      }
+
+      // Otherwise: NO eye produced a real (blocking) opinion, and it is not a full clean pass — i.e. at
+      // least one eye FAILED TO RUN (rate-limit / timeout / hang / auth) and no eye flagged anything.
+      // This is a GENUINE ABSENCE of a second-family opinion, indistinguishable from switch-off / no-sub.
+      // Fail-OPEN exactly like the true-absence branches above (verdict:null): a Codex that can't run on
+      // the operator's subscription budget must NOT hold auto-merge hostage. Safety: a real UNSAFE always
+      // carries available:true (runCodexRole line 342 is the only available:true return), so this path
+      // can never swallow a real finding. verdict:null is written DIRECT — NOT through
+      // deriveSecondFamilyVerdict (which never returns null), or the fail-open would be unreachable.
+      writeArtifact({ available: false, verdict: null, adversaryClean: false, securitySecure: false });
+      return crossFamilyEligible(pr, { available: false, secondFamilyVerdict: null });
     });
 
   const autoMergeEnabled = config.autoMergeEnabled === true;
