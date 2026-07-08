@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **test-infra memory chega ao test-author sozinha** — a curadoria de contexto do `orchestrating-delivery` agora, por convenção, injeta em todo dispatch do TEST-AUTHOR qualquer memory de `.claude/memory/` sobre o runner/pool/fixture de teste (ex.: `vitest-pool-workers-raw-import.md`). Um gotcha de test-infra já documentado alcança o test-author no primeiro dispatch — sem relay manual via `shared_context.md` — para a mesma mão não redescobri-lo duas vezes no mesmo run. Escopo restrito ao test-author; a curadoria do executor não muda (#102).
+
 ### Changed
 
 ### Fixed
