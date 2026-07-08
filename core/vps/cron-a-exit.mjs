@@ -390,18 +390,27 @@ export async function notifyExit(outcome, deps = {}) {
       try {
         const meta = readMetaFn(metaPath);
         if (meta && meta.status !== "closed") {
-          if (meta.threadId != null) {
-            const closeResult = await closeForumTopicFn(
-              { threadId: meta.threadId },
-              { config: notifier?.config ?? null, fetch: deps.fetch, log: deps.log }
-            );
-            if (closeResult && closeResult.ok) {
+          // Split by outcome:
+          // (1) When outcome.outcome==='done', set status to 'awaiting-review' and do NOT close the topic
+          // (2) When outcome.outcome is 'blocked' or 'failed', keep today's behavior
+          if (outcome.outcome === "done") {
+            // Keep the forum topic OPEN and set status to 'awaiting-review'
+            updateMetaFn(metaPath, { status: "awaiting-review" });
+          } else if (outcome.outcome === "blocked" || outcome.outcome === "failed") {
+            // Keep EXACTLY today's behavior for blocked/failed outcomes
+            if (meta.threadId != null) {
+              const closeResult = await closeForumTopicFn(
+                { threadId: meta.threadId },
+                { config: notifier?.config ?? null, fetch: deps.fetch, log: deps.log }
+              );
+              if (closeResult && closeResult.ok) {
+                updateMetaFn(metaPath, { status: "closed" });
+              }
+            } else {
+              // No forum topic was created for this run (createForumTopic failed at dispatch): nothing
+              // to close, but the run is terminal — mark it closed so the reaper orphan sweep skips it.
               updateMetaFn(metaPath, { status: "closed" });
             }
-          } else {
-            // No forum topic was created for this run (createForumTopic failed at dispatch): nothing
-            // to close, but the run is terminal — mark it closed so the reaper orphan sweep skips it.
-            updateMetaFn(metaPath, { status: "closed" });
           }
         }
       } catch {
