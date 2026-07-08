@@ -38,6 +38,25 @@ import { fileURLToPath } from "node:url";
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
 
+// Cosmetic-only, TTY-gated progress helpers (no deps — builtins only). NO_COLOR respected per
+// no-color.org. `step`/`ok` print as each stage completes so `npx claude-harness init` shows live
+// progress instead of one silent block followed by a final dump.
+const isTTY = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+const paint = (code, text) => (isTTY ? `\x1b[${code}m${text}\x1b[0m` : text);
+const dim = (text) => paint(2, text);
+const green = (text) => paint(32, text);
+const bold = (text) => paint(1, text);
+
+/** @description Prints a live "in progress" line for a stage about to run. */
+function step(label) {
+  process.stdout.write(`${dim("→")} ${label}\n`);
+}
+
+/** @description Prints a live "done" line right after a stage completes. */
+function ok(label) {
+  process.stdout.write(`${green("✓")} ${label}\n`);
+}
+
 const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 
@@ -107,12 +126,16 @@ function resolveSource(source, ref) {
     const cloneArgs = ["clone", "--depth", "1"];
     if (ref) cloneArgs.push("--branch", ref);
     cloneArgs.push(source, dest);
+    step(`Downloading harness${ref ? ` (${ref})` : ""} from ${source}...`);
     try {
-      execFileSync("git", cloneArgs, { stdio: "pipe" });
+      // stderr inherited only on a real TTY so git's own progress meter streams live; piped/CI
+      // output stays silent (no half-finished progress bar noise in logs).
+      execFileSync("git", cloneArgs, { stdio: ["ignore", "ignore", isTTY ? "inherit" : "pipe"] });
     } catch (err) {
       rmSync(dest, { recursive: true, force: true });
       fail(`git clone failed for "${source}": ${err.message}`);
     }
+    ok("harness downloaded");
     repoDir = dest;
     cleanup = () => rmSync(dest, { recursive: true, force: true });
   }
@@ -383,18 +406,35 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   const { coreDir, version, cleanup } = resolveSource(args.source, args.ref);
 
+  const startedAt = Date.now();
   try {
     mkdirSync(claudeDir, { recursive: true });
+
     copyFrameworkOwned(coreDir, claudeDir);
+    ok("agents/skills/rules/hooks copied (*.test.mjs excluded)");
+
     const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir);
+    ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps}`);
+
     const modules = copyModules(join(coreDir, "..", "modules"), claudeDir, Boolean(args["with-codex"]));
+    ok(`modules: ${modules}`);
+
     seedAccumulated(coreDir, claudeDir);
+    ok("memory/MEMORY.md, kaizen.md seeded (if absent)");
+
     const claudeMd = mergeClaudeMd(coreDir, claudeDir);
+    ok(`CLAUDE.md: ${claudeMd}`);
+
     const settings = writeSettings(coreDir, claudeDir);
+    ok(`settings.json: ${settings}`);
+
     const repoFiles = installRepoFiles(coreDir, target);
+    ok(`repo files (.github/…): ${repoFiles}`);
+
     const devVarsIgnore = existsSync(join(coreDir, "dev.vars.example"))
       ? ensureDevVarsIgnored(target)
       : "skipped (no dev.vars.example source)";
+    ok(`root .gitignore (.dev.vars): ${devVarsIgnore}`);
 
     // Integrity gate: FAIL LOUD (never ship a hook that will crash on load) if the final vendored
     // state is missing a `../vps/` module a hook imports. This catches the stale-jump — an update
@@ -418,22 +458,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       join(claudeDir, ".harness-version"),
       `${version}\nvendored_at: ${stampDate}\n`
     );
+    ok(".gitignore, .harness-version written");
 
-    process.stdout.write(
-      [
-        `[vendor-core] OK — harness ${version} → ${claudeDir}`,
-        `  agents/skills/rules/hooks: overwritten (*.test.mjs excluded)`,
-        `  hooks' vps deps → .claude/vps/: ${hookVpsDeps}`,
-        `  modules: ${modules}`,
-        `  memory/MEMORY.md, kaizen.md: seeded if absent`,
-        `  CLAUDE.md: ${claudeMd}`,
-        `  settings.json: ${settings}`,
-        `  repo files (.github/…): ${repoFiles}`,
-        `  root .gitignore (.dev.vars): ${devVarsIgnore}`,
-        `  .gitignore, .harness-version: written`,
-        "",
-      ].join("\n")
-    );
+    const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    process.stdout.write(`\n${bold(green(`✓ harness ${version} vendored → ${claudeDir} (${elapsedSec}s)`))}\n`);
   } finally {
     cleanup();
   }
