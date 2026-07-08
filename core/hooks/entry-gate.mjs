@@ -60,6 +60,18 @@ import {
 const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
 
 /**
+ * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor with the real classifier.
+ * Present so the frozen locked test resolves its `classifyRegatePending` import (un-vacuums the
+ * gate) while staying legitimately RED. The real implementation distinguishes an ABSENT
+ * regate_pending (undefined — fail-open) from a CORRUPT one (present but not an array — fail-closed).
+ * @param {object} gateState
+ * @returns {{ corrupt: false, pending: string[] } | { corrupt: true, raw: unknown }}
+ */
+export function classifyRegatePending(gateState) {
+  return { corrupt: false, pending: [] };
+}
+
+/**
  * @description Detects HEADLESS (cloud routine) mode. Cheap hands is a LOCAL-only capability; in
  * the cloud the hand roles (executor/sniper/test-author) run on Claude directly, so a main-loop
  * Agent of a hand role is the INTENDED dispatch there, not a fallback to police. Signal is
