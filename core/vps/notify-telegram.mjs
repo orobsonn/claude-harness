@@ -71,6 +71,7 @@ const EMOJI = {
   "pr-merged": "🟢",
   "pr-awaiting-merge": "🟡",
   "pr-blocked": "🔴",
+  "pr-review-infra-blocked": "🔴",
   "pr-branch-updated-retry": "🔄",
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
@@ -223,6 +224,8 @@ export function formatEvent(event = {}) {
       return `${prefix} PR ${prRef} estava desatualizado com a base — branch sincronizada; nova revisão + merge no próximo ciclo`;
     case "pr-blocked":
       return `${prefix} PR ${prRef} BLOQUEADO${reason}`;
+    case "pr-review-infra-blocked":
+      return `${prefix} PR ${prRef} — revisão automática falhou repetidamente (sessão travou 3x sem veredito); bloqueado pra você olhar`;
     case "reaper-killed":
       return `${prefix} sessão da issue ${issueRef} morta pelo watchdog`;
     case "reaper-recovered":

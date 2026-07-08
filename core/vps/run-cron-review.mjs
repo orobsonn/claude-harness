@@ -20,8 +20,9 @@
  * BREAKER_MAX_SESSIONS-per-window cap is what actually gates production spawns.
  *
  * Every other seam cron-review.mjs's `cronReview(opts)` contract needs (`gh`, `isReviewEligible`,
- * `getFreshVerdict`, `alreadyReviewed`, `authenticatedUser`)
- * defaults to its real, already-implemented sibling module, wired exactly as cronReview calls it.
+ * `getFreshVerdict`, `alreadyReviewed`, `incrementInfraFailure`, `atInfraFailureCeiling`,
+ * `authenticatedUser`) defaults to its real, already-implemented sibling module, wired exactly as
+ * cronReview calls it.
  * `mergeAndFinalize` and `reconcile` need MORE context than cronReview's own call site passes
  * through (a `counter`/`recordReviewed` adapter onto ./cron-state.mjs) — this composition root
  * supplies that extra context via a bound closure, mirroring run-cron-b.mjs's `harnessAuthorLogin`
@@ -65,6 +66,7 @@ import { cronReview } from "./cron-review.mjs";
 import { spawnReviewSession } from "./spawn-review-session.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import * as cronState from "./cron-state.mjs";
+import { incrementInfraFailure, atInfraFailureCeiling } from "./cron-state.mjs";
 import { isReviewEligible } from "./review-origin-gate.mjs";
 import { getFreshVerdict } from "./review-verdict-source.mjs";
 import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
@@ -351,6 +353,8 @@ export async function runCronReview(config, deps = {}) {
       breakerTripped: breakerTrippedFn,
       alreadyReviewed: alreadyReviewedFn,
       recordReviewed: deps.recordReviewed ?? cronState.recordReviewed,
+      incrementInfraFailure: deps.incrementInfraFailure ?? ((pr, sha, o) => incrementInfraFailure(pr, sha, o)),
+      atInfraFailureCeiling: deps.atInfraFailureCeiling ?? ((pr, sha, o) => atInfraFailureCeiling(pr, sha, o)),
       autoMergeEnabled,
     });
   } finally {

@@ -24,6 +24,9 @@ import {
   incrementUpdateAttempt,
   readUpdateAttempts,
   resetUpdateAttempts,
+  incrementInfraFailure,
+  readInfraFailure,
+  atInfraFailureCeiling,
 } from "./cron-state.mjs";
 
 /** @description Makes a fresh temp dir for one test and returns a cleanup callback. */
@@ -149,6 +152,52 @@ test("cron-state chain reset: resetChain zeroes the chain depth without touching
       2,
       "resetChain must leave the unrelated cron-counters.json attempt counter unchanged at its prior value"
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("cron-state infra-failure store: increments per pr:sha, keyed independently by sha, and never touches other stores", () => {
+  const { dir: stateDir, cleanup } = makeStateDir();
+  try {
+    const opts = { stateDir };
+
+    assert.equal(readInfraFailure(5, "sha-a", opts), 0, "a fresh pr:sha must read back 0 infra-failures");
+
+    incrementInfraFailure(5, "sha-a", opts);
+    incrementInfraFailure(5, "sha-a", opts);
+    assert.equal(readInfraFailure(5, "sha-a", opts), 2, "two increments for the same pr:sha must read back 2");
+
+    // A different sha (new push) is an independent keyspace — the counter zeroes naturally.
+    assert.equal(readInfraFailure(5, "sha-b", opts), 0, "a different sha for the same PR must be an independent count");
+    // A different PR is also independent.
+    assert.equal(readInfraFailure(9, "sha-a", opts), 0, "a different PR must be an independent count");
+
+    // Must not bleed into the plain attempt counter or the chain counter (distinct stores).
+    assert.equal(read(5, opts), 0, "incrementInfraFailure must not touch cron-counters.json");
+    assert.equal(readChain(5, opts), 0, "incrementInfraFailure must not touch cron-chain.json");
+  } finally {
+    cleanup();
+  }
+});
+
+test("cron-state infra-failure ceiling: atInfraFailureCeiling is false below 3 and true once it reaches 3", () => {
+  const { dir: stateDir, cleanup } = makeStateDir();
+  try {
+    const opts = { stateDir };
+    const pr = 12;
+    const sha = "sha-x";
+
+    assert.equal(atInfraFailureCeiling(pr, sha, opts), false, "0 failures must be below the ceiling");
+
+    incrementInfraFailure(pr, sha, opts);
+    assert.equal(atInfraFailureCeiling(pr, sha, opts), false, "1 failure must be below the ceiling");
+
+    incrementInfraFailure(pr, sha, opts);
+    assert.equal(atInfraFailureCeiling(pr, sha, opts), false, "2 failures must be below the ceiling");
+
+    incrementInfraFailure(pr, sha, opts);
+    assert.equal(atInfraFailureCeiling(pr, sha, opts), true, "reaching 3 failures must flip atInfraFailureCeiling to true");
   } finally {
     cleanup();
   }

@@ -116,6 +116,8 @@ function baseOpts(overrides = {}) {
     breakerTripped: () => false,
     alreadyReviewed: () => false,
     recordReviewed: makeSpy(),
+    incrementInfraFailure: makeSpy(),
+    atInfraFailureCeiling: () => false,
     ...overrides,
   };
 }
@@ -420,4 +422,94 @@ test("cronReview: a BEHIND-branch auto-merge (mergeAndFinalize returns {updateAt
   const routedAwaiting = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:awaiting-merge"));
   assert.ok(!routedAwaiting, "an update-branch retry must NOT relabel the issue to awaiting-merge — the review loop re-picks it up");
   assert.equal(recordReviewed.calls.length, 0, "an update-branch retry must NOT record the (pr, sha) as reviewed — the sha changes and must re-review");
+});
+
+test("cronReview: verdict === null below the ceiling → counts infra-failure, retries next cycle (NO routeReject, NO relabel, NO recordReviewed)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(90, { number: 90, headRefName: "harness/130", author: { login: "bot-user" }, labels: [], headSha: "sha-crash", url: "u90" });
+  setDiff(90, ["src/a.js"]);
+  const routeReject = makeSpy();
+  const recordReviewed = makeSpy();
+  const mergeAndFinalize = makeSpy();
+  const incrementInfraFailure = makeSpy();
+  const notify = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      getFreshVerdict: () => null, // the review session crashed — no verdict artifact
+      atInfraFailureCeiling: () => false, // still below the ceiling
+      incrementInfraFailure,
+      routeReject,
+      recordReviewed,
+      mergeAndFinalize,
+      notify,
+    })
+  );
+
+  assert.equal(incrementInfraFailure.calls.length, 1, "a null verdict must count one infra-failure for this pr:sha");
+  assert.deepEqual(
+    [incrementInfraFailure.calls[0][0], incrementInfraFailure.calls[0][1]],
+    [90, "sha-crash"],
+    "incrementInfraFailure must receive (pr number, head sha)"
+  );
+  assert.equal(routeReject.calls.length, 0, "a crash (null verdict) must NEVER routeReject — that would re-dispatch the whole issue");
+  assert.equal(recordReviewed.calls.length, 0, "below the ceiling the PR is NOT recorded reviewed — the next cycle retries the review");
+  assert.equal(mergeAndFinalize.calls.length, 0, "a null verdict must never merge");
+  const relabeled = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label"));
+  assert.ok(!relabeled, "below the ceiling nothing is relabeled (not ready, not blocked, not awaiting-merge)");
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(!types.includes("pr-review-infra-blocked"), "below the ceiling must NOT notify pr-review-infra-blocked");
+});
+
+test("cronReview: verdict === null AT the ceiling → blocks the root issue, records reviewed, notifies pr-review-infra-blocked (NO routeReject)", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  setPr(91, { number: 91, headRefName: "harness/131", author: { login: "bot-user" }, labels: [], headSha: "sha-dead", url: "u91" });
+  setDiff(91, ["src/b.js"]);
+  const routeReject = makeSpy();
+  const recordReviewed = makeSpy();
+  const notify = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      getFreshVerdict: () => null,
+      atInfraFailureCeiling: () => true, // the 3rd failure — ceiling reached
+      routeReject,
+      recordReviewed,
+      notify,
+    })
+  );
+
+  assert.equal(routeReject.calls.length, 0, "reaching the infra-failure ceiling must NEVER routeReject");
+  const blocked = calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("--add-label") && a.includes("harness:blocked"));
+  assert.ok(blocked, "at the ceiling the root issue must be relabeled harness:blocked");
+  assert.equal(recordReviewed.calls.length, 1, "at the ceiling the (pr, sha) must be recorded reviewed to stop re-reviewing the dead sha");
+  const [recordedPr, recordedSha] = recordReviewed.calls[0];
+  assert.equal(recordedPr, 91, "recordReviewed receives the PR number");
+  assert.equal(recordedSha, "sha-dead", "recordReviewed receives the head sha");
+  const types = notify.calls.map((a) => a[0] && a[0].type);
+  assert.ok(types.includes("pr-review-infra-blocked"), "at the ceiling must notify pr-review-infra-blocked");
+});
+
+test("cronReview: verdict {status:'BLOCKED'} (non-null) STILL calls routeReject — a real rejection is not an infra crash (regression guard)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(92, { number: 92, headRefName: "harness/132", author: { login: "bot-user" }, labels: [], headSha: "sha-block", url: "u92" });
+  setDiff(92, ["src/c.js"]);
+  const routeReject = makeSpy();
+  const incrementInfraFailure = makeSpy();
+
+  await cronReview(
+    baseOpts({
+      gh,
+      getFreshVerdict: () => ({ status: "BLOCKED", finding: "real bug" }),
+      routeReject,
+      incrementInfraFailure,
+    })
+  );
+
+  assert.equal(routeReject.calls.length, 1, "a real BLOCKED verdict must still routeReject (rejection behavior preserved)");
+  assert.equal(routeReject.calls[0][0].number, 92, "routeReject receives the pr");
+  assert.equal(routeReject.calls[0][1], "sha-block", "routeReject receives the head sha");
+  assert.equal(incrementInfraFailure.calls.length, 0, "a non-null verdict must NOT count as an infra-failure");
 });
