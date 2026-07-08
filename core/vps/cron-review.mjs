@@ -154,9 +154,7 @@ export async function cronReview(opts) {
           Array.isArray(view && view.labels) ? view.labels.map((l) => (l && l.name) || "").filter(Boolean) : []
         );
         const isActive =
-          (labelNames.has("harness:ready") ||
-            labelNames.has("harness:in-progress") ||
-            labelNames.has("harness:in-review")) &&
+          labelNames.has("harness:in-review") &&
           !labelNames.has("harness:awaiting-merge") &&
           !labelNames.has("harness:blocked") &&
           !labelNames.has("harness:done");
