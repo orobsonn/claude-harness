@@ -307,7 +307,19 @@ async function main() {
 
   try {
     const cwd = process.cwd();
-    const tag = runInit({ cwd, resolveTag: resolveLatestTag, runVendor: runVendorDefault, withCodex });
+    const isTTY = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+    const dim = (text) => (isTTY ? `\x1b[2m${text}\x1b[0m` : text);
+    process.stdout.write(`${dim("→")} Resolving latest harness release...\n`);
+    const tag = runInit({
+      cwd,
+      resolveTag: () => {
+        const resolved = resolveLatestTag();
+        if (resolved) process.stdout.write(`${isTTY ? "\x1b[32m✓\x1b[0m" : "✓"} latest release: ${resolved}\n`);
+        return resolved;
+      },
+      runVendor: runVendorDefault,
+      withCodex,
+    });
     process.stdout.write(
       `[claude-harness] vendored harness ${tag} into ./.claude — review and commit.\n`
     );
