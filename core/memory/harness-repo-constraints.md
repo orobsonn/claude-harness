@@ -1,6 +1,6 @@
 ---
 name: harness-repo-constraints
-description: Load-bearing dev constraints for the harness source repo — sandbox deny-list, test runner, no package.json, dual-mirror edit rule, and import.meta.url path resolution in tests.
+description: Load-bearing dev constraints for the harness source repo — sandbox deny-list, test runner (node --test; no tsconfig/eslint), version in package.json, dual-mirror edit rule, and import.meta.url path resolution in tests.
 metadata:
   type: project
 ---
@@ -9,14 +9,16 @@ metadata:
 ship incomplete changes: (1) the local Claude sandbox blocks `.env.*` reads, causing EPERM in tests
 that create `.env.example` fixtures; (2) global rule/skill/agent content now lives **only** in
 `core/` — the former `~/.claude/` global mirror was retired (see below, "Dual-mirror edit rule is
-STALE"); (3) there is no `package.json`, so standard Node tooling commands must not be run
-unconditionally.
+STALE"); (3) `package.json` exists (added in #53 for `npx` distribution) but there is no
+`tsconfig`/eslint, so `npx tsc --noEmit`/eslint must not be run — the only gate is `node --test`.
 
 **How to apply:**
 
-- **No `package.json`** — version lives in `VERSION`. The only test runner is `node --test`. Never
-  invoke `npm test`, `npx tsc --noEmit`, or eslint unconditionally — check for `package.json` first.
-  Stack detection for this repo resolves to `runner:"node-test"`, `command:'node --test "**/*.test.mjs"'`.
+- **Version lives in `package.json`** (added in #53; the old root `VERSION` file was retired
+  2026-07-08 — it had been stale at `0.26.1` since v0.26.1/#157 while every release bumped
+  `package.json`). The only test gate is `node --test` — the `package.json` `test` script aliases it,
+  so `npm test` works. There is **no `tsconfig` or eslint**, so never invoke `npx tsc --noEmit` or
+  eslint. Stack detection resolves to `runner:"node-test"`, `command:'node --test "core/**/*.test.mjs"'`.
 
 - **Sandbox `.env.*` deny-list** — the local Claude sandbox deny-list `/**/.env.*` blocks reads on
   temp-dir `.env.example` files created by tests (e.g. `detect-secrets.test.mjs`). These tests get
