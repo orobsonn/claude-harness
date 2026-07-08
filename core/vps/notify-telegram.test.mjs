@@ -360,3 +360,46 @@ test("formatEvent: pr-awaiting-merge references the PR and signals a pending man
   assert.match(text, /#8/, "must reference the PR number");
   assert.match(text, /merge/i, "must mention the pending merge");
 });
+
+// ---------------------------------------------------------------------------
+// per-event threadId routing — #ac-1.3 / F4 (frozen oracle)
+// ---------------------------------------------------------------------------
+
+test("#ac-1.3/F4 makeNotifier: a per-event threadId overrides the resolved global in message_thread_id", async () => {
+  const { fetchImpl, calls } = makeFakeFetch({ ok: true, status: 200 });
+  const { notify, drain } = makeNotifier(
+    { notify: { chatId: -100, threadId: 100 }, homeDir: "/h" },
+    { readFileSafe: () => "TELEGRAM_BOT_TOKEN=xx:en\n", fetch: fetchImpl }
+  );
+  await notify({ type: "review-started", pr: 5, threadId: 900 });
+  await drain();
+  assert.equal(calls.length, 1);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.message_thread_id, 900, "a per-event threadId must win over the resolved global");
+});
+
+test("#ac-1.3/F4 makeNotifier: without a per-event threadId, message_thread_id falls back to the resolved global", async () => {
+  const { fetchImpl, calls } = makeFakeFetch({ ok: true, status: 200 });
+  const { notify, drain } = makeNotifier(
+    { notify: { chatId: -100, threadId: 100 }, homeDir: "/h" },
+    { readFileSafe: () => "TELEGRAM_BOT_TOKEN=xx:en\n", fetch: fetchImpl }
+  );
+  await notify({ type: "review-started", pr: 5 });
+  await drain();
+  assert.equal(calls.length, 1);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.message_thread_id, 100, "without a per-event threadId, the resolved global must be used");
+});
+
+test("#ac-1.3/F4 makeNotifier: threadId is routing-only — it must never appear in the rendered text", async () => {
+  const { fetchImpl, calls } = makeFakeFetch({ ok: true, status: 200 });
+  const { notify, drain } = makeNotifier(
+    { notify: { chatId: -100, threadId: 100 }, homeDir: "/h" },
+    { readFileSafe: () => "TELEGRAM_BOT_TOKEN=xx:en\n", fetch: fetchImpl }
+  );
+  await notify({ type: "review-started", pr: 5, threadId: 900 });
+  await drain();
+  assert.equal(calls.length, 1);
+  const body = JSON.parse(calls[0].options.body);
+  assert.doesNotMatch(body.text, /900/, "threadId must live only in message_thread_id, never in the rendered text");
+});
