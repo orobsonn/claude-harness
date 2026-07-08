@@ -13,7 +13,6 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Changed
 
 ### Fixed
-- **Sessão de revisão que trava não vira mais loop de re-processamento caro.** Quando a revisão automática de um PR crashava/timeoutava sem produzir veredito, o sistema tratava isso como "revisão rejeitou" e devolvia a issue inteira pra fila — re-executando spec+plano+código do zero (caríssimo) pra corrigir um problema que não existia. Agora um crash de revisão é distinguido de uma rejeição real: o sistema apenas re-tenta a revisão (barata) do mesmo PR no próximo ciclo e, após 3 falhas seguidas de infraestrutura no mesmo commit, bloqueia a issue e avisa o operador de forma acionável, em vez de retentar pra sempre.
 
 ### Removed
 
