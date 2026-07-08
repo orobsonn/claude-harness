@@ -8,6 +8,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- **Revisão de conformidade passa a pegar CLI documentada que na prática nunca roda.** Quando um guia (skill, comentário de CI, etc.) descreve um módulo `.mjs` como comando de terminal (`node arquivo.mjs`) mas o arquivo não tem o bloco real que o habilita a rodar assim, o resultado era um comando "fantasma" — parece funcional na documentação, mas executa e não faz nada. A revisão agora detecta essa inconsistência e bloqueia; módulos que são só biblioteca (chamados via `import`, nunca documentados como comando de terminal) nunca são sinalizados por engano.
 
 ### Changed
 
