@@ -228,8 +228,11 @@ function everyNHoursSchedule(hours, label) {
 
 /**
  * @description Renders the five-field cron schedule for an every-N-MINUTES cadence (a step-N minute
- * field), validating N is an integer in [1,59]. Injection-safe by construction (an integer). Used
- * only for the lightweight drain-only cron.
+ * field), validating N is an integer in [1,59]. Injection-safe by construction (an integer).
+ * NOTE: the "step-N" minute field is a STEP within each hour, not a rolling interval — it fires at
+ * minutes 0, N, 2N… then RESETS at :00. So an N that does not divide 60 (e.g. 45) fires unevenly
+ * (:00, :45, then :00 — a 45-min gap followed by a 15-min gap). Pick a divisor of 60 (5, 10, 15, 20,
+ * 30) for an even cadence.
  * @param {number} minutes
  * @param {string} label
  * @returns {string}
@@ -840,6 +843,7 @@ export async function runCli(argv, deps = {}) {
   console.error(
     "Usage:\n" +
       "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--interval-hours-a <1..24>] [--interval-hours-review <1..24>] [--interval-minutes-a <1..59>] [--interval-minutes-review <1..59>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
+      "  (interval-minutes-* is a step within each hour, not a rolling interval — pick a divisor of 60 like 15/20/30 for an even cadence)\n" +
       "  --uninstall <project>"
   );
   process.exitCode = 1;
