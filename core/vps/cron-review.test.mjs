@@ -751,3 +751,28 @@ test("cronReview: the stalled backstop excludes a harness:in-progress root issue
   assert.equal(recordStalledNotified.calls.length, 0, "recordStalledNotified must never be called for an in-progress issue");
   assert.equal(spawnReviewSession.calls.length, 0, "spawnReviewSession must never run for an alreadyReviewed sha");
 });
+
+test("cronReview: a feat/x-branch PR's emitted lifecycle event carries root===42 resolved via the prLinksIssue body-link fallback (#ac-1.3) — extractRoot alone yields null for a non-harness/<N> branch", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(200, {
+    number: 200,
+    headRefName: "feat/x",
+    author: { login: "bot-user" },
+    labels: [{ name: "harness:autoreview" }],
+    headSha: "sha-root",
+    url: "u200",
+    body: "Some description. Closes #42",
+  });
+  setDiff(200, ["src/feat.js"]);
+
+  const notify = makeSpy();
+  await cronReview(baseOpts({ gh, notify }));
+
+  const reviewStarted = notify.calls.find((a) => a[0] && a[0].type === "review-started");
+  assert.ok(reviewStarted, "review-started must be emitted for the eligible feat/x PR (harness:autoreview + engineKnows)");
+  assert.equal(
+    reviewStarted[0].root,
+    42,
+    "the emitted event must carry root===42 — resolved via the prLinksIssue('Closes #42') body-link fallback, since headRefName 'feat/x' is not harness/<N> and extractRoot alone would yield null"
+  );
+});
