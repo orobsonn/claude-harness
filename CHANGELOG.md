@@ -9,6 +9,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **install-crons: cadência em minutos** — novos campos `intervalMinutesA` / `intervalMinutesReview` (inteiros 1–59) e flags `--interval-minutes-a` / `--interval-minutes-review` no `install-crons`, permitindo agendar Cron A e a fase de review em minutos (ex.: `*/15 * * * *`) de forma versionada, sem editar o crontab na mão. Mutuamente exclusivos com os campos `intervalHours*` do mesmo phase; sem eles o comportamento hour-based (4h/6h) permanece byte-idêntico (#162).
+
 ### Changed
 
 ### Fixed

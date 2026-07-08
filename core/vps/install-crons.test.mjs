@@ -1285,3 +1285,140 @@ test("cadence: validateInstallCoordinates carries valid intervals and rejects in
   assert.equal(plain.intervalHoursA, undefined);
   assert.equal(plain.intervalHoursReview, undefined);
 });
+
+// ---------------------------------------------------------------------------------------------
+// [issue #162] Configurable cadence in MINUTES (not just hours)
+// ---------------------------------------------------------------------------------------------
+
+const MINUTES_BASE_COORDS = {
+  project: "demo",
+  owner: "acme",
+  repo: "demo-repo",
+  projectRoot: "/srv/demo",
+  stateDir: "/srv/demo/.claude/state",
+  worktreeRoot: "/srv/worktrees",
+  homeDir: "/home/harness",
+};
+
+test("[#ac-1.1] renderProjectBlock: intervalMinutesA: 15 renders the Cron A schedule as exactly */15 * * * *", () => {
+  const block = renderProjectBlock({
+    project: "demo",
+    nodeBin: NODE_BIN,
+    scriptDir: SCRIPT_DIR,
+    configPath: configPathFor("demo"),
+    intervalMinutesA: 15,
+  });
+  const [, cronA] = block.split("\n");
+  assert.ok(cronA.startsWith("*/15 * * * * "), "Cron A schedule must be exactly */15 * * * *");
+});
+
+test("[#ac-1.4] renderProjectBlock: intervalMinutesReview: 20 renders the review schedule as exactly */20 * * * *", () => {
+  const block = renderProjectBlock({
+    project: "demo",
+    nodeBin: NODE_BIN,
+    scriptDir: SCRIPT_DIR,
+    configPath: configPathFor("demo"),
+    intervalMinutesReview: 20,
+  });
+  const [, , cronReview] = block.split("\n");
+  assert.ok(cronReview.startsWith("*/20 * * * * "), "review schedule must be exactly */20 * * * *");
+});
+
+test("[#ac-1.2] renderProjectBlock: intervalHoursA: 2 with no intervalMinutesA stays byte-identical to the existing hour-based schedule", () => {
+  const block = renderProjectBlock({
+    project: "demo",
+    nodeBin: NODE_BIN,
+    scriptDir: SCRIPT_DIR,
+    configPath: configPathFor("demo"),
+    intervalHoursA: 2,
+  });
+  const [, cronA] = block.split("\n");
+  assert.ok(cronA.startsWith("0 */2 * * * "), "backward-compatible: hour cadence unchanged when no minutes override is given");
+});
+
+test("[#ac-1.3] validateInstallCoordinates: intervalMinutesA carries through when valid and rejects 0, 60, and non-integer values", () => {
+  const coords = validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesA: 15 });
+  assert.equal(coords.intervalMinutesA, 15);
+
+  for (const bad of [0, 60, 1.5, -1]) {
+    assert.throws(
+      () => validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesA: bad }),
+      /intervalMinutesA/,
+      `intervalMinutesA=${bad}`
+    );
+  }
+});
+
+test("[#ac-1.4] validateInstallCoordinates: intervalMinutesReview carries through when valid and rejects out-of-range values", () => {
+  const coords = validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesReview: 30 });
+  assert.equal(coords.intervalMinutesReview, 30);
+
+  assert.throws(
+    () => validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesReview: 0 }),
+    /intervalMinutesReview/
+  );
+  assert.throws(
+    () => validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesReview: 90 }),
+    /intervalMinutesReview/
+  );
+});
+
+test("[#ac-1.3] validateInstallCoordinates: intervalMinutesA and intervalHoursA both set is a conflict and throws before any coord is produced", () => {
+  assert.throws(
+    () => validateInstallCoordinates({ ...MINUTES_BASE_COORDS, intervalMinutesA: 15, intervalHoursA: 2 }),
+    /intervalMinutesA.*intervalHoursA|intervalHoursA.*intervalMinutesA/
+  );
+});
+
+test("[#ac-1.4] validateInstallCoordinates: intervalMinutesReview and intervalHoursReview both set is a conflict and throws", () => {
+  assert.throws(
+    () =>
+      validateInstallCoordinates({
+        ...MINUTES_BASE_COORDS,
+        intervalMinutesReview: 20,
+        intervalHoursReview: 3,
+      }),
+    /intervalMinutesReview.*intervalHoursReview|intervalHoursReview.*intervalMinutesReview/
+  );
+});
+
+test("[#ac-1.1/#ac-1.4] installProject: intervalMinutesA/intervalMinutesReview render minute-based crontab lines and persist onto the per-project config", () => {
+  const { deps, state } = makeMemoryDeps();
+  installProject({ ...MINUTES_BASE_COORDS, intervalMinutesA: 15, intervalMinutesReview: 20 }, deps);
+
+  const cronLines = state.crontabText.split("\n");
+  assert.ok(cronLines.some((l) => l.startsWith("*/15 * * * * ") && l.includes("run-cron-a.mjs")));
+  assert.ok(cronLines.some((l) => l.startsWith("*/20 * * * * ") && l.includes("run-cron-review.mjs")));
+
+  const perProjectWrite = state.writeConfigCalls.find((c) => c.path.endsWith("demo.json"));
+  assert.equal(perProjectWrite.obj.intervalMinutesA, 15);
+  assert.equal(perProjectWrite.obj.intervalMinutesReview, 20);
+});
+
+test("[#ac-1.3] runCli: --interval-minutes-a is parsed as a number onto installProject inputs", async () => {
+  const calls = [];
+  const argv = [
+    "install",
+    "--project",
+    "demo",
+    "--owner",
+    "acme",
+    "--repo",
+    "demo-repo",
+    "--project-root",
+    "/srv/demo",
+    "--state-dir",
+    "/srv/demo/.claude/state",
+    "--worktree-root",
+    "/srv/worktrees",
+    "--home-dir",
+    "/home/harness",
+    "--interval-minutes-a",
+    "15",
+    "--interval-minutes-review",
+    "20",
+  ];
+  await runCli(argv, { installProject: (inputs) => calls.push(inputs), isTTY: false });
+  assert.equal(calls[0].intervalMinutesA, 15);
+  assert.equal(calls[0].intervalMinutesReview, 20);
+});

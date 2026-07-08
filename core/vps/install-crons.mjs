@@ -151,6 +151,24 @@ export function validateInstallCoordinates(inputs) {
     }
   }
 
+  // Optional MINUTE cadence overrides (integers 1..59) — mutually exclusive with their hour
+  // counterpart (a schedule cannot be both "every N hours" and "every N minutes" at once).
+  for (const [minutesField, hoursField] of [
+    ["intervalMinutesA", "intervalHoursA"],
+    ["intervalMinutesReview", "intervalHoursReview"],
+  ]) {
+    if (inputs[minutesField] !== undefined && inputs[minutesField] !== null) {
+      const value = inputs[minutesField];
+      if (!Number.isInteger(value) || value < 1 || value > 59) {
+        throw new Error(`invalid ${minutesField}`);
+      }
+      if (coords[hoursField] !== undefined) {
+        throw new Error(`${minutesField} and ${hoursField} are mutually exclusive`);
+      }
+      coords[minutesField] = value;
+    }
+  }
+
   const hasNotify = inputs.notify !== undefined && inputs.notify !== null;
   if (hasNotify) {
     const n = inputs.notify;
@@ -230,7 +248,7 @@ function everyNMinutesSchedule(minutes, label) {
  * `# <<< harness:<project> <<<` fence lines. No trailing newline. Cadence defaults to every 4h
  * (Cron A) / 6h (review); `intervalHoursA` / `intervalHoursReview` (integers 1..24) override it to
  * make a merged roadmap chain faster.
- * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string,intervalHoursA?:number,intervalHoursReview?:number}} args
+ * @param {{project:string,nodeBin:string,scriptDir:string,configPath:string,intervalHoursA?:number,intervalHoursReview?:number,intervalMinutesA?:number,intervalMinutesReview?:number}} args
  * @returns {string}
  */
 export function renderProjectBlock({
@@ -240,6 +258,8 @@ export function renderProjectBlock({
   configPath,
   intervalHoursA = DEFAULT_INTERVAL_HOURS_A,
   intervalHoursReview = DEFAULT_INTERVAL_HOURS_REVIEW,
+  intervalMinutesA,
+  intervalMinutesReview,
   intervalMinutesDrain = DEFAULT_INTERVAL_MINUTES_DRAIN,
 }) {
   const scriptA = join(scriptDir, "run-cron-a.mjs");
@@ -250,8 +270,14 @@ export function renderProjectBlock({
   assertCronSafe(scriptReview, "script path");
   assertCronSafe(scriptDrain, "script path");
   assertCronSafe(configPath, "configPath");
-  const scheduleA = everyNHoursSchedule(intervalHoursA, "intervalHoursA");
-  const scheduleReview = everyNHoursSchedule(intervalHoursReview, "intervalHoursReview");
+  const scheduleA =
+    intervalMinutesA !== undefined
+      ? everyNMinutesSchedule(intervalMinutesA, "intervalMinutesA")
+      : everyNHoursSchedule(intervalHoursA, "intervalHoursA");
+  const scheduleReview =
+    intervalMinutesReview !== undefined
+      ? everyNMinutesSchedule(intervalMinutesReview, "intervalMinutesReview")
+      : everyNHoursSchedule(intervalHoursReview, "intervalHoursReview");
   const scheduleDrain = everyNMinutesSchedule(intervalMinutesDrain, "intervalMinutesDrain");
   const cronA = `${scheduleA} ${nodeBin} ${scriptA} --config ${configPath}`;
   const cronReview = `${scheduleReview} ${nodeBin} ${scriptReview} --config ${configPath}`;
@@ -601,6 +627,8 @@ export function installProject(inputs, deps = {}) {
       // line renders from coords below; this keeps the config self-describing for audit/re-install).
       if (coords.intervalHoursA !== undefined) perProjectConfig.intervalHoursA = coords.intervalHoursA;
       if (coords.intervalHoursReview !== undefined) perProjectConfig.intervalHoursReview = coords.intervalHoursReview;
+      if (coords.intervalMinutesA !== undefined) perProjectConfig.intervalMinutesA = coords.intervalMinutesA;
+      if (coords.intervalMinutesReview !== undefined) perProjectConfig.intervalMinutesReview = coords.intervalMinutesReview;
       loadConfig(perProjectConfig);
       loadConfig(fleet);
       for (const entry of fleet.projects) {
@@ -618,6 +646,8 @@ export function installProject(inputs, deps = {}) {
         configPath: perProjectPath,
         intervalHoursA: coords.intervalHoursA,
         intervalHoursReview: coords.intervalHoursReview,
+        intervalMinutesA: coords.intervalMinutesA,
+        intervalMinutesReview: coords.intervalMinutesReview,
       });
       const reaperBlock = renderReaperBlock({ nodeBin, scriptDir, reaperConfigPath: fleetPath });
 
@@ -786,6 +816,10 @@ export async function runCli(argv, deps = {}) {
     // intervals make a merged roadmap chain advance faster. A non-integer fails validation before any write.
     if (flags["interval-hours-a"] !== undefined) inputs.intervalHoursA = Number(flags["interval-hours-a"]);
     if (flags["interval-hours-review"] !== undefined) inputs.intervalHoursReview = Number(flags["interval-hours-review"]);
+    // Optional MINUTE cadence overrides (integers 1..59), mutually exclusive with their hour
+    // counterpart — validateInstallCoordinates rejects setting both for the same phase.
+    if (flags["interval-minutes-a"] !== undefined) inputs.intervalMinutesA = Number(flags["interval-minutes-a"]);
+    if (flags["interval-minutes-review"] !== undefined) inputs.intervalMinutesReview = Number(flags["interval-minutes-review"]);
     // Review-phase kill switch. Defaults OFF (unlike heartbeat, which defaults ON) — an explicit
     // --review-enabled true|false flag always wins; absent, the review phase stays disabled until
     // the operator opts in.
@@ -805,7 +839,7 @@ export async function runCli(argv, deps = {}) {
   }
   console.error(
     "Usage:\n" +
-      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--interval-hours-a <1..24>] [--interval-hours-review <1..24>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
+      "  install --project <slug> --owner <o> --repo <r> --project-root <p> --state-dir <s> --worktree-root <w> --home-dir <h> [--harness-author-login <l>] [--interval-hours-a <1..24>] [--interval-hours-review <1..24>] [--interval-minutes-a <1..59>] [--interval-minutes-review <1..59>] [--chat-id <n> [--thread-id <n>] [--heartbeat true|false]]\n" +
       "  --uninstall <project>"
   );
   process.exitCode = 1;
