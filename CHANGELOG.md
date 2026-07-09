@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Unreleased]
+
+### Fixed
+- **vps notify (Telegram):** o feed de um run cujo tópico do fórum foi deletado/fechado não trava mais
+  em silêncio — o drain agora recria o tópico, confirma a persistência e retoma o envio dos checkpoints
+  pendentes ([#214](https://github.com/orobsonn/claude-harness/issues/214))
+
 ## [0.33.0](https://github.com/orobsonn/claude-harness/compare/claude-harness-v0.32.1...claude-harness-v0.33.0) (2026-07-08)
 
 
