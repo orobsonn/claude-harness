@@ -557,3 +557,40 @@ manual-merge the queue.
 - **Rationale:** low severity (no known live instance of the synonym gap), but a real hardening
   candidate cheap to apply the next time a test-author touches this file; flagged by final-review, not
   actioned now to preserve frozen-test integrity.
+
+### 2026-07-09 — CI/local gate divergence: `package.json` `scripts.test` globs only `core/`, but CI also runs `modules/`
+
+- **Observed:** during `vitest-fresh-response-mock` (#108), the final adversary confirmed
+  `.github/workflows/ci.yml` runs `node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"`, but
+  `package.json`'s `scripts.test` only globs `"core/**/*.test.mjs"`. So `npm test` — the command every
+  local run and this repo's own `harness-repo-constraints.md` memory documents as "the only gate" —
+  never exercises `modules/`. Confirmed live: `driveCrossFamily: enabled but headless-no-key =>
+  passthrough` (`modules/codex-adversary/references/cross-family.test.mjs:50`) fails deterministically
+  on the base commit `43a8f55` (pre-existing, not introduced by this PR) under a scrubbed env, and
+  nobody had noticed because the local/`npm test` gate structurally cannot see it.
+- **Proposed change:** align `scripts.test` with the CI glob —
+  `"node --test \"core/**/*.test.mjs\" \"modules/**/*.test.mjs\""` — so the local gate and CI cannot
+  diverge. Separately (not part of this proposal, tracked only as an observation): the
+  `cross-family.test.mjs:50` failure itself still needs a fix, out of scope for `vitest-fresh-response-mock`.
+- **Rationale:** a local gate that is narrower than CI is worse than no local gate — it gives false
+  confidence ("`npm test` is green" while a real regression sits unexercised in `modules/`) until CI
+  catches it on the PR, or — as happened here — doesn't get caught for an unknown number of merges
+  because nobody diffed the two commands.
+
+### 2026-07-09 — operational: re-vendor `.claude/` after a `core/` rule/agent merge, or flag the drift
+
+- **Observed:** during `vitest-fresh-response-mock` (#108), the final review noted this repo's own
+  git-excluded dogfood copies (`.claude/rules/testing-unit.md`, `.claude/agents/test-author.md`) stay
+  stale after a `core/` rule/agent change merges — they still teach the pre-fix anti-pattern to any
+  LOCAL run in this repo until someone manually re-vendors. Downstream projects are unaffected (they
+  vendor from `core/` on their own `init`/update cadence); this is specific to this repo's own
+  dogfooding loop.
+- **Proposed change:** either (a) add a re-vendor step (`updating-harness` / `vendor-core.mjs`) to this
+  repo's own release ritual, run right after a `core/` merge that touches `agents/`, `skills/`,
+  `rules/`, or `hooks/`; or (b) add a lightweight drift check (diff `core/<path>` against
+  `.claude/<path>` for the `FRAMEWORK_OWNED` categories) that warns — not blocks, since `.claude/` is
+  gitignored and not part of any PR diff — when the two have drifted.
+- **Rationale:** a stale dogfood copy silently defeats the very fix just merged, for every LOCAL
+  session in this repo until someone happens to re-vendor. Low severity (headless/cloud and downstream
+  projects are unaffected, and PR review already catches the `core/` side), but a small process gap
+  worth closing.

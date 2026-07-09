@@ -132,6 +132,8 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **Testes que mockam `fetch` não quebram mais na segunda chamada.** A orientação pra quem escreve testes agora usa `mockImplementation` com uma `Response` nova a cada chamada, em vez de `mockResolvedValue` reutilizando a mesma instância — o corpo de uma `Response` só pode ser lido uma vez, então a segunda chamada ao mock antes quebrava silenciosamente.
+
 ### Security
 
 - **Gate de entrega agora barra a entrega se o estado de re-triagem estiver corrompido, em vez de liberar por engano.** Se o arquivo interno que controla pendências de correção grave (`regate_pending`) existir mas estiver num formato inválido (corrompido), a entrega agora é **negada** com um motivo diagnosticável (em vez de tratar como "nada pendente" e liberar silenciosamente). Continua liberando normalmente quando o arquivo está simplesmente ausente (situação de infraestrutura, comportamento inalterado). Vale nos dois pontos onde essa checagem acontece antes de um push/entrega. (#100)
