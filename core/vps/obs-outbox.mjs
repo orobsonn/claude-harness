@@ -33,13 +33,14 @@ function readMetaRecord(metaPath) {
   }
 }
 
-/** @description Atomic temp->rename write of a meta object; never throws (fail-open). */
+/** @description Atomic temp->rename write of a meta object; returns true on success, false on failure; never throws (fail-open). */
 function atomicWriteMeta(metaPath, meta) {
   const tmpPath = `${metaPath}${TEMP_SUFFIX}`;
   try {
     mkdirSync(dirname(metaPath), { recursive: true });
     writeFileSync(tmpPath, JSON.stringify(meta), "utf8");
     renameSync(tmpPath, metaPath);
+    return true;
   } catch {
     // fail-open: a failed write must never propagate to the caller (never throw / never delay a cron).
     try {
@@ -47,6 +48,7 @@ function atomicWriteMeta(metaPath, meta) {
     } catch {
       // best-effort temp cleanup; never mask the silent fail-open
     }
+    return false;
   }
 }
 
@@ -85,6 +87,7 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
         ...existing,
         cursor: INITIAL_CURSOR,
         status: INITIAL_STATUS,
+        criticalSent: [],
       });
       atomicWriteMeta(metaPath, updatedMeta);
 
@@ -101,8 +104,11 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
     // Idempotent reuse: never reset events/cursor/threadId on a still-active (or fallback/orphan) run.
     // The reuse branch MUST NEVER touch the events log. It only strips a fossil timestamp if one is
     // actually present; a fossil-free reuse is byte-write-free (no rewrite at all).
-    if (hasFossilTimestamps(existing)) {
-      atomicWriteMeta(metaPath, stripFossilTimestamps(existing));
+    const freshExisting = readMetaRecord(metaPath);
+    if (!freshExisting) return metaPath;
+    if (hasFossilTimestamps(freshExisting)) {
+      for (const key of FOSSIL_KEYS) delete freshExisting[key];
+      atomicWriteMeta(metaPath, freshExisting);
     }
     return metaPath;
   }
@@ -221,11 +227,11 @@ export function updateMeta(metaPath, partial) {
 
 /**
  * @description Compare-and-swap partial merge: applies `partial` only when the meta currently on disk
- * still matches every key in `expected` (String-normalized compare). Returns true when the write
- * happened, false on any divergence or missing meta. Synchronous read-compare-write with NO await
- * between the re-read and the temp->rename — the residual local-file race is explicitly accepted
- * (a closed run always takes createRun's fresh branch, so a Telegram delete is safe). Never throws
- * (the atomic write is fail-open).
+ * still matches every key in `expected` (strict compare). Returns true when the write happened, false
+ * on any divergence or missing meta. Synchronous read-compare-write with NO await between the re-read
+ * and the temp->rename — the residual local-file race is explicitly accepted (a closed run always
+ * takes createRun's fresh branch, so a Telegram delete is safe). Never throws (the atomic write is
+ * fail-open).
  * @param {string} metaPath
  * @param {object} expected
  * @param {object} partial
@@ -235,9 +241,8 @@ export function updateMetaIfUnchanged(metaPath, expected, partial) {
   const meta = readMetaRecord(metaPath);
   if (!meta) return false;
   for (const key of Object.keys(expected)) {
-    if (!(key in meta) || String(meta[key]) !== String(expected[key])) return false;
+    if (!(key in meta) || meta[key] !== expected[key]) return false;
   }
   Object.assign(meta, partial);
-  atomicWriteMeta(metaPath, meta);
-  return true;
+  return atomicWriteMeta(metaPath, meta);
 }
