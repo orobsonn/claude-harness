@@ -921,6 +921,14 @@ async function trySend(send, message) {
  * forever after 3 cumulative recreations and flake the shared-process frozen tests. */
 const MAX_RECREATIONS_PER_CYCLE = 3;
 
+/** @description Per-RUN lifetime cap on topic recreations, PERSISTED across drain cycles on the run's
+ * meta (`healAttempts`). `MAX_RECREATIONS_PER_CYCLE` only bounds a single tick; without a persisted
+ * counter a run whose recreated topic keeps being reported dead (the chat is no longer a forum, or the
+ * new topic is deleted as fast as it is minted) re-mints one topic EVERY cron tick, unbounded over
+ * time. After this many lifetime heals the run is routed to the shared topic (status:"fallback") — the
+ * same terminal escape already used for the no-usable-threadId and unconfirmed-persist paths. */
+const MAX_HEAL_ATTEMPTS = 3;
+
 /**
  * @description Cron-side outbox drain. Enumerates every obs-<issue>.json in stateDir, derives
  * border checkpoints from the run worktree, then sends unsent events. Critical events (blocked /
@@ -1012,10 +1020,15 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   for (const { metaPath, meta, events } of runs) {
     const isFallback = meta.status === "fallback" || meta.threadId == null;
     let runThreadId = isFallback ? sharedThreadId : meta.threadId;
-    // A run OWNS its topic only while it is neither fallback nor closed. `isFallback` still governs
-    // ROUTING (a closed run with a remaining cursor keeps draining to the shared topic); `ownsTopic`
-    // governs SELF-HEAL, so a closed run never races cron-a-dispatch to create a second topic.
-    const ownsTopic = meta.status !== "fallback" && meta.status !== "closed" && meta.threadId != null;
+    // A run OWNS its topic only in a LIVE status — an explicit ALLOWLIST (`active` or
+    // `awaiting-review`), never a denylist. `orphan` (spawn died, topic-close failed), `fallback` and
+    // `closed` do NOT own a topic, so a dead/orphan run never self-heals and mints a fresh topic. A
+    // denylist here failed open on every status added later (`orphan` today, the next one tomorrow) —
+    // dangerous on a trigger that MINTS a remote resource. `isFallback` still governs ROUTING (a
+    // closed run with a remaining cursor keeps draining to the shared topic); `ownsTopic` governs
+    // SELF-HEAL, so neither a closed nor an orphan run races cron-a-dispatch to create a second topic.
+    const ownsTopic =
+      (meta.status === "active" || meta.status === "awaiting-review") && meta.threadId != null;
     const startCursor = typeof meta.cursor === "number" ? meta.cursor : 0;
     let newCursor = startCursor;
     let recreatedThisRun = false;
@@ -1053,6 +1066,18 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         recreationsThisCycle < MAX_RECREATIONS_PER_CYCLE &&
         sendResult.reason === "thread-not-found"
       ) {
+        // Per-RUN lifetime cap (persisted on the meta): once this run has already minted
+        // MAX_HEAL_ATTEMPTS topics over its life, stop re-minting and route to the shared topic —
+        // otherwise a topic that keeps being reported dead re-mints one fresh topic every cron tick.
+        const healAttempts = typeof meta.healAttempts === "number" ? meta.healAttempts : 0;
+        if (healAttempts >= MAX_HEAL_ATTEMPTS) {
+          try {
+            updateMeta(metaPath, { status: "fallback" });
+          } catch {
+            // fail-open
+          }
+          break;
+        }
         recreatedThisRun = true;
         recreationsThisCycle += 1;
         const topicName = `${meta.project ? `[${meta.project}] ` : ""}#${meta.issueNumber}`;
@@ -1077,7 +1102,7 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
           break;
         }
         try {
-          updateMeta(metaPath, { threadId: createResult.threadId });
+          updateMeta(metaPath, { threadId: createResult.threadId, healAttempts: healAttempts + 1 });
         } catch {
           // fail-open: updateMeta never throws, but never let a writer propagate
         }

@@ -436,3 +436,109 @@ test("#ac-1.7 makeNotifier.drainOutbox: an end-to-end thread-not-found send driv
     "the token-bound createTopic seam must be reached end-to-end and the recreated threadId persisted",
   );
 });
+
+test("#ac-1.9 drainTelegramOutbox: an 'orphan' run (dead spawn) does NOT own its topic — a thread-not-found send never mints a fresh topic", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "orphan",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: false };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic },
+  );
+
+  assert.strictEqual(
+    createTopicCalls.length,
+    0,
+    "an orphan run must never mint a fresh topic — ownsTopic is an allowlist (active|awaiting-review), not a denylist",
+  );
+});
+
+test("#ac-1.10 drainTelegramOutbox: a run at the persisted heal cap (healAttempts >= MAX) routes to fallback instead of minting yet another topic", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+    healAttempts: 3,
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: false };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic },
+  );
+
+  assert.strictEqual(
+    createTopicCalls.length,
+    0,
+    "a run at the persisted heal cap must NOT mint another topic — it stops re-minting every cron tick",
+  );
+  assert.strictEqual(
+    readMeta(metaPath(stateDir, 141)).status,
+    "fallback",
+    "a run at the heal cap is routed to the shared topic (status:fallback), the same terminal escape as the other dead-end paths",
+  );
+});
+
+test("#ac-1.11 drainTelegramOutbox: a successful self-heal increments the persisted healAttempts so the lifetime cap is reachable across cycles", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+    healAttempts: 1,
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopic = async () => ({ ok: true, threadId: 2000 });
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    if (message.threadId === 2000) return { sent: true };
+    return { sent: false };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic },
+  );
+
+  assert.strictEqual(
+    readMeta(metaPath(stateDir, 141)).healAttempts,
+    2,
+    "a heal must bump the persisted healAttempts so repeated per-cycle heals converge on the lifetime cap",
+  );
+});
