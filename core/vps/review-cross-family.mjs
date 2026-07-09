@@ -52,6 +52,18 @@ export function crossFamilyEligible(pr, opts) {
 }
 
 /**
+ * @description Classifies the codex SECURITY eye's FLAT `{available, verdict, issues}` view into
+ * `absent` | `clean` | `concern`. Well-formedness is decided on FIELD STRUCTURE only, never on the
+ * severity string. Takes no `securityVerdict` param, so the forbidden severity coupling is
+ * structurally impossible.
+ * @param {{available?: boolean, verdict?: string, issues?: unknown}} sec
+ * @returns {"absent" | "clean" | "concern"}
+ */
+export function classifyCodexSecurityEye(sec) {
+  throw new Error("not implemented");
+}
+
+/**
  * @description Pure RD-1 second-family verdict folder. Folds the codex adversary + security eye
  * outputs into a single `{ status }` verdict object using the injected `securityVerdict` seam.
  * Fail-closed: CLEAN requires both eyes present AND both judged SECURE; any missing eye or any

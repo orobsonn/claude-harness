@@ -19,7 +19,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
+import { crossFamilyEligible, deriveSecondFamilyVerdict, classifyCodexSecurityEye } from "./review-cross-family.mjs";
 import { securityVerdict as realSecurityVerdict } from "../../modules/codex-adversary/references/merge-findings.mjs";
 
 const PR = { number: 42, headRefName: "harness/feat-x", headSha: "abc123", url: "https://github.com/acme/demo/pull/42" };
@@ -153,4 +153,58 @@ test("deriveSecondFamilyVerdict: a codex adversary 'critical' finding blocks und
     { securityVerdict: realSecurityVerdict }
   );
   assert.equal(v.status, "BLOCKED");
+});
+
+/**
+ * @description Frozen oracle for `classifyCodexSecurityEye(sec)` — a pure function that decides
+ * well-formedness of a FLAT codex security-eye view `{available, verdict, issues}` (never `.output`)
+ * on FIELD STRUCTURE ONLY, never on the severity string. Rule precedence is load-bearing and
+ * evaluated in this order: `available !== true` → 'absent'; then an explicit `UNSAFE` verdict
+ * (trimmed, case-insensitive) → 'concern'; then `issues` not an array → 'absent'; then any
+ * structurally-incomplete issue (missing `scope`, `evidence`, or `description`) → 'absent'; then
+ * any structurally-complete issue → 'concern'; else → 'clean'. Takes no second parameter.
+ */
+test("Given available:true and a structurally-complete CRITICAL-severity issue, When classifyCodexSecurityEye runs, Then 'concern' (a complete issue routes to the refute-pass regardless of the 'critical' severity string)", () => {
+  const sec = { available: true, issues: [{ severity: "critical", scope: "x", evidence: "y", description: "z" }] };
+  assert.equal(classifyCodexSecurityEye(sec), "concern");
+});
+
+test("Given available:true and a structurally-complete LOW-severity issue, When classifyCodexSecurityEye runs, Then 'concern' (severity is never consulted to downgrade a complete issue to clean or absent)", () => {
+  const sec = { available: true, issues: [{ severity: "low", scope: "x", evidence: "y", description: "z" }] };
+  assert.equal(classifyCodexSecurityEye(sec), "concern");
+});
+
+test("Given available:true and an issue missing 'description', When classifyCodexSecurityEye runs, Then 'absent' (a structurally-incomplete issue is malformed → fail-open)", () => {
+  const sec = { available: true, issues: [{ severity: "high", scope: "x", evidence: "y" }] };
+  assert.equal(classifyCodexSecurityEye(sec), "absent");
+});
+
+test("Given available:false with a structurally-complete issue present, When classifyCodexSecurityEye runs, Then 'absent' (never ran)", () => {
+  const sec = { available: false, issues: [{ scope: "x", evidence: "y", description: "z" }] };
+  assert.equal(classifyCodexSecurityEye(sec), "absent");
+});
+
+test("Given available:false with a stray explicit UNSAFE verdict, When classifyCodexSecurityEye runs, Then 'absent' (availability is checked strictly FIRST — a not-ran eye is absence even with a stray explicit UNSAFE)", () => {
+  const sec = { available: false, verdict: "UNSAFE", issues: [] };
+  assert.equal(classifyCodexSecurityEye(sec), "absent");
+});
+
+test("Given available:true and issues is not an array, When classifyCodexSecurityEye runs, Then 'absent'", () => {
+  const sec = { available: true, issues: "nope" };
+  assert.equal(classifyCodexSecurityEye(sec), "absent");
+});
+
+test("Given available:true with no issues and no UNSAFE verdict, When classifyCodexSecurityEye runs, Then 'clean'", () => {
+  const sec = { available: true, issues: [] };
+  assert.equal(classifyCodexSecurityEye(sec), "clean");
+});
+
+test("Given available:true and an explicit verdict 'unsafe ' (trailing space, lowercase) with no issues, When classifyCodexSecurityEye runs, Then 'concern' (matched trimmed and case-insensitive)", () => {
+  const sec = { available: true, verdict: "unsafe ", issues: [] };
+  assert.equal(classifyCodexSecurityEye(sec), "concern");
+});
+
+test("Given available:true, explicit verdict 'UNSAFE', AND one structurally-incomplete issue (missing description), When classifyCodexSecurityEye runs, Then 'concern' NOT 'absent' (the explicit blocking declaration is evaluated BEFORE the per-issue completeness check; an incomplete issue never downgrades a well-formed UNSAFE to fail-open)", () => {
+  const sec = { available: true, verdict: "UNSAFE", issues: [{ severity: "high", scope: "x", evidence: "y" }] };
+  assert.equal(classifyCodexSecurityEye(sec), "concern");
 });
