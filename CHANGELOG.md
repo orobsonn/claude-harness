@@ -150,6 +150,9 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   edição não commitada, que é retentada no próximo ciclo) e a branch é mantida — os commits não
   mesclados são sempre registrados em log antes da limpeza. Um run com sessão ativa nunca é tocado
   (#161).
+- **vps notify (Telegram):** o feed de um run cujo tópico do fórum foi deletado/fechado não trava mais
+  em silêncio — o drain agora recria o tópico, confirma a persistência e retoma o envio dos checkpoints
+  pendentes ([#214](https://github.com/orobsonn/claude-harness/issues/214))
 
 ### Removed
 
