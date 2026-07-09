@@ -593,6 +593,17 @@ async function callTelegramMethod(method, payload, opts = {}, op) {
  * under a guarded `typeof res.json === "function"` + try/catch — the existing test fakes return plain
  * objects with NO `.json`, and a rejecting/throwing `.json` is unclassifiable → fail closed. The raw
  * description string is consumed ONLY here to pick the enum value; it NEVER escapes this function.
+ *
+ * AMBIGUITY — `"thread-not-found"` means "Telegram could not resolve this thread in THIS chat", which
+ * covers BOTH a genuinely deleted topic AND a wrong/mismatched `chat_id` (`message_thread_id` is
+ * per-chat, NOT globally unique). It must NEVER, on its own, authorize a caller to discard persisted
+ * local state — a caller reading it as "the topic is confirmed gone" while actually operating against
+ * the wrong chat would destroy records for a topic that still exists elsewhere.
+ *
+ * PERMISSION DENIAL — a `not enough rights` / `CHAT_ADMIN_REQUIRED` (the bot lacking
+ * `can_delete_messages` / `can_manage_topics`) currently classifies as `"transient"`, indistinguishable
+ * from a 429 or a timeout. A caller cannot tell a permission problem from a transient blip here and
+ * must detect it out-of-band (e.g. observing that attempts never succeed across cycles).
  * @param {object} res - The fetch response (may be a plain fake with no `.json`).
  * @returns {Promise<"thread-not-found" | "transient">}
  */
@@ -619,7 +630,9 @@ async function classifyTelegramError(res) {
  * `{ ok:true, threadId, chatId }` — `chatId` is `opts.config.chatId`, the chat the topic was actually
  * minted against (load-bearing for #ac-1.2: on a `.dev.vars`-only deployment `config.notify.chatId`
  * is undefined while the topic is minted against the resolved `TELEGRAM_CHAT_ID` fallback — only the
- * seam's return knows the true chat).
+ * seam's return knows the true chat). The returned `chatId` is exactly the chat the topic was minted
+ * against, and exists so callers can persist the `{ threadId, chatId }` pair required by
+ * `deleteForumTopic`'s caller contract.
  * @param {{ name: string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
  * @returns {Promise<{ ok: boolean, threadId?: number, chatId?: number|string }>}
@@ -659,6 +672,15 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
  * on 2xx, `{ ok:false, reason:"thread-not-found" }` when the topic is already gone, and
  * `{ ok:false, reason:"transient" }` otherwise. A failure logs ONLY `{ op:"deleteForumTopic",
  * type:"forum-topic", status }` — the token/URL/body never reach a log line.
+ *
+ * CALLER CONTRACT — `message_thread_id` is per-chat and NOT globally unique, so the caller MUST
+ * guarantee that `threadId` was minted in the SAME chat as `opts.config.chatId`. The intended
+ * mechanism: persist the `{ threadId, chatId }` pair `createForumTopic` returns together, and compare
+ * the persisted `chatId` against the currently-resolved one before ever calling this function. This
+ * function does NOT and CANNOT verify that pairing — a `threadId` from chat A paired with chat B's
+ * `config.chatId` destroys an unrelated topic in chat B, and the operation is irreversible. A
+ * `"thread-not-found"` reason is only safe to interpret as "already gone" once the caller has
+ * independently established, via that `chatId` equality check, that it is operating in the correct chat.
  * @param {{ threadId: number|string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
  * @returns {Promise<{ ok: boolean, reason?: string }>}
