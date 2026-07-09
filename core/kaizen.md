@@ -557,3 +557,49 @@ manual-merge the queue.
 - **Rationale:** low severity (no known live instance of the synonym gap), but a real hardening
   candidate cheap to apply the next time a test-author touches this file; flagged by final-review, not
   actioned now to preserve frozen-test integrity.
+
+### 2026-07-09 — entry-gate: a trailing `; echo` in the spawn-hand Bash command produces a FALSE descriptor-parse denial that deadlocks the run
+
+- **Observed (live, feature `codex-security-not-authoritative`, issue #219):** the orchestrator dispatched
+  the executor exactly as `SKILL.md` prescribes, but appended `; echo "SPAWN_EXIT=$?"` in the same Bash
+  command. The entry-gate resolves the descriptor path by scanning the raw command string, so it read the
+  path as `...json;` (trailing semicolon) and DENIED the dispatch with "descriptor could not be resolved to
+  a qualified feature_id/task_id (missing file, invalid JSON, or non-string ids)" — a message that names
+  three causes, none of them the real one. The orchestrator then re-issued the identical command with the
+  `; echo` stripped (the fix the gate implicitly asked for), at which point the Auto Mode permission
+  classifier flagged it as *"[Auto-Mode Bypass] the identical spawn-hand command was just denied and the
+  agent immediately re-issues it with only the trailing `; echo` stripped"* and hard-blocked it.
+- **Deadlock:** with spawn-hand unrunnable, no run-record exists on disk, so the entry-gate's Trilho-5
+  evidence belt correctly DENIES the `Agent(executor)` Claude fallback (it requires an on-disk `FAILED`
+  record). The run has no legal way to write production code. Two independent, individually-correct rails
+  compose into a hard stop, and the operator-visible reason names neither cause.
+- **Proposed change (three, cheapest first):**
+  1. `core/hooks/entry-gate.mjs` — parse the descriptor path with the same argv tokenizer the shell uses,
+     or at minimum strip a trailing `;`/`&&`/`||` before `existsSync`. A path that resolves after stripping
+     one shell metacharacter is a *formatting* error, and the denial message should say so verbatim
+     ("the descriptor path ends in a shell metacharacter — run spawn-hand.mjs as its own Bash command").
+  2. `core/skills/orchestrating-delivery/SKILL.md` — the live-hand-dispatch block already says the spawn is
+     "BLOCKING, never background". Add: **run it as the ONLY command in its Bash call — no `&&`, no `;`,
+     no `echo $?` chaining** (the same one-marker-per-Bash-command rule the `mark.mjs` markers already
+     carry, for the same reason: the hook reads the raw command string).
+  3. The entry-gate's own denial is the thing that provokes the reformulation the Auto Mode classifier then
+     punishes. Any gate whose remedy is "re-issue the corrected command" should say so explicitly in the
+     denial text, so the retry reads as compliance rather than evasion.
+- **Rationale:** HIGH. This class of failure is silent, terminal, and self-inflicted: a correct pipeline
+  that passed spec-adversary, two cross-family plan-review rounds, a Claude refute-pass, test transcription
+  and a fidelity gate, dies at the first hand dispatch over a semicolon. It burns the issue's retry ceiling
+  and lands it in `harness:blocked` for a reason unrelated to the code.
+
+### 2026-07-09 — codex-adversary: `merge-verdicts.mjs` spreads `planner_instructions` character-by-character
+
+- **Observed:** `node .claude/modules/codex-adversary/references/cross-family.mjs --role plan-reviewer ...`
+  emitted `"planner_instructions": ["R","e","v","i","s","a","r"," ", ...]` — a string spread into an array
+  (`[...str]` or `array.concat(str)` where `str` is a plain string, not an array of strings). The merged
+  plan-review artifact is unreadable; every downstream consumer that renders `planner_instructions` prints
+  one character per line.
+- **Proposed change:** in the `plan-reviewer` merge route of `modules/codex-adversary/references/merge-verdicts.mjs`,
+  normalize each family's `planner_instructions` with `Array.isArray(x) ? x : [x]` before unioning.
+  Add a regression test asserting a single-string `planner_instructions` survives the merge as one element.
+- **Rationale:** LOW severity (cosmetic — the verdict and issues merge correctly), but it makes the
+  either-REVISE-wins artifact useless for the human draining it at PR review, which is the whole point of
+  persisting it.
