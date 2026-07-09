@@ -121,7 +121,11 @@ import { realpathSync } from "node:fs";
 const DEFAULT_LIVENESS_CEILING_HOURS = 2;
 const DEFAULT_REGISTRATION_GRACE_SECONDS = 120;
 const DEFAULT_RETRY_CEILING_K = 2;
+const DEFAULT_RETENTION_DAYS = 7;
+const DEFAULT_HARD_CAP_DAYS = 30;
+const DEFAULT_MAX_DELETIONS = 3;
 const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86400;
 
 /**
  * @description Injectable clock seam returning epoch SECONDS — matches run-cron-review.mjs's
@@ -496,14 +500,281 @@ function sweepOrphanTopics(opts) {
 }
 
 /**
+ * @description Captures the immutable identity tuple used for CAS compare-and-swap and for re-read
+ * divergence checks before every irreversible step. Only primitive fields: a reference field would
+ * make the CAS permanently false and silently disable deletion forever.
+ * @param {object} meta
+ * @returns {{ status: *, closedAt: *, threadId: *, chatId: * }}
+ */
+function captureIdentity(meta) {
+  return {
+    status: meta.status,
+    closedAt: meta.closedAt,
+    threadId: meta.threadId,
+    chatId: meta.chatId,
+  };
+}
+
+/**
+ * @description Strict compare of the captured identity against a freshly re-read meta. Any divergence
+ * aborts the current irreversible step. String() normalization is intentionally NOT used: a concurrent
+ * writer that changes a number to its string representation is still a mutation we must treat as a
+ * divergence and fail closed on.
+ * @param {object|null} fresh
+ * @param {{ status: *, closedAt: *, threadId: *, chatId: * }} identity
+ * @returns {boolean}
+ */
+function identityMatches(fresh, identity) {
+  return (
+    fresh != null &&
+    fresh.status === identity.status &&
+    fresh.closedAt === identity.closedAt &&
+    fresh.threadId === identity.threadId &&
+    fresh.chatId === identity.chatId
+  );
+}
+
+/**
+ * @description True only when every event classified as critical by the injected predicate already has
+ * its positional index recorded in meta.criticalSent. Unconditional: no retention cap relaxes this.
+ * @param {object[]} events
+ * @param {Set<number>} criticalSent
+ * @param {(event: object) => boolean} isCriticalEvent
+ * @returns {boolean}
+ */
+function allCriticalsAcked(events, criticalSent, isCriticalEvent) {
+  for (let i = 0; i < events.length; i++) {
+    if (isCriticalEvent(events[i]) && !criticalSent.has(i)) return false;
+  }
+  return true;
+}
+
+/**
+ * @description Fail-closed deletability gate for one candidate. All conditions must hold; any missing
+ * or uncertain signal skips the candidate. The cosmetic outbox-drain gate (cursor >= events.length) is
+ * relaxed ONLY when the run is older than the hard cap.
+ * @param {{ meta: object, events: object[] }} candidate
+ * @param {object} opts
+ * @param {Set<string>} blocklist
+ * @returns {boolean}
+ */
+function isDeletable(candidate, opts, blocklist) {
+  const { meta } = candidate;
+  const { resolvedChatId, retentionDays, hardCapDays, now, prOpen } = opts;
+
+  if (meta.status !== "closed") return false;
+  if (!Number.isFinite(meta.closedAt)) return false;
+
+  const age = now() - meta.closedAt;
+  if (age <= retentionDays * SECONDS_PER_DAY) return false;
+
+  if (!("chatId" in meta) || String(meta.chatId) !== String(resolvedChatId)) return false;
+  if (meta.threadId == null) return false;
+  if (blocklist.has(String(meta.threadId))) return false;
+
+  if (typeof prOpen !== "function") return false;
+  try {
+    if (prOpen(meta.issueNumber) === true) return false;
+  } catch {
+    return false;
+  }
+
+  const criticalSent = new Set(Array.isArray(meta.criticalSent) ? meta.criticalSent : []);
+  if (!allCriticalsAcked(candidate.events, criticalSent, opts.isCriticalEvent)) return false;
+
+  const cursor = typeof meta.cursor === "number" ? meta.cursor : 0;
+  if (cursor < candidate.events.length && age <= hardCapDays * SECONDS_PER_DAY) return false;
+
+  return true;
+}
+
+/**
+ * @description Idempotent per-chatId tally helper. Mutates the shared tally object so the caller can
+ * read it after awaiting the returned promises.
+ * @param {Record<string, {attempted:number, deleted:number}>} tally
+ * @param {string} chatIdKey
+ * @param {"attempted"|"deleted"} field
+ */
+function incrementTally(tally, chatIdKey, field) {
+  if (!tally[chatIdKey]) tally[chatIdKey] = { attempted: 0, deleted: 0 };
+  tally[chatIdKey][field] += 1;
+}
+
+/**
+ * @description Performs the destructive delete + CAS-stamp + ordered unlink chain for a single
+ * eligible candidate. Wrapped in a promise so the sweep can return immediately and the caller can
+ * await completion. Every irreversible step is preceded by an identity re-read (or a CAS that itself
+ * re-reads). Fail-open: any error aborts only this candidate.
+ * @param {{ metaPath: string, meta: object }} candidate
+ * @param {{ status: *, closedAt: *, threadId: *, chatId: * }} identity
+ * @param {boolean} hasTopicDeletedAt
+ * @param {object} opts
+ * @param {Record<string, {attempted:number, deleted:number}>} tally
+ * @returns {Promise<void>}
+ */
+async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tally) {
+  const { metaPath } = candidate;
+  const { deleteForumTopic, updateMetaIfUnchanged, readMeta, unlinkRunFiles, now } = opts;
+  const chatIdKey = String(identity.chatId);
+  let deleteFailedTransient = false;
+
+  try {
+    if (!hasTopicDeletedAt) {
+      const freshBeforeDelete = readMeta(metaPath);
+      if (!identityMatches(freshBeforeDelete, identity)) return;
+    }
+
+    let deleteResult;
+    if (!hasTopicDeletedAt) {
+      try {
+        deleteResult = await deleteForumTopic({ threadId: identity.threadId });
+      } catch {
+        deleteFailedTransient = true;
+        return;
+      }
+      if (!deleteResult.ok && deleteResult.reason !== "thread-not-found") {
+        deleteFailedTransient = true;
+        return;
+      }
+    }
+
+    const casExpected = captureIdentity(identity);
+    const casPartial = { topicDeletedAt: now() };
+    let casOk;
+    try {
+      casOk = updateMetaIfUnchanged(metaPath, casExpected, casPartial);
+    } catch {
+      casOk = false;
+    }
+    if (!casOk) return;
+
+    const freshBeforeEventsUnlink = readMeta(metaPath);
+    if (!identityMatches(freshBeforeEventsUnlink, identity)) return;
+    try {
+      unlinkRunFiles(metaPath, { what: "events" });
+    } catch {
+      return;
+    }
+
+    const freshBeforeMetaUnlink = readMeta(metaPath);
+    if (!identityMatches(freshBeforeMetaUnlink, identity)) return;
+    try {
+      unlinkRunFiles(metaPath, { what: "meta" });
+    } catch {
+      return;
+    }
+
+    if (!hasTopicDeletedAt && deleteResult.ok) {
+      incrementTally(tally, chatIdKey, "deleted");
+    }
+  } catch {
+    // any unexpected error before deleteForumTopic (e.g. readMeta throw) leaves deleteFailedTransient
+    // false and therefore does NOT count toward attempted.
+  } finally {
+    if (deleteFailedTransient) incrementTally(tally, chatIdKey, "attempted");
+  }
+}
+
+/**
  * @description Retention sweep: DELETES (irreversibly) the forum topic of a run closed for longer than
  * the retention window, then unlinks the run's records. Every IO is an injected seam; every uncertainty
  * fails closed (skip the candidate).
+ *
+ * Candidates arrive as { metaPath, meta, events } where events were pre-read by the composition root.
+ * The sweep itself never reads the events log. A candidate is deletable only when status==='closed',
+ * closedAt is finite and past retentionDays, chatId matches resolvedChatId, threadId is not in the
+ * shared blocklist, prOpen(issue)!==true, every critical event index is in meta.criticalSent, and
+ * either the cosmetic cursor has reached events.length OR the run is past the hardCapDays. The identity
+ * tuple (status, closedAt, threadId, chatId) is re-read and re-compared before deleteForumTopic and
+ * before each unlink; the same tuple is the CAS expected when stamping topicDeletedAt.
+ *
+ * No-op guard: if any retention seam is not a function the sweep returns empty immediately, calling
+ * nothing. This keeps frozen reaper.test.mjs / run-crons.test.mjs green when reaper() is invoked without
+ * the retention seams.
+ *
  * @param {object} opts
+ * @param {() => Array<{ metaPath: string, meta: object, events: object[] }>} opts.listStaleRuns
+ * @param {(input: { threadId: number|string }) => Promise<{ ok: boolean, reason?: string }>} opts.deleteForumTopic
+ * @param {(metaPath: string, expected: object, partial: object) => boolean} opts.updateMetaIfUnchanged
+ * @param {(metaPath: string) => object|null} opts.readMeta
+ * @param {(metaPath: string, { what: 'events' | 'meta' }) => boolean} opts.unlinkRunFiles
+ * @param {(issueNumber: number) => boolean} opts.prOpen
+ * @param {(event: object) => boolean} opts.isCriticalEvent
+ * @param {() => number} [opts.now] - epoch seconds
+ * @param {number|string} opts.resolvedChatId
+ * @param {Array<number|string>} opts.sharedThreadIds
+ * @param {number} [opts.retentionDays=7]
+ * @param {number} [opts.hardCapDays=30]
+ * @param {number} [opts.maxDeletions=3]
  * @returns {{ retentionDeletes: Array<Promise>, retentionTally: Record<string, {attempted:number, deleted:number}> }}
  */
 export function sweepStaleClosedTopics(opts) {
-  throw new Error("not implemented");
+  const {
+    listStaleRuns,
+    deleteForumTopic,
+    updateMetaIfUnchanged,
+    readMeta,
+    unlinkRunFiles,
+    prOpen,
+    isCriticalEvent,
+    now = defaultNow,
+    resolvedChatId,
+    sharedThreadIds,
+    retentionDays = DEFAULT_RETENTION_DAYS,
+    hardCapDays = DEFAULT_HARD_CAP_DAYS,
+    maxDeletions = DEFAULT_MAX_DELETIONS,
+  } = opts;
+
+  const result = { retentionDeletes: [], retentionTally: {} };
+
+  if (
+    typeof listStaleRuns !== "function" ||
+    typeof deleteForumTopic !== "function" ||
+    typeof updateMetaIfUnchanged !== "function" ||
+    typeof readMeta !== "function" ||
+    typeof unlinkRunFiles !== "function" ||
+    typeof isCriticalEvent !== "function"
+  ) {
+    return result;
+  }
+
+  const blocklist = Array.isArray(sharedThreadIds) ? new Set(sharedThreadIds.map(String)) : new Set();
+
+  let candidates;
+  try {
+    candidates = listStaleRuns() ?? [];
+  } catch {
+    return result;
+  }
+
+  let attemptedDeletions = 0;
+
+  for (const candidate of candidates) {
+    try {
+      if (!candidate || typeof candidate.metaPath !== "string") continue;
+      const meta = candidate.meta;
+      if (!meta || typeof meta !== "object") continue;
+      if (!Array.isArray(candidate.events)) continue;
+      const events = candidate.events;
+
+      if (!isDeletable({ meta, events }, opts, blocklist)) continue;
+
+      const identity = captureIdentity(meta);
+      const hasTopicDeletedAt = meta.topicDeletedAt != null;
+      if (!hasTopicDeletedAt) {
+        if (attemptedDeletions >= maxDeletions) continue;
+        attemptedDeletions += 1;
+      }
+
+      result.retentionDeletes.push(
+        deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, result.retentionTally)
+      );
+    } catch {
+      // fail-open: one malformed candidate never aborts the sweep
+    }
+  }
+
+  return result;
 }
 
 export function reaper(opts) {
@@ -541,5 +812,14 @@ export function reaper(opts) {
   // array return contract stays byte-stable (reaper.test.mjs / notify-wiring.test.mjs assert
   // Array.isArray and actions[0]) while the composition root can still await them before exit.
   actions.topicCloses = sweepOrphanTopics(resolved);
+
+  // Retention sweep: deletes forum topics of runs that have been closed past the retention window and
+  // unlinks their obs records. Wired outside the per-worktree try/catch so a missing seam no-ops
+  // instead of throwing. The returned promises and tally are attached to the actions array just like
+  // topicCloses, keeping the array return contract byte-stable.
+  const { retentionDeletes, retentionTally } = sweepStaleClosedTopics(resolved);
+  actions.retentionDeletes = retentionDeletes;
+  actions.retentionTally = retentionTally;
+
   return actions;
 }
