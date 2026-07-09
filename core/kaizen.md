@@ -441,6 +441,17 @@ manual-merge the queue.
   the ephemeral config's workspace isn't pre-trusted — high leverage, small fix, and it invalidates
   the run-record's FAILED signal (a completed run mislabelled as a failure), which downstream
   escalation logic trusts.
+- **2026-07-09 reconfirmation (`fleet-multi-repo`, #117), new symptom variant:** the same untrusted-
+  ephemeral-workspace root cause also produces a DIFFERENT, quieter failure than the 9-min timeout
+  above — a WEAKER hand (`hand_tiers.medium`, glm-5.2) exited quickly with `NOT_DONE` and an EMPTY diff
+  (~0 output tokens) because it asked for permission and stopped, rather than stalling. This happened
+  from INSIDE a git worktree, where the ephemeral `CLAUDE_CONFIG_DIR` reported the PRIMARY tree's path
+  (not the worktree path) as untrusted. K=1 escalation to a STRONGER hand (`hand_tiers.high`,
+  kimi-k2.7-code) routed around it and succeeded on the first try — so the failure mode is
+  model-capability-dependent, not universal, and burns a full escalation step silently (a
+  `NOT_DONE`/empty-diff outcome reads as "the hand tried and failed", not "the hand was never allowed to
+  try"). Confirms the proposed fix (pre-seed `hasTrustDialogAccepted`) should target the WORKTREE path
+  specifically, not just the primary tree.
 
 ### 2026-07-06 — 429-streak: add a TTL/session key + tier-dedup (accepted fail-safe-direction residuals from hand-429-escalation-shortcut)
 
@@ -641,5 +652,82 @@ manual-merge the queue.
   have `headings()`/`sliceSection()` carry an `inFence` toggle that flips on a line whose trim starts
   with a triple backtick, skipping lines while inside a fence. Consider promoting the pair to a shared
   reference helper so every doc-pinning gate inherits the fix.
+
+### 2026-07-09 — codex-adversary: `--role plan-reviewer` merge output emitted `planner_instructions` as an array of single characters
+
+- **Observed:** during `fleet-multi-repo` (#117) plan-review round 1, the `cross-family.mjs --role
+  plan-reviewer` merge output's `planner_instructions` field arrived as an array of single characters
+  (consistent with a string having been spread/iterated as if it were an array of items — e.g.
+  `Object.values(aString)` or `[...aString]`) rather than the plain string the field's own JSDoc
+  contract promises. This made the field unusable by any downstream consumer expecting prose. The
+  `--role adversary` route does not exhibit this bug. Static inspection during this harvest of
+  `modules/codex-adversary/references/merge-verdicts.mjs`'s `mergeVerdicts` (the function that actually
+  builds `planner_instructions`, via `[claudeVerdict.planner_instructions,
+  codexVerdict.planner_instructions].filter(Boolean).join("\n---\n")`) and of
+  `driveCrossFamilyVerdict` in `cross-family.mjs` found **no spread/iteration of a string** on this
+  path — both look correct on paper. The root cause was NOT isolated in this run; it is likely in a
+  downstream consumer (e.g. how the orchestrator or a shell/`jq` step re-handles the CLI's JSON stdout
+  for the verdict shape specifically), not in `merge-verdicts.mjs` itself.
+- **Proposed change:** reproduce with a live `--role plan-reviewer` invocation and trace the field from
+  `cross-family.mjs`'s `process.stdout.write(JSON.stringify(result, null, 2))` through to wherever the
+  orchestrator consumes it (`orchestrating-delivery`'s plan-review step), since the bug is not in the
+  merge function itself. Add a unit test on `mergeVerdicts` asserting `planner_instructions` is a
+  `string` (not just truthy) to lock in that the merge layer stays correct once the real site is found.
+- **Rationale:** a verdict-shaped cross-family checkpoint whose whole value is the
+  `planner_instructions` field guiding a REVISE is silently defeated if that field is unusable — the
+  plan-reviewer eye still gates correctly (APPROVE/REVISE), but the human/planner-facing guidance is
+  lost. Low severity this run (round 1 already had `--role adversary`-shaped guidance to compensate,
+  and round 3 converged to APPROVE), but worth fixing before a REVISE with real prose guidance is lost
+  on a task where it's the only signal.
+
+### 2026-07-09 — orchestrating-delivery: SKILL.md step order lets the sniper dispatch onto an uncommitted executor diff, contradicting `spawn-hand`'s dirty-tree refusal
+
+- **Observed:** during `fleet-multi-repo` (#117) task-1, dispatching the per-task sniper required the
+  orchestrator to COMMIT the executor's implementation diff first — `spawn-hand.mjs`'s `runLiveDispatch`
+  refuses to spawn onto a tree that is dirty relative to the freeze baseline (`core/skills/
+  orchestrating-delivery/references/spawn-hand.mjs:588`, "working tree is dirty relative to the freeze
+  baseline — refusing to spawn"), and the sniper is dispatched via the SAME runnable command as the
+  executor. But `SKILL.md`'s own numbered steps put **5. sniper** BEFORE **6-commit. impl-commit** ("
+  after the task's gates are GREEN... the orchestrator COMMITS the production diff") — read literally,
+  the prose has the sniper firing on step 5 while the executor's own diff from steps 1d–4 is still
+  uncommitted, which `runLiveDispatch`'s precondition (step "Git-universe reconciliation (mandatory
+  pre-spawn)", line ~296) would refuse. The orchestrator had to commit the implementation out of the
+  documented step order to unblock the sniper dispatch.
+- **Proposed change:** in `core/skills/orchestrating-delivery/SKILL.md`, either (a) reorder so the
+  impl-commit happens BEFORE step 5 (sniper) whenever the fan-out produced any mapped issue — i.e. split
+  step 6 into "commit the executor's diff before sniper dispatch" (a precondition of step 5, not a
+  step-6 action) and "record the final commit state after sniper fixes land", or (b) if the intent was
+  always for the sniper's fix to be folded into ONE impl-commit alongside the executor's diff (no
+  separate freeze/commit needed for the fix), state that explicitly and clarify how the sniper's
+  dispatch satisfies the dirty-tree precondition without the impl-commit having happened yet — the
+  current text supports neither reading unambiguously.
+- **Rationale:** an orchestrator following the numbered steps literally hits a `runLiveDispatch` config
+  error at the sniper dispatch (dirty tree), which routes to a critical exception/config-error path
+  rather than the intended sniper fix — a documentation gap that turns a normal per-task fan-out finding
+  into an unplanned recovery.
+
+### 2026-07-09 — cross-family: two independently-caught defects this run are concrete evidence of its value, not ceremony
+
+- **Observed:** during `fleet-multi-repo` (#117), the Codex peer caught two things the Claude eye did
+  not, in the SAME run: (1) at plan-review, that `reconcileFleet` always writes `projects[]`, so
+  "absent `config.projects`" was never the legacy case, making a planned synthesis path incoherent with
+  `list-worktrees.mjs`'s bare `for...of` — Claude's spec-adversary pass missed this; (2) at final
+  review, the duplicate-project-name last-wins defect (a `Map` overwriting on a repeated project name
+  while `listWorktrees` enumerates every entry undeduped) was independently found by BOTH eyes, but
+  Codex rated it HIGH where Claude rated it MEDIUM — the higher rating is what routed the finding to
+  the mandatory strong-eye re-gate, which then found a further null-entry crash the first eye missed.
+  Symmetrically, Claude caught something Codex did not (a dedup test at `install-crons.test.mjs:1091`
+  that was NOT an inversion target — over-inclusion would have taught the executor a false "was red"),
+  so the value is bidirectional, not one-family-strictly-better.
+- **Proposed change:** no code/prose change — this entry is a **retained-evidence record**, not an
+  action item. When the module's cost (Codex CLI usage, extra round-trip latency) is next weighed
+  against dropping it or making it opt-in-only, cite this run: two real defects surfaced only because
+  of the second family, one of which (the HIGH-vs-MEDIUM severity gap) is what triggered a
+  delivery-blocking re-gate that caught an additional crash bug.
+- **Rationale:** the module's ROI is easy to lose sight of between incidents (it is invisible when it
+  finds nothing) — an evidence trail across runs is the only defense against it being quietly dropped
+  as ceremony during a future cost-cutting pass. This is the second independently-dated evidence entry
+  for cross-family's value (see 2026-07-04 above, a different angle — failure-mode robustness rather
+  than catch-rate), reinforcing rather than duplicating it.
 - **Rationale:** low severity (no live instance), but the harness now has several frozen tests that pin
   markdown by heading slice — the hazard is shared, and each new copy re-inherits it.
