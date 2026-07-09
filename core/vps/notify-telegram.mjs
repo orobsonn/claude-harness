@@ -407,7 +407,7 @@ export function resolveNotifyConfig(config, deps = {}) {
  * @param {typeof fetch} [deps.fetch]
  * @param {(entry: object) => void} [deps.log]
  * @param {number} [deps.timeoutMs]
- * @returns {{ notify: (event: object) => Promise<void>, drain: () => Promise<unknown>, drainOutbox: (opts?: object) => Promise<void>, enabled: boolean, heartbeat: boolean, config: object }}
+ * @returns {{ notify: (event: object) => Promise<void>, drain: () => Promise<unknown>, drainOutbox: (opts?: object) => Promise<void>, enabled: boolean, heartbeat: boolean, config: object, send?: Function, createTopic?: Function }}
  */
 export function makeNotifier(config, deps = {}) {
   const homeDir = deps.homeDir ?? config?.homeDir;
@@ -461,8 +461,19 @@ export function makeNotifier(config, deps = {}) {
       log: deps.log,
       timeoutMs: deps.timeoutMs,
     });
-    return { sent: result.ok };
+    return result.ok ? { sent: true } : { sent: false, reason: result.reason };
   };
+
+  // Token-bound createTopic seam: wraps the exported createForumTopic with the resolved config so the
+  // drain (task-2) can recreate a deleted/closed forum topic without re-plumbing the token. Exposed on
+  // the notifier so the production wiring is verifiable WITHOUT the self-heal branch existing yet.
+  const createTopic = (input) =>
+    createForumTopic(input, {
+      config: { token: resolved.token, chatId: resolved.chatId },
+      fetch: deps.fetch,
+      log: deps.log,
+      timeoutMs: deps.timeoutMs,
+    });
 
   const drainOutbox = (drainOpts = {}) =>
     drainTelegramOutbox(
@@ -481,6 +492,7 @@ export function makeNotifier(config, deps = {}) {
         updateMeta: defaultUpdateMeta,
         appendEvent: defaultAppendEvent,
         send,
+        createTopic,
       },
     );
 
@@ -491,6 +503,9 @@ export function makeNotifier(config, deps = {}) {
     enabled: true,
     heartbeat: resolved.heartbeat,
     config: resolved,
+    // Exposed SEAMS (production wiring verifiable directly, not only behind injected fakes):
+    send,
+    createTopic,
   };
 }
 
@@ -522,14 +537,18 @@ export function renderCheckpoint({ title, bodyLines } = {}) {
 /**
  * @description Shared best-effort one-shot POST for the forum-topic methods. NEVER throws, NEVER
  * retries. Mirrors sendNotification's seam (injected fetch/log) and runtime/abort feature-detect.
- * Without fetch+AbortSignal.timeout or without token+chatId → `{ ok:false }` with no network call.
- * Any error / non-2xx logs ONLY `{ op, type, status }` — never the URL (carries `/bot<token>/`),
- * token, or body. Resolves to `{ ok:true, data }` on 2xx (data is the parsed Telegram response).
+ * Without fetch+AbortSignal.timeout or without token+chatId → `{ ok:false, reason:"transient" }`
+ * with no network call. Any error / non-2xx logs ONLY `{ op, type, status }` — never the URL (carries
+ * `/bot<token>/`), token, or body. Resolves to `{ ok:true, data }` on 2xx (data is the parsed Telegram
+ * response). On failure resolves `{ ok:false, reason }` where `reason` is a BOUNDED ENUM —
+ * `"thread-not-found"` ONLY when the Telegram `description` means the forum topic is gone, else
+ * `"transient"` (fail-closed). The raw `description` NEVER reaches a log line nor the returned
+ * `reason`.
  * @param {string} method - Telegram Bot API method name (`createForumTopic` / `closeForumTopic`).
  * @param {object} payload - Request body (chat_id + method-specific fields).
  * @param {object} opts - { config, fetch, log, timeoutMs }.
  * @param {string} op - Redacted op label for the failure log.
- * @returns {Promise<{ ok: boolean, data?: object }>}
+ * @returns {Promise<{ ok: boolean, data?: object, reason?: string }>}
  */
 async function callTelegramMethod(method, payload, opts = {}, op) {
   const { config, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
@@ -543,7 +562,7 @@ async function callTelegramMethod(method, payload, opts = {}, op) {
     config.chatId == null ||
     config.chatId === ""
   ) {
-    return { ok: false };
+    return { ok: false, reason: "transient" };
   }
   try {
     const url = `${TELEGRAM_API}/bot${config.token}/${method}`;
@@ -556,15 +575,41 @@ async function callTelegramMethod(method, payload, opts = {}, op) {
     if (!res || !res.ok) {
       const status = res && res.status != null ? res.status : "no-response";
       log({ op, type: "forum-topic", status });
-      return { ok: false };
+      return { ok: false, reason: await classifyTelegramError(res) };
     }
     const data = typeof res.json === "function" ? await res.json() : {};
     return { ok: true, data };
   } catch {
     // NEVER log the error message/stack (the rejecting fake in tests carries the token+URL in it).
     log({ op, type: "forum-topic", status: "error" });
-    return { ok: false };
+    return { ok: false, reason: "transient" };
   }
+}
+
+/**
+ * @description Maps an unsuccessful Telegram response to a BOUNDED reason enum. FAIL-CLOSED: only an
+ * explicit dead-thread `description` (the topic was deleted/closed) classifies as `"thread-not-found"`;
+ * anything unreadable, non-JSON, absent, or unmatched maps to `"transient"`. The error body is read
+ * under a guarded `typeof res.json === "function"` + try/catch — the existing test fakes return plain
+ * objects with NO `.json`, and a rejecting/throwing `.json` is unclassifiable → fail closed. The raw
+ * description string is consumed ONLY here to pick the enum value; it NEVER escapes this function.
+ * @param {object} res - The fetch response (may be a plain fake with no `.json`).
+ * @returns {Promise<"thread-not-found" | "transient">}
+ */
+async function classifyTelegramError(res) {
+  let description = null;
+  if (res && typeof res.json === "function") {
+    try {
+      const body = await res.json();
+      if (body && typeof body === "object" && typeof body.description === "string") {
+        description = body.description;
+      }
+    } catch {
+      // rejecting/throwing .json, or non-JSON body → unclassifiable → fail closed below
+    }
+  }
+  // Positive gate: ONLY an explicit dead-thread description classifies as thread-not-found.
+  return /message thread not found/.test(description) ? "thread-not-found" : "transient";
 }
 
 /**
@@ -778,7 +823,15 @@ function criticalBodyLines(event, meta) {
   return lines;
 }
 
-/** @description Sends a pre-rendered HTML message through the Telegram sendMessage endpoint. */
+/**
+ * @description Sends a pre-rendered HTML message through the Telegram sendMessage endpoint. EXPORTED
+ * so the bounded-error classification contract is unit-testable. Returns `{ ok, reason }`: on success
+ * `{ ok:true }`; on failure `{ ok:false, reason }` where `reason` is the bounded enum classified by
+ * `callTelegramMethod` (`"thread-not-found"` only for an explicit dead-thread description, else
+ * `"transient"`). The raw Telegram `description` never reaches the returned `reason` nor any log line.
+ * @param {object} input - { config, text, fetch, log, timeoutMs }.
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
 export async function sendRenderedMessage({ config, text, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   const payload = {
     chat_id: config?.chatId,
@@ -788,7 +841,7 @@ export async function sendRenderedMessage({ config, text, fetch: fetchImpl, log 
     disable_web_page_preview: true,
   };
   const result = await callTelegramMethod("sendMessage", payload, { config, fetch: fetchImpl, log, timeoutMs }, "sendMessage");
-  return { ok: result.ok };
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
 /** @description Derives the two cron-sourced border checkpoints from the run's worktree and
@@ -839,13 +892,25 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
   }
 }
 
-/** @description Best-effort send with swallowed exceptions (429 / network failure / throwing fake). */
+/**
+ * @description Best-effort send with swallowed exceptions (429 / network failure / throwing fake).
+ * Surfaces `{ ack, reason }`: `ack` is true ONLY when the send succeeded; `reason` carries the
+ * bounded classified reason on failure (undefined on success / when the send fake omits it). The
+ * reason is surfaced here so the drain (and task-2's self-heal branch) can consume it without
+ * re-deriving classification. Never throws.
+ * @param {Function} send - The drain's send seam.
+ * @param {object} message - The message payload passed to the seam.
+ * @returns {Promise<{ ack: boolean, reason?: string }>}
+ */
 async function trySend(send, message) {
   try {
     const result = await send(message);
-    return result && result.sent === true;
+    if (result && result.sent === true) {
+      return { ack: true };
+    }
+    return { ack: false, reason: result && result.reason };
   } catch {
-    return false;
+    return { ack: false };
   }
 }
 
@@ -859,7 +924,7 @@ async function trySend(send, message) {
  * cursor is still drained. Fail-open: never throws and never delays the cron.
  *
  * @param {{ stateDir: string, homeDir: string, chatId: number|string, limitPerMinute?: number, sendDelayMs?: number }} opts
- * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function, sleep?: Function }} seams
+ * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function, sleep?: Function, createTopic?: Function }} seams
  * @returns {Promise<void>}
  */
 export async function drainTelegramOutbox(opts = {}, seams = {}) {
@@ -871,6 +936,10 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   const appendEvent = seams.appendEvent ?? defaultAppendEvent;
   const send = seams.send ?? (async () => ({ sent: false }));
   const sleep = typeof seams.sleep === "function" ? seams.sleep : defaultSleep;
+  // task-1 seam: a token-bound createTopic (recreate a deleted/closed forum topic). Plumbed but NOT
+  // yet consumed — the self-heal branch that fires it on `reason === "thread-not-found"` is task-2.
+  // Default no-op returns {ok:false} so an unconfigured / unbound drain never touches the network.
+  const createTopic = seams.createTopic ?? (async () => ({ ok: false }));
 
   if (!stateDir || chatId == null || chatId === "") return;
 
@@ -915,8 +984,8 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
       if (budget <= 0) break;
       const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: criticalBodyLines(event, meta) });
       await pace();
-      const ack = await trySend(send, { event, text, chatId, threadId: sharedThreadId });
-      if (ack) {
+      const sendResult = await trySend(send, { event, text, chatId, threadId: sharedThreadId });
+      if (sendResult.ack) {
         consumeBudget();
         budget -= 1;
         sent.push(i);
@@ -949,8 +1018,8 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
       if (budget <= 0) break;
       const text = renderCheckpoint({ title: checkpointTitle(event), bodyLines: cosmeticBodyLines(event, meta, isFallback) });
       await pace();
-      const ack = await trySend(send, { event, text, chatId, threadId: runThreadId });
-      if (ack) {
+      const sendResult = await trySend(send, { event, text, chatId, threadId: runThreadId });
+      if (sendResult.ack) {
         consumeBudget();
         budget -= 1;
         newCursor = i + 1;
