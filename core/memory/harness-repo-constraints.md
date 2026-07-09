@@ -68,3 +68,24 @@ STALE"); (3) `package.json` exists (added in #53 for `npx` distribution) but the
   tokens are themselves hazardous strings (a block-comment terminator, `/**` opener, or any pattern
   that could prematurely close the test file's own comments), build them via string-literal
   concatenation so they never appear as a literal token inside the test file's own comments.
+
+- **`extractSection` (the common helper duplicated across `core/__tests__/*.test.mjs`, e.g.
+  `sniper-frozen-test-gate.test.mjs`, `hand-dispatch-routing.test.mjs`, `planner-checklist-rules.test.mjs`)
+  matches `## `/`### ` HEADINGS only (`/^(#{1,6})\s+/`).** Pointing it at a markdown **bullet** (e.g.
+  `- **Mock de fetch no client HTTP**:`) returns `""` — an empty section makes a presence assertion
+  permanently RED (looks like a real failure) and, worse, makes an absence assertion **vacuously
+  GREEN** (a paper gate that never actually checks anything). Verified live during
+  `vitest-fresh-response-mock` (#108), caught by the plan-reviewer at r1 before the test froze.
+  **How to apply:** before writing a locked test that calls `extractSection` against a bullet-level
+  target, confirm the target line actually starts a heading; if it is a bullet, use (or write) a
+  bullet-scoped extractor instead (`extractBulletRegion`-style: find the bullet's own start marker and
+  read to the next sibling bullet or EOF) — never assume `extractSection` degrades gracefully to `""`
+  as a safe default.
+
+- **An absence assertion on a multi-token code literal is defeated by line-reflow.** A doc anti-pattern
+  like `mockResolvedValue(new Response(` can appear in the source markdown with a line break between
+  the two calls (`vi.spyOn(...).mockResolvedValue(` / `new Response(...)` on the next line) — a
+  contiguous-string `.includes()` check silently misses it. **How to apply:** assert absence of the
+  single most distinctive **token** (`mockresolvedvalue`, case-normalized) scoped to the extracted
+  region, never the multi-token literal and never a whole-file search (whole-file also risks matching
+  the rule's own warning bullet, which legitimately names the anti-pattern to warn against it).

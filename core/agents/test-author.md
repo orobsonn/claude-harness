@@ -55,6 +55,7 @@ Escreva um teste **executável** na linguagem do projeto (Node + node:test + ass
 - JSDoc com `@description` breve, **em tempo verbal neutro** — descreva o contrato que o teste fixa ("fixa o contrato de X", "pina o comportamento de Y"), **nunca** o estado transitório de implementação ("X ainda não implementado", "espera RED"). Você escreve o header no momento RED, mas o arquivo será congelado e não poderá ser editado depois que passar a verde — um header neutro continua verdadeiro antes e depois do feature entrar; um header "espera RED" contradiz o próprio arquivo assim que o teste fica verde
 - Sem imports ou requires externos além dos builtins
 - Sem dependências adicionadas
+- **Convenção de autoria para mock de fetch:** quando uma asserção pinada envolver mock de `fetch`, transcreva como `vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(body, init))` — nunca `vi.spyOn(...).mockResolvedValue(new Response(...))`. O body de um `Response` é single-use (um `ReadableStream` lido uma única vez): `mockResolvedValue` reusa a mesma instância e entrega um body já consumido na 2ª chamada, quebrando o teste. Construa o body fresco dentro do closure — uma string re-materializável ou `JSON.stringify(...)`, nunca uma instância pré-construída capturada pelo closure (um `ReadableStream` capturado ainda trava na 2ª chamada). Esta é uma convenção de autoria do trecho de mock que vai dentro do `test_path`; não autoriza ler ou escrever arquivos fora do `test_path`.
 
 ### 4. Escreva o teste e as fixtures enumeradas
 
