@@ -495,6 +495,17 @@ function sweepOrphanTopics(opts) {
   return topicCloses;
 }
 
+/**
+ * @description Retention sweep: DELETES (irreversibly) the forum topic of a run closed for longer than
+ * the retention window, then unlinks the run's records. Every IO is an injected seam; every uncertainty
+ * fails closed (skip the candidate).
+ * @param {object} opts
+ * @returns {{ retentionDeletes: Array<Promise>, retentionTally: Record<string, {attempted:number, deleted:number}> }}
+ */
+export function sweepStaleClosedTopics(opts) {
+  throw new Error("not implemented");
+}
+
 export function reaper(opts) {
   const {
     listWorktrees,
