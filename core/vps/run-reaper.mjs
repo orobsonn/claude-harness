@@ -46,8 +46,8 @@
  * @returns {void}
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from "node:fs";
+import { join, dirname } from "node:path";
 
 import { loadConfig } from "./run-cron-a.mjs";
 import { reaper } from "./reaper.mjs";
@@ -56,9 +56,29 @@ import { readHolder } from "./run-lock.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as counterModule from "./cron-state.mjs";
 import * as runLockModule from "./run-lock.mjs";
-import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
-import { readMeta as realReadMeta, updateMeta as realUpdateMeta } from "./obs-outbox.mjs";
+import {
+  makeNotifier,
+  closeForumTopic as realCloseForumTopic,
+  deleteForumTopic as realDeleteForumTopic,
+  isCriticalEvent,
+} from "./notify-telegram.mjs";
+import {
+  readMeta as realReadMeta,
+  updateMeta as realUpdateMeta,
+  updateMetaIfUnchanged as realUpdateMetaIfUnchanged,
+  readEvents,
+} from "./obs-outbox.mjs";
 import { pickSessionPr } from "./cron-a-exit.mjs";
+
+/** @description Default retention window (days) applied when config.topicRetentionDays is absent. */
+const DEFAULT_RETENTION_DAYS = 7;
+/** @description Hard cap (days) past which the cosmetic outbox-drain gate is relaxed. */
+const DEFAULT_HARD_CAP_DAYS = 30;
+/** @description Caps Telegram deleteForumTopic calls per cycle. */
+const DEFAULT_MAX_DELETIONS = 3;
+/** @description Consecutive no-delete cycles for a chatId before the operator is pinged about a
+ * possible missing `can_delete_messages` bot permission. */
+const PERMISSION_CHECK_THRESHOLD = 3;
 
 /** @description Real `git -C <projectRoot> worktree list --porcelain` stdout. Fail-soft -> "". */
 function defaultRunGitWorktreeList(projectRoot) {
@@ -87,13 +107,16 @@ function defaultTmuxKillSession(sessionId) {
 
 /**
  * @description Default listObsRuns producer: sweeps every configured project's stateDir for
- * obs-<issue>.json files and returns { metaPath, meta } pairs (meta pre-read via the canonical
- * obs-outbox readMeta). reaper.mjs never touches fs directly — this is the composition-root wiring.
- * Fail-soft per project: an unreadable stateDir contributes no runs (the shared cron never aborts
- * every other project because one stateDir is unreadable).
+ * obs-<issue>.json files and returns { metaPath, meta, events } triples (meta pre-read via the
+ * canonical obs-outbox readMeta; events pre-read via the canonical obs-outbox readEvents).
+ * reaper.mjs never touches fs directly — this is the composition-root wiring. Fail-soft per
+ * project: an unreadable stateDir contributes no runs (the shared cron never aborts every other
+ * project because one stateDir is unreadable). Consumed BOTH by sweepOrphanTopics (which only
+ * reads run.meta / run.metaPath — the events field is additive and does not change its behavior)
+ * and by the retention sweep's listStaleRuns (scoped to a readable-config subset of projects).
  * @param {Array<{ project: string, projectRoot: string, stateDir: string }>} projects
  * @param {(metaPath: string) => object|null} readMetaFn
- * @returns {Array<{ metaPath: string, meta: object }>}
+ * @returns {Array<{ metaPath: string, meta: object, events: object[] }>}
  */
 export function defaultListObsRuns(projects, readMetaFn) {
   const runs = [];
@@ -108,10 +131,117 @@ export function defaultListObsRuns(projects, readMetaFn) {
       if (!file.startsWith("obs-") || !file.endsWith(".json")) continue;
       const metaPath = join(project.stateDir, file);
       const meta = readMetaFn(metaPath);
-      if (meta) runs.push({ metaPath, meta });
+      if (meta) runs.push({ metaPath, meta, events: readEvents(metaPath) });
     }
   }
   return runs;
+}
+
+/**
+ * @description Reads and parses a project's `<homeDir>/.claude/harness-crons/<project>.json`
+ * config. Returns null on ANY failure (missing file, unreadable, invalid JSON, non-object) — the
+ * fail-closed signal the retention sweep uses to both drop the project's own candidates and
+ * withhold its blocklist contribution. Never throws.
+ * @param {string} homeDir
+ * @param {string} project
+ * @param {(path: string, encoding: string) => string} readFileSyncFn
+ * @returns {object|null}
+ */
+function readHarnessCronsConfig(homeDir, project, readFileSyncFn) {
+  const path = join(homeDir ?? "", ".claude", "harness-crons", `${project}.json`);
+  try {
+    const parsed = JSON.parse(readFileSyncFn(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Fail-open read of the persisted per-chatId permission-notification counter.
+ * Corrupt/missing/unreadable content is treated as `{}` (every chatId starts at 0) — never throws.
+ * @param {string} path
+ * @param {(path: string, encoding: string) => string} readFileSyncFn
+ * @returns {Record<string, { consecutiveNoDelete: number }>}
+ */
+function readPermissionStateSafe(path, readFileSyncFn) {
+  try {
+    const parsed = JSON.parse(readFileSyncFn(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * @description Atomic temp->rename write of the permission-state object. Fail-open: any fs error
+ * is swallowed (a lost counter update is acceptable; it never blocks or throws out of the cron).
+ * @param {string} path
+ * @param {object} state
+ * @param {object} deps - injectable { mkdirSync, writeFileSync, renameSync } (tests never override
+ *   these; default is the real fs wiring).
+ * @returns {void}
+ */
+function writePermissionStateSafe(path, state, deps = {}) {
+  const mkdirSyncFn = deps.mkdirSync ?? mkdirSync;
+  const writeFileSyncFn = deps.writeFileSync ?? writeFileSync;
+  const renameSyncFn = deps.renameSync ?? renameSync;
+  try {
+    mkdirSyncFn(dirname(path), { recursive: true });
+    const tmpPath = `${path}.${process.pid}.tmp`;
+    writeFileSyncFn(tmpPath, JSON.stringify(state), "utf8");
+    renameSyncFn(tmpPath, path);
+  } catch {
+    // fail-open: a lost permission-counter write never blocks or delays the reaper
+  }
+}
+
+/**
+ * @description Reconciles the persisted per-chatId permission counter against this cycle's
+ * retentionTally, AFTER every retention delete promise has settled. For each chatId present in the
+ * tally: an attempted-but-never-deleted cycle increments `consecutiveNoDelete`, firing exactly ONE
+ * `reaper-permission-check` notification the cycle it REACHES the threshold (never again on later
+ * cycles); any cycle that records at least one real delete resets the counter to 0. No-op (no fs
+ * touched) when the tally is empty. Fail-open: any error here never throws out of runReaper.
+ * @param {object} opts
+ * @param {string} opts.permissionStatePath
+ * @param {Record<string, {attempted:number, deleted:number}>} opts.retentionTally
+ * @param {(event: object) => void} opts.notify
+ * @param {object} [opts.deps]
+ * @returns {Promise<void>}
+ */
+async function reconcilePermissionState({ permissionStatePath, retentionTally, notify, deps = {} }) {
+  try {
+    if (!retentionTally || Object.keys(retentionTally).length === 0) return;
+    const readFileSyncFn = deps.readFileSync ?? readFileSync;
+    const state = readPermissionStateSafe(permissionStatePath, readFileSyncFn);
+
+    for (const [chatIdKey, tallyEntry] of Object.entries(retentionTally)) {
+      if (!state[chatIdKey] || typeof state[chatIdKey] !== "object") {
+        state[chatIdKey] = { consecutiveNoDelete: 0 };
+      }
+      const current =
+        typeof state[chatIdKey].consecutiveNoDelete === "number" ? state[chatIdKey].consecutiveNoDelete : 0;
+
+      if (tallyEntry.attempted > 0 && tallyEntry.deleted === 0) {
+        const next = current + 1;
+        state[chatIdKey].consecutiveNoDelete = next;
+        if (next === PERMISSION_CHECK_THRESHOLD) {
+          try {
+            notify({ type: "reaper-permission-check", chatId: chatIdKey });
+          } catch {
+            // fail-open — a notify failure never blocks the sweep
+          }
+        }
+      } else if (tallyEntry.deleted > 0) {
+        state[chatIdKey].consecutiveNoDelete = 0;
+      }
+    }
+
+    writePermissionStateSafe(permissionStatePath, state, deps);
+  } catch {
+    // total fail-open: the permission accounting never throws out of runReaper
+  }
 }
 
 /**
@@ -221,6 +351,45 @@ function makeDefaultPrOpen(spawn, owner, repo) {
     // deleted and cron-a-dispatch's local-ref resume probe never rebuilds from main, orphaning its
     // commits.
     if (Array.isArray(cache.prs) && cache.prs.length >= PR_OPEN_FETCH_LIMIT) return true;
+    return false;
+  };
+}
+
+/**
+ * @description Fallback prOpen built on the normalized `gh`/`ghExec` seam (the SAME seam
+ * `defaultPrExists` already uses) instead of a raw spawn — used ONLY when the caller injects a
+ * `ghExec`/`gh` fake but no `spawn` fake. A raw-spawn `makeDefaultPrOpen` would otherwise reach the
+ * REAL network for a fixture owner/repo that never exists, always fail-closed-true, and permanently
+ * block a test's retention deletion. Production (`mainReaper`, which injects neither) never reaches
+ * this branch — it always takes the raw-spawn path unchanged.
+ *
+ * Mirrors `defaultPrExists`'s established convention for this seam: the normalized `gh` call already
+ * collapses BOTH a real gh error and a genuine empty result to `[]` (or, in a test fake, to any
+ * non-array shape) — both read as "no open PR" (false), never as an ambiguous error to fail open on.
+ * This is intentionally LESS conservative than the raw-spawn `makeDefaultPrOpen` and exists solely as
+ * a test/dev affordance so a `ghExec` fake is sufficient without also faking raw spawn argv.
+ * @param {(args: string[]) => any} gh
+ * @returns {(issueNumber: number) => boolean}
+ */
+function makeDefaultPrOpenViaGh(gh) {
+  let cache; // undefined = unfetched
+  return (issueNumber) => {
+    if (cache === undefined) {
+      const prs = gh([
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--json",
+        "number,headRefName,url,body",
+        "--limit",
+        String(PR_OPEN_FETCH_LIMIT),
+      ]);
+      cache = Array.isArray(prs) ? prs : [];
+    }
+    const match = pickSessionPr(cache, issueNumber);
+    if (match !== null) return true;
+    if (cache.length >= PR_OPEN_FETCH_LIMIT) return true;
     return false;
   };
 }
@@ -425,7 +594,14 @@ export function defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn 
  * @returns {boolean}
  */
 export function unlinkRunFiles(metaPath, opts) {
-  throw new Error("not implemented");
+  const what = opts && opts.what;
+  try {
+    const target = what === "events" ? metaPath.replace(/\.json$/, ".events.jsonl") : metaPath;
+    unlinkSync(target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function defaultGitBranchDelete(branch, projectRoot, spawn = spawnSync) {
@@ -461,10 +637,20 @@ export function runReaper(config, deps = {}) {
   // error and a genuine empty result — an outage must map to null (unknown, fail-closed prune),
   // never to a false that would authorize a branch deletion.
   const spawn = deps.spawn ?? spawnSync;
-  // Open-PR predicate for the orphan-topic sweep (F2). FAIL-OPEN on a gh outage, memoized per sweep,
-  // --state open + --json body + no --head so a typed-branch body-link PR is still recognized.
-  // DISTINCT from prExists (open-OR-merged, --head harness/<N>) above — left unchanged.
-  const prOpen = deps.prOpen ?? makeDefaultPrOpen(spawn, config.owner, config.repo);
+  // Open-PR predicate — shared by the orphan-topic sweep (F2), the completed-worktree sweep, and
+  // the retention sweep (reaper.mjs threads the identical opts.prOpen to all three). FAIL-OPEN on a
+  // gh outage, memoized per sweep, --state open + --json body + no --head so a typed-branch
+  // body-link PR is still recognized. DISTINCT from prExists (open-OR-merged, --head harness/<N>)
+  // above — left unchanged. Defaults to the raw-spawn `makeDefaultPrOpen` (byte-identical to
+  // before, including in production where mainReaper injects neither `spawn` nor `ghExec`) UNLESS a
+  // `ghExec`/`gh` fake is injected without a `spawn` fake — the retention suite's affordance so a
+  // fixture owner/repo that never exists on the real network does not permanently fail-open-block
+  // every deletion (see makeDefaultPrOpenViaGh's doc comment).
+  const prOpen =
+    deps.prOpen ??
+    (!deps.spawn && ("ghExec" in deps || "gh" in deps)
+      ? makeDefaultPrOpenViaGh(gh)
+      : makeDefaultPrOpen(spawn, config.owner, config.repo));
 
   // Completed-worktree sweep (behavior d) tri-state probes — all injectable, all fail closed
   // (null on any failure) so the pure-logic prune in reaper.mjs never deletes on uncertainty.
@@ -517,6 +703,59 @@ export function runReaper(config, deps = {}) {
   const closeForumTopicFn = deps.closeForumTopic ?? null;
   const updateMetaSeam = deps.updateMeta ?? updateMetaFn;
 
+  // ---------------------------------------------------------------------------------------------
+  // Retention sweep wiring (#ac-1.1..#ac-1.9). Per-project shared-threadId blocklist + a
+  // readable-config-only candidate producer, fail-closed per project (never fleet-wide).
+  // ---------------------------------------------------------------------------------------------
+  const readFileSyncFn = deps.readFileSync ?? readFileSync;
+  const readableProjects = [];
+  const projectSharedThreadIds = [];
+  for (const project of config.projects ?? []) {
+    const raw = readHarnessCronsConfig(config.homeDir, project.project, readFileSyncFn);
+    if (raw == null) continue; // unreadable/unresolvable -> no blocklist entry, own candidates dropped
+    readableProjects.push(project);
+    if (raw.sharedThreadId != null) projectSharedThreadIds.push(raw.sharedThreadId);
+  }
+  const sharedThreadIds = [];
+  if (config.sharedThreadId != null) sharedThreadIds.push(config.sharedThreadId);
+  sharedThreadIds.push(...projectSharedThreadIds);
+
+  const listStaleRunsSeam =
+    deps.listStaleRuns ?? (() => defaultListObsRuns(readableProjects, readMetaFn));
+
+  // resolvedChatId + the token-bound deleteForumTopic seam both derive from the SAME resolved
+  // notify config (mirrors mainReaper's closeForumTopic judgment) so the retention sweep's chatId
+  // agrees with wherever the run's threadId was actually minted. `'resolvedChatId' in deps` (not
+  // `??`) so an injected falsy-but-valid chatId (e.g. 0) is never silently overridden.
+  let retentionNotifierConfig = null;
+  try {
+    retentionNotifierConfig = makeNotifier(config, { homeDir: config.homeDir }).config;
+  } catch {
+    retentionNotifierConfig = null;
+  }
+  const resolvedChatId =
+    "resolvedChatId" in deps
+      ? deps.resolvedChatId
+      : retentionNotifierConfig
+        ? retentionNotifierConfig.chatId
+        : null;
+  const rawDeleteForumTopic = deps.deleteForumTopic ?? realDeleteForumTopic;
+  const deleteForumTopicSeam = (input) =>
+    rawDeleteForumTopic(input, {
+      config: { ...(retentionNotifierConfig ?? {}), chatId: resolvedChatId },
+      fetch: config.fetch,
+      log: config.log,
+      timeoutMs: config.timeoutMs,
+    });
+
+  const updateMetaIfUnchangedSeam = deps.updateMetaIfUnchanged ?? realUpdateMetaIfUnchanged;
+  const unlinkRunFilesSeam = deps.unlinkRunFiles ?? unlinkRunFiles;
+  const isCriticalEventSeam = deps.isCriticalEvent ?? isCriticalEvent;
+  const retentionDays =
+    config.topicRetentionDays != null && config.topicRetentionDays !== ""
+      ? Number(config.topicRetentionDays)
+      : DEFAULT_RETENTION_DAYS;
+
   const result = reaperFn({
     listWorktrees: listWorktreesSeam,
     tmuxHasSession,
@@ -538,12 +777,25 @@ export function runReaper(config, deps = {}) {
     inspectWorktree,
     gitWorktreeRemove,
     gitBranchDelete,
+    listStaleRuns: listStaleRunsSeam,
+    deleteForumTopic: deleteForumTopicSeam,
+    updateMetaIfUnchanged: updateMetaIfUnchangedSeam,
+    readMeta: readMetaFn,
+    unlinkRunFiles: unlinkRunFilesSeam,
+    isCriticalEvent: isCriticalEventSeam,
+    resolvedChatId,
+    sharedThreadIds,
+    retentionDays,
+    hardCapDays: DEFAULT_HARD_CAP_DAYS,
+    maxDeletions: DEFAULT_MAX_DELETIONS,
   });
 
   // reaper returns the actions array with a `topicCloses` property attached; a fake/injected
   // reaper may return undefined or a bare array (backward compatible with the existing tests).
   const actions = Array.isArray(result) ? result : (result?.actions ?? []);
   const topicCloses = (result && result.topicCloses) || (result?.actions?.topicCloses) || [];
+  const retentionDeletes = (result && result.retentionDeletes) || (result?.actions?.retentionDeletes) || [];
+  const retentionTally = (result && result.retentionTally) || (result?.actions?.retentionTally) || {};
 
   const ACTION_TYPE = {
     "watchdog-killed": "reaper-killed",
@@ -560,8 +812,24 @@ export function runReaper(config, deps = {}) {
     }
   }
 
-  // Return the orphan close promises so mainReaper can await them before the process exits.
-  return topicCloses;
+  // Persisted per-chatId permission-notification counter, injectable via deps (tests inject a temp
+  // path). Reconciled AFTER every retention delete promise settles so this cycle's tally is final.
+  const permissionStatePath =
+    deps.permissionStatePath ??
+    join(config.homeDir ?? "", ".claude", "harness-crons", "retention-permission-state.json");
+  const permissionAccountingPromise = (async () => {
+    try {
+      await Promise.allSettled(retentionDeletes);
+      await reconcilePermissionState({ permissionStatePath, retentionTally, notify, deps });
+    } catch {
+      // total fail-open: the permission accounting never throws out of runReaper
+    }
+  })();
+
+  // Return the orphan close promises AND the retention delete + permission-accounting promises so
+  // mainReaper can await every in-flight destructive/network operation before the short-lived cron
+  // process exits.
+  return [...topicCloses, ...retentionDeletes, permissionAccountingPromise];
 }
 
 /**
