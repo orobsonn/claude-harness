@@ -1012,6 +1012,10 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   for (const { metaPath, meta, events } of runs) {
     const isFallback = meta.status === "fallback" || meta.threadId == null;
     let runThreadId = isFallback ? sharedThreadId : meta.threadId;
+    // A run OWNS its topic only while it is neither fallback nor closed. `isFallback` still governs
+    // ROUTING (a closed run with a remaining cursor keeps draining to the shared topic); `ownsTopic`
+    // governs SELF-HEAL, so a closed run never races cron-a-dispatch to create a second topic.
+    const ownsTopic = meta.status !== "fallback" && meta.status !== "closed" && meta.threadId != null;
     const startCursor = typeof meta.cursor === "number" ? meta.cursor : 0;
     let newCursor = startCursor;
     let recreatedThisRun = false;
@@ -1037,13 +1041,14 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         continue;
       }
 
-      // Self-heal branch (task-2): ONLY a per-run topic that OWNS its thread (!isFallback) and died
-      // (reason === "thread-not-found") is recreated. POSITIVE gate — a bare {sent:false} with NO
-      // reason (the shape the 30 frozen drain-outbox tests inject) or any other/transient reason falls
-      // to the else and behaves EXACTLY as before: break, cursor unadvanced, no recreation. At most ONE
-      // recreation per run per cycle (recreatedThisRun) plus a per-CYCLE cap (recreationsThisCycle).
+      // Self-heal branch (task-2): ONLY a per-run topic that OWNS its thread (ownsTopic — neither
+      // fallback nor closed, with a non-null threadId) and died (reason === "thread-not-found") is
+      // recreated. POSITIVE gate — a bare {sent:false} with NO reason (the shape the 30 frozen
+      // drain-outbox tests inject) or any other/transient reason falls to the else and behaves
+      // EXACTLY as before: break, cursor unadvanced, no recreation. At most ONE recreation per run per
+      // cycle (recreatedThisRun) plus a per-CYCLE cap (recreationsThisCycle).
       if (
-        !isFallback &&
+        ownsTopic &&
         !recreatedThisRun &&
         recreationsThisCycle < MAX_RECREATIONS_PER_CYCLE &&
         sendResult.reason === "thread-not-found"
@@ -1057,9 +1062,18 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         } catch {
           createResult = null;
         }
-        if (!createResult || !createResult.ok || createResult.threadId == null) {
-          // Recreation failed (not-ok OR ok-with-no-usable-threadId): leave meta.threadId unchanged,
-          // do not advance the cursor, no second createTopic this cycle.
+        if (!createResult || !createResult.ok) {
+          // genuine failure: no topic was created, safe to retry next cycle
+          break;
+        }
+        if (createResult.threadId == null) {
+          // ok:true means a topic MAY exist on Telegram but its id is unusable — retrying would mint a
+          // fresh orphan every cycle. Route the run to the shared topic instead.
+          try {
+            updateMeta(metaPath, { status: "fallback" });
+          } catch {
+            // fail-open
+          }
           break;
         }
         try {
@@ -1069,7 +1083,12 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         }
         // READ BACK to confirm the persist landed — updateMeta is fail-open and returns void, so a
         // silently-dropped threadId would otherwise mint a fresh orphan topic on every later cycle.
-        const confirmed = readMeta(metaPath);
+        let confirmed = null;
+        try {
+          confirmed = readMeta(metaPath);
+        } catch {
+          confirmed = null;
+        }
         if (!confirmed || confirmed.threadId !== createResult.threadId) {
           // Unconfirmed persist: do NOT re-send; switch the run to the shared topic then stop.
           try {
