@@ -207,6 +207,31 @@ function makeDefaultPrOpen(spawn, owner, repo) {
   };
 }
 
+/** @description Scaffold — the completed-worktree sweep's issue-state probe. */
+export function makeDefaultIssueClosed() {
+  throw new Error("not implemented");
+}
+
+/** @description Scaffold — the completed-worktree sweep's merged-PR probe. */
+export function makeDefaultPrMerged() {
+  throw new Error("not implemented");
+}
+
+/** @description Scaffold — the completed-worktree sweep's branch-ancestry probe. */
+export function makeDefaultBranchMerged() {
+  throw new Error("not implemented");
+}
+
+/** @description Scaffold — the completed-worktree sweep's unmerged-work/dirty inventory probe. */
+export function makeDefaultInspectWorktree() {
+  throw new Error("not implemented");
+}
+
+/** @description Scaffold — force-aware `git worktree remove` injected into the reaper logic. */
+export function defaultGitWorktreeRemove() {
+  throw new Error("not implemented");
+}
+
 export function runReaper(config, deps = {}) {
   const reaperFn = deps.reaper ?? reaper;
   const listWorktreesFn = deps.listWorktrees ?? listWorktrees;
