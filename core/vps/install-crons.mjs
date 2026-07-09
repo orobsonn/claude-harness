@@ -33,7 +33,7 @@ import { loadConfig, REQUIRED_CONFIG_FIELDS } from "./run-cron-a.mjs";
 const HARNESS_CRONS_SUBDIR = ".claude/harness-crons";
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const NAME_TOKEN = /^[A-Za-z0-9._-]+$/;
+const NAME_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const PATH_SAFE = /^[A-Za-z0-9._/-]+$/;
 const RESERVED_PROJECT = "reaper";
 
@@ -648,7 +648,12 @@ export function installProject(inputs, deps = {}) {
         // `--repo ${entry.owner}/${entry.repo}` for probes that authorize `git branch -D` and
         // `git worktree remove --force`. A legacy fleet whose top-level owner/repo were hand-edited
         // backfills that value onto every preserved sibling — reject it before any write.
-        if (!NAME_TOKEN.test(entry.owner) || !NAME_TOKEN.test(entry.repo)) {
+        if (
+          typeof entry.owner !== "string" ||
+          typeof entry.repo !== "string" ||
+          !NAME_TOKEN.test(entry.owner) ||
+          !NAME_TOKEN.test(entry.repo)
+        ) {
           throw new Error("fleet projects entry has invalid owner or repo");
         }
       }

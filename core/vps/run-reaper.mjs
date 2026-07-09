@@ -151,7 +151,7 @@ function defaultPrExists(gh) {
 }
 
 const PR_OPEN_FETCH_LIMIT = 100;
-const REPO_NAME_TOKEN = /^[A-Za-z0-9._-]+$/;
+const REPO_NAME_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * @description Builds a `project -> {owner, repo}` index ONCE from config.projects, backfilling
@@ -162,11 +162,17 @@ const REPO_NAME_TOKEN = /^[A-Za-z0-9._-]+$/;
  * / fail-open behavior for an unknown project take over. An absent/empty projects[] leaves the
  * index empty; the caller falls back to the fleet-level owner/repo to preserve today's single-repo
  * behavior.
+ *
+ * Ambiguity rule: if the same project name appears more than once with DIFFERENT resolved
+ * `{owner, repo}` coordinates, the name is removed from the index and never re-added, so it
+ * resolves to `null` (fail-closed). Exact duplicates (same name, same owner, same repo) are
+ * harmless and stay bound.
  * @param {object} config
  * @returns {Map<string, {owner: string, repo: string}>}
  */
 function buildProjectRepoIndex(config) {
   const index = new Map();
+  const ambiguous = new Set();
   if (Array.isArray(config.projects)) {
     for (const entry of config.projects) {
       const owner = entry.owner ?? config.owner;
@@ -180,7 +186,16 @@ function buildProjectRepoIndex(config) {
       ) {
         continue;
       }
-      index.set(entry.project, { owner, repo });
+      const name = entry.project;
+      if (ambiguous.has(name)) continue;
+      const existing = index.get(name);
+      if (existing && (existing.owner !== owner || existing.repo !== repo)) {
+        index.delete(name);
+        ambiguous.add(name);
+        console.warn(JSON.stringify({ op: "reaper.ambiguous-project", project: name }));
+        continue;
+      }
+      index.set(name, { owner, repo });
     }
   }
   return index;
