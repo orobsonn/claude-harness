@@ -566,11 +566,11 @@ function isDeletable(candidate, opts, blocklist) {
   if (!Number.isFinite(meta.closedAt)) return false;
 
   const age = now() - meta.closedAt;
+  // An irreversible delete must never widen its own window. A destructuring default only guards
+  // `undefined`; Number(null) and Number("") are both 0, which would silently mean "no retention".
+  if (retentionDays == null || retentionDays === "") return false;
   const retentionSeconds = Number(retentionDays) * SECONDS_PER_DAY;
-  // On an irreversible delete, a value we cannot trust must skip the candidate, never widen
-  // the window. Number(null) === 0 and Number("") === 0 are the traps — a destructuring default
-  // only guards undefined.
-  if (!Number.isFinite(retentionSeconds) || retentionSeconds < 0) return false;
+  if (!Number.isFinite(retentionSeconds) || retentionSeconds <= 0) return false;
   if (age <= retentionSeconds) return false;
 
   if (!("chatId" in meta) || String(meta.chatId) !== String(resolvedChatId)) return false;
@@ -587,9 +587,9 @@ function isDeletable(candidate, opts, blocklist) {
   const criticalSent = new Set(Array.isArray(meta.criticalSent) ? meta.criticalSent : []);
   if (!allCriticalsAcked(candidate.events, criticalSent, opts.isCriticalEvent)) return false;
 
-  const hardCapSeconds = Number(hardCapDays) * SECONDS_PER_DAY;
-  // Same fail-closed principle: an untrustworthy hard cap keeps the cosmetic drain gate active.
-  const pastHardCap = Number.isFinite(hardCapSeconds) && hardCapSeconds >= 0 && age > hardCapSeconds;
+  // A hard cap we cannot trust must never relax the drain gate — same Number(null)===0 trap.
+  const hardCapValid = hardCapDays != null && hardCapDays !== "" && Number.isFinite(Number(hardCapDays)) && Number(hardCapDays) > 0;
+  const pastHardCap = hardCapValid && age > Number(hardCapDays) * SECONDS_PER_DAY;
   const cursor = typeof meta.cursor === "number" ? meta.cursor : 0;
   if (cursor < candidate.events.length && !pastHardCap) return false;
 

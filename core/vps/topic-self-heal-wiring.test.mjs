@@ -150,8 +150,8 @@ test("#ac-1.7 makeNotifier.createTopic: binds a REAL token-bound createForumTopi
   assert.equal(body.chat_id, -100, "the request body must target the resolved chatId");
   assert.deepEqual(
     result,
-    { ok: true, threadId: 4242 },
-    "createTopic must resolve the new topic's threadId — proving a real token-bound call, not the drain's default no-op",
+    { ok: true, threadId: 4242, chatId: -100 },
+    "createTopic must resolve the new topic's threadId — proving a real token-bound call, not the drain's default no-op — AND must surface the chatId the topic was minted in, which the caller must persist alongside the threadId so a later retention sweep can match the run's persisted chatId against the currently-resolved one",
   );
 });
 
