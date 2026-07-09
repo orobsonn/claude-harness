@@ -53,9 +53,21 @@ Se uma asserção refere a um arquivo dentro do projeto (por ex., "Given core/ag
 Escreva um teste **executável** na linguagem do projeto (Node + node:test + assert/strict):
 - Uma função `test()` por asserção enumerada — **todas** as asserções pinadas para este `test_path` no mesmo arquivo
 - JSDoc com `@description` breve, **em tempo verbal neutro** — descreva o contrato que o teste fixa ("fixa o contrato de X", "pina o comportamento de Y"), **nunca** o estado transitório de implementação ("X ainda não implementado", "espera RED"). Você escreve o header no momento RED, mas o arquivo será congelado e não poderá ser editado depois que passar a verde — um header neutro continua verdadeiro antes e depois do feature entrar; um header "espera RED" contradiz o próprio arquivo assim que o teste fica verde
-- Sem imports ou requires externos além dos builtins
+- Sem imports ou requires externos além dos builtins (fixtures locais via import `?raw` em testes `@cloudflare/vitest-pool-workers` são permitidas — ver a seção abaixo)
 - Sem dependências adicionadas
 - **Convenção de autoria para mock de fetch:** quando uma asserção pinada envolver mock de `fetch`, transcreva como `vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(body, init))` — nunca `vi.spyOn(...).mockResolvedValue(new Response(...))`. O body de um `Response` é single-use (um `ReadableStream` lido uma única vez): `mockResolvedValue` reusa a mesma instância e entrega um body já consumido na 2ª chamada, quebrando o teste. Construa o body fresco dentro do closure — uma string re-materializável ou `JSON.stringify(...)`, nunca uma instância pré-construída capturada pelo closure (um `ReadableStream` capturado ainda trava na 2ª chamada). Esta é uma convenção de autoria do trecho de mock que vai dentro do `test_path`; não autoriza ler ou escrever arquivos fora do `test_path`.
+
+### Fixtures em testes @cloudflare/vitest-pool-workers (sem node:fs)
+
+Testes que rodam no `@cloudflare/vitest-pool-workers` executam dentro do isolate Cloudflare, que **não tem filesystem**. Nesses testes é **proibido** ler fixtures com `node:fs` — `readFileSync`, `readFile` ou qualquer API de filesystem falham no isolate. Em vez disso, carregue o fixture via import **build-time** `?raw`:
+
+```ts
+import payloadText from "./fixtures/payload.xml?raw";
+```
+
+`?raw` devolve uma **string** com o texto bruto do arquivo (equivalente a `readFileSync(caminho, "utf8")`) — **não** é um objeto parseado. Se o teste precisa do objeto, aplique `JSON.parse(payloadText)` (para JSON) ou o parser apropriado; para conteúdo não-JSON (XML, HTML, texto), use a string diretamente. Imports JSON (`import data from "./fixtures/data.json"`) também são resolvidos no build e já devolvem o objeto parseado — use quando o fixture é JSON puro.
+
+**Carve-out — onde `node:fs` é legítimo:** a proibição vale **apenas** para testes `@cloudflare/vitest-pool-workers`. Suítes `node:test` rodam no Node, com filesystem disponível, e usam `node:fs` normalmente. Exemplos concretos que continuam legítimos: os testes em `core/__tests__/` (node:test, leem arquivos do repo) e o próprio passo 6 (§6) deste guia, que prescreve `readFileSync`/`resolve` para resolução de path relativo ao módulo.
 
 ### 4. Escreva o teste e as fixtures enumeradas
 
@@ -83,7 +95,7 @@ Um teste que referencia um arquivo do repo por path DEVE resolvê-lo relativo ao
 | Fazer a edição de manutenção pontual pedida no brief (fixture bug, troca de método de leitura) em teste já congelado | Recusar a edição de manutenção como "fora do contrato de transcrição" |
 | Escrever as fixtures/suporte **enumeradas pelo `locked_test`** | Criar arquivos auxiliares não enumerados pelo `locked_test` |
 | Ajustar nomes de teste para clareza | Alterar lógica da asserção |
-| Usar builtins padrão do Node (fs, path, assert) | Editar ou criar código de produção |
+| Usar builtins padrão do Node (fs, path, assert) — **exceto `node:fs` em testes `@cloudflare/vitest-pool-workers`** (ver seção "Fixtures em testes @cloudflare/vitest-pool-workers (sem node:fs)") | Editar ou criar código de produção |
 | | Usar Edit, Bash ou Skill |
 
 Se a asserção parece ambígua ou exige decisão técnica além da transcrição literal, reporte `NEEDS_CONTEXT` — não invente.

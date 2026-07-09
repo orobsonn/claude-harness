@@ -594,3 +594,52 @@ manual-merge the queue.
   session in this repo until someone happens to re-vendor. Low severity (headless/cloud and downstream
   projects are unaffected, and PR review already catches the `core/` side), but a small process gap
   worth closing.
+### 2026-07-09 — orchestrating-delivery: descriptor-emitter and spawn-hand MUST run in separate Bash calls
+
+- **Observed:** the PreToolUse entry-gate evaluates a Bash command as a whole. Chaining
+  `node .../descriptor-emitter.mjs … && node .../spawn-hand.mjs …` in a SINGLE Bash call gets the
+  entire compound command blocked before the emitter runs; `spawn-hand.mjs` then reads whatever
+  `descriptor.json` was already on disk from a prior dispatch. Observed live during #109: a re-emit
+  intended to change `task_id` never executed, and the gate read the stale descriptor, denying the
+  dispatch with a confusing "fidelity-pass not stamped for `<task>-sniper`" message. This is the same
+  one-command-per-Bash class already documented for `mark.mjs`, but it is not called out for the
+  descriptor-emitter → spawn-hand pair.
+- **Proposed change:** in `core/skills/orchestrating-delivery/SKILL.md`, next to the descriptor-emitter
+  CLI block and the spawn-hand runnable-command block, state that the two MUST run in **separate Bash
+  calls** — never chained with `&&`/`;`/pipe. Optionally add a cheap runtime guard: `spawn-hand.mjs`
+  asserts the descriptor's mtime is newer than its own process start and fails with a clear
+  config-error reason otherwise, so a stale-descriptor read is caught even if the mistake recurs.
+- **Rationale:** the failure mode is silent and misleading — the operator sees a fidelity-rail denial
+  naming a task id that no longer exists in the file they just tried to rewrite.
+
+### 2026-07-09 — orchestrating-delivery: the sniper's task_id must be the executor's exact literal string
+
+- **Observed:** the entry-gate's fidelity rail keys its `fidelity_pass` allowlist on the literal
+  `${feature_id}/${task_id}` stamped when the locked test went RED. During #109 a sniper descriptor was
+  drafted with a `task-1-sniper` qualifier — a natural way to distinguish the sniper's dispatch from the
+  executor's — and was denied for a missing fidelity-pass, because that qualified id is never stamped.
+  The fix was to reuse `task-1` verbatim. SKILL.md says the sniper's descriptor "carries `feature_id` and
+  `task_id`" (Capture rail; step 5) but never says it must be the SAME literal string as the task being
+  fixed, not a derived variant.
+- **Proposed change:** add one sentence to the sniper dispatch section (step 5): "the sniper's `task_id`
+  MUST be the identical literal string as the task it is fixing (never a suffixed/derived variant like
+  `<task-id>-sniper`) — the fidelity rail's allowlist is keyed on that exact string."
+- **Rationale:** an orchestrator reasoning "this is a distinct dispatch, I should distinguish it" walks
+  straight into the trap; the denial message names an id the orchestrator just invented, which reads
+  like a harness bug rather than a naming rule.
+
+### 2026-07-09 — frozen doc-slicing helpers should track code fences
+
+- **Observed:** #109's frozen gate `core/__tests__/pool-workers-fixture-rule.test.mjs` slices markdown
+  sections with `sliceSection`/`headings` helpers that treat any line starting with `#` as a heading.
+  `core/agents/test-author.md` contains `##`/`###` lines INSIDE the fenced "Formato de resposta" block.
+  Inert today (those pseudo-headings sit after every sliced region), but a future reordering — or moving
+  the response-format block above step 4 — would make the slicer capture the wrong section and flip the
+  assertions spuriously. It could NOT be fixed in-run: the test was already frozen, and editing it
+  post-freeze is a manifest violation.
+- **Proposed change:** when a doc-content-pinning frozen test is next authored or legitimately touched,
+  have `headings()`/`sliceSection()` carry an `inFence` toggle that flips on a line whose trim starts
+  with a triple backtick, skipping lines while inside a fence. Consider promoting the pair to a shared
+  reference helper so every doc-pinning gate inherits the fix.
+- **Rationale:** low severity (no live instance), but the harness now has several frozen tests that pin
+  markdown by heading slice — the hazard is shared, and each new copy re-inherits it.
