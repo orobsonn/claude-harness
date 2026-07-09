@@ -643,3 +643,78 @@ manual-merge the queue.
   reference helper so every doc-pinning gate inherits the fix.
 - **Rationale:** low severity (no live instance), but the harness now has several frozen tests that pin
   markdown by heading slice — the hazard is shared, and each new copy re-inherits it.
+
+### 2026-07-09 — fidelity gate: require a paired positive control for negative locked tests on a destructive path
+
+- **Observed:** `retention-sweep-delete-stale-topics` (#178) task 6 shipped TWO production-dead
+  wirings that passed the fidelity gate green: (1) a frozen test injected a fake `listObsRuns` with
+  events already attached, while the real `defaultListObsRuns` returned no `events` key at all,
+  making the undelivered-critical guard pass vacuously in production; (2) a frozen test's own fixture
+  wrote a `sharedThreadId` field that `install-crons.mjs` never actually emits, so the blocklist would
+  have been empty in production. Both are the `test-real-composition-root-binding` trap (see
+  `core/memory/test-real-composition-root-binding.md`). Both were caught only because a reviewer
+  demanded a positive control over the SAME real fixture/composition-root binding, on top of the
+  negative-case assertion — the fidelity gate itself does not require this pairing.
+- **Proposed change:** in the fidelity-check step (compliance eye, pre-freeze), add an explicit rule:
+  for any locked test guarding a destructive/irreversible path, the test suite must include at least
+  one assertion that drives the REAL composition-root seam (not an injected fake) end-to-end and
+  confirms it produces the shape the guard expects — a "positive control" proving the wiring is live,
+  paired with the negative case proving the guard blocks correctly.
+- **Rationale:** the fidelity gate today validates that a locked test encodes the stated invariant and
+  goes red before the fix, but it does not check that the test's injected seam matches what the real
+  composition root actually returns. Two dead wirings shipping green in one delivery, both caught only
+  by reviewer instinct rather than gate mechanics, is exactly the kind of hole the deterministic rail
+  exists to close.
+
+### 2026-07-09 — spawn-hand: 9-minute ceiling may be too short for `complexity: high` composition-root tasks
+
+- **Observed:** in `retention-sweep-delete-stale-topics` (#178) task 6 (`reaper-composition-root`,
+  severity high, complexity high), the `hand_tiers.high` Ollama hand (kimi) hit the 9-minute
+  wall-clock ceiling mid-task and left broken partial state; the on-disk `FAILED` run-record correctly
+  authorized a K=1 Claude fallback, which completed the task cleanly. This is distinct from the
+  already-tracked untrusted-workspace stall (see the 2026-07-06 entry above) — this task's workspace
+  trust may or may not have been the cause; the composition-root wiring itself (touching 6+ files,
+  wiring 8 seams) is also plausibly just large enough to need more wall-clock time on a cheap-hand
+  model than a narrower task.
+- **Proposed change:** before widening the ceiling globally (which raises the cost of every stuck
+  dispatch), first confirm whether this instance was the already-tracked trust-stall recurring, or a
+  genuine time-budget shortfall. If genuine, consider a size/complexity-aware ceiling — e.g. a longer
+  wall-clock budget specifically for `complexity: high` tasks, or a `scope_paths`-count heuristic —
+  rather than a blanket increase.
+- **Rationale:** the K=1 Claude-fallback safety net worked as designed here, so this is not urgent, but
+  a `complexity: high` task is exactly the category most likely to need more than 9 minutes on a
+  cheap-hand model, and each timeout burns the full ceiling before falling back.
+
+### 2026-07-09 — orchestrator/planner: a sniper brief carrying literal suggested code must be labeled a sketch, not a patch
+
+- **Observed:** in the same delivery, an orchestrator-authored sniper brief included its own suggested
+  guard code, and that suggestion was itself wrong (`Number.isFinite(0)` is `true`, so the sketch would
+  not have caught the `retentionDays: 0`/`null`/`""` coercion bug it was meant to fix — see
+  `core/memory/vps-retention-sweep-fail-closed-guards.md`). The sniper hand had to re-derive the
+  correct fail-closed check itself rather than trust the brief's literal.
+- **Proposed change:** when an orchestrator (or planner) brief hands a hand/sniper literal example
+  code as part of the fix instructions, the brief must explicitly frame it as a SKETCH to be verified
+  against the actual defect, never as a patch to be applied as-is. Add a one-line convention to the
+  orchestrating-delivery sniper-dispatch section.
+- **Rationale:** a cheap hand under time pressure is more likely to trust and apply a literal code
+  block verbatim than to independently re-derive correctness; a wrong sketch in the brief is worse
+  than no sketch, because it looks authoritative.
+
+### 2026-07-09 — cross-family: instrument mid-session `available:false` degradation so it's visible in the run record
+
+- **Observed:** in `retention-sweep-delete-stale-topics` (#178), the cross-family (Codex) eye returned
+  `available:false` on the per-task adversary and its re-gate for one task, despite
+  `HARNESS_CODEX_ADVERSARY=1` and `codex` on PATH — and was available again for the feature-wide final
+  review shortly after. It was ALSO available for the spec-adversary and all three plan-review rounds
+  earlier in the same session. This pattern (available at the start and end, unavailable in the
+  middle) looks like transient quota/rate exhaustion, not a config problem, but nothing in the run
+  record makes that visible without manually reading findings — the checkpoint just silently ran
+  Claude-only, exactly as the fail-open design intends, with no distinguishing signal from "module
+  correctly absent" or "genuinely unavailable all session".
+- **Proposed change:** when a checkpoint's cross-family hook fires and the eye reports
+  `available:false`, have the checkpoint record (in the run's descriptor/finding, not just log output)
+  whether cross-family was available earlier in the SAME session — so a mid-session flicker (likely
+  quota) is distinguishable at a glance from a session-wide absence (likely config/module).
+- **Rationale:** this is the same operator-visibility gap the existing 2026-07-04 cross-family entry
+  raises for the outage case ("timed out, ran Claude-only") — this is the narrower mid-session-flicker
+  variant of the same problem, worth closing alongside it rather than separately re-discovering it.
