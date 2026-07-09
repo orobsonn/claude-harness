@@ -1146,8 +1146,13 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
           }
           break;
         }
+        // meta.chatId MUST always describe the chat where the CURRENT threadId lives — a stale
+        // pairing (chatId A + threadId minted in B) authorizes an irreversible deleteForumTopic of
+        // an unrelated topic in the wrong chat, since message_thread_id is per-chat, not global.
+        const healPartial = { threadId: createResult.threadId, healAttempts: healAttempts + 1 };
+        if (createResult.chatId != null) healPartial.chatId = createResult.chatId;
         try {
-          updateMeta(metaPath, { threadId: createResult.threadId, healAttempts: healAttempts + 1 });
+          updateMeta(metaPath, healPartial);
         } catch {
           // fail-open: updateMeta never throws, but never let a writer propagate
         }
