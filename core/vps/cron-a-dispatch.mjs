@@ -76,6 +76,16 @@ import { spawnSync } from "node:child_process";
 const CRON_A_EXIT_PATH = join(dirname(fileURLToPath(import.meta.url)), "cron-a-exit.mjs");
 
 /**
+ * @description Wall-clock ceiling for the fresh-base `git fetch origin main`. It is the ONLY
+ * synchronous network I/O dispatch performs while the run-lock is already held and before any tmux
+ * session exists, so an unreachable/hanging origin would otherwise block dispatch indefinitely —
+ * holding the lock with no session for the reaper's liveness probe to see. spawnSync's `timeout`
+ * kills the process and sets `res.error`, which the real spawn seam turns into a throw, so a hung
+ * fetch lands in the same pre-registration failure recovery as any other spawn failure.
+ */
+const FETCH_TIMEOUT_MS = 60_000;
+
+/**
  * @description Fixed autonomous-trigger prefix prepended to the issue body on claude's stdin.
  * Headless-local autonomy is declared HERE (never via $CLAUDE_CODE_REMOTE, which would disable
  * the cheap Ollama hands). Passed through shellQuoteSingle in composeSessionCommand, so single
@@ -516,7 +526,7 @@ export async function dispatch(issue, opts) {
     if (resumeExistingBranch) {
       spawn("git", ["worktree", "add", worktreePath, branch], { cwd: projectRoot, env });
     } else {
-      spawn("git", ["fetch", "origin", "main"], { cwd: projectRoot, env });
+      spawn("git", ["fetch", "origin", "main"], { cwd: projectRoot, env, timeout: FETCH_TIMEOUT_MS });
       spawn("git", ["worktree", "add", worktreePath, "-b", branch, "origin/main"], { cwd: projectRoot, env });
     }
   } catch {

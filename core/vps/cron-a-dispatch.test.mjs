@@ -47,7 +47,8 @@
  * worktree-add's start-point must be the literal `origin/main` — so a fresh branch's tip is
  * always built on an up-to-date base rather than whatever stale commit `projectRoot`'s checked-out
  * ref happened to be at. The RESUME path (branch already exists) never fetches and never carries
- * a start-point argument.
+ * a start-point argument. The fetch also carries a spawn timeout: it is the only synchronous
+ * network I/O performed while the run-lock is held and before any tmux session exists.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -80,7 +81,7 @@ function makeTempDirs() {
 function makeFakeSpawn({ failCommands = [] } = {}) {
   const calls = [];
   function spawn(command, args = [], spawnOpts = {}) {
-    calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
+    calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
     if (failCommands.includes(command)) {
       throw new Error(`fake spawn: ${command} failed`);
     }
@@ -721,6 +722,28 @@ test("dispatch: a FRESH branch runs `git fetch origin main` in projectRoot BEFOR
     );
     assert.notEqual(addIndex, -1, "dispatch must run `git worktree add`");
     assert.ok(fetchIndex < addIndex, "the fetch must be recorded BEFORE the worktree-add call");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: the fresh-base `git fetch` carries a spawn timeout so a hung origin cannot block dispatch while the run-lock is held", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => false })
+    );
+
+    const fetchCall = fake.calls.find((c) => c.command === "git" && c.args[0] === "fetch");
+    assert.ok(fetchCall, "dispatch must run a `git fetch` spawn for a fresh branch");
+    assert.equal(
+      typeof fetchCall.timeout,
+      "number",
+      "the fetch must pass a numeric spawn timeout — spawnSync without one blocks forever on a hung origin"
+    );
+    assert.ok(fetchCall.timeout > 0, "the fetch timeout must be a positive wall-clock ceiling");
   } finally {
     cleanup();
   }
