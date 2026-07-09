@@ -14,7 +14,11 @@ import {
   resolveNotifyConfig,
   makeNotifier,
   summarizeIssueBody,
+  deleteForumTopic,
+  createForumTopic,
+  isCriticalEvent,
 } from "./notify-telegram.mjs";
+import * as notifyTelegram from "./notify-telegram.mjs";
 
 const VALID_CONFIG = { token: "SECRET123:abc", chatId: -1003044689525, threadId: 613 };
 
@@ -402,4 +406,98 @@ test("#ac-1.3/F4 makeNotifier: threadId is routing-only — it must never appear
   assert.equal(calls.length, 1);
   const body = JSON.parse(calls[0].options.body);
   assert.doesNotMatch(body.text, /900/, "threadId must live only in message_thread_id, never in the rendered text");
+});
+
+// ---------------------------------------------------------------------------
+// deleteForumTopic — forum-topic wrapper, injectable fetch/log seam
+// (module does not yet export deleteForumTopic — RED until an executor implements it)
+// ---------------------------------------------------------------------------
+
+test("#ac-1.5 deleteForumTopic: happy path — POSTs deleteForumTopic with chat_id/message_thread_id, resolves {ok:true}", async () => {
+  const { fetchImpl, calls } = makeFakeFetch({ ok: true, status: 200, json: async () => ({ ok: true, result: true }) });
+  const result = await deleteForumTopic({ threadId: 5 }, { config: { token: "t", chatId: 9 }, fetch: fetchImpl });
+  assert.equal(calls.length, 1, "exactly one fetch call");
+  assert.match(calls[0].url, /\/deleteForumTopic$/, "the request must target the deleteForumTopic method");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { chat_id: 9, message_thread_id: 5 });
+  assert.deepEqual(result, { ok: true });
+});
+
+test("#ac-1.9 deleteForumTopic: a 'message thread not found' description classifies the reason as thread-not-found", async () => {
+  const { fetchImpl } = makeFakeFetch({
+    ok: false,
+    status: 400,
+    json: async () => ({ ok: false, description: "Bad Request: message thread not found" }),
+  });
+  const result = await deleteForumTopic(
+    { threadId: 5 },
+    { config: { token: "t", chatId: 9 }, fetch: fetchImpl, log: () => {} }
+  );
+  assert.deepEqual(result, { ok: false, reason: "thread-not-found" });
+});
+
+test("#ac-1.9 deleteForumTopic: a rejecting fetch never throws, resolves {ok:false, reason:'transient'}, and the log stays redacted to op/type/status", async () => {
+  const logs = [];
+  const log = (entry) => logs.push(entry);
+  const { fetchImpl } = makeFakeFetch(new Error("boom https://api.telegram.org/botSECRET123:abc/deleteForumTopic"));
+
+  let threw = false;
+  let result;
+  try {
+    result = await deleteForumTopic(
+      { threadId: 5 },
+      { config: { token: "SECRET123:abc", chatId: 9 }, fetch: fetchImpl, log }
+    );
+  } catch {
+    threw = true;
+  }
+
+  assert.equal(threw, false, "deleteForumTopic must never throw on a network error");
+  assert.deepEqual(result, { ok: false, reason: "transient" });
+
+  assert.equal(logs.length, 1, "exactly one log entry for the failure");
+  const [entry] = logs;
+  assert.deepEqual(Object.keys(entry).sort(), ["op", "status", "type"], "the log entry must have exactly the keys op/type/status");
+  assert.equal(entry.op, "deleteForumTopic");
+  assert.equal(entry.type, "forum-topic");
+  assert.equal(entry.status, "error");
+
+  const serialized = JSON.stringify(logs);
+  assert.doesNotMatch(serialized, /SECRET123/, "the token must never be logged");
+  assert.doesNotMatch(serialized, /api\.telegram\.org/, "the api URL (which carries the token) must never be logged");
+  assert.doesNotMatch(serialized, /message_thread_id/, "the payload field name must never be logged");
+});
+
+// ---------------------------------------------------------------------------
+// isCriticalEvent — canonical critical-event classifier, exported (not the raw Set)
+// (module does not yet export isCriticalEvent — RED until an executor implements it)
+// ---------------------------------------------------------------------------
+
+test("#ac-1.4 isCriticalEvent: exported canonical classifier for blocked/failed; CRITICAL_TYPES itself is NOT exported", () => {
+  assert.equal(typeof isCriticalEvent, "function");
+  assert.equal(isCriticalEvent({ type: "blocked" }), true);
+  assert.equal(isCriticalEvent({ type: "failed" }), true);
+  assert.equal(isCriticalEvent({ type: "picked" }), false);
+  assert.equal(isCriticalEvent({ type: "pr-merged" }), false);
+  assert.ok(!("CRITICAL_TYPES" in notifyTelegram), "CRITICAL_TYPES must stay module-private, never exported");
+});
+
+// ---------------------------------------------------------------------------
+// createForumTopic — surfaces the chat it created the topic in (#ac-1.2)
+// ---------------------------------------------------------------------------
+
+test("#ac-1.2 createForumTopic: surfaces the chatId it created the topic in alongside threadId on success, and exactly {ok:false} on failure", async () => {
+  const { fetchImpl } = makeFakeFetch({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, result: { message_thread_id: 77 } }),
+  });
+  const success = await createForumTopic({ name: "x" }, { config: { token: "t", chatId: -100123 }, fetch: fetchImpl });
+  assert.deepEqual(success, { ok: true, threadId: 77, chatId: -100123 });
+
+  const { fetchImpl: fetchImpl2 } = makeFakeFetch(new Error("boom"));
+  const failure = await createForumTopic(
+    { name: "x" },
+    { config: { token: "t", chatId: -100123 }, fetch: fetchImpl2, log: () => {} }
+  );
+  assert.deepEqual(failure, { ok: false }, "no chatId key, no threadId key, no extra keys on failure");
 });

@@ -649,6 +649,17 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
   return result.ok ? { ok: true } : { ok: false };
 }
 
+/**
+ * @description Wraps Telegram `deleteForumTopic` — IRREVERSIBLE: it destroys the topic and every
+ * message in it. Fail-open: any error → `{ ok:false, reason }`, never throws, never retries.
+ * @param {{ threadId: number|string }} input
+ * @param {object} opts - { config, fetch, log, timeoutMs }.
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function deleteForumTopic({ threadId } = {}, opts = {}) {
+  throw new Error("not implemented");
+}
+
 // --- task-5: cron-side outbox drain.
 // Invariants preserved: zero-dep, fail-open (never throw/retry/delay a cron), token only from the
 // resolved notify config, a failure logs only { op, type, status }.
@@ -710,7 +721,7 @@ function isCuratedFeedEvent(event) {
 /** @description True for events that must take the separate critical path (blocked/failed lifecycle
  * alerts). `regate-pending` is deliberately NOT critical for the feed — the operator does not want it,
  * and its delivery-blocking obligation is gate-state-enforced (entry-gate), independent of any ping. */
-function isCriticalEvent(event) {
+export function isCriticalEvent(event) {
   if (!event || typeof event.type !== "string") return false;
   return CRITICAL_TYPES.has(event.type);
 }
