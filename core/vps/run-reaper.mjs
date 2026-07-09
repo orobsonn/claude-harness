@@ -95,7 +95,7 @@ function defaultTmuxKillSession(sessionId) {
  * @param {(metaPath: string) => object|null} readMetaFn
  * @returns {Array<{ metaPath: string, meta: object }>}
  */
-function defaultListObsRuns(projects, readMetaFn) {
+export function defaultListObsRuns(projects, readMetaFn) {
   const runs = [];
   for (const project of projects ?? []) {
     let files;
@@ -416,6 +416,18 @@ export function defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn 
  * @param {string} projectRoot
  * @param {(cmd: string, args: string[], opts: object) => any} [spawn]
  */
+/**
+ * @description Dumb per-call unlink seam for the retention sweep: removes EXACTLY the one file implied
+ * by `what`. The events path is derived from `metaPath` by suffix-swap, never rebuilt from
+ * `meta.issueNumber`. Returns false and never throws on any fs error.
+ * @param {string} metaPath
+ * @param {{ what: 'events' | 'meta' }} opts
+ * @returns {boolean}
+ */
+export function unlinkRunFiles(metaPath, opts) {
+  throw new Error("not implemented");
+}
+
 export function defaultGitBranchDelete(branch, projectRoot, spawn = spawnSync) {
   try {
     spawn("git", ["-C", projectRoot, "branch", "-D", "--", branch], {
