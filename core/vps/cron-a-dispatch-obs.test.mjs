@@ -167,6 +167,34 @@ function makeRealObsSeam(order = []) {
   };
 }
 
+/**
+ * @description Fake obs seam (task-4 shape) with a FIXED metaPath and a caller-seeded `meta`
+ * object, giving full control over readMeta's return value — independent of the real, file-backed
+ * obs-outbox.mjs implementation. Used to drive setupObservability's "no open thread" branch (via
+ * dispatch) deterministically and to record every updateMeta partial verbatim for exact-shape
+ * assertions (#ac-1.2).
+ */
+function makeFakeObsSeam({
+  metaPath = "/tmp/fake-obs-141.json",
+  meta = { threadId: null, status: "active", cursor: 0 },
+  order = [],
+} = {}) {
+  let currentMeta = { ...meta };
+  const updateMetaCalls = [];
+  return {
+    createRun: () => metaPath,
+    readMeta: () => ({ ...currentMeta }),
+    updateMeta: (path, partial) => {
+      order.push(`updateMeta:${JSON.stringify(partial)}`);
+      updateMetaCalls.push({ metaPath: path, partial });
+      currentMeta = { ...currentMeta, ...partial };
+    },
+    appendEvent: () => {},
+    readEvents: () => [],
+    updateMetaCalls,
+  };
+}
+
 /** @description Reads the parsed obs-<issue>.json meta straight off disk via the real reader. */
 function readObsMeta(stateDir, issueNumber) {
   return realReadMeta(join(stateDir, `obs-${issueNumber}.json`));
@@ -656,6 +684,80 @@ test("assertion 10: after dispatch appends 'picked' for issue 141 (thread 707), 
     const pickedSends = sendCalls.filter((m) => m.event && m.event.type === "picked");
     assert.equal(pickedSends.length, 1, "the picked event must be delivered by exactly one send call");
     assert.equal(pickedSends[0].threadId, 707, "the picked event must be routed to thread 707");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#ac-1.2 chatId is stamped from the seam's return — the successful-threadId updateMeta partial deep-equals exactly {threadId:77, chatId:-100123, status:'active'}, sourced from createForumTopic's own result, never from opts.notify.chatId", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const order = [];
+    const fakeSpawn = makeFakeSpawn({ order });
+    const fakeTopic = makeFakeCreateForumTopic({
+      result: { ok: true, threadId: 77, chatId: -100123 },
+      order,
+    });
+    const fakeObs = makeFakeObsSeam({ order });
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fakeSpawn.spawn,
+      obs: fakeObs,
+      createForumTopic: fakeTopic.createForumTopic,
+    });
+    // A DIFFERENT chatId injected on notify config — the test would fail if the implementation
+    // read config.notify.chatId instead of the seam's own result.chatId.
+    opts.notify = { chatId: -999999999, threadId: 1 };
+
+    await dispatch({ number: 141, title: "fix billing race", body: "some body" }, opts);
+
+    const call = fakeObs.updateMetaCalls.find((c) => "threadId" in c.partial);
+    assert.ok(call, "the successful-threadId updateMeta call must have been recorded");
+    assert.deepEqual(
+      call.partial,
+      { threadId: 77, chatId: -100123, status: "active" },
+      "the successful-threadId updateMeta partial must deep-equal exactly {threadId, chatId, status}"
+    );
+
+    const otherChatIdWrites = fakeObs.updateMetaCalls.filter((c) => c !== call && "chatId" in c.partial);
+    assert.equal(
+      otherChatIdWrites.length,
+      0,
+      "no OTHER updateMeta call may write a chatId key"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("#ac-1.2 no chatId on the seam's return => no chatId key stamped (fail-closed) — the successful-threadId updateMeta partial has threadId 77 + status 'active' but NO chatId key at all, key absence not chatId===undefined", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const order = [];
+    const fakeSpawn = makeFakeSpawn({ order });
+    const fakeTopic = makeFakeCreateForumTopic({ result: { ok: true, threadId: 77 }, order });
+    const fakeObs = makeFakeObsSeam({ order });
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fakeSpawn.spawn,
+      obs: fakeObs,
+      createForumTopic: fakeTopic.createForumTopic,
+    });
+
+    await dispatch({ number: 141, title: "fix billing race", body: "some body" }, opts);
+
+    const call = fakeObs.updateMetaCalls.find((c) => "threadId" in c.partial);
+    assert.ok(call, "the successful-threadId updateMeta call must have been recorded");
+    assert.equal(call.partial.threadId, 77, "the partial's threadId must be 77");
+    assert.equal(call.partial.status, "active", "the partial's status must be 'active'");
+    assert.ok(
+      !("chatId" in call.partial),
+      "the partial must have NO chatId key at all — key absence, not chatId===undefined (fail-closed: an un-keyed meta stays permanently un-sweepable by the retention sweep)"
+    );
   } finally {
     cleanup();
   }

@@ -137,6 +137,14 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
 }
 
 /**
+ * @description Injectable clock seam returning epoch SECONDS — matches
+ * run-cron-review.mjs's `Math.floor(Date.now()/1000)`. NEVER raw Date.now() milliseconds: a
+ * millisecond closedAt passes Number.isFinite and breaks the retention sweep's age gate. Tests
+ * inject a fixed `now` so the stamped closedAt is deterministic; production uses the default.
+ */
+const defaultNow = () => Math.floor(Date.now() / 1000);
+
+/**
  * @description Pre-registration spawn-failure recovery (AC1.12): release the held run-lock and
  * relabel the issue harness:in-progress -> harness:ready so neither is stranded with no release
  * owner. No retry attempt is consumed (the counter is charged only after a successful spawn +
@@ -158,9 +166,10 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
  *   Observability context from the pre-spawn setup; when a topic was created (threadId != null) the
  *   seam is closed or the meta is marked 'orphan'.
  * @param {Function} [args.closeForumTopic] - Token-bound seam `({threadId}) => Promise<{ok}>`.
+ * @param {Function} [args.now=defaultNow] - Injectable epoch-SECONDS clock for the closedAt stamp.
  * @returns {Promise<void>}
  */
-async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
+async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
   try {
     runLock.release({ stateDir, acquireTs });
   } catch {
@@ -211,7 +220,11 @@ async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumb
   }
   if (metaPath && obs && typeof obs.updateMeta === "function") {
     try {
-      obs.updateMeta(metaPath, { status });
+      // closedAt is the retention sweep's ONLY age anchor: a `closed` meta without it can never
+      // be aged and its forum topic leaks forever. Epoch SECONDS — a millisecond value passes
+      // Number.isFinite and silently breaks the age gate. `orphan` carries no stamp (no close
+      // happened, the reaper sweeps it on its own terms).
+      obs.updateMeta(metaPath, status === "closed" ? { status, closedAt: now() } : { status });
     } catch {
       // best-effort: a status write failure must never mask the original spawn failure
     }
@@ -219,8 +232,8 @@ async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumb
 }
 
 /** @description recoverSpawnFailure wrapped to return the { ok: false } result shape. */
-async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
-  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
+  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now });
   return { ok: false };
 }
 
@@ -353,12 +366,22 @@ async function setupObservability({ obs, createForumTopic, issueNumber, title, p
     }
     if (result && result.ok && result.threadId != null) {
       threadId = result.threadId;
+      // Stamp the chatId the topic was ACTUALLY created against — result.chatId, widened onto the
+      // createForumTopic seam's success return by the delete-forum-topic task. NOT opts.notify.chatId
+      // and NOT any locally resolved config: on a .dev.vars-only deployment config.notify.chatId is
+      // undefined while the topic is minted against the resolved TELEGRAM_CHAT_ID fallback, so only
+      // the seam's return knows the true chat. This gives every minted topic a tenant identity so the
+      // retention sweep can gate cross-tenant deletion. When result.chatId == null, write NO chatId
+      // key — the meta then carries no tenant identity and stays permanently un-deletable (the
+      // intended fail-closed; a legacy meta without chatId behaves identically). The stamp rides ONLY
+      // this successful-threadId write; the fallback branch below writes status:'fallback' with no
+      // chatId, and a run reusing an already-open thread is unchanged. Status is reset to 'active' so
+      // a reused run whose meta was previously 'fallback'/'orphan' (a requeue retry) does not keep
+      // routing to the shared topic nor stay sweepable by the reaper — the dedicated topic now exists.
+      const partial = { threadId, status: "active" };
+      if (result.chatId != null) partial.chatId = result.chatId;
       try {
-        // Reset status to 'active' on a successful topic creation: a reused run whose meta was
-        // previously 'fallback'/'orphan' (a requeue retry) must not keep routing to the shared
-        // topic nor be sweepable by the reaper — the dedicated topic now exists. The failure path
-        // below still writes status 'fallback' (unchanged).
-        obs.updateMeta(metaPath, { threadId, status: "active" });
+        obs.updateMeta(metaPath, partial);
       } catch {
         // best-effort: threadId persist failure routes to the shared topic instead
         threadId = null;

@@ -76,6 +76,7 @@ const EMOJI = {
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
   "reaper-orphan-cleaned": "🧹",
+  "reaper-permission-check": "🔐",
   "engine-updated": "⬆️",
   "engine-update-failed": "❗",
   "chain-released": "🔗",
@@ -232,6 +233,14 @@ export function formatEvent(event = {}) {
       return `${prefix} run da issue ${issueRef} recuperado de crash`;
     case "reaper-orphan-cleaned":
       return `${prefix} worktree órfão da issue ${issueRef} limpo`;
+    case "reaper-permission-check": {
+      // FLEET-level event with no single project (event.project is absent) — render without a
+      // `[<project>]` prefix so the operator never sees a cryptic `[?]`. Names the chat and the
+      // remedy: the retention sweep can't clear topics because the bot lacks can_delete_messages,
+      // and the operator must grant it in that group.
+      const chatId = event.chatId != null ? escapeHtml(String(event.chatId)) : "?";
+      return `${emoji} a limpeza de tópicos do grupo ${chatId} não avança — o bot não consegue apagar tópicos; conceda a ele a permissão de apagar mensagens (can_delete_messages) nesse grupo`;
+    }
     case "engine-updated": {
       const range = event.from && event.to ? ` (${escapeHtml(String(event.from).slice(0, 7))} → ${escapeHtml(String(event.to).slice(0, 7))})` : "";
       return `${prefix} motor do harness atualizado com a main${range} — próximos crons já rodam a versão nova`;
@@ -593,6 +602,17 @@ async function callTelegramMethod(method, payload, opts = {}, op) {
  * under a guarded `typeof res.json === "function"` + try/catch — the existing test fakes return plain
  * objects with NO `.json`, and a rejecting/throwing `.json` is unclassifiable → fail closed. The raw
  * description string is consumed ONLY here to pick the enum value; it NEVER escapes this function.
+ *
+ * AMBIGUITY — `"thread-not-found"` means "Telegram could not resolve this thread in THIS chat", which
+ * covers BOTH a genuinely deleted topic AND a wrong/mismatched `chat_id` (`message_thread_id` is
+ * per-chat, NOT globally unique). It must NEVER, on its own, authorize a caller to discard persisted
+ * local state — a caller reading it as "the topic is confirmed gone" while actually operating against
+ * the wrong chat would destroy records for a topic that still exists elsewhere.
+ *
+ * PERMISSION DENIAL — a `not enough rights` / `CHAT_ADMIN_REQUIRED` (the bot lacking
+ * `can_delete_messages` / `can_manage_topics`) currently classifies as `"transient"`, indistinguishable
+ * from a 429 or a timeout. A caller cannot tell a permission problem from a transient blip here and
+ * must detect it out-of-band (e.g. observing that attempts never succeed across cycles).
  * @param {object} res - The fetch response (may be a plain fake with no `.json`).
  * @returns {Promise<"thread-not-found" | "transient">}
  */
@@ -615,11 +635,16 @@ async function classifyTelegramError(res) {
 /**
  * @description Wraps Telegram `createForumTopic`. The NAME is PLAIN TEXT: truncated to ≤128 code
  * points and NEVER HTML-escaped (Telegram does not parse_mode the topic name). Fail-open: any error
- * → `{ ok:false }`, never throws. On success resolves `{ ok:true, threadId }` with the new topic's
- * message_thread_id.
+ * → `{ ok:false }` (no chatId, no extra keys), never throws. On success resolves
+ * `{ ok:true, threadId, chatId }` — `chatId` is `opts.config.chatId`, the chat the topic was actually
+ * minted against (load-bearing for #ac-1.2: on a `.dev.vars`-only deployment `config.notify.chatId`
+ * is undefined while the topic is minted against the resolved `TELEGRAM_CHAT_ID` fallback — only the
+ * seam's return knows the true chat). The returned `chatId` is exactly the chat the topic was minted
+ * against, and exists so callers can persist the `{ threadId, chatId }` pair required by
+ * `deleteForumTopic`'s caller contract.
  * @param {{ name: string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
- * @returns {Promise<{ ok: boolean, threadId?: number }>}
+ * @returns {Promise<{ ok: boolean, threadId?: number, chatId?: number|string }>}
  */
 export async function createForumTopic({ name } = {}, opts = {}) {
   const payload = {
@@ -630,7 +655,7 @@ export async function createForumTopic({ name } = {}, opts = {}) {
   if (!result.ok) {
     return { ok: false };
   }
-  return { ok: true, threadId: result.data?.result?.message_thread_id };
+  return { ok: true, threadId: result.data?.result?.message_thread_id, chatId: opts?.config?.chatId };
 }
 
 /**
@@ -647,6 +672,35 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
   };
   const result = await callTelegramMethod("closeForumTopic", payload, opts, "closeForumTopic");
   return result.ok ? { ok: true } : { ok: false };
+}
+
+/**
+ * @description Wraps Telegram `deleteForumTopic` — IRREVERSIBLE: it destroys the topic and every
+ * message in it. Mirrors `closeForumTopic` EXACTLY (same `callTelegramMethod` seam, same bounded-error
+ * classification, same redaction contract). Fail-open: never throws, never retries. Resolves `{ ok:true }`
+ * on 2xx, `{ ok:false, reason:"thread-not-found" }` when the topic is already gone, and
+ * `{ ok:false, reason:"transient" }` otherwise. A failure logs ONLY `{ op:"deleteForumTopic",
+ * type:"forum-topic", status }` — the token/URL/body never reach a log line.
+ *
+ * CALLER CONTRACT — `message_thread_id` is per-chat and NOT globally unique, so the caller MUST
+ * guarantee that `threadId` was minted in the SAME chat as `opts.config.chatId`. The intended
+ * mechanism: persist the `{ threadId, chatId }` pair `createForumTopic` returns together, and compare
+ * the persisted `chatId` against the currently-resolved one before ever calling this function. This
+ * function does NOT and CANNOT verify that pairing — a `threadId` from chat A paired with chat B's
+ * `config.chatId` destroys an unrelated topic in chat B, and the operation is irreversible. A
+ * `"thread-not-found"` reason is only safe to interpret as "already gone" once the caller has
+ * independently established, via that `chatId` equality check, that it is operating in the correct chat.
+ * @param {{ threadId: number|string }} input
+ * @param {object} opts - { config, fetch, log, timeoutMs }.
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function deleteForumTopic({ threadId } = {}, opts = {}) {
+  const payload = {
+    chat_id: opts?.config?.chatId,
+    message_thread_id: threadId,
+  };
+  const result = await callTelegramMethod("deleteForumTopic", payload, opts, "deleteForumTopic");
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
 // --- task-5: cron-side outbox drain.
@@ -710,7 +764,7 @@ function isCuratedFeedEvent(event) {
 /** @description True for events that must take the separate critical path (blocked/failed lifecycle
  * alerts). `regate-pending` is deliberately NOT critical for the feed — the operator does not want it,
  * and its delivery-blocking obligation is gate-state-enforced (entry-gate), independent of any ping. */
-function isCriticalEvent(event) {
+export function isCriticalEvent(event) {
   if (!event || typeof event.type !== "string") return false;
   return CRITICAL_TYPES.has(event.type);
 }
@@ -1101,8 +1155,13 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
           }
           break;
         }
+        // meta.chatId MUST always describe the chat where the CURRENT threadId lives — a stale
+        // pairing (chatId A + threadId minted in B) authorizes an irreversible deleteForumTopic of
+        // an unrelated topic in the wrong chat, since message_thread_id is per-chat, not global.
+        const healPartial = { threadId: createResult.threadId, healAttempts: healAttempts + 1 };
+        if (createResult.chatId != null) healPartial.chatId = createResult.chatId;
         try {
-          updateMeta(metaPath, { threadId: createResult.threadId, healAttempts: healAttempts + 1 });
+          updateMeta(metaPath, healPartial);
         } catch {
           // fail-open: updateMeta never throws, but never let a writer propagate
         }

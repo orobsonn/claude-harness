@@ -14,6 +14,7 @@ const INITIAL_THREAD_ID = null;
 const CLOSED_STATUS = "closed";
 const AWAITING_REVIEW_STATUS = "awaiting-review";
 const TEMP_SUFFIX = `.${process.pid}.tmp`;
+const FOSSIL_KEYS = ["closedAt", "topicDeletedAt"];
 // PIPE_BUF (4096 on Linux) is the largest write guaranteed atomic per-line across concurrent
 // writers. Appends beyond it can tear a MIDDLE line under contention — best-effort: we still
 // append, accepting the documented fail-open silent-drop on a torn middle line.
@@ -32,13 +33,14 @@ function readMetaRecord(metaPath) {
   }
 }
 
-/** @description Atomic temp->rename write of a meta object; never throws (fail-open). */
+/** @description Atomic temp->rename write of a meta object; returns true on success, false on failure; never throws (fail-open). */
 function atomicWriteMeta(metaPath, meta) {
   const tmpPath = `${metaPath}${TEMP_SUFFIX}`;
   try {
     mkdirSync(dirname(metaPath), { recursive: true });
     writeFileSync(tmpPath, JSON.stringify(meta), "utf8");
     renameSync(tmpPath, metaPath);
+    return true;
   } catch {
     // fail-open: a failed write must never propagate to the caller (never throw / never delay a cron).
     try {
@@ -46,7 +48,20 @@ function atomicWriteMeta(metaPath, meta) {
     } catch {
       // best-effort temp cleanup; never mask the silent fail-open
     }
+    return false;
   }
+}
+
+/** @description True when the meta carries any fossil timestamp (closedAt/topicDeletedAt). */
+function hasFossilTimestamps(meta) {
+  return FOSSIL_KEYS.some((key) => key in meta);
+}
+
+/** @description Returns a shallow copy of the meta with the fossil timestamps removed. */
+function stripFossilTimestamps(meta) {
+  const next = { ...meta };
+  for (const key of FOSSIL_KEYS) delete next[key];
+  return next;
 }
 
 /**
@@ -66,26 +81,43 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
   if (existing && existing.status !== CLOSED_STATUS) {
     // DISTINCT branch for awaiting-review: reuse-with-truncate
     if (existing.status === AWAITING_REVIEW_STATUS) {
-      // Preserve threadId, reset cursor to 0, truncate events log, set status to active
-      const updatedMeta = {
-        ...existing,
-        cursor: INITIAL_CURSOR,
-        status: INITIAL_STATUS,
-      };
-      atomicWriteMeta(metaPath, updatedMeta);
-
-      // Truncate the events log - fail-open (mirror the existing try/catch around the fresh-branch truncate)
+      // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
+      // and strip the fossil timestamps (closedAt/topicDeletedAt) off a meta returning to active.
+      // Truncate the events log FIRST, gating the meta reset on truncate success: a drain tick
+      // landing between a reset meta and a pending/failed truncate would read the reset meta
+      // (criticalSent: [], cursor: 0) against the still-intact old events log and re-send every
+      // previously-acknowledged critical. Truncating first leaves an interleaved drain observing
+      // an empty log (zero events to send, nothing to write back); on truncate failure the meta
+      // stays consistent with the still-intact old log instead of entering the re-send state.
+      let truncated = false;
       try {
         writeFileSync(eventsPathFor(metaPath), "", "utf8");
+        truncated = true;
       } catch {
         // best-effort: a failed truncate must never propagate to the caller
+      }
+
+      if (truncated) {
+        atomicWriteMeta(metaPath, stripFossilTimestamps({
+          ...existing,
+          cursor: INITIAL_CURSOR,
+          status: INITIAL_STATUS,
+          criticalSent: [],
+        }));
       }
 
       return metaPath;
     }
 
     // Idempotent reuse: never reset events/cursor/threadId on a still-active (or fallback/orphan) run.
-    // The reuse branch MUST NEVER touch the events log.
+    // The reuse branch MUST NEVER touch the events log. It only strips a fossil timestamp if one is
+    // actually present; a fossil-free reuse is byte-write-free (no rewrite at all).
+    const freshExisting = readMetaRecord(metaPath);
+    if (!freshExisting) return metaPath;
+    if (hasFossilTimestamps(freshExisting)) {
+      for (const key of FOSSIL_KEYS) delete freshExisting[key];
+      atomicWriteMeta(metaPath, freshExisting);
+    }
     return metaPath;
   }
   const meta = {
@@ -199,4 +231,26 @@ export function updateMeta(metaPath, partial) {
   if (!meta) return;
   Object.assign(meta, partial);
   atomicWriteMeta(metaPath, meta);
+}
+
+/**
+ * @description Compare-and-swap partial merge: applies `partial` only when the meta currently on disk
+ * still matches every key in `expected` (strict compare). Returns true when the write happened, false
+ * on any divergence or missing meta. Synchronous read-compare-write with NO await between the re-read
+ * and the temp->rename — the residual local-file race is explicitly accepted (a closed run always
+ * takes createRun's fresh branch, so a Telegram delete is safe). Never throws (the atomic write is
+ * fail-open).
+ * @param {string} metaPath
+ * @param {object} expected
+ * @param {object} partial
+ * @returns {boolean}
+ */
+export function updateMetaIfUnchanged(metaPath, expected, partial) {
+  const meta = readMetaRecord(metaPath);
+  if (!meta) return false;
+  for (const key of Object.keys(expected)) {
+    if (!(key in meta) || meta[key] !== expected[key]) return false;
+  }
+  Object.assign(meta, partial);
+  return atomicWriteMeta(metaPath, meta);
 }

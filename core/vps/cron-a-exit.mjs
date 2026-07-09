@@ -52,6 +52,14 @@ const LABEL_READY = "harness:ready";
 const DEFAULT_RETRY_CEILING_K = 2;
 
 /**
+ * @description Injectable clock seam returning epoch SECONDS — matches
+ * run-cron-review.mjs's `Math.floor(Date.now()/1000)`. NEVER raw Date.now() milliseconds: a
+ * millisecond closedAt passes Number.isFinite and breaks the retention sweep's age gate. Tests
+ * inject a fixed `now` so the stamped closedAt is deterministic; production uses the default.
+ */
+const defaultNow = () => Math.floor(Date.now() / 1000);
+
+/**
  * @description Path the autonomous session writes a deliberate-block marker to (the finding
  * message body). Lives under the worktree's `.claude/` (git-excluded via `.git/info/exclude`, so
  * it never dirties the tracked tree); the exit handler reads it best-effort and treats absence as
@@ -325,12 +333,16 @@ function realBlockingFinding(worktree) {
  * @param {(input: { threadId: number|string }, opts: object) => Promise<{ ok: boolean }>} [deps.closeForumTopic]
  * @param {(metaPath: string) => object|null} [deps.readMeta]
  * @param {(metaPath: string, partial: object) => void} [deps.updateMeta]
+ * @param {() => number} [deps.now] - clock seam returning epoch SECONDS (default
+ *   `() => Math.floor(Date.now()/1000)`). Stamped as `closedAt` on every status:'closed' write so
+ *   the retention sweep can measure age; inject a fixed value in tests for determinism.
  * @param {typeof fetch} [deps.fetch]
  * @param {(entry: object) => void} [deps.log]
  * @returns {Promise<void>}
  */
 export async function notifyExit(outcome, deps = {}) {
   const env = deps.env ?? process.env;
+  const nowFn = deps.now ?? defaultNow;
   const prLookup = deps.prLookup ?? realPrLookup;
   const makeNotifierFn = deps.makeNotifier ?? makeNotifier;
   const appendEventFn = deps.appendEvent ?? defaultAppendEvent;
@@ -404,12 +416,12 @@ export async function notifyExit(outcome, deps = {}) {
                 { config: notifier?.config ?? null, fetch: deps.fetch, log: deps.log }
               );
               if (closeResult && closeResult.ok) {
-                updateMetaFn(metaPath, { status: "closed" });
+                updateMetaFn(metaPath, { status: "closed", closedAt: nowFn() });
               }
             } else {
               // No forum topic was created for this run (createForumTopic failed at dispatch): nothing
               // to close, but the run is terminal — mark it closed so the reaper orphan sweep skips it.
-              updateMetaFn(metaPath, { status: "closed" });
+              updateMetaFn(metaPath, { status: "closed", closedAt: nowFn() });
             }
           }
         }

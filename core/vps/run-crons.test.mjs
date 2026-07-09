@@ -7,11 +7,17 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { runCronA, loadConfig } from "./run-cron-a.mjs";
 import { runCronB } from "./run-cron-b.mjs";
 import {
   runReaper,
+  mainReaper,
+  defaultListObsRuns,
+  unlinkRunFiles,
   makeDefaultIssueClosed,
   makeDefaultPrMerged,
   makeDefaultBranchMerged,
@@ -674,4 +680,1182 @@ test("makeDefaultIssueClosed maps gh issue view --json state to true/false/null 
     null,
     "unparseable stdout must be null"
   );
+});
+
+// -------------------------------------------------------------------------------------------
+// Retention sweep composition-root wiring (#ac-1.1, #ac-1.2, #ac-1.4, #ac-1.5, #ac-1.6, #ac-1.8,
+// #ac-1.9). These tests pin the run-reaper.mjs wiring that connects reaper.mjs's already-built
+// sweepStaleClosedTopics to real per-project harness-crons configs, the real obs-outbox seams, and
+// a persisted per-chatId permission-notification counter. Several assertions use REAL temp files
+// under mkdtempSync so the enumeration/unlink seams are exercised end-to-end, never faked.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * @description Builds a {fn, calls} recorder: fn pushes every call's arguments into `calls` and
+ * delegates to the given implementation (default: a resolved {ok:true}).
+ */
+function makeRecorder(impl = async () => ({ ok: true })) {
+  const calls = [];
+  const fn = (...args) => {
+    calls.push(args);
+    return impl(...args);
+  };
+  return { fn, calls };
+}
+
+/**
+ * @description Writes a real <homeDir>/.claude/harness-crons/<project>.json config used by the
+ * per-project shared-thread-blocklist tests, so the project counts as "readable" for the
+ * retention sweep's config-readability gate (#ac-1.1).
+ */
+function writeHarnessCronsConfig(homeDir, project, obj = {}) {
+  const cronsDir = join(homeDir, ".claude", "harness-crons");
+  mkdirSync(cronsDir, { recursive: true });
+  writeFileSync(join(cronsDir, `${project}.json`), JSON.stringify(obj), "utf8");
+}
+
+test("#ac-1.2 the underlying deleteForumTopic receives a config whose chatId is the RESOLVED chatId — never a value read off the candidate's meta", async () => {
+  const config = { ...BASE_CONFIG, projects: [] };
+
+  const recorder = makeRecorder(async () => ({ ok: true }));
+
+  let capturedDeleteForumTopic;
+  const fakeReaperLogic = (opts) => {
+    capturedDeleteForumTopic = opts.deleteForumTopic;
+    return [];
+  };
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    listWorktrees: () => [],
+    gh: () => ({ ok: true }),
+    ghExec: () => ({ ok: true }),
+    runLock: { release: () => {} },
+    counter: { read: () => 0 },
+    deleteForumTopic: recorder.fn,
+    resolvedChatId: 9,
+  });
+
+  assert.equal(
+    typeof capturedDeleteForumTopic,
+    "function",
+    "runReaper must wire a deleteForumTopic seam into the reaper logic's opts"
+  );
+
+  await capturedDeleteForumTopic({ threadId: 555 });
+
+  assert.equal(recorder.calls.length, 1, "the underlying deleteForumTopic must be invoked once");
+  const [input, opts] = recorder.calls[0];
+  assert.equal(input.threadId, 555, "the threadId must be passed through unchanged");
+  assert.notEqual(opts, undefined, "the underlying deleteForumTopic must receive an opts object");
+  assert.equal(
+    opts.config.chatId,
+    9,
+    "the config passed to the underlying deleteForumTopic must carry the RESOLVED chatId — never a value read from a candidate's meta"
+  );
+});
+
+test("#ac-1.2 a run whose meta.chatId was stamped from the .dev.vars-resolved chatId (no config.notify block) is deleted — the dispatch stamp and the reaper resolution agree on the same resolveNotifyConfig output", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-devvars-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-state-"));
+  try {
+    mkdirSync(join(homeDir, ".claude"), { recursive: true });
+    writeFileSync(
+      join(homeDir, ".claude", ".dev.vars"),
+      "TELEGRAM_BOT_TOKEN=t\nTELEGRAM_CHAT_ID=-100777\n",
+      "utf8"
+    );
+    writeHarnessCronsConfig(homeDir, "demo", {});
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      stateDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 2 * 86400;
+
+    const metaPath = join(stateDir, "obs-1.json");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 1,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: -100777,
+        threadId: 555,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-1.events.jsonl"), "", "utf8");
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      // deps.reaper is deliberately NOT injected — the real reaper.mjs resolves resolvedChatId
+      // internally so the dispatch stamp and the reaper resolution must agree.
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+      updateMetaIfUnchanged: (metaPath2, expected, partial) => {
+        const current = JSON.parse(readFileSync(metaPath2, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(metaPath2, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length >= 1,
+      true,
+      ".dev.vars-only chatId resolution must agree between the dispatch stamp and the reaper — the candidate must be deleted"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 shared threadIds (numeric + hand-edited string) from two per-project harness-crons configs plus the fleet build a normalized blocklist that blocks a numeric-threadId candidate", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-blocklist-"));
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", { sharedThreadId: 613 });
+    writeHarnessCronsConfig(homeDir, "other", { sharedThreadId: "777" });
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [
+        { project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/state" },
+        { project: "other", projectRoot: "/srv/other", stateDir: "/srv/other/state" },
+      ],
+      sharedThreadId: 42,
+    };
+
+    let capturedOpts;
+    const fakeReaperLogic = (opts) => {
+      capturedOpts = opts;
+      return { retentionDeletes: [], retentionTally: {} };
+    };
+
+    runReaper(config, {
+      reaper: fakeReaperLogic,
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+    });
+
+    assert.ok(Array.isArray(capturedOpts.sharedThreadIds), "runReaper must wire a sharedThreadIds array");
+    const normalized = capturedOpts.sharedThreadIds.map(String);
+    assert.ok(normalized.includes("613"), "the numeric per-project sharedThreadId must be normalized into the blocklist");
+    assert.ok(normalized.includes("777"), "the hand-edited string per-project sharedThreadId must be normalized into the blocklist");
+    assert.ok(normalized.includes("42"), "the fleet sharedThreadId must be in the blocklist");
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 a real numeric-threadId candidate (613, matching the '613' normalized blocklist member contributed by a per-project harness-crons config) is DRIVEN THROUGH THE SWEEP and NEVER deleted, while a second otherwise-identical non-blocklisted candidate (threadId 500) IS deleted exactly once — proving the blocklist actually blocks, not merely that its array shape is correct", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-blocklist-real-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-blocklist-real-state-"));
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", { sharedThreadId: 613 });
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 10 * 86400;
+
+    const metaPathBlocked = join(stateDir, "obs-61.json");
+    writeFileSync(
+      metaPathBlocked,
+      JSON.stringify({
+        issueNumber: 61,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 613,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-61.events.jsonl"), "", "utf8");
+
+    const metaPathAllowed = join(stateDir, "obs-62.json");
+    writeFileSync(
+      metaPathAllowed,
+      JSON.stringify({
+        issueNumber: 62,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 500,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-62.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      1,
+      "exactly one candidate must be deleted — the blocklisted threadId 613 candidate must never be deleted, and the sweep must not have done nothing"
+    );
+    assert.equal(
+      deleteForumTopicRecorder.calls[0][0].threadId,
+      500,
+      "the single delete call must be for the non-blocklisted threadId 500 candidate"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 an unreadable first project's harness-crons config contributes no blocklist entry, and the sweep is NOT aborted — the second (readable-config) project's eligible candidate is still evaluated", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-unreadable-"));
+  const stateDir1 = mkdtempSync(join(tmpdir(), "run-crons-state1-"));
+  const stateDir2 = mkdtempSync(join(tmpdir(), "run-crons-state2-"));
+  try {
+    // "first"'s harness-crons config is deliberately NEVER written -> unreadable/absent.
+    writeHarnessCronsConfig(homeDir, "second", {});
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 10 * 86400;
+
+    const metaPath2 = join(stateDir2, "obs-2.json");
+    writeFileSync(
+      metaPath2,
+      JSON.stringify({
+        issueNumber: 2,
+        project: "second",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 999,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir2, "obs-2.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [
+        { project: "first", projectRoot: "/srv/first", stateDir: stateDir1 },
+        { project: "second", projectRoot: "/srv/second", stateDir: stateDir2 },
+      ],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      1,
+      "the second (readable-config) project's eligible candidate must still be evaluated — the sweep is not aborted by the first project's unreadable config"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir1, { recursive: true, force: true });
+    rmSync(stateDir2, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 the unreadable-config project's OWN otherwise-eligible candidate is DROPPED — deleteForumTopic is never called for it (fail-closed skips its own candidates, not merely its blocklist contribution)", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-ownskip-"));
+  const stateDir1 = mkdtempSync(join(tmpdir(), "run-crons-ownstate1-"));
+  try {
+    mkdirSync(join(homeDir, ".claude", "harness-crons"), { recursive: true });
+    // "first"'s harness-crons config is deliberately NEVER written -> unreadable.
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 10 * 86400;
+
+    const metaPath1 = join(stateDir1, "obs-1.json");
+    writeFileSync(
+      metaPath1,
+      JSON.stringify({
+        issueNumber: 1,
+        project: "first",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 111,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir1, "obs-1.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "first", projectRoot: "/srv/first", stateDir: stateDir1 }],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      0,
+      "a project whose OWN harness-crons config is unreadable must have its own candidates dropped, never deleted"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir1, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.4 END-TO-END real enumeration: a candidate with an unacked critical event is NEVER deleted, and its real meta + events files remain on disk — production defaultListObsRuns->readEvents is the code under test, deps.listObsRuns is NEVER injected", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-e2e-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-e2e-state-"));
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 10 * 86400;
+
+    const metaPath = join(stateDir, "obs-5.json");
+    const eventsPath = join(stateDir, "obs-5.events.jsonl");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 5,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 555,
+        cursor: 1,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "blocked" })}\n`, "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      // deps.listObsRuns is deliberately NOT injected — the production defaultListObsRuns->readEvents
+      // enumeration is exercised end-to-end.
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      0,
+      "a candidate with an unacked critical event must never be deleted"
+    );
+    assert.equal(existsSync(eventsPath), true, "the real .events.jsonl file must still exist");
+    assert.equal(existsSync(metaPath), true, "the real .json meta file must still exist");
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.4 positive control: the SAME real fixture with the critical ACKED (criticalSent:[0]) IS deleted — proving the production events read actually feeds the critical guard", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-e2e-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-e2e-state-"));
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 10 * 86400;
+
+    const metaPath = join(stateDir, "obs-5.json");
+    const eventsPath = join(stateDir, "obs-5.events.jsonl");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 5,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 555,
+        cursor: 1,
+        criticalSent: [0],
+      }),
+      "utf8"
+    );
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "blocked" })}\n`, "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      // deps.listObsRuns is deliberately NOT injected — the production defaultListObsRuns->readEvents
+      // enumeration is exercised end-to-end.
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      1,
+      "the SAME fixture with the critical acked (criticalSent:[0]) must be deleted — proving the production events read actually feeds the critical guard"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.4 defaultListObsRuns called DIRECTLY returns candidates carrying events read from the real events.jsonl", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-listobsruns-"));
+  try {
+    const metaPath = join(stateDir, "obs-7.json");
+    const eventsPath = join(stateDir, "obs-7.events.jsonl");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({ issueNumber: 7, project: "demo", status: "closed", cursor: 0 }),
+      "utf8"
+    );
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "blocked" })}\n`, "utf8");
+
+    const readMetaFn = (p) => {
+      try {
+        return JSON.parse(readFileSync(p, "utf8"));
+      } catch {
+        return null;
+      }
+    };
+
+    const runs = defaultListObsRuns([{ project: "demo", projectRoot: "/srv/demo", stateDir }], readMetaFn);
+
+    const run = runs.find((r) => r.metaPath === metaPath);
+    assert.notEqual(run, undefined, "defaultListObsRuns must return a candidate for the real obs-7.json");
+    assert.ok(Array.isArray(run.events), "the candidate must carry an events array");
+    assert.ok(run.events.length > 0, "the candidate's events must be non-empty (read from the real .events.jsonl)");
+    assert.ok(
+      run.events.some((e) => e.type === "blocked"),
+      "the candidate's events must include the blocked event written to the real .events.jsonl"
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 the {metaPath, meta, events} enumeration extension leaves sweepOrphanTopics unchanged — an orphan run (worktree gone, status:'active', threadId set, prOpen false) still gets its topic CLOSED exactly as before", async () => {
+  const config = { ...BASE_CONFIG, projects: [] };
+
+  const closeForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+  const updateMetaCalls = [];
+
+  const topicCloses = runReaper(config, {
+    listWorktrees: () => [],
+    gh: () => ({ ok: true }),
+    ghExec: () => ({ ok: true }),
+    runLock: { release: () => {} },
+    counter: { read: () => 0 },
+    closeForumTopic: closeForumTopicRecorder.fn,
+    listObsRuns: () => [
+      {
+        metaPath: "/srv/demo/state/obs-9.json",
+        meta: {
+          issueNumber: 9,
+          project: "demo",
+          status: "active",
+          threadId: 321,
+          worktreePath: "/srv/worktrees/harness-demo-9",
+        },
+        events: [],
+      },
+    ],
+    liveWorktreePaths: () => [], // the worktree is gone -> orphan
+    updateMeta: (metaPath, partial) => {
+      updateMetaCalls.push({ metaPath, partial });
+    },
+    prOpen: () => false,
+  });
+
+  await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+  assert.equal(closeForumTopicRecorder.calls.length, 1, "an orphan run's topic must be closed via closeForumTopic");
+  assert.equal(
+    closeForumTopicRecorder.calls[0][0].threadId,
+    321,
+    "closeForumTopic must be called with the orphan run's threadId"
+  );
+  const closedCall = updateMetaCalls.find((c) => c.partial && c.partial.status === "closed");
+  assert.notEqual(closedCall, undefined, "updateMeta must write status:'closed' for the orphan run");
+});
+
+test("#ac-1.5 unlinkRunFiles unlinks the derived .events.jsonl for what:'events' and the metaPath itself for what:'meta', using REAL temp files; neither target is rebuilt from meta.issueNumber; an fs error returns false and never throws", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-unlink-"));
+  try {
+    const metaPath = join(stateDir, "obs-11.json");
+    const eventsPath = join(stateDir, "obs-11.events.jsonl");
+    writeFileSync(metaPath, JSON.stringify({ issueNumber: 11 }), "utf8");
+    writeFileSync(eventsPath, "", "utf8");
+
+    assert.equal(existsSync(eventsPath), true, "the events file must exist before unlinking");
+    const eventsResult = unlinkRunFiles(metaPath, { what: "events" });
+    assert.equal(eventsResult, true, "unlinkRunFiles must return true on a successful unlink");
+    assert.equal(existsSync(eventsPath), false, "the .events.jsonl file must be gone after what:'events'");
+    assert.equal(existsSync(metaPath), true, "the metaPath must remain untouched by what:'events'");
+
+    assert.equal(existsSync(metaPath), true, "the meta file must exist before unlinking");
+    const metaResult = unlinkRunFiles(metaPath, { what: "meta" });
+    assert.equal(metaResult, true, "unlinkRunFiles must return true on a successful unlink");
+    assert.equal(existsSync(metaPath), false, "the metaPath file must be gone after what:'meta'");
+
+    const missingPath = join(stateDir, "does-not-exist.json");
+    let threw = false;
+    let result;
+    try {
+      result = unlinkRunFiles(missingPath, { what: "meta" });
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, false, "unlinkRunFiles must never throw on an fs error");
+    assert.equal(result, false, "unlinkRunFiles must return false on an fs error (e.g. a non-existent path)");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.6 config.topicRetentionDays = 3 makes a run closed 4 days ago eligible (deleteForumTopic IS called); a second run closed 4 days ago with topicRetentionDays absent (default 7) is NOT eligible (deleteForumTopic is NOT called for it)", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-retentiondays-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-retentiondays-state-"));
+  const stateDirDefault = mkdtempSync(join(tmpdir(), "run-crons-retentiondays-default-state-"));
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+
+    const now = () => 1_000_000;
+    const closedAt = now() - 4 * 86400;
+
+    const metaPath = join(stateDir, "obs-13.json");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 13,
+        project: "demo",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 777,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-13.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 3,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    const topicCloses = runReaper(config, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorder.fn,
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      1,
+      "a run closed 4 days ago must be eligible when topicRetentionDays=3"
+    );
+
+    writeHarnessCronsConfig(homeDir, "demo-default", {});
+
+    const metaPathDefault = join(stateDirDefault, "obs-14.json");
+    writeFileSync(
+      metaPathDefault,
+      JSON.stringify({
+        issueNumber: 14,
+        project: "demo-default",
+        status: "closed",
+        closedAt,
+        chatId: 9,
+        threadId: 778,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDirDefault, "obs-14.events.jsonl"), "", "utf8");
+
+    const configDefault = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo-default", projectRoot: "/srv/demo-default", stateDir: stateDirDefault }],
+      // topicRetentionDays deliberately absent -> the default (7 days) must apply.
+    };
+
+    const deleteForumTopicRecorderDefault = makeRecorder(async () => ({ ok: true }));
+
+    const topicClosesDefault = runReaper(configDefault, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicRecorderDefault.fn,
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicClosesDefault) ? topicClosesDefault : []);
+
+    assert.equal(
+      deleteForumTopicRecorderDefault.calls.length,
+      0,
+      "a run closed 4 days ago must NOT be eligible when topicRetentionDays is absent — the default is 7 days"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(stateDirDefault, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.8 across THREE SEPARATE runReaper cycles against the same permission-state file, exactly ONE permission-check notification fires and only on the THIRD cycle; consecutiveNoDelete reaches 3 between cycles", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-permstate-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-permstate-state-"));
+  const permissionStatePath = join(stateDir, "retention-permission-state.json");
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+
+    const now = () => 1_000_000;
+    // A candidate that is ATTEMPTED (isDeletable true) but whose delete never resolves ok, so
+    // attempted increments and deleted stays 0 across every cycle.
+    const metaPath = join(stateDir, "obs-21.json");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 21,
+        project: "demo",
+        status: "closed",
+        closedAt: now() - 10 * 86400,
+        chatId: 9,
+        threadId: 111,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-21.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const notifyCalls = [];
+    const deleteForumTopicFailing = async () => ({ ok: false, reason: "transient" });
+
+    const deps = {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: deleteForumTopicFailing,
+      updateMetaIfUnchanged: () => false,
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: () => true,
+      permissionStatePath,
+      notify: (payload) => {
+        notifyCalls.push(payload);
+      },
+    };
+
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      const topicCloses = runReaper(config, deps);
+      await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+      if (cycle < 3) {
+        const permissionNotifications = notifyCalls.filter((c) => c && c.type === "reaper-permission-check");
+        assert.equal(
+          permissionNotifications.length,
+          0,
+          `no permission-check notification must fire before the 3rd cycle (cycle ${cycle})`
+        );
+      }
+
+      let persisted;
+      try {
+        persisted = JSON.parse(readFileSync(permissionStatePath, "utf8"));
+      } catch {
+        persisted = null;
+      }
+      assert.notEqual(persisted, null, `the permission-state file must be written after cycle ${cycle}`);
+      const tally = persisted["9"];
+      assert.notEqual(tally, undefined, `the chatId 9 entry must be present after cycle ${cycle}`);
+      assert.equal(
+        tally.consecutiveNoDelete,
+        cycle,
+        `consecutiveNoDelete must equal the cycle count (${cycle}) after cycle ${cycle}`
+      );
+    }
+
+    const permissionNotifications = notifyCalls.filter((c) => c && c.type === "reaper-permission-check");
+    assert.equal(
+      permissionNotifications.length,
+      1,
+      "exactly one permission-check notification must be emitted across the three cycles"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.8 a persisted consecutiveNoDelete:3 for a chatId resets to 0 after a runReaper cycle records a successful delete for that chatId; no further permission notification fires", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-permreset-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-permreset-state-"));
+  const permissionStatePath = join(stateDir, "retention-permission-state.json");
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+    writeFileSync(permissionStatePath, JSON.stringify({ "9": { consecutiveNoDelete: 3 } }), "utf8");
+
+    const now = () => 1_000_000;
+    const metaPath = join(stateDir, "obs-31.json");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 31,
+        project: "demo",
+        status: "closed",
+        closedAt: now() - 10 * 86400,
+        chatId: 9,
+        threadId: 222,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-31.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const notifyCalls = [];
+
+    const topicCloses = runReaper(config, {
+      listWorktrees: () => [],
+      gh: () => ({ ok: true }),
+      ghExec: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0 },
+      now,
+      resolvedChatId: 9,
+      deleteForumTopic: async () => ({ ok: true }),
+      updateMetaIfUnchanged: (p, expected, partial) => {
+        const current = JSON.parse(readFileSync(p, "utf8"));
+        for (const key of Object.keys(expected)) {
+          if (current[key] !== expected[key]) return false;
+        }
+        writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+        return true;
+      },
+      readMeta: (p) => {
+        try {
+          return JSON.parse(readFileSync(p, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      unlinkRunFiles: (p, { what }) => {
+        try {
+          rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      permissionStatePath,
+      notify: (payload) => {
+        notifyCalls.push(payload);
+      },
+    });
+
+    await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+
+    const persisted = JSON.parse(readFileSync(permissionStatePath, "utf8"));
+    assert.equal(
+      persisted["9"].consecutiveNoDelete,
+      0,
+      "consecutiveNoDelete must reset to 0 after a successful delete for that chatId"
+    );
+
+    const permissionNotifications = notifyCalls.filter((c) => c && c.type === "reaper-permission-check");
+    assert.equal(
+      permissionNotifications.length,
+      0,
+      "no permission-check notification must fire on the cycle that records a successful delete"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.9 a corrupt (non-JSON) retention-permission-state.json at the injected path never throws — runReaper treats the counter as 0, actually completes the sweep (an otherwise-eligible candidate IS deleted), and rewrites the permission-state file with valid JSON", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-crons-corruptstate-home-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "run-crons-corruptstate-state-"));
+  const permissionStatePath = join(stateDir, "retention-permission-state.json");
+  try {
+    writeHarnessCronsConfig(homeDir, "demo", {});
+    writeFileSync(permissionStatePath, "{ this is not valid json ]]", "utf8");
+
+    const now = () => 1_000_000;
+    const metaPath = join(stateDir, "obs-41.json");
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        issueNumber: 41,
+        project: "demo",
+        status: "closed",
+        closedAt: now() - 10 * 86400,
+        chatId: 9,
+        threadId: 333,
+        cursor: 0,
+        criticalSent: [],
+      }),
+      "utf8"
+    );
+    writeFileSync(join(stateDir, "obs-41.events.jsonl"), "", "utf8");
+
+    const config = {
+      ...BASE_CONFIG,
+      homeDir,
+      projects: [{ project: "demo", projectRoot: "/srv/demo", stateDir }],
+      topicRetentionDays: 1,
+    };
+
+    const deleteForumTopicRecorder = makeRecorder(async () => ({ ok: true }));
+
+    let threw = false;
+    try {
+      const topicCloses = runReaper(config, {
+        listWorktrees: () => [],
+        gh: () => ({ ok: true }),
+        ghExec: () => ({ ok: true }),
+        runLock: { release: () => {} },
+        counter: { read: () => 0 },
+        now,
+        resolvedChatId: 9,
+        deleteForumTopic: deleteForumTopicRecorder.fn,
+        updateMetaIfUnchanged: (p, expected, partial) => {
+          const current = JSON.parse(readFileSync(p, "utf8"));
+          for (const key of Object.keys(expected)) {
+            if (current[key] !== expected[key]) return false;
+          }
+          writeFileSync(p, JSON.stringify({ ...current, ...partial }), "utf8");
+          return true;
+        },
+        readMeta: (p) => {
+          try {
+            return JSON.parse(readFileSync(p, "utf8"));
+          } catch {
+            return null;
+          }
+        },
+        unlinkRunFiles: (p, { what }) => {
+          try {
+            rmSync(what === "events" ? p.replace(/\.json$/, ".events.jsonl") : p, { force: true });
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        permissionStatePath,
+      });
+      await Promise.allSettled(Array.isArray(topicCloses) ? topicCloses : []);
+    } catch {
+      threw = true;
+    }
+
+    assert.equal(threw, false, "runReaper must never throw on a corrupt permission-state file");
+
+    assert.equal(
+      deleteForumTopicRecorder.calls.length,
+      1,
+      "the otherwise-eligible candidate must be deleted — the sweep must run to completion past the corrupt permission-state read, not silently return early"
+    );
+
+    let persisted;
+    let parseThrew = false;
+    try {
+      persisted = JSON.parse(readFileSync(permissionStatePath, "utf8"));
+    } catch {
+      parseThrew = true;
+    }
+    assert.equal(
+      parseThrew,
+      false,
+      "the permission-state file must be rewritten with valid JSON, replacing the corrupt content"
+    );
+    assert.equal(typeof persisted, "object", "the rewritten permission-state file must parse to a JSON object");
+    assert.notEqual(persisted, null, "the rewritten permission-state file must parse to a non-null JSON object");
+    assert.equal(
+      persisted["9"].consecutiveNoDelete,
+      0,
+      "the corrupt counter must be treated as 0, and a successful delete keeps/resets it at 0"
+    );
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
