@@ -6,8 +6,8 @@
  * runLock.register() to attach the owning session name onto the already-held holder.
  *
  * Spawn composition (pinned by cron-a-dispatch.test.mjs):
- *   - `git worktree add <path> -b harness/<issue>` creates a per-run working tree on a
- *     project-distinct branch, never the project's primary tree.
+ *   - `git worktree add <path> -b harness/<issue> origin/main` creates a per-run working tree
+ *     on a project-distinct branch based on a freshly-fetched origin/main (never the primary tree HEAD).
  *   - `claude -p --permission-mode auto` runs INSIDE a detached `tmux new-session -d -s <name>
  *     -c <worktree> <sessionCommand>` — there is NO separate foreground `claude` spawn (a
  *     detached tmux session has no stdin to feed, and spawnSync ignores stdin anyway).
@@ -493,13 +493,15 @@ export async function dispatch(issue, opts) {
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
-  // 1) Per-run worktree on a project-distinct branch (never the primary tree). RESUME (attach the
-  //    EXISTING branch, no -b) ONLY when it carries an OPEN PR — a genuine prior delivery, so a
-  //    re-dispatch updates the SAME PR instead of orphaning it. A branch that exists WITHOUT an open
-  //    PR is an ORPHAN from a died run: resurrecting its stale, un-re-gated commits into a fresh PR is
-  //    a bug (it opens a PR in seconds without running the pipeline), so DELETE it and rebuild fresh
-  //    with -b. The delete is guarded by the fail-safe probe (defaultHasOpenPr returns true on any gh
-  //    uncertainty) so an unreachable gh can never destroy a real delivered branch.
+  // 1) Per-run worktree on a project-distinct branch (never the primary tree). Fresh branches are
+  //    based on a freshly-fetched origin/main. RESUME (attach the EXISTING branch, no -b) happens
+  //    ONLY when it carries an OPEN PR — a genuine prior delivery, so a re-dispatch updates the
+  //    SAME PR instead of orphaning it, and resume is untouched. A branch that exists WITHOUT an
+  //    open PR is an ORPHAN from a died run: resurrecting its stale, un-re-gated commits into a
+  //    fresh PR is a bug (it opens a PR in seconds without running the pipeline), so DELETE it and
+  //    rebuild fresh with -b. The delete is guarded by the fail-safe probe (defaultHasOpenPr
+  //    returns true on any gh uncertainty) so an unreachable gh can never destroy a real
+  //    delivered branch.
   const branchAlreadyExisted = probeBranchExists(branch);
   const resumeExistingBranch = branchAlreadyExisted && probeHasOpenPr(branch);
   if (branchAlreadyExisted && !resumeExistingBranch) {
@@ -514,7 +516,8 @@ export async function dispatch(issue, opts) {
     if (resumeExistingBranch) {
       spawn("git", ["worktree", "add", worktreePath, branch], { cwd: projectRoot, env });
     } else {
-      spawn("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: projectRoot, env });
+      spawn("git", ["fetch", "origin", "main"], { cwd: projectRoot, env });
+      spawn("git", ["worktree", "add", worktreePath, "-b", branch, "origin/main"], { cwd: projectRoot, env });
     }
   } catch {
     // Prune any leaked worktree from a prior interrupted run so the retry ceiling can eventually
