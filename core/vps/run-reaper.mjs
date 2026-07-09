@@ -46,7 +46,15 @@
  * @returns {void}
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  unlinkSync,
+  existsSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 
 import { loadConfig } from "./run-cron-a.mjs";
@@ -131,7 +139,26 @@ export function defaultListObsRuns(projects, readMetaFn) {
       if (!file.startsWith("obs-") || !file.endsWith(".json")) continue;
       const metaPath = join(project.stateDir, file);
       const meta = readMetaFn(metaPath);
-      if (meta) runs.push({ metaPath, meta, events: readEvents(metaPath) });
+      if (!meta) continue;
+      // The events log lives at the suffix-swapped path (never rebuilt from
+      // meta.issueNumber). `readEvents` returns [] on ANY read failure (missing file,
+      // EACCES, EMFILE, a torn read) — indistinguishable from a genuinely empty log. On
+      // the irreversible delete path an UNREADABLE-but-existing log must fail CLOSED:
+      // a fabricated empty `events` array would vacuously satisfy BOTH the
+      // unsent-critical guard (allCriticalsAcked loops zero times -> true) AND the
+      // drain-cursor guard (cursor < 0 -> false), destroying an undelivered critical.
+      // A genuinely ABSENT log is fine (a closed run with no events has nothing
+      // undelivered); only an existing-but-unreadable one is dropped, for THIS run only.
+      const eventsPath = metaPath.replace(/\.json$/, ".events.jsonl");
+      if (existsSync(eventsPath)) {
+        try {
+          readFileSync(eventsPath, "utf8");
+        } catch {
+          // exists but unreadable -> fail CLOSED: skip this run entirely
+          continue;
+        }
+      }
+      runs.push({ metaPath, meta, events: readEvents(metaPath) });
     }
   }
   return runs;
