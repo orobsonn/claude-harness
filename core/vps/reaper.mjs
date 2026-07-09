@@ -648,6 +648,10 @@ async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tal
     }
     if (!casOk) return;
 
+    // `deleted` measures "retention is progressing" — an API delete, an already-gone topic,
+    // or a resumed CAS-stamped run all indicate the Telegram side is gone and local unlink can proceed.
+    incrementTally(tally, chatIdKey, "deleted");
+
     const freshBeforeEventsUnlink = readMeta(metaPath);
     if (!identityMatches(freshBeforeEventsUnlink, identity)) return;
     try {
@@ -662,10 +666,6 @@ async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tal
       unlinkRunFiles(metaPath, { what: "meta" });
     } catch {
       return;
-    }
-
-    if (!hasTopicDeletedAt && deleteResult.ok) {
-      incrementTally(tally, chatIdKey, "deleted");
     }
   } catch {
     // any unexpected error before deleteForumTopic (e.g. readMeta throw) leaves deleteFailedTransient
@@ -705,7 +705,8 @@ async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tal
  * @param {Array<number|string>} opts.sharedThreadIds
  * @param {number} [opts.retentionDays=7]
  * @param {number} [opts.hardCapDays=30]
- * @param {number} [opts.maxDeletions=3]
+ * @param {number} [opts.maxDeletions=3] - caps Telegram `deleteForumTopic` calls per cycle; resumed
+ *   candidates (already stamped with `topicDeletedAt`) only perform local unlinks and are NOT counted.
  * @returns {{ retentionDeletes: Array<Promise>, retentionTally: Record<string, {attempted:number, deleted:number}> }}
  */
 export function sweepStaleClosedTopics(opts) {
@@ -724,6 +725,14 @@ export function sweepStaleClosedTopics(opts) {
     hardCapDays = DEFAULT_HARD_CAP_DAYS,
     maxDeletions = DEFAULT_MAX_DELETIONS,
   } = opts;
+
+  const resolvedOpts = {
+    ...opts,
+    now,
+    retentionDays,
+    hardCapDays,
+    maxDeletions,
+  };
 
   const result = { retentionDeletes: [], retentionTally: {} };
 
@@ -757,7 +766,7 @@ export function sweepStaleClosedTopics(opts) {
       if (!Array.isArray(candidate.events)) continue;
       const events = candidate.events;
 
-      if (!isDeletable({ meta, events }, opts, blocklist)) continue;
+      if (!isDeletable({ meta, events }, resolvedOpts, blocklist)) continue;
 
       const identity = captureIdentity(meta);
       const hasTopicDeletedAt = meta.topicDeletedAt != null;
@@ -767,7 +776,7 @@ export function sweepStaleClosedTopics(opts) {
       }
 
       result.retentionDeletes.push(
-        deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, result.retentionTally)
+        deleteCandidate(candidate, identity, hasTopicDeletedAt, resolvedOpts, result.retentionTally)
       );
     } catch {
       // fail-open: one malformed candidate never aborts the sweep
