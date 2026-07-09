@@ -151,13 +151,17 @@ function defaultPrExists(gh) {
 }
 
 const PR_OPEN_FETCH_LIMIT = 100;
+const REPO_NAME_TOKEN = /^[A-Za-z0-9._-]+$/;
 
 /**
  * @description Builds a `project -> {owner, repo}` index ONCE from config.projects, backfilling
  * each entry from the fleet-level owner/repo at construction (entry.owner ?? config.owner,
  * entry.repo ?? config.repo). The legacy case (projects[] exists but lacks owner/repo) is
- * backfilled exactly once here. An absent/empty projects[] leaves the index empty; the caller
- * falls back to the fleet-level owner/repo to preserve today's single-repo behavior.
+ * backfilled exactly once here. Entries with a malformed or non-string project name, owner, or repo
+ * are skipped and therefore resolve to `null` at resolveRepoScope, letting the existing fail-closed
+ * / fail-open behavior for an unknown project take over. An absent/empty projects[] leaves the
+ * index empty; the caller falls back to the fleet-level owner/repo to preserve today's single-repo
+ * behavior.
  * @param {object} config
  * @returns {Map<string, {owner: string, repo: string}>}
  */
@@ -165,15 +169,22 @@ function buildProjectRepoIndex(config) {
   const index = new Map();
   if (Array.isArray(config.projects)) {
     for (const entry of config.projects) {
-      index.set(entry.project, {
-        owner: entry.owner ?? config.owner,
-        repo: entry.repo ?? config.repo,
-      });
+      const owner = entry.owner ?? config.owner;
+      const repo = entry.repo ?? config.repo;
+      if (
+        typeof entry.project !== "string" ||
+        typeof owner !== "string" ||
+        !REPO_NAME_TOKEN.test(owner) ||
+        typeof repo !== "string" ||
+        !REPO_NAME_TOKEN.test(repo)
+      ) {
+        continue;
+      }
+      index.set(entry.project, { owner, repo });
     }
   }
   return index;
 }
-
 
 /**
  * @description Builds the real prOpen seam for the orphan-topic sweep: true iff the issue has an
@@ -192,19 +203,13 @@ function buildProjectRepoIndex(config) {
  *
  * MEMOIZED per owner/repo slug: one gh fetch per distinct repo per sweep, not one per
  * orphan-candidate run. The predicate is constructed once per runReaper call and closed over a
- * `Map<slug, cacheEntry>`. Supports both the legacy single-repo call shape
- * `(spawn, owner, repo)` and the multi-repo shape `(spawn, resolveScope)` where resolveScope
- * receives the project and returns `{owner, repo} | null`.
+ * `Map<slug, cacheEntry>`. Receives a `resolveScope` function that returns `{owner, repo} | null`
+ * for a project.
  * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
- * @param {string | ((project: string) => {owner: string, repo: string} | null)} ownerOrResolver
- * @param {string} [repo]
+ * @param {(project: string) => {owner: string, repo: string} | null} resolveScope
  * @returns {(issueNumber: number, project?: string) => boolean}
  */
-function makeDefaultPrOpen(spawn, ownerOrResolver, repo) {
-  const resolveScope =
-    typeof ownerOrResolver === "function"
-      ? ownerOrResolver
-      : () => ({ owner: ownerOrResolver, repo });
+function makeDefaultPrOpen(spawn, resolveScope) {
   // Map keyed by owner/repo slug; both the gh-outage fail-open and the >= PR_OPEN_FETCH_LIMIT
   // fail-open are per slug so repo A's cached PR list never answers repo B's query (C3).
   const cache = new Map();
@@ -484,8 +489,9 @@ export function runReaper(config, deps = {}) {
   // projects[] falls back to the fleet-level owner/repo to preserve today's single-repo behavior.
   const repoIndex = buildProjectRepoIndex(config);
   const fleetRepo = { owner: config.owner, repo: config.repo };
+  const hasDeclaredProjects = Array.isArray(config.projects) && config.projects.length > 0;
   function resolveRepoScope(project) {
-    if (repoIndex.size === 0) return fleetRepo;
+    if (!hasDeclaredProjects) return fleetRepo;
     return repoIndex.get(project) ?? null;
   }
 
