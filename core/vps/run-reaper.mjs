@@ -207,29 +207,176 @@ function makeDefaultPrOpen(spawn, owner, repo) {
   };
 }
 
-/** @description Scaffold — the completed-worktree sweep's issue-state probe. */
-export function makeDefaultIssueClosed() {
-  throw new Error("not implemented");
+/**
+ * @description Builds the real issueClosed seam for the completed-worktree sweep: true iff the
+ * issue's state is CLOSED, false iff OPEN, null on any gh failure or unparseable stdout. Uses the
+ * RAW spawn seam (spawnSync shape {status, stdout, error}) — NOT the normalized gh/ghExec seam,
+ * which returns [] on both a gh error and a genuine empty result. A gh outage must map to null
+ * (unknown) so the prune fails closed, never to a false that could authorize a branch deletion.
+ * issueClosed NEVER authorizes a branch deletion on its own — it only satisfies `concluded`.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {(issueNumber: number) => boolean | null}
+ */
+export function makeDefaultIssueClosed(spawn, owner, repo) {
+  return (issueNumber) => {
+    let res;
+    try {
+      res = spawn(
+        "gh",
+        ["issue", "view", String(issueNumber), "--repo", `${owner}/${repo}`, "--json", "state"],
+        { encoding: "utf8" }
+      );
+    } catch {
+      return null;
+    }
+    if (!res || res.status !== 0 || res.error) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(res.stdout);
+    } catch {
+      return null;
+    }
+    if (parsed && parsed.state === "CLOSED") return true;
+    if (parsed && parsed.state === "OPEN") return false;
+    return null;
+  };
 }
 
-/** @description Scaffold — the completed-worktree sweep's merged-PR probe. */
-export function makeDefaultPrMerged() {
-  throw new Error("not implemented");
+/**
+ * @description Builds the real prMerged seam for the completed-worktree sweep: true iff a MERGED
+ * PR exists for head branch harness/<issueNumber>, false iff none, null on any gh failure. Uses
+ * the RAW spawn seam so a gh outage maps to null (unknown) — the LOAD-BEARING merged signal under
+ * squash-merge (the merged branch is NOT an ancestor of main, so branchMerged is false for
+ * legitimately merged work). prMerged===true alone satisfies both workPreserved and concluded.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {(issueNumber: number) => boolean | null}
+ */
+export function makeDefaultPrMerged(spawn, owner, repo) {
+  return (issueNumber) => {
+    let res;
+    try {
+      res = spawn(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--repo",
+          `${owner}/${repo}`,
+          "--head",
+          `harness/${issueNumber}`,
+          "--state",
+          "merged",
+          "--json",
+          "number",
+        ],
+        { encoding: "utf8" }
+      );
+    } catch {
+      return null;
+    }
+    if (!res || res.status !== 0 || res.error) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(res.stdout);
+    } catch {
+      return null;
+    }
+    return Array.isArray(parsed) && parsed.length > 0;
+  };
 }
 
-/** @description Scaffold — the completed-worktree sweep's branch-ancestry probe. */
-export function makeDefaultBranchMerged() {
-  throw new Error("not implemented");
+/**
+ * @description Builds the real branchMerged seam: `git -C <projectRoot> merge-base --is-ancestor
+ * <branch> main`. Exit 0 -> true (branch is an ancestor of main), exit 1 -> false (not an
+ * ancestor), ANYTHING else (e.g. 128 for unrelated histories) -> null (unknown) so the prune fails
+ * closed rather than reading an unrelated-history error as 'not an ancestor'. A spawn throw also
+ * maps to null. NOT load-bearing under squash-merge (prMerged is the real merged signal) — kept as
+ * a conservative extra workPreserved signal.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @returns {(branch: string, projectRoot: string) => boolean | null}
+ */
+export function makeDefaultBranchMerged(spawn) {
+  return (branch, projectRoot) => {
+    let res;
+    try {
+      res = spawn(
+        "git",
+        ["-C", projectRoot, "merge-base", "--is-ancestor", branch, "main"],
+        { encoding: "utf8" }
+      );
+    } catch {
+      return null;
+    }
+    if (!res || res.error) return null;
+    if (res.status === 0) return true;
+    if (res.status === 1) return false;
+    return null;
+  };
 }
 
-/** @description Scaffold — the completed-worktree sweep's unmerged-work/dirty inventory probe. */
-export function makeDefaultInspectWorktree() {
-  throw new Error("not implemented");
+/**
+ * @description Builds the real inspectWorktree seam: `git log --oneline main..<branch>` for the
+ * unmerged commits (workPreserved when length===0) and `git status --porcelain` for the
+ * dirty/untracked inventory (recorded on the action descriptor). Returns EXACTLY
+ * { unmergedCommits: string[], dirtyPaths: string[] } or null on any git failure — a wrong field
+ * name or shape throws into reaper()'s per-worktree swallowing try/catch and silently never prunes
+ * (fail closed). Both git calls run `-C <worktreePath>` so the status reflects THIS worktree.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @returns {(worktree: { branch: string, worktreePath: string, projectRoot: string }) => { unmergedCommits: string[], dirtyPaths: string[] } | null}
+ */
+export function makeDefaultInspectWorktree(spawn) {
+  const splitLines = (s) => (s ?? "").split("\n").filter((line) => line !== "");
+  return (worktree) => {
+    let logRes, statusRes;
+    try {
+      logRes = spawn(
+        "git",
+        ["-C", worktree.worktreePath, "log", "--oneline", `main..${worktree.branch}`],
+        { encoding: "utf8" }
+      );
+      statusRes = spawn(
+        "git",
+        ["-C", worktree.worktreePath, "status", "--porcelain"],
+        { encoding: "utf8" }
+      );
+    } catch {
+      return null;
+    }
+    if (!logRes || logRes.status !== 0 || logRes.error) return null;
+    if (!statusRes || statusRes.status !== 0 || statusRes.error) return null;
+    return {
+      unmergedCommits: splitLines(logRes.stdout),
+      dirtyPaths: splitLines(statusRes.stdout),
+    };
+  };
 }
 
-/** @description Scaffold — force-aware `git worktree remove` injected into the reaper logic. */
-export function defaultGitWorktreeRemove() {
-  throw new Error("not implemented");
+/**
+ * @description Best-effort default for removing a worktree, injected into the reaper logic as
+ * opts.gitWorktreeRemove. Grown from the two-arg contract to accept an optional third { force }
+ * argument: appends `--force` to `git worktree remove` ONLY when force is truthy. The existing
+ * two-argument call sites (orphan/crash cleanup) pass no opts and stay unchanged — a dirty
+ * worktree is deliberately left intact by a plain `git worktree remove` (#ac-1.3 preservation).
+ * The safe completed-cleaned path passes { force: true }. The spawn seam is the 4th arg (defaulting
+ * to the real spawnSync) so the REAL default can be driven by a fake spawn in tests.
+ * @param {string} worktreePath
+ * @param {string} projectRoot
+ * @param {{ force?: boolean }} [opts]
+ * @param {(cmd: string, args: string[], opts2: object) => any} [spawn]
+ */
+export function defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn = spawnSync) {
+  try {
+    const argv = ["-C", projectRoot, "worktree", "remove"];
+    if (opts && opts.force) argv.push("--force");
+    argv.push("--", worktreePath);
+    spawn("git", argv, { encoding: "utf8", stdio: "pipe" });
+  } catch {
+    // best-effort worktree remove
+  }
 }
 
 export function runReaper(config, deps = {}) {
@@ -249,10 +396,28 @@ export function runReaper(config, deps = {}) {
 
   const gh = scopedGh(config.owner, config.repo, ghExec);
   const prExists = deps.prExists ?? defaultPrExists(gh);
+  // Raw spawn seam (spawnSync shape {status, stdout, error}) shared by every completed-sweep probe
+  // below. Used INSTEAD of the normalized gh/ghExec seam because that seam returns [] on BOTH a gh
+  // error and a genuine empty result — an outage must map to null (unknown, fail-closed prune),
+  // never to a false that would authorize a branch deletion.
+  const spawn = deps.spawn ?? spawnSync;
   // Open-PR predicate for the orphan-topic sweep (F2). FAIL-OPEN on a gh outage, memoized per sweep,
   // --state open + --json body + no --head so a typed-branch body-link PR is still recognized.
   // DISTINCT from prExists (open-OR-merged, --head harness/<N>) above — left unchanged.
-  const prOpen = deps.prOpen ?? makeDefaultPrOpen(deps.spawn ?? spawnSync, config.owner, config.repo);
+  const prOpen = deps.prOpen ?? makeDefaultPrOpen(spawn, config.owner, config.repo);
+
+  // Completed-worktree sweep (behavior d) tri-state probes — all injectable, all fail closed
+  // (null on any failure) so the pure-logic prune in reaper.mjs never deletes on uncertainty.
+  const issueClosed = deps.issueClosed ?? makeDefaultIssueClosed(spawn, config.owner, config.repo);
+  const prMerged = deps.prMerged ?? makeDefaultPrMerged(spawn, config.owner, config.repo);
+  const branchMerged = deps.branchMerged ?? makeDefaultBranchMerged(spawn);
+  const inspectWorktree = deps.inspectWorktree ?? makeDefaultInspectWorktree(spawn);
+  // Force-aware worktree remove: the safe completed-cleaned path passes { force: true }; the
+  // orphan/crash paths pass no opts (two-arg contract unchanged). Bound to the raw spawn seam so a
+  // fake spawn can drive the REAL default in tests.
+  const gitWorktreeRemove =
+    deps.gitWorktreeRemove ??
+    ((worktreePath, projectRoot, opts) => defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn));
 
   // The zero-arg listWorktrees seam handed to the reaper logic: delegates to the injected producer
   // over config.projects (every project the shared cron sweeps in one invocation), bound to the
@@ -299,6 +464,11 @@ export function runReaper(config, deps = {}) {
     closeForumTopic: closeForumTopicFn,
     updateMeta: closeForumTopicFn ? updateMetaSeam : undefined,
     prOpen,
+    issueClosed,
+    prMerged,
+    branchMerged,
+    inspectWorktree,
+    gitWorktreeRemove,
   });
 
   // reaper returns the actions array with a `topicCloses` property attached; a fake/injected
@@ -310,6 +480,7 @@ export function runReaper(config, deps = {}) {
     "watchdog-killed": "reaper-killed",
     "crash-recovered": "reaper-recovered",
     "orphan-cleaned": "reaper-orphan-cleaned",
+    "completed-cleaned": "reaper-orphan-cleaned",
   };
   for (const a of actions) {
     try {
