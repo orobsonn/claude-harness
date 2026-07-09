@@ -615,11 +615,14 @@ async function classifyTelegramError(res) {
 /**
  * @description Wraps Telegram `createForumTopic`. The NAME is PLAIN TEXT: truncated to ≤128 code
  * points and NEVER HTML-escaped (Telegram does not parse_mode the topic name). Fail-open: any error
- * → `{ ok:false }`, never throws. On success resolves `{ ok:true, threadId }` with the new topic's
- * message_thread_id.
+ * → `{ ok:false }` (no chatId, no extra keys), never throws. On success resolves
+ * `{ ok:true, threadId, chatId }` — `chatId` is `opts.config.chatId`, the chat the topic was actually
+ * minted against (load-bearing for #ac-1.2: on a `.dev.vars`-only deployment `config.notify.chatId`
+ * is undefined while the topic is minted against the resolved `TELEGRAM_CHAT_ID` fallback — only the
+ * seam's return knows the true chat).
  * @param {{ name: string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
- * @returns {Promise<{ ok: boolean, threadId?: number }>}
+ * @returns {Promise<{ ok: boolean, threadId?: number, chatId?: number|string }>}
  */
 export async function createForumTopic({ name } = {}, opts = {}) {
   const payload = {
@@ -630,7 +633,7 @@ export async function createForumTopic({ name } = {}, opts = {}) {
   if (!result.ok) {
     return { ok: false };
   }
-  return { ok: true, threadId: result.data?.result?.message_thread_id };
+  return { ok: true, threadId: result.data?.result?.message_thread_id, chatId: opts?.config?.chatId };
 }
 
 /**
@@ -651,13 +654,22 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
 
 /**
  * @description Wraps Telegram `deleteForumTopic` — IRREVERSIBLE: it destroys the topic and every
- * message in it. Fail-open: any error → `{ ok:false, reason }`, never throws, never retries.
+ * message in it. Mirrors `closeForumTopic` EXACTLY (same `callTelegramMethod` seam, same bounded-error
+ * classification, same redaction contract). Fail-open: never throws, never retries. Resolves `{ ok:true }`
+ * on 2xx, `{ ok:false, reason:"thread-not-found" }` when the topic is already gone, and
+ * `{ ok:false, reason:"transient" }` otherwise. A failure logs ONLY `{ op:"deleteForumTopic",
+ * type:"forum-topic", status }` — the token/URL/body never reach a log line.
  * @param {{ threadId: number|string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
  * @returns {Promise<{ ok: boolean, reason?: string }>}
  */
 export async function deleteForumTopic({ threadId } = {}, opts = {}) {
-  throw new Error("not implemented");
+  const payload = {
+    chat_id: opts?.config?.chatId,
+    message_thread_id: threadId,
+  };
+  const result = await callTelegramMethod("deleteForumTopic", payload, opts, "deleteForumTopic");
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
 // --- task-5: cron-side outbox drain.
