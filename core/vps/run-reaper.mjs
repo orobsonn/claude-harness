@@ -24,6 +24,9 @@
  * @param {string} config.homeDir
  * @param {Array<{project: string, projectRoot: string, stateDir: string}>} [config.projects] -
  *   every project the shared reaper sweeps in one invocation.
+ * @param {string} [config.defaultBranch] - default "main". Threaded into the workPreserved probes
+ *   (branchMerged / inspectWorktree) so the completed sweep stays live on fleets whose default
+ *   branch is not main.
  * @param {object} [deps] - Injectable seams; each defaults to the real wiring when omitted.
  * @param {(opts: object) => void} [deps.reaper] - default: real reaper from ./reaper.mjs
  * @param {(opts: object) => Array<object>} [deps.listWorktrees] - default: real listWorktrees from ./list-worktrees.mjs
@@ -291,21 +294,24 @@ export function makeDefaultPrMerged(spawn, owner, repo) {
 
 /**
  * @description Builds the real branchMerged seam: `git -C <projectRoot> merge-base --is-ancestor
- * <branch> main`. Exit 0 -> true (branch is an ancestor of main), exit 1 -> false (not an
- * ancestor), ANYTHING else (e.g. 128 for unrelated histories) -> null (unknown) so the prune fails
- * closed rather than reading an unrelated-history error as 'not an ancestor'. A spawn throw also
- * maps to null. NOT load-bearing under squash-merge (prMerged is the real merged signal) — kept as
- * a conservative extra workPreserved signal.
+ * <branch> <defaultBranch>`. Exit 0 -> true (branch is an ancestor of the default branch), exit 1
+ * -> false (not an ancestor), ANYTHING else (e.g. 128 for unrelated histories) -> null (unknown)
+ * so the prune fails closed rather than reading an unrelated-history error as 'not an ancestor'. A
+ * spawn throw also maps to null. NOT load-bearing under squash-merge (prMerged is the real merged
+ * signal) — kept as a conservative extra workPreserved signal. The default branch is threaded from
+ * config (default "main") so the probe stays live on fleets whose default branch is not main.
  * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @param {string} [defaultBranch] - default "main"
  * @returns {(branch: string, projectRoot: string) => boolean | null}
  */
-export function makeDefaultBranchMerged(spawn) {
+export function makeDefaultBranchMerged(spawn, defaultBranch = "main") {
   return (branch, projectRoot) => {
+    if (!/^harness\/\d+$/.test(branch)) return null;
     let res;
     try {
       res = spawn(
         "git",
-        ["-C", projectRoot, "merge-base", "--is-ancestor", branch, "main"],
+        ["-C", projectRoot, "merge-base", "--is-ancestor", branch, defaultBranch],
         { encoding: "utf8" }
       );
     } catch {
@@ -319,23 +325,28 @@ export function makeDefaultBranchMerged(spawn) {
 }
 
 /**
- * @description Builds the real inspectWorktree seam: `git log --oneline main..<branch>` for the
- * unmerged commits (workPreserved when length===0) and `git status --porcelain` for the
+ * @description Builds the real inspectWorktree seam: `git log --oneline <defaultBranch>..<branch>`
+ * for the unmerged commits (workPreserved when length===0) and `git status --porcelain` for the
  * dirty/untracked inventory (recorded on the action descriptor). Returns EXACTLY
  * { unmergedCommits: string[], dirtyPaths: string[] } or null on any git failure — a wrong field
  * name or shape throws into reaper()'s per-worktree swallowing try/catch and silently never prunes
- * (fail closed). Both git calls run `-C <worktreePath>` so the status reflects THIS worktree.
+ * (fail closed). Both git calls run `-C <worktreePath>` so the status reflects THIS worktree. The
+ * default branch is threaded from config (default "main") so the probe stays live on fleets whose
+ * default branch is not main. A non-string stdout maps to null (unknown, fail-closed) — never to
+ * an empty unmergedCommits that would authorize a branch delete.
  * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
+ * @param {string} [defaultBranch] - default "main"
  * @returns {(worktree: { branch: string, worktreePath: string, projectRoot: string }) => { unmergedCommits: string[], dirtyPaths: string[] } | null}
  */
-export function makeDefaultInspectWorktree(spawn) {
+export function makeDefaultInspectWorktree(spawn, defaultBranch = "main") {
   const splitLines = (s) => (s ?? "").split("\n").filter((line) => line !== "");
   return (worktree) => {
+    if (!/^harness\/\d+$/.test(worktree.branch)) return null;
     let logRes, statusRes;
     try {
       logRes = spawn(
         "git",
-        ["-C", worktree.worktreePath, "log", "--oneline", `main..${worktree.branch}`],
+        ["-C", worktree.worktreePath, "log", "--oneline", `${defaultBranch}..${worktree.branch}`],
         { encoding: "utf8" }
       );
       statusRes = spawn(
@@ -348,6 +359,7 @@ export function makeDefaultInspectWorktree(spawn) {
     }
     if (!logRes || logRes.status !== 0 || logRes.error) return null;
     if (!statusRes || statusRes.status !== 0 || statusRes.error) return null;
+    if (typeof logRes.stdout !== "string" || typeof statusRes.stdout !== "string") return null;
     return {
       unmergedCommits: splitLines(logRes.stdout),
       dirtyPaths: splitLines(statusRes.stdout),
@@ -376,6 +388,27 @@ export function defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn 
     spawn("git", argv, { encoding: "utf8", stdio: "pipe" });
   } catch {
     // best-effort worktree remove
+  }
+}
+
+/**
+ * @description Best-effort default for deleting the orphan branch, injected into the reaper logic
+ * as opts.gitBranchDelete. Runs `git -C <projectRoot> branch -D -- <branch>` with errors swallowed.
+ * The spawn seam is the 3rd arg (defaulting to the real spawnSync) so the REAL default can be driven
+ * by a fake spawn in tests — mirroring defaultGitWorktreeRemove so `git branch -D` no longer escapes
+ * the injected spawn seam.
+ * @param {string} branch
+ * @param {string} projectRoot
+ * @param {(cmd: string, args: string[], opts: object) => any} [spawn]
+ */
+export function defaultGitBranchDelete(branch, projectRoot, spawn = spawnSync) {
+  try {
+    spawn("git", ["-C", projectRoot, "branch", "-D", "--", branch], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  } catch {
+    // best-effort branch delete
   }
 }
 
@@ -410,14 +443,22 @@ export function runReaper(config, deps = {}) {
   // (null on any failure) so the pure-logic prune in reaper.mjs never deletes on uncertainty.
   const issueClosed = deps.issueClosed ?? makeDefaultIssueClosed(spawn, config.owner, config.repo);
   const prMerged = deps.prMerged ?? makeDefaultPrMerged(spawn, config.owner, config.repo);
-  const branchMerged = deps.branchMerged ?? makeDefaultBranchMerged(spawn);
-  const inspectWorktree = deps.inspectWorktree ?? makeDefaultInspectWorktree(spawn);
+  const branchMerged =
+    deps.branchMerged ?? makeDefaultBranchMerged(spawn, config.defaultBranch ?? "main");
+  const inspectWorktree =
+    deps.inspectWorktree ?? makeDefaultInspectWorktree(spawn, config.defaultBranch ?? "main");
   // Force-aware worktree remove: the safe completed-cleaned path passes { force: true }; the
   // orphan/crash paths pass no opts (two-arg contract unchanged). Bound to the raw spawn seam so a
   // fake spawn can drive the REAL default in tests.
   const gitWorktreeRemove =
     deps.gitWorktreeRemove ??
     ((worktreePath, projectRoot, opts) => defaultGitWorktreeRemove(worktreePath, projectRoot, opts, spawn));
+  // Best-effort branch delete, bound to the raw spawn seam so a fake spawn observes the branch
+  // deletion too (mirrors gitWorktreeRemove). Without this, `git branch -D` falls through to
+  // reaper.mjs's own default and bypasses deps.spawn.
+  const gitBranchDelete =
+    deps.gitBranchDelete ??
+    ((branch, projectRoot) => defaultGitBranchDelete(branch, projectRoot, spawn));
 
   // The zero-arg listWorktrees seam handed to the reaper logic: delegates to the injected producer
   // over config.projects (every project the shared cron sweeps in one invocation), bound to the
@@ -469,6 +510,7 @@ export function runReaper(config, deps = {}) {
     branchMerged,
     inspectWorktree,
     gitWorktreeRemove,
+    gitBranchDelete,
   });
 
   // reaper returns the actions array with a `topicCloses` property attached; a fake/injected
