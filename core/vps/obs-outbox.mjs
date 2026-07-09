@@ -14,6 +14,7 @@ const INITIAL_THREAD_ID = null;
 const CLOSED_STATUS = "closed";
 const AWAITING_REVIEW_STATUS = "awaiting-review";
 const TEMP_SUFFIX = `.${process.pid}.tmp`;
+const FOSSIL_KEYS = ["closedAt", "topicDeletedAt"];
 // PIPE_BUF (4096 on Linux) is the largest write guaranteed atomic per-line across concurrent
 // writers. Appends beyond it can tear a MIDDLE line under contention — best-effort: we still
 // append, accepting the documented fail-open silent-drop on a torn middle line.
@@ -49,6 +50,18 @@ function atomicWriteMeta(metaPath, meta) {
   }
 }
 
+/** @description True when the meta carries any fossil timestamp (closedAt/topicDeletedAt). */
+function hasFossilTimestamps(meta) {
+  return FOSSIL_KEYS.some((key) => key in meta);
+}
+
+/** @description Returns a shallow copy of the meta with the fossil timestamps removed. */
+function stripFossilTimestamps(meta) {
+  const next = { ...meta };
+  for (const key of FOSSIL_KEYS) delete next[key];
+  return next;
+}
+
 /**
  * @description Creates (or idempotently reuses) the outbox meta for an issue. When a non-closed
  * meta already exists it is reused AS-IS — events and cursor are NEVER reset. When the prior run
@@ -66,12 +79,13 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
   if (existing && existing.status !== CLOSED_STATUS) {
     // DISTINCT branch for awaiting-review: reuse-with-truncate
     if (existing.status === AWAITING_REVIEW_STATUS) {
-      // Preserve threadId, reset cursor to 0, truncate events log, set status to active
-      const updatedMeta = {
+      // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
+      // and strip the fossil timestamps (closedAt/topicDeletedAt) off a meta returning to active.
+      const updatedMeta = stripFossilTimestamps({
         ...existing,
         cursor: INITIAL_CURSOR,
         status: INITIAL_STATUS,
-      };
+      });
       atomicWriteMeta(metaPath, updatedMeta);
 
       // Truncate the events log - fail-open (mirror the existing try/catch around the fresh-branch truncate)
@@ -85,7 +99,11 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
     }
 
     // Idempotent reuse: never reset events/cursor/threadId on a still-active (or fallback/orphan) run.
-    // The reuse branch MUST NEVER touch the events log.
+    // The reuse branch MUST NEVER touch the events log. It only strips a fossil timestamp if one is
+    // actually present; a fossil-free reuse is byte-write-free (no rewrite at all).
+    if (hasFossilTimestamps(existing)) {
+      atomicWriteMeta(metaPath, stripFossilTimestamps(existing));
+    }
     return metaPath;
   }
   const meta = {
@@ -203,12 +221,23 @@ export function updateMeta(metaPath, partial) {
 
 /**
  * @description Compare-and-swap partial merge: applies `partial` only when the meta currently on disk
- * still matches every key in `expected`. Returns true when the write happened, false otherwise.
+ * still matches every key in `expected` (String-normalized compare). Returns true when the write
+ * happened, false on any divergence or missing meta. Synchronous read-compare-write with NO await
+ * between the re-read and the temp->rename — the residual local-file race is explicitly accepted
+ * (a closed run always takes createRun's fresh branch, so a Telegram delete is safe). Never throws
+ * (the atomic write is fail-open).
  * @param {string} metaPath
  * @param {object} expected
  * @param {object} partial
  * @returns {boolean}
  */
 export function updateMetaIfUnchanged(metaPath, expected, partial) {
-  throw new Error("not implemented");
+  const meta = readMetaRecord(metaPath);
+  if (!meta) return false;
+  for (const key of Object.keys(expected)) {
+    if (!(key in meta) || String(meta[key]) !== String(expected[key])) return false;
+  }
+  Object.assign(meta, partial);
+  atomicWriteMeta(metaPath, meta);
+  return true;
 }
