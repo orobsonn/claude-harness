@@ -613,3 +613,69 @@ test("notifyExit: 'blocked' outcome with no PR STILL closes the forum topic and 
     cleanup();
   }
 });
+
+test("notifyExit: 'blocked' outcome with an open topic stamps closedAt from deps.now() in SECONDS, not milliseconds (#ac-1.11)", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic } = makeFakeCloseForumTopic({ ok: true });
+    const readMeta = makeFakeReadMeta({ status: "active", threadId: 707 });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "blocked", issueNumber: 4201, finding: "x" },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+        now: () => 1700000000,
+      }
+    );
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(closedCall, "updateMeta must be called with a partial whose status === 'closed'");
+    assert.equal(closedCall.partial.closedAt, 1700000000, "closedAt must equal the injected now() value");
+    assert.ok(closedCall.partial.closedAt < 1e12, "closedAt must be in SECONDS (< 1e12), never Date.now() milliseconds");
+  } finally {
+    cleanup();
+  }
+});
+
+test("notifyExit: 'failed' outcome with no forum topic (threadId null) stamps closedAt from deps.now() in SECONDS and never calls closeForumTopic (#ac-1.11)", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic, calls: closeCalls } = makeFakeCloseForumTopic({ ok: true });
+    const readMeta = makeFakeReadMeta({ status: "active", threadId: null });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "failed", issueNumber: 4202 },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+        now: () => 1700000000,
+      }
+    );
+
+    assert.equal(closeCalls.length, 0, "closeForumTopic must never be called when no forum topic was ever created (threadId null)");
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(closedCall, "updateMeta must be called with a partial whose status === 'closed'");
+    assert.equal(closedCall.partial.closedAt, 1700000000, "closedAt must equal the injected now() value");
+    assert.ok(closedCall.partial.closedAt < 1e12, "closedAt must be in SECONDS (< 1e12), never Date.now() milliseconds");
+  } finally {
+    cleanup();
+  }
+});

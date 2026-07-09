@@ -940,3 +940,71 @@ test("reaper: sweepMergedWorktrees KEEPS the branch when the issue's PR is still
   assert.ok(removed, "the worktree must still be removed even with an open PR");
   assert.notEqual(removed.opts?.force, true, "an open PR keep-branch removal must NOT pass { force: true }");
 });
+
+test("reaper: sweepOrphanTopics stamps closedAt from opts.now() in SECONDS on an optimistic close (#ac-1.11)", () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-903.json",
+    meta: {
+      issueNumber: 903,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "active",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: true });
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [], // /gone is absent from the live set -> genuine orphan candidate
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+      now: () => 1700000000,
+    })
+  );
+
+  const closedCall = updateCalls.find((c) => c.partial && c.partial.status === "closed");
+  assert.ok(closedCall, "the optimistic close must write status:'closed' via updateMeta");
+  assert.equal(closedCall.partial.closedAt, 1700000000, "closedAt must equal the injected now() value");
+  assert.ok(closedCall.partial.closedAt < 1e12, "closedAt must be in SECONDS (< 1e12), never Date.now() milliseconds");
+});
+
+test("reaper: sweepOrphanTopics reverts a FAILED close to the captured prior status AND clears the closedAt fossil (#ac-1.7)", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-904.json",
+    meta: {
+      issueNumber: 904,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "awaiting-review",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: false }); // failed close ack
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [], // /gone is absent from the live set -> genuine orphan candidate
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+      now: () => 1700000000,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  const revertCall = updateCalls[updateCalls.length - 1];
+  assert.deepEqual(
+    revertCall.partial,
+    { status: "awaiting-review", closedAt: null },
+    "the revert partial must restore the captured prior status AND clear the closedAt fossil, nothing else"
+  );
+});
