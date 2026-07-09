@@ -122,6 +122,15 @@ const DEFAULT_LIVENESS_CEILING_HOURS = 2;
 const DEFAULT_REGISTRATION_GRACE_SECONDS = 120;
 const DEFAULT_RETRY_CEILING_K = 2;
 const SECONDS_PER_HOUR = 3600;
+
+/**
+ * @description Injectable clock seam returning epoch SECONDS — matches run-cron-review.mjs's
+ * `Math.floor(Date.now()/1000)`. Stamped as `closedAt` on the optimistic close so the retention
+ * sweep can measure age; NEVER raw Date.now() milliseconds (a ms value passes Number.isFinite and
+ * breaks the age gate). Default is the real clock; reaper() threads `opts.now` through, tests inject
+ * a fixed value.
+ */
+const defaultNow = () => Math.floor(Date.now() / 1000);
 const LABEL_IN_PROGRESS = "harness:in-progress";
 const LABEL_IN_REVIEW = "harness:in-review";
 const LABEL_READY = "harness:ready";
@@ -411,7 +420,7 @@ function actionOf(worktree, action) {
  * @returns {Array<Promise>} close promises for mainReaper to await.
  */
 function sweepOrphanTopics(opts) {
-  const { listObsRuns, liveWorktreePaths, closeForumTopic, updateMeta, prOpen } = opts;
+  const { listObsRuns, liveWorktreePaths, closeForumTopic, updateMeta, prOpen, now = defaultNow } = opts;
   const topicCloses = [];
   if (
     typeof listObsRuns !== "function" ||
@@ -464,15 +473,19 @@ function sweepOrphanTopics(opts) {
       // captured priorStatus when the ack is missing/failed: a transient 429/timeout leaves the run
       // back where it was for the next cycle to retry instead of a permanent on-disk 'closed'
       // orphan. The frozen orphan-sweep test pins the synchronous 'closed' write (its close fake
-      // resolves {ok:true} -> no revert).
-      updateMeta(run.metaPath, { status: "closed" });
+      // resolves {ok:true} -> no revert). closedAt is stamped in epoch SECONDS via the injected now()
+      // seam so the retention sweep can measure age; on revert it is cleared to null so no fossil
+      // survives a failed close (a lingering closedAt on a non-closed run would either delete a live
+      // topic or skew retention). status:'closed' is preserved alongside closedAt — the test asserts
+      // partial.status==='closed'.
+      updateMeta(run.metaPath, { status: "closed", closedAt: now() });
       if (closePromise && typeof closePromise.then === "function") {
         closePromise
           .then((r) => {
-            if (!r || !r.ok) updateMeta(run.metaPath, { status: priorStatus });
+            if (!r || !r.ok) updateMeta(run.metaPath, { status: priorStatus, closedAt: null });
           })
           .catch(() => {
-            updateMeta(run.metaPath, { status: priorStatus });
+            updateMeta(run.metaPath, { status: priorStatus, closedAt: null });
           });
       }
     } catch {
