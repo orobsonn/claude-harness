@@ -644,6 +644,13 @@ export function installProject(inputs, deps = {}) {
         if (!entry || !entry.project || !entry.owner || !entry.repo || !entry.projectRoot || !entry.stateDir) {
           throw new Error("fleet projects entry missing required fields");
         }
+        // A malformed (present but invalid) owner/repo must never reach disk: the reaper builds
+        // `--repo ${entry.owner}/${entry.repo}` for probes that authorize `git branch -D` and
+        // `git worktree remove --force`. A legacy fleet whose top-level owner/repo were hand-edited
+        // backfills that value onto every preserved sibling — reject it before any write.
+        if (!NAME_TOKEN.test(entry.owner) || !NAME_TOKEN.test(entry.repo)) {
+          throw new Error("fleet projects entry has invalid owner or repo");
+        }
       }
 
       // Render BEFORE any write so assertCronSafe (an unsafe nodeBin/scriptDir/config path) throws
@@ -679,8 +686,9 @@ export function installProject(inputs, deps = {}) {
  * install lock: reads the crontab and removes the project block. If nothing changed (an
  * unregistered/ghost project) it early-returns with ZERO writes — an orphaned reaper is retained
  * byte-identical. Otherwise, if no projects remain it also removes the reaper block and DELETES the
- * fleet config file (a stale empty fleet with the old owner/repo would block a later unrelated
- * install); if projects remain it updates the fleet in place. Writes in order — crontab, fleet
+ * fleet config file so a stale top-level owner/repo (the legacy fallback) does not linger pointing
+ * at an uninstalled repo that the reaper would still use for gh probes; if projects remain it
+ * updates the fleet in place. Writes in order — crontab, fleet
  * (delete-or-update), per-project config removal (force).
  * @param {string} project
  * @param {object} [deps]
