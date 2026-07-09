@@ -370,10 +370,13 @@ export function listRegisteredProjects(crontabText) {
 
 /**
  * @description Builds the reconciled fleet config for the reaper. A null existing fleet seeds a
- * fresh one from coords. An existing fleet whose top owner/repo differs from coords throws BEFORE
- * any write (single-repo invariant) and never mutates its input. The projects[] array is reconciled
- * to only currently-registered projects plus the one being installed (ghosts whose crontab block is
- * absent are dropped), upserting the current project in place; top owner/repo stay constant.
+ * fresh one from coords. The fleet is multi-repo: top-level owner/repo are legacy fallbacks, not
+ * install gates, so an existing fleet whose top owner/repo differ from coords is NOT an error.
+ * The projects[] array is reconciled to only currently-registered projects plus the one being
+ * installed (ghosts whose crontab block is absent are dropped), upserting the current project in
+ * place with its OWN owner/repo. Preserved siblings keep their own owner/repo when present, and
+ * are backfilled from the fleet's top-level owner/repo only when missing (legacy path).
+ * Never mutates its input.
  * @param {object|null} existingFleet
  * @param {string[]} registeredProjects
  * @param {object} coords
@@ -382,6 +385,8 @@ export function listRegisteredProjects(crontabText) {
 export function reconcileFleet(existingFleet, registeredProjects, coords) {
   const currentEntry = {
     project: coords.project,
+    owner: coords.owner,
+    repo: coords.repo,
     projectRoot: coords.projectRoot,
     stateDir: coords.stateDir,
   };
@@ -401,9 +406,8 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
     };
   }
 
-  if (existingFleet.owner !== coords.owner) throw new Error("owner mismatch with existing fleet");
-  if (existingFleet.repo !== coords.repo) throw new Error("repo mismatch with existing fleet");
-
+  // Fleet is multi-repo: top-level owner/repo are legacy fallbacks, not install gates.
+  // Each projects[] entry carries its own owner/repo; preserved siblings keep theirs.
   const keep = new Set(registeredProjects);
   keep.add(coords.project);
   const existingProjects = Array.isArray(existingFleet.projects) ? existingFleet.projects : [];
@@ -420,6 +424,8 @@ export function reconcileFleet(existingFleet, registeredProjects, coords) {
     } else {
       reconciled.push({
         project: entry.project,
+        owner: entry.owner ?? existingFleet.owner,
+        repo: entry.repo ?? existingFleet.repo,
         projectRoot: entry.projectRoot,
         stateDir: entry.stateDir,
       });
@@ -591,10 +597,10 @@ export function withInstallLock(homeDir, fn, deps = {}) {
 
 /**
  * @description Installs a project's cron jobs and configs. Validates coords, then under the install
- * lock: reads the crontab, reads the existing fleet, reconciles the fleet (throwing on a repo
- * mismatch BEFORE any write), validates both configs and the projects shape, THEN writes in order —
- * per-project config, fleet config, crontab (project block + reaper block). Any validation/mismatch
- * writes nothing. Never reads .dev.vars or any token.
+ * lock: reads the crontab, reads the existing fleet, reconciles the fleet (multi-repo: the fleet's
+ * top-level owner/repo no longer gate installs), validates both configs and the projects shape,
+ * THEN writes in order — per-project config, fleet config, crontab (project block + reaper block).
+ * Any validation error writes nothing. Never reads .dev.vars or any token.
  * @param {object} inputs
  * @param {object} [deps]
  * @returns {{project:string}}
@@ -635,7 +641,7 @@ export function installProject(inputs, deps = {}) {
       loadConfig(perProjectConfig);
       loadConfig(fleet);
       for (const entry of fleet.projects) {
-        if (!entry || !entry.project || !entry.projectRoot || !entry.stateDir) {
+        if (!entry || !entry.project || !entry.owner || !entry.repo || !entry.projectRoot || !entry.stateDir) {
           throw new Error("fleet projects entry missing required fields");
         }
       }
