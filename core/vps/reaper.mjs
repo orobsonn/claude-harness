@@ -152,7 +152,7 @@ function normalizeWorktreePath(p) {
  */
 function defaultGitBranchDelete(branch, projectRoot) {
   try {
-    spawnSync("git", ["-C", projectRoot, "branch", "-D", branch], { encoding: "utf8", stdio: "pipe" });
+    spawnSync("git", ["-C", projectRoot, "branch", "-D", "--", branch], { encoding: "utf8", stdio: "pipe" });
   } catch {
     // best-effort branch prune
   }
@@ -162,9 +162,12 @@ function defaultGitBranchDelete(branch, projectRoot) {
  * @description Best-effort default for removing a dead holder's worktree. Runs in the target
  * project's repo for the same cross-project safety as defaultGitBranchDelete. Errors are swallowed.
  */
-function defaultGitWorktreeRemove(worktreePath, projectRoot) {
+function defaultGitWorktreeRemove(worktreePath, projectRoot, opts) {
   try {
-    spawnSync("git", ["-C", projectRoot, "worktree", "remove", worktreePath], { encoding: "utf8", stdio: "pipe" });
+    const argv = ["-C", projectRoot, "worktree", "remove"];
+    if (opts && opts.force) argv.push("--force");
+    argv.push("--", worktreePath);
+    spawnSync("git", argv, { encoding: "utf8", stdio: "pipe" });
   } catch {
     // best-effort worktree remove
   }
@@ -277,8 +280,15 @@ function reapCompletedWorktree(worktree, opts) {
     return null;
   }
 
-  const unmergedCommits = Array.isArray(inspection.unmergedCommits) ? inspection.unmergedCommits : [];
-  const dirtyPaths = Array.isArray(inspection.dirtyPaths) ? inspection.dirtyPaths : [];
+  // Fail closed on a malformed inspection: a non-null but partial inspection (e.g. `{}` or
+  // `{ unmergedCommits: null }`) must NOT coerce to length===0 (workPreserved===true) — that would
+  // force-remove the worktree and `git branch -D` a branch that may hold unpushed local-only commits.
+  if (!Array.isArray(inspection.unmergedCommits) || !Array.isArray(inspection.dirtyPaths)) {
+    return null;
+  }
+
+  const unmergedCommits = inspection.unmergedCommits;
+  const dirtyPaths = inspection.dirtyPaths;
   const workPreserved =
     prMergedResult === true || branchMergedResult === true || unmergedCommits.length === 0;
   const concluded = issueClosedResult === true || prMergedResult === true;
