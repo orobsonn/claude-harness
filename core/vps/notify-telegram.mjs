@@ -779,7 +779,7 @@ function criticalBodyLines(event, meta) {
 }
 
 /** @description Sends a pre-rendered HTML message through the Telegram sendMessage endpoint. */
-async function sendRenderedMessage({ config, text, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+export async function sendRenderedMessage({ config, text, fetch: fetchImpl, log = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   const payload = {
     chat_id: config?.chatId,
     message_thread_id: config?.threadId,
