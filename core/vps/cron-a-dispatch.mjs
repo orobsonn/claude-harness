@@ -353,12 +353,22 @@ async function setupObservability({ obs, createForumTopic, issueNumber, title, p
     }
     if (result && result.ok && result.threadId != null) {
       threadId = result.threadId;
+      // Stamp the chatId the topic was ACTUALLY created against — result.chatId, widened onto the
+      // createForumTopic seam's success return by the delete-forum-topic task. NOT opts.notify.chatId
+      // and NOT any locally resolved config: on a .dev.vars-only deployment config.notify.chatId is
+      // undefined while the topic is minted against the resolved TELEGRAM_CHAT_ID fallback, so only
+      // the seam's return knows the true chat. This gives every minted topic a tenant identity so the
+      // retention sweep can gate cross-tenant deletion. When result.chatId == null, write NO chatId
+      // key — the meta then carries no tenant identity and stays permanently un-deletable (the
+      // intended fail-closed; a legacy meta without chatId behaves identically). The stamp rides ONLY
+      // this successful-threadId write; the fallback branch below writes status:'fallback' with no
+      // chatId, and a run reusing an already-open thread is unchanged. Status is reset to 'active' so
+      // a reused run whose meta was previously 'fallback'/'orphan' (a requeue retry) does not keep
+      // routing to the shared topic nor stay sweepable by the reaper — the dedicated topic now exists.
+      const partial = { threadId, status: "active" };
+      if (result.chatId != null) partial.chatId = result.chatId;
       try {
-        // Reset status to 'active' on a successful topic creation: a reused run whose meta was
-        // previously 'fallback'/'orphan' (a requeue retry) must not keep routing to the shared
-        // topic nor be sweepable by the reaper — the dedicated topic now exists. The failure path
-        // below still writes status 'fallback' (unchanged).
-        obs.updateMeta(metaPath, { threadId, status: "active" });
+        obs.updateMeta(metaPath, partial);
       } catch {
         // best-effort: threadId persist failure routes to the shared topic instead
         threadId = null;
