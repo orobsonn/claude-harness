@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.35.0](https://github.com/orobsonn/claude-harness/compare/v0.34.0...v0.35.0) (2026-07-09)
+
+
+### Features
+
+* **vps:** frota multi-repo — cada projeto age no seu próprio repositório ([#236](https://github.com/orobsonn/claude-harness/issues/236)) ([5decc74](https://github.com/orobsonn/claude-harness/commit/5decc744b832a61378958708bae5b37119f6b915))
+
 ## [0.34.0](https://github.com/orobsonn/claude-harness/compare/v0.33.0...v0.34.0) (2026-07-09)
 
 
