@@ -358,16 +358,27 @@ function makeDefaultPrOpen(spawn, owner, repo) {
 /**
  * @description Fallback prOpen built on the normalized `gh`/`ghExec` seam (the SAME seam
  * `defaultPrExists` already uses) instead of a raw spawn — used ONLY when the caller injects a
- * `ghExec`/`gh` fake but no `spawn` fake. A raw-spawn `makeDefaultPrOpen` would otherwise reach the
- * REAL network for a fixture owner/repo that never exists, always fail-closed-true, and permanently
- * block a test's retention deletion. Production (`mainReaper`, which injects neither) never reaches
- * this branch — it always takes the raw-spawn path unchanged.
+ * `ghExec`/`gh` fake but no `spawn` fake (the test doubles). A raw-spawn `makeDefaultPrOpen` would
+ * otherwise reach the REAL network for a fixture owner/repo that never exists, always
+ * fail-closed-true, and permanently block a test's retention deletion. `mainReaper` injects
+ * NEITHER a fake `gh`/`ghExec` NOR a fake `spawn`, so PRODUCTION always selects the raw-spawn
+ * `makeDefaultPrOpen` (see the `prOpen` wiring in runReaper) and NEVER reaches this branch.
  *
  * Mirrors `defaultPrExists`'s established convention for this seam: the normalized `gh` call already
  * collapses BOTH a real gh error and a genuine empty result to `[]` (or, in a test fake, to any
  * non-array shape) — both read as "no open PR" (false), never as an ambiguous error to fail open on.
  * This is intentionally LESS conservative than the raw-spawn `makeDefaultPrOpen` and exists solely as
  * a test/dev affordance so a `ghExec` fake is sufficient without also faking raw spawn argv.
+ *
+ * ACCEPTED RESIDUAL RISK (documentation only — behavior unchanged). `gh-exec.mjs`'s
+ * `normalizeGhResult` returns `[]` for a `--json` call on BOTH a `gh` outage and a genuine empty
+ * result, so this variant CANNOT distinguish them and would report "no open PR" during a `gh`
+ * outage. It must NEVER be wired into a production composition root: it guards an IRREVERSIBLE
+ * topic deletion (the retention sweep closes/deletes the topic of a run whose PR it judges "no
+ * longer open"), and a false "no open PR" during an outage destroys the topic of a run whose PR
+ * is still under review. Contrast `makeDefaultPrOpen`, which uses the RAW spawn seam precisely so
+ * a `gh` error (non-zero status / unparseable stdout) maps to `true` (assume OPEN → skip the
+ * candidate), preserving the topic under uncertainty.
  * @param {(args: string[]) => any} gh
  * @returns {(issueNumber: number) => boolean}
  */
@@ -714,10 +725,26 @@ export function runReaper(config, deps = {}) {
     const raw = readHarnessCronsConfig(config.homeDir, project.project, readFileSyncFn);
     if (raw == null) continue; // unreadable/unresolvable -> no blocklist entry, own candidates dropped
     readableProjects.push(project);
-    if (raw.sharedThreadId != null) projectSharedThreadIds.push(raw.sharedThreadId);
+    // The shared topic's threadId lives at notify.threadId in both the per-project config and the
+    // fleet config (written by install-crons.mjs), never a flat sharedThreadId. Keep the flat field
+    // as a fallback so the frozen tests (whose fixtures write it) stay green. An empty blocklist
+    // would let the sweep IRREVERSIBLY delete the group's shared/global topic.
+    const projectThreadId = raw?.notify?.threadId ?? raw?.sharedThreadId;
+    if (projectThreadId != null) projectSharedThreadIds.push(projectThreadId);
+  }
+  // Resolve the fleet notifier config once (it also honours the TELEGRAM_THREAD_ID fallback in
+  // ~/.claude/.dev.vars — the .dev.vars-only deployment, where only the RESOLVED notify config
+  // knows the shared threadId); reused for resolvedChatId below. Do NOT resolve it a second time.
+  let fleetNotifierConfig = null;
+  try {
+    fleetNotifierConfig = makeNotifier(config, { homeDir: config.homeDir }).config;
+  } catch {
+    fleetNotifierConfig = null;
   }
   const sharedThreadIds = [];
-  if (config.sharedThreadId != null) sharedThreadIds.push(config.sharedThreadId);
+  const fleetThreadId =
+    fleetNotifierConfig?.threadId ?? config?.notify?.threadId ?? config?.sharedThreadId;
+  if (fleetThreadId != null) sharedThreadIds.push(fleetThreadId);
   sharedThreadIds.push(...projectSharedThreadIds);
 
   const listStaleRunsSeam =
@@ -725,14 +752,11 @@ export function runReaper(config, deps = {}) {
 
   // resolvedChatId + the token-bound deleteForumTopic seam both derive from the SAME resolved
   // notify config (mirrors mainReaper's closeForumTopic judgment) so the retention sweep's chatId
-  // agrees with wherever the run's threadId was actually minted. `'resolvedChatId' in deps` (not
-  // `??`) so an injected falsy-but-valid chatId (e.g. 0) is never silently overridden.
-  let retentionNotifierConfig = null;
-  try {
-    retentionNotifierConfig = makeNotifier(config, { homeDir: config.homeDir }).config;
-  } catch {
-    retentionNotifierConfig = null;
-  }
+  // agrees with wherever the run's threadId was actually minted. Reuses the fleetNotifierConfig
+  // already resolved for the blocklist above (single resolution, never a second makeNotifier call).
+  // `'resolvedChatId' in deps` (not `??`) so an injected falsy-but-valid chatId (e.g. 0) is never
+  // silently overridden.
+  const retentionNotifierConfig = fleetNotifierConfig;
   const resolvedChatId =
     "resolvedChatId" in deps
       ? deps.resolvedChatId
