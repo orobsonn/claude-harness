@@ -200,3 +200,15 @@ export function updateMeta(metaPath, partial) {
   Object.assign(meta, partial);
   atomicWriteMeta(metaPath, meta);
 }
+
+/**
+ * @description Compare-and-swap partial merge: applies `partial` only when the meta currently on disk
+ * still matches every key in `expected`. Returns true when the write happened, false otherwise.
+ * @param {string} metaPath
+ * @param {object} expected
+ * @param {object} partial
+ * @returns {boolean}
+ */
+export function updateMetaIfUnchanged(metaPath, expected, partial) {
+  throw new Error("not implemented");
+}
