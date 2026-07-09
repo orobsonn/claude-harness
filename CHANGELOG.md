@@ -138,6 +138,16 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **O reaper agora limpa sozinho o worktree de um run já concluído.** Antes, um run que terminava
+  normalmente (sem crash) deixava o worktree e a branch parados no disco indefinidamente — o reaper só
+  agia em crash ou lock órfão. Agora, quando não há run vivo, o reaper confirma que o trabalho está
+  preservado (PR merjado, branch ancestral do default, ou nenhum commit exclusivo) e o run está
+  concluído (issue fechada ou PR merjado) sem PR aberto, e remove o worktree + a branch órfã. Se o
+  trabalho NÃO está confirmadamente preservado, o worktree é removido sem force (preservando qualquer
+  edição não commitada, que é retentada no próximo ciclo) e a branch é mantida — os commits não
+  mesclados são sempre registrados em log antes da limpeza. Um run com sessão ativa nunca é tocado
+  (#161).
+
 ### Removed
 
 ## [0.32.1] - 2026-07-08

@@ -256,7 +256,8 @@ function crashRecover(worktree, holder, opts) {
  *   'completed-cleaned'. Unsafe removal records the unmerged commits on the descriptor BEFORE a
  *   non-force `gitWorktreeRemove(path, root)` and KEEPS the branch (deletion of a worktree whose
  *   branch has unmerged work, or whose PR is still open, would orphan commits). Consumes only
- *   injected seams; reaper.mjs performs no IO.
+ *   injected seams; the only IO is the structured console.warn record written to the cron log BEFORE
+ *   each destructive git call (the #ac-1.1/#ac-1.3 obligation) — no fs, no network.
  * @returns {{ project: string, issueNumber: number, action: string } | null} the action descriptor,
  *   or null when the prune is skipped (live own session, or a null probe failing closed).
  */
