@@ -83,19 +83,27 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
     if (existing.status === AWAITING_REVIEW_STATUS) {
       // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
       // and strip the fossil timestamps (closedAt/topicDeletedAt) off a meta returning to active.
-      const updatedMeta = stripFossilTimestamps({
-        ...existing,
-        cursor: INITIAL_CURSOR,
-        status: INITIAL_STATUS,
-        criticalSent: [],
-      });
-      atomicWriteMeta(metaPath, updatedMeta);
-
-      // Truncate the events log - fail-open (mirror the existing try/catch around the fresh-branch truncate)
+      // Truncate the events log FIRST, gating the meta reset on truncate success: a drain tick
+      // landing between a reset meta and a pending/failed truncate would read the reset meta
+      // (criticalSent: [], cursor: 0) against the still-intact old events log and re-send every
+      // previously-acknowledged critical. Truncating first leaves an interleaved drain observing
+      // an empty log (zero events to send, nothing to write back); on truncate failure the meta
+      // stays consistent with the still-intact old log instead of entering the re-send state.
+      let truncated = false;
       try {
         writeFileSync(eventsPathFor(metaPath), "", "utf8");
+        truncated = true;
       } catch {
         // best-effort: a failed truncate must never propagate to the caller
+      }
+
+      if (truncated) {
+        atomicWriteMeta(metaPath, stripFossilTimestamps({
+          ...existing,
+          cursor: INITIAL_CURSOR,
+          status: INITIAL_STATUS,
+          criticalSent: [],
+        }));
       }
 
       return metaPath;
