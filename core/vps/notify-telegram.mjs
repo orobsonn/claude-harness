@@ -914,6 +914,13 @@ async function trySend(send, message) {
   }
 }
 
+/** @description Hard cap on the number of topic recreations attempted in a single `drainTelegramOutbox`
+ * invocation (a drain CYCLE). Bounds a mass-deletion burst so a forum purge cannot mint an unbounded
+ * flock of fresh topics in one cron tick. The COUNTER that enforces it is a LOCAL of each invocation
+ * (zeroed every call) — NEVER a module-global like `outboxRateLimiter`, which would refuse recreation
+ * forever after 3 cumulative recreations and flake the shared-process frozen tests. */
+const MAX_RECREATIONS_PER_CYCLE = 3;
+
 /**
  * @description Cron-side outbox drain. Enumerates every obs-<issue>.json in stateDir, derives
  * border checkpoints from the run worktree, then sends unsent events. Critical events (blocked /
@@ -936,9 +943,9 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   const appendEvent = seams.appendEvent ?? defaultAppendEvent;
   const send = seams.send ?? (async () => ({ sent: false }));
   const sleep = typeof seams.sleep === "function" ? seams.sleep : defaultSleep;
-  // task-1 seam: a token-bound createTopic (recreate a deleted/closed forum topic). Plumbed but NOT
-  // yet consumed — the self-heal branch that fires it on `reason === "thread-not-found"` is task-2.
-  // Default no-op returns {ok:false} so an unconfigured / unbound drain never touches the network.
+  // task-1 seam: a token-bound createTopic (recreate a deleted/closed forum topic). Consumed by the
+  // cosmetic-pass self-heal branch on `reason === "thread-not-found"` (task-2). Default no-op returns
+  // {ok:false} so an unconfigured / unbound drain never touches the network.
   const createTopic = seams.createTopic ?? (async () => ({ ok: false }));
 
   if (!stateDir || chatId == null || chatId === "") return;
@@ -999,11 +1006,15 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   }
 
   // Cosmetic pass: contiguous cursor advances only on ack.
+  // The recreation cap counter is a LOCAL of THIS invocation — zeroed every call so a second
+  // consecutive drain still heals, never a module-global that refuses forever.
+  let recreationsThisCycle = 0;
   for (const { metaPath, meta, events } of runs) {
     const isFallback = meta.status === "fallback" || meta.threadId == null;
-    const runThreadId = isFallback ? sharedThreadId : meta.threadId;
+    let runThreadId = isFallback ? sharedThreadId : meta.threadId;
     const startCursor = typeof meta.cursor === "number" ? meta.cursor : 0;
     let newCursor = startCursor;
+    let recreatedThisRun = false;
 
     for (let i = startCursor; i < events.length; i++) {
       const event = events[i];
@@ -1023,6 +1034,64 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         consumeBudget();
         budget -= 1;
         newCursor = i + 1;
+        continue;
+      }
+
+      // Self-heal branch (task-2): ONLY a per-run topic that OWNS its thread (!isFallback) and died
+      // (reason === "thread-not-found") is recreated. POSITIVE gate — a bare {sent:false} with NO
+      // reason (the shape the 30 frozen drain-outbox tests inject) or any other/transient reason falls
+      // to the else and behaves EXACTLY as before: break, cursor unadvanced, no recreation. At most ONE
+      // recreation per run per cycle (recreatedThisRun) plus a per-CYCLE cap (recreationsThisCycle).
+      if (
+        !isFallback &&
+        !recreatedThisRun &&
+        recreationsThisCycle < MAX_RECREATIONS_PER_CYCLE &&
+        sendResult.reason === "thread-not-found"
+      ) {
+        recreatedThisRun = true;
+        recreationsThisCycle += 1;
+        const topicName = `${meta.project ? `[${meta.project}] ` : ""}#${meta.issueNumber}`;
+        let createResult;
+        try {
+          createResult = await createTopic({ name: topicName });
+        } catch {
+          createResult = null;
+        }
+        if (!createResult || !createResult.ok || createResult.threadId == null) {
+          // Recreation failed (not-ok OR ok-with-no-usable-threadId): leave meta.threadId unchanged,
+          // do not advance the cursor, no second createTopic this cycle.
+          break;
+        }
+        try {
+          updateMeta(metaPath, { threadId: createResult.threadId });
+        } catch {
+          // fail-open: updateMeta never throws, but never let a writer propagate
+        }
+        // READ BACK to confirm the persist landed — updateMeta is fail-open and returns void, so a
+        // silently-dropped threadId would otherwise mint a fresh orphan topic on every later cycle.
+        const confirmed = readMeta(metaPath);
+        if (!confirmed || confirmed.threadId !== createResult.threadId) {
+          // Unconfirmed persist: do NOT re-send; switch the run to the shared topic then stop.
+          try {
+            updateMeta(metaPath, { status: "fallback" });
+          } catch {
+            // fail-open
+          }
+          break;
+        }
+        // Confirmed: rebind the loop-local send target so this run's remaining events in the SAME
+        // cycle go to the new thread, then re-send the SAME event (cursor advances by exactly one,
+        // no event skipped).
+        runThreadId = createResult.threadId;
+        await pace();
+        const resendResult = await trySend(send, { event, text, chatId, threadId: runThreadId });
+        if (resendResult.ack) {
+          consumeBudget();
+          budget -= 1;
+          newCursor = i + 1;
+        } else {
+          break;
+        }
       } else {
         break;
       }
