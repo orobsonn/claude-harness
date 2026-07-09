@@ -153,6 +153,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - **vps notify (Telegram):** o feed de um run cujo tópico do fórum foi deletado/fechado não trava mais
   em silêncio — o drain agora recria o tópico, confirma a persistência e retoma o envio dos checkpoints
   pendentes ([#214](https://github.com/orobsonn/claude-harness/issues/214))
+- **cross-family:** o teste de passthrough do `driveCrossFamily` não depende mais da máquina — antes ele
+  chamava a checagem de disponibilidade real e, num host com o `codex` instalado e logado, disparava uma
+  chamada de verdade ao codex dentro da suite, deixando o `main` vermelho e envenenando o gate de todo
+  run. Agora a indisponibilidade é injetada, e um novo teste fixa o contrato oposto — sessão headless sem
+  chave de API, mas autenticada por assinatura, **continua** rodando a segunda família (é assim que a
+  revisão de PR ganha os olhos do codex) ([#225](https://github.com/orobsonn/claude-harness/issues/225))
 
 ### Removed
 

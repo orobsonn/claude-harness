@@ -7,8 +7,8 @@
  * Pipeline:
  *   0. TOGGLE  — isEnabled()? (env HARNESS_CODEX_ADVERSARY or task.adversarial.cross_family). Off =>
  *                passthrough: the Claude issues are returned unchanged (Claude-only, as today).
- *   1. AVAIL   — checkAvailability()? (codex present, not headless-without-key). Unavailable =>
- *                same passthrough; never blocks.
+ *   1. AVAIL   — checkAvailability()? (codex present AND authed — by subscription or API key; being
+ *                headless is not itself a gate). Unavailable => same passthrough; never blocks.
  *   2. ATTACK  — run the Codex adversary (read-only) on the same task. Different family.
  *   3. MERGE   — classifyFindings(claude, codex): agreed (both) + needsCrosscheck (single-family).
  *   4. REFUTE  — for claude-only findings, Codex tries to refute (policy B, fully in JS).
@@ -32,9 +32,9 @@ import { mergeVerdicts } from "./merge-verdicts.mjs";
  * also `security`) with INJECTABLE codex runners (unit-testable without codex). The role is the only
  * variable: it selects the canonical prompt source, the dedup discriminators (security has no
  * `category`), and the refutation role file. FAIL-OPEN is total: the toggle, availability, AND the
- * compose/attack are all guarded so a missing module, an off switch, a headless run, OR a path /
- * compose bug all degrade to Claude-only passthrough — never a throw (a thrown compose would be
- * fail-CLOSED, the opposite of the contract).
+ * compose/attack are all guarded so a missing module, an off switch, an unreachable/unauthed codex,
+ * OR a path / compose bug all degrade to Claude-only passthrough — never a throw (a thrown compose
+ * would be fail-CLOSED, the opposite of the contract).
  * @param {{
  *   role?: string,
  *   taskJson: object|string,

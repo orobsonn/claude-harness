@@ -37,6 +37,17 @@ test("checkAvailability: headless WITH API key may proceed if codex present", ()
   assert.equal(r.ok, true);
 });
 
+// The PR-review session (core/vps/spawn-review-session.mjs) spawns with CLAUDE_CODE_REMOTE=1 and no
+// OPENAI_API_KEY: re-adding a headless gate here would silently kill the second family in every review.
+test("checkAvailability: headless WITHOUT api key but subscription-authed is available (headless is not a gate)", () => {
+  const r = checkAvailability({
+    env: { CLAUDE_CODE_REMOTE: "1" },
+    hasCodex: () => true,
+    loginStatus: () => ({ status: 0, stdout: "Logged in using ChatGPT" }),
+  });
+  assert.equal(r.ok, true);
+});
+
 test("checkAvailability: missing codex binary is unavailable", () => {
   const r = checkAvailability({ env: {}, hasCodex: () => false });
   assert.equal(r.ok, false);
