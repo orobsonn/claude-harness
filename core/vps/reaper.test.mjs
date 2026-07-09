@@ -70,7 +70,7 @@ function makeFakeCounter(counts) {
 
 /** @description Fake PR-existence seam; `issueNumbers` is the set of issues with an open/merged harness PR. */
 function makePrExists(issueNumbersWithPr = new Set()) {
-  return (issueNumber) => issueNumbersWithPr.has(issueNumber);
+  return (issueNumber, _project) => issueNumbersWithPr.has(issueNumber);
 }
 
 /** @description Fake issue-labels seam; `labelsByIssue` maps issueNumber -> array of label strings. */
@@ -139,7 +139,7 @@ function makeGitBranchDelete() {
 function makeIssueClosed(result) {
   const calls = [];
   return {
-    issueClosed: (issueNumber) => {
+    issueClosed: (issueNumber, _project) => {
       calls.push(issueNumber);
       return result;
     },
@@ -151,7 +151,7 @@ function makeIssueClosed(result) {
 function makePrMerged(result) {
   const calls = [];
   return {
-    prMerged: (issueNumber) => {
+    prMerged: (issueNumber, _project) => {
       calls.push(issueNumber);
       return result;
     },
