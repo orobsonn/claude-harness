@@ -39,6 +39,21 @@
  *       `opts.gitWorktreeRemove(worktreePath)` and its orphan branch pruned via
  *       `opts.gitBranchDelete(worktree.branch)`. A worktree whose holder is ALIVE (including one
  *       merely over the watchdog ceiling, until a later cycle observes it dead) is NEVER removed.
+ *   (d) Completed sweep — a worktree whose run-lock was RELEASED NORMALLY (holder null AND no
+ *       readable lock directory age, i.e. `lockDirAgeSeconds == null` covering both null and the
+ *       undefined production shape) is the only state (a)-(c) misclassify as "alive (conservative)".
+ *       This branch is entered ONLY by the explicit `holder == null && lockDirAgeSeconds == null`
+ *       check at the call site — NEVER routed via the liveness verdict, which returns the identical
+ *       {alive:true,registered:false} shape for a live UNREGISTERED holder still inside the
+ *       registration grace (a run mid-dispatch). Own-session guard first (never prune while the
+ *       run's own `harness-<project>-<issue>` tmux session is alive), then four tri-state probes
+ *       (issueClosed, prMerged, branchMerged, inspectWorktree) — any null, evaluated BEFORE the
+ *       safe-signal disjunction, skips the prune entirely (fail-closed under uncertainty). Safe
+ *       removal (workPreserved && concluded && !prOpen) force-removes the worktree and prunes the
+ *       orphan branch, returning 'completed-cleaned'; unsafe removal records the unmerged commits
+ *       on the descriptor BEFORE a non-force removal and KEEPS the branch. issueClosed NEVER
+ *       authorizes a branch deletion; prOpen===false is load-bearing (cron-a-dispatch's resume probe
+ *       reads the LOCAL ref, so deleting the branch of a still-open PR orphans its commits).
  *
  * @param {object} opts
  * @param {() => Array<{
@@ -70,6 +85,19 @@
  * @param {(branch: string, projectRoot: string) => void} [opts.gitBranchDelete] - best-effort prune the orphan
  *   harness/<n> branch after removing a dead holder's worktree. Default: `git -C <projectRoot> branch -D <branch>`
  *   with failures swallowed.
+ * @param {(issueNumber: number) => boolean | null} [opts.issueClosed] - completed-sweep tri-state probe (true/false/null).
+ *   null = unknown -> the sweep fails closed (skip the prune). Required only for the completed sweep (behavior d);
+ *   absent seams throw inside the per-worktree try/catch and the worktree is left alone (never-prune).
+ * @param {(issueNumber: number) => boolean | null} [opts.prMerged] - completed-sweep tri-state probe. The load-bearing
+ *   merged signal under squash-merge (the merged branch is NOT an ancestor of main, so branchMerged is false for
+ *   legitimately merged work). prMerged===true alone satisfies both workPreserved and concluded.
+ * @param {(branch: string, projectRoot: string) => boolean | null} [opts.branchMerged] - completed-sweep tri-state
+ *   probe (git merge-base --is-ancestor mapped to true/false/null where null = exit 128 / unknown).
+ * @param {(worktree: object) => { unmergedCommits: string[], dirtyPaths: string[] } | null} [opts.inspectWorktree] -
+ *   completed-sweep tri-state probe. unmergedCommits.length===0 satisfies workPreserved (work provably preserved).
+ * @param {(issueNumber: number) => boolean} [opts.prOpen] - completed-sweep open-PR gate. prOpen===false is REQUIRED
+ *   for a safe (force + branch-delete) removal; a still-open PR falls to the keep-branch path so
+ *   cron-a-dispatch's local-ref resume probe does not orphan the PR's commits on re-dispatch.
  * @param {() => Array<{ metaPath: string, meta: object }>} [opts.listObsRuns] - zero-arg producer of pre-read
  *   obs-<issue>.json runs to sweep for orphan topic closes (decoupled from the per-worktree holder-liveness
  *   scan). Each entry is { metaPath, meta } where meta is the already-parsed obs-<issue>.json. The composition
@@ -124,7 +152,7 @@ function normalizeWorktreePath(p) {
  */
 function defaultGitBranchDelete(branch, projectRoot) {
   try {
-    spawnSync("git", ["-C", projectRoot, "branch", "-D", branch], { encoding: "utf8", stdio: "pipe" });
+    spawnSync("git", ["-C", projectRoot, "branch", "-D", "--", branch], { encoding: "utf8", stdio: "pipe" });
   } catch {
     // best-effort branch prune
   }
@@ -134,9 +162,12 @@ function defaultGitBranchDelete(branch, projectRoot) {
  * @description Best-effort default for removing a dead holder's worktree. Runs in the target
  * project's repo for the same cross-project safety as defaultGitBranchDelete. Errors are swallowed.
  */
-function defaultGitWorktreeRemove(worktreePath, projectRoot) {
+function defaultGitWorktreeRemove(worktreePath, projectRoot, opts) {
   try {
-    spawnSync("git", ["-C", projectRoot, "worktree", "remove", worktreePath], { encoding: "utf8", stdio: "pipe" });
+    const argv = ["-C", projectRoot, "worktree", "remove"];
+    if (opts && opts.force) argv.push("--force");
+    argv.push("--", worktreePath);
+    spawnSync("git", argv, { encoding: "utf8", stdio: "pipe" });
   } catch {
     // best-effort worktree remove
   }
@@ -207,14 +238,126 @@ function crashRecover(worktree, holder, opts) {
 }
 
 /**
- * @description Per-worktree reaping. Three independent behaviors, never conflated:
+ * @description Completed sweep (behavior d) for a worktree whose run-lock was released NORMALLY
+ *   (holder null, no readable lock age). Guards in order:
+ *   (1) entry is the caller's explicit `holder == null && lockDirAgeSeconds == null` check — this
+ *       function is never reached via the liveness verdict;
+ *   (2) own-session guard — never prune while the run's own `harness-<project>-<issue>` tmux session
+ *       is alive (a null holder plus a live own session is treated as live);
+ *   (3) four tri-state probes (issueClosed, prMerged, branchMerged, inspectWorktree) — ANY null,
+ *       evaluated BEFORE the safe-signal disjunction, skips the prune entirely (fail-closed under
+ *       uncertainty);
+ *   (4) workPreserved = prMerged===true OR branchMerged===true OR inspectWorktree.unmergedCommits
+ *       .length===0 (issueClosed NEVER authorizes a branch deletion);
+ *   (5) concluded = issueClosed===true OR prMerged===true;
+ *   (6) prOpen===false required for a safe removal.
+ *   Safe removal (workPreserved && concluded && !prOpen) records the dirty/untracked inventory then
+ *   `gitWorktreeRemove(path, root, { force: true })` + `gitBranchDelete(branch, root)`, returning
+ *   'completed-cleaned'. Unsafe removal records the unmerged commits on the descriptor BEFORE a
+ *   non-force `gitWorktreeRemove(path, root)` and KEEPS the branch (deletion of a worktree whose
+ *   branch has unmerged work, or whose PR is still open, would orphan commits). Consumes only
+ *   injected seams; the only IO is the structured console.warn record written to the cron log BEFORE
+ *   each destructive git call (the #ac-1.1/#ac-1.3 obligation) — no fs, no network.
+ * @returns {{ project: string, issueNumber: number, action: string } | null} the action descriptor,
+ *   or null when the prune is skipped (live own session, or a null probe failing closed).
+ */
+function reapCompletedWorktree(worktree, opts) {
+  const ownSession = `harness-${worktree.project}-${worktree.issueNumber}`;
+  if (opts.tmuxHasSession(ownSession)) return null;
+
+  const issueClosedResult = opts.issueClosed(worktree.issueNumber);
+  const prMergedResult = opts.prMerged(worktree.issueNumber);
+  const branchMergedResult = opts.branchMerged(worktree.branch, worktree.projectRoot);
+  const inspection = opts.inspectWorktree(worktree);
+
+  // Fail closed under uncertainty: a null from ANY probe short-circuits BEFORE the safe-signal
+  // disjunction — prMerged===true alone must NOT authorize a prune when branchMerged is unknown.
+  if (
+    issueClosedResult == null ||
+    prMergedResult == null ||
+    branchMergedResult == null ||
+    inspection == null
+  ) {
+    return null;
+  }
+
+  // Fail closed on a malformed inspection: a non-null but partial inspection (e.g. `{}` or
+  // `{ unmergedCommits: null }`) must NOT coerce to length===0 (workPreserved===true) — that would
+  // force-remove the worktree and `git branch -D` a branch that may hold unpushed local-only commits.
+  if (!Array.isArray(inspection.unmergedCommits) || !Array.isArray(inspection.dirtyPaths)) {
+    return null;
+  }
+
+  const unmergedCommits = inspection.unmergedCommits;
+  const dirtyPaths = inspection.dirtyPaths;
+  const workPreserved =
+    prMergedResult === true || branchMergedResult === true || unmergedCommits.length === 0;
+  const concluded = issueClosedResult === true || prMergedResult === true;
+  const prOpenResult = opts.prOpen(worktree.issueNumber);
+
+  if (workPreserved && concluded && prOpenResult === false) {
+    // Safe removal: the work is preserved AND the run is concluded AND no PR is still open. Record
+    // the dirty/untracked inventory on the descriptor, then force-remove (a dirty/untracked
+    // worktree refuses a plain `git worktree remove`) and prune the orphan branch.
+    // why #ac-1.1: record the discarded working-tree inventory BEFORE the destructive force-remove
+    // so uncommitted work never disappears silently — the mitigation that justifies an unattended
+    // destructive cron. Structured single-line JSON on stderr (the cron log), nothing beyond these
+    // fields.
+    console.warn(
+      JSON.stringify({
+        op: "reaper.completed-cleaned",
+        project: worktree.project,
+        issue: worktree.issueNumber,
+        worktreePath: worktree.worktreePath,
+        dirtyPaths,
+      })
+    );
+    opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot, { force: true });
+    opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
+    return { ...actionOf(worktree, "completed-cleaned"), dirtyPaths };
+  }
+
+  // Unsafe removal: the work is not provably preserved, or the run is not concluded, or a PR is
+  // still open. Record the unmerged commits on the descriptor BEFORE the non-force removal so the
+  // work is never lost silently, then remove WITHOUT force (a dirty worktree is deliberately left
+  // intact by `git worktree remove`) and KEEP the branch for the next attempt.
+  // why #ac-1.3: record the unmerged commits BEFORE the destructive removal so unmerged work never
+  // disappears silently — the mitigation that justifies an unattended destructive cron. Structured
+  // single-line JSON on stderr (the cron log), nothing beyond these fields.
+  const descriptor = { ...actionOf(worktree, "keep-branch"), unmergedCommits };
+  console.warn(
+    JSON.stringify({
+      op: "reaper.keep-branch",
+      project: worktree.project,
+      issue: worktree.issueNumber,
+      worktreePath: worktree.worktreePath,
+      unmergedCommits,
+    })
+  );
+  opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot);
+  return descriptor;
+}
+
+/**
+ * @description Per-worktree reaping. Four independent behaviors, never conflated:
+ *   - a RELEASED-LOCK worktree (holder null AND no readable lock age) -> completed sweep (behavior d);
  *   - a REGISTERED holder still ALIVE but past the wall-clock ceiling -> watchdog-kill the tmux
  *     session and stop (cleanup/relabel wait for a later cycle that observes the session dead);
- *   - any holder ALIVE and (unregistered, or within the ceiling) -> leave it alone;
+ *   - any other holder ALIVE and (unregistered, or within the ceiling) -> leave it alone;
  *   - a DEAD holder -> crash-recover (relabel when no PR; release lock always) and remove the
  *     worktree + orphan branch.
  */
 function reapWorktree(worktree, opts) {
+  // Behavior (d) — completed sweep. Entered ONLY by the explicit released-lock check at the call
+  // site, NEVER via the liveness verdict: judgeLiveness returns the identical {alive:true,
+  // registered:false} shape for this null-holder case AND for a live UNREGISTERED holder inside the
+  // registration grace (a run mid-dispatch). Loose `== null` covers the undefined production shape
+  // (listWorktreesSeam never wires lockDirAgeSeconds), so a strict === null guard would pass every
+  // null-fixture yet be permanently dead in production.
+  if (worktree.holder == null && worktree.lockDirAgeSeconds == null) {
+    return reapCompletedWorktree(worktree, opts);
+  }
+
   const liveness = judgeLiveness(worktree.holder, opts, worktree.lockDirAgeSeconds);
   if (liveness === null) return null;
 
@@ -248,7 +391,7 @@ function reapWorktree(worktree, opts) {
  * notification. Carries the entry's OWN project (the reaper is a shared cron over many projects, so
  * the `<project>` prefix must come from the worktree, never a single fleet value).
  * @param {{ project: string, issueNumber: number }} worktree
- * @param {"watchdog-killed"|"crash-recovered"|"orphan-cleaned"} action
+ * @param {"watchdog-killed"|"crash-recovered"|"orphan-cleaned"|"completed-cleaned"|"keep-branch"} action
  * @returns {{ project: string, issueNumber: number, action: string }}
  */
 function actionOf(worktree, action) {

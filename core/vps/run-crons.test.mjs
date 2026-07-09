@@ -10,7 +10,14 @@ import assert from "node:assert/strict";
 
 import { runCronA, loadConfig } from "./run-cron-a.mjs";
 import { runCronB } from "./run-cron-b.mjs";
-import { runReaper } from "./run-reaper.mjs";
+import {
+  runReaper,
+  makeDefaultIssueClosed,
+  makeDefaultPrMerged,
+  makeDefaultBranchMerged,
+  makeDefaultInspectWorktree,
+  defaultGitWorktreeRemove,
+} from "./run-reaper.mjs";
 
 const BASE_CONFIG = {
   project: "demo",
@@ -393,5 +400,275 @@ test("run-reaper's prOpen FAILS OPEN on a gh error — returns true (skip) so th
     result,
     true,
     "a gh error must make prOpen assume the PR is OPEN (skip the close) — never false, which would close a live topic"
+  );
+});
+
+/**
+ * @description Builds an in-memory fake spawn (spawnSync shape) that records every call's
+ * {cmd, args, opts} into `calls` and delegates the response to the given handler. Shared across
+ * the completed-sweep tri-state probe tests below (3+ call sites) so each test asserts on the
+ * recorded argv without re-declaring the same recording boilerplate.
+ * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} handler
+ * @returns {{ spawn: (cmd: string, args: string[], opts: object) => object, calls: Array<{cmd: string, args: string[], opts: object}> }}
+ */
+function makeRecordingSpawn(handler) {
+  const calls = [];
+  const spawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return handler(cmd, args, opts);
+  };
+  return { spawn, calls };
+}
+
+test("[integration HIGH closed] run-reaper wires the four completed-sweep tri-state probes (issueClosed, prMerged, branchMerged, inspectWorktree) plus gitWorktreeRemove into the reaper logic's opts", () => {
+  const config = { ...BASE_CONFIG };
+
+  let capturedOpts;
+  const fakeReaperLogic = (opts) => {
+    capturedOpts = opts;
+    return [];
+  };
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    listWorktrees: () => [],
+    gh: () => ({ ok: true }),
+    ghExec: () => ({ ok: true }),
+    runLock: { release: () => {} },
+    counter: { read: () => 0 },
+  });
+
+  assert.equal(
+    typeof capturedOpts.issueClosed,
+    "function",
+    "runReaper must wire an issueClosed seam into the reaper logic's opts"
+  );
+  assert.equal(
+    typeof capturedOpts.prMerged,
+    "function",
+    "runReaper must wire a prMerged seam into the reaper logic's opts"
+  );
+  assert.equal(
+    typeof capturedOpts.branchMerged,
+    "function",
+    "runReaper must wire a branchMerged seam into the reaper logic's opts"
+  );
+  assert.equal(
+    typeof capturedOpts.inspectWorktree,
+    "function",
+    "runReaper must wire an inspectWorktree seam into the reaper logic's opts"
+  );
+  assert.equal(
+    typeof capturedOpts.gitWorktreeRemove,
+    "function",
+    "runReaper must wire a gitWorktreeRemove seam into the reaper logic's opts"
+  );
+});
+
+test("makeDefaultBranchMerged maps git merge-base --is-ancestor exit codes to true/false/null — exit 128 (or a spawn throw) must be null, NEVER false, so an unrelated-history error never authorizes a branch delete", () => {
+  const projectRoot = "/srv/demo";
+  const branch = "harness/161";
+
+  const rec128 = makeRecordingSpawn(() => ({ status: 128, stdout: "" }));
+  const result128 = makeDefaultBranchMerged(rec128.spawn)(branch, projectRoot);
+  assert.equal(result128, null, "exit 128 (unrelated histories / unknown) must be null, not false");
+  assert.equal(rec128.calls.length, 1);
+  assert.deepEqual(
+    rec128.calls[0].args,
+    ["-C", projectRoot, "merge-base", "--is-ancestor", branch, "main"],
+    "branchMerged must run git merge-base --is-ancestor <branch> main scoped to -C <projectRoot>"
+  );
+
+  const rec0 = makeRecordingSpawn(() => ({ status: 0, stdout: "" }));
+  assert.equal(
+    makeDefaultBranchMerged(rec0.spawn)(branch, projectRoot),
+    true,
+    "exit 0 -> true (branch is an ancestor of main)"
+  );
+
+  const rec1 = makeRecordingSpawn(() => ({ status: 1, stdout: "" }));
+  assert.equal(
+    makeDefaultBranchMerged(rec1.spawn)(branch, projectRoot),
+    false,
+    "exit 1 -> false (branch is not an ancestor of main)"
+  );
+
+  const spawnThrow = () => {
+    throw new Error("spawn ENOENT");
+  };
+  assert.equal(
+    makeDefaultBranchMerged(spawnThrow)(branch, projectRoot),
+    null,
+    "a spawn throw must be null, never false"
+  );
+});
+
+test("makeDefaultPrMerged maps gh pr list --state merged to true/false/null via the raw spawn seam (never the normalized gh/ghExec seam, whose [] is ambiguous between a gh error and a genuine empty result)", () => {
+  const owner = "owner";
+  const repo = "repo";
+  const issueNumber = 161;
+
+  const recMerged = makeRecordingSpawn(() => ({ status: 0, stdout: '[{"number":7}]' }));
+  const prMergedTrue = makeDefaultPrMerged(recMerged.spawn, owner, repo);
+  assert.equal(prMergedTrue(issueNumber), true, "a non-empty array from gh pr list --state merged must be true");
+
+  assert.equal(recMerged.calls.length, 1);
+  const args = recMerged.calls[0].args;
+  assert.ok(args.includes("pr"), "argv must include pr");
+  assert.ok(args.includes("list"), "argv must include list");
+  assert.ok(args.includes("--head"), "argv must include --head");
+  assert.ok(args.includes(`harness/${issueNumber}`), "argv must scope --head to harness/<issueNumber>");
+  assert.ok(args.includes("--state"), "argv must include --state");
+  assert.ok(args.includes("merged"), "argv must scope --state to merged");
+
+  const recEmpty = makeRecordingSpawn(() => ({ status: 0, stdout: "[]" }));
+  const prMergedFalse = makeDefaultPrMerged(recEmpty.spawn, owner, repo);
+  assert.equal(prMergedFalse(issueNumber), false, "an empty array from a successful gh call must be false");
+
+  const recGhError = makeRecordingSpawn(() => ({ status: 1, stdout: "" }));
+  const prMergedNull = makeDefaultPrMerged(recGhError.spawn, owner, repo);
+  assert.equal(
+    prMergedNull(issueNumber),
+    null,
+    "a gh error (non-zero status) must be null, never false — a gh outage must never be read as not-merged"
+  );
+});
+
+test("run-reaper notifies reaper-orphan-cleaned for a completed-cleaned action, scoped to the action's own project and issue", () => {
+  const config = { ...BASE_CONFIG };
+
+  const fakeReaperLogic = () => [{ action: "completed-cleaned", project: "demo-project", issueNumber: 161 }];
+
+  const notifyCalls = [];
+  const fakeNotify = (payload) => {
+    notifyCalls.push(payload);
+  };
+
+  runReaper(config, {
+    reaper: fakeReaperLogic,
+    listWorktrees: () => [],
+    gh: () => ({ ok: true }),
+    ghExec: () => ({ ok: true }),
+    runLock: { release: () => {} },
+    counter: { read: () => 0 },
+    notify: fakeNotify,
+  });
+
+  assert.equal(notifyCalls.length, 1, "notify must be called exactly once for the single completed-cleaned action");
+  assert.deepEqual(
+    notifyCalls[0],
+    { type: "reaper-orphan-cleaned", project: "demo-project", issue: 161 },
+    "a completed-cleaned action must notify type reaper-orphan-cleaned scoped to the action's own project/issue"
+  );
+});
+
+test("defaultGitWorktreeRemove's argv includes --force only when opts.force is true; the two-arg contract stays unchanged when opts is omitted", () => {
+  const worktreePath = "/srv/worktrees/harness-demo-161";
+  const projectRoot = "/srv/demo";
+
+  const recForce = makeRecordingSpawn(() => ({ status: 0, stdout: "" }));
+  defaultGitWorktreeRemove(worktreePath, projectRoot, { force: true }, recForce.spawn);
+
+  assert.equal(recForce.calls.length, 1);
+  const forceArgs = recForce.calls[0].args;
+  assert.ok(forceArgs.includes("worktree"), "argv must include worktree");
+  assert.ok(forceArgs.includes("remove"), "argv must include remove");
+  assert.ok(forceArgs.includes("--force"), "opts.force === true must add --force to the argv");
+  assert.ok(forceArgs.includes(worktreePath), "the argv must include the worktree path");
+
+  const recNoForce = makeRecordingSpawn(() => ({ status: 0, stdout: "" }));
+  defaultGitWorktreeRemove(worktreePath, projectRoot, undefined, recNoForce.spawn);
+
+  assert.equal(recNoForce.calls.length, 1);
+  const noForceArgs = recNoForce.calls[0].args;
+  assert.ok(
+    !noForceArgs.includes("--force"),
+    "an omitted (undefined) opts must NOT add --force — the two-arg contract is unchanged"
+  );
+});
+
+test("makeDefaultInspectWorktree parses git log --oneline main..<branch> into unmergedCommits and git status --porcelain into dirtyPaths — a rename of either field throws into reaper()'s per-worktree swallowing try/catch and silently blocks every prune", () => {
+  const worktree = {
+    branch: "harness/161",
+    projectRoot: "/srv/demo",
+    worktreePath: "/srv/worktrees/harness-demo-161",
+  };
+
+  const recOk = makeRecordingSpawn((cmd, args) => {
+    if (cmd === "git" && args.includes("log")) {
+      return { status: 0, stdout: "abc123 wip\ndef456 more\n" };
+    }
+    if (cmd === "git" && args.includes("status")) {
+      return { status: 0, stdout: " M core/vps/reaper.mjs\n" };
+    }
+    return { status: 1, stdout: "" };
+  });
+
+  const inspectOk = makeDefaultInspectWorktree(recOk.spawn);
+  const inspection = inspectOk(worktree);
+
+  assert.deepEqual(
+    inspection.unmergedCommits,
+    ["abc123 wip", "def456 more"],
+    "unmergedCommits must be the git log --oneline output split on newlines with empty lines dropped"
+  );
+  assert.deepEqual(
+    inspection.dirtyPaths,
+    [" M core/vps/reaper.mjs"],
+    "dirtyPaths must be the git status --porcelain output split on newlines with empty lines dropped"
+  );
+
+  const rec128 = makeRecordingSpawn((cmd, args) => {
+    if (cmd === "git" && args.includes("log")) return { status: 128, stdout: "" };
+    return { status: 0, stdout: "" };
+  });
+  assert.equal(
+    makeDefaultInspectWorktree(rec128.spawn)(worktree),
+    null,
+    "a non-zero status from the git log call must be null"
+  );
+
+  const spawnThrow = () => {
+    throw new Error("spawn ENOENT");
+  };
+  assert.equal(makeDefaultInspectWorktree(spawnThrow)(worktree), null, "a spawn throw must be null");
+});
+
+test("makeDefaultIssueClosed maps gh issue view --json state to true/false/null — a gh error or unparseable stdout must be null, never a guess", () => {
+  const owner = "owner";
+  const repo = "repo";
+  const issueNumber = 161;
+
+  const recClosed = makeRecordingSpawn(() => ({ status: 0, stdout: '{"state":"CLOSED"}' }));
+  const issueClosedTrue = makeDefaultIssueClosed(recClosed.spawn, owner, repo);
+  assert.equal(issueClosedTrue(issueNumber), true, 'state "CLOSED" must be true');
+
+  assert.equal(recClosed.calls.length, 1);
+  const args = recClosed.calls[0].args;
+  assert.ok(args.includes("issue"), "argv must include issue");
+  assert.ok(args.includes("view"), "argv must include view");
+  assert.ok(args.includes(String(issueNumber)), "argv must include the issue number");
+  assert.ok(args.includes("--json"), "argv must include --json");
+  assert.ok(args.includes("state"), "argv must request the state field");
+
+  const recOpen = makeRecordingSpawn(() => ({ status: 0, stdout: '{"state":"OPEN"}' }));
+  assert.equal(
+    makeDefaultIssueClosed(recOpen.spawn, owner, repo)(issueNumber),
+    false,
+    'state "OPEN" must be false'
+  );
+
+  const recGhError = makeRecordingSpawn(() => ({ status: 1, stdout: "" }));
+  assert.equal(
+    makeDefaultIssueClosed(recGhError.spawn, owner, repo)(issueNumber),
+    null,
+    "a gh error (non-zero status) must be null"
+  );
+
+  const recUnparseable = makeRecordingSpawn(() => ({ status: 0, stdout: "not json" }));
+  assert.equal(
+    makeDefaultIssueClosed(recUnparseable.spawn, owner, repo)(issueNumber),
+    null,
+    "unparseable stdout must be null"
   );
 });

@@ -111,6 +111,78 @@ function makeUpdateMeta() {
   };
 }
 
+/**
+ * @description Records every `gitWorktreeRemove(path, projectRoot, opts)` call including the
+ * optional third argument, so a test can assert whether `{ force: true }` was passed on the safe
+ * prune path vs. omitted/false on the keep-branch path. Kept SEPARATE from `makeGitWorktreeRemove`
+ * above — the existing frozen tests keep using that path-only fake and their existing assertions
+ * untouched.
+ */
+function makeGitWorktreeRemoveDetailed() {
+  const calls = [];
+  return {
+    gitWorktreeRemove: (path, projectRoot, opts) => calls.push({ path, projectRoot, opts }),
+    calls,
+  };
+}
+
+/** @description Records every `gitBranchDelete(branch, projectRoot)` call into an array. */
+function makeGitBranchDelete() {
+  const calls = [];
+  return {
+    gitBranchDelete: (branch, projectRoot) => calls.push({ branch, projectRoot }),
+    calls,
+  };
+}
+
+/** @description Fake tri-state issueClosed probe; records each issueNumber it is asked about. */
+function makeIssueClosed(result) {
+  const calls = [];
+  return {
+    issueClosed: (issueNumber) => {
+      calls.push(issueNumber);
+      return result;
+    },
+    calls,
+  };
+}
+
+/** @description Fake tri-state prMerged probe; records each issueNumber it is asked about. */
+function makePrMerged(result) {
+  const calls = [];
+  return {
+    prMerged: (issueNumber) => {
+      calls.push(issueNumber);
+      return result;
+    },
+    calls,
+  };
+}
+
+/** @description Fake tri-state branchMerged probe; records each `{branch, projectRoot}` it is asked about. */
+function makeBranchMerged(result) {
+  const calls = [];
+  return {
+    branchMerged: (branch, projectRoot) => {
+      calls.push({ branch, projectRoot });
+      return result;
+    },
+    calls,
+  };
+}
+
+/** @description Fake inspectWorktree probe; records each worktree path it is asked about and returns the fixed result (or null for "unknown"). */
+function makeInspectWorktree(result) {
+  const calls = [];
+  return {
+    inspectWorktree: (worktree) => {
+      calls.push(worktree);
+      return result;
+    },
+    calls,
+  };
+}
+
 /** @description Builds one listWorktrees() entry with sensible defaults, overridable per test. */
 function makeEntry(overrides = {}) {
   return {
@@ -565,4 +637,306 @@ test("reaper: sweepOrphanTopics reverts a FAILED close to the CAPTURED prior sta
     !updateCalls.some((c) => c.partial.status === "active"),
     "a failed close must NEVER revert to the hardcoded literal 'active'"
   );
+});
+
+test("reaper: sweepMergedWorktrees SAFELY prunes a released-lock worktree when the branch is squash-merged (prMerged true, branchMerged false, issue closed, PR not open) — worktree removed WITH force, branch deleted, action descriptor marked completed-cleaned (#ac-1.1)", () => {
+  const entry = makeEntry({
+    issueNumber: 83,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-83",
+    branch: "harness/83",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(true);
+  const { branchMerged } = makeBranchMerged(false); // squash-merged: not an ancestor of main
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()), // own session harness-demo-project-83 absent
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  const removed = removeCalls.find((c) => c.path === entry.worktreePath);
+  assert.ok(removed, "the squash-merged worktree must be removed");
+  assert.equal(removed.opts?.force, true, "a safely-pruned worktree must be removed WITH force");
+  assert.ok(
+    branchDeleteCalls.some((c) => c.branch === "harness/83"),
+    "the squash-merged branch must be deleted"
+  );
+  assert.ok(
+    actions.some((a) => a.issueNumber === 83 && a.action === "completed-cleaned"),
+    "the returned actions must carry a completed-cleaned descriptor for issue 83"
+  );
+});
+
+test("reaper: sweepMergedWorktrees FAILS CLOSED when branchMerged is unknown (null), even though prMerged alone would satisfy the safe-signal disjunction — the null short-circuits BEFORE the OR, so neither removal nor branch delete fires (#ac-1.1 guard)", () => {
+  const entry = makeEntry({
+    issueNumber: 83,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-83",
+    branch: "harness/83",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(true); // load-bearing: alone this would satisfy workPreserved
+  const { branchMerged } = makeBranchMerged(null); // git merge-base exit 128 -> unknown
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  assert.equal(removeCalls.length, 0, "an unknown branchMerged must skip the prune — no gitWorktreeRemove");
+  assert.equal(branchDeleteCalls.length, 0, "an unknown branchMerged must skip the prune — no gitBranchDelete");
+});
+
+test("reaper: sweepMergedWorktrees treats a released-lock worktree (holder null) as LIVE when its OWN tmux session harness-<project>-<issue> is alive — no removal even with every other safe signal green (#ac-1.2)", () => {
+  const entry = makeEntry({
+    issueNumber: 84,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-84",
+    branch: "harness/84",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(true);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set(["harness-demo-project-84"])), // own session alive
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  assert.equal(removeCalls.length, 0, "a live own tmux session must block the worktree removal");
+  assert.equal(branchDeleteCalls.length, 0, "a live own tmux session must block the branch delete");
+});
+
+test("reaper: sweepMergedWorktrees removes an UNSAFE released-lock worktree WITHOUT force and KEEPS the branch when neither prMerged nor branchMerged is true (#ac-1.3)", () => {
+  const entry = makeEntry({
+    issueNumber: 85,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-85",
+    branch: "harness/85",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(false);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  const removed = removeCalls.find((c) => c.path === entry.worktreePath);
+  assert.ok(removed, "an unsafe worktree must still be removed");
+  assert.notEqual(removed.opts?.force, true, "an unsafe removal must NOT pass { force: true }");
+  assert.equal(branchDeleteCalls.length, 0, "an unsafe removal must NEVER delete the branch");
+});
+
+test("reaper: sweepMergedWorktrees records the unmerged commits on the action descriptor (field unmergedCommits) before removing an unsafe worktree (#ac-1.3)", () => {
+  const entry = makeEntry({
+    issueNumber: 85,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-85",
+    branch: "harness/85",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(false);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  const descriptor = actions.find((a) => a.issueNumber === 85);
+  assert.ok(descriptor, "the unsafe worktree must produce an action descriptor");
+  assert.deepEqual(
+    descriptor.unmergedCommits,
+    ["abc123 wip"],
+    "the descriptor must carry the inspected unmerged commits under the unmergedCommits field"
+  );
+});
+
+test("reaper: the NEW released-lock sweep is entered ONLY when lockDirAgeSeconds == null — the EXISTING orphan-lock path (lockDirAgeSeconds >= grace) still fires and never probes any of the four new seams (#ac-1.4)", () => {
+  const entry = makeEntry({
+    issueNumber: 86,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-86",
+    branch: "harness/86",
+    holder: null,
+    lockDirAgeSeconds: 200, // >= the 120s registration grace -> the EXISTING orphan-lock branch
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemove();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed, calls: issueClosedCalls } = makeIssueClosed(true);
+  const { prMerged, calls: prMergedCalls } = makePrMerged(true);
+  const { branchMerged, calls: branchMergedCalls } = makeBranchMerged(false);
+  const { inspectWorktree, calls: inspectWorktreeCalls } = makeInspectWorktree({ unmergedCommits: [], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  assert.ok(removeCalls.includes(entry.worktreePath), "the existing orphan-lock path must still remove the worktree");
+  assert.ok(
+    branchDeleteCalls.some((c) => c.branch === "harness/86"),
+    "the existing orphan-lock path must still delete the branch"
+  );
+  assert.equal(issueClosedCalls.length, 0, "an orphan-lock entry must never probe issueClosed");
+  assert.equal(prMergedCalls.length, 0, "an orphan-lock entry must never probe prMerged");
+  assert.equal(branchMergedCalls.length, 0, "an orphan-lock entry must never probe branchMerged");
+  assert.equal(inspectWorktreeCalls.length, 0, "an orphan-lock entry must never probe inspectWorktree");
+});
+
+test("reaper: sweepMergedWorktrees prunes safely even when lockDirAgeSeconds is OMITTED entirely (undefined — the real listWorktrees() production shape, since run-reaper's seam never wires a lockDirAgeSeconds value); a strict === null entry guard would pass every other test here and be permanently dead in production (#ac-1.1)", () => {
+  const entry = makeEntry({
+    issueNumber: 87,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-87",
+    branch: "harness/87",
+    holder: null,
+  });
+  delete entry.lockDirAgeSeconds; // guarantee the key truly does not exist, not merely null
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(true);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: [], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  const removed = removeCalls.find((c) => c.path === entry.worktreePath);
+  assert.ok(removed, "an omitted lockDirAgeSeconds key must still enter the released-lock sweep");
+  assert.equal(removed.opts?.force, true, "the safe prune must still pass { force: true }");
+  assert.ok(
+    branchDeleteCalls.some((c) => c.branch === "harness/87"),
+    "the safe prune must still delete the branch"
+  );
+});
+
+test("reaper: sweepMergedWorktrees KEEPS the branch when the issue's PR is still OPEN — an open PR fails the !prOpen safe gate and falls to the #ac-1.3 keep-branch handling even with work provably preserved, because cron-a-dispatch's resume probe reads the LOCAL ref and deleting it would orphan the open PR's commits on re-dispatch (#ac-1.1 guard)", () => {
+  const entry = makeEntry({
+    issueNumber: 88,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-88",
+    branch: "harness/88",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete, calls: branchDeleteCalls } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(false);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: [], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => true, // the open PR itself
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+    })
+  );
+
+  assert.equal(branchDeleteCalls.length, 0, "an open PR must NEVER have its branch deleted");
+  const removed = removeCalls.find((c) => c.path === entry.worktreePath);
+  assert.ok(removed, "the worktree must still be removed even with an open PR");
+  assert.notEqual(removed.opts?.force, true, "an open PR keep-branch removal must NOT pass { force: true }");
 });
