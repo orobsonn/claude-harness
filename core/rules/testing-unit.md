@@ -58,6 +58,18 @@ Carrega em arquivos de teste unit/integration e config de Vitest. Stack default:
 - Factory functions pra dados complexos: `makeUser(overrides?: Partial<User>)`
 - Evitar JSON enorme inline em test — extrair pra fixture
 
+### Fixtures em testes @cloudflare/vitest-pool-workers (sem node:fs)
+
+Testes que rodam no `@cloudflare/vitest-pool-workers` executam dentro do isolate Cloudflare, que **não tem filesystem**. Nesses testes é **proibido** ler fixtures com `node:fs` — `readFileSync`, `readFile` ou qualquer API de filesystem falham no isolate. Em vez disso, carregue o fixture via import **build-time** `?raw`:
+
+```ts
+import payloadText from "./fixtures/payload.xml?raw";
+```
+
+`?raw` devolve uma **string** com o texto bruto do arquivo (equivalente a `readFileSync(caminho, "utf8")`) — **não** é um objeto parseado. Se o teste precisa do objeto, aplique `JSON.parse(payloadText)` (para JSON) ou o parser apropriado; para conteúdo não-JSON (XML, HTML, texto), use a string diretamente. Imports JSON (`import data from "./fixtures/data.json"`) também são resolvidos no build e já devolvem o objeto parseado — use quando o fixture é JSON puro.
+
+**Carve-out — onde `node:fs` é legítimo:** a proibição vale **apenas** para testes `@cloudflare/vitest-pool-workers`. Suítes `node:test` rodam no Node, com filesystem disponível, e usam `node:fs` normalmente. Exemplos concretos que continuam legítimos: os testes em `core/__tests__/` (node:test, leem arquivos do repo) e o passo 6 (§6) do agente `test-author`, que prescreve `readFileSync`/`resolve` para resolução de path relativo ao módulo.
+
 ### JSDoc obrigatorio
 - Todo `.spec.ts` / `.test.ts` novo com `/** @description ... */` na linha 1 (CI verifica)
 

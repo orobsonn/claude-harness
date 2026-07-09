@@ -129,6 +129,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ### Added
 
 - **test-infra memory chega ao test-author sozinha** — a curadoria de contexto do `orchestrating-delivery` agora, por convenção, injeta em todo dispatch do TEST-AUTHOR qualquer memory de `.claude/memory/` sobre o runner/pool/fixture de teste (ex.: `vitest-pool-workers-raw-import.md`). Um gotcha de test-infra já documentado alcança o test-author no primeiro dispatch — sem relay manual via `shared_context.md` — para a mesma mão não redescobri-lo duas vezes no mesmo run. Escopo restrito ao test-author; a curadoria do executor não muda (#102).
+- **Fixtures em testes `@cloudflare/vitest-pool-workers` sem `node:fs`.** Testes que rodam no isolate Cloudflare não têm filesystem, então a orientação de autoria agora proíbe `readFileSync`/`readFile` nesses testes e prescreve o import build-time `?raw` (que devolve o texto bruto do fixture como string; `JSON.parse` quando o objeto é necessário), com carve-out explícito para suítes `node:test`, que continuam legítimas com `node:fs`. Documentado no agente `test-author` e na regra `testing-unit`.
 
 ### Changed
 
