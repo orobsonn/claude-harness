@@ -76,6 +76,7 @@ const EMOJI = {
   "reaper-killed": "⏱️",
   "reaper-recovered": "♻️",
   "reaper-orphan-cleaned": "🧹",
+  "reaper-permission-check": "🔐",
   "engine-updated": "⬆️",
   "engine-update-failed": "❗",
   "chain-released": "🔗",
@@ -232,6 +233,14 @@ export function formatEvent(event = {}) {
       return `${prefix} run da issue ${issueRef} recuperado de crash`;
     case "reaper-orphan-cleaned":
       return `${prefix} worktree órfão da issue ${issueRef} limpo`;
+    case "reaper-permission-check": {
+      // FLEET-level event with no single project (event.project is absent) — render without a
+      // `[<project>]` prefix so the operator never sees a cryptic `[?]`. Names the chat and the
+      // remedy: the retention sweep can't clear topics because the bot lacks can_delete_messages,
+      // and the operator must grant it in that group.
+      const chatId = event.chatId != null ? escapeHtml(String(event.chatId)) : "?";
+      return `${emoji} a limpeza de tópicos do grupo ${chatId} não avança — o bot não consegue apagar tópicos; conceda a ele a permissão de apagar mensagens (can_delete_messages) nesse grupo`;
+    }
     case "engine-updated": {
       const range = event.from && event.to ? ` (${escapeHtml(String(event.from).slice(0, 7))} → ${escapeHtml(String(event.to).slice(0, 7))})` : "";
       return `${prefix} motor do harness atualizado com a main${range} — próximos crons já rodam a versão nova`;

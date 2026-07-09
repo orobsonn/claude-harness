@@ -458,6 +458,11 @@ function sweepOrphanTopics(opts) {
       if (!meta) continue;
       if (meta.status === "closed") continue; // no double-close
       if (meta.threadId == null) continue; // no forum topic was created — nothing to close
+      // A run whose own `harness-<project>-<issue>` tmux session is alive is LIVE, even if its worktree is
+      // not yet in `git worktree list` (setupObservability creates the meta BEFORE `git worktree add`).
+      // Closing it here would strand a live run's topic and, after the retention window, delete it.
+      const ownSession = `harness-${meta.project}-${meta.issueNumber}`;
+      if (typeof opts.tmuxHasSession === "function" && opts.tmuxHasSession(ownSession)) continue;
       if (livePaths.has(normalizeWorktreePath(meta.worktreePath))) continue; // a live run's topic is never closed
       // Open-PR gate (#ac-1.2): a run whose PR is still OPEN is mid-review — its topic must NEVER be
       // swept. Only a NOT-open PR (merged-but-close-missed OR abandoned) proceeds to close (#ac-1.6).
@@ -663,7 +668,7 @@ async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tal
     const freshBeforeEventsUnlink = readMeta(metaPath);
     if (!identityMatches(freshBeforeEventsUnlink, identity)) return;
     try {
-      unlinkRunFiles(metaPath, { what: "events" });
+      if (!unlinkRunFiles(metaPath, { what: "events" })) return;
     } catch {
       return;
     }
