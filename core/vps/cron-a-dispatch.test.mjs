@@ -41,6 +41,14 @@
  * PR-carrying) branch would destroy work. When the branch does not exist, the original fresh `-b`
  * path is unchanged. Every existing test above exercises the fresh path implicitly via
  * `baseOpts`'s default `branchExists: () => false`.
+ *
+ * FRESH-BASE FETCH (fresh/orphan branch only): before `git worktree add` runs for a branch that
+ * does not (yet) exist, dispatch must run `git fetch origin main` in `projectRoot`, and the
+ * worktree-add's start-point must be the literal `origin/main` — so a fresh branch's tip is
+ * always built on an up-to-date base rather than whatever stale commit `projectRoot`'s checked-out
+ * ref happened to be at. The RESUME path (branch already exists) never fetches and never carries
+ * a start-point argument. The fetch also carries a spawn timeout: it is the only synchronous
+ * network I/O performed while the run-lock is held and before any tmux session exists.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -73,7 +81,7 @@ function makeTempDirs() {
 function makeFakeSpawn({ failCommands = [] } = {}) {
   const calls = [];
   function spawn(command, args = [], spawnOpts = {}) {
-    calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
+    calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
     if (failCommands.includes(command)) {
       throw new Error(`fake spawn: ${command} failed`);
     }
@@ -198,7 +206,7 @@ test("dispatch: creates the git worktree at a path distinct from the project roo
     const fake42 = makeFakeSpawn();
     dispatch({ number: 42, body: "hi" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake42.spawn }));
 
-    const git42 = fake42.calls.find((c) => c.command === "git");
+    const git42 = fake42.calls.find((c) => c.command === "git" && c.args[0] === "worktree");
     assert.ok(git42, "dispatch must invoke git");
     assert.deepEqual(git42.args.slice(0, 2), ["worktree", "add"], "must run `git worktree add`");
     const path42 = git42.args[2];
@@ -209,7 +217,7 @@ test("dispatch: creates the git worktree at a path distinct from the project roo
     const fake43 = makeFakeSpawn();
     dispatch({ number: 43, body: "hi" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake43.spawn }));
 
-    const git43 = fake43.calls.find((c) => c.command === "git");
+    const git43 = fake43.calls.find((c) => c.command === "git" && c.args[0] === "worktree");
     assert.ok(git43);
     assert.equal(git43.args[4], "harness/43");
     assert.notEqual(git43.args[2], path42, "two different issues must get distinct worktree paths");
@@ -467,7 +475,7 @@ test("dispatch: the tmux session command runs the graceful cron-a-exit handler a
     const fake = makeFakeSpawn();
     dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
 
-    const gitCall = fake.calls.find((c) => c.command === "git");
+    const gitCall = fake.calls.find((c) => c.command === "git" && c.args[0] === "worktree");
     const worktreePath = gitCall.args[2];
 
     const tmuxCall = findTmuxCall(fake.calls);
@@ -687,6 +695,153 @@ test("dispatch: given branch harness/<n> does NOT exist (probe fails), the git w
       "harness/42",
       "the -b flag must target harness/42, unchanged from the pre-resume-mode fresh path"
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: a FRESH branch runs `git fetch origin main` in projectRoot BEFORE `git worktree add` (#ac-1.1)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => false })
+    );
+
+    const fetchIndex = fake.calls.findIndex(
+      (c) => c.command === "git" && Array.isArray(c.args) && c.args[0] === "fetch"
+    );
+    assert.notEqual(fetchIndex, -1, "dispatch must run a `git fetch` spawn for a fresh branch");
+    const fetchCall = fake.calls[fetchIndex];
+    assert.deepEqual(fetchCall.args, ["fetch", "origin", "main"], "the fetch must be exactly `git fetch origin main`");
+    assert.equal(fetchCall.cwd, projectRoot, "the fetch must run with cwd === projectRoot");
+
+    const addIndex = fake.calls.findIndex(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.notEqual(addIndex, -1, "dispatch must run `git worktree add`");
+    assert.ok(fetchIndex < addIndex, "the fetch must be recorded BEFORE the worktree-add call");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: the fresh-base `git fetch` carries a spawn timeout so a hung origin cannot block dispatch while the run-lock is held", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => false })
+    );
+
+    const fetchCall = fake.calls.find((c) => c.command === "git" && c.args[0] === "fetch");
+    assert.ok(fetchCall, "dispatch must run a `git fetch` spawn for a fresh branch");
+    assert.equal(
+      typeof fetchCall.timeout,
+      "number",
+      "the fetch must pass a numeric spawn timeout — spawnSync without one blocks forever on a hung origin"
+    );
+    assert.ok(fetchCall.timeout > 0, "the fetch timeout must be a positive wall-clock ceiling");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: a FRESH branch's `git worktree add` argv starts the new branch tip at origin/main (#ac-1.2)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => false })
+    );
+
+    const addCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.ok(addCall, "dispatch must run `git worktree add`");
+    assert.deepEqual(
+      addCall.args,
+      ["worktree", "add", addCall.args[2], "-b", "harness/42", "origin/main"],
+      "a fresh branch must be created with a start-point of literal origin/main"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: a RESUMED branch (exists, open PR) runs no `git fetch` and its `git worktree add` argv carries no start-point (#ac-1.3)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, branchExists: () => true, hasOpenPr: () => true })
+    );
+
+    const fetchCall = fake.calls.find((c) => c.command === "git" && c.args[0] === "fetch");
+    assert.equal(fetchCall, undefined, "a resumed branch must never run `git fetch`");
+
+    const addCall = fake.calls.find(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.ok(addCall, "dispatch must run `git worktree add`");
+    assert.deepEqual(
+      addCall.args,
+      ["worktree", "add", addCall.args[2], "harness/42"],
+      "resuming an existing branch must check it out with no -b and no start-point"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: a FRESH branch whose `git fetch origin main` spawn throws never reaches `git worktree add`, releases via harness:ready relabel, skips register + attempt-counter, and resolves { ok: false } (#ac-1.4)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const counter = makeFakeCounter();
+    const fake = makeFakeSpawn({ failCommands: ["git"] });
+    const runLock = makeFakeRunLock({ pid: 111, acquire_ts: 5000 });
+    const gh = makeFakeGh();
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fake.spawn,
+      runLock,
+      gh: gh.gh,
+      counter,
+      branchExists: () => false,
+    });
+
+    const result = await dispatch({ number: 42, body: "hello" }, opts);
+
+    const worktreeAddCalls = fake.calls.filter(
+      (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add"
+    );
+    assert.equal(
+      worktreeAddCalls.length,
+      0,
+      "the fetch throwing must abort BEFORE `git worktree add` ever runs — no `git worktree add` call may be recorded"
+    );
+    assert.equal(runLock.registerCalls.length, 0, "register() must never be called when the fetch spawn fails");
+
+    const relabelCall = gh.calls.find(
+      (args) =>
+        args.includes("--remove-label") &&
+        args[args.indexOf("--remove-label") + 1] === "harness:in-progress" &&
+        args.includes("--add-label") &&
+        args[args.indexOf("--add-label") + 1] === "harness:ready"
+    );
+    assert.ok(
+      relabelCall,
+      "dispatch must relabel the issue --remove-label harness:in-progress --add-label harness:ready"
+    );
+
+    assert.equal(counter.read(42, { stateDir }), 0, "a fetch failure must not consume a retry attempt");
+    assert.deepEqual(result, { ok: false }, "dispatch must resolve { ok: false } on a pre-registration fetch failure");
   } finally {
     cleanup();
   }
