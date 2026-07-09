@@ -240,7 +240,7 @@ test("[#ac-1.1/#ac-1.5] a8: generateProjectConfig produces exactly REQUIRED_CONF
   assert.equal(configWithAuthor.harnessAuthorLogin, "bot-user");
 });
 
-test("[#ac-1.4] a9: reconcileFleet: an existing fleet's owner/repo differs from incoming coords, throws, and never mutates the input fleet", () => {
+test("[#ac-1.4/#ac-1.1] a9: reconcileFleet: an existing fleet's owner/repo differs from incoming coords and the new entry still carries its OWN owner/repo without throwing", () => {
   const existingFleet = {
     project: "other",
     owner: "acme",
@@ -254,24 +254,54 @@ test("[#ac-1.4] a9: reconcileFleet: an existing fleet's owner/repo differs from 
   const snapshot = JSON.parse(JSON.stringify(existingFleet));
   const coords = { ...BASE_COORDS, owner: "beta", repo: "y" };
 
-  assert.throws(() => reconcileFleet(existingFleet, ["other"], coords));
+  let fleet;
+  assert.doesNotThrow(() => {
+    fleet = reconcileFleet(existingFleet, ["other"], coords);
+  });
   assert.deepEqual(existingFleet, snapshot, "reconcileFleet must never mutate its input fleet");
+
+  const otherEntry = fleet.projects.find((p) => p.project === "other");
+  assert.deepEqual(otherEntry, {
+    project: "other",
+    owner: "acme",
+    repo: "x",
+    projectRoot: "/srv/other",
+    stateDir: "/srv/other/.claude/state",
+  });
+
+  const currentEntry = fleet.projects.find((p) => p.project === coords.project);
+  assert.deepEqual(currentEntry, {
+    project: coords.project,
+    owner: "beta",
+    repo: "y",
+    projectRoot: coords.projectRoot,
+    stateDir: coords.stateDir,
+  });
+
+  assert.equal(fleet.owner, "acme");
+  assert.equal(fleet.repo, "x");
 });
 
-test("[#ac-1.3] a10: reconcileFleet: a null existing fleet seeds a fresh fleet whose projects[] entries carry no owner/repo", () => {
+test("[#ac-1.3/#ac-1.1] a10: reconcileFleet: a null existing fleet seeds a fresh fleet whose projects[] entries carry their OWN owner/repo", () => {
   const fleet = reconcileFleet(null, [], BASE_COORDS);
   assert.equal(fleet.owner, BASE_COORDS.owner);
   assert.equal(fleet.repo, BASE_COORDS.repo);
   assert.deepEqual(fleet.projects, [
-    { project: BASE_COORDS.project, projectRoot: BASE_COORDS.projectRoot, stateDir: BASE_COORDS.stateDir },
+    {
+      project: BASE_COORDS.project,
+      owner: BASE_COORDS.owner,
+      repo: BASE_COORDS.repo,
+      projectRoot: BASE_COORDS.projectRoot,
+      stateDir: BASE_COORDS.stateDir,
+    },
   ]);
   for (const entry of fleet.projects) {
-    assert.equal("owner" in entry, false);
-    assert.equal("repo" in entry, false);
+    assert.equal(entry.owner, BASE_COORDS.owner);
+    assert.equal(entry.repo, BASE_COORDS.repo);
   }
 });
 
-test("[#ac-1.3/#ac-1.4] a11: reconcileFleet: re-installing an already-registered project upserts in place (no duplicate) and leaves top owner/repo unchanged", () => {
+test("[#ac-1.3/#ac-1.4/#ac-1.1] a11: reconcileFleet: re-installing an already-registered project upserts its OWN owner/repo in place (no duplicate) and leaves top owner/repo unchanged", () => {
   const existingFleet = {
     project: "demo",
     owner: "acme",
@@ -288,6 +318,8 @@ test("[#ac-1.3/#ac-1.4] a11: reconcileFleet: re-installing an already-registered
   assert.equal(fleet.projects.length, 1);
   assert.deepEqual(fleet.projects[0], {
     project: "demo",
+    owner: "acme",
+    repo: "demo-repo",
     projectRoot: "/srv/demo-new",
     stateDir: "/srv/demo-new/.claude/state",
   });
@@ -735,7 +767,7 @@ test("[#ac-5.2] a39: writeCrontab: the text piped to the real crontab process en
   assert.equal(/\n\n$/.test(pipedInput), false);
 });
 
-test("[#ac-1.4] a40: installProject: same owner but a different repo than the existing fleet throws and mutates nothing", () => {
+test("[#ac-1.4/#ac-1.1] a40: installProject: same owner but a different repo than the existing fleet succeeds and writes a fleet entry with the new project's OWN owner/repo", () => {
   const existingFleet = {
     project: "other",
     owner: "acme",
@@ -749,13 +781,24 @@ test("[#ac-1.4] a40: installProject: same owner but a different repo than the ex
   const initialConfigs = { [fleetPathFor()]: existingFleet };
   const { deps, state } = makeMemoryDeps({ initialConfigs });
 
-  assert.throws(() => installProject({ ...BASE_COORDS, owner: "acme", repo: "y" }, deps));
-  assert.equal(state.writeConfigCalls.length, 0);
-  assert.equal(state.writeCrontabCalls.length, 0);
+  assert.doesNotThrow(() => installProject({ ...BASE_COORDS, owner: "acme", repo: "y" }, deps));
+  assert.ok(state.writeConfigCalls.length > 0, "installProject must write configs when repo differs from the fleet top-level");
+  assert.equal(state.writeCrontabCalls.length, 1);
   assert.equal(state.rmSyncCalls.length, 0);
+
+  const fleetWrite = state.writeConfigCalls.find((c) => c.path.endsWith("reaper.json"));
+  assert.ok(fleetWrite);
+  const demoEntry = fleetWrite.obj.projects.find((p) => p.project === "demo");
+  assert.deepEqual(demoEntry, {
+    project: "demo",
+    owner: "acme",
+    repo: "y",
+    projectRoot: BASE_COORDS.projectRoot,
+    stateDir: BASE_COORDS.stateDir,
+  });
 });
 
-test("[#ac-1.4] a41: installProject: a wholly different owner/repo than the existing fleet mutates nothing", () => {
+test("[#ac-1.4/#ac-1.1] a41: installProject: a wholly different owner/repo than the existing fleet succeeds and writes a fleet entry with the new project's OWN owner/repo", () => {
   const existingFleet = {
     project: "other",
     owner: "acme",
@@ -769,10 +812,21 @@ test("[#ac-1.4] a41: installProject: a wholly different owner/repo than the exis
   const initialConfigs = { [fleetPathFor()]: existingFleet };
   const { deps, state } = makeMemoryDeps({ initialConfigs });
 
-  assert.throws(() => installProject({ ...BASE_COORDS, owner: "beta", repo: "y" }, deps));
-  assert.equal(state.writeConfigCalls.length, 0);
-  assert.equal(state.writeCrontabCalls.length, 0);
+  assert.doesNotThrow(() => installProject({ ...BASE_COORDS, owner: "beta", repo: "y" }, deps));
+  assert.ok(state.writeConfigCalls.length > 0, "installProject must write configs when owner/repo differ from the fleet top-level");
+  assert.equal(state.writeCrontabCalls.length, 1);
   assert.equal(state.rmSyncCalls.length, 0);
+
+  const fleetWrite = state.writeConfigCalls.find((c) => c.path.endsWith("reaper.json"));
+  assert.ok(fleetWrite);
+  const demoEntry = fleetWrite.obj.projects.find((p) => p.project === "demo");
+  assert.deepEqual(demoEntry, {
+    project: "demo",
+    owner: "beta",
+    repo: "y",
+    projectRoot: BASE_COORDS.projectRoot,
+    stateDir: BASE_COORDS.stateDir,
+  });
 });
 
 test("[#ac-1.3/#ac-5.5] a42: installProject: a fleet entry with no matching crontab block (a ghost) is dropped on reconciliation", () => {
@@ -797,7 +851,7 @@ test("[#ac-1.3/#ac-5.5] a42: installProject: a fleet entry with no matching cron
   assert.ok(fleetWrite.obj.projects.some((p) => p.project === "demo"));
 });
 
-test("[#ac-1.3] a43: installProject: an empty (\"no crontab for\") crontab reconciles the fleet down to just the project being installed", () => {
+test("[#ac-1.3/#ac-1.1] a43: installProject: an empty (\"no crontab for\") crontab reconciles the fleet down to just the project being installed with its OWN owner/repo", () => {
   const existingFleet = {
     project: "ghost",
     owner: "acme",
@@ -815,7 +869,13 @@ test("[#ac-1.3] a43: installProject: an empty (\"no crontab for\") crontab recon
 
   const fleetWrite = state.writeConfigCalls.find((c) => c.path.endsWith("reaper.json"));
   assert.deepEqual(fleetWrite.obj.projects, [
-    { project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/.claude/state" },
+    {
+      project: "demo",
+      owner: BASE_COORDS.owner,
+      repo: BASE_COORDS.repo,
+      projectRoot: "/srv/demo",
+      stateDir: "/srv/demo/.claude/state",
+    },
   ]);
 });
 
@@ -1113,6 +1173,9 @@ test("[#ac-1.3/#ac-1.4] reconcileFleet: a corrupt fleet with two \"other\" entri
   assert.equal(fleet.projects.length, 2);
   // first-appearance order preserved: "other" before the appended current project.
   assert.deepEqual(fleet.projects.map((p) => p.project), ["other", "demo"]);
+  const otherEntry = fleet.projects.find((p) => p.project === "other");
+  assert.equal(otherEntry.owner, "acme", "preserved sibling backfills owner from fleet top-level");
+  assert.equal(otherEntry.repo, "demo-repo", "preserved sibling backfills repo from fleet top-level");
   assert.deepEqual(existingFleet, snapshot, "reconcileFleet must never mutate its input fleet");
 });
 

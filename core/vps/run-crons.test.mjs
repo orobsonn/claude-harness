@@ -33,6 +33,9 @@ const BASE_CONFIG = {
   stateDir: "/srv/demo/.claude/state",
   worktreeRoot: "/srv/worktrees",
   homeDir: "/home/harness",
+  projects: [
+    { project: "demo", projectRoot: "/srv/demo", stateDir: "/srv/demo/.claude/state" },
+  ],
 };
 
 test("[integration HIGH closed] run-cron-a wires buildScopedEnvFromDisk (not the broken pure buildScopedEnv) into dispatch", () => {
@@ -311,9 +314,9 @@ test("[integration HIGH closed] run-reaper wires defaultPrOpen (--state open, ra
     "prOpen must be a DISTINCT function from prExists — an open-only query, never the closed-inclusive one"
   );
 
-  const result = capturedReaperOpts.prOpen(42);
+  const result = capturedReaperOpts.prOpen(42, "demo");
 
-  assert.equal(result, true, "prOpen(42) must be true for the harness/42 branch PR");
+  assert.equal(result, true, "prOpen(42, 'demo') must be true for the harness/42 branch PR");
 
   const openCall = spawnCalls.find(
     (call) =>
@@ -370,12 +373,12 @@ test("[integration HIGH closed] run-reaper's prOpen recognizes a body-link Close
     "opts.prOpen must be a defined function before invoking it"
   );
 
-  const result = capturedReaperOpts.prOpen(42);
+  const result = capturedReaperOpts.prOpen(42, "demo");
 
   assert.equal(
     result,
     true,
-    "prOpen(42) must recognize the body-link (Closes #42) even though the PR's head is not harness/42"
+    "prOpen(42, 'demo') must recognize the body-link (Closes #42) even though the PR's head is not harness/42"
   );
 });
 
@@ -400,12 +403,12 @@ test("run-reaper's prOpen FAILS OPEN on a gh error — returns true (skip) so th
     "opts.prOpen must be a defined function before invoking it"
   );
 
-  const result = capturedReaperOpts.prOpen(42);
+  const result = capturedReaperOpts.prOpen(42, "demo");
 
   assert.equal(
     result,
     true,
-    "a gh error must make prOpen assume the PR is OPEN (skip the close) — never false, which would close a live topic"
+    "a gh error must make prOpen(42, 'demo') assume the PR is OPEN (skip the close) — never false, which would close a live topic"
   );
 });
 

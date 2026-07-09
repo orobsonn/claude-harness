@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.35.0](https://github.com/orobsonn/claude-harness/compare/v0.34.0...v0.35.0) (2026-07-09)
+
+
+### Features
+
+* **vps:** frota multi-repo — cada projeto age no seu próprio repositório ([#236](https://github.com/orobsonn/claude-harness/issues/236)) ([5decc74](https://github.com/orobsonn/claude-harness/commit/5decc744b832a61378958708bae5b37119f6b915))
+
 ## [0.34.0](https://github.com/orobsonn/claude-harness/compare/v0.33.0...v0.34.0) (2026-07-09)
 
 
@@ -251,6 +258,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **A frota VPS agora suporta múltiplos repositórios.** Antes o reaper e os crons resolviam owner/repo
+  a partir de UM único par no nível da frota — uma frota com dois repositórios corria o risco de
+  relabelar, fechar ou podar contra o repositório errado, já que números de issue são por-repo. Cada
+  entrada de `projects[]` agora carrega seu próprio `owner`/`repo`; o reaper resolve o escopo do `gh`
+  por projeto (com fallback pro nível da frota numa fleet legada sem esses campos), e falha fechado
+  (nunca poda, nunca fecha tópico) diante de um projeto desconhecido (#117).
 - **test-infra memory chega ao test-author sozinha** — a curadoria de contexto do `orchestrating-delivery` agora, por convenção, injeta em todo dispatch do TEST-AUTHOR qualquer memory de `.claude/memory/` sobre o runner/pool/fixture de teste (ex.: `vitest-pool-workers-raw-import.md`). Um gotcha de test-infra já documentado alcança o test-author no primeiro dispatch — sem relay manual via `shared_context.md` — para a mesma mão não redescobri-lo duas vezes no mesmo run. Escopo restrito ao test-author; a curadoria do executor não muda (#102).
 - **Fixtures em testes `@cloudflare/vitest-pool-workers` sem `node:fs`.** Testes que rodam no isolate Cloudflare não têm filesystem, então a orientação de autoria agora proíbe `readFileSync`/`readFile` nesses testes e prescreve o import build-time `?raw` (que devolve o texto bruto do fixture como string; `JSON.parse` quando o objeto é necessário), com carve-out explícito para suítes `node:test`, que continuam legítimas com `node:fs`. Documentado no agente `test-author` e na regra `testing-unit`.
 

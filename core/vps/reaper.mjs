@@ -73,10 +73,10 @@
  * @param {number} [opts.livenessCeilingHours] - default 2.
  * @param {number} [opts.registrationGraceSeconds] - default 120.
  * @param {number} [opts.retryCeilingK] - default 2.
- * @param {(issueNumber: number) => boolean} opts.prExists
+ * @param {(issueNumber: number, project: string) => boolean} opts.prExists
  * @param {(issueNumber: number) => string[]} [opts.issueLabels] - returns the current labels for an issue;
  *   used to recognize harness:in-review so the reaper never mistakes it for an orphan.
- * @param {(args: string[]) => { ok: boolean }} opts.gh
+ * @param {(args: string[], project: string) => { ok: boolean }} opts.gh
  * @param {{ release: (opts: { stateDir: string, acquireTs: number }) => void }} opts.runLock
  * @param {{ read: (issueNumber: number, opts: { stateDir: string }) => number }} opts.counter -
  *   READ-ONLY seam; the reaper never calls an increment/write method on it.
@@ -85,17 +85,17 @@
  * @param {(branch: string, projectRoot: string) => void} [opts.gitBranchDelete] - best-effort prune the orphan
  *   harness/<n> branch after removing a dead holder's worktree. Default: `git -C <projectRoot> branch -D <branch>`
  *   with failures swallowed.
- * @param {(issueNumber: number) => boolean | null} [opts.issueClosed] - completed-sweep tri-state probe (true/false/null).
+ * @param {(issueNumber: number, project: string) => boolean | null} [opts.issueClosed] - completed-sweep tri-state probe (true/false/null).
  *   null = unknown -> the sweep fails closed (skip the prune). Required only for the completed sweep (behavior d);
  *   absent seams throw inside the per-worktree try/catch and the worktree is left alone (never-prune).
- * @param {(issueNumber: number) => boolean | null} [opts.prMerged] - completed-sweep tri-state probe. The load-bearing
+ * @param {(issueNumber: number, project: string) => boolean | null} [opts.prMerged] - completed-sweep tri-state probe. The load-bearing
  *   merged signal under squash-merge (the merged branch is NOT an ancestor of main, so branchMerged is false for
  *   legitimately merged work). prMerged===true alone satisfies both workPreserved and concluded.
  * @param {(branch: string, projectRoot: string) => boolean | null} [opts.branchMerged] - completed-sweep tri-state
  *   probe (git merge-base --is-ancestor mapped to true/false/null where null = exit 128 / unknown).
  * @param {(worktree: object) => { unmergedCommits: string[], dirtyPaths: string[] } | null} [opts.inspectWorktree] -
  *   completed-sweep tri-state probe. unmergedCommits.length===0 satisfies workPreserved (work provably preserved).
- * @param {(issueNumber: number) => boolean} [opts.prOpen] - completed-sweep open-PR gate. prOpen===false is REQUIRED
+ * @param {(issueNumber: number, project: string) => boolean} [opts.prOpen] - completed-sweep open-PR gate. prOpen===false is REQUIRED
  *   for a safe (force + branch-delete) removal; a still-open PR falls to the keep-branch path so
  *   cron-a-dispatch's local-ref resume probe does not orphan the PR's commits on re-dispatch.
  * @param {() => Array<{ metaPath: string, meta: object }>} [opts.listObsRuns] - zero-arg producer of pre-read
@@ -232,18 +232,21 @@ function crashRecover(worktree, holder, opts) {
   const labels = opts.issueLabels ? opts.issueLabels(worktree.issueNumber) : [];
   if (labels.includes(LABEL_IN_REVIEW)) return false;
 
-  if (!opts.prExists(worktree.issueNumber)) {
+  if (!opts.prExists(worktree.issueNumber, worktree.project)) {
     const count = opts.counter.read(worktree.issueNumber, { stateDir: worktree.stateDir });
     const label = count < opts.retryCeilingK ? LABEL_READY : LABEL_BLOCKED;
-    const result = opts.gh([
-      "issue",
-      "edit",
-      String(worktree.issueNumber),
-      "--remove-label",
-      LABEL_IN_PROGRESS,
-      "--add-label",
-      label,
-    ]);
+    const result = opts.gh(
+      [
+        "issue",
+        "edit",
+        String(worktree.issueNumber),
+        "--remove-label",
+        LABEL_IN_PROGRESS,
+        "--add-label",
+        label,
+      ],
+      worktree.project
+    );
     if (!result || !result.ok) return false;
   }
   opts.runLock.release({ stateDir: worktree.stateDir, acquireTs: holder.acquire_ts });
@@ -278,8 +281,8 @@ function reapCompletedWorktree(worktree, opts) {
   const ownSession = `harness-${worktree.project}-${worktree.issueNumber}`;
   if (opts.tmuxHasSession(ownSession)) return null;
 
-  const issueClosedResult = opts.issueClosed(worktree.issueNumber);
-  const prMergedResult = opts.prMerged(worktree.issueNumber);
+  const issueClosedResult = opts.issueClosed(worktree.issueNumber, worktree.project);
+  const prMergedResult = opts.prMerged(worktree.issueNumber, worktree.project);
   const branchMergedResult = opts.branchMerged(worktree.branch, worktree.projectRoot);
   const inspection = opts.inspectWorktree(worktree);
 
@@ -306,7 +309,7 @@ function reapCompletedWorktree(worktree, opts) {
   const workPreserved =
     prMergedResult === true || branchMergedResult === true || unmergedCommits.length === 0;
   const concluded = issueClosedResult === true || prMergedResult === true;
-  const prOpenResult = opts.prOpen(worktree.issueNumber);
+  const prOpenResult = opts.prOpen(worktree.issueNumber, worktree.project);
 
   if (workPreserved && concluded && prOpenResult === false) {
     // Safe removal: the work is preserved AND the run is concluded AND no PR is still open. Record
@@ -469,7 +472,7 @@ function sweepOrphanTopics(opts) {
       // When prOpen is not wired the gate is skipped (production always wires it via the composition
       // root's makeDefaultPrOpen — see run-reaper.mjs); the sweep then falls back to its pre-feature
       // close semantics rather than crash.
-      if (typeof prOpen === "function" && prOpen(meta.issueNumber)) continue;
+      if (typeof prOpen === "function" && prOpen(meta.issueNumber, meta.project)) continue;
       // H6: capture the PRIOR status BEFORE the optimistic close so a failed close reverts to the
       // run's actual prior state (e.g. 'awaiting-review'), never the hardcoded literal 'active'.
       const priorStatus = meta.status;
@@ -584,7 +587,7 @@ function isDeletable(candidate, opts, blocklist) {
 
   if (typeof prOpen !== "function") return false;
   try {
-    if (prOpen(meta.issueNumber) === true) return false;
+    if (prOpen(meta.issueNumber, meta.project) === true) return false;
   } catch {
     return false;
   }
@@ -711,7 +714,7 @@ async function deleteCandidate(candidate, identity, hasTopicDeletedAt, opts, tal
  * @param {(metaPath: string, expected: object, partial: object) => boolean} opts.updateMetaIfUnchanged
  * @param {(metaPath: string) => object|null} opts.readMeta
  * @param {(metaPath: string, { what: 'events' | 'meta' }) => boolean} opts.unlinkRunFiles
- * @param {(issueNumber: number) => boolean} opts.prOpen
+ * @param {(issueNumber: number, project: string) => boolean} opts.prOpen
  * @param {(event: object) => boolean} opts.isCriticalEvent
  * @param {() => number} [opts.now] - epoch seconds
  * @param {number|string} opts.resolvedChatId

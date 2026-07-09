@@ -549,3 +549,79 @@ test("#ac-1.8 retentionTally counts only ATTEMPTED deletions per chatId — a gu
     "only the attempted-and-failed transient delete counts toward attempted; the blocklist-guard-skipped candidate must not"
   );
 });
+
+// ---------------------------------------------------------------------------------------------
+// Multi-repo fleet regression: isDeletable must resolve prOpen against THIS candidate's OWN
+// project (meta.project), never a fleet-wide default. Before the fix, isDeletable called
+// `prOpen(meta.issueNumber)` — one argument short — which in a multi-repo fleet resolves the
+// scope to `undefined` at the composition root (run-reaper.mjs's resolveRepoScope/resolveScope),
+// collapsing every project's PR-open check onto the wrong (or no) repo. The negative test below
+// pins a fake prOpen that only reports "open" for the correct project; without the fix the fake
+// receives `project === undefined`, never matches, and the run is wrongly deleted.
+// ---------------------------------------------------------------------------------------------
+
+test("#ac-multi-repo negative: a run from project 'alpha' with an OPEN PR must never be deleted — isDeletable must pass meta.project to prOpen, not just meta.issueNumber", async () => {
+  const { candidate, readMeta } = makeEligibleFixture({ project: "alpha" });
+  const deleteForumTopic = makeRecorder(() => Promise.resolve({ ok: true }));
+  // Only reports an open PR for the correct project — a scope-less call (project undefined,
+  // the pre-fix shape) never matches "alpha" and would wrongly read as "no open PR".
+  const prOpen = (issueNumber, project) => project === "alpha";
+
+  const opts = baseSweepOpts({
+    listStaleRuns: () => [candidate],
+    readMeta,
+    prOpen,
+    deleteForumTopic: deleteForumTopic.fn,
+  });
+
+  const result = sweepStaleClosedTopics(opts);
+  await Promise.allSettled(result.retentionDeletes ?? []);
+
+  assert.equal(
+    deleteForumTopic.calls.length,
+    0,
+    "a run whose project has an OPEN PR must never be deleted — prOpen must be scoped by meta.project"
+  );
+});
+
+test("#ac-multi-repo positive control: the SAME fixture with prOpen reporting no open PR anywhere lets deletion proceed — proves the negative test above fails for the right reason, not because another gate already blocks it", async () => {
+  const { candidate, readMeta } = makeEligibleFixture({ project: "alpha" });
+  const deleteForumTopic = makeRecorder(() => Promise.resolve({ ok: true }));
+
+  const opts = baseSweepOpts({
+    listStaleRuns: () => [candidate],
+    readMeta,
+    prOpen: () => false,
+    deleteForumTopic: deleteForumTopic.fn,
+  });
+
+  const result = sweepStaleClosedTopics(opts);
+  await Promise.allSettled(result.retentionDeletes ?? []);
+
+  assert.equal(
+    deleteForumTopic.calls.length,
+    1,
+    "the same candidate must be deletable once prOpen reports no open PR — confirms no other gate was blocking it"
+  );
+});
+
+test("#ac-multi-repo argument contract: prOpen is called with exactly (meta.issueNumber, meta.project)", async () => {
+  const { candidate, readMeta } = makeEligibleFixture({ project: "alpha", issueNumber: 99 });
+  const prOpen = makeRecorder(() => false);
+
+  const opts = baseSweepOpts({
+    listStaleRuns: () => [candidate],
+    readMeta,
+    prOpen: prOpen.fn,
+  });
+
+  const result = sweepStaleClosedTopics(opts);
+  await Promise.allSettled(result.retentionDeletes ?? []);
+
+  assert.equal(prOpen.calls.length, 1, "prOpen must be called exactly once for the single candidate");
+  assert.deepEqual(
+    prOpen.calls[0],
+    [99, "alpha"],
+    "prOpen must receive exactly (meta.issueNumber, meta.project) — never issueNumber alone"
+  );
+});

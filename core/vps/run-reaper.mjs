@@ -308,6 +308,56 @@ function defaultPrExists(gh) {
 }
 
 const PR_OPEN_FETCH_LIMIT = 100;
+const REPO_NAME_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * @description Builds a `project -> {owner, repo}` index ONCE from config.projects, backfilling
+ * each entry from the fleet-level owner/repo at construction (entry.owner ?? config.owner,
+ * entry.repo ?? config.repo). The legacy case (projects[] exists but lacks owner/repo) is
+ * backfilled exactly once here. Entries with a malformed or non-string project name, owner, or repo
+ * are skipped and therefore resolve to `null` at resolveRepoScope, letting the existing fail-closed
+ * / fail-open behavior for an unknown project take over. An absent/empty projects[] leaves the
+ * index empty; the caller falls back to the fleet-level owner/repo to preserve today's single-repo
+ * behavior.
+ *
+ * Ambiguity rule: if the same project name appears more than once with DIFFERENT resolved
+ * `{owner, repo}` coordinates, the name is removed from the index and never re-added, so it
+ * resolves to `null` (fail-closed). Exact duplicates (same name, same owner, same repo) are
+ * harmless and stay bound.
+ * @param {object} config
+ * @returns {Map<string, {owner: string, repo: string}>}
+ */
+function buildProjectRepoIndex(config) {
+  const index = new Map();
+  const ambiguous = new Set();
+  if (Array.isArray(config.projects)) {
+    for (const entry of config.projects) {
+      if (entry == null || typeof entry !== "object") continue;
+      const owner = entry.owner ?? config.owner;
+      const repo = entry.repo ?? config.repo;
+      if (
+        typeof entry.project !== "string" ||
+        typeof owner !== "string" ||
+        !REPO_NAME_TOKEN.test(owner) ||
+        typeof repo !== "string" ||
+        !REPO_NAME_TOKEN.test(repo)
+      ) {
+        continue;
+      }
+      const name = entry.project;
+      if (ambiguous.has(name)) continue;
+      const existing = index.get(name);
+      if (existing && (existing.owner !== owner || existing.repo !== repo)) {
+        index.delete(name);
+        ambiguous.add(name);
+        console.warn(JSON.stringify({ op: "reaper.ambiguous-project", project: name }));
+        continue;
+      }
+      index.set(name, { owner, repo });
+    }
+  }
+  return index;
+}
 
 /**
  * @description Builds the real prOpen seam for the orphan-topic sweep: true iff the issue has an
@@ -324,17 +374,24 @@ const PR_OPEN_FETCH_LIMIT = 100;
  * (assume OPEN -> the sweep SKIPS, never closing a live topic under uncertainty). Only a SUCCEEDED
  * fetch with no matching PR returns false (close).
  *
- * MEMOIZED per predicate instance: one gh fetch per sweep, not one per orphan-candidate run. The
- * predicate is constructed once per runReaper call and closed over the `cache` slot.
+ * MEMOIZED per owner/repo slug: one gh fetch per distinct repo per sweep, not one per
+ * orphan-candidate run. The predicate is constructed once per runReaper call and closed over a
+ * `Map<slug, cacheEntry>`. Receives a `resolveScope` function that returns `{owner, repo} | null`
+ * for a project.
  * @param {(cmd: string, args: string[], opts: object) => {status: number, stdout: string, error?: *}} spawn
- * @param {string} owner
- * @param {string} repo
- * @returns {(issueNumber: number) => boolean}
+ * @param {(project: string) => {owner: string, repo: string} | null} resolveScope
+ * @returns {(issueNumber: number, project?: string) => boolean}
  */
-function makeDefaultPrOpen(spawn, owner, repo) {
-  let cache; // undefined = unfetched; { prs } = ok; { error: true } = failed
-  return (issueNumber) => {
-    if (cache === undefined) {
+function makeDefaultPrOpen(spawn, resolveScope) {
+  // Map keyed by owner/repo slug; both the gh-outage fail-open and the >= PR_OPEN_FETCH_LIMIT
+  // fail-open are per slug so repo A's cached PR list never answers repo B's query (C3).
+  const cache = new Map();
+  return (issueNumber, project) => {
+    const scope = resolveScope(project);
+    if (!scope) return true; // unknown project -> fail OPEN (never close a topic under uncertainty)
+    const slug = `${scope.owner}/${scope.repo}`;
+    let cached = cache.get(slug);
+    if (cached === undefined) {
       let res;
       try {
         res = spawn(
@@ -343,7 +400,7 @@ function makeDefaultPrOpen(spawn, owner, repo) {
             "pr",
             "list",
             "--repo",
-            `${owner}/${repo}`,
+            slug,
             "--state",
             "open",
             "--json",
@@ -354,30 +411,31 @@ function makeDefaultPrOpen(spawn, owner, repo) {
           { encoding: "utf8" }
         );
       } catch {
-        cache = { error: true };
+        cached = { error: true };
       }
-      if (cache === undefined) {
-        if (!res || res.status !== 0 || res.error) cache = { error: true };
+      if (cached === undefined) {
+        if (!res || res.status !== 0 || res.error) cached = { error: true };
         else {
           try {
-            cache = { prs: JSON.parse(res.stdout) };
+            cached = { prs: JSON.parse(res.stdout) };
           } catch {
-            cache = { error: true };
+            cached = { error: true };
           }
         }
       }
+      cache.set(slug, cached);
     }
     // FAIL-OPEN: a gh outage -> assume OPEN -> the sweep SKIPS (never close a live topic under
     // uncertainty). Only a succeeded fetch with no matching PR returns false.
-    if (cache.error) return true;
-    const match = pickSessionPr(cache.prs, issueNumber);
+    if (cached.error) return true;
+    const match = pickSessionPr(cached.prs, issueNumber);
     if (match !== null) return true;
     // Ambiguous full window: the repo has >= PR_OPEN_FETCH_LIMIT open PRs, so a genuinely-open
     // harness PR outside the fetched window is indistinguishable from "no match" — fail OPEN to
     // preservation (exactly like the gh-outage path above) so a still-OPEN PR's branch is never
     // deleted and cron-a-dispatch's local-ref resume probe never rebuilds from main, orphaning its
     // commits.
-    if (Array.isArray(cache.prs) && cache.prs.length >= PR_OPEN_FETCH_LIMIT) return true;
+    if (Array.isArray(cached.prs) && cached.prs.length >= PR_OPEN_FETCH_LIMIT) return true;
     return false;
   };
 }
@@ -406,28 +464,39 @@ function makeDefaultPrOpen(spawn, owner, repo) {
  * is still under review. Contrast `makeDefaultPrOpen`, which uses the RAW spawn seam precisely so
  * a `gh` error (non-zero status / unparseable stdout) maps to `true` (assume OPEN → skip the
  * candidate), preserving the topic under uncertainty.
- * @param {(args: string[]) => any} gh
- * @returns {(issueNumber: number) => boolean}
+ * @param {(args: string[], project?: string) => any} gh
+ * @param {(project: string) => {owner: string, repo: string} | null} resolveScope
+ * @returns {(issueNumber: number, project?: string) => boolean}
  */
-function makeDefaultPrOpenViaGh(gh) {
-  let cache; // undefined = unfetched
-  return (issueNumber) => {
-    if (cache === undefined) {
-      const prs = gh([
-        "pr",
-        "list",
-        "--state",
-        "open",
-        "--json",
-        "number,headRefName,url,body",
-        "--limit",
-        String(PR_OPEN_FETCH_LIMIT),
-      ]);
-      cache = Array.isArray(prs) ? prs : [];
+function makeDefaultPrOpenViaGh(gh, resolveScope) {
+  // Keyed by owner/repo slug, mirroring makeDefaultPrOpen: repo A's cached PR list must never
+  // answer repo B's query.
+  const cache = new Map();
+  return (issueNumber, project) => {
+    const scope = resolveScope(project);
+    if (!scope) return true; // unknown project -> fail OPEN (never delete a topic under uncertainty)
+    const slug = `${scope.owner}/${scope.repo}`;
+    let prs = cache.get(slug);
+    if (prs === undefined) {
+      const result = gh(
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--json",
+          "number,headRefName,url,body",
+          "--limit",
+          String(PR_OPEN_FETCH_LIMIT),
+        ],
+        project
+      );
+      prs = Array.isArray(result) ? result : [];
+      cache.set(slug, prs);
     }
-    const match = pickSessionPr(cache, issueNumber);
+    const match = pickSessionPr(prs, issueNumber);
     if (match !== null) return true;
-    if (cache.length >= PR_OPEN_FETCH_LIMIT) return true;
+    if (prs.length >= PR_OPEN_FETCH_LIMIT) return true;
     return false;
   };
 }
@@ -668,32 +737,92 @@ export function runReaper(config, deps = {}) {
   const readMetaFn = deps.readMeta ?? realReadMeta;
   const updateMetaFn = deps.updateMeta ?? realUpdateMeta;
 
-  const gh = scopedGh(config.owner, config.repo, ghExec);
-  const prExists = deps.prExists ?? defaultPrExists(gh);
-  // Raw spawn seam (spawnSync shape {status, stdout, error}) shared by every completed-sweep probe
-  // below. Used INSTEAD of the normalized gh/ghExec seam because that seam returns [] on BOTH a gh
-  // error and a genuine empty result — an outage must map to null (unknown, fail-closed prune),
-  // never to a false that would authorize a branch deletion.
+  // Per-project owner/repo index. Backfills each entry from the fleet-level owner/repo at
+  // construction (entry.owner ?? config.owner, entry.repo ?? config.repo). An absent/empty
+  // projects[] falls back to the fleet-level owner/repo to preserve today's single-repo behavior.
+  const repoIndex = buildProjectRepoIndex(config);
+  const fleetRepo = { owner: config.owner, repo: config.repo };
+  const hasDeclaredProjects = Array.isArray(config.projects) && config.projects.length > 0;
+  function resolveRepoScope(project) {
+    if (!hasDeclaredProjects) return fleetRepo;
+    return repoIndex.get(project) ?? null;
+  }
+
+  // NORMALIZED gh seam (C4): prExists and the crash-recovery relabel `gh issue edit` go through
+  // scopedGh, which appends `--repo owner/repo` at the end of the args array. The scope is resolved
+  // from the project passed at call time. Unknown project fails closed with {ok:false} / false (C2).
+  const ghByScope = new Map();
+  function getScopedGh(project) {
+    const scope = resolveRepoScope(project);
+    if (!scope) return null;
+    const slug = `${scope.owner}/${scope.repo}`;
+    if (!ghByScope.has(slug)) {
+      ghByScope.set(slug, scopedGh(scope.owner, scope.repo, ghExec));
+    }
+    return ghByScope.get(slug);
+  }
+  const gh =
+    deps.gh ??
+    ((args, project) => {
+      const scoped = getScopedGh(project);
+      if (!scoped) return { ok: false };
+      return scoped(args);
+    });
+  const prExists =
+    deps.prExists ??
+    ((issueNumber, project) => {
+      const scoped = getScopedGh(project);
+      if (!scoped) return false;
+      return defaultPrExists(scoped)(issueNumber);
+    });
+
+  // RAW spawn seam (spawnSync shape {status, stdout, error}) shared by the completed-sweep and
+  // orphan-topic probes below. Used INSTEAD of the normalized gh/ghExec seam because that seam
+  // returns [] on BOTH a gh error and a genuine empty result — an outage must map to null (unknown,
+  // fail-closed prune), never to a false that would authorize a branch deletion.
   const spawn = deps.spawn ?? spawnSync;
   // Open-PR predicate — shared by the orphan-topic sweep (F2), the completed-worktree sweep, and
   // the retention sweep (reaper.mjs threads the identical opts.prOpen to all three). FAIL-OPEN on a
-  // gh outage, memoized per sweep, --state open + --json body + no --head so a typed-branch
-  // body-link PR is still recognized. DISTINCT from prExists (open-OR-merged, --head harness/<N>)
-  // above — left unchanged. Defaults to the raw-spawn `makeDefaultPrOpen` (byte-identical to
-  // before, including in production where mainReaper injects neither `spawn` nor `ghExec`) UNLESS a
+  // gh outage, memoized per distinct owner/repo slug, --state open + --json body + no --head so a
+  // typed-branch body-link PR is still recognized. DISTINCT from prExists (open-OR-merged,
+  // --head harness/<N>) above — left unchanged. Defaults to the raw-spawn `makeDefaultPrOpen`
+  // (including in production, where mainReaper injects neither `spawn` nor `ghExec`) UNLESS a
   // `ghExec`/`gh` fake is injected without a `spawn` fake — the retention suite's affordance so a
   // fixture owner/repo that never exists on the real network does not permanently fail-open-block
   // every deletion (see makeDefaultPrOpenViaGh's doc comment).
   const prOpen =
     deps.prOpen ??
     (!deps.spawn && ("ghExec" in deps || "gh" in deps)
-      ? makeDefaultPrOpenViaGh(gh)
-      : makeDefaultPrOpen(spawn, config.owner, config.repo));
+      ? makeDefaultPrOpenViaGh(gh, resolveRepoScope)
+      : makeDefaultPrOpen(spawn, resolveRepoScope));
 
   // Completed-worktree sweep (behavior d) tri-state probes — all injectable, all fail closed
   // (null on any failure) so the pure-logic prune in reaper.mjs never deletes on uncertainty.
-  const issueClosed = deps.issueClosed ?? makeDefaultIssueClosed(spawn, config.owner, config.repo);
-  const prMerged = deps.prMerged ?? makeDefaultPrMerged(spawn, config.owner, config.repo);
+  // Each probe resolves `--repo owner/repo` from the per-project index at call time (C4).
+  const issueClosedByScope = new Map();
+  const issueClosed =
+    deps.issueClosed ??
+    ((issueNumber, project) => {
+      const scope = resolveRepoScope(project);
+      if (!scope) return null;
+      const slug = `${scope.owner}/${scope.repo}`;
+      if (!issueClosedByScope.has(slug)) {
+        issueClosedByScope.set(slug, makeDefaultIssueClosed(spawn, scope.owner, scope.repo));
+      }
+      return issueClosedByScope.get(slug)(issueNumber);
+    });
+  const prMergedByScope = new Map();
+  const prMerged =
+    deps.prMerged ??
+    ((issueNumber, project) => {
+      const scope = resolveRepoScope(project);
+      if (!scope) return null;
+      const slug = `${scope.owner}/${scope.repo}`;
+      if (!prMergedByScope.has(slug)) {
+        prMergedByScope.set(slug, makeDefaultPrMerged(spawn, scope.owner, scope.repo));
+      }
+      return prMergedByScope.get(slug)(issueNumber);
+    });
   const branchMerged =
     deps.branchMerged ?? makeDefaultBranchMerged(spawn, config.defaultBranch ?? "main");
   const inspectWorktree =
