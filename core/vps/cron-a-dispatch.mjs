@@ -137,6 +137,14 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
 }
 
 /**
+ * @description Injectable clock seam returning epoch SECONDS — matches
+ * run-cron-review.mjs's `Math.floor(Date.now()/1000)`. NEVER raw Date.now() milliseconds: a
+ * millisecond closedAt passes Number.isFinite and breaks the retention sweep's age gate. Tests
+ * inject a fixed `now` so the stamped closedAt is deterministic; production uses the default.
+ */
+const defaultNow = () => Math.floor(Date.now() / 1000);
+
+/**
  * @description Pre-registration spawn-failure recovery (AC1.12): release the held run-lock and
  * relabel the issue harness:in-progress -> harness:ready so neither is stranded with no release
  * owner. No retry attempt is consumed (the counter is charged only after a successful spawn +
@@ -158,9 +166,10 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
  *   Observability context from the pre-spawn setup; when a topic was created (threadId != null) the
  *   seam is closed or the meta is marked 'orphan'.
  * @param {Function} [args.closeForumTopic] - Token-bound seam `({threadId}) => Promise<{ok}>`.
+ * @param {Function} [args.now=defaultNow] - Injectable epoch-SECONDS clock for the closedAt stamp.
  * @returns {Promise<void>}
  */
-async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
+async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
   try {
     runLock.release({ stateDir, acquireTs });
   } catch {
@@ -211,7 +220,11 @@ async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumb
   }
   if (metaPath && obs && typeof obs.updateMeta === "function") {
     try {
-      obs.updateMeta(metaPath, { status });
+      // closedAt is the retention sweep's ONLY age anchor: a `closed` meta without it can never
+      // be aged and its forum topic leaks forever. Epoch SECONDS — a millisecond value passes
+      // Number.isFinite and silently breaks the age gate. `orphan` carries no stamp (no close
+      // happened, the reaper sweeps it on its own terms).
+      obs.updateMeta(metaPath, status === "closed" ? { status, closedAt: now() } : { status });
     } catch {
       // best-effort: a status write failure must never mask the original spawn failure
     }
@@ -219,8 +232,8 @@ async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumb
 }
 
 /** @description recoverSpawnFailure wrapped to return the { ok: false } result shape. */
-async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic }) {
-  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
+  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now });
   return { ok: false };
 }
 
