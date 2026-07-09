@@ -175,6 +175,7 @@ function buildProjectRepoIndex(config) {
   const ambiguous = new Set();
   if (Array.isArray(config.projects)) {
     for (const entry of config.projects) {
+      if (entry == null || typeof entry !== "object") continue;
       const owner = entry.owner ?? config.owner;
       const repo = entry.repo ?? config.repo;
       if (
