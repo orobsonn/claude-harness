@@ -298,6 +298,19 @@ function reapCompletedWorktree(worktree, opts) {
     // Safe removal: the work is preserved AND the run is concluded AND no PR is still open. Record
     // the dirty/untracked inventory on the descriptor, then force-remove (a dirty/untracked
     // worktree refuses a plain `git worktree remove`) and prune the orphan branch.
+    // why #ac-1.1: record the discarded working-tree inventory BEFORE the destructive force-remove
+    // so uncommitted work never disappears silently — the mitigation that justifies an unattended
+    // destructive cron. Structured single-line JSON on stderr (the cron log), nothing beyond these
+    // fields.
+    console.warn(
+      JSON.stringify({
+        op: "reaper.completed-cleaned",
+        project: worktree.project,
+        issue: worktree.issueNumber,
+        worktreePath: worktree.worktreePath,
+        dirtyPaths,
+      })
+    );
     opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot, { force: true });
     opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
     return { ...actionOf(worktree, "completed-cleaned"), dirtyPaths };
@@ -307,7 +320,19 @@ function reapCompletedWorktree(worktree, opts) {
   // still open. Record the unmerged commits on the descriptor BEFORE the non-force removal so the
   // work is never lost silently, then remove WITHOUT force (a dirty worktree is deliberately left
   // intact by `git worktree remove`) and KEEP the branch for the next attempt.
+  // why #ac-1.3: record the unmerged commits BEFORE the destructive removal so unmerged work never
+  // disappears silently — the mitigation that justifies an unattended destructive cron. Structured
+  // single-line JSON on stderr (the cron log), nothing beyond these fields.
   const descriptor = { ...actionOf(worktree, "keep-branch"), unmergedCommits };
+  console.warn(
+    JSON.stringify({
+      op: "reaper.keep-branch",
+      project: worktree.project,
+      issue: worktree.issueNumber,
+      worktreePath: worktree.worktreePath,
+      unmergedCommits,
+    })
+  );
   opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot);
   return descriptor;
 }
