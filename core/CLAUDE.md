@@ -94,9 +94,11 @@ families** — Claude and a second family (GPT via the Codex CLI) — so each su
 other's priors miss. The **global switch** is the env var `HARNESS_CODEX_ADVERSARY` (set it in
 `settings.local.json` → `env` for a per-machine opt-in — what `npx claude-harness init` writes when you
 opt in — or in the committed `settings.json` → `env` for a repo-wide default; per-task via
-`adversarial.cross_family`). It is **fail-open**: with the module absent, the switch off, in headless
-without an `OPENAI_API_KEY`, or with `codex` unreachable, every checkpoint runs **Claude-only exactly
-as today** — the second family is never a hard dependency. For the `security` eye specifically, the
+`adversarial.cross_family`). It is **fail-open**: with the module absent, the switch off, or with
+`codex` unreachable — absent from `PATH`, or authenticated by neither a ChatGPT subscription nor an
+`OPENAI_API_KEY` — every checkpoint runs **Claude-only exactly as today** — the second family is never
+a hard dependency. Headless alone does **not** disable it: a subscription-authed `codex` runs in a
+headless session with no API key (that is how the PR-review session gets its second family). For the `security` eye specifically, the
 SECURE|UNSAFE gate verdict stays Claude-authoritative (a codex-only finding only escalates the gate
 after its Claude refute-pass — a gate-state precondition). The second family is always read-only and
 Claude-tier (an eye, never a cheap hand). The **`codex-eye-nudge` hook** (PostToolUse[Agent],

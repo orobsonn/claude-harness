@@ -47,11 +47,22 @@ test("driveCrossFamily: toggle off => passthrough (claude-only)", () => {
   assert.equal(r.pendingClaudeRefutation.length, 0);
 });
 
-test("driveCrossFamily: enabled but headless-no-key => passthrough", () => {
-  const r = driveCrossFamily({ taskJson: { adversarial: { cross_family: true } }, claudeIssues: [issue()], env: { CLAUDE_CODE_REMOTE: "1" } });
+// `availability` is injected: without it this unit reaches the real checkAvailability, which shells
+// out to `codex login status` and — on a machine with codex authenticated — spawns a real `codex exec`.
+test("driveCrossFamily: enabled but codex unavailable => passthrough (claude-only)", () => {
+  const claude = [issue()];
+  const runAttack = () => assert.fail("attack must not run when codex is unavailable");
+  const r = driveCrossFamily({
+    taskJson: { adversarial: { cross_family: true } },
+    claudeIssues: claude,
+    env: {},
+    availability: { ok: false, reason: "codex CLI not found on PATH" },
+    runAttack,
+  });
   assert.equal(r.enabled, true);
   assert.equal(r.available, false);
-  assert.equal(r.findings.length, 1);
+  assert.deepEqual(r.findings, claude);
+  assert.equal(r.pendingClaudeRefutation.length, 0);
 });
 
 test("driveCrossFamily: agreed + codex-refutes-claude-only + claude-pending", () => {
