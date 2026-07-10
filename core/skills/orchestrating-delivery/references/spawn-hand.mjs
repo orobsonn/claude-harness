@@ -48,15 +48,30 @@ const OLLAMA_BASE_URL = "https://ollama.com";
  */
 const CLAUDE_HAND_ALIASES = new Set(["haiku", "sonnet", "opus"]);
 
-/** @description Default wall-clock timeout for hand spawn in milliseconds (15 minutes) */
-const DEFAULT_HAND_TIMEOUT_MS = 900000;
+/**
+ * @description Default wall-clock timeout for the hand's own spawnSync, in milliseconds (9 minutes).
+ * Deliberately < the Bash tool's 600000ms (10 min) hard max so the hand self-terminates cleanly
+ * BEFORE the orchestrator's foreground Bash call (which runs `node spawn-hand.mjs`) is SIGKILLed —
+ * a 60s headroom. A value >= 600000 would let the Bash tool kill the node process mid-capture,
+ * losing the run-record the entry-gate rails depend on.
+ */
+export const DEFAULT_HAND_TIMEOUT_MS = 540000;
 
 /**
  * @description Hard ceiling for the wall-clock timeout, in milliseconds. `dispatch.timeout_ms`
  * (per-task override) may lower the wall-clock but must never raise it above this ceiling —
  * a plan cannot smuggle an unbounded wait past the hand's designed timeout envelope.
  */
-const HAND_TIMEOUT_CEILING_MS = DEFAULT_HAND_TIMEOUT_MS;
+export const HAND_TIMEOUT_CEILING_MS = DEFAULT_HAND_TIMEOUT_MS;
+
+/**
+ * @description Explicit Bash-tool timeout (ms) the orchestrator MUST pass when it runs
+ * `node spawn-hand.mjs` in the FOREGROUND. The Bash tool defaults to 120000ms (2 min) and would
+ * SIGKILL the hand at 2 minutes; 600000ms is the Bash tool's hard max and sits 60s above the
+ * hand's own 540000ms self-timeout, so the hand always self-terminates first. Carried explicitly
+ * on the assembled dispatch (bash_timeout_ms) so the value is observable/verifiable, not folklore.
+ */
+export const HAND_BASH_TIMEOUT_MS = 600000;
 
 /**
  * @description Attributes a 429 rate-limit event over the FULL pre-truncation child stream
@@ -624,6 +639,10 @@ export async function runLiveDispatch(descriptor, {
     // Optional: a descriptor with no opinion (no test_runner field) lets dispatchHand/capture
     // default to DEFAULT_RUNNER_ID — every pre-existing descriptor keeps today's behavior.
     test_runner: descriptor.test_runner,
+    // #ac-2.2: carry the explicit Bash-tool timeout the orchestrator must set on the FOREGROUND
+    // `node spawn-hand.mjs` call, so it never defaults to 120000ms and SIGKILLs the hand at 2 min.
+    // Observable on the assembled dispatch (and forwarded to the capture seam) for verification.
+    bash_timeout_ms: HAND_BASH_TIMEOUT_MS,
   };
 
   // (7) Persist the descriptor ONLY into an ephemeral mkdtemp path, redactDeep-scrubbed, torn down

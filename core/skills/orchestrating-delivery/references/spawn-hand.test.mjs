@@ -17,8 +17,41 @@ import {
   buildSpawnArgs,
   dispatchHand,
   runLiveDispatch,
+  DEFAULT_HAND_TIMEOUT_MS,
+  HAND_TIMEOUT_CEILING_MS,
+  HAND_BASH_TIMEOUT_MS,
 } from "./spawn-hand.mjs";
 import { OUTCOME } from "./dispatch-hand.mjs";
+
+// ---------------------------------------------------------------------------
+// #ac-2.1 — the hand's own wall-clock timeout must sit BELOW the Bash tool's 600000ms max,
+// so the hand self-terminates cleanly before the orchestrator's foreground Bash call is
+// SIGKILLed. 540000ms (9 min) leaves 60s headroom. The ceiling is kept == default so a
+// per-task override can lower but never raise the wall-clock. HAND_BASH_TIMEOUT_MS is the
+// explicit Bash-tool timeout (== 600000, the tool max) and must exceed the hand self-timeout.
+// ---------------------------------------------------------------------------
+describe("hand timeout ceiling constants (#ac-2.1)", () => {
+  it("DEFAULT_HAND_TIMEOUT_MS is below the Bash tool's 600000ms max", () => {
+    assert.equal(typeof DEFAULT_HAND_TIMEOUT_MS, "number", "DEFAULT_HAND_TIMEOUT_MS must be a number");
+    assert.ok(
+      DEFAULT_HAND_TIMEOUT_MS < 600000,
+      `DEFAULT_HAND_TIMEOUT_MS must be < 600000ms (Bash tool max) — got ${DEFAULT_HAND_TIMEOUT_MS}`,
+    );
+    assert.equal(DEFAULT_HAND_TIMEOUT_MS, 540000, "DEFAULT_HAND_TIMEOUT_MS must be 540000ms (9 min, 60s headroom)");
+  });
+
+  it("HAND_TIMEOUT_CEILING_MS equals DEFAULT_HAND_TIMEOUT_MS (a plan cannot raise the wall-clock)", () => {
+    assert.equal(HAND_TIMEOUT_CEILING_MS, DEFAULT_HAND_TIMEOUT_MS);
+  });
+
+  it("HAND_BASH_TIMEOUT_MS is 600000 (Bash tool max) and above the hand self-timeout", () => {
+    assert.equal(HAND_BASH_TIMEOUT_MS, 600000, "HAND_BASH_TIMEOUT_MS must be the Bash tool max (600000)");
+    assert.ok(
+      HAND_BASH_TIMEOUT_MS > DEFAULT_HAND_TIMEOUT_MS,
+      "the Bash-tool timeout must exceed the hand's own self-timeout so the hand self-terminates first",
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Locked test 1 — argv shape + token exclusion
@@ -955,10 +988,10 @@ describe("dispatchHand wall-clock timeout — dry-run probe has NO timeout (#ac-
 
 // ---------------------------------------------------------------------------
 // Locked test 15 — #ac-1.1 / C4 / C7 dispatch.timeout_ms overrides the live-spawn
-// timeout, and the DEFAULT_HAND_TIMEOUT_MS (900000ms) is used when omitted.
+// timeout, and the DEFAULT_HAND_TIMEOUT_MS (540000ms) is used when omitted.
 // ---------------------------------------------------------------------------
 describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac-1.1, C4/C7)", () => {
-  it("honors dispatch.timeout_ms when present, and defaults to 900000ms otherwise", async () => {
+  it("honors dispatch.timeout_ms when present, and defaults to 540000ms otherwise", async () => {
     let liveOptsOverride = null;
     const fakeSpawnOverride = (cmd, args, opts) => {
       if (args?.includes("--test")) {
@@ -1024,18 +1057,18 @@ describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac
     assert.ok(liveOptsDefault, "the live spawn call must have been captured for the default case");
     assert.equal(
       liveOptsDefault.timeout,
-      900000,
-      "opts.timeout must default to DEFAULT_HAND_TIMEOUT_MS (900000ms) when timeout_ms is omitted"
+      540000,
+      "opts.timeout must default to DEFAULT_HAND_TIMEOUT_MS (540000ms) when timeout_ms is omitted"
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// Locked test — #ac-1.1 the per-task timeout_ms override is clamped to the 900000ms
+// Locked test — #ac-1.1 the per-task timeout_ms override is clamped to the 540000ms
 // ceiling — a plan cannot smuggle an unbounded wait past the hand's timeout envelope.
 // ---------------------------------------------------------------------------
-describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 900000ms ceiling (#ac-1.1)", () => {
-  it("clamps an over-ceiling dispatch.timeout_ms down to 900000ms", async () => {
+describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 540000ms ceiling (#ac-1.1)", () => {
+  it("clamps an over-ceiling dispatch.timeout_ms down to 540000ms", async () => {
     let liveOpts = null;
     const fakeSpawn = (cmd, args, opts) => {
       if (args?.includes("--test")) {
@@ -1053,7 +1086,7 @@ describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 90000
       frozen_paths: [],
       allowed_writes: ["core/"],
       locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
-      timeout_ms: 1_800_000, // over the 900000ms ceiling
+      timeout_ms: 1_800_000, // over the 540000ms ceiling
     };
     const fakeEnv = { ANTHROPIC_AUTH_TOKEN: "fake-token" };
 
@@ -1062,8 +1095,8 @@ describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 90000
     assert.ok(liveOpts, "the live spawn call must have been captured");
     assert.equal(
       liveOpts.timeout,
-      900000,
-      "an over-ceiling dispatch.timeout_ms must be clamped down to the 900000ms ceiling"
+      540000,
+      "an over-ceiling dispatch.timeout_ms must be clamped down to the 540000ms ceiling"
     );
   });
 });
