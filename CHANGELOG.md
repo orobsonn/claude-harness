@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.36.0](https://github.com/orobsonn/claude-harness/compare/v0.35.0...v0.36.0) (2026-07-10)
+
+
+### Features
+
+* **vps:** sweep de retenção que apaga tópicos fechados há mais de 7 dias ([#238](https://github.com/orobsonn/claude-harness/issues/238)) ([c01c740](https://github.com/orobsonn/claude-harness/commit/c01c7405e28adf85218636c7463e0f504af8c9cb)), closes [#178](https://github.com/orobsonn/claude-harness/issues/178)
+
 ## [0.35.0](https://github.com/orobsonn/claude-harness/compare/v0.34.0...v0.35.0) (2026-07-09)
 
 
