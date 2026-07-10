@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.38.0](https://github.com/orobsonn/claude-harness/compare/v0.37.0...v0.38.0) (2026-07-10)
+
+
+### Features
+
+* **vps:** modo-conserto no re-dispatch de review reprovada (Grupo C) ([#258](https://github.com/orobsonn/claude-harness/issues/258)) ([213306b](https://github.com/orobsonn/claude-harness/commit/213306b748d3cda5e2fb4360963b1374e4cd9a7f)), closes [#249](https://github.com/orobsonn/claude-harness/issues/249)
+
 ## [0.37.0](https://github.com/orobsonn/claude-harness/compare/v0.36.1...v0.37.0) (2026-07-10)
 
 
