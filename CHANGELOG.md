@@ -5,6 +5,16 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.36.1](https://github.com/orobsonn/claude-harness/compare/v0.36.0...v0.36.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* alinha scripts.test do npm ao glob do CI (core + modules) ([#242](https://github.com/orobsonn/claude-harness/issues/242)) ([75183fd](https://github.com/orobsonn/claude-harness/commit/75183fd03547704213ec843bbaa7e08302572571)), closes [#226](https://github.com/orobsonn/claude-harness/issues/226)
+* harvester delega CHANGELOG ao release-please quando configurado ([#244](https://github.com/orobsonn/claude-harness/issues/244)) ([c745e6d](https://github.com/orobsonn/claude-harness/commit/c745e6dfe301a89e95863a846a5c52f010ccbf96)), closes [#231](https://github.com/orobsonn/claude-harness/issues/231)
+* reaper poda worktree concluído mesmo com outro run ativo ([#233](https://github.com/orobsonn/claude-harness/issues/233)) ([#245](https://github.com/orobsonn/claude-harness/issues/245)) ([bb1fc03](https://github.com/orobsonn/claude-harness/commit/bb1fc03e1c3e7910abfafd2d4797d35a5e94f9f1))
+* **vps:** tópicos de Telegram de issues fechadas não ressurgem mais ([#246](https://github.com/orobsonn/claude-harness/issues/246)) ([3e07c52](https://github.com/orobsonn/claude-harness/commit/3e07c529131c2ef8083968781d60f1c20b5d080b)), closes [#235](https://github.com/orobsonn/claude-harness/issues/235)
+
 ## [0.36.0](https://github.com/orobsonn/claude-harness/compare/v0.35.0...v0.36.0) (2026-07-10)
 
 
