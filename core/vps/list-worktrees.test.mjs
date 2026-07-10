@@ -69,7 +69,7 @@ test("listWorktrees: for one project, returns only the harness/* worktrees (excl
   assert.equal(e7.stateDir, "/root/dev/demo-project/.claude/state");
 });
 
-test("listWorktrees: each returned entry carries the holder object that readHolder({stateDir}) returned for that project's stateDir", () => {
+test("listWorktrees: when the project holder's tmux_session_id matches an entry's own expected session, that entry's holder deep-equals the shared project-level holder object (the live run's own worktree keeps the holder)", () => {
   const project = {
     project: "demo-project",
     projectRoot: "/root/dev/demo-project",
@@ -78,25 +78,93 @@ test("listWorktrees: each returned entry carries the holder object that readHold
 
   const stdout = porcelain("/root/dev/demo-project", [
     { path: "/root/dev/demo-project/.worktrees/harness-demo-project-42", branch: "harness/42" },
+    { path: "/root/dev/demo-project/.worktrees/harness-demo-project-7", branch: "harness/7" },
   ]);
 
-  const expectedHolder = { pid: 4242, acquire_ts: 90_000, tmux_session_id: "sess-42" };
+  const holder = { pid: 999, acquire_ts: 1000, tmux_session_id: "harness-demo-project-42" };
 
   const runGitWorktreeList = makeFakeRunGitWorktreeList({
     "/root/dev/demo-project": stdout,
   });
   const readHolder = makeFakeReadHolder({
-    "/root/dev/demo-project/.claude/state": expectedHolder,
+    "/root/dev/demo-project/.claude/state": holder,
   });
 
   const entries = listWorktrees({ projects: [project], runGitWorktreeList, readHolder });
 
-  assert.equal(entries.length, 1);
+  const e42 = entries.find((e) => e.issueNumber === 42);
+  assert.ok(e42, "an entry for harness/42 must be present");
   assert.deepEqual(
-    entries[0].holder,
-    expectedHolder,
-    "the entry's holder must be exactly what readHolder({stateDir}) returned for this project's stateDir"
+    e42.holder,
+    holder,
+    "harness/42's own expected session matches the lock's tmux_session_id, so it must keep the shared project holder"
   );
+});
+
+test("listWorktrees: when the project holder's tmux_session_id does NOT match an entry's own expected session, that entry's holder is null (the shared project holder must not be blindly assigned to a worktree it doesn't belong to)", () => {
+  const project = {
+    project: "demo-project",
+    projectRoot: "/root/dev/demo-project",
+    stateDir: "/root/dev/demo-project/.claude/state",
+  };
+
+  const stdout = porcelain("/root/dev/demo-project", [
+    { path: "/root/dev/demo-project/.worktrees/harness-demo-project-42", branch: "harness/42" },
+    { path: "/root/dev/demo-project/.worktrees/harness-demo-project-7", branch: "harness/7" },
+  ]);
+
+  const holder = { pid: 999, acquire_ts: 1000, tmux_session_id: "harness-demo-project-42" };
+
+  const runGitWorktreeList = makeFakeRunGitWorktreeList({
+    "/root/dev/demo-project": stdout,
+  });
+  const readHolder = makeFakeReadHolder({
+    "/root/dev/demo-project/.claude/state": holder,
+  });
+
+  const entries = listWorktrees({ projects: [project], runGitWorktreeList, readHolder });
+
+  const e7 = entries.find((e) => e.issueNumber === 7);
+  assert.ok(e7, "an entry for harness/7 must be present");
+  assert.equal(
+    e7.holder,
+    null,
+    "harness/7's own expected session 'harness-demo-project-7' does not match the lock's tmux_session_id, so its holder must be null"
+  );
+});
+
+test("listWorktrees: when the project holder has NO tmux_session_id key at all (unregistered — the acquire→register window), EVERY entry retains that holder unchanged", () => {
+  const project = {
+    project: "demo-project",
+    projectRoot: "/root/dev/demo-project",
+    stateDir: "/root/dev/demo-project/.claude/state",
+  };
+
+  const stdout = porcelain("/root/dev/demo-project", [
+    { path: "/root/dev/demo-project/.worktrees/harness-demo-project-42", branch: "harness/42" },
+    { path: "/root/dev/demo-project/.worktrees/harness-demo-project-7", branch: "harness/7" },
+  ]);
+
+  const holder = { pid: 999, acquire_ts: 1000 };
+
+  const runGitWorktreeList = makeFakeRunGitWorktreeList({
+    "/root/dev/demo-project": stdout,
+  });
+  const readHolder = makeFakeReadHolder({
+    "/root/dev/demo-project/.claude/state": holder,
+  });
+
+  const entries = listWorktrees({ projects: [project], runGitWorktreeList, readHolder });
+
+  assert.equal(entries.length, 2);
+  for (const entry of entries) {
+    assert.deepEqual(
+      entry.holder,
+      holder,
+      `entry for issue ${entry.issueNumber} must retain the unregistered holder unchanged (never nulled)`
+    );
+    assert.notEqual(entry.holder, null, `entry for issue ${entry.issueNumber} must not have a null holder`);
+  }
 });
 
 test("listWorktrees: sweeps MULTIPLE configured projects in a single call, returning entries from BOTH (one shared sweep feeding the shared reaper cron)", () => {
