@@ -73,7 +73,7 @@ import { getFreshVerdict } from "./review-verdict-source.mjs";
 import { crossFamilyEligible, deriveSecondFamilyVerdict } from "./review-cross-family.mjs";
 import { mergeAndFinalize, reconcile } from "./review-merge.mjs";
 import { releaseChainedDependents } from "./chain-release.mjs";
-import { routeReject } from "./review-routing.mjs";
+import { routeReject, persistReviewFindings } from "./review-routing.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
@@ -109,15 +109,6 @@ function defaultTmuxHasSession(sessionId) {
  */
 function defaultEngineKnows() {
   return false;
-}
-
-/**
- * @description routeReject's finding-persistence seam has no production implementation yet.
- * Best-effort no-op: the chain-depth advance and relabel in routeReject still happen; only the
- * findings payload itself is not yet durably stored.
- */
-function defaultRecordFindings() {
-  // Pending dedicated wiring — intentionally not fabricated here.
 }
 
 /**
@@ -461,7 +452,14 @@ export async function runCronReview(config, deps = {}) {
         ...o,
         chain,
         reviewed,
-        recordFindings: deps.recordFindings ?? defaultRecordFindings,
+        recordFindings:
+          deps.recordFindings ??
+          ((root, findings, ctx) =>
+            persistReviewFindings(root, findings, {
+              ...ctx,
+              reviewStateDir,
+              outStateDir: config.stateDir,
+            })),
         notify: safeNotify,
       }));
 
