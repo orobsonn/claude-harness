@@ -469,11 +469,42 @@ export async function notifyExit(outcome, deps = {}) {
 }
 
 /**
+ * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Redacts secret-shaped
+ * substrings from session output before it is persisted.
+ * @param {string} _text
+ * @returns {string}
+ */
+export function scrubSecrets(_text) {
+  throw new Error("not implemented");
+}
+
+/**
+ * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Best-effort persists the
+ * diagnostic exit-reason file for a non-PR session exit; never throws.
+ * @param {object} _args
+ * @returns {void}
+ */
+export function captureExitReason(_args) {
+  throw new Error("not implemented");
+}
+
+/**
+ * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Testable CLI orchestration
+ * used by main(): parseArgv -> cronAExit -> notifyExit -> captureExitReason.
+ * @param {string[]} _argv
+ * @param {object} [_deps]
+ * @returns {Promise<void>}
+ */
+export async function runCronAExitCli(_argv, _deps = {}) {
+  throw new Error("not implemented");
+}
+
+/**
  * @description Parses and validates the CLI argv: `<issueNumber> <worktree> <bodyFile> <envFile>`.
  * @param {string[]} argv - process.argv.slice(2) from the CLI entry.
  * @returns {{ issueNumber: number, worktree: string, bodyFile: string, envFile: string }}
  */
-function parseArgv(argv) {
+export function parseArgv(argv) {
   const [issueNumber, worktree, bodyFile, envFile] = argv;
   if (!issueNumber || !worktree || !bodyFile || !envFile) {
     throw new Error(
