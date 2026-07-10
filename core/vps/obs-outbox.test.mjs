@@ -52,8 +52,14 @@ test("#2 appendEvent: called twice appends exactly 2 ordered JSON lines to obs-<
     assert.equal(eventsPath, path.join(stateDir, "obs-141.events.jsonl"));
     const lines = readFileSync(eventsPath, "utf8").split("\n").filter((line) => line.length > 0);
     assert.equal(lines.length, 2, "exactly 2 lines must be present");
-    assert.deepEqual(JSON.parse(lines[0]), { type: "eye", role: "compliance", n: 0 });
-    assert.deepEqual(JSON.parse(lines[1]), { type: "eye", role: "compliance", n: 1 });
+    // appendEvent stamps an ISO `ts` at append time (issue #251, AC-2.1); assert the payload fields
+    // minus the stamp, and that a valid ISO ts is present.
+    const { ts: ts0, ...payload0 } = JSON.parse(lines[0]);
+    const { ts: ts1, ...payload1 } = JSON.parse(lines[1]);
+    assert.deepEqual(payload0, { type: "eye", role: "compliance", n: 0 });
+    assert.deepEqual(payload1, { type: "eye", role: "compliance", n: 1 });
+    assert.match(ts0, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    assert.match(ts1, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -70,7 +76,9 @@ test("#3 advanceCursor: meta cursor 0 with 3 events, advanceCursor(metaPath, 2) 
     assert.equal(readMeta(metaPath).cursor, 2, "cursor must be advanced to 2");
     const unsent = readEvents(metaPath).slice(2);
     assert.equal(unsent.length, 1, "exactly the single unsent event must remain past the cursor");
-    assert.deepEqual(unsent[0], { type: "e", n: 2 });
+    const { ts: unsentTs, ...unsentPayload } = unsent[0];
+    assert.deepEqual(unsentPayload, { type: "e", n: 2 });
+    assert.match(unsentTs, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -366,10 +374,13 @@ test("#ac-1.7 createRun: plain active reuse strips fossils, leaves the events lo
 
     const events = readEvents(metaPath);
     assert.equal(events.length, 2, "the events log must NOT be truncated on a plain active reuse");
-    assert.deepEqual(events, [
-      { type: "e", n: 0 },
-      { type: "e", n: 1 },
-    ]);
+    assert.deepEqual(
+      events.map(({ ts, ...rest }) => rest),
+      [
+        { type: "e", n: 0 },
+        { type: "e", n: 1 },
+      ],
+    );
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
