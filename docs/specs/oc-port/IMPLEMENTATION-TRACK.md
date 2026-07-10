@@ -82,4 +82,6 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 | 2026-07-10 | OpenAI terra REVISE applied to 03/05/06/07 (worktree, RMW lock, dual error policy, locked_tests, session-scoped hand records) |
 | 2026-07-10 | Terra loop pass 2: no_tests boolean, lock ownership token, quarantine gate owner |
 | 2026-07-10 | OpenAI gpt-5.6-terra virgin loop → **APPROVE** |
+| 2026-07-10 | Sol REVISE applied: session `..` reject, no_tests DONE path, Finding/refutes schema, self-contained worktree clean |
+| 2026-07-10 | Sol loop: preUntrackedContents restore; virgin gpt-5.6-sol → **APPROVE** |
 | 2026-07-10 | Virgin OpenAI `gpt-5.6-terra` → REVISE (non-auth dual error policy, concurrent gate-state RMW, NOT_DONE worktree quarantine, handRecord session scope) — follow-ups for T5/T7/T8, not blocking pack publish |

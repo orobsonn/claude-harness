@@ -93,12 +93,34 @@ Hand agent frontmatter:
 | Outcome | Worktree action (mandatory) | Next step |
 |---|---|---|
 | `DONE` | keep changes in scope | continue loop |
-| `FAILED` | **reset to freeze commit** (hard restore of tracked + remove untracked in scope per existing CC policy) | optional escalate / re-dispatch |
-| `NOT_DONE` | **same as FAILED** — reset to freeze | do not leave partial writes for next role |
+| `FAILED` | **reset to freeze** + delete hand-created untracked via pre/post snapshot set-difference (§ cleanup) | optional escalate / re-dispatch |
+| `NOT_DONE` | **same as FAILED** — reset + hand-created untracked cleanup | do not leave partial writes for next role |
 | `CAPTURE_ERROR` | **quarantine:** reset to freeze if any uncommitted hand writes detected; if reset impossible, mark gate-state `hand_quarantine: true` for that `featureId+taskId` | never DONE; **entry-gate / spawn adapter** deny any further hand spawn for that task while flag set until orchestrator clears via mark |
 | `CONFIG_ERROR` | no hand writes expected; if tree dirty vs freeze, reset anyway | fix config before retry |
 
 **Invariant:** after any non-`DONE` hand attempt, the next role must not see uncommitted partial hand output. Prose claiming success never skips this table.
+
+### Untracked / partial write cleanup (self-contained — do not invent “CC policy”)
+
+**Pre-spawn snapshot (mandatory):** before starting the hand, adapter records:
+- `freezeCommitSha`
+- `preUntracked`: set of untracked paths (`git ls-files --others --exclude-standard`)
+- `preUntrackedContents`: for each path in `preUntracked`, a content snapshot (hash + bytes, or copy under a temp quarantine dir owned by the adapter). Required so hand edits/deletes of pre-existing untracked can be restored.
+
+After a non-`DONE` hand, adapter MUST:
+
+1. `git reset --hard <freezeCommitSha>` (restores **tracked** files)  
+2. Compute `postUntracked` the same way  
+3. **Delete every path in `postUntracked - preUntracked`** (hand-created untracked), **including outside `scope_paths`**  
+4. For every path in `preUntracked`:  
+   - if missing or content hash ≠ snapshot → **restore** from `preUntrackedContents`  
+   - if hand deleted it → recreate from snapshot  
+5. Do **not** `git clean -fd` blindly without set-difference + restore rules  
+6. If any delete/restore fails, set `hand_quarantine: true` and block further hands for that task  
+
+**Invariant restated:** after non-`DONE`, (a) no hand-created untracked remains, (b) operator pre-existing untracked paths and contents match the pre-spawn snapshot, (c) tracked tree matches freeze.
+
+This section is the full contract.
 
 ## 5. Run-record (on disk)
 

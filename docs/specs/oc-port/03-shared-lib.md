@@ -48,14 +48,14 @@ type ValidationResult = {
 |---|---|---|
 | `SAFE_FEATURE_ID` | `RegExp` | `/^[a-z0-9]+(?:-[a-z0-9]+)*$/` |
 | `isSafeFeatureId(value)` | `(unknown) => boolean` | false if not string or regex fail; never throw |
-| `SAFE_SESSION_ID` | `RegExp` | `/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/` — no `/`, `\`, `..`, spaces |
-| `isSafeSessionId(value)` | `(unknown) => boolean` | false if not string, length 0 or >128, or regex fail; never throw |
+| `SAFE_SESSION_ID` | `RegExp` | `/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/` — no `/`, `\`, spaces |
+| `isSafeSessionId(value)` | `(unknown) => boolean` | false if not string, length 0 or >128, regex fail, **or `value.includes("..")`** (reject dot-dot anywhere, even mid-string); never throw |
 | `isSafeTaskId(value)` | `(unknown) => boolean` | same rules as feature_id (kebab-case) unless documented otherwise |
 
 ### Tests
 
 - feature: accepts `user-auth-revamp`; rejects `../etc`, `UPPER`, `under_score`, empty, non-string  
-- session: accepts `ses_0b26b3d3dffemhkidMaMZwfPZn`; rejects `../x`, `a/b`, empty, 200-char string  
+- session: accepts `ses_0b26b3d3dffemhkidMaMZwfPZn`; rejects `../x`, `a/b`, `foo..bar`, empty, 200-char string  
 - task: accepts `task-1`; rejects `../task`  
 
 **T2 DoD must list:** `isSafeFeatureId`, `isSafeSessionId`, `isSafeTaskId` exports + tests green.
@@ -192,16 +192,38 @@ Never throw.
 | `finalizeFindings(classified, verdicts?)` | policy B: keep unless explicit refute |
 | `securityVerdict(issues)` | SECURE/UNSAFE style summary if used |
 
+### Finding object shape (locked)
+
+```ts
+type Finding = {
+  id: string                    // stable id within family report (required)
+  title: string
+  severity: "low" | "medium" | "high" | "critical"
+  evidence?: string
+  family: string                // e.g. "grok" | "openai" — set by merge, not model prose alone
+  // optional explicit refute of another finding:
+  refutes?: {
+    target_id: string           // Finding.id of the other family
+    target_family: string
+    reason: string              // non-empty
+  }
+}
+```
+
+**Association key for dedup/refute:** `dedupKey(finding)` default = normalize(`title`) + `severity` (override fields documented in DEDUP_FIELDS).  
+**Explicit refute:** only when `refutes.target_id` + `refutes.target_family` match an existing finding **and** `refutes.reason` length ≥ 1. Vague disagreement in free text without `refutes` object does **not** drop the other finding.
+
 ### Policy B (locked)
 
-- Finding from one family alone is **kept** unless the other family **explicitly refutes** it.  
+- Finding from one family alone is **kept** unless the other family **explicitly refutes** it via the `refutes` object.  
 - No majority vote.  
 - See 07 for orchestrator wiring.
 
 ### Tests
 
 - only-A finding kept  
-- A finding + B refute → dropped or marked refuted per existing codex tests  
+- A finding + B `refutes` matching A.id → A dropped or marked refuted  
+- B free-text disagreement without `refutes` → A still kept  
 - dedup merges same key  
 
 ---
@@ -269,6 +291,19 @@ Port from `dispatch-hand.mjs` `OUTCOME` — implement exactly these string value
 | `CAPTURE_ERROR` | capture itself could not run (git/test runner failure) — **not** DONE; do not escalate as successful hand |
 
 **Never count as DONE:** model prose claiming success; OC process exit code 0; plugin deny followed by hallucinated text (probe P12).
+
+### `no_tests: true` tasks (locked)
+
+When the plan task has `no_tests: true` and `locked_tests: []`:
+
+| Check | Rule |
+|---|---|
+| Test re-run | **skipped** (no vacuous-green possible) |
+| `DONE` criteria | scope ok + frozen ok + capture ran + **no test requirement** |
+| Vacuous green | N/A |
+| Implementation tasks without `no_tests` | still require locked_tests length ≥ 1 and green tests for DONE |
+
+`evaluateRun` must receive `task.no_tests` (boolean) from the adapter.
 
 `evaluateRun` returns `{ ok: true, outcome, details }` or `{ ok: false, reason }` if inputs malformed — never throw.
 
