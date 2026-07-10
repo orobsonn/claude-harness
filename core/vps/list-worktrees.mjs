@@ -5,9 +5,15 @@
  * blank-line-separated porcelain blocks, and keeps ONLY the blocks whose branch is
  * `refs/heads/harness/<n>` — i.e. matches ^harness/(\d+)$. The primary/main worktree (which carries
  * a non-harness branch, typically `main`) and any other non-harness branch are excluded. For each
- * surviving harness worktree it reads the run-lock holder via the injected `readHolder` seam and
- * builds one entry. A project whose porcelain output has only the primary worktree contributes no
- * entries and never throws — an empty/primary-only project is the normal idle state.
+ * surviving harness worktree it reads the project's (one-per-project) run-lock holder via the
+ * injected `readHolder` seam and matches it PER-WORKTREE before building the entry: a REGISTERED
+ * holder (carries a `tmux_session_id`) is kept only on the entry whose own
+ * `harness-<project>-<issueNumber>` session id it matches — every other worktree of that project
+ * gets `holder: null`, so reaper.mjs's completed-sweep can fire for a finished worktree even while
+ * a different run in the same project is live. An UNREGISTERED holder (no `tmux_session_id` yet —
+ * the acquire->register window) is left unchanged on every entry. A project whose porcelain output
+ * has only the primary worktree contributes no entries and never throws — an empty/primary-only
+ * project is the normal idle state.
  *
  * Both `runGitWorktreeList` and `readHolder` are injected so callers (and tests) can fake git/fs;
  * listWorktrees itself performs no IO.
@@ -105,8 +111,23 @@ export function listWorktrees(opts) {
       // Per-entry fail-soft: a corrupt lock / invalid JSON / fs error for ONE worktree must never
       // abort the whole shared sweep. The reaper tolerates a null holder; the entry is kept (so a
       // genuinely dead worktree stays visible) and the error path is never leaked.
+      //
+      // Per-worktree liveness match: the run-lock is ONE PER PROJECT, so readHolder returns the
+      // SAME holder object for every worktree of this project. Blindly assigning it to every entry
+      // (the pre-fix bug) makes every OTHER worktree look alive for as long as ANY run in the
+      // project is live — which is nearly always, since the engine serializes one issue at a time.
+      // A REGISTERED holder (has a `tmux_session_id` key — mirrors reaper.mjs's own
+      // `"tmux_session_id" in holder` check) belongs to exactly one worktree: the one whose
+      // `harness-${project}-${issueNumber}` session id it carries. Keep it only on that entry; null
+      // it out everywhere else so reaper.mjs's completed-sweep can fire for a finished worktree. An
+      // UNREGISTERED holder (no `tmux_session_id` yet — the acquire->register window) is left
+      // unchanged on every entry, exactly as before: judgeLiveness still needs it to recognize an
+      // in-flight acquire, and which worktree it belongs to isn't yet knowable from the holder alone.
       try {
-        entry.holder = readHolder({ stateDir });
+        const holder = readHolder({ stateDir });
+        const registered = holder != null && "tmux_session_id" in holder;
+        const expectedSessionId = `harness-${project.project}-${issueNumber}`;
+        entry.holder = registered && holder.tmux_session_id !== expectedSessionId ? null : holder;
       } catch {
         entry.holder = null;
       }
