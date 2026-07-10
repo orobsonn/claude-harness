@@ -63,58 +63,22 @@ Model per role. **This table is authoritative** — when a role's model is named
 
 **Hands vs Eyes (v2 wiring):** executor and sniper are **HAND** roles — code/test-writing workers that run on an Ollama model resolved from `hand_tiers` via `dispatch-hand.mjs` + `spawn-hand.mjs` (the **spawn-hand path**: `claude -p` + isolated ephemeral CLAUDE_CONFIG_DIR), **NOT** via `Agent`. The **test-author** authors test code (conceptually a hand), but it runs as a **main-loop Claude Agent (sonnet) in BOTH local and headless** — it is **NOT** dispatched via spawn-hand or Ollama. Reason: at author time no frozen test yet exists, so `runLiveDispatch` has nothing to run; the spawn-hand path is therefore unavailable. The test-author's safety controls are the compliance eye (step 1b, which validates fidelity before freeze) + the freeze content-hash (step 1c) — not the executor's run-record rail. Only executor and sniper go through the spawn-hand path. All other roles (orchestrator, planner, plan-reviewer, compliance, adversary, security, harvester, shipper) are **EYE** roles — they judge and decide, and they **always stay on Claude**. No eye role ever resolves to an Ollama model — this is a hard constraint. In v2 ALL executor tiers (low/medium/high) route to the live spawn path; executor-high resolves to `hand_tiers.high` (a strong Ollama coder). The sniper is wired to the live spawn path (`hand_tiers[issue.severity]`) for ALL severities including high. Claude is reachable by an Ollama hand only via the K=1 escalation fallback. **HEADLESS exception (LOCAL-only capability):** the spawn-hand path is LOCAL-only. In **HEADLESS** (cloud routine, `$CLAUDE_CODE_REMOTE` set) there is no Ollama hand — executor and sniper are dispatched as ordinary Claude `Agent`s on the standard cloud model, and the entry-gate allows a main-loop hand-role Agent (no spawn-hand, no ticket/run-record needed). Do NOT invoke `spawn-hand.mjs` in headless. The test-author is unaffected by this headless exception — it always runs as a Claude Agent.
 
-**Cross-family eyes (optional `codex-adversary` module):** an EYE judges better when a *second model
-family* judges alongside it — each family surfaces the failure modes the other's priors miss. When the
-`codex-adversary` module is installed AND `adversarial.cross_family` is not `false` (planner default:
-`true`) AND the second family is available (the global switch `HARNESS_CODEX_ADVERSARY` is on and `codex`
-is reachable), run the eye on BOTH families and merge — at **every** checkpoint that runs an eye. The
-module is vendored under `.claude/modules/codex-adversary/` (the orchestrator runs from the repo root):
-- **adversary** (spec attack, per-task, final dual-review): dispatch the Claude `adversary` as today AND
-  `node .claude/modules/codex-adversary/references/cross-family.mjs --task <task.json> --claude <claude-issues.json>`.
-  The driver returns `findings` (ship to the sniper now), `pendingClaudeRefutation` (codex-only findings
-  whose refutation belongs to a native Claude `adversary` refute-pass — run it, then fold survivors in),
-  and `dropped` (audit). Cross-check is **policy B**: a single-family finding is kept unless the other
-  family refutes it — never majority voting.
-- **plan-reviewer**: dispatch a Claude `plan-reviewer` AND a Codex one (`runCodexRole` role `plan-reviewer`)
-  on the SAME plan to catch DISTINCT engineering problems, then merge with `merge-verdicts.mjs`
-  (**either-REVISE-wins** + union of concerns).
-- **security** (per-task step 3b, final dual-review): dispatch the Claude `security` auditor as today AND
-  `node .claude/modules/codex-adversary/references/cross-family.mjs --role security --task <task.json> --claude <claude-issues.json>`.
-  Same **policy B**, with a severity-based dedup (security issues carry no `category`). The driver returns
-  a `verdict` (SECURE|UNSAFE) computed ONLY from `findings` (Claude + agreed + claude-only survivors) —
-  codex-only findings sit in `pendingClaudeRefutation` and do **NOT** escalate the gate until their Claude
-  refute-pass runs and survivors are folded in. **Determinism (gate precondition):** a non-empty
-  `pendingClaudeRefutation` is a **delivery-blocking precondition** — record it like a `regate-pending`
-  marker in gate-state; the gate does not pass until every pending codex-only finding has had its Claude
-  refute-pass and the verdict is recomputed. This makes the second family's catch first-class (it CAN
-  gate, once Claude has weighed in) while a codex false-high can never flip the gate behind the
-  orchestrator's back, and a forgotten refute-pass blocks rather than silently passing.
-This is **fail-open and never a hard dependency**: module absent, switch off, headless without
-`OPENAI_API_KEY`, or `codex` unreachable → the checkpoint runs **Claude-only exactly as today** (for
-security, the verdict is then Claude's alone). The second family is always read-only (`--sandbox
-read-only`) — an EYE, never a hand. It does **not** relax the "no eye on Ollama" constraint above:
-cross-family adds a second *Claude-tier* family, not a cheap hand.
-
-**Deterministic nudge (`codex-eye-nudge.mjs` — PostToolUse[Agent] hook):** rather than relying on
-the orchestrator to remember from prose, the harness injects the cross-family invocation
-deterministically. When the orchestrator dispatches an eligible eye (`adversary`, `security`, or
-`plan-reviewer`) with `HARNESS_CODEX_ADVERSARY` on and the module present, the PostToolUse[Agent]
-hook `codex-eye-nudge.mjs` fires automatically after the Claude eye returns and injects an
-`additionalContext` reminder to run the second family. **Sequencing (critical):** the nudge is an
-obligation to honour AFTER the Claude eye has returned — capture the eye's findings/verdict into the
-`--claude` input file FIRST, THEN run
-`node .claude/modules/codex-adversary/references/cross-family.mjs --role <role> --task <task.json> --claude <claude-input.json>`,
-THEN merge. **Never run `cross-family.mjs` against an empty `--claude` file** — that produces a
-degenerate merge with no Claude signal. **Coverage:** the nudge fires by `subagent_type` at every eye
-checkpoint (spec-adversary, per-task, plan-review, final dual-review) — not only the final ones.
-**Advisory, never a gate:** the nudge never blocks; switch off, module absent, headless, or `codex`
-unreachable → the hook skips silently and the checkpoint runs Claude-only exactly as today (fail-open).
-**Idempotence (residual accepted):** duplicate nudges are expected (final dual-review = 2 eyes → 2
-nudges; a re-gate → another); an eye whose cross-family step is already merged is satisfied; the Claude
-refute-pass for codex-only findings MUST be dispatched as a general Claude agent — **NOT** as
-`subagent_type adversary/security` — otherwise it re-triggers the nudge in a loop. The `plan-reviewer`
-cross-family step runs verdict-shaped via `cross-family.mjs --role plan-reviewer` (new route alongside
-the existing `--role security`).
+**Cross-family eyes (optional `codex-adversary` module) — resident summary:** an EYE judges better when
+a *second model family* judges alongside it — each surfaces the failure modes the other's priors miss.
+When the module is installed AND `adversarial.cross_family` is not `false` (planner default: `true`) AND
+the second family is available (`HARNESS_CODEX_ADVERSARY` on and `codex` reachable), run the eligible eye
+(`adversary`, `security`, `plan-reviewer`) on BOTH families and merge under **policy B** (a single-family
+finding is kept unless the other family refutes it — never majority voting). The **deterministic nudge**
+`codex-eye-nudge.mjs` (PostToolUse[Agent] hook) injects the cross-family invocation automatically —
+**sequencing is critical: honour it AFTER the Claude eye returns** (capture the eye's findings into the
+`--claude` file FIRST, THEN run `cross-family.mjs`, THEN merge; never against an empty `--claude`). For
+**security** the SECURE|UNSAFE verdict is recomputed only after the Claude refute-pass on any codex-only
+findings, and a pending refute-pass is a **delivery-blocking precondition** recorded like `regate-pending`
+in gate-state. **Fail-open, never a hard dependency:** module absent, switch off, headless without
+`OPENAI_API_KEY`, or `codex` unreachable → the checkpoint runs **Claude-only exactly as today**. The
+second family is always read-only — an EYE, never a hand; cross-family adds a second *Claude-tier* family,
+not a cheap hand. **Full per-checkpoint mechanism (driver flags, `pendingClaudeRefutation` handling, nudge
+idempotence, plan-reviewer merge) → load `references/cross-family-eyes.md` on demand.**
 
 **Orchestrator = sonnet (committed default):** the orchestrator is the highest-volume token consumer, so a cheap model here is the harness's real economy — this is the whole point of the design. The residual risk is curation quality: context curation is judgment, and weak curation poisons every downstream agent. The harness mitigates this by **moving the critical decisions off the orchestrator's judgment onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (the orchestrator *cannot* generate the plan inline and must dispatch the opus `planner`), the sensitive-path override is a glob check, and per-role model routing is this fixed table. The cheaper the orchestrator, the more these rails carry the judgment. Residual curation risk stays instrumented — watch `usage` per role and whether downstream agents got the right scope. The operator may still override the model via `/model` for a given session.
 
@@ -201,6 +165,33 @@ Curation rules:
 - **test-author (test-infra memory routing — by convention):** for every **TEST-AUTHOR** dispatch, the orchestrator proactively reads `.claude/memory/MEMORY.md` and injects into the dispatch context the content of **any memory file whose name/description concerns the test runner, pool, or fixture layer** (e.g. `vitest-pool-workers-raw-import.md`) — the same way domain-relevant memory reaches the other hands. The inclusion is **automatic and must NOT depend on a manual relay via `shared_context.md`**: a test-infra gotcha already documented in memory must reach the test-author on the first dispatch, so the same hand does not re-discover it twice in one run. This layer is scoped to the **test-author only** — it does **not** alter the executor's context-curation.
 - **deferred-risk reconciliation (narrow exception, not a loosening):** the per-task pre-dispatch grep match described under Phase 2 step 3 is a narrow, deterministic, grep-matched exception to the guardrail above, scoped only to matched guards overlaps — it is explicitly not a general loosening of the virgin rule. Absent a match, the adversary enters exactly as virgin as it does today.
 - `shared_context` has a **ceiling** — prioritize the relevant; do not append everything, or every task gets more expensive.
+
+---
+
+## Orchestrator economy (context-cost discipline)
+
+The orchestrator is the highest-volume token consumer, and ~87% of a run's spend is **context re-read**
+(prompt-prefix cache), not generation. Three disciplines keep the resident context lean — they change
+*how the orchestrator spends context*, never *what the pipeline does*:
+
+- **Probes run in an `Explore` subagent, never the main context (#ac-2.1).** Any read-only codebase
+  probe the orchestrator needs — grep/glob to locate a helper, `wc` a usage count, read a file to map a
+  folder — is dispatched to a read-only `Explore` (or `general-purpose`) subagent that returns **only the
+  conclusion in one turn**. Never run raw `grep`/`wc`/`Read`/`Glob` in the orchestrator's own context:
+  the probe's full output would be pinned into the expensive high-volume context and re-read on every
+  subsequent turn for the rest of the run. The subagent's context is discarded; only its conclusion
+  returns. (The deliberate L3 nested-`CLAUDE.md` read and the on-disk run buffers are not probes — they
+  are curated context and stay.)
+- **Task bookkeeping is minimal (#ac-2.2).** The per-task loop is driven by the execution plan's
+  `tasks[]` (topological order) and the on-disk run buffers (`shared_context.md`, run-records,
+  gate-state) — **not** by `TaskCreate`/`TaskUpdate` churn. Do NOT open a task per micro-step; at most
+  track phase-level progress. Every bookkeeping tool call is another turn and more resident context with
+  no behavior change — the authoritative state is already the plan + the buffers on disk.
+- **Preload deferred tools; NO mid-run `ToolSearch` (#ac-3.1).** Resolve every tool the run needs
+  (`Agent`, `Bash`, `Read`/`Edit`/`Write`, `Grep`/`Glob`) **at the start**. A `ToolSearch` (or any
+  tool-schema fetch) **in the middle of a run mutates the tool prefix and INVALIDATES the prompt-prefix
+  cache** — the next turn re-reads the whole context uncached (the dominant cost). Load-on-demand tools
+  are loaded up front, once; never mid-loop.
 
 ---
 
