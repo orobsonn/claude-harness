@@ -57,6 +57,8 @@ import {
   mergeGateState,
   readHandRecord,
   listHandRecordsForFeature,
+  matchesAbsolution,
+  absolutionPrefix,
 } from "./lib/gate-lib.mjs";
 
 /**
@@ -587,8 +589,11 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
         spawnGateState = {};
       }
     }
-    const fidelityPass = Array.isArray(spawnGateState.fidelity_pass) ? spawnGateState.fidelity_pass : [];
-    if (!fidelityPass.includes(qualifiedId)) {
+    // fidelity_pass entries are sha-qualified (`<feature>/<task>@<sha>`); the fidelity precondition
+    // matches by task-PREFIX only (a red test was authored for this task), never by sha freshness —
+    // strip the @sha before comparing. An unqualified legacy/test entry has prefix === whole string.
+    const fidelityPrefixes = (Array.isArray(spawnGateState.fidelity_pass) ? spawnGateState.fidelity_pass : []).map(absolutionPrefix);
+    if (!fidelityPrefixes.includes(qualifiedId)) {
       return {
         allow: false,
         hookSpecificOutput: {
@@ -717,7 +722,9 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   }
   const pending = regate.pending;
   const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
-  const unmatched = pending.filter((t) => !passed.includes(t));
+  // A regate_passed clears a pending obligation only when its sha-qualified entry is an ancestor of
+  // (or equal to) HEAD — an unqualified/legacy or divergent-sha absolution is treated as absent.
+  const unmatched = pending.filter((t) => !matchesAbsolution(t, passed, isAncestorFn));
   if (unmatched.length > 0) {
     return {
       allow: false,
@@ -738,7 +745,9 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   // blocks delivery. Same qualified ${feature_id}/${task_id} shape and array-diff style.
   const handFinished = Array.isArray(gateState.hand_finished) ? gateState.hand_finished : [];
   const captureVerified = Array.isArray(gateState.capture_verified) ? gateState.capture_verified : [];
-  const unmatchedCapture = handFinished.filter((t) => !captureVerified.includes(t));
+  // Same sha-qualified-absolution semantics as the re-gate rail above: a capture_verified clears a
+  // finished hand only when its sha is an ancestor of HEAD (unqualified/divergent → absent).
+  const unmatchedCapture = handFinished.filter((t) => !matchesAbsolution(t, captureVerified, isAncestorFn));
   if (unmatchedCapture.length > 0) {
     return {
       allow: false,
@@ -1057,7 +1066,9 @@ export function decide(payload, deps = {}) {
     }
     const pending = regate.pending;
     const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
-    const unmatched = pending.filter((t) => !passed.includes(t));
+    // A regate_passed clears the pending obligation only when its sha-qualified entry is an ancestor
+    // of HEAD (unqualified/legacy or divergent-sha absolution → absent). Same rail as decideBash.
+    const unmatched = pending.filter((t) => !matchesAbsolution(t, passed, isAncestorFn));
     if (unmatched.length > 0) {
       return {
         allow: false,

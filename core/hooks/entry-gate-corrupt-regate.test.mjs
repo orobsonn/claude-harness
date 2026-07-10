@@ -127,11 +127,11 @@ test("LOCKED 5: Bash valid-array regate_pending behavior preserved (unmatched de
     `deny reason must name the unmatched task — got: "${verdictUnmatched.hookSpecificOutput.permissionDecisionReason}"`,
   );
 
-  const readGateStateFnMatched = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1"] });
+  const readGateStateFnMatched = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1@abc123"] });
   const payloadMatched = makeBashPayload("ses_corrupt_5b", "git push origin main");
-  const verdictMatched = decide(payloadMatched, { readGateStateFn: readGateStateFnMatched });
+  const verdictMatched = decide(payloadMatched, { readGateStateFn: readGateStateFnMatched, isAncestorFn: () => true });
 
-  assert.equal(verdictMatched.allow, true, "matched regate_pending must still allow");
+  assert.equal(verdictMatched.allow, true, "matched regate_pending (ancestor-sha absolution) must still allow");
 });
 
 // ---------------------------------------------------------------------------

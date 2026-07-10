@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 /**
  * Kebab-case token pattern: lowercase alphanumeric segments separated by hyphens.
@@ -224,6 +225,108 @@ export function isExpired(mtimeMs, nowMs, maxAgeDays) {
 }
 
 // ---------------------------------------------------------------------------
+// Sha-qualified absolutions — shared by stamp-triage (STAMPS the sha) and
+// entry-gate/reinject-state (READ validity). An absolution entry is stored as
+// `<feature>/<task>@<sha>`; the obligation it clears stays UNqualified
+// `<feature>/<task>` (obligations survive across shas, absolutions do not).
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Best-effort current-HEAD sha reader for sha-qualifying an absolution at stamp time.
+ * Returns the trimmed `git rev-parse HEAD` output, or null on ANY git/infra error — so a non-git
+ * environment (or a git failure) makes the caller fall back to an UNqualified stamp. An unqualified
+ * absolution is treated as legacy/absent by the reader (fail-safe: absent = blocks delivery, never
+ * falsely clears). Mirrors entry-gate's defaultHeadSha approach; exported so stamp-triage reuses it.
+ * @returns {string|null}
+ */
+export function currentHeadSha() {
+  try {
+    return (
+      execFileSync("git", ["rev-parse", "HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Splits an absolution entry into its `<feature>/<task>` prefix and `@<sha>` suffix.
+ * Splits on the LAST '@' (feature/task ids are kebab-case and shas are hex — neither contains '@').
+ * Returns null when the entry is not a string, carries no '@', or has an empty prefix/sha
+ * (legacy/unqualified/malformed → treated as ABSENT by matchesAbsolution).
+ * @param {unknown} entry
+ * @returns {{ prefix: string, sha: string } | null}
+ */
+function parseAbsolutionEntry(entry) {
+  if (typeof entry !== "string") return null;
+  const at = entry.lastIndexOf("@");
+  if (at <= 0 || at >= entry.length - 1) return null;
+  return { prefix: entry.slice(0, at), sha: entry.slice(at + 1) };
+}
+
+/**
+ * @description Returns the `<feature>/<task>` prefix of an absolution entry — the part before the
+ * last '@', or the whole string when there is no '@' (an unqualified/legacy entry). Used by the
+ * LENIENT consumers (the fidelity precondition + the compaction-recovery summary) that match by
+ * task identity only, ignoring sha freshness. Non-strings return "".
+ * @param {unknown} entry
+ * @returns {string}
+ */
+export function absolutionPrefix(entry) {
+  if (typeof entry !== "string") return "";
+  const at = entry.lastIndexOf("@");
+  return at > 0 ? entry.slice(0, at) : entry;
+}
+
+/**
+ * @description Returns true iff `absolutionArray` contains an entry whose `<feature>/<task>` prefix
+ * equals `pendingId` AND whose `@<sha>` suffix is present AND `isAncestorFn(sha) === true` (the
+ * absolution's sha is an ancestor of, or equal to, current HEAD). An entry with NO '@sha'
+ * (legacy/unqualified) or whose sha is NOT a positive ancestor (isAncestorFn returns false OR null
+ * — the undetermined case) is treated as ABSENT and does not clear the obligation.
+ *
+ * Rationale: a healthy multi-task run advances HEAD with each task's commit, so a per-task
+ * absolution earned at an EARLIER (ancestor) commit MUST still count at delivery — hence is-ancestor,
+ * never strict sha===HEAD equality. A re-dispatch that DISCARDS the prior attempt (git reset/stash)
+ * produces a DIVERGENT new HEAD of which the old absolution's sha is NOT an ancestor → invalidated.
+ * @param {string} pendingId - the UNqualified obligation id `<feature>/<task>`
+ * @param {unknown} absolutionArray - the sha-qualified absolution array (regate_passed / capture_verified)
+ * @param {(sha: string) => boolean|null} isAncestorFn - positive-ancestor probe (true/false/null)
+ * @returns {boolean}
+ */
+export function matchesAbsolution(pendingId, absolutionArray, isAncestorFn) {
+  if (!Array.isArray(absolutionArray)) return false;
+  for (const entry of absolutionArray) {
+    const parsed = parseAbsolutionEntry(entry);
+    if (parsed === null) continue; // unqualified/legacy/malformed → absent
+    if (parsed.prefix !== pendingId) continue;
+    let ancestor = false;
+    try {
+      ancestor = isAncestorFn(parsed.sha) === true;
+    } catch {
+      ancestor = false;
+    }
+    if (ancestor) return true;
+  }
+  return false;
+}
+
+/**
+ * @description True iff an absolution array entry is sha-QUALIFIED (`<feature>/<task>@<sha>` with a
+ * non-empty prefix and sha). The purge belt in resetGateState uses it to DROP unqualified
+ * (pre-migration/legacy) absolutions so a stale unqualified entry cannot clear an obligation for the
+ * first re-dispatch.
+ * @param {unknown} entry
+ * @returns {boolean}
+ */
+function isShaQualified(entry) {
+  return parseAbsolutionEntry(entry) !== null;
+}
+
+// ---------------------------------------------------------------------------
 // Gate-state I/O — shared by stamp-triage (writes brainstormed) and
 // entry-gate (writes adversary_fired). Single implementation guarantees the
 // read-merge-write atomic strategy is identical in both writers.
@@ -307,10 +410,14 @@ export function resetGateState(sessionId, featureId) {
   try {
     const current = readGateState(sessionId);
     const next = { feature_id: featureId };
+    // Obligations survive a reclassify VERBATIM (they are unqualified and must outlive shas).
     if (Array.isArray(current.regate_pending)) next.regate_pending = current.regate_pending;
-    if (Array.isArray(current.regate_passed)) next.regate_passed = current.regate_passed;
     if (Array.isArray(current.hand_finished)) next.hand_finished = current.hand_finished;
-    if (Array.isArray(current.capture_verified)) next.capture_verified = current.capture_verified;
+    // Purge belt (#ac-2.2): the preserved ABSOLUTION arrays drop any UNqualified (pre-migration,
+    // no-@sha) entry, so an old-schema gate-state cannot pass a stale unqualified absolution to the
+    // first re-dispatch. (Primary rail = the reader ignoring unqualified/non-ancestor; this is the belt.)
+    if (Array.isArray(current.regate_passed)) next.regate_passed = current.regate_passed.filter(isShaQualified);
+    if (Array.isArray(current.capture_verified)) next.capture_verified = current.capture_verified.filter(isShaQualified);
     // Preserve the plan-review round counter across a re-triage/compaction-resume so a
     // reclassify of the SAME session cannot launder the counter back to 0 and dodge the ceiling.
     if (Number.isInteger(current.plan_review_count)) next.plan_review_count = current.plan_review_count;

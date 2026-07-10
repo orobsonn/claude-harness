@@ -45,6 +45,7 @@ import {
   resetGateState,
   readHandRecord,
   markHandRecordCaptured,
+  currentHeadSha,
 } from "./lib/gate-lib.mjs";
 import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from "../vps/obs-outbox.mjs";
 
@@ -201,6 +202,26 @@ function countMarkerObjectsByName(stdout, markerName) {
 }
 
 /**
+ * @description Re-validates a scope/allowed-writes path array from the active-scope marker stdout
+ * (never trust model-adjacent output, even after mark.mjs validated it). Returns a normalized copy
+ * when every entry is a non-empty relative string with no '..' segment and not absolute; otherwise
+ * null. An empty input array is valid (allowed_writes is optional) and returns [].
+ * @param {unknown} value
+ * @returns {string[]|null}
+ */
+function sanitizeScopeList(value) {
+  if (!Array.isArray(value)) return null;
+  const out = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0) return null;
+    const norm = path.posix.normalize(entry.replace(/\\/g, "/"));
+    if (norm === ".." || norm.split("/").includes("..") || path.posix.isAbsolute(norm)) return null;
+    out.push(norm);
+  }
+  return out;
+}
+
+/**
  * Interprets a hook payload and returns an action descriptor.
  * Never throws. All validation lives here so decide() is unit-testable.
  *
@@ -322,6 +343,48 @@ export function decide(payload) {
       return { action: "none" };
     }
     return { action: "brainstorm-done", session_id };
+  }
+
+  // --- mark.mjs active-scope marker (A3 scope_paths write rail source) ---
+  // Exactly-one marker scan. Writes a hook-owned `active_dispatch` object (last-write-wins) that
+  // plan-write-gate reads to DENY an executor/sniper subagent write outside scope_paths/allowed_writes.
+  if (command.includes("mark.mjs") && command.includes("active-scope")) {
+    const responseStr = unwrapStdout(payload);
+    const { count, sole } = countMarkerObjectsByName(responseStr, "active-scope");
+    if (count === 0) {
+      return { action: "none" };
+    }
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
+      return { action: "none" };
+    }
+    if (!isSafeFeatureId(sole.task_id)) {
+      return { action: "none" };
+    }
+    if (sole.role !== "executor" && sole.role !== "sniper") {
+      return { action: "none" };
+    }
+    const scopePaths = sanitizeScopeList(sole.scope_paths);
+    if (scopePaths === null || scopePaths.length === 0) {
+      return { action: "none" };
+    }
+    const allowedWrites = sole.allowed_writes === undefined ? [] : sanitizeScopeList(sole.allowed_writes);
+    if (allowedWrites === null) {
+      return { action: "none" };
+    }
+    return {
+      action: "active-scope",
+      session_id,
+      active_dispatch: {
+        role: sole.role,
+        feature_id: sole.feature_id,
+        task_id: sole.task_id,
+        scope_paths: scopePaths,
+        allowed_writes: allowedWrites,
+      },
+    };
   }
 
   // --- mark.mjs regate-pending marker ---
@@ -655,6 +718,19 @@ export function handle(payload, opts = {}) {
   const mergeFn = opts.mergeGateStateFn || mergeGateState;
   const markCapturedFn = opts.markHandRecordCapturedFn || markHandRecordCaptured;
   const appendEventFn = opts.appendEventFn || defaultAppendEvent;
+  // Best-effort HEAD sha reader (injectable for tests). ABSOLUTION stamps (regate-passed,
+  // capture-verified, fidelity-pass) are qualified `<feature>/<task>@<sha>`; a null sha (non-git
+  // env / git failure) falls back to the UNqualified id, which the reader treats as legacy/absent.
+  const headShaFn = opts.headShaFn || currentHeadSha;
+  const qualifyAbsolution = (bareId) => {
+    let sha = null;
+    try {
+      sha = headShaFn();
+    } catch {
+      sha = null;
+    }
+    return typeof sha === "string" && sha.length > 0 ? `${bareId}@${sha}` : bareId;
+  };
 
   let decision;
   try {
@@ -707,6 +783,20 @@ export function handle(payload, opts = {}) {
     // Read-back: presence-check that brainstormed landed
     const after = readGateState(decision.session_id);
     return { readBackOk: after.brainstormed === true };
+  }
+
+  if (decision.action === "active-scope") {
+    // Last-write-wins single object (never an array): a later dispatch overwrites the prior scope.
+    mergeFn(decision.session_id, { active_dispatch: decision.active_dispatch });
+    // Read-back: presence-check that the active_dispatch landed with the same role+task_id.
+    const after = readGateState(decision.session_id);
+    const ad = after.active_dispatch;
+    const ok =
+      ad !== null &&
+      typeof ad === "object" &&
+      ad.role === decision.active_dispatch.role &&
+      ad.task_id === decision.active_dispatch.task_id;
+    return { readBackOk: ok };
   }
 
   if (decision.action === "regate-pending") {
@@ -775,14 +865,17 @@ export function handle(payload, opts = {}) {
     if (!pending.includes(decision.task_id)) {
       return; // intentional no-op guard — no read-back
     }
-    // Append task_id to the regate_passed list (dedup — idempotent for the same task_id).
+    // Append the SHA-QUALIFIED entry to regate_passed (dedup on the full `<feature>/<task>@<sha>`
+    // string — a same-sha re-stamp is idempotent, a new sha after a re-dispatch legitimately adds a
+    // fresh entry). The pending-guard above compares the UNqualified pending array vs the bare id.
+    const entry = qualifyAbsolution(decision.task_id);
     const existing = Array.isArray(current.regate_passed) ? current.regate_passed : [];
-    if (!existing.includes(decision.task_id)) {
-      mergeFn(decision.session_id, { regate_passed: [...existing, decision.task_id] });
-      // Read-back: presence-check that the qualified task_id landed in regate_passed
+    if (!existing.includes(entry)) {
+      mergeFn(decision.session_id, { regate_passed: [...existing, entry] });
+      // Read-back: presence-check that the sha-qualified entry landed in regate_passed
       const after = readGateState(decision.session_id);
       const passed = Array.isArray(after.regate_passed) ? after.regate_passed : [];
-      return { readBackOk: passed.includes(decision.task_id) };
+      return { readBackOk: passed.includes(entry) };
     }
     return; // idempotent already-present — no write attempted, no read-back
   }
@@ -821,13 +914,17 @@ export function handle(payload, opts = {}) {
     // Durable stamp runs unconditionally AFTER both guards pass — it is idempotent (overwrites
     // the timestamp) so it self-heals a prior partial failure on every retry.
     const recordOk = markCapturedFn(decision.task_id, new Date().toISOString());
+    // Append the SHA-QUALIFIED entry to capture_verified (the durable run-record stamp above stays
+    // keyed by the UNqualified id — it is the per-task file, not an absolution). Dedup on the full
+    // `<feature>/<task>@<sha>` string.
+    const entry = qualifyAbsolution(decision.task_id);
     const existing = Array.isArray(current.capture_verified) ? current.capture_verified : [];
-    if (!existing.includes(decision.task_id)) {
-      mergeFn(decision.session_id, { capture_verified: [...existing, decision.task_id] });
-      // Read-back: presence-check that the qualified task_id landed in capture_verified
+    if (!existing.includes(entry)) {
+      mergeFn(decision.session_id, { capture_verified: [...existing, entry] });
+      // Read-back: presence-check that the sha-qualified entry landed in capture_verified
       const after = readGateState(decision.session_id);
       const cv = Array.isArray(after.capture_verified) ? after.capture_verified : [];
-      const cvOk = cv.includes(decision.task_id);
+      const cvOk = cv.includes(entry);
       return { readBackOk: cvOk && recordOk };
     }
     // Idempotent already-present: the durable stamp still ran above, so fold its result into
@@ -840,14 +937,18 @@ export function handle(payload, opts = {}) {
     // no other gate-state fields are dropped. This records that the test-author confirmed a red
     // locked test exists for this task — the executor cheap-hand and headless executor are gated
     // on this stamp before they can be dispatched.
+    // Append the SHA-QUALIFIED entry to fidelity_pass. The consumers (spawn-hand gate + headless
+    // executor) match by task-PREFIX only (ignoring the @sha), so the sha is carried for schema
+    // uniformity; the lenient prefix match keeps an unqualified legacy/test entry working too.
+    const entry = qualifyAbsolution(decision.task_id);
     const current = readGateState(decision.session_id);
     const existing = Array.isArray(current.fidelity_pass) ? current.fidelity_pass : [];
-    if (!existing.includes(decision.task_id)) {
-      mergeFn(decision.session_id, { fidelity_pass: [...existing, decision.task_id] });
-      // Read-back: presence-check that the qualified task_id landed
+    if (!existing.includes(entry)) {
+      mergeFn(decision.session_id, { fidelity_pass: [...existing, entry] });
+      // Read-back: presence-check that the sha-qualified entry landed
       const after = readGateState(decision.session_id);
       const fp = Array.isArray(after.fidelity_pass) ? after.fidelity_pass : [];
-      return { readBackOk: fp.includes(decision.task_id) };
+      return { readBackOk: fp.includes(entry) };
     }
     return; // idempotent already-present — no write attempted, no read-back
   }

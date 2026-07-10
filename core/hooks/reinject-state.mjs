@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isExpired, isSafeFeatureId, isSafeSessionId, readGateState } from "./lib/gate-lib.mjs";
+import { isExpired, isSafeFeatureId, isSafeSessionId, readGateState, absolutionPrefix } from "./lib/gate-lib.mjs";
 
 const GC_MAX_AGE_DAYS = 7;
 const DEFAULT_PLANS_ROOT = ".claude/plans";
@@ -90,7 +90,11 @@ export function buildReinject(payload, opts = {}) {
     const gateState = readGateStateFn(sessionId);
     const pending = Array.isArray(gateState.regate_pending) ? gateState.regate_pending : [];
     const passed = Array.isArray(gateState.regate_passed) ? gateState.regate_passed : [];
-    const unmatched = pending.filter((t) => !passed.includes(t));
+    // regate_passed is now sha-qualified `<feature>/<task>@<sha>`; this recovery summary matches by
+    // task-PREFIX (lenient, no git probe here) so it never falsely flags a task that DOES carry a
+    // regate_passed as blocked. The authoritative ancestor check stays in entry-gate at delivery.
+    const passedPrefixes = passed.map(absolutionPrefix);
+    const unmatched = pending.filter((t) => !passedPrefixes.includes(t));
     if (unmatched.length > 0) {
       context += `\nDELIVERY BLOCKED — unmatched re-gate (HIGH sniper fix awaiting strong-eye re-gate): ${unmatched.join(", ")}\n`;
     }
