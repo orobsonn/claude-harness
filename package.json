@@ -18,7 +18,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test \"core/**/*.test.mjs\""
+    "test": "node --test \"core/**/*.test.mjs\" \"modules/**/*.test.mjs\""
   },
   "repository": {
     "type": "git",
