@@ -502,6 +502,11 @@ export function makeNotifier(config, deps = {}) {
         appendEvent: defaultAppendEvent,
         send,
         createTopic,
+        // #235/task-4: forward the optional issue-state + clock seams a wired composition root
+        // (run-drain.mjs, run-cron-a.mjs, run-cron-review.mjs) passes in via drainOpts. Absent on
+        // both -> undefined -> drainTelegramOutbox's own defaults apply (byte-identical today).
+        issueOpen: drainOpts.issueOpen,
+        now: drainOpts.now,
       },
     );
 
@@ -659,11 +664,13 @@ export async function createForumTopic({ name } = {}, opts = {}) {
 }
 
 /**
- * @description Wraps Telegram `closeForumTopic`. Fail-open: any error → `{ ok:false }`, never
- * throws. On success resolves `{ ok:true }`.
+ * @description Wraps Telegram `closeForumTopic`. Fail-open: any error → `{ ok:false, reason }`,
+ * never throws. On success resolves `{ ok:true }`. Mirrors `deleteForumTopic`'s return shape exactly
+ * so callers can distinguish a permanent `"thread-not-found"` (the topic is already gone — a caller
+ * finalizing terminal state should NOT retry) from a `"transient"` failure (retry later).
  * @param {{ threadId: number|string }} input
  * @param {object} opts - { config, fetch, log, timeoutMs }.
- * @returns {Promise<{ ok: boolean }>}
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
  */
 export async function closeForumTopic({ threadId } = {}, opts = {}) {
   const payload = {
@@ -671,7 +678,7 @@ export async function closeForumTopic({ threadId } = {}, opts = {}) {
     message_thread_id: threadId,
   };
   const result = await callTelegramMethod("closeForumTopic", payload, opts, "closeForumTopic");
-  return result.ok ? { ok: true } : { ok: false };
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
 /**
@@ -975,6 +982,14 @@ async function trySend(send, message) {
  * forever after 3 cumulative recreations and flake the shared-process frozen tests. */
 const MAX_RECREATIONS_PER_CYCLE = 3;
 
+/**
+ * @description Injectable clock seam returning epoch SECONDS — mirrors cron-a-exit.mjs's/reaper.mjs's
+ * defaultNow so a closedAt stamped by this module's self-heal finalize path is comparable across
+ * modules and satisfies the retention sweep's Number.isFinite(closedAt) gate. NEVER raw
+ * Date.now() milliseconds. Tests inject a fixed value for determinism; production uses the default.
+ */
+const defaultNow = () => Math.floor(Date.now() / 1000);
+
 /** @description Per-RUN lifetime cap on topic recreations, PERSISTED across drain cycles on the run's
  * meta (`healAttempts`). `MAX_RECREATIONS_PER_CYCLE` only bounds a single tick; without a persisted
  * counter a run whose recreated topic keeps being reported dead (the chat is no longer a forum, or the
@@ -1009,6 +1024,12 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   // cosmetic-pass self-heal branch on `reason === "thread-not-found"` (task-2). Default no-op returns
   // {ok:false} so an unconfigured / unbound drain never touches the network.
   const createTopic = seams.createTopic ?? (async () => ({ ok: false }));
+  // #235/task-4: optional issue-state gate for the self-heal re-mint branch below. ABSENT (the
+  // default) preserves today's behavior byte-identically — createTopic fires unconditionally past
+  // the existing ownsTopic/thread-not-found guard, exactly as before this feature. When PRESENT it
+  // is consulted ONLY inside that rare re-mint branch, never per-run on every tick (#ac-1.3).
+  const issueOpen = seams.issueOpen;
+  const now = seams.now ?? defaultNow;
 
   if (!stateDir || chatId == null || chatId === "") return;
 
@@ -1072,7 +1093,15 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
   // consecutive drain still heals, never a module-global that refuses forever.
   let recreationsThisCycle = 0;
   for (const { metaPath, meta, events } of runs) {
-    const isFallback = meta.status === "fallback" || meta.threadId == null;
+    // #235: a run finalized closed via a CONFIRMED-dead topic (topicConfirmedGone, stamped above)
+    // is fallback-routed too — its threadId is provably gone, so retrying against it forever
+    // (the pre-fix behavior) would waste a send every tick and never deliver the event anywhere.
+    // A run closed via a NORMAL successful close (closeForumTopic {ok:true} — the topic itself is
+    // merely archived, not deleted) is deliberately NOT included here: Telegram can still accept a
+    // message on a closed-but-existing topic, so that case keeps targeting meta.threadId (#10 in
+    // drain-outbox.test.mjs pins this — a bare status:'closed' alone must stay live-topic-routed).
+    const isFallback =
+      meta.status === "fallback" || meta.threadId == null || meta.topicConfirmedGone === true;
     let runThreadId = isFallback ? sharedThreadId : meta.threadId;
     // A run OWNS its topic only in a LIVE status — an explicit ALLOWLIST (`active` or
     // `awaiting-review`), never a denylist. `orphan` (spawn died, topic-close failed), `fallback` and
@@ -1120,6 +1149,39 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
         recreationsThisCycle < MAX_RECREATIONS_PER_CYCLE &&
         sendResult.reason === "thread-not-found"
       ) {
+        // #235/task-4/#ac-1.3/#ac-1.4: only re-mint (createTopic) when the underlying issue is
+        // confirmed still OPEN. issueOpen is OPTIONAL — absent, this check is skipped entirely and
+        // behavior stays byte-identical to before this feature (backward-compat for every caller
+        // that does not wire the seam). When present it returns a TRI-STATE: `true` (confirmed
+        // OPEN) proceeds to mint; `false` (confirmed CLOSED) finalizes the run terminal; anything
+        // else — `null` (unknown, e.g. a gh outage/timeout) or a throw (wrapped below) — is
+        // UNCERTAIN and does NEITHER: never mint (fail-closed for the mint decision) AND never
+        // finalize (an uncertain state must not be mistaken for "confirmed closed" — that would
+        // wrongly terminate a genuinely active run on a transient gh blip). The drain itself never
+        // throws or delays on any of these outcomes (fail-open for the cron).
+        if (typeof issueOpen === "function") {
+          let state;
+          try {
+            state = issueOpen(meta.issueNumber, meta.project);
+          } catch {
+            state = null;
+          }
+          if (state !== true) {
+            if (state === false) {
+              // Confirmed closed/merged: the topic is gone and staying gone. Finalize terminal.
+              // topicConfirmedGone flags the NEXT tick's isFallback computation (below) so any
+              // remaining cosmetic event for this run routes to the shared topic instead of
+              // retrying forever against this now-provably-dead threadId.
+              try {
+                updateMeta(metaPath, { status: "closed", closedAt: now(), topicConfirmedGone: true });
+              } catch {
+                // fail-open: a failed finalize write never blocks the drain
+              }
+            }
+            // state === null (unknown/uncertain): neither mint nor finalize — retry next tick.
+            break;
+          }
+        }
         // Per-RUN lifetime cap (persisted on the meta): once this run has already minted
         // MAX_HEAL_ATTEMPTS topics over its life, stop re-minting and route to the shared topic —
         // otherwise a topic that keeps being reported dead re-mints one fresh topic every cron tick.

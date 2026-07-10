@@ -494,7 +494,20 @@ function sweepOrphanTopics(opts) {
       if (closePromise && typeof closePromise.then === "function") {
         closePromise
           .then((r) => {
-            if (!r || !r.ok) updateMeta(run.metaPath, { status: priorStatus, closedAt: null });
+            // #235/#ac-1.1: a permanent thread-not-found (the topic is already gone) KEEPS the
+            // optimistic status:'closed' — that IS the terminal state, not a failure to revert from.
+            // Only a genuinely transient failure (any other falsy/failed ack) reverts to priorStatus
+            // so a later cycle can retry the close (today's behavior, preserved for #ac-1.2).
+            if (r && r.reason === "thread-not-found") {
+              // Flag topicConfirmedGone (mirrors notify-telegram.mjs's self-heal finalize and
+              // cron-a-exit.mjs/run-cron-review.mjs's own thread-not-found finalize) so
+              // drainTelegramOutbox's isFallback routes any remaining cosmetic event to the shared
+              // topic instead of retrying this now-confirmed-dead threadId forever.
+              updateMeta(run.metaPath, { topicConfirmedGone: true });
+              return;
+            }
+            if (r && r.ok) return;
+            updateMeta(run.metaPath, { status: priorStatus, closedAt: null });
           })
           .catch(() => {
             updateMeta(run.metaPath, { status: priorStatus, closedAt: null });

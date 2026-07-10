@@ -55,7 +55,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCronReview, mainCronReview } from "./run-cron-review.mjs";
+import { runCronReview, mainCronReview, makeIssueOpen } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
 import { createRun, updateMeta, readMeta } from "./obs-outbox.mjs";
@@ -166,6 +166,91 @@ test("mainCronReview: drains the observability outbox each tick (P7) with spacin
   assert.strictEqual(seenOpts.stateDir, stateDir, "the drain targets the run stateDir");
   assert.ok(seenOpts.sendDelayMs > 0, "sends are spaced (same as Cron A)");
   assert.ok(!existsSync(join(stateDir, "drain.lock")), "the drain.lock is released after the drain");
+});
+
+// ---------------------------------------------------------------------------
+// #235/task-7: mainCronReview wires a real issueOpen seam into its drain, reusing run-reaper.mjs's
+// gh-scoped makeDefaultIssueClosed with a finite gh spawn timeout (#ac-1.4).
+// ---------------------------------------------------------------------------
+
+/** @description Fake `deps.spawn` seam mirroring spawnSync's shape, resolving a canned
+ * `gh issue view --json state` response and recording every call's opts. */
+function makeFakeSpawn(ghResponse = { status: 0, stdout: JSON.stringify({ state: "OPEN" }) }) {
+  const calls = [];
+  const spawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return ghResponse;
+  };
+  return { spawn, calls };
+}
+
+function homeWithToken(prefix) {
+  const homeDir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(homeDir, ".claude"), { recursive: true });
+  writeFileSync(join(homeDir, ".claude", ".dev.vars"), "TELEGRAM_BOT_TOKEN=fake\nTELEGRAM_CHAT_ID=999\n", "utf8");
+  return homeDir;
+}
+
+test("#235/task-7 mainCronReview: threads a real issueOpen function into the drainOutbox opts, resolving true for a gh-confirmed OPEN issue", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "harness-review-issueopen-"));
+  const homeDir = homeWithToken("harness-review-issueopen-home-");
+  const config = { ...BASE_CONFIG, stateDir, homeDir, notify: { chatId: 999 } };
+  const { spawn } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "OPEN" }) });
+
+  let receivedOpts;
+  await mainCronReview(config, {
+    runCronReview: async () => {},
+    drainOutbox: async (opts) => { receivedOpts = opts; },
+    spawn,
+  });
+
+  assert.strictEqual(typeof receivedOpts.issueOpen, "function", "the drain opts must carry an issueOpen function");
+  assert.strictEqual(receivedOpts.issueOpen(42), true, "a gh-confirmed OPEN issue must resolve issueOpen(n) === true");
+});
+
+test("#235/task-7 mainCronReview: issueOpen resolves false for a gh-confirmed CLOSED issue (do-not-mint)", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "harness-review-issueopen-"));
+  const homeDir = homeWithToken("harness-review-issueopen-home-");
+  const config = { ...BASE_CONFIG, stateDir, homeDir, notify: { chatId: 999 } };
+  const { spawn } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "CLOSED" }) });
+
+  let receivedOpts;
+  await mainCronReview(config, {
+    runCronReview: async () => {},
+    drainOutbox: async (opts) => { receivedOpts = opts; },
+    spawn,
+  });
+
+  assert.strictEqual(receivedOpts.issueOpen(42), false, "a gh-confirmed CLOSED issue must resolve issueOpen(n) === false");
+});
+
+test("#235/task-7 mainCronReview: a gh outage (non-zero status) makes issueOpen resolve null (unknown) and mainCronReview never rejects", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "harness-review-issueopen-"));
+  const homeDir = homeWithToken("harness-review-issueopen-home-");
+  const config = { ...BASE_CONFIG, stateDir, homeDir, notify: { chatId: 999 } };
+  const { spawn } = makeFakeSpawn({ status: 1, stdout: "" });
+
+  let receivedOpts;
+  await assert.doesNotReject(
+    mainCronReview(config, {
+      runCronReview: async () => {},
+      drainOutbox: async (opts) => { receivedOpts = opts; },
+      spawn,
+    }),
+  );
+
+  assert.strictEqual(receivedOpts.issueOpen(42), null, "a gh outage must resolve issueOpen(n) === null (unknown) — never authorize a mint AND never authorize a finalize-closed under uncertainty");
+});
+
+test("#235/task-7 makeIssueOpen: passes a finite opts.timeout and killSignal:'SIGKILL' to every gh spawn (#ac-1.4)", () => {
+  const { spawn, calls } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "OPEN" }) });
+
+  const issueOpen = makeIssueOpen({ owner: "acme", repo: "demo-repo" }, { spawn });
+  issueOpen(42);
+
+  assert.strictEqual(calls.length, 1, "exactly one gh spawn call");
+  assert.ok(Number.isFinite(calls[0].opts.timeout) && calls[0].opts.timeout > 0, "the spawn call must carry a finite timeout");
+  assert.strictEqual(calls[0].opts.killSignal, "SIGKILL", "the spawn call must carry killSignal:'SIGKILL'");
 });
 
 /** @description Creates a fresh temp stateDir for a test, and returns a cleanup callback. */
@@ -1431,6 +1516,187 @@ test("run-cron-review: close-on-merge does NOT mark the meta 'closed' when close
       meta.closedAt === undefined,
       "closedAt must be absent when the close send failed"
     );
+  } finally {
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #235/task-8: close-on-merge finalizes 'closed' on a permanent thread-not-found (the topic is
+// already gone — this run's PR just merged, arguably the MOST likely trigger for the reported
+// recurrence), and preserves today's leave-as-is behavior for a genuinely transient failure.
+// ---------------------------------------------------------------------------
+
+test("#235/task-8 run-cron-review: close-on-merge finalizes status:'closed' with a numeric closedAt when closeForumTopic resolves {ok:false, reason:'thread-not-found'}", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-tnf-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async () => ({ ok: false, reason: "thread-not-found" }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "closed", "a thread-not-found close must still finalize status:'closed' — the topic is already gone, there is nothing to retry");
+    assert.equal(typeof meta.closedAt, "number", "closedAt must be a numeric epoch-seconds value");
+    assert.equal(meta.topicConfirmedGone, true, "a thread-not-found close-on-merge must flag topicConfirmedGone identically to notify-telegram.mjs's self-heal finalize, so drainTelegramOutbox's isFallback routes any remaining cosmetic event to the shared topic instead of retrying this dead threadId forever");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/final-review run-cron-review: close-on-merge does NOT flag topicConfirmedGone on a normal successful close (ok:true) — the topic is merely archived, not confirmed gone, and must keep targeting its own thread", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-oktrue-nogone-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async () => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "closed");
+    assert.ok(!meta.topicConfirmedGone, "an ok:true close must NOT flag topicConfirmedGone — the topic still exists (merely archived), so it must keep targeting its own thread, not the shared fallback");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/task-8 run-cron-review: close-on-merge does NOT finalize 'closed' when closeForumTopic resolves {ok:false, reason:'transient'} (today's leave-as-is preserved)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-transient-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async () => ({ ok: false, reason: "transient" }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "awaiting-review", "a transient close failure must NEVER finalize status:'closed' — a later reconcile/reaper retry must still be possible");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/task-8 run-cron-review: close-on-merge STILL finalizes 'closed' when closeForumTopic resolves {ok:true} (existing success path preserved, no regression)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-oktrue-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async () => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+      }
+    );
+
+    await captured.reconcile();
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "closed", "an ok:true close must still finalize status:'closed' — no regression");
+    assert.equal(typeof meta.closedAt, "number");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/final-review run-cron-review: close-on-merge stamps closedAt from the injected deps.now() seam (determinism — matches cron-a-exit.mjs/reaper.mjs's convention, not a raw Date.now() read)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-close-nowseam-");
+  try {
+    const metaPath = createRun({ issueNumber: 42, project: "demo", worktreePath: "/srv/worktrees/42" }, stateDir);
+    updateMeta(metaPath, { threadId: 900, status: "awaiting-review" });
+
+    const closeForumTopicSpy = makeSpy(async () => ({ ok: true }));
+    const reconcileFake = () => [{ issue: 42, from: "harness:awaiting-merge" }];
+
+    let captured = null;
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      {
+        cronReview: (opts) => { captured = opts; },
+        reconcile: reconcileFake,
+        closeForumTopic: closeForumTopicSpy,
+        notifyConfig: { token: "BOT-TOKEN-XYZ", chatId: -100987 },
+        runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {} },
+        breakerTripped: () => false,
+        recordReviewSession: () => {},
+        loadCodexDriver: async () => null,
+        notify: () => {},
+        now: () => 1700000000,
+      }
+    );
+
+    await captured.reconcile();
+
+    const meta = readMeta(metaPath);
+    assert.equal(meta.closedAt, 1700000000, "closedAt must equal the injected deps.now() value, not a raw Date.now() read");
   } finally {
     cleanup();
   }

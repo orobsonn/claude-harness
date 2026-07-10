@@ -679,3 +679,101 @@ test("notifyExit: 'failed' outcome with no forum topic (threadId null) stamps cl
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// #235/task-2: the close terminal finalizes 'closed' on a permanent thread-not-found, and preserves
+// today's behavior (no premature finalize) on a transient close failure.
+// ---------------------------------------------------------------------------
+
+test("#235/task-2 notifyExit: 'blocked' outcome + closeForumTopic resolving {ok:false, reason:'thread-not-found'} -> status finalizes 'closed' with a finite closedAt", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic } = makeFakeCloseForumTopic({ ok: false, reason: "thread-not-found" });
+    const readMeta = makeFakeReadMeta({ status: "awaiting-review", threadId: 555 });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "blocked", issueNumber: 42, finding: "x" },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+        now: () => 1700000000,
+      }
+    );
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(closedCall, "a thread-not-found close must still finalize status:'closed' — the topic is already gone, there is nothing to retry");
+    assert.equal(closedCall.partial.closedAt, 1700000000);
+    assert.equal(closedCall.partial.topicConfirmedGone, true, "a thread-not-found finalize must flag topicConfirmedGone so drainTelegramOutbox's isFallback routes any remaining cosmetic event to the shared topic instead of retrying this dead threadId forever");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/final-review notifyExit: 'blocked' outcome + closeForumTopic resolving {ok:true} -> status finalizes 'closed' WITHOUT topicConfirmedGone (the topic still exists, merely archived — no regression)", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic } = makeFakeCloseForumTopic({ ok: true });
+    const readMeta = makeFakeReadMeta({ status: "awaiting-review", threadId: 555 });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "blocked", issueNumber: 42, finding: "x" },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+        now: () => 1700000000,
+      }
+    );
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(closedCall);
+    assert.ok(!closedCall.partial.topicConfirmedGone, "an ok:true close must NOT flag topicConfirmedGone — the topic still exists, so it must keep targeting its own thread");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#235/task-2 notifyExit: 'failed' outcome + closeForumTopic resolving {ok:false, reason:'transient'} -> updateMeta is NEVER called with status:'closed' (today's behavior preserved)", async () => {
+  const { runPath, cleanup } = makeObsRunPath();
+  try {
+    const { appendEvent } = makeFakeAppendEvent();
+    const { closeForumTopic } = makeFakeCloseForumTopic({ ok: false, reason: "transient" });
+    const readMeta = makeFakeReadMeta({ status: "active", threadId: 555 });
+    const { updateMeta, calls: updateCalls } = makeFakeUpdateMeta();
+    const makeNotifierFake = makeFakeMakeNotifier();
+
+    await notifyExit(
+      { outcome: "failed", issueNumber: 42 },
+      {
+        env: { HOME: "/fake/home", HARNESS_OBSERVABILITY_RUN_PATH: runPath },
+        prLookup: () => null,
+        makeNotifier: makeNotifierFake,
+        appendEvent,
+        closeForumTopic,
+        readMeta,
+        updateMeta,
+        now: () => 1700000000,
+      }
+    );
+
+    const closedCall = updateCalls.find((call) => call.partial && call.partial.status === "closed");
+    assert.ok(!closedCall, "a transient close failure must NEVER finalize status:'closed' — the meta stays at its prior status for a later retry");
+  } finally {
+    cleanup();
+  }
+});

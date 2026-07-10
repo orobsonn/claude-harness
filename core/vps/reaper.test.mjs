@@ -1008,3 +1008,147 @@ test("reaper: sweepOrphanTopics reverts a FAILED close to the captured prior sta
     "the revert partial must restore the captured prior status AND clear the closedAt fossil, nothing else"
   );
 });
+
+// ---------------------------------------------------------------------------
+// #235/task-3: a permanent thread-not-found close KEEPS the optimistic status:'closed' (no revert);
+// a transient failure still reverts (today's behavior preserved).
+// ---------------------------------------------------------------------------
+
+test("#235/task-3 reaper: sweepOrphanTopics KEEPS status:'closed' (no revert) when closeForumTopic resolves {ok:false, reason:'thread-not-found'}", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-905.json",
+    meta: {
+      issueNumber: 905,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "awaiting-review",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: false, reason: "thread-not-found" });
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [],
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+      now: () => 1700000000,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  assert.ok(
+    !updateCalls.some((c) => c.partial.status === "awaiting-review"),
+    "a thread-not-found close must NEVER revert to the prior status — the topic is already gone, that IS the terminal state"
+  );
+  const closedCall = updateCalls.find((c) => c.partial.status === "closed");
+  assert.ok(closedCall, "the final on-disk state must be status:'closed'");
+  assert.ok(
+    updateCalls.some((c) => c.partial.topicConfirmedGone === true),
+    "a thread-not-found close must ALSO flag topicConfirmedGone so drainTelegramOutbox's isFallback routes any remaining cosmetic event to the shared topic instead of retrying this dead threadId forever"
+  );
+});
+
+test("#235/final-review reaper: sweepOrphanTopics does NOT flag topicConfirmedGone when closeForumTopic resolves {ok:true} (the topic still exists, merely archived — no regression)", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-908.json",
+    meta: {
+      issueNumber: 908,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "active",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: true });
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [],
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  assert.ok(
+    !updateCalls.some((c) => c.partial.topicConfirmedGone),
+    "an ok:true close must NEVER flag topicConfirmedGone — the topic still exists, so it must keep targeting its own thread"
+  );
+});
+
+test("#235/task-3 reaper: sweepOrphanTopics STILL reverts to the prior status when closeForumTopic resolves {ok:false, reason:'transient'} (today's behavior preserved)", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-906.json",
+    meta: {
+      issueNumber: 906,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "awaiting-review",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: false, reason: "transient" });
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [],
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  assert.ok(
+    updateCalls.some((c) => c.partial.status === "awaiting-review"),
+    "a transient close failure must still revert to the captured prior status"
+  );
+});
+
+test("#235/task-3 reaper: sweepOrphanTopics KEEPS status:'closed' (no revert) when closeForumTopic resolves {ok:true}", async () => {
+  const run = {
+    metaPath: "/root/dev/demo-project/.claude/state/obs-907.json",
+    meta: {
+      issueNumber: 907,
+      threadId: 5,
+      worktreePath: "/gone",
+      status: "active",
+    },
+  };
+
+  const { closeForumTopic } = makeCloseForumTopic({ ok: true });
+  const { updateMeta, calls: updateCalls } = makeUpdateMeta();
+
+  const actions = reaper(
+    baseOpts({
+      listWorktrees: () => [],
+      listObsRuns: () => [run],
+      liveWorktreePaths: () => [],
+      prOpen: () => false,
+      closeForumTopic,
+      updateMeta,
+    })
+  );
+
+  await Promise.allSettled(actions.topicCloses ?? []);
+
+  assert.ok(
+    !updateCalls.some((c) => c.partial.status === "active"),
+    "a successful close must never revert — no regression"
+  );
+});

@@ -16,6 +16,7 @@ import {
   summarizeIssueBody,
   deleteForumTopic,
   createForumTopic,
+  closeForumTopic,
   isCriticalEvent,
 } from "./notify-telegram.mjs";
 import * as notifyTelegram from "./notify-telegram.mjs";
@@ -465,6 +466,59 @@ test("#ac-1.9 deleteForumTopic: a rejecting fetch never throws, resolves {ok:fal
   assert.doesNotMatch(serialized, /SECRET123/, "the token must never be logged");
   assert.doesNotMatch(serialized, /api\.telegram\.org/, "the api URL (which carries the token) must never be logged");
   assert.doesNotMatch(serialized, /message_thread_id/, "the payload field name must never be logged");
+});
+
+// ---------------------------------------------------------------------------
+// closeForumTopic — mirrors deleteForumTopic's { ok:false, reason } failure shape (#ac-1.1/#ac-1.2
+// of issue #235: callers need to distinguish a permanent thread-not-found from a transient failure).
+// ---------------------------------------------------------------------------
+
+test("#235/task-1 closeForumTopic: a 'message thread not found' response resolves exactly { ok:false, reason:'thread-not-found' }", async () => {
+  const { fetchImpl } = makeFakeFetch({
+    ok: false,
+    status: 400,
+    json: async () => ({ ok: false, description: "Bad Request: message thread not found" }),
+  });
+  const result = await closeForumTopic(
+    { threadId: 5 },
+    { config: { token: "t", chatId: 9 }, fetch: fetchImpl, log: () => {} }
+  );
+  assert.deepEqual(result, { ok: false, reason: "thread-not-found" });
+});
+
+test("#235/task-1 closeForumTopic: a rejecting fetch never throws, resolves { ok:false, reason:'transient' }, and the log stays redacted to op/type/status", async () => {
+  const logs = [];
+  const log = (entry) => logs.push(entry);
+  const { fetchImpl } = makeFakeFetch(new Error("boom https://api.telegram.org/botSECRET123:abc/closeForumTopic"));
+
+  let threw = false;
+  let result;
+  try {
+    result = await closeForumTopic(
+      { threadId: 5 },
+      { config: { token: "SECRET123:abc", chatId: 9 }, fetch: fetchImpl, log }
+    );
+  } catch {
+    threw = true;
+  }
+
+  assert.equal(threw, false, "closeForumTopic must never throw on a network error");
+  assert.deepEqual(result, { ok: false, reason: "transient" });
+
+  assert.equal(logs.length, 1, "exactly one log entry for the failure");
+  const [entry] = logs;
+  assert.deepEqual(Object.keys(entry).sort(), ["op", "status", "type"], "the log entry must have exactly the keys op/type/status");
+  assert.equal(entry.status, "error");
+
+  const serialized = JSON.stringify(logs);
+  assert.doesNotMatch(serialized, /SECRET123/, "the token must never be logged");
+});
+
+test("#235/task-1 closeForumTopic: a 2xx Telegram response resolves exactly { ok:true } with no reason key", async () => {
+  const { fetchImpl } = makeFakeFetch({ ok: true, status: 200, json: async () => ({ ok: true, result: true }) });
+  const result = await closeForumTopic({ threadId: 5 }, { config: { token: "t", chatId: 9 }, fetch: fetchImpl });
+  assert.deepEqual(result, { ok: true });
+  assert.ok(!("reason" in result), "the success shape must carry no reason key");
 });
 
 // ---------------------------------------------------------------------------

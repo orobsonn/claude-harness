@@ -44,6 +44,12 @@ import { buildScopedEnvFromDisk } from "./scoped-env-fromdisk.mjs";
 import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import * as runLockModule from "./run-lock.mjs";
 import * as counterModule from "./cron-state.mjs";
+// #235/task-6: reuses run-reaper.mjs's gh-scoped makeDefaultIssueClosed for the drain's issueOpen
+// seam (no new dependency). This creates a run-cron-a.mjs <-> run-reaper.mjs ESM cycle (run-reaper.mjs
+// already imports loadConfig from this file) — SAFE: both cross-imported symbols (loadConfig,
+// makeDefaultIssueClosed) are hoisted function declarations consumed only at CALL time inside a
+// function body, never at module-eval top level, so the cycle resolves cleanly under Node's ESM loader.
+import { makeDefaultIssueClosed } from "./run-reaper.mjs";
 import {
   makeNotifier,
   resolveNotifyConfig,
@@ -270,10 +276,41 @@ export function runCronA(config, deps = {}) {
   return selectResult;
 }
 
+/** @description Finite timeout (ms) + kill signal applied to every gh spawnSync the issueOpen seam
+ * below issues — #235/#ac-1.4: a hung gh process must NEVER block the post-dispatch drain. */
+const GH_SPAWN_TIMEOUT_MS = 5000;
+
+/**
+ * @description Builds a real issueOpen(issueNumber) seam for this project's single-repo config,
+ * reusing run-reaper.mjs's existing gh-scoped makeDefaultIssueClosed (no new dependency). Returns a
+ * TRI-STATE: `true` = confirmed OPEN (authorizes a self-heal re-mint), `false` = confirmed CLOSED
+ * (authorizes finalizing the run terminal), `null` = UNKNOWN (a gh outage/timeout — authorizes
+ * NEITHER a mint nor a finalize; collapsing an outage into "closed" would wrongly terminate a
+ * genuinely active run on a transient blip). The spawn's finite timeout keeps the cron itself
+ * fail-open (never blocked by a hung gh).
+ * @param {{ owner: string, repo: string }} config
+ * @param {{ spawn?: Function }} [deps] - test seam; defaults to the real spawnSync
+ * @returns {(issueNumber: number) => boolean | null}
+ */
+export function makeIssueOpen(config, deps = {}) {
+  const spawn = deps.spawn ?? spawnSync;
+  const spawnWithTimeout = (cmd, args, opts) =>
+    spawn(cmd, args, { ...opts, timeout: GH_SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+  const issueClosed = makeDefaultIssueClosed(spawnWithTimeout, config.owner, config.repo);
+  return (issueNumber) => {
+    const closed = issueClosed(issueNumber);
+    if (closed === true) return false;
+    if (closed === false) return true;
+    return null;
+  };
+}
+
 /**
  * @description CLI wrapper: builds the REAL best-effort notifier, runs runCronA with it injected,
  * and awaits drain() so the short-lived cron process does not exit before in-flight notifications
- * settle (bounded by the send timeout). A notify failure never affects the cron's exit.
+ * settle (bounded by the send timeout). A notify failure never affects the cron's exit. Wires a real
+ * issueOpen seam (#235/#ac-1.3) into the post-dispatch drain so the self-heal branch never re-mints a
+ * topic for a closed issue.
  * @param {object} config
  * @returns {Promise<void>}
  */
@@ -343,6 +380,7 @@ export async function mainCronA(config, deps = {}) {
           chatId: notifier.config?.chatId,
           limitPerMinute: config.notify?.limitPerMinute ?? 20,
           sendDelayMs: config.notify?.sendDelayMs ?? 1100,
+          issueOpen: makeIssueOpen(config, { spawn: deps.spawn }),
         });
       } catch {
         // fail-open: a drain failure never throws or delays the cron
