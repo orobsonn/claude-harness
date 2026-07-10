@@ -56,6 +56,58 @@ function isExecutionPlanPath(filePath) {
 }
 
 /**
+ * The sensitive gate-state basenames. A Write/Edit whose basename is one of these is denied in ANY
+ * path (not only under .claude/plans/.state/) — the `.state/` anchor is cwd-relative (stateDirFor is
+ * a relative path resolved against process.cwd()), so a homonym written to the worktree cwd or any
+ * sibling dir could become the file the gate actually reads and forge every absolution at once. The
+ * basename rail closes that; the carve-out (isCarvedOut) exempts test fixtures that never reach the
+ * real gate.
+ */
+const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
+
+/**
+ * Splits a file_path into normalized, lowercased, non-empty path segments — the shared primitive
+ * for the path/basename checks. Normalizes separators and resolves '.'/'..' first so a traversal
+ * variant cannot evade a check. Returns [] for a non-string/empty path.
+ * @param {unknown} filePath
+ * @returns {string[]}
+ */
+function pathSegments(filePath) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return [];
+  }
+  const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
+  return norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
+}
+
+/**
+ * Carve-out for the state-file rails (#ac-1.2): a homonymous state file that lives under a
+ * `__fixtures__/` dir OR whose path carries a `*.test.*` segment is a TEST artifact — it never
+ * resolves to the real gate, so gating it would false-block the harness's own test suite. Matches a
+ * `__fixtures__` path segment or any segment containing `.test.` (e.g. `foo.test.mjs`,
+ * `gate-state.test.json`). Real runtime state paths never carry either token.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isCarvedOut(filePath) {
+  const segs = pathSegments(filePath);
+  return segs.some((s) => s === "__fixtures__" || s.includes(".test."));
+}
+
+/**
+ * Tests whether a file_path's BASENAME is one of the forbidden gate-state basenames, in ANY path.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isForbiddenStateBasename(filePath) {
+  const segs = pathSegments(filePath);
+  if (segs.length === 0) {
+    return false;
+  }
+  return FORBIDDEN_STATE_BASENAMES.has(segs[segs.length - 1]);
+}
+
+/**
  * Tests whether a file_path resolves to a JSON file under a .claude/plans/.state/ directory
  * (gate-state.json, triage.json). These files are the deterministic gates' state and must be
  * written ONLY by the stamp-triage/entry-gate hooks (which use fs directly, never a tool call) —
@@ -126,11 +178,36 @@ export function decide(payload) {
 
   const filePath = payload?.tool_input?.file_path;
 
+  // Carve-out (#ac-1.2): a __fixtures__/*.test.* homonym is a test artifact that never reaches the
+  // real gate — exempt it from BOTH state-file rails below so the harness's own suite is not
+  // false-blocked. Real runtime state paths never carry either token.
+  const carved = isCarvedOut(filePath);
+
+  // Basename rail (#ac-1.1): DENY a Write/Edit whose BASENAME is a sensitive gate-state file
+  // (gate-state.json / triage.json) in ANY path — not only under .claude/plans/.state/. The
+  // stateDir anchor is cwd-relative, so a homonym written elsewhere (worktree cwd, a sibling dir)
+  // could become the file the gate actually reads and forge every absolution. The path rail below
+  // stays as defense-in-depth for other *.json state files under .state/.
+  if (!carved && isForbiddenStateBasename(filePath)) {
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[plan-write-gate] Blocked: a gate-state/triage file (by basename) is written ONLY by the " +
+          "harness hooks (stamp-triage/entry-gate), never by a Write/Edit tool — in ANY path. A direct " +
+          "write anywhere could become the file the gate reads (the stateDir is cwd-relative) and forge " +
+          "the regate/capture/escalation absolutions. Use the mark.mjs / classify.mjs markers.",
+      },
+    };
+  }
+
   // Gate-state/triage files under .claude/plans/.state/ are owned by the stamp-triage/entry-gate
   // hooks (fs writes, not tool calls). DENY any tool Write/Edit to them — from the main loop OR a
   // subagent — so a caller can never forge regate_passed/capture_verified/escalation_fallback by
   // overwriting the state file directly (a laundering path stronger than the echo-forgery residual).
-  if (isStateFilePath(filePath)) {
+  if (!carved && isStateFilePath(filePath)) {
     return {
       allow: false,
       hookSpecificOutput: {
