@@ -63,7 +63,7 @@ Invoke `proposing-improvements`. It scans findings for **systemic patterns** (sa
 ### 4. Docs (absorbed from the former docs agent)
 After skills complete, update local project docs directly:
 
-- **`CHANGELOG.md`** — add entry under `## [Unreleased]` (Keep a Changelog format). Subsection: Added / Changed / Fixed / Removed. One line per user-facing impact.
+- **`CHANGELOG.md`** — **release-please owns it** whenever the project has `release-please-config.json` at the repo root: it derives the changelog from Conventional Commits, so the harvester never writes, appends, or edits `CHANGELOG.md` in that case. Projects **without** release-please keep the manual fallback (add an entry under `## [Unreleased]`, Keep a Changelog format, one line per user-facing impact) as described in `core/rules/releases.md`.
 - **`CLAUDE.md` / `.claude/rules/`** — update only if a project-level pattern, constraint, or architecture decision changed. Do not rewrite entire sections. Follow the existing style.
 - **`.dev.vars.example`** — if a new secret was introduced, add a placeholder (no real value) with a comment.
 - **JSDoc** is NOT your responsibility — the executor handles it per task.
@@ -108,7 +108,7 @@ Reply in pt-br. End with:
 - promoted → <path> — <itens cujo ponteiro virou promoção, se houver>
 
 ### Docs locais
-- CHANGELOG.md — <entry adicionada ou "sem mudança">
+- CHANGELOG.md — <entry adicionada, "sem mudança" ou "delegado ao release-please">
 - CLAUDE.md / rules — <seção atualizada ou "sem mudança">
 
 ### Custo da entrega
