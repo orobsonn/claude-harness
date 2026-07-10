@@ -20,7 +20,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { runLiveDispatch } from "./spawn-hand.mjs";
+import { runLiveDispatch, HAND_BASH_TIMEOUT_MS } from "./spawn-hand.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SPAWN_CLI = join(__dirname, "spawn-hand.mjs");
@@ -140,6 +140,63 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       // The record is ANCHORED to the freeze it ran against (the entry-gate freshness cross-check).
       assert.equal(result.record.freezeCommitSha, FREEZE_SHA, "the record must carry the freeze_commit_sha it ran against");
       assert.equal(JSON.parse(writtenRecord.content).freezeCommitSha, FREEZE_SHA, "the persisted record must carry freezeCommitSha");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #ac-2.2 — the assembled dispatch carries an EXPLICIT 600000 Bash-tool timeout field
+// (bash_timeout_ms), so the orchestrator's foreground `node spawn-hand.mjs` call never
+// defaults to the Bash tool's 120000ms and SIGKILLs the hand at 2 min. Observed via the
+// injected capture seam, which receives the assembled dispatch.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch assembles a dispatch carrying the explicit Bash timeout (#ac-2.2)", () => {
+  it("the dispatch handed to the capture seam carries bash_timeout_ms === 600000", async () => {
+    const { descriptor, dir } = makeDescriptor();
+    const token = "fake-live-token-bashtimeout";
+    const sink = {};
+    let captureArgs = null;
+
+    const fakeCapture = (args) => {
+      captureArgs = args;
+      return {
+        captured: true,
+        child: {
+          captured: true,
+          touchedPaths: ["core/foo.mjs"],
+          lockedTestExitCode: 0,
+          exitCode: args.child.exitCode,
+          stdout: args.child.stdout,
+          stderr: args.child.stderr,
+          testsCount: 5,
+        },
+        outcome: { status: "DONE", scopeViolations: [], frozenViolations: [], allowedWriteViolations: [], reasons: [] },
+      };
+    };
+
+    try {
+      await runLiveDispatch(descriptor, {
+        spawn: makeFakeSpawn(sink),
+        gitStatus: () => "",
+        headSha: () => FREEZE_SHA,
+        capture: fakeCapture,
+        env: { ANTHROPIC_AUTH_TOKEN: token },
+        writeRecord: () => {},
+      });
+
+      assert.ok(captureArgs, "the capture seam must receive the assembled dispatch");
+      assert.equal(
+        captureArgs.dispatch.bash_timeout_ms,
+        600000,
+        "the assembled dispatch must carry an explicit bash_timeout_ms of 600000",
+      );
+      assert.equal(
+        captureArgs.dispatch.bash_timeout_ms,
+        HAND_BASH_TIMEOUT_MS,
+        "bash_timeout_ms must equal the exported HAND_BASH_TIMEOUT_MS constant",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

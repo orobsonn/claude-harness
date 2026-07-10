@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { decide, processInput, computeGitState, adviseIssueForm } from "./entry-gate.mjs";
+import { decide, processInput, computeGitState, adviseIssueForm, isRoutineSession } from "./entry-gate.mjs";
 
 const ENTRY_GATE_PATH = fileURLToPath(new URL("./entry-gate.mjs", import.meta.url));
 
@@ -853,6 +853,132 @@ test(
       verdict = decide(payload, { readGateStateFn });
     }, "decide must not throw on empty gate-state");
     assert.equal(verdict.allow, true, "delivery command allowed when gate-state has no regate_pending");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// #ac-1.2 — death rail: a backgrounded spawn-hand / cross-family hand dispatch is DENIED
+// (run_in_background:true kills the session under `claude -p`). UNCONDITIONAL — any mode.
+// ---------------------------------------------------------------------------
+
+test(
+  "#ac-1.2: spawn-hand.mjs dispatch with run_in_background:true → deny",
+  () => {
+    const payload = makeBashPayload(
+      "ses_bg_spawn",
+      "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json",
+      { tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json", run_in_background: true } },
+    );
+
+    const verdict = decide(payload);
+
+    assert.equal(verdict.allow, false, "backgrounded spawn-hand dispatch must be denied");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      /run_in_background|foreground|synchronous/i.test(verdict.hookSpecificOutput.permissionDecisionReason),
+      `deny reason must explain the foreground requirement — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
+    );
+  },
+);
+
+test(
+  "#ac-1.2: cross-family.mjs dispatch with run_in_background:true → deny",
+  () => {
+    const cmd = "node .claude/modules/codex-adversary/cross-family.mjs --task x";
+    const payload = makeBashPayload("ses_bg_xfam", cmd, {
+      tool_input: { command: cmd, run_in_background: true },
+    });
+
+    const verdict = decide(payload);
+
+    assert.equal(verdict.allow, false, "backgrounded cross-family dispatch must be denied");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  },
+);
+
+test(
+  "#ac-1.2: spawn-hand.mjs dispatch WITHOUT run_in_background → allow (foreground is correct)",
+  () => {
+    // Foreground spawn-hand with no --descriptor is a read/allow path (fidelity rail fail-open).
+    const cmd = "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --help";
+    const payloadAbsent = makeBashPayload("ses_fg_spawn", cmd);
+    assert.equal(decide(payloadAbsent).allow, true, "foreground spawn-hand (no run_in_background) must be allowed");
+
+    const payloadFalse = makeBashPayload("ses_fg_spawn2", cmd, {
+      tool_input: { command: cmd, run_in_background: false },
+    });
+    assert.equal(decide(payloadFalse).allow, true, "run_in_background:false must be allowed");
+  },
+);
+
+test(
+  "#ac-1.2: a NON-hand command with run_in_background:true is NOT denied by this rail",
+  () => {
+    const cmd = "npm run build";
+    const payload = makeBashPayload("ses_bg_build", cmd, {
+      tool_input: { command: cmd, run_in_background: true },
+    });
+    // Not a delivery command, not a hand dispatch → allowed (rail is scoped to the hand dispatch).
+    assert.equal(decide(payload).allow, true, "background npm build must not be denied — rail is hand-scoped");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// #ac-1.3 — death rail: ScheduleWakeup is DENIED in a harness routine session, ALLOWED in a
+// plain interactive session (routine detection via injectable env seam).
+// ---------------------------------------------------------------------------
+
+function makeWakeupPayload(sessionId, extra = {}) {
+  return { session_id: sessionId, tool_name: "ScheduleWakeup", tool_input: {}, ...extra };
+}
+
+test(
+  "#ac-1.3: ScheduleWakeup in a routine session (HARNESS_NOTIFY_PROJECT set) → deny",
+  () => {
+    const payload = makeWakeupPayload("ses_wakeup_routine");
+    const isRoutineFn = () => isRoutineSession({ HARNESS_NOTIFY_PROJECT: "my-project" });
+
+    const verdict = decide(payload, { isRoutineFn });
+
+    assert.equal(verdict.allow, false, "ScheduleWakeup must be denied in a routine session");
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(
+      /ScheduleWakeup|re-invoke|wakeup/i.test(verdict.hookSpecificOutput.permissionDecisionReason),
+      "deny reason must explain the wakeup-does-not-re-invoke failure mode",
+    );
+  },
+);
+
+test(
+  "#ac-1.3: ScheduleWakeup with CLAUDE_CODE_REMOTE or OBSERVABILITY_RUN_PATH set → deny",
+  () => {
+    for (const env of [{ CLAUDE_CODE_REMOTE: "1" }, { HARNESS_OBSERVABILITY_RUN_PATH: "/run/x" }]) {
+      const payload = makeWakeupPayload("ses_wakeup_env");
+      const verdict = decide(payload, { isRoutineFn: () => isRoutineSession(env) });
+      assert.equal(verdict.allow, false, `ScheduleWakeup must be denied when routine env is ${JSON.stringify(env)}`);
+    }
+  },
+);
+
+test(
+  "#ac-1.3: ScheduleWakeup in a plain interactive session (no routine markers) → allow",
+  () => {
+    const payload = makeWakeupPayload("ses_wakeup_interactive");
+    const isRoutineFn = () => isRoutineSession({}); // no markers → interactive
+
+    const verdict = decide(payload, { isRoutineFn });
+
+    assert.equal(verdict.allow, true, "ScheduleWakeup must be allowed in a plain interactive session");
+    assert.equal(verdict.hookSpecificOutput, undefined, "no deny output on the interactive allow path");
+  },
+);
+
+test(
+  "#ac-1.3: isRoutineSession is fail-open (undefined env → false → allow)",
+  () => {
+    assert.equal(isRoutineSession(undefined), false, "undefined env must fail open to false");
+    assert.equal(isRoutineSession({}), false, "empty env (no markers) is not a routine");
+    assert.equal(isRoutineSession({ HARNESS_NOTIFY_PROJECT: "p" }), true, "any marker → routine");
   },
 );
 

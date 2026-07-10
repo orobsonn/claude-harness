@@ -156,6 +156,24 @@ function defaultIsHeadless(env = process.env) {
 }
 
 /**
+ * @description Detects a HARNESS ROUTINE (headless-local / cloud cron) session — the sessions
+ * in which a ScheduleWakeup would silently die (it does NOT re-invoke the assistant under
+ * `claude -p`). The VPS cron dispatch deliberately does NOT set $CLAUDE_CODE_REMOTE (that would
+ * disable cheap hands), but it DOES set $HARNESS_NOTIFY_PROJECT and usually
+ * $HARNESS_OBSERVABILITY_RUN_PATH in the session env — so the routine signal is ANY of the three
+ * markers. Fail-open (returns false → allow) when env is unavailable. Injectable via decide()'s
+ * deps for tests (mirrors defaultIsHeadless's env seam).
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {boolean}
+ */
+export function isRoutineSession(env = process.env) {
+  if (!env) return false;
+  return Boolean(
+    env.CLAUDE_CODE_REMOTE || env.HARNESS_NOTIFY_PROJECT || env.HARNESS_OBSERVABILITY_RUN_PATH,
+  );
+}
+
+/**
  * @description Best-effort current-HEAD sha reader for the run-record freshness cross-check.
  * Returns null on ANY git/infra error so the freshness check fails OPEN (never bricks a legit
  * escalation) — it only ever DENIES on a POSITIVE staleness signal (known HEAD ≠ record's freeze).
@@ -523,6 +541,38 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
     return { allow: true };
   }
 
+  // #ac-1.2 death rail (UNCONDITIONAL — any mode; backgrounding a hand is NEVER correct):
+  // a spawn-hand.mjs / cross-family.mjs dispatch with run_in_background:true silently KILLS the
+  // session under a headless `claude -p`. A backgrounded Bash job does NOT re-invoke the assistant,
+  // so the orchestrator yielding its turn to "wait for the background hand" TERMINATES the process
+  // mid-run — the hand is killed, nothing is captured/committed, the run dies. These dispatches
+  // MUST run synchronously in the foreground. Only an explicit run_in_background === true triggers
+  // this (absent/undefined/false → allow). Scoped to the hand dispatch only — NOT a broad ban on
+  // background Bash (legit background use elsewhere is untouched).
+  const isHandDispatch =
+    command.includes("spawn-hand.mjs") || command.includes("cross-family.mjs");
+  if (isHandDispatch && payload?.tool_input?.run_in_background === true) {
+    console.error(
+      "[entry-gate] denied backgrounded hand dispatch (spawn-hand.mjs/cross-family.mjs) — " +
+        "run_in_background:true kills the session under `claude -p`.",
+    );
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[entry-gate] Blocked: hand dispatch (spawn-hand.mjs / cross-family.mjs) with " +
+          "run_in_background:true. Under a headless `claude -p` session a backgrounded Bash job " +
+          "does NOT re-invoke the assistant — yielding the turn to wait for it TERMINATES the " +
+          "process mid-run and the hand is killed with nothing captured/committed. Run the dispatch " +
+          "SYNCHRONOUSLY in the FOREGROUND (no run_in_background, no sleep-poll): spawn-hand.mjs is " +
+          "spawnSync-based and blocks until the hand finishes (minutes is normal). Set an explicit " +
+          "Bash timeout of 600000 (the tool max) instead of backgrounding.",
+      },
+    };
+  }
+
   // Fidelity rail — spawn-hand.mjs dispatch is gated until the task's fidelity-pass is stamped.
   // MUST come before the isDeliveryCommand check because spawn-hand.mjs is NOT a delivery
   // command and would otherwise be allowed freely.
@@ -805,6 +855,9 @@ export function decide(payload, deps = {}) {
     readHandRecordFn = readHandRecord,
     headShaFn = defaultHeadSha,
     isHeadlessFn = defaultIsHeadless,
+    // Routine (headless-local / cloud cron) detector for the ScheduleWakeup death rail (#ac-1.3).
+    // Default reads process.env; tests inject to exercise the marker set deterministically.
+    isRoutineFn = isRoutineSession,
     // No-op by default so unit callers of decide() are inert to the branch/commit rail; the real
     // git probe (defaultGitState) is injected at the processInput layer (production CLI path).
     gitStateFn = () => null,
@@ -824,6 +877,37 @@ export function decide(payload, deps = {}) {
   // Non-object payload → infra error → fail-open
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { allow: true };
+  }
+
+  // ScheduleWakeup tool (#ac-1.3 death rail): denied in a harness routine (headless-local / cloud)
+  // session. ScheduleWakeup does NOT re-invoke the assistant under `claude -p` — the run would
+  // silently die waiting for a wakeup that never delivers a turn (unlike Agent subagents, which DO
+  // re-invoke). In a plain interactive session (none of the routine env markers set) it is allowed.
+  // Fail-open when routine detection is unavailable/throws.
+  if (payload.tool_name === "ScheduleWakeup") {
+    let routine = false;
+    try {
+      routine = Boolean(isRoutineFn());
+    } catch {
+      routine = false;
+    }
+    if (!routine) {
+      return { allow: true };
+    }
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[entry-gate] Blocked: ScheduleWakeup in a harness routine (headless-local / cloud) " +
+          "session. ScheduleWakeup does NOT re-invoke the assistant under `claude -p` — the run " +
+          "would silently die waiting for a wakeup that never delivers a turn. Do NOT schedule a " +
+          "wakeup or sleep-poll; drive the work synchronously in the foreground. If something must " +
+          "resume with fresh context, dispatch an Agent subagent (those DO re-invoke), never a " +
+          "wakeup. This rail does not apply to a plain interactive session.",
+      },
+    };
   }
 
   // Bash tool: delivery-bash-gate + fidelity rail + issue-form advisory.

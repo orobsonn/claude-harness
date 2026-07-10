@@ -127,7 +127,7 @@ test("SessionStart startup wires version-check.mjs but compact does NOT (no re-n
   );
 });
 
-test("NO Skill matcher in PreToolUse and exactly 8 hooks total", () => {
+test("NO Skill matcher in PreToolUse and exactly 9 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
 
@@ -150,7 +150,35 @@ test("NO Skill matcher in PreToolUse and exactly 8 hooks total", () => {
     totalHooks += settings.hooks.SessionStart.length;
   }
 
-  strictEqual(totalHooks, 8, "exactly 8 hooks should be wired (Agent + Bash + Write|Edit for PreToolUse, Bash + Agent + Write for PostToolUse, compact + startup for SessionStart)");
+  strictEqual(totalHooks, 9, "exactly 9 hooks should be wired (Agent + Bash + ScheduleWakeup + Write|Edit for PreToolUse, Bash + Agent + Write for PostToolUse, compact + startup for SessionStart)");
+});
+
+// #ac-1.3 — settings.json wires a ScheduleWakeup PreToolUse matcher → entry-gate.mjs, so the
+// ScheduleWakeup death rail actually fires (a tool with no wired matcher is never gated).
+test("hooks.PreToolUse has ScheduleWakeup matcher with entry-gate.mjs command", () => {
+  const content = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(content);
+
+  const wakeupHook = settings.hooks.PreToolUse.find(
+    (h) => h.matcher === "ScheduleWakeup"
+  );
+  ok(wakeupHook, "PreToolUse ScheduleWakeup matcher found");
+  ok(
+    wakeupHook.hooks &&
+      wakeupHook.hooks[0] &&
+      wakeupHook.hooks[0].command &&
+      wakeupHook.hooks[0].command.includes("entry-gate.mjs"),
+    "ScheduleWakeup hook command contains entry-gate.mjs"
+  );
+  ok(
+    wakeupHook.hooks[0].command.includes("${CLAUDE_PROJECT_DIR}"),
+    "command uses ${CLAUDE_PROJECT_DIR} variable"
+  );
+
+  // The pre-existing Agent + Bash entry-gate matchers remain intact alongside it.
+  const matchers = settings.hooks.PreToolUse.map((h) => h.matcher);
+  ok(matchers.includes("Agent"), "Agent matcher still present");
+  ok(matchers.includes("Bash"), "Bash matcher still present");
 });
 
 test("hooks.PreToolUse has Bash matcher with entry-gate.mjs command", () => {
