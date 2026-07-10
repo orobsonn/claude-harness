@@ -43,7 +43,32 @@
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { isSafeFeatureId } from "./lib/gate-lib.mjs";
+
+/**
+ * @description Parses a comma-separated list of RELATIVE path strings for the active-scope marker.
+ * Trims each entry, drops empties, normalizes separators/'.'/'..'. Rejects (returns null) when any
+ * entry is absolute or, after normalize, still contains a '..' segment (path traversal). Returns []
+ * for an empty input only when allowEmpty is true (allowed_writes is optional); otherwise null.
+ * @param {unknown} raw - comma-separated path list
+ * @param {boolean} allowEmpty - whether an empty result is valid
+ * @returns {string[]|null}
+ */
+function parsePathList(raw, allowEmpty) {
+  if (typeof raw !== "string") return null;
+  const parts = raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  if (parts.length === 0) return allowEmpty ? [] : null;
+  const out = [];
+  for (const p of parts) {
+    const norm = path.posix.normalize(p.replace(/\\/g, "/"));
+    if (norm === ".." || norm.split("/").includes("..") || path.posix.isAbsolute(norm)) {
+      return null;
+    }
+    out.push(norm);
+  }
+  return out;
+}
 
 /**
  * Markers that additionally require a --task-id (the per-task re-gate rail, the per-task
@@ -82,6 +107,7 @@ const OBSERVABILITY_MARKERS = new Set(["plan-reviewed", "task-executing", "final
  */
 const SUPPORTED_MARKERS = new Set([
   "brainstorm-done",
+  "active-scope",
   ...OBSERVABILITY_MARKERS,
   ...TASK_SCOPED_MARKERS,
 ]);
@@ -137,6 +163,24 @@ export function parseArgs(argv) {
     const parsed = { marker, feature_id, verdict };
     if (task_id !== null) {
       parsed.task_id = task_id;
+    }
+    return parsed;
+  }
+
+  // active-scope: the deterministic scope_paths write rail source. Requires --task-id, --role
+  // (executor|sniper), --scope-paths (comma-sep); optional --allowed-writes (comma-sep). The
+  // orchestrator stamps it right before dispatching an executor/sniper; last-write-wins.
+  if (marker === "active-scope") {
+    const task_id = findFlag(argv, "--task-id");
+    const role = findFlag(argv, "--role");
+    const scope_paths = findFlag(argv, "--scope-paths");
+    const allowed_writes = findFlag(argv, "--allowed-writes");
+    if (task_id === null || role === null || scope_paths === null) {
+      return null;
+    }
+    const parsed = { marker, feature_id, task_id, role, scope_paths };
+    if (allowed_writes !== null) {
+      parsed.allowed_writes = allowed_writes;
     }
     return parsed;
   }
@@ -197,6 +241,54 @@ export function run(args) {
       };
     }
     return { success: true, output: { marker, feature_id, task_id } };
+  }
+
+  // active-scope: validate ids (kebab), role in {executor, sniper}, and the relative path lists
+  // (scope-paths required non-empty; allowed-writes optional). Any '..' or absolute path is rejected.
+  if (marker === "active-scope") {
+    if (!isSafeFeatureId(feature_id)) {
+      return {
+        success: false,
+        error: `invalid feature_id: "${feature_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only).`,
+      };
+    }
+    if (!isSafeFeatureId(task_id)) {
+      return {
+        success: false,
+        error: `invalid task_id: "${task_id}" must be a non-empty kebab-case string (a-z, 0-9, hyphens only).`,
+      };
+    }
+    if (args.role !== "executor" && args.role !== "sniper") {
+      return {
+        success: false,
+        error: `invalid role: "${args.role}" must be executor or sniper.`,
+      };
+    }
+    const scopeList = parsePathList(args.scope_paths, false);
+    if (scopeList === null) {
+      return {
+        success: false,
+        error: `invalid scope-paths: "${args.scope_paths}" must be a non-empty comma-separated list of relative paths with no '..' segment or absolute path.`,
+      };
+    }
+    const allowedList = parsePathList(args.allowed_writes ?? "", true);
+    if (allowedList === null) {
+      return {
+        success: false,
+        error: `invalid allowed-writes: "${args.allowed_writes}" must be a comma-separated list of relative paths with no '..' segment or absolute path.`,
+      };
+    }
+    return {
+      success: true,
+      output: {
+        marker,
+        feature_id,
+        task_id,
+        role: args.role,
+        scope_paths: scopeList,
+        allowed_writes: allowedList,
+      },
+    };
   }
 
   // Validate feature_id (kebab-case required for all other markers — IDs are used in file paths)
@@ -289,7 +381,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | plan-reviewed --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE | task-executing --feature-id <id> --n <n> --total <N> | final-review-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | active-scope --feature-id <id> --task-id <id> --role executor|sniper --scope-paths <a,b> [--allowed-writes <c,d>] | plan-reviewed --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE | task-executing --feature-id <id> --n <n> --total <N> | final-review-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
     );
     process.exit(1);
   }

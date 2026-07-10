@@ -192,3 +192,59 @@ test("Finding 3: a normal non-state, non-plan write still passes", () => {
   assert.equal(verdict.allow, true);
   assert.equal(verdict.hookSpecificOutput, undefined);
 });
+
+// --- A1 basename rail (#ac-1.1) — gate-state.json/triage.json blocked in ANY path ---
+
+test("#ac-1.1: Write gate-state.json OUTSIDE .state/ (worktree cwd) → deny (basename rail)", () => {
+  const verdict = decide(makeWritePayload("Write", "gate-state.json"));
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("#ac-1.1: Write gate-state.json to an unrelated sibling dir → deny (basename rail)", () => {
+  const verdict = decide(makeWritePayload("Write", "some/other/dir/gate-state.json"));
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("#ac-1.1: Edit triage.json outside .state/ (basename anywhere) → deny", () => {
+  const verdict = decide(makeWritePayload("Edit", "tmp/triage.json"));
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("#ac-1.1: basename rail is case-insensitive — Gate-State.json → deny", () => {
+  const verdict = decide(makeWritePayload("Write", "Gate-State.json"));
+  assert.equal(verdict.allow, false);
+});
+
+// --- A1 carve-out (#ac-1.2) — __fixtures__/*.test.* homonyms are allowed ---
+
+test("#ac-1.2: gate-state.json under a __fixtures__/ dir → allow (test-fixture carve-out)", () => {
+  const verdict = decide(
+    makeWritePayload("Write", "core/hooks/__fixtures__/ses_x/gate-state.json")
+  );
+  assert.equal(verdict.allow, true);
+  assert.equal(verdict.hookSpecificOutput, undefined);
+});
+
+test("#ac-1.2: a *.test.* segment homonym (gate-state.test.json) → allow (carve-out)", () => {
+  const verdict = decide(makeWritePayload("Write", "core/hooks/gate-state.test.json"));
+  assert.equal(verdict.allow, true);
+});
+
+test("#ac-1.2: carve-out also exempts a fixture under .state/ path (fixtures never reach the gate)", () => {
+  const verdict = decide(
+    makeWritePayload("Write", "__fixtures__/.claude/plans/.state/ses_x/gate-state.json")
+  );
+  assert.equal(verdict.allow, true);
+});
+
+// non-regression: a REAL .state/ gate-state.json is STILL denied (basename OR path rail)
+test("#ac-1.1 non-regression: real .claude/plans/.state gate-state.json still denied", () => {
+  const verdict = decide(
+    makeWritePayload("Write", ".claude/plans/.state/ses_x/gate-state.json")
+  );
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});

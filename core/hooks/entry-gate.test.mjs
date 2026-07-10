@@ -682,13 +682,34 @@ test("decide: shipper with unmatched regate_pending (no matching regate_passed) 
   );
 });
 
-test("decide: shipper with regate_pending matched by regate_passed → allow", () => {
+test("decide: shipper with regate_pending matched by an ancestor-sha regate_passed → allow", () => {
   const payload = makeAgentPayload("ses_ship_ok", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  // Absolutions are sha-qualified `<feature>/<task>@<sha>`; the pending obligation is unqualified.
+  const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1@abc123"] });
+
+  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
+  assert.equal(verdict.allow, true, "shipper must be allowed once every re-gate is matched by an ancestor-sha absolution");
+});
+
+test("decide: shipper with regate_passed at a DIVERGENT (non-ancestor) sha → deny (stale absolution ignored)", () => {
+  const payload = makeAgentPayload("ses_ship_divergent", "shipper");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1@stale99"] });
+
+  // A re-dispatch discarded the prior attempt → the old absolution's sha is not an ancestor of HEAD.
+  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => false });
+  assert.equal(verdict.allow, false, "a non-ancestor (divergent) absolution must not clear the obligation");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("decide: shipper with a legacy UNqualified regate_passed → deny (no @sha treated as absent)", () => {
+  const payload = makeAgentPayload("ses_ship_legacy", "shipper");
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1"] });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
-  assert.equal(verdict.allow, true, "shipper must be allowed once every re-gate is matched");
+  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
+  assert.equal(verdict.allow, false, "an unqualified (pre-migration) absolution must be treated as absent");
 });
 
 test("decide: shipper with feature-qualified unmatched regate_pending → deny naming the qualified entry", () => {
@@ -698,10 +719,10 @@ test("decide: shipper with feature-qualified unmatched regate_pending → deny n
   // unmatched computation reads whatever qualified entries the arrays carry.
   const readGateStateFn = () => ({
     regate_pending: ["feature-a/task-1", "feature-b/task-1"],
-    regate_passed: ["feature-b/task-1"],
+    regate_passed: ["feature-b/task-1@abc123"],
   });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
   assert.equal(verdict.allow, false, "shipper must be denied while feature-a/task-1 is unmatched");
   assert.ok(
     verdict.hookSpecificOutput.permissionDecisionReason.includes("feature-a/task-1"),
@@ -805,12 +826,12 @@ test(
     const payload = makeBashPayload("ses_bash_push_ok", "git push origin main");
     const readGateStateFn = () => ({
       regate_pending: ["task-1"],
-      regate_passed: ["task-1"],
+      regate_passed: ["task-1@abc123"],
     });
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
 
-    assert.equal(verdict.allow, true, "git push must be allowed once every regate is matched");
+    assert.equal(verdict.allow, true, "git push must be allowed once every regate is matched by an ancestor-sha absolution");
   },
 );
 
@@ -1136,12 +1157,12 @@ test(
     const payload = makeBashPayload("ses_cap_ok", "git push origin main");
     const readGateStateFn = () => ({
       hand_finished: ["feat-a/task-1"],
-      capture_verified: ["feat-a/task-1"],
+      capture_verified: ["feat-a/task-1@abc123"],
     });
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
 
-    assert.equal(verdict.allow, true, "git push must be allowed once every capture is matched");
+    assert.equal(verdict.allow, true, "git push must be allowed once every capture is matched by an ancestor-sha absolution");
   },
 );
 
@@ -1180,11 +1201,11 @@ test(
     const payload = makeBashPayload("ses_cap_independent", "git push origin main");
     const readGateStateFn = () => ({
       regate_pending: ["feat-a/x"],
-      regate_passed: ["feat-a/x"], // regate rail satisfied
+      regate_passed: ["feat-a/x@abc123"], // regate rail satisfied (ancestor-sha absolution)
       hand_finished: ["feat-a/task-1"], // but capture rail unmatched
     });
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
 
     assert.equal(verdict.allow, false, "capture rail must deny even when the regate rail is satisfied");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");

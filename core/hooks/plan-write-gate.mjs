@@ -25,7 +25,86 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bareRole } from "./lib/gate-lib.mjs";
+import { bareRole, isSafeSessionId, readGateState } from "./lib/gate-lib.mjs";
+
+/**
+ * @description Hand roles whose subagent writes are constrained to the active dispatch's scope_paths
+ * (A3). test-author is NOT scoped — it only authors tests. Only executor/sniper write implementation.
+ */
+const SCOPE_RAIL_ROLES = new Set(["executor", "sniper"]);
+
+/**
+ * @description True iff `normPathLower` (a normalized, lowercased relative path) is INSIDE the scope
+ * entry — equal to it, or under it as a directory prefix. A file entry (src/a.ts) matches only by
+ * equality; a directory entry (src) matches any path beneath it. Case-insensitive (the operator's
+ * platform is), '..'-normalized.
+ * @param {string} normPathLower
+ * @param {unknown} entry
+ * @returns {boolean}
+ */
+function scopeContains(normPathLower, entry) {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  const s = path.posix.normalize(entry.replace(/\\/g, "/")).toLowerCase();
+  if (s.length === 0) return false;
+  if (normPathLower === s) return true;
+  const prefix = s.endsWith("/") ? s : `${s}/`;
+  return normPathLower.startsWith(prefix);
+}
+
+/**
+ * @description The A3 deterministic scope_paths write rail. Returns a DENY verdict when a SUBAGENT
+ * write (own agent_id) by an executor/sniper hand targets a path outside the active dispatch's
+ * scope_paths AND allowed_writes; otherwise null (allow / rail off). Fail-OPEN on every "unknown
+ * scope" condition — non-subagent, non-hand role, missing/unsafe session_id, absent/malformed
+ * active_dispatch, a role mismatch, or a non-string file_path — so it never bricks a legit write.
+ * @param {object} payload - the PreToolUse Write/Edit payload
+ * @param {(sessionId: string) => object} readGateStateFn
+ * @returns {null | { allow: false, hookSpecificOutput: object }}
+ */
+function checkScopeRail(payload, readGateStateFn) {
+  // Only a SUBAGENT write (own agent_id) by an executor/sniper hand is scoped.
+  if (!Object.prototype.hasOwnProperty.call(payload, "agent_id")) return null;
+  const role = bareRole(payload.agent_type);
+  if (!SCOPE_RAIL_ROLES.has(role)) return null;
+
+  const sessionId = payload.session_id;
+  if (!isSafeSessionId(sessionId)) return null; // missing/unsafe session → fail-open
+
+  let gateState = {};
+  try {
+    gateState = readGateStateFn(sessionId);
+  } catch {
+    return null; // fail-open
+  }
+  const ad = gateState?.active_dispatch;
+  if (!ad || typeof ad !== "object" || Array.isArray(ad)) return null; // absent/malformed → fail-open
+  if (ad.role !== role) return null; // scope belongs to a different acting role → fail-open
+
+  const scopePaths = Array.isArray(ad.scope_paths) ? ad.scope_paths : null;
+  if (scopePaths === null || scopePaths.length === 0) return null; // malformed → fail-open
+  const allowedWrites = Array.isArray(ad.allowed_writes) ? ad.allowed_writes : [];
+
+  const filePath = payload?.tool_input?.file_path;
+  if (typeof filePath !== "string" || filePath.length === 0) return null; // fail-open
+
+  const normPathLower = path.posix.normalize(filePath.replace(/\\/g, "/")).toLowerCase();
+  const inScope = scopePaths.some((s) => scopeContains(normPathLower, s));
+  const inAllowed = allowedWrites.some((s) => scopeContains(normPathLower, s));
+  if (inScope || inAllowed) return null; // inside scope/allowed → allow
+
+  return {
+    allow: false,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason:
+        `[plan-write-gate] Blocked: ${role} hand write to '${filePath}' is OUTSIDE its dispatch scope. ` +
+        `The active dispatch (${ad.feature_id}/${ad.task_id}) is scoped to: ${scopePaths.join(", ")}` +
+        (allowedWrites.length ? ` (plus allowed writes: ${allowedWrites.join(", ")})` : "") +
+        ". Stay inside scope_paths, or fold this path into the plan's scope deliberately before writing it.",
+    },
+  };
+}
 
 /**
  * Tests whether a file_path resolves to an execution-plan.json under a .claude/plans/ dir.
@@ -53,6 +132,58 @@ function isExecutionPlanPath(filePath) {
   }
   const ci = segs.indexOf(".claude");
   return ci !== -1 && segs[ci + 1] === "plans";
+}
+
+/**
+ * The sensitive gate-state basenames. A Write/Edit whose basename is one of these is denied in ANY
+ * path (not only under .claude/plans/.state/) — the `.state/` anchor is cwd-relative (stateDirFor is
+ * a relative path resolved against process.cwd()), so a homonym written to the worktree cwd or any
+ * sibling dir could become the file the gate actually reads and forge every absolution at once. The
+ * basename rail closes that; the carve-out (isCarvedOut) exempts test fixtures that never reach the
+ * real gate.
+ */
+const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
+
+/**
+ * Splits a file_path into normalized, lowercased, non-empty path segments — the shared primitive
+ * for the path/basename checks. Normalizes separators and resolves '.'/'..' first so a traversal
+ * variant cannot evade a check. Returns [] for a non-string/empty path.
+ * @param {unknown} filePath
+ * @returns {string[]}
+ */
+function pathSegments(filePath) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return [];
+  }
+  const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
+  return norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
+}
+
+/**
+ * Carve-out for the state-file rails (#ac-1.2): a homonymous state file that lives under a
+ * `__fixtures__/` dir OR whose path carries a `*.test.*` segment is a TEST artifact — it never
+ * resolves to the real gate, so gating it would false-block the harness's own test suite. Matches a
+ * `__fixtures__` path segment or any segment containing `.test.` (e.g. `foo.test.mjs`,
+ * `gate-state.test.json`). Real runtime state paths never carry either token.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isCarvedOut(filePath) {
+  const segs = pathSegments(filePath);
+  return segs.some((s) => s === "__fixtures__" || s.includes(".test."));
+}
+
+/**
+ * Tests whether a file_path's BASENAME is one of the forbidden gate-state basenames, in ANY path.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isForbiddenStateBasename(filePath) {
+  const segs = pathSegments(filePath);
+  if (segs.length === 0) {
+    return false;
+  }
+  return FORBIDDEN_STATE_BASENAMES.has(segs[segs.length - 1]);
 }
 
 /**
@@ -118,7 +249,9 @@ export function checkPlanContent(content) {
  * @returns {{ allow: true }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-export function decide(payload) {
+export function decide(payload, deps = {}) {
+  const { readGateStateFn = readGateState } = deps;
+
   // Non-object payload → infra error → fail-open
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { allow: true };
@@ -126,11 +259,36 @@ export function decide(payload) {
 
   const filePath = payload?.tool_input?.file_path;
 
+  // Carve-out (#ac-1.2): a __fixtures__/*.test.* homonym is a test artifact that never reaches the
+  // real gate — exempt it from BOTH state-file rails below so the harness's own suite is not
+  // false-blocked. Real runtime state paths never carry either token.
+  const carved = isCarvedOut(filePath);
+
+  // Basename rail (#ac-1.1): DENY a Write/Edit whose BASENAME is a sensitive gate-state file
+  // (gate-state.json / triage.json) in ANY path — not only under .claude/plans/.state/. The
+  // stateDir anchor is cwd-relative, so a homonym written elsewhere (worktree cwd, a sibling dir)
+  // could become the file the gate actually reads and forge every absolution. The path rail below
+  // stays as defense-in-depth for other *.json state files under .state/.
+  if (!carved && isForbiddenStateBasename(filePath)) {
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[plan-write-gate] Blocked: a gate-state/triage file (by basename) is written ONLY by the " +
+          "harness hooks (stamp-triage/entry-gate), never by a Write/Edit tool — in ANY path. A direct " +
+          "write anywhere could become the file the gate reads (the stateDir is cwd-relative) and forge " +
+          "the regate/capture/escalation absolutions. Use the mark.mjs / classify.mjs markers.",
+      },
+    };
+  }
+
   // Gate-state/triage files under .claude/plans/.state/ are owned by the stamp-triage/entry-gate
   // hooks (fs writes, not tool calls). DENY any tool Write/Edit to them — from the main loop OR a
   // subagent — so a caller can never forge regate_passed/capture_verified/escalation_fallback by
   // overwriting the state file directly (a laundering path stronger than the echo-forgery residual).
-  if (isStateFilePath(filePath)) {
+  if (!carved && isStateFilePath(filePath)) {
     return {
       allow: false,
       hookSpecificOutput: {
@@ -143,6 +301,14 @@ export function decide(payload) {
           "classify.mjs markers, which the hooks observe and stamp authoritatively.",
       },
     };
+  }
+
+  // A3 scope rail: an executor/sniper SUBAGENT write outside its dispatch's scope_paths/allowed_writes
+  // is denied. Runs AFTER the state-file rails (those are absolute security, never scope-relaxed) and
+  // BEFORE the plan-authorship rail. Fail-open when scope is unknown (see checkScopeRail).
+  const scopeDeny = checkScopeRail(payload, readGateStateFn);
+  if (scopeDeny) {
+    return scopeDeny;
   }
 
   // Only gate writes to a feature's execution-plan.json. Everything else passes.
