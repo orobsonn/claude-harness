@@ -57,6 +57,23 @@ Do not invent secondary findings.
 
 Never store `dual_completed: true` as a bare boolean. Downstream must not treat `primary_only_failopen` as full dual coverage for metrics that claim cross-family ran.
 
+### `primary_only_error` policy (locked)
+
+When secondary **was attempted** and failed for a reason other than missing auth/provider:
+
+| Step | Action |
+|---|---|
+| 1 | Record `dual_status: "primary_only_error"` + error class in gate-state |
+| 2 | **Retry secondary once** (K=1) with same virgin brief |
+| 3 | If retry succeeds → upgrade to `both` and merge |
+| 4 | If retry fails → **do not invent** secondary findings; keep primary findings; surface operator warning (pt-br) |
+| 5 | **Continue** the loop (fail-open on secondary infrastructure) unless primary itself failed |
+| 6 | Never spin infinite retries; never block the whole feature solely on secondary infra error |
+
+Auth/unavailable secondary stays `primary_only_failopen` (no retry storm).  
+`primary_only_error` is for “OpenAI logged in but task crashed / rate limit / 5xx”.
+
+
 ---
 
 ## 4. Policy B (merge)

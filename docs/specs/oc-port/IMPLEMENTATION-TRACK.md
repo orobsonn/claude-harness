@@ -79,4 +79,7 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 | 2026-07-10 | Third virgin REVISE: stub vs full plan, dual_status enum, parity OC tiers, safe sessionId, deferred inventory |
 | 2026-07-10 | Fourth/fifth virgin REVISE: isSafeSessionId API + handRecordPath canonical + validate expect tests |
 | 2026-07-10 | Final virgin Grok 4.5 → **APPROVE** (N1–N5 non-blocking only) |
+| 2026-07-10 | OpenAI terra REVISE applied to 03/05/06/07 (worktree, RMW lock, dual error policy, locked_tests, session-scoped hand records) |
+| 2026-07-10 | Terra loop pass 2: no_tests boolean, lock ownership token, quarantine gate owner |
+| 2026-07-10 | OpenAI gpt-5.6-terra virgin loop → **APPROVE** |
 | 2026-07-10 | Virgin OpenAI `gpt-5.6-terra` → REVISE (non-auth dual error policy, concurrent gate-state RMW, NOT_DONE worktree quarantine, handRecord session scope) — follow-ups for T5/T7/T8, not blocking pack publish |

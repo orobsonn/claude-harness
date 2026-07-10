@@ -74,7 +74,7 @@ Relative paths only — never absolute home paths in committed config.
 |---|---|---|
 | Plans | `.claude/plans/<feature_id>/` | `.opencode/plans/<sessionID>-<feature_id>/` |
 | Gate state | `.claude/plans/.state/<session_id>/` | `.opencode/plans/.state/<session_id>/` |
-| Hand records | `.claude/plans/.state/hand-records/<feature>/<task>.json` | same under `.opencode/` |
+| Hand records | `.claude/plans/.state/hand-records/<feature>/<task>.json` | `.opencode/plans/.state/hand-records/<feature>/<sessionId>/<task>.json` |
 | shared_context | under plan dir | under plan dir |
 | findings buffer | project root `findings.md` | project root `findings.md` |
 | Durable memory | `.claude/memory/` | project root `MEMORY.md` (current OC convention) |

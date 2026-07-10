@@ -88,7 +88,7 @@ type Roots = {
 | `planDir(roots)` | Claude: `.../plans/<featureId>` · OC: `.../plans/<sessionId>-<featureId>` (require both ids for OC) |
 | `gateStateDir(roots)` | `.../plans/.state/<sessionId>` |
 | `gateStatePath(roots)` | `.../gate-state.json` |
-| `handRecordPath(roots, taskId)` | PathResult → `{runtimeDir}/plans/.state/hand-records/<featureId>/<taskId>.json` (requires safe featureId + safe taskId; OC/Claude same relative shape under their runtimeDir) |
+| `handRecordPath(roots, taskId)` | PathResult → `{runtimeDir}/plans/.state/hand-records/<featureId>/<sessionId>/<taskId>.json` when `sessionId` present (OC default); Claude may use `<featureId>/<taskId>.json` if single-session-per-feature legacy — **OC must include sessionId** to avoid cross-session collision. Requires safe featureId + safe sessionId + safe taskId. |
 | `sharedContextPath(roots)` | PathResult → `{planDir}/shared_context.md` |
 | `findingsPath(projectRoot)` | PathResult → `<projectRoot>/findings.md` |
 
@@ -130,7 +130,23 @@ Default `expect: "any"` (auto-detect).
   - **stub** (classify output): `kind: "stub"` (or detect: `tasks` empty + modes `no-ceremony|QUICK|LIGHT|FULL` uppercase triage). `tasks` **may be empty**. validatePlan(stub) only checks feature_id, mode, kind.
   - **full plan** (planner output): `kind: "full"` (or detect: non-empty tasks). Canonical mode lowercase `light`|`full`. `tasks` **must** be non-empty.
 - `validatePlan(plan, { expect: "stub"|"full"|"any" })` — default `"any"` auto-detects; plan-gate uses `expect: "full"` before executors; classify uses stub builder only  
-- each task: id, scope_paths, criterion_refs, locked_tests shape, depends_on acyclic  
+- each task: id, scope_paths, criterion_refs, locked_tests, depends_on acyclic  
+- **locked_tests item shape (locked):** each entry is an object:
+  ```ts
+  {
+    id: string              // stable test id, kebab or file#name
+    path: string            // repo-relative test file path
+    command?: string        // optional exact runner command; else project default test runner + path
+    assertion?: string      // optional human/planner pin text
+  }
+  ```
+  **Validation rules (deterministic):**
+  - Every task in a full plan MUST have `locked_tests` as an **array**.
+  - **Min length 1** for all tasks unless `task.kind === "docs"` OR `task.no_tests === true` (boolean, explicit).
+  - If `no_tests: true`, `locked_tests` MUST be `[]` and `criterion_refs` still required.
+  - Missing `locked_tests` key → error. `null` → error.
+  - No string form `tests: "none"` — use `no_tests: true` only.
+
 - valid complexity/severity tiers: `low|medium|high` (not haiku/sonnet/opus)  
 - `demo` shape if present  
 - `adversarial` focus when enabled  

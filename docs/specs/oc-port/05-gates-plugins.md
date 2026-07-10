@@ -48,8 +48,20 @@ Minimum fields (align with existing gate-lib):
 - loop counters for plan-review and adversary-sniper (loop-guard)  
 - `dual_status` optional until T8; when present must be enum from 07 (`both` | `primary_only_failopen` | `pending` | `primary_only_error`) — never bare boolean  
 
-**Write:** temp file + rename.  
+**Write:** temp file + rename (atomic replace on same filesystem).  
 **Forbidden:** sole source of truth in plugin module-level `Map` (old OC port regression).
+
+### Concurrent read-modify-write (locked)
+
+Multiple plugins/processes may update gate-state in one session. Protocol:
+
+1. **Lock file** beside state: `gate-state.json.lock` contents = JSON `{ "token": "<uuid>", "pid": <n>, "createdAt": <iso> }` created with exclusive create (`O_EXCL` / `wx`).  
+2. **Acquire:** loop exclusive create; on EEXIST read lock — if `now - createdAt > 30s` **and** pid not alive (best-effort), delete only if file still contains same `token` (compare-and-delete), then retry acquire. Never break a lock whose token you do not own without stale+dead checks.  
+3. Under lock: read JSON → apply patch (merge arrays/counters; never blind overwrite from stale in-memory snapshot) → write temp → rename → **release only if lock file token still equals our token** (delete).  
+4. If lock not acquired within timeout (e.g. 5s): return deny `{ decision: "deny", reason: "gate-state-lock-timeout" }` for writes that require markers; optional short backoff retry for counters only.  
+5. Shared pure helpers only compute the **next state object** from `(prev, patch)`; fs+lock+token live in CC/OC shells.
+
+Tests required (T5): two concurrent writers do not drop markers; stale lock recovery; release refuses mismatched token; lock timeout path covered.
 
 ---
 

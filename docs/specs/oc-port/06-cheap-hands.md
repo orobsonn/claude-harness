@@ -88,6 +88,18 @@ Hand agent frontmatter:
 
 ---
 
+## 4b. Worktree policy by outcome (locked)
+
+| Outcome | Worktree action (mandatory) | Next step |
+|---|---|---|
+| `DONE` | keep changes in scope | continue loop |
+| `FAILED` | **reset to freeze commit** (hard restore of tracked + remove untracked in scope per existing CC policy) | optional escalate / re-dispatch |
+| `NOT_DONE` | **same as FAILED** — reset to freeze | do not leave partial writes for next role |
+| `CAPTURE_ERROR` | **quarantine:** reset to freeze if any uncommitted hand writes detected; if reset impossible, mark gate-state `hand_quarantine: true` for that `featureId+taskId` | never DONE; **entry-gate / spawn adapter** deny any further hand spawn for that task while flag set until orchestrator clears via mark |
+| `CONFIG_ERROR` | no hand writes expected; if tree dirty vs freeze, reset anyway | fix config before retry |
+
+**Invariant:** after any non-`DONE` hand attempt, the next role must not see uncommitted partial hand output. Prose claiming success never skips this table.
+
 ## 5. Run-record (on disk)
 
 Path via path-helpers handRecordPath.  
@@ -117,6 +129,7 @@ Reintroducing “block all hands until fidelity” without exempting test-author
 - [ ] P2 addressed: spawn agents are `mode: primary` (or documented twin pattern)  
 - [ ] capture uses shared pure checks + **closed outcome enum** from 03  
 - [ ] DONE never derived from prose or exit code alone  
+- [ ] FAILED / NOT_DONE / CAPTURE_ERROR follow worktree policy table (reset or quarantine)  
 - [ ] FAILED resets to freeze  
 - [ ] run-record written on disk by adapter code  
 - [ ] fidelity: test-author path not deadlocked  
