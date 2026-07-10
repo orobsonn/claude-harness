@@ -381,6 +381,30 @@ function mergeClaudeMd(coreDir, claudeDir) {
 }
 
 /**
+ * @description Idempotent MERGE of the ephemeral-runtime ignore lines into `.claude/.gitignore`.
+ * Never clobbers: an existing `.claude/.gitignore` (a consumer may keep its own project entries there)
+ * is preserved verbatim and only the MISSING required lines are appended. Each required line is checked
+ * against the current file first (tracked-before) so a re-vendor is a no-op when everything is already
+ * ignored. `plans/` (relative to `.claude/`) covers `.claude/plans/` and its `.state/` gate dirs.
+ * Returns a status string.
+ */
+export function mergeClaudeGitignore(claudeDir) {
+  const gitignore = join(claudeDir, ".gitignore");
+  const current = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : "";
+  const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const required = GITIGNORE.split("\n").filter((line) => line.trim().length > 0);
+  const missing = required.filter((line) => !present.has(line.trim()));
+  if (current.trim() && missing.length === 0) return "already ignored";
+  if (!current.trim()) {
+    writeFileSync(gitignore, GITIGNORE);
+    return "created";
+  }
+  const body = `${current.trimEnd()}\n${missing.join("\n")}\n`;
+  writeFileSync(gitignore, body);
+  return `merged (${missing.length} line${missing.length === 1 ? "" : "s"} added)`;
+}
+
+/**
  * @description Writes settings.json if absent; otherwise writes settings.harness.json
  * so the operator merges manually (never clobber an existing config).
  */
@@ -453,12 +477,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       );
     }
 
-    writeFileSync(join(claudeDir, ".gitignore"), GITIGNORE);
+    const claudeGitignore = mergeClaudeGitignore(claudeDir);
     writeFileSync(
       join(claudeDir, ".harness-version"),
       `${version}\nvendored_at: ${stampDate}\n`
     );
-    ok(".gitignore, .harness-version written");
+    ok(`.claude/.gitignore (${claudeGitignore}), .harness-version written`);
 
     const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
     process.stdout.write(`\n${bold(green(`✓ harness ${version} vendored → ${claudeDir} (${elapsedSec}s)`))}\n`);

@@ -790,13 +790,43 @@ const CHECKPOINT_LABELS = {
   pr: "PR aberto",
 };
 
-/** @description Title for an outbox checkpoint message: status emoji + friendly pt-br label (falls
- * back to the UPPERCASE taxonomy key for any non-curated type that still reaches the renderer). */
+/** @description The operator's timezone — checkpoint clock times render in São Paulo local time
+ * regardless of the VPS host timezone, so `14:32` means 14:32 for the operator. */
+const CHECKPOINT_TZ = "America/Sao_Paulo";
+
+/**
+ * @description PURE. Formats an event's ISO `ts` as `HH:MM` in the operator's timezone. Returns "" for
+ * a missing/invalid ts (so a legacy event with no `ts` renders exactly as before — no prefix). Fail-open:
+ * any Intl error yields "". This is the seam that makes a checkpoint show the REAL event instant
+ * (stamped at append) instead of the batched drain time.
+ * @param {string} ts - ISO timestamp stamped by appendEvent.
+ * @returns {string}
+ */
+export function formatCheckpointTime(ts) {
+  if (typeof ts !== "string" || !ts) return "";
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return "";
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: CHECKPOINT_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return "";
+  }
+}
+
+/** @description Title for an outbox checkpoint message: real event time (`HH:MM` from `event.ts`, when
+ * present) + status emoji + friendly pt-br label (falls back to the UPPERCASE taxonomy key for any
+ * non-curated type that still reaches the renderer). */
 function checkpointTitle(event) {
   const type = String(event?.type ?? "evento").toLowerCase();
   const emoji = EMOJI[type] ?? "🔔";
   const label = CHECKPOINT_LABELS[type] ?? type.toUpperCase();
-  return `${emoji} ${label}`;
+  const time = formatCheckpointTime(event?.ts);
+  return `${time ? `${time} ` : ""}${emoji} ${label}`;
 }
 
 /** @description Body lines for a run's cosmetic checkpoint. The fallback/shared path prefixes the

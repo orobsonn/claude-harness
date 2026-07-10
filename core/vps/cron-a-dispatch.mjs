@@ -62,7 +62,7 @@
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
 import { writeFileSync, rmSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -143,6 +143,24 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath })
  * inject a fixed `now` so the stamped closedAt is deterministic; production uses the default.
  */
 const defaultNow = () => Math.floor(Date.now() / 1000);
+
+/**
+ * @description Resolves the per-run `.claude/plans` dir to purge after `cp -a`, or null when the
+ * removal MUST be skipped. Guards the rmSync against a blind delete: the target must live strictly
+ * inside the run's OWN worktree and must NEVER resolve to the projectRoot's plans — the operator's
+ * live primary tree, always referenced by a running session. Returns null (skip) on a missing/
+ * non-string worktreePath or when the worktree resolves to projectRoot; otherwise the run's plans dir.
+ * @param {string} worktreePath - Absolute path to this run's per-run worktree.
+ * @param {string} projectRoot - Absolute path to the primary tree (never purged).
+ * @returns {string|null}
+ */
+export function resolveRunPlansDir(worktreePath, projectRoot) {
+  if (typeof worktreePath !== "string" || !worktreePath) return null;
+  if (typeof projectRoot !== "string" || !projectRoot) return null;
+  const worktree = resolve(worktreePath);
+  if (worktree === resolve(projectRoot)) return null;
+  return join(worktree, ".claude", "plans");
+}
 
 /**
  * @description Pre-registration spawn-failure recovery (AC1.12): release the held run-lock and
@@ -595,7 +613,10 @@ export async function dispatch(issue, opts) {
       // drain's deriveBorderCheckpoints and the spec-adversary phase-probe scan the worktree and pick
       // a STALE foreign plan, emitting false spec-created/plan-created and mislabeling the spec
       // adversary (P11). `memory/` and `kaizen.md` are NOT dropped — the shipper commits them back.
-      rmSync(join(claudeDst, "plans"), { recursive: true, force: true });
+      // The removal is GUARDED (resolveRunPlansDir): never a blind rmSync — skipped unless the target
+      // is strictly inside THIS run's worktree, and never the projectRoot's live plans.
+      const runPlansDir = resolveRunPlansDir(worktreePath, projectRoot);
+      if (runPlansDir) rmSync(runPlansDir, { recursive: true, force: true });
     }
   } catch {
     // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails

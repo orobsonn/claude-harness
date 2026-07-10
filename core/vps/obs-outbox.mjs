@@ -151,10 +151,18 @@ export function appendEvent(metaPath, event) {
   const eventsPath = eventsPathFor(metaPath);
   try {
     mkdirSync(dirname(eventsPath), { recursive: true });
+    // Stamp the real append instant onto the event so the Telegram renderer shows WHEN each checkpoint
+    // happened, not the batched 3-min drain time (which collapses an hour of work into ~2 timestamps).
+    // Stamp only when absent — a producer that set its own `ts` keeps it. A non-object event is written
+    // as-is (fail-open, never throw).
+    const stamped =
+      event && typeof event === "object" && !Array.isArray(event) && event.ts == null
+        ? { ...event, ts: new Date().toISOString() }
+        : event;
     // Best-effort per-line atomicity: a serialized event > PIPE_BUF (4096) can tear a MIDDLE line
     // under concurrent appends. We still append (fail-open) — the JSONL one-object-per-line contract
     // holds; a torn middle line is silently dropped by readEvents (accepted degradation).
-    const line = JSON.stringify(event);
+    const line = JSON.stringify(stamped);
     appendFileSync(eventsPath, `${line}\n`, "utf8");
   } catch {
     // fail-open: a failed append must never propagate to the session hook
