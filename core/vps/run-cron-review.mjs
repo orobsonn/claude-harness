@@ -78,6 +78,9 @@ import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
 import { drainWithLock } from "./drain-lock.mjs";
+// #235/task-7: reuses run-reaper.mjs's gh-scoped makeDefaultIssueClosed for the drain's issueOpen
+// seam (no new dependency) — same pattern as run-drain.mjs/run-cron-a.mjs (task-5/task-6).
+import { makeDefaultIssueClosed } from "./run-reaper.mjs";
 
 /**
  * @description Real authenticated-gh-user lookup: `gh api user --jq .login`. Returns "" on
@@ -243,9 +246,11 @@ export async function runCronReview(config, deps = {}) {
   // Close is CONFIRMED before persisting 'closed': closeForumTopic is async and fail-open
   // ({ok:false} on 429/timeout/network/no-token). Persisting 'closed' unconditionally on a
   // transient send failure would leave the topic OPEN forever while the meta lies 'closed' — the
-  // reaper skips a status:'closed' meta, so that PR would never be re-closed. Only an explicit
-  // {ok:true} settlement writes the terminal status; anything else (ok:false or a throw) leaves
-  // the meta as-is ('awaiting-review') so a later reconcile/reaper sweep can retry the close.
+  // reaper skips a status:'closed' meta, so that PR would never be re-closed. An explicit {ok:true}
+  // settlement OR a permanent {ok:false, reason:'thread-not-found'} (#235/#ac-1.1: the topic is
+  // already gone — this run's PR just merged, arguably the single most likely trigger for a stale
+  // dead topic) writes the terminal status; any OTHER failure (transient, or a throw) leaves the
+  // meta as-is ('awaiting-review') so a later reconcile/reaper sweep can retry the close (#ac-1.2).
   const closeRunTopicOnMerge = async (issueNumber, { fetch, log } = {}) => {
     try {
       const metaPath = join(config.stateDir, `obs-${issueNumber}.json`);
@@ -256,8 +261,16 @@ export async function runCronReview(config, deps = {}) {
         // Fail-open: wrap in try/catch so a close/update failure never throws
         try {
           const res = await closeForumTopic({ threadId: meta.threadId }, { config: notifyConfig, fetch, log });
-          if (res && res.ok === true) {
-            updateMeta(metaPath, { status: 'closed', closedAt: Math.floor(Date.now() / 1000) });
+          if (res && (res.ok === true || res.reason === 'thread-not-found')) {
+            // #235/final-review: a thread-not-found close here is the SAME "confirmed dead topic"
+            // signal notify-telegram.mjs's self-heal finalize stamps topicConfirmedGone for — flag it
+            // identically so drainTelegramOutbox's isFallback routes any remaining cosmetic event to
+            // the shared topic on the next tick instead of retrying this now-dead threadId forever.
+            // An ok:true close (the topic is merely archived, not confirmed gone) does NOT set it —
+            // that topic still exists and keeps receiving sends to its own thread (no regression).
+            const partial = { status: 'closed', closedAt: now() };
+            if (res.reason === 'thread-not-found') partial.topicConfirmedGone = true;
+            updateMeta(metaPath, partial);
           }
         } catch {
           // Silent fail - never break reconcile/chain-release/the cycle
@@ -503,10 +516,40 @@ export async function runCronReview(config, deps = {}) {
   }
 }
 
+/** @description Finite timeout (ms) + kill signal applied to every gh spawnSync the issueOpen seam
+ * below issues — #235/#ac-1.4: a hung gh process must NEVER block the review cron's drain. */
+const GH_SPAWN_TIMEOUT_MS = 5000;
+
+/**
+ * @description Builds a real issueOpen(issueNumber) seam for this project's single-repo config,
+ * reusing run-reaper.mjs's existing gh-scoped makeDefaultIssueClosed (no new dependency). Returns a
+ * TRI-STATE: `true` = confirmed OPEN (authorizes a self-heal re-mint), `false` = confirmed CLOSED
+ * (authorizes finalizing the run terminal), `null` = UNKNOWN (a gh outage/timeout — authorizes
+ * NEITHER a mint nor a finalize; collapsing an outage into "closed" would wrongly terminate a
+ * genuinely active run on a transient blip). The spawn's finite timeout keeps the cron itself
+ * fail-open (never blocked by a hung gh).
+ * @param {{ owner: string, repo: string }} config
+ * @param {{ spawn?: Function }} [deps] - test seam; defaults to the real spawnSync
+ * @returns {(issueNumber: number) => boolean | null}
+ */
+export function makeIssueOpen(config, deps = {}) {
+  const spawn = deps.spawn ?? spawnSync;
+  const spawnWithTimeout = (cmd, args, opts) =>
+    spawn(cmd, args, { ...opts, timeout: GH_SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+  const issueClosed = makeDefaultIssueClosed(spawnWithTimeout, config.owner, config.repo);
+  return (issueNumber) => {
+    const closed = issueClosed(issueNumber);
+    if (closed === true) return false;
+    if (closed === false) return true;
+    return null;
+  };
+}
+
 /**
  * @description CLI wrapper: builds the REAL best-effort notifier, runs runCronReview with it
  * injected, and awaits drain() so the short-lived cron process does not exit before in-flight
- * notifications settle. A notify failure never affects the cron's exit.
+ * notifications settle. A notify failure never affects the cron's exit. Wires a real issueOpen seam
+ * (#235/#ac-1.3) into the drain so the self-heal branch never re-mints a topic for a closed issue.
  * @param {object} config
  * @returns {Promise<void>}
  */
@@ -520,7 +563,9 @@ export async function mainCronReview(config, deps = {}) {
     // Cron A): a run that finishes between drain ticks still reaches its topic. Shared `drain.lock`
     // (via drainWithLock) means the crons never double-send; fail-open. Injectable seam for tests.
     if (notifier.enabled) {
-      await drainWithLock(config, { drainOutbox: deps.drainOutbox ?? notifier.drainOutbox });
+      const issueOpen = makeIssueOpen(config, { spawn: deps.spawn });
+      const baseDrainOutbox = deps.drainOutbox ?? notifier.drainOutbox;
+      await drainWithLock(config, { drainOutbox: (opts) => baseDrainOutbox({ ...opts, issueOpen }) });
     }
     try {
       await notifier.drain();

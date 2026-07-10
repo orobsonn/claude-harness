@@ -542,3 +542,287 @@ test("#ac-1.11 drainTelegramOutbox: a successful self-heal increments the persis
     "a heal must bump the persisted healAttempts so repeated per-cycle heals converge on the lifetime cap",
   );
 });
+
+// ---------------------------------------------------------------------------
+// #235/task-4: the self-heal re-mint branch gates createTopic behind an OPTIONAL issueOpen seam, and
+// a finalized-closed run gets a real closedAt via an injectable now() seam.
+// ---------------------------------------------------------------------------
+
+test("#235/task-4 drainTelegramOutbox: with NO issueOpen seam injected, createTopic fires exactly once (byte-identical to today)", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic },
+  );
+
+  assert.strictEqual(createTopicCalls.length, 1, "no issueOpen seam -> createTopic still fires exactly once (backward-compat)");
+});
+
+test("#235/task-4 drainTelegramOutbox: an injected issueOpen returning false skips createTopic and finalizes status:'closed' with a finite closedAt", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: true };
+  };
+  const issueOpen = () => false;
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic, issueOpen, now: () => 1234567890 },
+  );
+
+  assert.strictEqual(createTopicCalls.length, 0, "issueOpen:false must skip createTopic — the issue is confirmed not open, never re-mint");
+  const meta = readMeta(metaPath(stateDir, 141));
+  assert.strictEqual(meta.status, "closed", "the run must be finalized closed instead of re-minted");
+  assert.strictEqual(meta.closedAt, 1234567890, "closedAt must come from the injected now() seam");
+  assert.strictEqual(meta.topicConfirmedGone, true, "a confirmed-closed finalize must flag topicConfirmedGone so a later tick routes any remaining event to the shared topic instead of the now-dead threadId");
+});
+
+test("#235/final-review drainTelegramOutbox: an issueOpen seam that THROWS is treated as UNKNOWN — never mints, never finalizes closed (an uncertain gh outage must not be mistaken for a confirmed-closed issue)", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: true };
+  };
+  const issueOpen = () => {
+    throw new Error("gh boom");
+  };
+
+  let threw = false;
+  try {
+    await drainTelegramOutbox(
+      { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+      { ...seams, send, createTopic, issueOpen, now: () => 1234567890 },
+    );
+  } catch {
+    threw = true;
+  }
+
+  assert.strictEqual(threw, false, "drainTelegramOutbox must never throw even if the injected issueOpen seam throws");
+  assert.strictEqual(createTopicCalls.length, 0, "a throwing (uncertain) issueOpen must never authorize a mint");
+  const meta = readMeta(metaPath(stateDir, 141));
+  assert.strictEqual(meta.status, "active", "an uncertain (throwing) issueOpen must NEVER finalize the run closed — that would wrongly terminate a genuinely active run on a transient gh blip");
+  assert.strictEqual(meta.closedAt, undefined, "no closedAt is stamped when the state stays uncertain");
+});
+
+test("#235/final-review drainTelegramOutbox: an issueOpen seam returning null (explicit unknown, not via throw) never mints, never finalizes closed, and the run retries next tick", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "awaiting-review",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: true };
+  };
+  const issueOpen = () => null;
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic, issueOpen, now: () => 1234567890 },
+  );
+
+  assert.strictEqual(createTopicCalls.length, 0, "an explicit null (unknown) must never authorize a mint");
+  const meta = readMeta(metaPath(stateDir, 141));
+  assert.strictEqual(meta.status, "awaiting-review", "an explicit null (unknown) must NEVER finalize the run closed — it must retry next tick instead");
+});
+
+test("#235/final-review drainTelegramOutbox: a run finalized closed via a confirmed-dead topic (topicConfirmedGone) routes its NEXT tick's remaining cosmetic event to the shared topic instead of retrying the dead threadId", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "closed",
+    closedAt: 1234567890,
+    topicConfirmedGone: true,
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }, { type: "pr", pr: 7 }]);
+
+  const sendCalls = [];
+  const send = async (message) => {
+    sendCalls.push(message);
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send },
+  );
+
+  assert.ok(
+    !sendCalls.some((call) => call.threadId === 1045),
+    "a topicConfirmedGone run must never target the known-dead threadId again — it must route to the shared topic instead",
+  );
+  assert.strictEqual(readMeta(metaPath(stateDir, 141)).cursor, 2, "the remaining events must be delivered (via the shared topic) and the cursor must advance, not stay stuck forever");
+});
+
+test("#235/final-review drainTelegramOutbox: a run closed via a NORMAL successful close (no topicConfirmedGone) still targets its OWN (closed-but-existing) topic thread — no regression to the pre-existing 'closed run with unsent event' behavior", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "closed",
+  });
+  writeEvents(stateDir, 141, [{ type: "pr", pr: 55 }]);
+
+  const sendCalls = [];
+  const send = async (message) => {
+    sendCalls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send },
+  );
+
+  assert.ok(
+    sendCalls.some((call) => call.threadId === 1045),
+    "a normally-closed run (topic merely archived, not confirmed gone) must still target its own threadId — closing a topic does not delete it",
+  );
+});
+
+test("#235/task-4 drainTelegramOutbox: an injected issueOpen returning true still allows the re-mint (a confirmed-open issue self-heals normally)", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath: "/tmp/wt-141",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const createTopicCalls = [];
+  const createTopic = async (input) => {
+    createTopicCalls.push(input);
+    return { ok: true, threadId: 2000 };
+  };
+  const send = async (message) => {
+    if (message.threadId === 1045) return { sent: false, reason: "thread-not-found" };
+    if (message.threadId === 2000) return { sent: true };
+    return { sent: false };
+  };
+  const issueOpen = () => true;
+
+  await drainTelegramOutbox(
+    { stateDir, chatId: -100, threadId: SHARED_THREAD_ID, limitPerMinute: 1000, sendDelayMs: 0 },
+    { ...seams, send, createTopic, issueOpen },
+  );
+
+  assert.strictEqual(createTopicCalls.length, 1, "issueOpen:true must still allow the re-mint");
+});
+
+test("#235/task-4 makeNotifier.drainOutbox: end-to-end, the closure threads drainOpts.issueOpen/now through into drainTelegramOutbox, suppressing a re-mint for a closed issue and finalizing closed", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    threadId: 1045,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "pipeline-type", mode: "FULL" }]);
+
+  const fetchCalls = [];
+  const fakeFetch = async (url, options) => {
+    fetchCalls.push({ url, options });
+    if (url.endsWith("/sendMessage")) {
+      const body = JSON.parse(options.body);
+      if (body.message_thread_id === 1045) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ ok: false, description: "Bad Request: message thread not found" }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+    if (url.endsWith("/createForumTopic")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_thread_id: 2000 } }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ ok: false }) };
+  };
+
+  const notifier = makeNotifier(
+    { notify: { chatId: -100, threadId: 613 } },
+    { homeDir: "/h", readFileSafe: () => "TELEGRAM_BOT_TOKEN=SECRET123:abc\n", fetch: fakeFetch },
+  );
+
+  await notifier.drainOutbox({ stateDir, issueOpen: () => false, now: () => 1234567890 });
+
+  const createTopicCall = fetchCalls.find((call) => call.url.endsWith("/createForumTopic"));
+  assert.ok(!createTopicCall, "no POST to /createForumTopic must be issued when the wired issueOpen returns false");
+  const meta = readMeta(metaPath(stateDir, 141));
+  assert.strictEqual(meta.status, "closed", "makeNotifier's drainOutbox closure must actually forward issueOpen through to drainTelegramOutbox");
+  assert.strictEqual(meta.closedAt, 1234567890, "the closure must also forward the injected now() seam");
+});

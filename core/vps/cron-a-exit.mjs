@@ -415,8 +415,19 @@ export async function notifyExit(outcome, deps = {}) {
                 { threadId: meta.threadId },
                 { config: notifier?.config ?? null, fetch: deps.fetch, log: deps.log }
               );
-              if (closeResult && closeResult.ok) {
-                updateMetaFn(metaPath, { status: "closed", closedAt: nowFn() });
+              // #235/#ac-1.1: a permanent thread-not-found (the topic is already gone) finalizes the
+              // run as closed exactly like a successful close — there is nothing left to retry. A
+              // transient failure (reason !== 'thread-not-found') preserves today's behavior: the meta
+              // is left at its prior status for a later retry, never prematurely marked closed.
+              if (closeResult && (closeResult.ok || closeResult.reason === "thread-not-found")) {
+                // topicConfirmedGone (only on the thread-not-found branch, mirroring
+                // notify-telegram.mjs's self-heal finalize and run-cron-review.mjs's
+                // closeRunTopicOnMerge) so drainTelegramOutbox's isFallback routes any remaining
+                // cosmetic event to the shared topic instead of retrying this dead threadId forever.
+                // An ok:true close leaves the topic intact (merely archived) — no flag, own thread.
+                const partial = { status: "closed", closedAt: nowFn() };
+                if (closeResult.reason === "thread-not-found") partial.topicConfirmedGone = true;
+                updateMetaFn(metaPath, partial);
               }
             } else {
               // No forum topic was created for this run (createForumTopic failed at dispatch): nothing

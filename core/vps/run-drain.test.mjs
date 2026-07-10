@@ -10,10 +10,28 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { drainWithLock } from "./drain-lock.mjs";
-import { mainDrain } from "./run-drain.mjs";
+import { mainDrain, makeIssueOpen } from "./run-drain.mjs";
 
 function makeStateDir() {
   return mkdtempSync(join(tmpdir(), "run-drain-state-"));
+}
+
+/** @description Builds a fake `deps.spawn` seam mirroring spawnSync's shape, recording every call's
+ * opts and resolving a canned `gh issue view --json state` response. */
+function makeFakeSpawn(ghResponse = { status: 0, stdout: JSON.stringify({ state: "OPEN" }) }) {
+  const calls = [];
+  const spawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return ghResponse;
+  };
+  return { spawn, calls };
+}
+
+function homeWithToken() {
+  const homeDir = mkdtempSync(join(tmpdir(), "run-drain-home-"));
+  mkdirSync(join(homeDir, ".claude"), { recursive: true });
+  writeFileSync(join(homeDir, ".claude", ".dev.vars"), "TELEGRAM_BOT_TOKEN=fake\nTELEGRAM_CHAT_ID=999\n", "utf8");
+  return homeDir;
 }
 
 test("drainWithLock: drains once with spacing, then releases the drain.lock", async () => {
@@ -79,4 +97,65 @@ test("mainDrain: a configured notifier drains once; an unconfigured one is a no-
   let drains2 = 0;
   await mainDrain({ project: "demo", stateDir, homeDir: homeDir2 }, { drainOutbox: async () => { drains2 += 1; } });
   assert.strictEqual(drains2, 0, "an unconfigured notifier drains nothing");
+});
+
+// ---------------------------------------------------------------------------
+// #235/task-5: mainDrain wires a real issueOpen seam (reused from run-reaper.mjs's
+// makeDefaultIssueClosed) into the drain, with a finite gh spawn timeout (#ac-1.4).
+// ---------------------------------------------------------------------------
+
+test("#235/task-5 mainDrain: threads a real issueOpen function into the drainOutbox opts, and it resolves true for a gh-confirmed OPEN issue", async () => {
+  const stateDir = makeStateDir();
+  const homeDir = homeWithToken();
+  const { spawn } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "OPEN" }) });
+
+  let receivedOpts;
+  await mainDrain(
+    { project: "demo", owner: "acme", repo: "widgets", stateDir, homeDir, notify: { chatId: 999 } },
+    { drainOutbox: async (opts) => { receivedOpts = opts; }, spawn },
+  );
+
+  assert.strictEqual(typeof receivedOpts.issueOpen, "function", "the drain opts must carry an issueOpen function");
+  assert.strictEqual(receivedOpts.issueOpen(42), true, "a gh-confirmed OPEN issue must resolve issueOpen(n) === true");
+});
+
+test("#235/task-5 mainDrain: issueOpen resolves false for a gh-confirmed CLOSED issue (do-not-mint)", async () => {
+  const stateDir = makeStateDir();
+  const homeDir = homeWithToken();
+  const { spawn } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "CLOSED" }) });
+
+  let receivedOpts;
+  await mainDrain(
+    { project: "demo", owner: "acme", repo: "widgets", stateDir, homeDir, notify: { chatId: 999 } },
+    { drainOutbox: async (opts) => { receivedOpts = opts; }, spawn },
+  );
+
+  assert.strictEqual(receivedOpts.issueOpen(42), false, "a gh-confirmed CLOSED issue must resolve issueOpen(n) === false");
+});
+
+test("#235/task-5 mainDrain: a gh outage (non-zero status) makes issueOpen resolve null (unknown) and mainDrain never rejects (fail-open cron, fail-closed mint/finalize under uncertainty)", async () => {
+  const stateDir = makeStateDir();
+  const homeDir = homeWithToken();
+  const { spawn } = makeFakeSpawn({ status: 1, stdout: "" });
+
+  let receivedOpts;
+  await assert.doesNotReject(
+    mainDrain(
+      { project: "demo", owner: "acme", repo: "widgets", stateDir, homeDir, notify: { chatId: 999 } },
+      { drainOutbox: async (opts) => { receivedOpts = opts; }, spawn },
+    ),
+  );
+
+  assert.strictEqual(receivedOpts.issueOpen(42), null, "a gh outage must resolve issueOpen(n) === null (unknown) — never authorize a mint AND never authorize a finalize-closed under uncertainty");
+});
+
+test("#235/task-5 makeIssueOpen: the real issueOpen builder passes a finite opts.timeout and killSignal:'SIGKILL' to every gh spawn (#ac-1.4)", () => {
+  const { spawn, calls } = makeFakeSpawn({ status: 0, stdout: JSON.stringify({ state: "OPEN" }) });
+
+  const issueOpen = makeIssueOpen({ owner: "acme", repo: "widgets" }, { spawn });
+  issueOpen(42);
+
+  assert.strictEqual(calls.length, 1, "exactly one gh spawn call");
+  assert.ok(Number.isFinite(calls[0].opts.timeout) && calls[0].opts.timeout > 0, "the spawn call must carry a finite timeout so a hung gh can never block the drain");
+  assert.strictEqual(calls[0].opts.killSignal, "SIGKILL", "the spawn call must carry killSignal:'SIGKILL'");
 });
