@@ -302,6 +302,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   run. Agora a indisponibilidade é injetada, e um novo teste fixa o contrato oposto — sessão headless sem
   chave de API, mas autenticada por assinatura, **continua** rodando a segunda família (é assim que a
   revisão de PR ganha os olhos do codex) ([#225](https://github.com/orobsonn/claude-harness/issues/225))
+- **O reaper volta a podar worktrees concluídos mesmo com outro run em andamento no mesmo projeto.**
+  Antes, o run-lock (um por projeto) era atribuído ao holder vivo em TODO worktree listado — enquanto
+  qualquer run estivesse ativo, todo outro worktree do mesmo projeto parecia vivo, e o reaper nunca
+  podava worktrees de issues já fechadas/PRs já mergeados enquanto o motor (serializado, quase sempre
+  ocupado) tinha outro run em curso. Agora a liveness é decidida por worktree — o holder só é atribuído
+  à entrada cujo `tmux_session_id` bate com aquele worktree específico — então um run concluído é
+  podado mesmo com outro run vivo no mesmo projeto ([#233](https://github.com/orobsonn/claude-harness/issues/233))
 
 ### Removed
 
