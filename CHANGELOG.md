@@ -5,6 +5,16 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.37.0](https://github.com/orobsonn/claude-harness/compare/v0.36.1...v0.37.0) (2026-07-10)
+
+
+### Features
+
+* **hooks:** rails de morte de sessão + teto de timeout da mão (Grupo B) ([#255](https://github.com/orobsonn/claude-harness/issues/255)) ([d51671f](https://github.com/orobsonn/claude-harness/commit/d51671fd723c9e34cbe5952085c3e27364c387be)), closes [#248](https://github.com/orobsonn/claude-harness/issues/248)
+* **hooks:** security-rails que destravam a frota — A1 basename + A2 sha-qualified + A3 scope (Grupo A) ([#254](https://github.com/orobsonn/claude-harness/issues/254)) ([b8a7f10](https://github.com/orobsonn/claude-harness/commit/b8a7f103503b8e9e8ef0eddadbcb7aff32ce84a2)), closes [#247](https://github.com/orobsonn/claude-harness/issues/247)
+* **orchestrating-delivery:** disciplina de custo de contexto do orquestrador (Grupo D) ([#253](https://github.com/orobsonn/claude-harness/issues/253)) ([acbdfcb](https://github.com/orobsonn/claude-harness/commit/acbdfcb410a9908b24c04ae763aa7d84052107ee)), closes [#250](https://github.com/orobsonn/claude-harness/issues/250)
+* **vps:** higiene de efêmeros + timestamp real nos checkpoints (Grupo E) ([#252](https://github.com/orobsonn/claude-harness/issues/252)) ([e50518d](https://github.com/orobsonn/claude-harness/commit/e50518d30c6cd617cdf3b778ffbff6725aa4977d)), closes [#251](https://github.com/orobsonn/claude-harness/issues/251)
+
 ## [0.36.1](https://github.com/orobsonn/claude-harness/compare/v0.36.0...v0.36.1) (2026-07-10)
 
 
