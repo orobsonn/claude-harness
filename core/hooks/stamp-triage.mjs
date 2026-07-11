@@ -13,6 +13,8 @@
  *   - mark.mjs hand-finished / capture-verified → the independent-capture rail: hand-finished
  *                                 records a finished hand; capture-verified only appends once that
  *                                 qualified id is already in hand_finished (never pre-authorizes).
+ *   - mark.mjs spec-adversaried → observability-only checkpoint: appends {type, verdict, findings}
+ *                                 to the outbox. Never a gate-state write, never deduped.
  *   - mark.mjs fidelity-pass → the fidelity rail: appends the qualified <feature_id>/<task_id>
  *                                 to gate-state.fidelity_pass (append, dedup, idempotent). Consumed
  *                                 by entry-gate to gate spawn-hand.mjs dispatches and headless
@@ -234,6 +236,7 @@ function sanitizeScopeList(value) {
  *         | { action: 'hand-finished',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'capture-verified', session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
  *         | { action: 'fidelity-pass',    session_id: string, task_id: string }  task_id is qualified `${feature_id}/${task_id}`
+ *         | { action: 'spec-adversaried', verdict: 'SHIP'|'BLOCK', findings: number }  observability-only (no gate-state write)
  *         | { action: 'plan-reviewed',  verdict: 'APPROVE'|'REVISE' }  observability-only (no gate-state write)
  *         | { action: 'task-executing', n: number, total: number }     observability-only (no gate-state write)
  *         | { action: 'final-review-done' }                           observability-only (no gate-state write)
@@ -540,6 +543,35 @@ export function decide(payload) {
     }
     // Qualify by feature to match the other rail entry shapes (collision-proof across features).
     return { action: "fidelity-pass", session_id, task_id: `${sole.feature_id}/${sole.task_id}` };
+  }
+
+  // --- mark.mjs spec-adversaried marker (observability-only — NO gate-state write) ---
+  // Exactly-one marker scan, mirroring plan-reviewed. verdict must be SHIP|BLOCK; findings must be
+  // a non-negative integer (0 is valid — a clean pass with zero findings). The stamp-triage hook
+  // appends a {type:'spec-adversaried', verdict, findings} checkpoint event to the run's
+  // observability outbox — the deterministic producer for the spec-adversary checkpoint (no prose
+  // sourcing). Unlike plan-reviewed, this marker has a single producer and is NEVER deduped — a
+  // repeated same-verdict pass must still show up in the feed.
+  if (command.includes("mark.mjs") && command.includes("spec-adversaried")) {
+    const responseStr = unwrapStdout(payload);
+    const { count, sole } = countMarkerObjectsByName(responseStr, "spec-adversaried");
+    if (count === 0) {
+      return { action: "none" };
+    }
+    if (count >= 2) {
+      return { action: "marker-ambiguous" };
+    }
+    if (!isSafeFeatureId(sole.feature_id)) {
+      return { action: "none" };
+    }
+    if (sole.verdict !== "SHIP" && sole.verdict !== "BLOCK") {
+      return { action: "none" };
+    }
+    const n = Number(sole.findings);
+    if (!Number.isInteger(n) || n < 0) {
+      return { action: "none" };
+    }
+    return { action: "spec-adversaried", verdict: sole.verdict, findings: n };
   }
 
   // --- mark.mjs plan-reviewed marker (observability-only — NO gate-state write) ---
@@ -963,6 +995,13 @@ export function handle(payload, opts = {}) {
     obsAppend({ type: "plan-reviewed", verdict: decision.verdict }, appendEventFn, {
       dedupeFn: (e) => e.type === "plan-reviewed" && e.verdict === decision.verdict,
     });
+    return;
+  }
+
+  if (decision.action === "spec-adversaried") {
+    // No dedupeFn: unlike plan-reviewed, spec-adversaried has a single producer and must never
+    // suppress a repeated same-verdict pass.
+    obsAppend({ type: "spec-adversaried", verdict: decision.verdict, findings: decision.findings }, appendEventFn);
     return;
   }
 
