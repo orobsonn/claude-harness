@@ -806,3 +806,70 @@ manual-merge the queue.
 - **Rationale:** this is the same operator-visibility gap the existing 2026-07-04 cross-family entry
   raises for the outage case ("timed out, ran Claude-only") — this is the narrower mid-session-flicker
   variant of the same problem, worth closing alongside it rather than separately re-discovering it.
+
+### 2026-07-10 — entry-gate/spawn-hand: eye-finding fixes have no Claude-fallback path under Ollama quota exhaustion
+
+- **Observed:** in `exit-reason-capture` (#240), a sniper fix for an EYE finding (security/adversary)
+  KEEPS an already-green frozen test green (the fix corrects behavior the test already encodes as
+  passing, e.g. hardening a guard that a happy-path test doesn't exercise the gap in). `spawn-hand`
+  treats a green locked-test gate as VACUOUS → exit 2 (config error), which is NOT a genuine
+  FAILED/NOT_DONE run-record → the entry-gate's hand-routing branch DENIES the Claude Agent(sniper)
+  fallback (it requires a genuine spawn failure record). With Ollama weekly quota exhausted (429, no
+  reset this session), there was no way to ever produce that genuine failure — the eye-finding fix
+  deadlocked. Compounding: the sniper spawn also config-errors on a dirty tree (fallback executor's
+  work uncommitted during the eyes→sniper window), so it never even reaches the vacuous-gate check.
+  WORKAROUND used: convert the eye finding into a NEW test-pinned RED assertion in a frozen test, so
+  the executor fallback path gets a genuine red gate → 429 → NOT_DONE record → authorized Claude
+  fallback (and the fix becomes regression-tested as a side benefit).
+- **Proposed change:** allow the entry-gate to authorize a Claude Agent(sniper) fallback for
+  green-keeping eye-finding fixes WITHOUT requiring a genuine FAILED locked-test record — e.g. a
+  `sniper-fallback` ticket gated on a recent 429/rateLimited run-record for the same feature (detected
+  via the existing run-record `rateLimited` field), since a green-keeping fix can structurally never
+  produce a FAILED gate to authorize on.
+- **Rationale:** the workaround (manufacturing a new red test to route around the vacuous-gate check)
+  is rule-compliant and even leaves better test coverage behind, but it is indirection that exists only
+  because the fallback gate has no path for "fix doesn't change red/green state, hand-dispatch is
+  itself unreachable due to quota." A quota-aware fallback path removes the need to invent a red test
+  purely as an entry-gate unlock mechanism.
+
+### 2026-07-10 — creating-plans/fidelity: cross-check a frozen locked_test's exact FORMAT against other locked resolved_judgments
+
+- **Observed:** in `exit-reason-capture` (#240), producer task 1's test 4 pinned an EXACT 4-token
+  command-string tokenization for a fallback path (bare, unquoted path). The executor, to satisfy that
+  frozen assertion, dropped `shellQuoteSingle(CRON_A_EXIT_PATH)` — which VIOLATED the SAME plan's
+  `precreate_failure_fallback: byte-identical` resolved judgment (the fallback command must match the
+  pre-existing byte-identical legacy form, which IS quoted). The fidelity gate passed test 4 (it
+  faithfully encoded the assertion as written), but the assertion itself silently conflicted with a
+  different locked decision in the same plan. Root cause: the test-author pinned a FORMAT detail (token
+  count from a naive `.split(" ")`) instead of the SEMANTIC invariant (byte-identical to the legacy
+  command). Resolved via a maintenance edit to test 4 (require the quoted form, re-freeze red→green)
+  plus a sniper re-quote — a light-path re-gate, no deadlock, but it shipped once before being caught.
+- **Proposed change:** add a fidelity-gate (or plan-reviewer) cross-check step: when a plan has 2+
+  `locked_tests`/`resolved_judgments` touching the SAME code path or output artifact, verify the
+  assertions are mutually compatible — specifically, a test pinning an exact string/token-count FORMAT
+  must be checked against any co-located judgment pinning "byte-identical to X" or similar structural
+  invariants, not just checked for internal self-consistency.
+- **Rationale:** the fidelity gate today only verifies a locked test encodes ITS OWN pinned assertion
+  faithfully — it has no mechanism to catch two locked tests/judgments in the same plan that pin
+  mutually exclusive requirements on the same output. This is a second recorded instance of a
+  format-pinned test overconstraining implementation (see the 2026-06-12 "locked_test must pin the FULL
+  invariant, not a happy-path example" entry above) — this run's variant is cross-test conflict rather
+  than single-test under-specification, worth tracking as a related but distinct failure mode.
+
+### 2026-07-10 — test-author: surface the secret-shaped-fixture-fragmentation convention proactively (not just reactively)
+
+- **Observed:** in `exit-reason-capture` (#240), two test files planted literal secret-shaped fixture
+  tokens (`ghp_`, `sk-proj-`, `github_pat_`) to exercise `scrubSecrets` redaction, and both tripped the
+  repo's own `scan-secrets-in-tree` locked-2 meta-test (which scans the whole tracked tree for
+  ZERO findings) — caught only after the fact, fixed by fragmenting each token into ≤16-char
+  concatenated string literals (see `core/memory/secret-shaped-fixture-fragmentation.md`, newly added
+  this run). This is the same shape of gap as the existing vitest-pool-config memory nudge: a
+  test-infra convention the test-author needs BEFORE writing the fixture, not after a locked-2 failure.
+- **Proposed change:** when a task's scope involves writing a test fixture with a secret-shaped literal
+  (heuristic: task touches `scrubSecrets`/redaction/secret-scanning logic, or `locked_tests` mention
+  tokens like `ghp_`/`sk-`/`github_pat_`/JWT), inject the fragmentation convention into the test-author's
+  brief proactively — the same mechanism the orchestrator already uses to inject the vitest-pool memory
+  for test-runner config.
+- **Rationale:** reactive discovery (write the fixture, fail locked-2, fix it) costs an extra round-trip
+  every time a test-author touches this surface; the convention is narrow, mechanical, and fully
+  known — a good candidate for proactive injection rather than repeated rediscovery.
