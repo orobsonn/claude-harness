@@ -228,6 +228,57 @@ test('dispatch: the composed normal command captures claude\'s exit status via e
   }
 });
 
+test("dispatch: the composed normal command caps the raw output log's write side via `ulimit -f`, set BEFORE claude -p runs", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand);
+
+    const ulimitMatch = sessionCommand.match(/ulimit -f (\d+);/);
+    assert.ok(ulimitMatch, "the session command must set a ulimit -f cap before redirecting claude -p's output");
+    assert.ok(Number(ulimitMatch[1]) > 0, "the ulimit -f cap must be a positive block count");
+
+    const ulimitIndex = sessionCommand.indexOf("ulimit -f");
+    const claudeIndex = sessionCommand.indexOf("claude -p");
+    assert.ok(
+      ulimitIndex !== -1 && ulimitIndex < claudeIndex,
+      "ulimit -f must be composed BEFORE the claude -p invocation it caps"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: an injected precreateLog seam that THROWS falls back to the legacy command with no ulimit -f cap (nothing to cap without a redirect)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fake.spawn,
+      precreateLog: () => {
+        throw new Error("boom");
+      },
+    });
+    await dispatch({ number: 42, body: "hello" }, opts);
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand);
+    assert.equal(
+      sessionCommand.includes("ulimit -f"),
+      false,
+      "the byte-identical legacy fallback must not set a ulimit -f cap (there is no redirected log to cap)"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("dispatch: normal dispatch actually pre-creates stateDir/issue-42-output.log with mode 0600 before the tmux spawn runs", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
@@ -358,6 +409,10 @@ test('dispatch: fix-mode dispatch ALSO redirects claude -p\'s combined output to
     assert.notEqual(logIdxInTrailing, -1, "the fix-mode cron-a-exit.mjs invocation must carry the log path as a positional arg");
     assert.notEqual(ecIdxInTrailing, -1, 'the fix-mode cron-a-exit.mjs invocation must carry "$ec" as a positional arg');
     assert.ok(logIdxInTrailing < ecIdxInTrailing, 'the log path must precede "$ec" in the fix-mode cron-a-exit.mjs argv');
+    assert.ok(
+      sessionCommand.includes("ulimit -f") && sessionCommand.indexOf("ulimit -f") < sessionCommand.indexOf("claude -p"),
+      "the fix-mode session command must also cap the raw log via ulimit -f before claude -p runs (parity with the normal path)"
+    );
   } finally {
     cleanup();
   }

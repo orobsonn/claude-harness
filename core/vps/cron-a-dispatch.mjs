@@ -76,6 +76,18 @@ import { spawnSync } from "node:child_process";
 const CRON_A_EXIT_PATH = join(dirname(fileURLToPath(import.meta.url)), "cron-a-exit.mjs");
 
 /**
+ * @description Write-side cap on the raw session-output log, in 512-byte blocks (the `ulimit -f`
+ * unit) — 204800 blocks = 100MiB. Before this PR the session's combined stdout+stderr only ever
+ * lived in the tmux scrollback (bounded by history-limit); redirecting it to a file in stateDir
+ * removes that bound, and a long/verbose/looping session could otherwise grow the file until the
+ * VPS disk — shared by every project's run-lock, attempt counters, and obs-outbox — fills up.
+ * `ulimit -f` applies for the rest of the composed shell command (including the chained
+ * cron-a-exit tail), which is safe: cron-a-exit's own writes (the bounded 256KB tail read +
+ * the small exit-reason JSON) stay far under this ceiling.
+ */
+const RAW_LOG_ULIMIT_BLOCKS = 204_800;
+
+/**
  * @description Wall-clock ceiling for the fresh-base `git fetch origin main`. It is the ONLY
  * synchronous network I/O dispatch performs while the run-lock is already held and before any tmux
  * session exists, so an unreachable/hanging origin would otherwise block dispatch indefinitely —
@@ -163,6 +175,7 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, l
   if (log) {
     return (
       preamble +
+      `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
       `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
@@ -250,6 +263,7 @@ function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktree
   if (log) {
     return (
       preamble +
+      `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
       `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
