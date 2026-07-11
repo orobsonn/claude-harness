@@ -156,6 +156,8 @@ function baseOpts({
   lock = { acquireTs: 1000 },
   branchExists = () => false,
   hasOpenPr = () => true,
+  freeMem = () => Number.POSITIVE_INFINITY,
+  memGuardBytes,
 }) {
   return {
     project,
@@ -170,6 +172,8 @@ function baseOpts({
     buildScopedEnv,
     branchExists,
     hasOpenPr,
+    freeMem,
+    memGuardBytes,
   };
 }
 
@@ -842,6 +846,155 @@ test("dispatch: a FRESH branch whose `git fetch origin main` spawn throws never 
 
     assert.equal(counter.read(42, { stateDir }), 0, "a fetch failure must not consume a retry attempt");
     assert.deepEqual(result, { ok: false }, "dispatch must resolve { ok: false } on a pre-registration fetch failure");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: below-threshold free memory aborts before any heavy spawn", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, freeMem: () => 524288000 })
+    );
+
+    assert.ok(
+      !fake.calls.some((c) => c.command === "git" && c.args[0] === "worktree"),
+      "a below-threshold memory guard must abort before any `git worktree` spawn"
+    );
+    assert.ok(
+      !fake.calls.some((c) => c.command === "tmux"),
+      "a below-threshold memory guard must abort before any `tmux` spawn"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: below-threshold relabels the issue back to harness:ready", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const gh = makeFakeGh();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, gh: gh.gh, freeMem: () => 524288000 })
+    );
+
+    const relabelCall = gh.calls.find(
+      (args) => args.includes("--add-label") && args[args.indexOf("--add-label") + 1] === "harness:ready"
+    );
+    assert.ok(relabelCall, "dispatch must relabel the issue back to harness:ready on a below-threshold memory abort");
+    assert.ok(relabelCall.includes("harness:in-progress"), "the relabel must move the issue off harness:in-progress");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: below-threshold releases the run-lock once and never registers", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const runLock = makeFakeRunLock({ pid: 111, acquire_ts: 5000 });
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, runLock, freeMem: () => 524288000 })
+    );
+
+    assert.equal(runLock.releaseCalls.length, 1, "a below-threshold memory abort must release the run-lock exactly once");
+    assert.equal(runLock.registerCalls.length, 0, "register() must never be called when the memory guard aborts");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: below-threshold charges no retry attempt", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const counter = makeFakeCounter();
+    assert.equal(counter.read(42, { stateDir }), 0);
+
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, counter, freeMem: () => 524288000 })
+    );
+
+    assert.equal(counter.read(42, { stateDir }), 0, "a below-threshold memory abort must not consume a retry attempt");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: below-threshold returns the {ok:false} recovery shape", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const result = await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, freeMem: () => 524288000 })
+    );
+
+    assert.deepEqual(result, { ok: false }, "a below-threshold memory guard must resolve { ok: false }");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: sufficient free memory spawns exactly as today (no regression)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    const counter = makeFakeCounter();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, counter, freeMem: () => 2147483648 })
+    );
+
+    assert.ok(
+      fake.calls.some((c) => c.command === "git" && c.args[0] === "worktree"),
+      "sufficient free memory must let dispatch reach `git worktree`"
+    );
+    assert.ok(
+      fake.calls.some((c) => c.command === "tmux"),
+      "sufficient free memory must let dispatch reach the `tmux` spawn"
+    );
+    assert.equal(counter.read(42, { stateDir }), 1, "a successful spawn must raise the counter by exactly 1");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mem-guard: a throwing memory reader fails open and proceeds to spawn", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    const counter = makeFakeCounter();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({
+        projectRoot,
+        worktreeRoot,
+        stateDir,
+        spawn: fake.spawn,
+        counter,
+        freeMem: () => {
+          throw new Error("reader boom");
+        },
+      })
+    );
+
+    assert.ok(
+      fake.calls.some((c) => c.command === "git" && c.args[0] === "worktree"),
+      "a throwing memory reader must fail open and let dispatch reach `git worktree`"
+    );
+    assert.ok(
+      fake.calls.some((c) => c.command === "tmux"),
+      "a throwing memory reader must fail open and let dispatch reach the `tmux` spawn"
+    );
+    assert.equal(
+      counter.read(42, { stateDir }),
+      1,
+      "a fail-open memory reader must never abort dispatch (successful spawn still counted)"
+    );
   } finally {
     cleanup();
   }
