@@ -31,7 +31,7 @@
  * / blockingFinding seams. The frozen oracle (cron-a-exit.test.mjs) exercises cronAExit() with
  * every seam INJECTED as a fake; the CLI wrapper is the thin production wiring.
  */
-import { rmSync, readFileSync, existsSync } from "node:fs";
+import { rmSync, readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 
@@ -469,40 +469,109 @@ export async function notifyExit(outcome, deps = {}) {
 }
 
 /**
- * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Redacts secret-shaped
- * substrings from session output before it is persisted.
- * @param {string} _text
+ * @description Secret-shaped substring patterns replaced by scrubSecrets(), applied in sequence.
+ * Covers: Anthropic keys, JWTs, GitHub token/PAT prefixes, Bearer headers, and
+ * KEY|TOKEN|SECRET|PASSWORD= assignments — the shapes most likely to leak into a `gh`-heavy
+ * session's raw output log.
+ */
+const SECRET_PATTERNS = [
+  /sk-ant-[A-Za-z0-9_-]+/g,
+  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+  /gh[opsu]_[A-Za-z0-9]{20,}/g,
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /Bearer\s+[A-Za-z0-9._-]+/g,
+  /(?:KEY|TOKEN|SECRET|PASSWORD)=\S+/gi,
+];
+const SECRET_REDACTION_MARKER = "[REDACTED]";
+
+/**
+ * @description Redacts secret-shaped substrings from session output before it is persisted. A
+ * non-string input returns an empty string rather than throwing.
+ * @param {string} text
  * @returns {string}
  */
-export function scrubSecrets(_text) {
-  throw new Error("not implemented");
+export function scrubSecrets(text) {
+  if (typeof text !== "string") return "";
+  return SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, SECRET_REDACTION_MARKER), text);
 }
 
 /**
- * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Best-effort persists the
- * diagnostic exit-reason file for a non-PR session exit; never throws.
- * @param {object} _args
+ * @description Categorizes a non-PR exit for the diagnostic reason file: exitCode===0 is the
+ * dominant graceful requeue (`no-pr-produced`), any other numeric exitCode is `tool-error`, and a
+ * missing/unparseable exitCode is `unknown`.
+ * @param {number|undefined} exitCode
+ * @returns {"no-pr-produced"|"tool-error"|"unknown"}
+ */
+function categorizeExit(exitCode) {
+  if (exitCode === 0) return "no-pr-produced";
+  if (typeof exitCode === "number" && !Number.isNaN(exitCode)) return "tool-error";
+  return "unknown";
+}
+
+/**
+ * @description Best-effort persists the diagnostic exit-reason file for a non-PR session exit;
+ * NEVER throws and never alters the exit. On a 'done' (PR-produced) outcome it writes nothing.
+ * On any non-'done' outcome it reads the last 200 lines of `logPath` (when present/readable),
+ * scrubs secrets from the summary, categorizes the exit, and writes
+ * `stateDir/issue-<issueNumber>-exit-reason.json` (mode 0o600). On EVERY outcome, including
+ * 'done', it best-effort unlinks the raw log at `logPath` in a finally so unscrubbed session
+ * output never persists.
+ * @param {object} args
+ * @param {string} args.stateDir
+ * @param {{ outcome: string, issueNumber: number, hadPr: boolean, finding: string|null }} args.outcome
+ * @param {number|undefined} args.exitCode
+ * @param {string|undefined} args.logPath
+ * @param {() => number} [args.now] - clock seam returning epoch SECONDS.
  * @returns {void}
  */
-export function captureExitReason(_args) {
-  throw new Error("not implemented");
+export function captureExitReason({ stateDir, outcome, exitCode, logPath, now = defaultNow }) {
+  try {
+    if (outcome && outcome.outcome !== "done") {
+      let summary = "";
+      if (logPath) {
+        try {
+          const rawLog = readFileSync(logPath, "utf8");
+          const lines = rawLog.split("\n");
+          const last200 = lines.slice(Math.max(0, lines.length - 200));
+          summary = scrubSecrets(last200.join("\n"));
+        } catch {
+          summary = "";
+        }
+      }
+
+      const reasonFile = join(stateDir, `issue-${outcome.issueNumber}-exit-reason.json`);
+      const payload = {
+        outcome: outcome.outcome,
+        timestamp: now(),
+        category: categorizeExit(exitCode),
+        summary,
+      };
+      try {
+        writeFileSync(reasonFile, JSON.stringify(payload), { mode: 0o600 });
+        chmodSync(reasonFile, 0o600);
+      } catch {
+        // best-effort: a write failure never blocks the exit or throws
+      }
+    }
+  } catch {
+    // best-effort: capture must never affect the exit handler
+  } finally {
+    if (logPath) {
+      try {
+        rmSync(logPath, { force: true });
+      } catch {
+        // best-effort: a vanished/unreadable raw log is the desired end state
+      }
+    }
+  }
 }
 
 /**
- * @description SCAFFOLD STUB (freeze-commit) — replaced by the executor. Testable CLI orchestration
- * used by main(): parseArgv -> cronAExit -> notifyExit -> captureExitReason.
- * @param {string[]} _argv
- * @param {object} [_deps]
- * @returns {Promise<void>}
- */
-export async function runCronAExitCli(_argv, _deps = {}) {
-  throw new Error("not implemented");
-}
-
-/**
- * @description Parses and validates the CLI argv: `<issueNumber> <worktree> <bodyFile> <envFile>`.
+ * @description Parses and validates the CLI argv: `<issueNumber> <worktree> <bodyFile> <envFile>
+ * [logPath] [exitCode]`. The throw-guard applies ONLY to the original first 4 args, so an
+ * in-flight OLD 4-arg session still exits cleanly; `logPath`/`exitCode` are optional additions.
  * @param {string[]} argv - process.argv.slice(2) from the CLI entry.
- * @returns {{ issueNumber: number, worktree: string, bodyFile: string, envFile: string }}
+ * @returns {{ issueNumber: number, worktree: string, bodyFile: string, envFile: string, logPath: string|undefined, exitCode: number|undefined }}
  */
 export function parseArgv(argv) {
   const [issueNumber, worktree, bodyFile, envFile] = argv;
@@ -515,37 +584,78 @@ export function parseArgv(argv) {
   if (!Number.isInteger(issueNum)) {
     throw new Error(`cron-a-exit: issueNumber must be an integer, got: ${JSON.stringify(issueNumber)}`);
   }
-  return { issueNumber: issueNum, worktree, bodyFile, envFile };
+  return {
+    issueNumber: issueNum,
+    worktree,
+    bodyFile,
+    envFile,
+    logPath: argv[4],
+    exitCode: argv[5] !== undefined ? Number(argv[5]) : undefined,
+  };
 }
 
 /**
- * @description CLI entry: wires real `gh` / run-lock / counter / prExists / blockingFinding seams
- * and runs the state machine. stateDir is derived from the bodyFile's directory (dispatch writes
- * both bodyFile and envFile into stateDir); acquireTs is recovered from the run-lock holder so the
- * ownership-guarded release targets THIS session's lock, not a newer owner's.
+ * @description Testable CLI orchestration: parseArgv -> cronAExit -> notifyExit ->
+ * captureExitReason, with every seam injectable via `deps` and defaulting to the real production
+ * bindings. `main()` calls this with real deps so the composition root itself is hermetically
+ * testable — a fake-injecting unit test on the helpers alone could pass while leaving
+ * captureExitReason unwired in production.
  * @param {string[]} argv - process.argv.slice(2).
- * @returns {void}
+ * @param {object} [deps] - Injectable seams; each defaults to the real binding.
+ * @returns {Promise<void>}
  */
-export async function main(argv) {
-  const { issueNumber, worktree, bodyFile, envFile } = parseArgv(argv);
-  const stateDir = dirname(bodyFile);
-  const holder = readHolder({ stateDir });
-  const acquireTs = holder ? holder.acquire_ts : undefined;
+export async function runCronAExitCli(argv, deps = {}) {
+  const parseArgvFn = deps.parseArgv ?? parseArgv;
+  const cronAExitFn = deps.cronAExit ?? cronAExit;
+  const notifyExitFn = deps.notifyExit ?? notifyExit;
+  const captureExitReasonFn = deps.captureExitReason ?? captureExitReason;
+  const readHolderFn = deps.readHolder ?? readHolder;
+  const ghFn = deps.gh ?? realGh;
+  const runLockObj = deps.runLock ?? { release: releaseLock };
+  const counterObj = deps.counter ?? { read: readCounter, reset: resetCounter, increment: incrementCounter };
+  const prExistsFn = deps.prExists ?? realPrExists;
+  const retryCeilingK = deps.retryCeilingK ?? DEFAULT_RETRY_CEILING_K;
+  const nowFn = deps.now ?? defaultNow;
 
-  const outcome = cronAExit(issueNumber, worktree, bodyFile, envFile, {
-    gh: realGh,
-    runLock: { release: releaseLock },
-    counter: { read: readCounter, reset: resetCounter, increment: incrementCounter },
-    prExists: realPrExists,
-    blockingFinding: () => realBlockingFinding(worktree),
+  const { issueNumber, worktree, bodyFile, envFile, logPath, exitCode } = parseArgvFn(argv);
+  const stateDir = dirname(bodyFile);
+  const blockingFindingFn = deps.blockingFinding ?? (() => realBlockingFinding(worktree));
+
+  let acquireTs = deps.acquireTs;
+  if (acquireTs === undefined) {
+    const holder = readHolderFn({ stateDir });
+    acquireTs = holder ? holder.acquire_ts : undefined;
+  }
+
+  const outcome = cronAExitFn(issueNumber, worktree, bodyFile, envFile, {
+    gh: ghFn,
+    runLock: runLockObj,
+    counter: counterObj,
+    prExists: prExistsFn,
+    blockingFinding: blockingFindingFn,
     stateDir,
     acquireTs,
-    retryCeilingK: DEFAULT_RETRY_CEILING_K,
+    retryCeilingK,
   });
 
   // Best-effort notification AFTER the synchronous relabel/lock-release/cleanup already completed
   // inside cronAExit. A rejection here is swallowed by notifyExit and never escapes.
-  await notifyExit(outcome);
+  await notifyExitFn(outcome);
+
+  // Reason capture runs LAST, after notifyExit resolves — never inside cronAExit (keeps it
+  // byte-identical) and never before the notification it describes.
+  captureExitReasonFn({ stateDir, outcome, exitCode, logPath, now: nowFn });
+}
+
+/**
+ * @description CLI entry: delegates to runCronAExitCli with real deps (parseArgv, cronAExit,
+ * notifyExit, captureExitReason, gh, run-lock, counter, prExists, blockingFinding all default to
+ * their production bindings).
+ * @param {string[]} argv - process.argv.slice(2).
+ * @returns {Promise<void>}
+ */
+export async function main(argv) {
+  await runCronAExitCli(argv, {});
 }
 
 if (isDirectCli(import.meta.url)) {
