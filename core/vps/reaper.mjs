@@ -116,7 +116,8 @@
  *   awaits before exit. Attached as a property so the array return contract stays byte-stable.
  */
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 const DEFAULT_LIVENESS_CEILING_HOURS = 2;
 const DEFAULT_REGISTRATION_GRACE_SECONDS = 120;
@@ -187,6 +188,22 @@ function defaultGitWorktreeRemove(worktreePath, projectRoot, opts) {
 }
 
 /**
+ * @description Best-effort default for removing an orphaned raw session-output log
+ * (`stateDir/issue-<n>-output.log`, deterministic and reaper-findable by design — see
+ * cron-a-dispatch.mjs). The file is unlinked in captureExitReason's `finally`, which only runs on
+ * a graceful `claude -p` exit; a session that dies before reaching cron-a-exit (crash, reboot, tmux
+ * killed, OOM-kill) leaves its unscrubbed raw output on disk with no other cleanup path. Errors are
+ * swallowed — a missing file (the common case) is not a failure.
+ */
+function defaultRmOutputLog(stateDir, issueNumber) {
+  try {
+    rmSync(join(stateDir, `issue-${issueNumber}-output.log`), { force: true });
+  } catch {
+    // best-effort raw-log cleanup
+  }
+}
+
+/**
  * @description Decides holder liveness with the SAME two-branch rule as run-lock.mjs's acquire()
  * — the reaper never drifts from it. REGISTERED (tmux_session_id present) -> alive iff
  * `tmuxHasSession(id)` alone, launcher pid never consulted. NOT-YET-REGISTERED -> alive iff
@@ -248,6 +265,10 @@ function crashRecover(worktree, holder, opts) {
       worktree.project
     );
     if (!result || !result.ok) return false;
+    // The crashed session died before reaching cron-a-exit's own unlink-in-finally, so its raw
+    // (unscrubbed) output log would otherwise linger on disk until the next dispatch attempt
+    // truncates it. Best-effort; never blocks or alters the relabel/lock outcome above.
+    opts.rmOutputLog(worktree.stateDir, worktree.issueNumber);
   }
   opts.runLock.release({ stateDir: worktree.stateDir, acquireTs: holder.acquire_ts });
   return true;
@@ -823,6 +844,7 @@ export function reaper(opts) {
     retryCeilingK = DEFAULT_RETRY_CEILING_K,
     gitBranchDelete = defaultGitBranchDelete,
     gitWorktreeRemove = defaultGitWorktreeRemove,
+    rmOutputLog = defaultRmOutputLog,
   } = opts;
 
   const resolved = {
@@ -832,6 +854,7 @@ export function reaper(opts) {
     retryCeilingK,
     gitBranchDelete,
     gitWorktreeRemove,
+    rmOutputLog,
   };
 
   const actions = [];
