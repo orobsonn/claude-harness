@@ -61,7 +61,7 @@
  *   gh open-PR probe in production).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
-import { writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -113,6 +113,27 @@ function shellQuoteSingle(s) {
 }
 
 /**
+ * @description Default real behavior for the injectable precreateLog seam: creates the
+ * deterministic per-issue output-log file with owner-only permissions. `writeFileSync`'s `mode`
+ * option only applies at file CREATION — a pre-existing file (e.g. left over from a prior run)
+ * keeps its old mode — so `chmodSync` re-tightens it to 0600 unconditionally afterward. Wrapped:
+ * any throw (unwritable stateDir, disk full, permission denied) returns null so dispatch falls
+ * back to the legacy unredirected command rather than failing the whole dispatch over a log
+ * pre-create hiccup.
+ * @param {string} logPath
+ * @returns {string|null}
+ */
+function defaultPrecreateLog(logPath) {
+  try {
+    writeFileSync(logPath, "", { encoding: "utf8", mode: 0o600 });
+    chmodSync(logPath, 0o600);
+    return logPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @description Composes the session command string handed to `tmux new-session`. The env-file is
  * sourced first so the session deterministically receives the scoped env (and explicitly unsets
  * CLAUDE_CODE_REMOTE). The trigger prompt is inlined (a fixed harness string, never user input)
@@ -120,19 +141,36 @@ function shellQuoteSingle(s) {
  * body as its prompt while the body file stays byte-identical to the issue body. The graceful-exit
  * handler is chained AFTER the `claude -p` invocation so it fires on the session's own
  * termination, and is handed the body + env file paths so task-6 can unlink them.
+ *
+ * When `log` is a pre-created path, ONLY `claude -p`'s combined output is redirected into it
+ * (`> '<log>' 2>&1`) and its exit status captured immediately after (`ec=$?`) — the redirect must
+ * never wrap the chained `node cron-a-exit.mjs` tail, which itself reads that same log. The log
+ * path + `"$ec"` are then handed to cron-a-exit as its 5th/6th positional args. When `log` is null
+ * (the precreate seam failed), the command is composed BYTE-IDENTICAL to the legacy (pre-capture)
+ * shape — no redirect, no `ec=$?`, exactly the original 4 cron-a-exit args.
  * @param {object} parts
  * @param {string} parts.envFile - Absolute path to the scoped env file (single-quoted for sourcing).
  * @param {string} parts.bodyFile - Absolute path to the written body file (single-quoted in the redirect).
  * @param {number} parts.issueNumber
  * @param {string} parts.worktreePath - Absolute path to the per-run worktree.
+ * @param {string|null} [parts.log] - Pre-created output-log path, or null to fall back to legacy.
  * @returns {string}
  */
-function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath }) {
-  return (
+function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log = null }) {
+  const preamble =
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
-    `{ printf '%s\\n\\n' ${shellQuoteSingle(TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | ` +
+    `{ printf '%s\\n\\n' ${shellQuoteSingle(TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | `;
+  if (log) {
+    return (
+      preamble +
+      `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
+      `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
+    );
+  }
+  return (
+    preamble +
     `claude -p --permission-mode auto; ` +
-    `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+    `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
 
@@ -199,17 +237,27 @@ function renderUntrustedFindingsBlock(fixFindings, nonce) {
  * @param {string} parts.worktreePath
  * @param {object} parts.fixFindings
  * @param {string} parts.nonce
+ * @param {string|null} [parts.log] - Pre-created output-log path, or null to fall back to legacy.
  * @returns {string}
  */
-function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce }) {
+function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce, log = null }) {
   const block = renderUntrustedFindingsBlock(fixFindings, nonce);
-  return (
+  const preamble =
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
     `{ printf '%s\\n\\n' ${shellQuoteSingle(FIX_MODE_TRIGGER)}; ` +
     `printf '%s\\n\\n' ${shellQuoteSingle(block)}; ` +
-    `cat < ${shellQuoteSingle(bodyFile)}; } | ` +
+    `cat < ${shellQuoteSingle(bodyFile)}; } | `;
+  if (log) {
+    return (
+      preamble +
+      `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
+      `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
+    );
+  }
+  return (
+    preamble +
     `claude -p --permission-mode auto; ` +
-    `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+    `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
 
@@ -581,7 +629,9 @@ export async function dispatch(issue, opts) {
     obs,
     createForumTopic,
     closeForumTopic,
+    precreateLog,
   } = opts;
+  const resolvedPrecreateLog = precreateLog ?? defaultPrecreateLog;
   const issueNumber = issue.number;
   const branch = `harness/${issueNumber}`;
   const worktreePath = join(worktreeRoot, `harness-${project}-${issueNumber}`);
@@ -710,6 +760,21 @@ export async function dispatch(issue, opts) {
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
+  // Deterministic per-issue output-log (issue-<n>-output.log, NOT per-uuid — reaper-findable).
+  // Pre-created here (before any subsequent spawn) so it is in scope for every pre-registration
+  // failure-recovery branch below to best-effort clean up, and so composeSessionCommand /
+  // composeFixModeSessionCommand can redirect claude -p's combined output into it. A null `log`
+  // (precreate failed) makes both composers fall back to the byte-identical legacy command.
+  const logPath = join(stateDir, `issue-${issueNumber}-output.log`);
+  let log;
+  try {
+    log = resolvedPrecreateLog(logPath);
+  } catch {
+    // wrapped: an injected precreateLog seam that throws must never fail the whole dispatch —
+    // fall back to the legacy unredirected command.
+    log = null;
+  }
+
   // 1) Per-run worktree on a project-distinct branch (never the primary tree). Fresh branches are
   //    based on a freshly-fetched origin/main. RESUME (attach the EXISTING branch, no -b) happens
   //    ONLY when it carries an OPEN PR — a genuine prior delivery, so a re-dispatch updates the
@@ -756,6 +821,11 @@ export async function dispatch(issue, opts) {
       rmSync(envFile);
     } catch {
       // best-effort cleanup of the short-lived env-file
+    }
+    try {
+      rmSync(logPath, { force: true });
+    } catch {
+      // best-effort cleanup of the pre-created output-log
     }
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
@@ -805,6 +875,11 @@ export async function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup
     }
+    try {
+      rmSync(logPath, { force: true });
+    } catch {
+      // best-effort cleanup of the pre-created output-log
+    }
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
 
@@ -812,8 +887,8 @@ export async function dispatch(issue, opts) {
   //    fix-mode the stdin is the FIX_MODE_TRIGGER + a nonce-delimited UNTRUSTED findings block (the
   //    nonce is per-invocation, so a finding summary cannot forge the closing marker) + the body.
   const sessionCommand = fixMode
-    ? composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce: randomUUID() })
-    : composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath });
+    ? composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce: randomUUID(), log })
+    : composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log });
   try {
     spawn(
       "tmux",
@@ -838,6 +913,11 @@ export async function dispatch(issue, opts) {
       rmSync(bodyFile);
     } catch {
       // best-effort cleanup
+    }
+    try {
+      rmSync(logPath, { force: true });
+    } catch {
+      // best-effort cleanup of the pre-created output-log
     }
     return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
   }
