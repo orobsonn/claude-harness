@@ -492,7 +492,7 @@ const SECRET_PATTERNS = [
   /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   /gh[opsu]_[A-Za-z0-9]{20,}/g,
   /github_pat_[A-Za-z0-9_]{20,}/g,
-  /\bhttps?:\/\/[^\s:@/]+:[^\s@/]+@/gi,
+  /\b\w+:\/\/[^\s:@/]+:[^\s@/]+@/gi,
   /Basic\s+[A-Za-z0-9+/=]+/g,
   /\bsk-[A-Za-z0-9_-]{20,}/g,
   /\bgl(?:pat|ptt|rt)-[A-Za-z0-9_-]+/g,
@@ -503,9 +503,13 @@ const SECRET_REDACTION_MARKER = "[REDACTED]";
 
 /**
  * @description Name pattern for env vars whose VALUE is treated as a secret for the value-based
- * redaction pass, regardless of shape (e.g. OLLAMA_HAND_TOKEN, ANTHROPIC_AUTH_TOKEN).
+ * redaction pass, regardless of shape (e.g. OLLAMA_HAND_TOKEN, ANTHROPIC_AUTH_TOKEN). Extended
+ * beyond KEY|TOKEN|SECRET|PASSWORD|AUTH to also catch connection-string-style env names
+ * (DATABASE_URL, REDIS_URL, SENTRY_DSN) whose value carries embedded credentials but whose name
+ * alone wouldn't otherwise match — paired with the scheme-agnostic URL-cred shape in
+ * SECRET_PATTERNS above for schemes the shape pass doesn't independently redact.
  */
-const SECRET_ENV_NAME_PATTERN = /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i;
+const SECRET_ENV_NAME_PATTERN = /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH|URL|DSN|CONN|DATABASE|REDIS)/i;
 
 /**
  * @description Minimum length an env value must have to be eligible for value-based redaction —
@@ -534,6 +538,12 @@ export function scrubSecrets(text, env = process.env) {
     for (const [name, value] of Object.entries(source)) {
       if (!SECRET_ENV_NAME_PATTERN.test(name)) continue;
       if (typeof value !== "string" || value.length < MIN_SECRET_VALUE_LENGTH) continue;
+      // A value shaped like an absolute filesystem path (e.g. AUTH_DIR=/usr/local) is not a
+      // secret even when its env name matches — redacting it destroys forensic value in the
+      // persisted summary without preventing any real leak (no known secret format starts with
+      // `/`: hex/base64 tokens, JWTs, and every prefixed key shape above start with an
+      // alphanumeric character).
+      if (value.startsWith("/")) continue;
       scrubbed = scrubbed.split(value).join(SECRET_REDACTION_MARKER);
     }
   } catch {

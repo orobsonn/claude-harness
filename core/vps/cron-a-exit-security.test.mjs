@@ -141,3 +141,36 @@ test("captureExitReason: bounded read of a large (~4000-line) log still yields t
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("scrubSecrets: redacts a connection-string-style secret whose env name is DATABASE_URL (no KEY/TOKEN/SECRET/PASSWORD/AUTH substring)", () => {
+  const env = {
+    DATABASE_URL: "postgres://appuser:sup3r-dsn-secret@db.internal:5432/prod",
+  };
+  const text = "connecting with postgres://appuser:sup3r-dsn-secret@db.internal:5432/prod now";
+
+  const output = scrubSecrets(text, env);
+
+  assert.ok(!output.includes("sup3r-dsn-secret"), "the DATABASE_URL value must not survive verbatim");
+});
+
+test("scrubSecrets: redacts URL-embedded credentials for a non-http scheme (postgres://) by shape alone", () => {
+  const text = "dsn=postgres://robson:anotherSecret1@db.internal/prod";
+
+  const output = scrubSecrets(text, {});
+
+  assert.ok(!output.includes("anotherSecret1"), "a non-http URL-cred password must not survive verbatim");
+});
+
+test("scrubSecrets: does not redact a path-like value for an env name that matches the AUTH pattern (forensic value preserved)", () => {
+  const env = {
+    AUTH_DIR: "/usr/local/harness-auth",
+  };
+  const text = "reading config from /usr/local/harness-auth/config.json";
+
+  const output = scrubSecrets(text, env);
+
+  assert.ok(
+    output.includes("/usr/local/harness-auth"),
+    "an absolute-path value must survive redaction even when its env name matches AUTH — it is not a secret"
+  );
+});
