@@ -20,7 +20,7 @@ import {
 } from "./gate-state.mjs";
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
 import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
-import { decideLoopGuard, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
+import { decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
 import { applyGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -442,6 +442,28 @@ test("t5-loop-thresh: after configured warn threshold emits warn; after deny thr
   // below warn
   const a = decideLoopGuard({ subagentType: "plan-reviewer", count: 1 });
   assert.equal(a.decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
+// t5-loop-dual-secondary-no-inc
+// ---------------------------------------------------------------------------
+
+test("t5-loop-dual-secondary-no-inc: loopCounterKey returns null for *-openai secondaries; decideLoopGuard allows secondary (not-loop-guarded then-clause) even when primary counter >= deny", () => {
+  assert.equal(loopCounterKey("adversary-openai"), null);
+  assert.equal(loopCounterKey("plan-reviewer-openai"), null);
+
+  // primary at/above deny
+  const p = decideLoopGuard({ subagentType: "adversary", count: 4 });
+  assert.equal(p.decision, "deny");
+
+  // secondary uses the !key then-clause and is allowed regardless of passed count
+  const s = decideLoopGuard({ subagentType: "adversary-openai", count: 4 });
+  assert.equal(s.decision, "allow");
+  assert.equal(s.reason, "not-loop-guarded");
+
+  const s2 = decideLoopGuard({ subagentType: "plan-reviewer-openai", count: 5 });
+  assert.equal(s2.decision, "allow");
+  assert.equal(s2.reason, "not-loop-guarded");
 });
 
 // ---------------------------------------------------------------------------

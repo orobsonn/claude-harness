@@ -7,6 +7,7 @@
 import {
   classifyFindings,
   finalizeFindings,
+  isRefuteVehicle,
 } from "../../../shared/lib/merge-findings.mjs";
 import { mergeVerdicts } from "../../../shared/lib/merge-verdicts.mjs";
 
@@ -543,13 +544,17 @@ function finalizeBoth(args) {
       extractFindings(secondaryResult),
       { a: primaryFamily, b: secondaryFamily },
     );
-    const kept = mergedFindings.findings.length ? mergedFindings.findings : findings;
+    const kept = mergedFindings.findings;
     // Either-REVISE-wins + non-refuted issues → top-level blocking REVISE for orchestrator
     const nonRefuted = kept.filter(
-      (f) => f && typeof f === "object" && /** @type {{refuted?: unknown}} */ (f).refuted !== true,
+      (f) =>
+        f &&
+        typeof f === "object" &&
+        /** @type {{refuted?: unknown, refutes?: unknown}} */ (f).refuted !== true &&
+        !isRefuteVehicle(f),
     );
     const blocking =
-      merged.verdict === "REVISE" || nonRefuted.length > 0 ? "REVISE" : "APPROVE";
+      (primaryResult?.verdict === "REVISE" || secondaryResult?.verdict === "REVISE") || nonRefuted.length > 0 ? "REVISE" : "APPROVE";
     return {
       ok: merged.ok !== false,
       dual_status: DUAL_STATUS.BOTH,
@@ -573,7 +578,11 @@ function finalizeBoth(args) {
   });
   // Non-refuted findings after policy B → blocking REVISE so orchestrator cannot miss them
   const nonRefuted = (mergedFindings.findings ?? []).filter(
-    (f) => f && typeof f === "object" && /** @type {{refuted?: unknown}} */ (f).refuted !== true,
+    (f) =>
+      f &&
+      typeof f === "object" &&
+      /** @type {{refuted?: unknown, refutes?: unknown}} */ (f).refuted !== true &&
+      !isRefuteVehicle(f),
   );
   const blockingVerdict =
     nonRefuted.length > 0 ? { verdict: "REVISE", issues: nonRefuted } : null;

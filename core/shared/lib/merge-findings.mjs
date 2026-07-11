@@ -36,6 +36,16 @@ export function dedupKey(finding, fields) {
   return `${text}|${severity}|${disc}`
 }
 
+/** @description Valid refutes vehicle: has refutes.{target_id,target_family,reason} — non-blocking even with title. */
+export function isRefuteVehicle(f) {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return false
+  const r = f.refutes
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return false
+  return typeof r.target_id === 'string' && r.target_id.length > 0 &&
+         typeof r.target_family === 'string' && r.target_family.length > 0 &&
+         typeof r.reason === 'string' && r.reason.trim().length >= 1
+}
+
 export function classifyFindings(familyAIssues = [], familyBIssues = [], labels = { a: 'primary', b: 'secondary' }) {
   const aLabel =
     labels && typeof labels === 'object' && !Array.isArray(labels) && labels.a != null
