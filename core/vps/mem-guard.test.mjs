@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { hasEnoughFreeMemory, DEFAULT_MEM_GUARD_BYTES } from "./mem-guard.mjs";
+import { hasEnoughFreeMemory, readMemGuardBytesFromEnv, DEFAULT_MEM_GUARD_BYTES } from "./mem-guard.mjs";
 
 test("hasEnoughFreeMemory: freeBytes below thresholdBytes returns false (abort)", () => {
   const result = hasEnoughFreeMemory({ freeBytes: 524288000, thresholdBytes: 805306368 });
@@ -38,4 +38,26 @@ test("hasEnoughFreeMemory: genuine finite freeBytes=0 below a positive threshold
 
 test("DEFAULT_MEM_GUARD_BYTES: equals exactly 805306368 (768 MiB)", () => {
   assert.strictEqual(DEFAULT_MEM_GUARD_BYTES, 805306368);
+});
+
+test("readMemGuardBytesFromEnv: parses a finite HARNESS_MEM_GUARD_BYTES value", () => {
+  const result = readMemGuardBytesFromEnv({ HARNESS_MEM_GUARD_BYTES: "1073741824" });
+  assert.strictEqual(result, 1073741824);
+});
+
+test("readMemGuardBytesFromEnv: parses '0' to disable the guard via the fail-open branch", () => {
+  const result = readMemGuardBytesFromEnv({ HARNESS_MEM_GUARD_BYTES: "0" });
+  assert.strictEqual(result, 0);
+});
+
+test("readMemGuardBytesFromEnv: unset variable returns undefined", () => {
+  const result = readMemGuardBytesFromEnv({});
+  assert.strictEqual(result, undefined);
+});
+
+test("readMemGuardBytesFromEnv: empty-string or non-numeric value returns undefined", () => {
+  const withEmpty = readMemGuardBytesFromEnv({ HARNESS_MEM_GUARD_BYTES: "" });
+  const withGarbage = readMemGuardBytesFromEnv({ HARNESS_MEM_GUARD_BYTES: "not-a-number" });
+  assert.strictEqual(withEmpty, undefined);
+  assert.strictEqual(withGarbage, undefined);
 });

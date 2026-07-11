@@ -41,7 +41,27 @@ export function defaultFreeMem() {
 /**
  * @description Default free-memory threshold, in bytes: 768 MiB (805306368). The incident this
  * guard responds to failed at ~550 MB free; 768 MiB leaves margin above that danger zone.
- * Empirically, `os.freemem()` reports available-like memory on this VPS (~6.5 GB free on a
- * healthy host), so the guard is a no-op in the common case and only fires near genuine OOM.
+ * Caveat: per classic Linux/libuv semantics, `os.freemem()` reports MemFree (excludes reclaimable
+ * cache/buffers), NOT MemAvailable — it can under-report genuinely usable memory on a host with a
+ * large page cache. On this VPS it has empirically read available-like (~6.5 GB free on a healthy
+ * host), so the guard is a no-op in the common case, but that is a host-specific observation, not a
+ * guarantee of `os.freemem()` semantics in general.
  */
 export const DEFAULT_MEM_GUARD_BYTES = 805306368;
+
+/**
+ * @description Operator-facing override for the memory-guard threshold, read from the
+ * `HARNESS_MEM_GUARD_BYTES` environment variable — a fallback ahead of `DEFAULT_MEM_GUARD_BYTES`
+ * so ops can raise, lower, or disable (set to `0`) the guard without a redeploy. A `0` value flows
+ * into the existing `thresholdBytes <= 0` fail-open branch of `hasEnoughFreeMemory`, disabling the
+ * guard outright. Returns `undefined` when the variable is unset or does not parse to a finite
+ * number, so callers can chain it with `??` ahead of the default constant.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number | undefined}
+ */
+export function readMemGuardBytesFromEnv(env = process.env) {
+  const raw = env.HARNESS_MEM_GUARD_BYTES;
+  if (raw === undefined || raw === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}

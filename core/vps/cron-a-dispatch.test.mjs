@@ -999,3 +999,67 @@ test("mem-guard: a throwing memory reader fails open and proceeds to spawn", asy
     cleanup();
   }
 });
+
+test("mem-guard: HARNESS_MEM_GUARD_BYTES env var is used as a fallback threshold when opts.memGuardBytes is absent", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  const hadEnv = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_MEM_GUARD_BYTES");
+  const prevEnv = process.env.HARNESS_MEM_GUARD_BYTES;
+  try {
+    process.env.HARNESS_MEM_GUARD_BYTES = "2147483648"; // 2 GiB — above DEFAULT_MEM_GUARD_BYTES (768 MiB)
+    const fake = makeFakeSpawn();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn, freeMem: () => 1073741824 }) // 1 GiB free
+    );
+
+    assert.ok(
+      !fake.calls.some((c) => c.command === "git" && c.args[0] === "worktree"),
+      "an env-var threshold above free memory must abort before any `git worktree` spawn"
+    );
+    assert.ok(
+      !fake.calls.some((c) => c.command === "tmux"),
+      "an env-var threshold above free memory must abort before any `tmux` spawn"
+    );
+  } finally {
+    if (hadEnv) process.env.HARNESS_MEM_GUARD_BYTES = prevEnv;
+    else delete process.env.HARNESS_MEM_GUARD_BYTES;
+    cleanup();
+  }
+});
+
+test("mem-guard: an explicit opts.memGuardBytes overrides a stricter HARNESS_MEM_GUARD_BYTES env var", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  const hadEnv = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_MEM_GUARD_BYTES");
+  const prevEnv = process.env.HARNESS_MEM_GUARD_BYTES;
+  try {
+    process.env.HARNESS_MEM_GUARD_BYTES = "10737418240"; // 10 GiB — would abort on its own
+    const fake = makeFakeSpawn();
+    const counter = makeFakeCounter();
+    await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({
+        projectRoot,
+        worktreeRoot,
+        stateDir,
+        spawn: fake.spawn,
+        counter,
+        freeMem: () => 1073741824, // 1 GiB free — below the env var, irrelevant once the guard is disabled
+        memGuardBytes: 0, // explicit disable must win over the env var
+      })
+    );
+
+    assert.ok(
+      fake.calls.some((c) => c.command === "git" && c.args[0] === "worktree"),
+      "opts.memGuardBytes must take precedence over HARNESS_MEM_GUARD_BYTES and let dispatch reach `git worktree`"
+    );
+    assert.ok(
+      fake.calls.some((c) => c.command === "tmux"),
+      "opts.memGuardBytes must take precedence over HARNESS_MEM_GUARD_BYTES and let dispatch reach the `tmux` spawn"
+    );
+    assert.equal(counter.read(42, { stateDir }), 1, "a successful spawn must raise the counter by exactly 1");
+  } finally {
+    if (hadEnv) process.env.HARNESS_MEM_GUARD_BYTES = prevEnv;
+    else delete process.env.HARNESS_MEM_GUARD_BYTES;
+    cleanup();
+  }
+});

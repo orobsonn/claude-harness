@@ -66,7 +66,12 @@ import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { hasEnoughFreeMemory, defaultFreeMem, DEFAULT_MEM_GUARD_BYTES } from "./mem-guard.mjs";
+import {
+  hasEnoughFreeMemory,
+  defaultFreeMem,
+  readMemGuardBytesFromEnv,
+  DEFAULT_MEM_GUARD_BYTES,
+} from "./mem-guard.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -602,8 +607,11 @@ export async function dispatch(issue, opts) {
   // yet, no env-file written) and before the first heavy spawn, so an insufficient-memory abort
   // goes through the SAME spawn-failure recovery path (release the lock, relabel harness:ready) —
   // no retry is charged and nothing leaks. obsContext is still null here (no topic exists yet).
+  // Threshold precedence: an explicit opts.memGuardBytes (tests / programmatic callers) wins, then
+  // the HARNESS_MEM_GUARD_BYTES env var (ops kill-switch — set to 0 to disable without a redeploy),
+  // then the DEFAULT_MEM_GUARD_BYTES constant.
   const readFreeMem = freeMem ?? defaultFreeMem;
-  const thresholdBytes = memGuardBytes ?? DEFAULT_MEM_GUARD_BYTES;
+  const thresholdBytes = memGuardBytes ?? readMemGuardBytesFromEnv() ?? DEFAULT_MEM_GUARD_BYTES;
   let freeBytes = null;
   try {
     freeBytes = readFreeMem();
