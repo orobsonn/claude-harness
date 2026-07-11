@@ -58,7 +58,9 @@
  * @param {object} opts - Injected seams: project, projectRoot, worktreeRoot, stateDir,
  *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment,
  *   branchExists (optional; defaults to a real git probe), hasOpenPr (optional; defaults to a real
- *   gh open-PR probe in production).
+ *   gh open-PR probe in production), freeMem (optional; defaults to os.freemem() via
+ *   defaultFreeMem), memGuardBytes (optional; defaults to HARNESS_MEM_GUARD_BYTES env then
+ *   DEFAULT_MEM_GUARD_BYTES).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
 import { writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from "node:fs";
@@ -66,6 +68,12 @@ import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import {
+  hasEnoughFreeMemory,
+  defaultFreeMem,
+  readMemGuardBytesFromEnv,
+  DEFAULT_MEM_GUARD_BYTES,
+} from "./mem-guard.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -643,6 +651,8 @@ export async function dispatch(issue, opts) {
     obs,
     createForumTopic,
     closeForumTopic,
+    freeMem,
+    memGuardBytes,
     precreateLog,
   } = opts;
   const resolvedPrecreateLog = precreateLog ?? defaultPrecreateLog;
@@ -657,6 +667,26 @@ export async function dispatch(issue, opts) {
   const probeBranchExists = branchExists ?? ((b) => defaultBranchExists(b, { cwd: projectRoot, env }));
   const probeHasOpenPr = hasOpenPr ?? ((b) => defaultHasOpenPr(b, { cwd: projectRoot, env }));
   const probePrHeadSha = prHeadSha ?? ((b) => defaultPrHeadSha(b, { cwd: projectRoot, env }));
+
+  // Memory guard: never spawn a new heavy session (worktree add + tmux + claude -p) under memory
+  // pressure on the shared VPS. This runs BEFORE any reversible side-effect (no obs topic minted
+  // yet, no env-file written) and before the first heavy spawn, so an insufficient-memory abort
+  // goes through the SAME spawn-failure recovery path (release the lock, relabel harness:ready) —
+  // no retry is charged and nothing leaks. obsContext is still null here (no topic exists yet).
+  // Threshold precedence: an explicit opts.memGuardBytes (tests / programmatic callers) wins, then
+  // the HARNESS_MEM_GUARD_BYTES env var (ops kill-switch — set to 0 to disable without a redeploy),
+  // then the DEFAULT_MEM_GUARD_BYTES constant.
+  const readFreeMem = freeMem ?? defaultFreeMem;
+  const thresholdBytes = memGuardBytes ?? readMemGuardBytesFromEnv() ?? DEFAULT_MEM_GUARD_BYTES;
+  let freeBytes = null;
+  try {
+    freeBytes = readFreeMem();
+  } catch {
+    freeBytes = null; // fail-open: a throwing reader must never stall dispatch
+  }
+  if (!hasEnoughFreeMemory({ freeBytes, thresholdBytes })) {
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext: null, closeForumTopic });
+  }
 
   // Pre-spawn observability setup (task-4): createRun + createForumTopic + append 'picked' all
   // complete BEFORE the tmux spawn. Fail-open — observability never blocks a dispatch; a null
