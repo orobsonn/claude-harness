@@ -90,6 +90,12 @@ function makeTmuxKillSession() {
   return { tmuxKillSession: (sessionId) => calls.push(sessionId), calls };
 }
 
+/** @description Records every `rmOutputLog(stateDir, issueNumber)` call into an array. */
+function makeRmOutputLog() {
+  const calls = [];
+  return { rmOutputLog: (stateDir, issueNumber) => calls.push({ stateDir, issueNumber }), calls };
+}
+
 /** @description Fake token-bound closeForumTopic seam; records every `{threadId}` call and resolves with `ack`. */
 function makeCloseForumTopic(ack = { ok: true }) {
   const calls = [];
@@ -352,6 +358,58 @@ test("reaper: crash-recovers a dead-session issue — relabels ready under the r
     releaseCallsB.some((args) => args.acquireTs === 60_000),
     "the stale run-lock holder must be released in the blocked sub-case too"
   );
+});
+
+test("reaper: crash-recovering a dead-session issue WITHOUT a PR best-effort removes its orphaned raw output log", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-77",
+    issueNumber: 77,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 7777, acquire_ts: 50_000, tmux_session_id: "sess-77" }, // dead session
+  });
+  const { rmOutputLog, calls } = makeRmOutputLog();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false, // session exited
+      prExists: makePrExists(), // no PR — the crash left the session's output orphaned
+      counter: makeFakeCounter({ 77: 0 }),
+      rmOutputLog,
+    })
+  );
+
+  assert.deepEqual(
+    calls,
+    [{ stateDir: "/root/dev/demo-project/.claude/state", issueNumber: 77 }],
+    "crash-recovery without a PR must best-effort remove issue-77-output.log via the injected rmOutputLog seam"
+  );
+});
+
+test("reaper: crash-recovering a dead-session issue that already HAS a PR does NOT touch the output log (the session reached cron-a-exit's own cleanup)", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-88",
+    issueNumber: 88,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 8888, acquire_ts: 50_000, tmux_session_id: "sess-88" }, // dead session
+  });
+  const { rmOutputLog, calls } = makeRmOutputLog();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false, // session exited
+      prExists: makePrExists(new Set([88])), // PR exists
+      counter: makeFakeCounter({ 88: 0 }),
+      rmOutputLog,
+    })
+  );
+
+  assert.deepEqual(calls, [], "crash-recovery with an existing PR must not call rmOutputLog");
 });
 
 test("reaper: processes Cron-A worktrees from MULTIPLE projects within a single invocation (one shared cron across the whole VPS)", () => {
