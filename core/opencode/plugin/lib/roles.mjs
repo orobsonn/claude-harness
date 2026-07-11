@@ -74,7 +74,8 @@ export function isSniperRole(subagentType) {
  * @returns {boolean}
  */
 export function isPlanReviewerRole(subagentType) {
-  return bareRole(subagentType) === "plan-reviewer";
+  const bare = bareRole(subagentType);
+  return bare === "plan-reviewer" || bare.startsWith("plan-reviewer-");
 }
 
 /**

@@ -10,10 +10,15 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Features
 
-* **oc-port:** phase-1 dual runtime + shared core + opencode vendoring + cutover ([#257](https://github.com/orobsonn/claude-harness/issues/257)) — includes `primary_only_failopen` (secondary auth/unavailable yields primary findings only; not full dual coverage) and accepted medium polish items (T5c plugins and colocated tests deferred per M3/M4 reviews)
+* **oc-port:** phase-1 dual runtime + shared core + opencode vendoring + cutover ([#257](https://github.com/orobsonn/claude-harness/issues/257)) — includes `primary_only_failopen` (secondary auth/unavailable yields primary findings only; not full dual coverage) and all medium boundary items now resolved or accepted (T5c real, loop-guard dual count, ceremony stamp timing; .opencode/plans/ gitignore rule)
 
 
-### Features
+### Chores
+
+* .gitignore rule for .opencode/plans/
+* medium fixes: T5c real (reinject-state), loop-guard dual count (loop-decide + roles), ceremony stamp timing (entry-gate + tests)
+
+
 
 * **hooks:** rails de morte de sessão + teto de timeout da mão (Grupo B) ([#255](https://github.com/orobsonn/claude-harness/issues/255)) ([d51671f](https://github.com/orobsonn/claude-harness/commit/d51671fd723c9e34cbe5952085c3e27364c387be)), closes [#248](https://github.com/orobsonn/claude-harness/issues/248)
 * **hooks:** security-rails que destravam a frota — A1 basename + A2 sha-qualified + A3 scope (Grupo A) ([#254](https://github.com/orobsonn/claude-harness/issues/254)) ([b8a7f10](https://github.com/orobsonn/claude-harness/commit/b8a7f103503b8e9e8ef0eddadbcb7aff32ce84a2)), closes [#247](https://github.com/orobsonn/claude-harness/issues/247)

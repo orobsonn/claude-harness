@@ -3,6 +3,6 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 export const versionCheck: Plugin = ({ app, client }) => ({
   "chat.message": async (input, output) => {
-    // advisory version check only
+    // advisory only (no block)
   },
 })

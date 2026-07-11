@@ -18,6 +18,8 @@ export const LOOP_THRESHOLDS = {
  * @returns {"plan_review_count"|"adversary_loop_count"|null}
  */
 export function loopCounterKey(subagentType) {
+  const bare = bareRole(subagentType);
+  if (bare.includes("-openai")) return null; // secondary dual-eye does not increment
   if (isPlanReviewerRole(subagentType)) return "plan_review_count";
   if (isAdversaryRole(subagentType)) return "adversary_loop_count";
   return null;

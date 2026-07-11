@@ -55,6 +55,21 @@ export async function createEntryGateHooks(
           }
         }
       }
+      if (tool === "skill" && !output?.error) {
+        const name = skillNameOf(output?.args ?? input?.args)
+        const sp = statePathFor(sessionID)
+        if (sp) {
+          if (name.includes("triaging-requests")) mergeGateState(sp, { triaged: true, session_id: sessionID })
+          if (name.includes("brainstorming")) mergeGateState(sp, { brainstormed: true, session_id: sessionID })
+        }
+      }
+      if (tool === "task" && !output?.error) {
+        const subagent = subagentOf(output?.args ?? input?.args)
+        if (isAdversaryRole(subagent) && statePathFor(sessionID)) {
+          const sp = statePathFor(sessionID)
+          if (sp) mergeGateState(sp, { adversary_fired: true, session_id: sessionID })
+        }
+      }
     },
 
     "tool.execute.before": async (input, output) => {
@@ -64,15 +79,6 @@ export async function createEntryGateHooks(
       if (!sessionID) return
 
       if (tool === "skill") {
-        const name = skillNameOf(args)
-        const sp = statePathFor(sessionID)
-        if (!sp) return
-        if (name.includes("triaging-requests")) {
-          mergeGateState(sp, { triaged: true, session_id: sessionID })
-        }
-        if (name.includes("brainstorming")) {
-          mergeGateState(sp, { brainstormed: true, session_id: sessionID })
-        }
         return
       }
 
@@ -93,10 +99,6 @@ export async function createEntryGateHooks(
       })
       throwIfDenied(decision)
 
-      // ADV-ADVERSARY-STAMP-BYPASS: stamp only after successful allow — never before decide.
-      if (isAdversaryRole(subagent) && sp && decision?.decision === "allow") {
-        mergeGateState(sp, { adversary_fired: true, session_id: sessionID })
-      }
     },
   }
 }
