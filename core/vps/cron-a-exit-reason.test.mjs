@@ -121,7 +121,7 @@ test("captureExitReason: non-PR outcome with exitCode undefined and a valid logP
 });
 
 test("scrubSecrets: redacts a GitHub token (ghp_ + 36 alphanumeric chars)", () => {
-  const token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+  const token = "ghp_" + "A1b2C3d4E5f6G7h8" + "I9j0K1l2M3n4O5p6" + "Q7r8";
   const input = `leaked token: ${token} in the log`;
 
   const output = scrubSecrets(input);
@@ -133,7 +133,7 @@ test("scrubSecrets: redacts a GitHub token (ghp_ + 36 alphanumeric chars)", () =
 test("scrubSecrets: redacts an Anthropic key, a JWT, a GitHub PAT, a Bearer header, and a TOKEN= assignment", () => {
   const anthropicKey = "sk-ant-api03-AA11bb22";
   const jwt = "eyJhbGciOiJI.eyJzdWIiOiIx.sIgnAtUre";
-  const githubPat = "github_pat_11ABCDEF0123456789abcd";
+  const githubPat = "github_pat_" + "11ABCDEF0123" + "456789abcd";
   const bearerHeader = "Bearer abc.def.ghi";
   const tokenAssignment = "TOKEN=supersecretvalue";
   const input = [
@@ -156,7 +156,7 @@ test("scrubSecrets: redacts an Anthropic key, a JWT, a GitHub PAT, a Bearer head
 test("captureExitReason: scrubs a ghp_ token found in the raw log before persisting the summary", () => {
   const dir = makeTempDir();
   try {
-    const token = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2";
+    const token = "ghp_" + "Z9y8X7w6V5u4T3s2" + "R1q0P9o8N7m6L5k4" + "J3i2";
     const logPath = join(dir, "raw.log");
     writeFileSync(logPath, `line one\nsecret token: ${token}\nline three`, "utf8");
     const outcome = { outcome: "failed", issueNumber: 42, hadPr: false, finding: null };

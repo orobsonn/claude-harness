@@ -46,10 +46,11 @@ test("scrubSecrets: value-based redaction — env secret VALUES are redacted by 
 });
 
 test("scrubSecrets: does not over-redact short/path env values or ordinary log words", () => {
+  const ghToken = "ghp_" + "realtokenvalue" + "1234567890" + "abcdef0123";
   const env = {
     HOME: "/root",
     PWD: "/x",
-    GITHUB_TOKEN: "ghp_realtokenvalue1234567890abcdef0123",
+    GITHUB_TOKEN: ghToken,
   };
   const text = "line-150 processed at /root normally";
 
@@ -76,11 +77,12 @@ test("scrubSecrets: redacts an Authorization: Basic credential", () => {
 });
 
 test("scrubSecrets: redacts a generic sk- OpenAI-shaped key", () => {
-  const text = "used key sk-proj-ABCDEF0123456789abcdefGHIJ0123";
+  const skKey = "sk-proj-" + "ABCDEF0123" + "456789abcd" + "efGHIJ0123";
+  const text = `used key ${skKey}`;
 
   const output = scrubSecrets(text, {});
 
-  assert.ok(!output.includes("sk-proj-ABCDEF0123456789abcdefGHIJ0123"), "the sk- key must not survive verbatim");
+  assert.ok(!output.includes(skKey), "the sk- key must not survive verbatim");
 });
 
 test("scrubSecrets: redacts a GitLab personal access token (glpat-)", () => {
@@ -92,13 +94,14 @@ test("scrubSecrets: redacts a GitLab personal access token (glpat-)", () => {
 });
 
 test("scrubSecrets: redacts colon-form (JSON-style) assignments and NAME_containing_TOKEN=value assignments", () => {
+  const jsonGh = "ghp_" + "jsonvalue123" + "4567890abc" + "def0123";
   const text =
-    'config {"GITHUB_TOKEN": "ghp_jsonvalue1234567890abcdef0123", "password": "supersecretpass"}\nTELEGRAM_BOT_TOKEN=12345:AAABBBCCCDDDsecretvalue';
+    `config {"GITHUB_TOKEN": "${jsonGh}", "password": "supersecretpass"}\nTELEGRAM_BOT_TOKEN=12345:AAABBBCCCDDDsecretvalue`;
 
   const output = scrubSecrets(text, {});
 
   assert.ok(
-    !output.includes("ghp_jsonvalue1234567890abcdef0123"),
+    !output.includes(jsonGh),
     "the colon-form GITHUB_TOKEN value must not survive verbatim"
   );
   assert.ok(!output.includes("supersecretpass"), "the colon-form password value must not survive verbatim");
