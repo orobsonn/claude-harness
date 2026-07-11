@@ -3,6 +3,7 @@
 .claude/plans/
 .claude/plans/current.md
 .claude/plans/*.local.md
+.opencode/plans/
 
 # Secrets — Ollama auth token (dispatch-hand) and any env file, never commit
 .dev.vars

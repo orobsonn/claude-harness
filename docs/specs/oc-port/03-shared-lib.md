@@ -146,6 +146,8 @@ Default `expect: "any"` (auto-detect).
   - If `no_tests: true`, `locked_tests` MUST be `[]` and `criterion_refs` still required.
   - Missing `locked_tests` key → error. `null` → error.
   - No string form `tests: "none"` — use `no_tests: true` only.
+  - **`path` (required):** must be repo-relative; reject absolute paths (`/…`, `C:\…`, etc.); reject any `..` segment; must target an allowed test-file extension/location (e.g. `*.test.ts`, `*.spec.ts`, `**/tests/**`, `**/__tests__/**` — project allowlist).
+  - **`command` (optional):** either omitted (use project default runner + `path`) or an allowlisted runner form executed as **argv** (not shell text). Reject shell metacharacters / free-form shell strings.
 
 - valid complexity/severity tiers: `low|medium|high` (not haiku/sonnet/opus)  
 - `demo` shape if present  
@@ -159,6 +161,10 @@ Default `expect: "any"` (auto-detect).
 - stub (`kind: stub`, tasks `[]`) + expect `stub` → ok  
 - stub + expect `full` → error  
 - legacy claude tier names → error  
+- locked_tests `path` absolute → error  
+- locked_tests `path` with `..` → error  
+- locked_tests `command` with shell metacharacters → error  
+
 
 OC `tools/validate-plan.ts` becomes thin wrapper calling shared (or shared is TS-compiled — prefer shared mjs called from tool via node, or duplicate-free port to TS that mirrors tests). **Single source:** implement once in shared mjs; OC tool shells out or imports if bundler allows.
 

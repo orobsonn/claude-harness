@@ -14,7 +14,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const PACKAGE_JSON_PATH = resolve(REPO_ROOT, "package.json");
 
-test("locked: package.json scripts.test covers both core/**/*.test.mjs and modules/**/*.test.mjs", () => {
+test("locked: package.json scripts.test covers core/**, modules/**, and scripts/** test globs", () => {
   const pkg = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8"));
   const testScript = pkg.scripts?.test ?? "";
 
@@ -25,5 +25,9 @@ test("locked: package.json scripts.test covers both core/**/*.test.mjs and modul
   assert.ok(
     testScript.includes("modules/**/*.test.mjs"),
     `scripts.test must include the modules/**/*.test.mjs glob — without it a modules/ test can rot red without npm test catching it (got: ${testScript})`
+  );
+  assert.ok(
+    testScript.includes("scripts/**/*.test.mjs"),
+    `scripts.test must include scripts/**/*.test.mjs (parity/cutover tests) (got: ${testScript})`
   );
 });
