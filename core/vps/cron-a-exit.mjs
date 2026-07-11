@@ -706,24 +706,29 @@ export async function runCronAExitCli(argv, deps = {}) {
     acquireTs = holder ? holder.acquire_ts : undefined;
   }
 
-  const outcome = cronAExitFn(issueNumber, worktree, bodyFile, envFile, {
-    gh: ghFn,
-    runLock: runLockObj,
-    counter: counterObj,
-    prExists: prExistsFn,
-    blockingFinding: blockingFindingFn,
-    stateDir,
-    acquireTs,
-    retryCeilingK,
-  });
+  let outcome;
+  try {
+    outcome = cronAExitFn(issueNumber, worktree, bodyFile, envFile, {
+      gh: ghFn,
+      runLock: runLockObj,
+      counter: counterObj,
+      prExists: prExistsFn,
+      blockingFinding: blockingFindingFn,
+      stateDir,
+      acquireTs,
+      retryCeilingK,
+    });
 
-  // Best-effort notification AFTER the synchronous relabel/lock-release/cleanup already completed
-  // inside cronAExit. A rejection here is swallowed by notifyExit and never escapes.
-  await notifyExitFn(outcome);
-
-  // Reason capture runs LAST, after notifyExit resolves — never inside cronAExit (keeps it
-  // byte-identical) and never before the notification it describes.
-  captureExitReasonFn({ stateDir, outcome, exitCode, logPath, now: nowFn });
+    // Best-effort notification AFTER the synchronous relabel/lock-release/cleanup already completed
+    // inside cronAExit. A rejection here is swallowed by notifyExit and never escapes.
+    await notifyExitFn(outcome);
+  } finally {
+    // Reason capture always runs, even when cronAExit/notifyExit throws, so the raw session log is
+    // never left unlinked on a throwing exit path. On the success path it still runs AFTER
+    // notifyExit resolves (never inside cronAExit, keeps it byte-identical) — the finally executes
+    // after the awaited notifyExit call above, so the ordering is preserved.
+    captureExitReasonFn({ stateDir, outcome, exitCode, logPath, now: nowFn });
+  }
 }
 
 /**
