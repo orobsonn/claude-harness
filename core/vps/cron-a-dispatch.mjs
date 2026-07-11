@@ -164,13 +164,13 @@ function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, l
     return (
       preamble +
       `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
-      `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
+      `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
     preamble +
     `claude -p --permission-mode auto; ` +
-    `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+    `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
 
@@ -251,13 +251,13 @@ function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktree
     return (
       preamble +
       `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
-      `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
+      `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
     preamble +
     `claude -p --permission-mode auto; ` +
-    `node ${CRON_A_EXIT_PATH} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
+    `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
 
