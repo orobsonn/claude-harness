@@ -31,7 +31,17 @@
  * / blockingFinding seams. The frozen oracle (cron-a-exit.test.mjs) exercises cronAExit() with
  * every seam INJECTED as a fake; the CLI wrapper is the thin production wiring.
  */
-import { rmSync, readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  rmSync,
+  readFileSync,
+  existsSync,
+  writeFileSync,
+  chmodSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 
@@ -470,29 +480,66 @@ export async function notifyExit(outcome, deps = {}) {
 
 /**
  * @description Secret-shaped substring patterns replaced by scrubSecrets(), applied in sequence.
- * Covers: Anthropic keys, JWTs, GitHub token/PAT prefixes, Bearer headers, and
- * KEY|TOKEN|SECRET|PASSWORD= assignments — the shapes most likely to leak into a `gh`-heavy
- * session's raw output log.
+ * Covers: Anthropic keys, JWTs, GitHub token/PAT prefixes, URL-embedded userinfo credentials,
+ * Authorization: Basic headers, generic sk- prefixed keys (superset of sk-ant), GitLab tokens,
+ * Bearer headers, and KEY|TOKEN|SECRET|PASSWORD assignments in both `=` and colon (JSON/YAML)
+ * form — the shapes most likely to leak into a `gh`/curl-heavy session's raw output log. This is
+ * SHAPE-based; scrubSecrets() also applies a VALUE-based pass (see below) for arbitrary-value
+ * secrets that have no distinguishing shape.
  */
 const SECRET_PATTERNS = [
   /sk-ant-[A-Za-z0-9_-]+/g,
   /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   /gh[opsu]_[A-Za-z0-9]{20,}/g,
   /github_pat_[A-Za-z0-9_]{20,}/g,
-  /Bearer\s+[A-Za-z0-9._-]+/g,
-  /(?:KEY|TOKEN|SECRET|PASSWORD)=\S+/gi,
+  /\bhttps?:\/\/[^\s:@/]+:[^\s@/]+@/gi,
+  /Basic\s+[A-Za-z0-9+/=]+/g,
+  /\bsk-[A-Za-z0-9_-]{20,}/g,
+  /\bgl(?:pat|ptt|rt)-[A-Za-z0-9_-]+/g,
+  /Bearer\s+[A-Za-z0-9._\-+/=]+/g,
+  /\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?[^\s"',]+/gi,
 ];
 const SECRET_REDACTION_MARKER = "[REDACTED]";
 
 /**
- * @description Redacts secret-shaped substrings from session output before it is persisted. A
- * non-string input returns an empty string rather than throwing.
+ * @description Name pattern for env vars whose VALUE is treated as a secret for the value-based
+ * redaction pass, regardless of shape (e.g. OLLAMA_HAND_TOKEN, ANTHROPIC_AUTH_TOKEN).
+ */
+const SECRET_ENV_NAME_PATTERN = /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i;
+
+/**
+ * @description Minimum length an env value must have to be eligible for value-based redaction —
+ * short values (e.g. flags, single chars) are not redacted to avoid blanking ordinary log content.
+ */
+const MIN_SECRET_VALUE_LENGTH = 6;
+
+/**
+ * @description Redacts secret-shaped substrings from session output before it is persisted, THEN
+ * redacts the literal VALUE of every env var whose name matches SECRET_ENV_NAME_PATTERN and whose
+ * value is at least MIN_SECRET_VALUE_LENGTH long — this catches arbitrary-value secrets (no
+ * distinguishing shape) that the pattern list alone would miss. Value matching is a literal
+ * split/join (never a dynamically-built RegExp) so a value containing regex metacharacters can
+ * never throw. Best-effort: any error during the value-based pass never propagates. A non-string
+ * `text` input returns an empty string rather than throwing.
  * @param {string} text
+ * @param {Record<string, string | undefined>} [env] - Defaults to process.env in production;
+ *   tests always pass an explicit env object.
  * @returns {string}
  */
-export function scrubSecrets(text) {
+export function scrubSecrets(text, env = process.env) {
   if (typeof text !== "string") return "";
-  return SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, SECRET_REDACTION_MARKER), text);
+  let scrubbed = SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, SECRET_REDACTION_MARKER), text);
+  try {
+    const source = env && typeof env === "object" ? env : {};
+    for (const [name, value] of Object.entries(source)) {
+      if (!SECRET_ENV_NAME_PATTERN.test(name)) continue;
+      if (typeof value !== "string" || value.length < MIN_SECRET_VALUE_LENGTH) continue;
+      scrubbed = scrubbed.split(value).join(SECRET_REDACTION_MARKER);
+    }
+  } catch {
+    // best-effort: value-based redaction must never throw
+  }
+  return scrubbed;
 }
 
 /**
@@ -506,6 +553,34 @@ function categorizeExit(exitCode) {
   if (exitCode === 0) return "no-pr-produced";
   if (typeof exitCode === "number" && !Number.isNaN(exitCode)) return "tool-error";
   return "unknown";
+}
+
+/**
+ * @description Max number of trailing bytes read from a raw log to derive the last-200-lines
+ * summary. Bounds memory regardless of log size — a whole-file read on a huge agentic log can OOM,
+ * and an OOM mid-read would skip the finally-unlink, leaving the raw unscrubbed log on disk.
+ */
+const LOG_TAIL_MAX_BYTES = 256 * 1024;
+
+/**
+ * @description Reads only the last `maxBytes` of a file (or the whole file when smaller) via
+ * statSync + openSync/readSync into a bounded Buffer — never loads the full file into memory.
+ * @param {string} path
+ * @param {number} maxBytes
+ * @returns {string} The trailing slice of the file, decoded as utf8.
+ */
+function readTail(path, maxBytes) {
+  const { size } = statSync(path);
+  const start = Math.max(0, size - maxBytes);
+  const length = size - start;
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(path, "r");
+  try {
+    readSync(fd, buffer, 0, length, start);
+  } finally {
+    closeSync(fd);
+  }
+  return buffer.toString("utf8");
 }
 
 /**
@@ -530,10 +605,10 @@ export function captureExitReason({ stateDir, outcome, exitCode, logPath, now = 
       let summary = "";
       if (logPath) {
         try {
-          const rawLog = readFileSync(logPath, "utf8");
+          const rawLog = readTail(logPath, LOG_TAIL_MAX_BYTES);
           const lines = rawLog.split("\n");
           const last200 = lines.slice(Math.max(0, lines.length - 200));
-          summary = scrubSecrets(last200.join("\n"));
+          summary = scrubSecrets(last200.join("\n"), process.env);
         } catch {
           summary = "";
         }
@@ -547,6 +622,10 @@ export function captureExitReason({ stateDir, outcome, exitCode, logPath, now = 
         summary,
       };
       try {
+        // Remove any pre-existing reason file first so the create-fresh writeFileSync mode 0o600
+        // actually applies from the start — otherwise a stale permissive file could briefly hold
+        // the new summary before chmodSync tightens it.
+        rmSync(reasonFile, { force: true });
         writeFileSync(reasonFile, JSON.stringify(payload), { mode: 0o600 });
         chmodSync(reasonFile, 0o600);
       } catch {
