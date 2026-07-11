@@ -12,6 +12,7 @@
  *   - hand-finished      --feature-id <id> --task-id <id>
  *   - capture-verified   --feature-id <id> --task-id <id>
  *   - fidelity-pass      --feature-id <id> --task-id <id>
+ *   - spec-adversaried   --feature-id <id> --verdict SHIP|BLOCK --findings <n>
  * Validates feature_id (and task_id, where required) via gate-lib, and on success
  * echoes a single JSON line to stdout with exit 0:
  *   {marker:'brainstorm-done', feature_id}
@@ -24,6 +25,7 @@
  *   {marker:'hand-finished', feature_id, task_id}
  *   {marker:'capture-verified', feature_id, task_id}
  *   {marker:'fidelity-pass', feature_id, task_id}
+ *   {marker:'spec-adversaried', feature_id, verdict, findings}
  * On invalid input, exits non-zero with a corrective stderr message.
  * NEITHER reads nor writes state — the stamp-triage hook observes the command
  * and stamps the corresponding flag into gate-state.json.
@@ -100,7 +102,7 @@ const REASON_MARKERS = new Set(["hand-config-error"]);
  * (the plan verdict is feature-scoped, not task-scoped) plus a required --verdict APPROVE|REVISE;
  * task-executing carries --n/--total (the 1-based task index and total task count).
  */
-const OBSERVABILITY_MARKERS = new Set(["plan-reviewed", "task-executing", "final-review-done"]);
+const OBSERVABILITY_MARKERS = new Set(["plan-reviewed", "task-executing", "final-review-done", "spec-adversaried"]);
 
 /**
  * All supported marker commands.
@@ -165,6 +167,17 @@ export function parseArgs(argv) {
       parsed.task_id = task_id;
     }
     return parsed;
+  }
+
+  // spec-adversaried: feature-scoped (no --task-id), required --verdict SHIP|BLOCK + required
+  // --findings <n> (validated as a non-negative integer in run() — 0 is a valid finding count).
+  if (marker === "spec-adversaried") {
+    const verdict = findFlag(argv, "--verdict");
+    const findings = findFlag(argv, "--findings");
+    if (verdict === null || findings === null) {
+      return null;
+    }
+    return { marker, feature_id, verdict, findings };
   }
 
   // active-scope: the deterministic scope_paths write rail source. Requires --task-id, --role
@@ -322,6 +335,25 @@ export function run(args) {
     return { success: true, output };
   }
 
+  // spec-adversaried: verdict in {SHIP, BLOCK} + findings a non-negative integer (0 is valid).
+  // Observability-only.
+  if (marker === "spec-adversaried") {
+    if (verdict !== "SHIP" && verdict !== "BLOCK") {
+      return {
+        success: false,
+        error: `invalid verdict: "${verdict}" must be SHIP or BLOCK.`,
+      };
+    }
+    const n = Number(args.findings);
+    if (!Number.isSafeInteger(n) || n < 0) {
+      return {
+        success: false,
+        error: `invalid findings: "${args.findings}" must be a non-negative integer.`,
+      };
+    }
+    return { success: true, output: { marker, feature_id, verdict, findings: n } };
+  }
+
   // task-executing: n/total must be positive integers. Observability-only.
   if (marker === "task-executing") {
     const n = Number(args.n);
@@ -381,7 +413,7 @@ if (isDirectCli()) {
   if (!parsed) {
     console.error("mark: invalid command");
     console.error(
-      "usage: mark.mjs <brainstorm-done --feature-id <id> | active-scope --feature-id <id> --task-id <id> --role executor|sniper --scope-paths <a,b> [--allowed-writes <c,d>] | plan-reviewed --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE | task-executing --feature-id <id> --n <n> --total <N> | final-review-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id>>"
+      "usage: mark.mjs <brainstorm-done --feature-id <id> | active-scope --feature-id <id> --task-id <id> --role executor|sniper --scope-paths <a,b> [--allowed-writes <c,d>] | plan-reviewed --feature-id <id> [--task-id <id>] --verdict APPROVE|REVISE | task-executing --feature-id <id> --n <n> --total <N> | final-review-done --feature-id <id> | regate-pending --feature-id <id> --task-id <id> | regate-passed --feature-id <id> --task-id <id> | escalation-fallback --feature-id <id> --task-id <id> | hand-finished --feature-id <id> --task-id <id> | capture-verified --feature-id <id> --task-id <id> | hand-config-error --feature-id <id> --task-id <id> [--reason <text>] | fidelity-pass --feature-id <id> --task-id <id> | spec-adversaried --feature-id <id> --verdict SHIP|BLOCK --findings <n>>"
     );
     process.exit(1);
   }

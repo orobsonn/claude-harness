@@ -873,3 +873,59 @@ manual-merge the queue.
 - **Rationale:** reactive discovery (write the fixture, fail locked-2, fix it) costs an extra round-trip
   every time a test-author touches this surface; the convention is narrow, mechanical, and fully
   known — a good candidate for proactive injection rather than repeated rediscovery.
+
+### 2026-07-11 — orchestrating-delivery: `plan-reviewed` checkpoint has the same positional defect just fixed for `spec-adversaried`
+
+- **Observed:** `spec-adversary-checkpoint` (#260) fixed the new `spec-adversaried` deterministic
+  checkpoint in `core/skills/orchestrating-delivery/SKILL.md` after the final dual review's
+  cross-family (codex) adversary caught it positioned AFTER HARD-GATE 1's HEADLESS stop-and-report
+  branch — a BLOCK verdict with an unresolvable issue could read as "stop before emitting the
+  marker," exactly the silently-skipped-checkpoint class this feature exists to prevent (see
+  `core/memory/checkpoint-position-before-branching.md`). The light-path re-gate spot-check on that
+  fix independently found that Phase 1's existing `plan-reviewed` checkpoint (around the
+  "Deterministic plan-review checkpoint" paragraph) is placed AFTER HARD-GATE 2's own HEADLESS "stop
+  and open an issue" branch — the exact same structural defect. #260's spec explicitly forbade
+  touching the existing `plan-reviewed` marker (scope discipline), so this was recorded, not fixed.
+- **Proposed change:** move the `plan-reviewed` checkpoint instruction (and its
+  `node .claude/hooks/mark.mjs plan-reviewed ...` command) to fire immediately after the
+  plan-reviewer returns its verdict (end of step 3, before HARD-GATE 2's prose and its HEADLESS
+  stop/proceed branch) — mirroring the fix already applied to `spec-adversaried` in Phase 0.
+- **Rationale:** worth its own small follow-up issue rather than folding into an unrelated feature,
+  since it touches the same file the byte budget is already tight against (see
+  `core/memory/orchestrating-delivery-skillmd-byte-budget.md`).
+
+### 2026-07-11 — entry-gate: `#ac-1.3` fail-open assertion is polluted by the real `process.env`
+
+- **Observed:** `isRoutineSession(env = process.env)` in `core/hooks/entry-gate.mjs` uses a JS
+  default parameter. The test `#ac-1.3: isRoutineSession is fail-open (undefined env → false →
+  allow)` (`core/hooks/entry-gate.test.mjs`) calls `isRoutineSession(undefined)` intending to
+  exercise the "no env at all" case — but passing `undefined` triggers default-parameter
+  substitution, so the call actually evaluates against the REAL `process.env` of whatever process
+  runs the test, not a true undefined-env case. In any environment where
+  `HARNESS_OBSERVABILITY_RUN_PATH` / `HARNESS_NOTIFY_PROJECT` / `CLAUDE_CODE_REMOTE` happen to be
+  set (e.g. this VPS cron session's own observability plumbing for #260's run), the test's premise
+  is never exercised and it fails — confirmed unrelated to #260's diff (file not in `scope_paths`,
+  fails identically on `main`).
+- **Proposed change:** exercise the true "no env" case with an explicit empty-ish object that
+  cannot collide with default-parameter substitution — e.g. keep `isRoutineSession({})` for the "no
+  markers" case (already covered) and, for the "no env object provided" contract, either (a) assert
+  the function signature accepts zero args without throwing rather than asserting a specific
+  env-dependent outcome, or (b) inject a sanitized empty env object instead of `undefined` and drop
+  the "undefined env" framing from the assertion name.
+- **Rationale:** `undefined` can never deterministically mean "no env" once a default parameter is
+  involved. Low urgency (environment-triggered, not diff-triggered) but worth fixing so CI-suite
+  parity stops showing a false `allGreen:false` on unrelated PRs run from a polluted shell.
+
+### 2026-07-11 — mark.mjs: `--findings` accepts absurdly large exponential-notation integers (cosmetic, non-blocking)
+
+- **Observed:** the final-review security eye on `spec-adversary-checkpoint` (#260) found that
+  `mark.mjs`'s `spec-adversaried` validation (`Number.isInteger(n) && n >= 0`) accepts a literal
+  like `--findings 1e21` — `Number("1e21")` is a mathematically whole number so `Number.isInteger`
+  returns true, and it renders in exponential notation wherever the count is displayed/logged. No
+  injection vector (internally-produced value only, escaped, any downstream string truncated to 80
+  chars) — pure cosmetic annoyance, not fixed in #260 (low value/cost ratio, non-blocking SECURE
+  verdict).
+- **Proposed change:** tighten the bound with an upper ceiling sanity check (e.g. `n <= 10000`) or
+  reject non-finite-safe integers (`Number.isSafeInteger` instead of `Number.isInteger`). The same
+  pattern likely applies to any other marker taking a numeric `--n`/`--total`/`--findings` flag.
+- **Rationale:** low priority — bundle with the next `mark.mjs` touch rather than a dedicated fix.

@@ -84,6 +84,7 @@ const EMOJI = {
   "pipeline-type": "🚀",
   "spec-created": "📝",
   "spec-adversary": "🛡️",
+  "spec-adversaried": "🗡️",
   "plan-created": "📋",
   "plan-reviewed": "🧐",
   "task-executing": "⚙️",
@@ -754,6 +755,7 @@ const CURATED_FEED_TYPES = new Set([
   "pipeline-type",
   "spec-created",
   "spec-adversary",
+  "spec-adversaried",
   "plan-created",
   "plan-reviewed",
   "task-executing",
@@ -763,7 +765,7 @@ const CURATED_FEED_TYPES = new Set([
 ]);
 
 /** @description True when an event belongs in the curated Telegram feed (case-insensitive). */
-function isCuratedFeedEvent(event) {
+export function isCuratedFeedEvent(event) {
   const type = String(event?.type ?? "").toLowerCase();
   return CURATED_FEED_TYPES.has(type);
 }
@@ -782,6 +784,7 @@ const CHECKPOINT_LABELS = {
   "pipeline-type": "Classificação",
   "spec-created": "Spec criada",
   "spec-adversary": "Adversarial da spec",
+  "spec-adversaried": "Spec atacada",
   "plan-created": "Plano criado",
   "plan-reviewed": "Revisão do plano",
   "task-executing": "Tarefa",
@@ -864,6 +867,13 @@ function cosmeticBodyLines(event, meta, isFallback) {
       // fallback) renders the verdict alone.
       const round = Number(event.round);
       lines.push(Number.isInteger(round) && round > 0 ? `revisão ${round} — ${verdictLabel}` : verdictLabel);
+      break;
+    }
+    case "spec-adversaried": {
+      const n = event.findings;
+      const findingsLabel = Number(n) === 1 ? `${n} achado` : `${n} achados`;
+      const verdictLabel = event.verdict === "SHIP" ? "aprovado" : event.verdict === "BLOCK" ? "bloqueado" : "...";
+      lines.push(`${findingsLabel} — ${verdictLabel}`);
       break;
     }
     case "task-executing":

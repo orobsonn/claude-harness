@@ -325,3 +325,53 @@ test("parseArgs+run: hand-finished echoes {marker, feature_id, task_id}", () => 
     task_id: "task-1",
   });
 });
+
+// --- spec-adversaried marker (the spec-level adversary verdict stamp) ---
+
+test("run: spec-adversaried accepts findings '0' as the number zero", () => {
+  const result = run({ marker: "spec-adversaried", feature_id: "f", verdict: "SHIP", findings: "0" });
+  assert.deepEqual(result, {
+    success: true,
+    output: { marker: "spec-adversaried", feature_id: "f", verdict: "SHIP", findings: 0 },
+  });
+});
+
+test("run: spec-adversaried echoes numeric findings for a BLOCK verdict", () => {
+  const result = run({ marker: "spec-adversaried", feature_id: "f", verdict: "BLOCK", findings: "3" });
+  assert.equal(result.success, true);
+  assert.equal(result.output.findings, 3);
+  assert.equal(result.output.verdict, "BLOCK");
+});
+
+test("parseArgs: spec-adversaried without --findings → null (findings required)", () => {
+  const result = parseArgs(["node", "mark.mjs", "spec-adversaried", "--feature-id", "f", "--verdict", "SHIP"]);
+  assert.equal(result, null);
+});
+
+test("run: spec-adversaried rejects a verdict outside {SHIP, BLOCK}", () => {
+  const result = run({ marker: "spec-adversaried", feature_id: "f", verdict: "MAYBE", findings: "2" });
+  assert.equal(result.success, false);
+  assert.match(result.error, /verdict/);
+  assert.equal(result.output, undefined);
+});
+
+test("CLI: spec-adversaried with an invalid verdict exits non-zero and emits no marker JSON", async () => {
+  const { exitCode, stdout } = await spawnMark([
+    "spec-adversaried",
+    "--feature-id",
+    "f",
+    "--verdict",
+    "MAYBE",
+    "--findings",
+    "2",
+  ]);
+
+  assert.notEqual(exitCode, 0, "Expected non-zero exit code");
+  assert.equal(stdout, "", "Expected no stdout marker JSON on invalid verdict");
+});
+
+test("run: spec-adversaried rejects negative findings", () => {
+  const result = run({ marker: "spec-adversaried", feature_id: "f", verdict: "SHIP", findings: "-1" });
+  assert.equal(result.success, false);
+  assert.equal(result.output, undefined);
+});
