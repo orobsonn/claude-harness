@@ -1,0 +1,367 @@
+/**
+ * @description Pins dispatch()'s deterministic per-issue output-log capture (issue-<n>-output.log)
+ * for cron-a-dispatch.mjs. dispatch() pre-creates a deterministic log file
+ * `stateDir/issue-<n>-output.log` (mode 0600) via an injectable seam
+ * `precreateLog(logPath) -> logPath|null` (default real behavior: writeFileSync then chmodSync
+ * 0o600; returns null on failure). composeSessionCommand redirects ONLY the `claude -p` combined
+ * output to that log (`> '<log>' 2>&1`), captures `ec=$?` immediately after, and passes the log
+ * path as the 5th positional arg and `"$ec"` as the 6th to the chained
+ * `node .../cron-a-exit.mjs <issue> <worktree> <body> <env> <log> "$ec"` invocation. When
+ * precreateLog returns null or throws, dispatch composes the byte-identical LEGACY command (no
+ * redirect, exactly 4 args to cron-a-exit.mjs). The same redirect+arg parity holds in fix-mode
+ * (composeFixModeSessionCommand).
+ *
+ * The harness below mirrors cron-a-dispatch.test.mjs's hermetic seams (fake spawn/runLock/gh/
+ * counter, real temp dirs) so dispatch runs fully hermetically here too — no real git/tmux/
+ * claude/gh process is ever spawned.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, statSync, chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+
+import { dispatch } from "./cron-a-dispatch.mjs";
+
+/** @description Fresh temp projectRoot/worktreeRoot/stateDir for one test, plus cleanup. */
+function makeTempDirs() {
+  const root = mkdtempSync(join(tmpdir(), "cron-a-dispatch-capture-"));
+  const projectRoot = join(root, "project");
+  const worktreeRoot = join(root, "worktrees");
+  const stateDir = join(root, "state");
+  mkdirSync(projectRoot, { recursive: true });
+  mkdirSync(worktreeRoot, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  return { projectRoot, worktreeRoot, stateDir, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+/**
+ * @description Fake spawn/exec seam. Records every invocation as
+ * `{ command, args, env, stdin, cwd }`. Throws for any command listed in `failCommands`.
+ */
+function makeFakeSpawn({ failCommands = [] } = {}) {
+  const calls = [];
+  function spawn(command, args = [], spawnOpts = {}) {
+    calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
+    if (failCommands.includes(command)) {
+      throw new Error(`fake spawn: ${command} failed`);
+    }
+    return { ok: true };
+  }
+  return { spawn, calls };
+}
+
+/** @description Fake run-lock seam mirroring run-lock.mjs's register(tmuxId, opts) / release(opts). */
+function makeFakeRunLock(initialHolder) {
+  let holder = { ...initialHolder };
+  const registerCalls = [];
+  const releaseCalls = [];
+  return {
+    holder: () => holder,
+    register(tmuxId, opts) {
+      registerCalls.push({ tmuxId, opts });
+      holder = { ...holder, tmux_session_id: tmuxId };
+    },
+    release(opts) {
+      releaseCalls.push(opts);
+      holder = null;
+    },
+    registerCalls,
+    releaseCalls,
+  };
+}
+
+/** @description Fake gh seam. Records each `gh` argv. */
+function makeFakeGh() {
+  const calls = [];
+  function gh(args) {
+    calls.push(args);
+    return { ok: true };
+  }
+  return { gh, calls };
+}
+
+/** @description Fake per-issue attempt counter seam, backed by an in-memory map. */
+function makeFakeCounter(initial = {}) {
+  const counts = { ...initial };
+  return {
+    increment(issueNumber, _opts) {
+      counts[issueNumber] = (counts[issueNumber] ?? 0) + 1;
+    },
+    read(issueNumber, _opts) {
+      return counts[issueNumber] ?? 0;
+    },
+  };
+}
+
+/**
+ * @description Real-behavior default for the precreateLog seam: writeFileSync then chmodSync
+ * 0o600, returning the path on success or null on any failure — mirrors the production default
+ * dispatch() falls back to when no `precreateLog` override is injected.
+ * @param {string} logPath
+ * @returns {string|null}
+ */
+function defaultPrecreateLog(logPath) {
+  try {
+    writeFileSync(logPath, "", { encoding: "utf8", mode: 0o600 });
+    chmodSync(logPath, 0o600);
+    return logPath;
+  } catch {
+    return null;
+  }
+}
+
+/** @description The deterministic output-log path dispatch() must pre-create for a given issue. */
+function logPathFor(stateDir, issueNumber = 42) {
+  return join(stateDir, `issue-${issueNumber}-output.log`);
+}
+
+/** @description Assembles a full dispatch() opts object from defaults + per-test overrides. */
+function baseOpts({
+  projectRoot,
+  worktreeRoot,
+  stateDir,
+  project = "demo-project",
+  spawn = makeFakeSpawn().spawn,
+  runLock = makeFakeRunLock({ pid: 111, acquire_ts: 1000 }),
+  gh = makeFakeGh().gh,
+  counter = makeFakeCounter(),
+  buildScopedEnv = () => ({ PATH: "/usr/bin", OLLAMA_HAND_TOKEN: "oll-token" }),
+  lock = { acquireTs: 1000 },
+  branchExists = () => false,
+  hasOpenPr = () => true,
+  prHeadSha,
+  precreateLog = defaultPrecreateLog,
+}) {
+  return {
+    project,
+    projectRoot,
+    worktreeRoot,
+    stateDir,
+    lock,
+    spawn,
+    runLock,
+    gh,
+    counter,
+    buildScopedEnv,
+    branchExists,
+    hasOpenPr,
+    prHeadSha,
+    precreateLog,
+  };
+}
+
+/** @description Locates the `tmux new-session` spawn call in a fake's recorded calls. */
+function findTmuxCall(calls) {
+  return calls.find((c) => c.command === "tmux");
+}
+
+/** @description The composed session-command string is the one string arg mentioning claude. */
+function sessionCommandOf(tmuxCall) {
+  return tmuxCall.args.find((a) => typeof a === "string" && a.includes("claude"));
+}
+
+/**
+ * @description Extracts the path from a `> '<path>' 2>&1` (or unquoted `> <path> 2>&1`) redirect
+ * inside a composed session command string, unquoting a single-quoted path if present.
+ */
+function extractLogRedirectPath(sessionCommand) {
+  const quoted = sessionCommand.match(/>\s*'((?:[^'\\]|\\.)*)'\s*2>&1/);
+  if (quoted) return quoted[1].replace(/\\'/g, "'");
+  const bare = sessionCommand.match(/>\s*(\S+)\s*2>&1/);
+  return bare ? bare[1] : undefined;
+}
+
+test("dispatch: normal dispatch with a writable stateDir redirects claude -p's combined output to issue-42-output.log, composed BEFORE the chained cron-a-exit.mjs invocation", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const tmuxCall = findTmuxCall(fake.calls);
+    assert.ok(tmuxCall, "dispatch must spawn the tmux session");
+    const sessionCommand = sessionCommandOf(tmuxCall);
+    assert.ok(sessionCommand, "the tmux argv must carry a composed session command string");
+
+    const logPath = logPathFor(stateDir);
+    const redirectPath = extractLogRedirectPath(sessionCommand);
+    assert.ok(redirectPath, "the session command must redirect claude's combined output via `> '<log>' 2>&1`");
+    assert.ok(redirectPath.endsWith("issue-42-output.log"), "the redirected path must end with issue-42-output.log");
+    assert.equal(redirectPath, logPath, "the redirected path must be the deterministic stateDir/issue-42-output.log path");
+
+    const claudeIndex = sessionCommand.indexOf("claude -p");
+    const redirectIndex = sessionCommand.indexOf("2>&1");
+    const exitIndex = sessionCommand.indexOf("cron-a-exit.mjs");
+    assert.notEqual(claudeIndex, -1, "the session command must invoke claude -p");
+    assert.notEqual(redirectIndex, -1, "the session command must carry the 2>&1 redirect");
+    assert.notEqual(exitIndex, -1, "the session command must invoke node .../cron-a-exit.mjs");
+    assert.ok(claudeIndex < exitIndex, "cron-a-exit.mjs must be composed AFTER the claude -p invocation");
+    assert.ok(redirectIndex < exitIndex, "the 2>&1 redirect must be composed BEFORE the chained cron-a-exit.mjs invocation");
+  } finally {
+    cleanup();
+  }
+});
+
+test('dispatch: the composed normal command captures claude\'s exit status via ec=$? and hands the log path + "$ec" as the 5th/6th positional args to cron-a-exit.mjs', async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand);
+    assert.ok(sessionCommand.includes("ec=$?"), "the session command must capture claude's exit status via ec=$?");
+
+    const exitIdx = sessionCommand.indexOf("cron-a-exit.mjs");
+    assert.notEqual(exitIdx, -1, "the session command must invoke cron-a-exit.mjs");
+    const trailing = sessionCommand.slice(exitIdx + "cron-a-exit.mjs".length);
+
+    const logPath = logPathFor(stateDir);
+    const logIdxInTrailing = trailing.indexOf(logPath);
+    const ecIdxInTrailing = trailing.indexOf('"$ec"');
+    assert.notEqual(logIdxInTrailing, -1, "the cron-a-exit.mjs invocation must carry the log path as a positional arg");
+    assert.notEqual(ecIdxInTrailing, -1, 'the cron-a-exit.mjs invocation must carry "$ec" as a positional arg');
+    assert.ok(logIdxInTrailing < ecIdxInTrailing, 'the log path must precede "$ec" in the cron-a-exit.mjs argv');
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: normal dispatch actually pre-creates stateDir/issue-42-output.log with mode 0600 before the tmux spawn runs", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const logPath = logPathFor(stateDir);
+    assert.ok(existsSync(logPath), "dispatch must have pre-created the deterministic output log file");
+    const mode = statSync(logPath).mode & 0o777;
+    assert.equal(mode, 0o600, "the pre-created log file must be owner-read-write-only (0600)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: an injected precreateLog seam that THROWS falls back to the byte-identical legacy command (no redirect, no ec capture, exactly 4 cron-a-exit.mjs args)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fake.spawn,
+      precreateLog: () => {
+        throw new Error("boom");
+      },
+    });
+    await dispatch({ number: 42, body: "hello" }, opts);
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand);
+    assert.equal(
+      sessionCommand.includes("2>&1"),
+      false,
+      "a throwing precreateLog must fall back to the legacy command with no output redirect"
+    );
+    assert.equal(
+      sessionCommand.includes("ec=$?"),
+      false,
+      "a throwing precreateLog must fall back to the legacy command with no exit-status capture"
+    );
+
+    const gitCall = fake.calls.find((c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add");
+    assert.ok(gitCall, "dispatch must run git worktree add");
+    const worktreePath = gitCall.args[2];
+
+    const exitIdx = sessionCommand.indexOf("cron-a-exit.mjs");
+    assert.notEqual(exitIdx, -1, "the session command must invoke cron-a-exit.mjs");
+    const trailing = sessionCommand.slice(exitIdx + "cron-a-exit.mjs".length).trim();
+    const tokens = trailing.split(/\s+/);
+    assert.equal(
+      tokens.length,
+      4,
+      "the legacy cron-a-exit.mjs invocation must carry exactly 4 positional args (issue, worktree, body, env)"
+    );
+    assert.equal(tokens[0], "42", "the 1st legacy arg must be the issue number");
+    assert.equal(tokens[1], worktreePath, "the 2nd legacy arg must be the worktree path");
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: the composed normal redirected session command is shell-syntax-valid (`sh -n`, P10 regression guard)", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand);
+    const res = spawnSync("sh", ["-n", "-c", sessionCommand], { encoding: "utf8" });
+    assert.equal(res.status, 0, `the redirected session command must be shell-syntax-valid; sh -n said: ${res.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('dispatch: fix-mode dispatch ALSO redirects claude -p\'s combined output to issue-42-output.log and carries the log path + "$ec" to cron-a-exit.mjs (parity with the normal path)', async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const sha = "a1b2c3d4e5f6";
+    writeFileSync(
+      join(stateDir, "fix-findings-42.json"),
+      JSON.stringify({ changedFiles: ["src/foo.ts"], sha }),
+      "utf8"
+    );
+
+    const fake = makeFakeSpawn();
+    const opts = baseOpts({
+      projectRoot,
+      worktreeRoot,
+      stateDir,
+      spawn: fake.spawn,
+      branchExists: () => true,
+      hasOpenPr: () => true,
+      prHeadSha: () => sha,
+    });
+    await dispatch({ number: 42, body: "hello" }, opts);
+
+    const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+    assert.ok(sessionCommand, "the fix-mode dispatch must still compose a tmux session command");
+
+    const logPath = logPathFor(stateDir);
+    const redirectPath = extractLogRedirectPath(sessionCommand);
+    assert.ok(redirectPath, "the fix-mode session command must also redirect claude's combined output via `> '<log>' 2>&1`");
+    assert.equal(redirectPath, logPath, "the fix-mode redirect must target the same deterministic issue-42-output.log path");
+
+    const exitIdx = sessionCommand.indexOf("cron-a-exit.mjs");
+    assert.notEqual(exitIdx, -1, "the fix-mode session command must invoke cron-a-exit.mjs");
+    const trailing = sessionCommand.slice(exitIdx + "cron-a-exit.mjs".length);
+    const logIdxInTrailing = trailing.indexOf(logPath);
+    const ecIdxInTrailing = trailing.indexOf('"$ec"');
+    assert.notEqual(logIdxInTrailing, -1, "the fix-mode cron-a-exit.mjs invocation must carry the log path as a positional arg");
+    assert.notEqual(ecIdxInTrailing, -1, 'the fix-mode cron-a-exit.mjs invocation must carry "$ec" as a positional arg');
+    assert.ok(logIdxInTrailing < ecIdxInTrailing, 'the log path must precede "$ec" in the fix-mode cron-a-exit.mjs argv');
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: a pre-existing issue-42-output.log with a permissive mode is re-tightened to 0600 by precreateLog", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const logPath = logPathFor(stateDir);
+    writeFileSync(logPath, "", { encoding: "utf8", mode: 0o644 });
+    chmodSync(logPath, 0o644);
+
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const mode = statSync(logPath).mode & 0o777;
+    assert.equal(mode, 0o600, "precreateLog must re-apply owner-only 0600 permissions even onto a pre-existing permissive log file");
+  } finally {
+    cleanup();
+  }
+});
