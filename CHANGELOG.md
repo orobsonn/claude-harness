@@ -5,7 +5,12 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
-## [0.37.0](https://github.com/orobsonn/claude-harness/compare/v0.36.1...v0.37.0) (2026-07-10)
+## [0.38.0](https://github.com/orobsonn/claude-harness/compare/v0.37.0...v0.38.0) (2026-07-10)
+
+
+### Features
+
+* **oc-port:** phase-1 dual runtime + shared core + opencode vendoring + cutover ([#257](https://github.com/orobsonn/claude-harness/issues/257)) — includes `primary_only_failopen` (secondary auth/unavailable yields primary findings only; not full dual coverage) and accepted medium polish items (T5c plugins and colocated tests deferred per M3/M4 reviews)
 
 
 ### Features
