@@ -345,7 +345,7 @@ export function run(args) {
       };
     }
     const n = Number(args.findings);
-    if (!Number.isInteger(n) || n < 0) {
+    if (!Number.isSafeInteger(n) || n < 0) {
       return {
         success: false,
         error: `invalid findings: "${args.findings}" must be a non-negative integer.`,

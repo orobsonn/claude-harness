@@ -568,7 +568,7 @@ export function decide(payload) {
       return { action: "none" };
     }
     const n = Number(sole.findings);
-    if (!Number.isInteger(n) || n < 0) {
+    if (!Number.isSafeInteger(n) || n < 0) {
       return { action: "none" };
     }
     return { action: "spec-adversaried", verdict: sole.verdict, findings: n };
