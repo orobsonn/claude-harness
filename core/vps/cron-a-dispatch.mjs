@@ -58,7 +58,9 @@
  * @param {object} opts - Injected seams: project, projectRoot, worktreeRoot, stateDir,
  *   lock.acquireTs, spawn, runLock.{register,release}, buildScopedEnv, gh, counter.increment,
  *   branchExists (optional; defaults to a real git probe), hasOpenPr (optional; defaults to a real
- *   gh open-PR probe in production).
+ *   gh open-PR probe in production), freeMem (optional; defaults to os.freemem() via
+ *   defaultFreeMem), memGuardBytes (optional; defaults to HARNESS_MEM_GUARD_BYTES env then
+ *   DEFAULT_MEM_GUARD_BYTES).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
 import { writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
