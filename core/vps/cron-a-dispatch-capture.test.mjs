@@ -243,7 +243,7 @@ test("dispatch: normal dispatch actually pre-creates stateDir/issue-42-output.lo
   }
 });
 
-test("dispatch: an injected precreateLog seam that THROWS falls back to the byte-identical legacy command (no redirect, no ec capture, exactly 4 cron-a-exit.mjs args)", async () => {
+test("dispatch: an injected precreateLog seam that THROWS falls back to the byte-identical legacy command (no redirect, no ec capture, single-quoted cron-a-exit.mjs path, exactly 4 positional args)", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
     const fake = makeFakeSpawn();
@@ -275,17 +275,31 @@ test("dispatch: an injected precreateLog seam that THROWS falls back to the byte
     assert.ok(gitCall, "dispatch must run git worktree add");
     const worktreePath = gitCall.args[2];
 
-    const exitIdx = sessionCommand.indexOf("cron-a-exit.mjs");
-    assert.notEqual(exitIdx, -1, "the session command must invoke cron-a-exit.mjs");
-    const trailing = sessionCommand.slice(exitIdx + "cron-a-exit.mjs".length).trim();
-    const tokens = trailing.split(/\s+/);
-    assert.equal(
-      tokens.length,
-      4,
-      "the legacy cron-a-exit.mjs invocation must carry exactly 4 positional args (issue, worktree, body, env)"
+    assert.match(
+      sessionCommand,
+      /node '[^']*cron-a-exit\.mjs' 42 /,
+      "the byte-identical legacy fallback must single-quote the cron-a-exit.mjs path (shellQuoteSingle), never interpolate it bare"
     );
-    assert.equal(tokens[0], "42", "the 1st legacy arg must be the issue number");
-    assert.equal(tokens[1], worktreePath, "the 2nd legacy arg must be the worktree path");
+
+    const quotedExitMatch = sessionCommand.match(/'([^']*cron-a-exit\.mjs)'/);
+    assert.ok(quotedExitMatch, "the session command must invoke the single-quoted cron-a-exit.mjs path");
+    const closingQuoteIdx = sessionCommand.indexOf(`${quotedExitMatch[1]}'`) + quotedExitMatch[1].length + 1;
+    const trailing = sessionCommand.slice(closingQuoteIdx);
+
+    const bodyFileMatch = sessionCommand.match(/cat < '([^']*)'/);
+    const envFileMatch = sessionCommand.match(/\. '([^']*)'; set \+a;/);
+    assert.ok(bodyFileMatch, "the session command must redirect the body file via cat < '<bodyfile>'");
+    assert.ok(envFileMatch, "the session command must source the env file via . '<envfile>'");
+    const bodyFile = bodyFileMatch[1];
+    const envFile = envFileMatch[1];
+
+    assert.equal(
+      trailing,
+      ` 42 ${worktreePath} ${bodyFile} ${envFile}`,
+      "the legacy fallback must carry exactly the 4 positional args (issue, worktree, body, env) after the quoted cron-a-exit.mjs path"
+    );
+    assert.equal(trailing.includes("output.log"), false, "the legacy fallback must not carry the log path");
+    assert.equal(trailing.includes('"$ec"'), false, "the legacy fallback must not carry the exit-status capture");
   } finally {
     cleanup();
   }
