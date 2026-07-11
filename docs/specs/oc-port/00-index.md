@@ -113,8 +113,8 @@ T6  04 agents/skills         → agents + skills + build prose (dual protocol te
 T7  06 cheap-hands           → spawn OC + capture (see P2: CLI hand agents are mode primary)
 T8  07 cross-family wiring   → dual task + merge + fail-open (runtime wiring)
 T9  08 vendor-cli            → init --target opencode
-T10 10 cutover               → global empty + docs
-T11 parity CI                → manifesto tests
+T11 parity CI                → manifesto tests (before cutover)
+T10 10 cutover               → global empty + docs (after T11)
 ---- phase 2 ----
 T12 09 NDJSON session parser → shared/VPS oracle (exit code is not success)
 T13 09 VPS spawn opencode    → cron session driver

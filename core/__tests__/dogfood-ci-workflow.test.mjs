@@ -66,8 +66,10 @@ test("locked-1: ci.yml has correct trigger, node-version string, and test comman
 
   // 1d. The required test-runner step must exist exactly
   assert.ok(
-    content.includes('node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"'),
-    `ci.yml must include a step running exactly: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs"`
+    content.includes(
+      'node --test "core/**/*.test.mjs" "modules/**/*.test.mjs" "scripts/**/*.test.mjs"',
+    ),
+    `ci.yml must include a step running: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs" "scripts/**/*.test.mjs"`,
   );
 });
 
@@ -142,8 +144,8 @@ test("locked-5: committed test command is faithful to what the generator produce
 
   // 5c. Fidelity via globSync set-equality:
   //     The generator emits `node --test "**/*.test.mjs"` (generic node-test pattern from
-  //     detect-stack). The committed CI uses two narrowed globs:
-  //       "core/**/*.test.mjs" and "modules/**/*.test.mjs".
+  //     detect-stack). The committed CI uses three narrowed globs:
+  //       "core/**/*.test.mjs", "modules/**/*.test.mjs", "scripts/**/*.test.mjs".
   //     Together they must be EQUIVALENT to the generic — i.e. their union covers exactly
   //     all .test.mjs files in the repo (outside node_modules).
   //
@@ -152,7 +154,11 @@ test("locked-5: committed test command is faithful to what the generator produce
   //     the committed command would silently skip it (a faithfulness regression). This test
   //     catches that regression deterministically.
   const GENERIC_GLOB = "**/*.test.mjs";
-  const COMMITTED_GLOBS = ["core/**/*.test.mjs", "modules/**/*.test.mjs"];
+  const COMMITTED_GLOBS = [
+    "core/**/*.test.mjs",
+    "modules/**/*.test.mjs",
+    "scripts/**/*.test.mjs",
+  ];
 
   const genericFiles = globSync(GENERIC_GLOB, {
     cwd: REPO_ROOT,

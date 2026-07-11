@@ -4,21 +4,24 @@
   "description": "One-command vendoring of the Claude Harness delivery pipeline into a project's .claude/",
   "type": "module",
   "bin": {
-    "claude-harness": "core/skills/initializing-projects/references/cli.mjs"
+    "claude-harness": "core/claude-code/skills/initializing-projects/references/cli.mjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "files": [
-    "core/skills/initializing-projects/references/cli.mjs",
-    "core/skills/initializing-projects/references/setup-vps.mjs",
-    "core/skills/initializing-projects/references/vendor-core.mjs"
+    "core/claude-code/skills/initializing-projects/references/cli.mjs",
+    "core/claude-code/skills/initializing-projects/references/setup-vps.mjs",
+    "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
+    "core/opencode",
+    "core/shared",
+    "core/claude-code"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test \"core/**/*.test.mjs\" \"modules/**/*.test.mjs\""
+    "test": "node --test \"core/**/*.test.mjs\" \"modules/**/*.test.mjs\" \"scripts/**/*.test.mjs\""
   },
   "repository": {
     "type": "git",
