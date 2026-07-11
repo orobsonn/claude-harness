@@ -275,6 +275,40 @@ Para o desenho e as decisões: [`docs/design.md`](docs/design.md) · [`docs/clou
 
 ---
 
+## OpenCode (dual-runtime) e cutover global
+
+O harness tem layout dual-runtime em `core/`:
+
+| Pasta | Papel |
+|---|---|
+| `core/shared/` | libs puras (nunca throw) — paths, validate-plan, merge, capture-oracle, … |
+| `core/claude-code/` | shell Claude Code (agents/skills/hooks) |
+| `core/opencode/` | shell OpenCode (agents/skills/plugin/tools + `harness.routing.json`) |
+| `core/vps/` | motor headless VPS (fase 2 OC driver **fora** do DoD fase 1) |
+
+**Vendor OpenCode num projeto:**
+
+```bash
+npx @orobsonn/claude-harness init --target opencode
+```
+
+Isso cria `.opencode/` no projeto (plugins com paths **relativos**). O harness global em `~/.config/opencode` **não** deve carregar agents/plugins de delivery depois do cutover — senão o projeto não fica isolado.
+
+**Cutover do harness global (T10, depois da parity T11):**
+
+```bash
+./scripts/cutover-opencode-global.sh                 # preflight only (nunca apaga)
+./scripts/cutover-opencode-global.sh --apply --i-confirm-cutover   # backup + remove harness
+```
+
+Runbook completo: [`scripts/cutover-opencode-global.md`](scripts/cutover-opencode-global.md). Mantém auth de provider, MCP e skills pessoais; remove só o harness. Rollback a partir de `~/.config/opencode/.backup-cutover-<stamp>/`.
+
+**Release minor (pós DoD fase 1):** após TRACK fase 1 completo, publicar **minor** via skill `releasing-versions` / release-please. Fase 2 (T12–T14) não entra nesse release.
+
+Spec pack: [`docs/specs/oc-port/`](docs/specs/oc-port/).
+
+---
+
 ## Status
 
-Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais.
+Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado; motor VPS OC é fase 2.
