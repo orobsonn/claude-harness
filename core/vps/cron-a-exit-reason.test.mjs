@@ -378,3 +378,45 @@ test("runCronAExitCli: drives the REAL orchestration — captureExitReason is in
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("runCronAExitCli: when deps.cronAExit throws (e.g. a gh relabel failure), the raw log at logPath is still unlinked — captureExitReason's raw-log unlink runs in a finally regardless of the cronAExit throw", async () => {
+  const dir = makeTempDir();
+  try {
+    const bodyFile = join(dir, "issue-42-body.txt");
+    const envFile = join(dir, "issue-42-env.env");
+    const logPath = join(dir, "issue-42-output.log");
+    writeFileSync(bodyFile, "the issue body", "utf8");
+    writeFileSync(envFile, "SOME_SECRET=abc123", "utf8");
+    writeLinesLog(logPath, 15);
+    const argv = ["42", "/fake/worktree", bodyFile, envFile, logPath, "1"];
+
+    const deps = {
+      cronAExit: () => {
+        throw new Error("relabel failed");
+      },
+      notifyExit: async () => {},
+      gh: () => ({ ok: true }),
+      runLock: { release: () => {} },
+      counter: { read: () => 0, reset: () => {}, increment: () => {} },
+      prExists: () => false,
+      blockingFinding: () => null,
+      acquireTs: 1000,
+      retryCeilingK: 2,
+      now: () => 1700000000,
+    };
+
+    try {
+      await runCronAExitCli(argv, deps);
+    } catch {
+      // expected: the cronAExit error propagates after the finally runs captureExitReason
+    }
+
+    assert.equal(
+      existsSync(logPath),
+      false,
+      "the raw (unscrubbed) log must be unlinked even when cronAExit throws before captureExitReason would otherwise run"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
