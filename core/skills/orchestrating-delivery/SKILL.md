@@ -132,7 +132,7 @@ is re-reviewed at its new sha (#ac-1.4). Gate on the env var, not prose. **Full 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does and ask the operator to confirm. Do not show code or schema.
 **HEADLESS:** no operator to confirm. The upfront adversary attack has already run; if it surfaced no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
 
-Spec-adversary checkpoint: `node .claude/hooks/mark.mjs spec-adversaried --verdict SHIP|BLOCK --findings <n>`.
+Checkpoint: `node .claude/hooks/mark.mjs spec-adversaried --feature-id <feature-id> --verdict SHIP|BLOCK --findings <n>`
 
 5. **Mark brainstorm complete** (final Phase 0 action before dispatch to plan): run the brainstorm-done marker to set the gate's `brainstormed` flag.
    **INTERACTIVE:** execute `node .claude/hooks/mark.mjs brainstorm-done --feature-id <feature-id>` where `<feature-id>` matches the kebab-case identifier chosen in triaging-requests. The hook stamps `brainstormed=true` into `.claude/plans/.state/<session_id>/gate-state.json` (PostToolUse recognition).
