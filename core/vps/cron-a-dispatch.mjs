@@ -66,6 +66,7 @@ import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { hasEnoughFreeMemory, defaultFreeMem, DEFAULT_MEM_GUARD_BYTES } from "./mem-guard.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -581,6 +582,8 @@ export async function dispatch(issue, opts) {
     obs,
     createForumTopic,
     closeForumTopic,
+    freeMem,
+    memGuardBytes,
   } = opts;
   const issueNumber = issue.number;
   const branch = `harness/${issueNumber}`;
@@ -593,6 +596,23 @@ export async function dispatch(issue, opts) {
   const probeBranchExists = branchExists ?? ((b) => defaultBranchExists(b, { cwd: projectRoot, env }));
   const probeHasOpenPr = hasOpenPr ?? ((b) => defaultHasOpenPr(b, { cwd: projectRoot, env }));
   const probePrHeadSha = prHeadSha ?? ((b) => defaultPrHeadSha(b, { cwd: projectRoot, env }));
+
+  // Memory guard: never spawn a new heavy session (worktree add + tmux + claude -p) under memory
+  // pressure on the shared VPS. This runs BEFORE any reversible side-effect (no obs topic minted
+  // yet, no env-file written) and before the first heavy spawn, so an insufficient-memory abort
+  // goes through the SAME spawn-failure recovery path (release the lock, relabel harness:ready) —
+  // no retry is charged and nothing leaks. obsContext is still null here (no topic exists yet).
+  const readFreeMem = freeMem ?? defaultFreeMem;
+  const thresholdBytes = memGuardBytes ?? DEFAULT_MEM_GUARD_BYTES;
+  let freeBytes = null;
+  try {
+    freeBytes = readFreeMem();
+  } catch {
+    freeBytes = null; // fail-open: a throwing reader must never stall dispatch
+  }
+  if (!hasEnoughFreeMemory({ freeBytes, thresholdBytes })) {
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext: null, closeForumTopic });
+  }
 
   // Pre-spawn observability setup (task-4): createRun + createForumTopic + append 'picked' all
   // complete BEFORE the tmux spawn. Fail-open — observability never blocks a dispatch; a null
