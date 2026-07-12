@@ -252,6 +252,51 @@ test("dispatch: the composed normal command caps the raw output log's write side
   }
 });
 
+test("dispatch: stdin pipe targets the runner (not ulimit) so the prompt reaches claude/opencode", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    // Claude path (default)
+    {
+      const fake = makeFakeSpawn();
+      await dispatch({ number: 42, body: "hello" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+      const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+      assert.ok(sessionCommand);
+      assert.match(
+        sessionCommand,
+        /\}\s*\|\s*claude -p/,
+        "the body/trigger pipe must feed claude -p directly (not ulimit)"
+      );
+      assert.equal(
+        /\}\s*\|\s*ulimit/.test(sessionCommand),
+        false,
+        "ulimit must never sit between the pipe and the runner"
+      );
+    }
+    // OpenCode path — same invariant; empty stdin was the production failure mode
+    {
+      const fake = makeFakeSpawn();
+      await dispatch(
+        { number: 43, body: "hello oc" },
+        { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }), runtime: "opencode" }
+      );
+      const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+      assert.ok(sessionCommand);
+      assert.match(
+        sessionCommand,
+        /\}\s*\|\s*opencode run/,
+        "the body/trigger pipe must feed opencode run directly (not ulimit)"
+      );
+      assert.equal(
+        /\}\s*\|\s*ulimit/.test(sessionCommand),
+        false,
+        "ulimit must never sit between the pipe and the OC runner"
+      );
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("dispatch: an injected precreateLog seam that THROWS falls back to the legacy command with no ulimit -f cap (nothing to cap without a redirect)", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
