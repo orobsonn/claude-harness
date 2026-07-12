@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { applyGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
+import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
 /** @type {number} stale lock age (resolved_judgments.lock_stale_seconds) */
 export const LOCK_STALE_MS = 30_000;
@@ -263,7 +263,7 @@ export function writeGateStateAtomic(statePath, state) {
 }
 
 /**
- * @description Under ownership-token lock: read → applyGateStatePatch → atomic write → release.
+ * @description Under ownership-token lock: read → mergeGateStatePatch → atomic write → release.
  * @param {string} statePath
  * @param {Record<string, unknown>} patch
  * @param {{ timeoutMs?: number, staleMs?: number, now?: () => number, sleepMs?: (ms: number) => void }} [opts]
@@ -277,7 +277,7 @@ export function mergeGateState(statePath, patch, opts = {}) {
   const token = acquired.token;
   try {
     const prev = readGateState(statePath);
-    const applied = applyGateStatePatch(prev, patch);
+    const applied = mergeGateStatePatch(prev, patch);
     if (!applied.ok) {
       return { ok: false, decision: "deny", reason: applied.reason ?? "patch-failed" };
     }

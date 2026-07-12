@@ -21,7 +21,7 @@ import {
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
 import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
 import { decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
-import { applyGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
+import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -376,7 +376,7 @@ test("t5-loop-inc: plan-review and adversary loop counters increment in disk gat
     // Increment plan-review
     const r1 = withGateStateLock(statePath, (prev) => {
       const step = nextLoopCount(prev, "plan-reviewer");
-      const applied = applyGateStatePatch(prev, { [step.key]: step.next });
+      const applied = mergeGateStatePatch(prev, { [step.key]: step.next });
       return applied.state;
     });
     assert.equal(r1.ok, true);
@@ -385,7 +385,7 @@ test("t5-loop-inc: plan-review and adversary loop counters increment in disk gat
     // Increment adversary
     const r2 = withGateStateLock(statePath, (prev) => {
       const step = nextLoopCount(prev, "adversary");
-      const applied = applyGateStatePatch(prev, { [step.key]: step.next });
+      const applied = mergeGateStatePatch(prev, { [step.key]: step.next });
       return applied.state;
     });
     assert.equal(r2.ok, true);
