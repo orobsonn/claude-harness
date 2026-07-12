@@ -4,13 +4,29 @@
  * - bash/shell: decideBashForge then decideBashDelivery (gate-state from disk)
  * - task: decideEntryTask then enforceDualFromDiskOrThrow for executor/sniper
  * Deny throws [entry-gate]. Fail-closed on unreadable gate-state for delivery.
+ * Delivery bash injects gitState + isAncestorFn + listHandRecordsForFeatureFn;
+ * non-delivery never probes git/list/ancestor.
  * Load shape matches loop-guard: dynamic import of pure mjs inside factory
  * (static import of mjs breaks OC plugin loader — "export is not a function").
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
+import { execFileSync } from "node:child_process"
 
 const PREFIX = "[entry-gate]"
+
+/**
+ * @description Optional injectable seams for tests (git/list/ancestor).
+ */
+export type EntryGateDeps = {
+  gitStateFn?: () => {
+    branch?: string | null
+    commitsAhead?: number | null
+    defaultBranch?: string | null
+  } | null
+  isAncestorFn?: (sha: string) => boolean | null
+  listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
+}
 
 /**
  * @description Whether tool name is bash or shell (OC variants).
@@ -64,10 +80,62 @@ function extractFeatureTaskIds(toolArgs: unknown): {
 }
 
 /**
+ * @description Real git runner for computeGitState (trim stdout).
+ */
+function realGitRunner(args: string[]): string {
+  return execFileSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim()
+}
+
+/**
+ * @description Fail-open git state probe — null on any error.
+ */
+function defaultGitState(
+  computeGitState: (git: (args: string[]) => string) => {
+    branch: string | null
+    commitsAhead: number | null
+    defaultBranch: string | null
+  },
+): {
+  branch: string | null
+  commitsAhead: number | null
+  defaultBranch: string | null
+} | null {
+  try {
+    return computeGitState(realGitRunner)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * @description git merge-base --is-ancestor sha HEAD → true / false / null.
+ */
+function defaultIsAncestor(sha: string): boolean | null {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+    return true
+  } catch (err: unknown) {
+    const status =
+      err && typeof err === "object" && "status" in err
+        ? (err as { status?: unknown }).status
+        : undefined
+    if (status === 1) return false
+    return null
+  }
+}
+
+/**
  * @description Builds entry-gate hooks (async load of pure decide mjs).
+ * Optional deps override git/list/ancestor seams for tests.
  */
 export async function createEntryGateHooks(
   projectRoot: string,
+  deps: EntryGateDeps = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
   const {
     enforceDualFromDiskOrThrow,
@@ -78,12 +146,22 @@ export async function createEntryGateHooks(
   const {
     decideBashForge,
     decideBashDelivery,
+    isDeliveryCommand,
     throwIfDenied: throwIfBashDenied,
   } = await import("./lib/bash-decide.mjs")
   const {
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
   } = await import("./lib/entry-decide.mjs")
+  const { computeGitState } = await import("../../shared/lib/git-state.mjs")
+  const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
+
+  const gitStateFn =
+    deps.gitStateFn ?? (() => defaultGitState(computeGitState))
+  const isAncestorFn = deps.isAncestorFn ?? defaultIsAncestor
+  const listHandRecordsForFeatureFn =
+    deps.listHandRecordsForFeatureFn ??
+    ((featureId: string) => listHandRecordsForFeature(projectRoot, featureId))
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -99,12 +177,28 @@ export async function createEntryGateHooks(
             ? sessionId
             : undefined
         const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+        const gateState = loaded.ok ? loaded.state : {}
+
+        /** Delivery-only rails: never probe git/list/ancestor for non-delivery bash. */
+        const deliveryExtras: {
+          gitState?: ReturnType<typeof gitStateFn>
+          isAncestorFn?: typeof isAncestorFn
+          listHandRecordsForFeatureFn?: typeof listHandRecordsForFeatureFn
+        } = {}
+        if (isDeliveryCommand(command)) {
+          deliveryExtras.gitState = gitStateFn()
+          deliveryExtras.isAncestorFn = isAncestorFn
+          deliveryExtras.listHandRecordsForFeatureFn =
+            listHandRecordsForFeatureFn
+        }
+
         throwIfBashDenied(
           decideBashDelivery({
             command,
-            gateState: loaded.ok ? loaded.state : {},
+            gateState,
             sessionId: sid ?? null,
             gateStateLoadOk: loaded.ok,
+            ...deliveryExtras,
           }),
         )
         return

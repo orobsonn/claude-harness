@@ -60,6 +60,15 @@ import {
   matchesAbsolution,
   absolutionPrefix,
 } from "./lib/gate-lib.mjs";
+import {
+  classifyRegatePending,
+  serializeRawRegatePending,
+  corruptRegatePendingReason,
+} from "../../shared/lib/regate-classify.mjs";
+import { computeGitState } from "../../shared/lib/git-state.mjs";
+import { checkRealFileCaptureRail as sharedCheckRealFileCaptureRail } from "../../shared/lib/real-file-capture-rail.mjs";
+
+export { classifyRegatePending, computeGitState };
 
 /**
  * @description Outcome statuses (from dispatch-hand.mjs evaluateRun) that authorize a Claude hand
@@ -72,56 +81,10 @@ import {
 const AUTHORIZING_OUTCOMES = new Set(["FAILED", "NOT_DONE"]);
 
 /**
- * @description Classifies a gate-state's regate_pending as ABSENT/CORRUPT. Pure single source of
- * truth shared by BOTH gate-evaluation read sites (decideBash delivery-bash-gate + the shipper
- * Agent gate) so the two can never drift on what counts as "corrupt". ABSENT (regate_pending ===
- * undefined — the normal case AND the infra-error {} case, since readGateState returns {} on any
- * read failure) → { corrupt:false, pending:[] } → fail OPEN, unchanged. CORRUPT (present but not
- * an array — null/string/number/object) → { corrupt:true, raw } → fail CLOSED at the call site.
- * Mirrors the existing checkRealFileCaptureRail shared-helper pattern. Does NOT touch
- * regate_passed handling — that stays an independent array-coercion at the call sites.
- * @param {object} [gateState]
- * @returns {{ corrupt: false, pending: string[] } | { corrupt: true, raw: unknown }}
- */
-export function classifyRegatePending(gateState) {
-  const raw = gateState?.regate_pending;
-  if (raw === undefined) return { corrupt: false, pending: [] };
-  if (Array.isArray(raw)) return { corrupt: false, pending: raw };
-  return { corrupt: true, raw };
-}
-
-/**
- * @description Serializes a corrupt regate_pending raw value for the deny reason / stderr log,
- * NEVER throwing: JSON.stringify first (catches circular/huge/BigInt), then String(raw) (catches
- * a throwing toString), then a generic label. Capped at 200 chars BEFORE the caller assembles the
- * reason, so a 5000-char blob (or worse) can never produce an unbounded deny reason — and a throw
- * here can never bubble to the outer fail-open branch (which would reopen the very bug this closes).
- * @param {unknown} raw
- * @returns {string}
- */
-function serializeRawRegatePending(raw) {
-  let text;
-  try {
-    text = JSON.stringify(raw);
-  } catch {
-    try {
-      text = String(raw);
-    } catch {
-      text = "<unserializable regate_pending>";
-    }
-  }
-  if (text.length > 200) text = text.slice(0, 200);
-  return text;
-}
-
-/**
  * @description Builds the deliberate-DENY verdict for a CORRUPT regate_pending and logs the raw
- * value to stderr (stdout stays reserved for the decision JSON). Shared by both read sites so the
- * corrupt-case reason can never drift. The reason carries the stable greppable token
- * "gate-state corrupted", the truncated (≤200 char) raw value, and a REPAIR/DELETE instruction
- * (regate_pending must be a JSON array, then re-stamp the pending re-gate) — deliberately DISTINCT
- * from the normal unmatched-regate deny: it does NOT tell the operator to "stamp regate-passed",
- * which is a no-op on a corrupt non-array value.
+ * value to stderr (stdout stays reserved for the decision JSON). Reason text comes from shared
+ * corruptRegatePendingReason (1:1 with OC). classifyRegatePending is re-exported from
+ * core/shared/lib/regate-classify.mjs.
  * @param {unknown} raw
  * @returns {{ allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
@@ -136,10 +99,7 @@ function corruptRegatePendingDeny(raw) {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason:
-        "[entry-gate] Blocked: gate-state corrupted — regate_pending is not a JSON array " +
-        `(raw value: ${truncated}). Repair or delete gate-state.json (regate_pending must be a ` +
-        "JSON array), then re-stamp the pending re-gate before proceeding.",
+      permissionDecisionReason: corruptRegatePendingReason(raw),
     },
   };
 }
@@ -214,68 +174,26 @@ function defaultIsAncestor(sha) {
 }
 
 /**
- * @description Runs the real-file capture rail for one feature: lists every hand-record via
- * listHandRecordsForFeatureFn, scopes to records whose freezeCommitSha is an ancestor of (or
- * equal to) HEAD, and returns a deny result for the first violation found — a scope/frozen
- * violation (hard-stop regardless of capturedVerifiedAt), or a DONE outcome with no
- * capturedVerifiedAt. Returns null when nothing blocks. Shared by both call sites (the
- * mandatory delivery-command gate and the best-effort freeze-commit early trigger) so the two
- * can never drift out of sync on what counts as "unresolved".
+ * @description CC adapter over shared checkRealFileCaptureRail (option A dual-shape + freeze-deny).
+ * Maps shared { decision:"deny", reason } → CC hookSpecificOutput deny shape. Null when clear.
  * @param {string} featureId
  * @param {{ listHandRecordsForFeatureFn: function, isAncestorFn: function }} deps
  * @returns {null | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
 function checkRealFileCaptureRail(featureId, { listHandRecordsForFeatureFn, isAncestorFn }) {
-  let records = [];
-  try {
-    records = listHandRecordsForFeatureFn(featureId);
-  } catch {
-    records = [];
-  }
-  for (const { taskId, record } of records) {
-    if (!record || typeof record !== "object") continue;
-    const sha = record.freezeCommitSha;
-    if (typeof sha !== "string" || sha.length === 0) continue;
-    let ancestor = null;
-    try {
-      ancestor = isAncestorFn(sha);
-    } catch {
-      ancestor = null;
-    }
-    if (ancestor !== true) continue; // undetermined or not-an-ancestor → skip (fail open on this record)
-    const outcome = record.outcome ?? {};
-    const scopeViolations = Array.isArray(outcome.scopeViolations) ? outcome.scopeViolations : [];
-    const frozenViolations = Array.isArray(outcome.frozenViolations) ? outcome.frozenViolations : [];
-    if (scopeViolations.length > 0 || frozenViolations.length > 0) {
-      return {
-        allow: false,
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason:
-            `[entry-gate] Blocked: the independent capture for ${featureId}/${taskId} found a ` +
-            `SCOPE/FROZEN-MANIFEST violation (${[...scopeViolations, ...frozenViolations].join(", ")}). ` +
-            "This requires a human decision, not a re-run or a capture-verified stamp — resolve " +
-            "the out-of-scope write (revert it or fold it into scope_paths deliberately) before proceeding.",
-        },
-      };
-    }
-    if (outcome.status === "DONE" && typeof record.capturedVerifiedAt !== "string") {
-      return {
-        allow: false,
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason:
-            `[entry-gate] Blocked: the on-disk run-record for ${featureId}/${taskId} shows a ` +
-            "completed dispatch with no independent capture stamped on it yet " +
-            "(capturedVerifiedAt missing), regardless of what hand_finished/capture_verified show. " +
-            "Run capture-hand.mjs and stamp capture-verified before proceeding.",
-        },
-      };
-    }
-  }
-  return null;
+  const shared = sharedCheckRealFileCaptureRail(featureId, {
+    listHandRecordsForFeatureFn,
+    isAncestorFn,
+  });
+  if (shared === null) return null;
+  return {
+    allow: false,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: shared.reason,
+    },
+  };
 }
 
 /**
@@ -382,67 +300,8 @@ function defaultReadDescriptor(descriptorPath) {
 // ---------------------------------------------------------------------------
 
 /**
- * @description Computes git state (branch name and commits-ahead count) using an injected
- * git runner. The merge base is always resolved from origin's default branch — never from
- * the feature branch's own upstream (`@{u}`), which equals HEAD after `git push` and would
- * incorrectly report 0 commits ahead, blocking a legitimate delivery.
- *
- * Base resolution order (first that succeeds wins):
- *   1. `git symbolic-ref refs/remotes/origin/HEAD` → strip `refs/remotes/` prefix (e.g. `origin/main`)
- *   2. `git rev-parse --verify --quiet origin/main` (common default)
- *   3. `git rev-parse --verify --quiet origin/master` (legacy default)
- *   4. base = null → commitsAhead = null, defaultBranch = null (fail-open; consumer skips the ahead check)
- *
- * Limitation: `defaultBranch` is reliable only when `origin/HEAD` is set locally (only `git clone` sets it).
- * When unset, fallbacks match by mere ref existence — in a repo whose real default is not `main`/`master`
- * but stale copies exist, `defaultBranch` mis-derives and the protected-branch floor may under-deny
- * delivery from the true default. Fixing via `git ls-remote --symref origin HEAD` adds a network call — deferred.
- *
- * @param {(args: string[]) => string} git - Runner: takes args array, returns trimmed stdout, throws on git failure
- * @returns {{ branch: string|null, commitsAhead: number|null, defaultBranch: string|null }}
- *   branch - current HEAD branch name, or null when detached
- *   commitsAhead - number of commits HEAD is ahead of origin default, or null when base is unresolvable
- *   defaultBranch - bare name of origin's default branch (e.g. "main", "develop"), or null when base is unresolvable
- */
-export function computeGitState(git) {
-  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
-
-  let base = null;
-  try {
-    const headRef = git(["symbolic-ref", "refs/remotes/origin/HEAD"]);
-    base = headRef.replace(/^refs\/remotes\//, "");
-  } catch {
-    // origin/HEAD not set (common — only `git clone` sets it); try known defaults in order
-    for (const fallback of ["origin/main", "origin/master"]) {
-      try {
-        git(["rev-parse", "--verify", "--quiet", fallback]);
-        base = fallback;
-        break;
-      } catch {
-        // continue to next fallback
-      }
-    }
-  }
-
-  // Derive the bare default-branch name by stripping the remote prefix (e.g. "origin/develop" → "develop").
-  // Handles any remote name, not just "origin". Null when base is unresolvable.
-  const defaultBranch = base ? base.replace(/^[^/]+\//, "") : null;
-
-  let commitsAhead = null;
-  if (base !== null) {
-    try {
-      const count = Number.parseInt(git(["rev-list", "--count", `${base}..HEAD`]), 10);
-      commitsAhead = Number.isNaN(count) ? null : count;
-    } catch {
-      commitsAhead = null;
-    }
-  }
-
-  return { branch: branch || null, commitsAhead, defaultBranch };
-}
-
-/**
  * Probes the working-tree git state for the branch/commit delivery rail.
+ * computeGitState is re-exported from core/shared/lib/git-state.mjs.
  * Returns { branch, commitsAhead, defaultBranch } where branch is the current branch name
  * (null when detached/unknown), commitsAhead is the count of commits HEAD is ahead of the
  * origin default branch (resolved via origin/HEAD, then origin/main, then origin/master;
