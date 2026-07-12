@@ -6,6 +6,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   formatEvent,
@@ -18,8 +21,11 @@ import {
   createForumTopic,
   closeForumTopic,
   isCriticalEvent,
+  drainTelegramOutbox,
+  isCuratedFeedEvent,
 } from "./notify-telegram.mjs";
 import * as notifyTelegram from "./notify-telegram.mjs";
+import { createRun, updateMeta, appendEvent } from "./obs-outbox.mjs";
 
 const VALID_CONFIG = { token: "SECRET123:abc", chatId: -1003044689525, threadId: 613 };
 
@@ -554,4 +560,96 @@ test("#ac-1.2 createForumTopic: surfaces the chatId it created the topic in alon
     { config: { token: "t", chatId: -100123 }, fetch: fetchImpl2, log: () => {} }
   );
   assert.deepEqual(failure, { ok: false }, "no chatId key, no threadId key, no extra keys on failure");
+});
+
+// ---------------------------------------------------------------------------
+// spec-adversaried checkpoint render — the operator-facing 'Spec atacada' checkpoint. The event
+// is seeded DIRECTLY into a fresh run's outbox (appendEvent) so these 4 tests exercise ONLY the
+// render/curation contract (formatting + isCuratedFeedEvent membership) — the produced->consumed
+// wiring across mark.mjs/stamp-triage.mjs is covered separately by the e2e test in
+// spec-adversaried-e2e.test.mjs. (module does not yet export isCuratedFeedEvent, and
+// 'spec-adversaried' is not yet in CURATED_FEED_TYPES/EMOJI/CHECKPOINT_LABELS/cosmeticBodyLines —
+// RED until an executor implements the checkpoint.)
+// ---------------------------------------------------------------------------
+
+test("#spec-adversaried-1 drainTelegramOutbox: a SHIP verdict with findings:2 renders the emoji/label/count/verdict", async () => {
+  const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-outbox-"));
+  const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-worktree-"));
+  try {
+    const metaPath = createRun({ issueNumber: 201, project: "proj", worktreePath }, obsStateDir);
+    updateMeta(metaPath, { threadId: 555 });
+    appendEvent(metaPath, { type: "spec-adversaried", verdict: "SHIP", findings: 2 });
+
+    const sendCalls = [];
+    const fakeSend = async (message) => {
+      sendCalls.push(message);
+      return { sent: true };
+    };
+
+    await drainTelegramOutbox({ stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 }, { send: fakeSend });
+
+    const matching = sendCalls.filter((call) => call.event?.type === "spec-adversaried");
+    const text = matching.map((call) => call.text).join(" ");
+    assert.match(text, /Spec atacada/, "the checkpoint must render the 'Spec atacada' label");
+    assert.match(text, /2 achados/, "the checkpoint must count the findings as '2 achados'");
+    assert.match(text, /aprovado/, "a SHIP verdict must render as 'aprovado'");
+  } finally {
+    fs.rmSync(obsStateDir, { recursive: true, force: true });
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  }
+});
+
+test("#spec-adversaried-2 drainTelegramOutbox: findings:1 pluralizes as '1 achado', never '1 achados'", async () => {
+  const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-outbox-"));
+  const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-worktree-"));
+  try {
+    const metaPath = createRun({ issueNumber: 202, project: "proj", worktreePath }, obsStateDir);
+    updateMeta(metaPath, { threadId: 555 });
+    appendEvent(metaPath, { type: "spec-adversaried", verdict: "SHIP", findings: 1 });
+
+    const sendCalls = [];
+    const fakeSend = async (message) => {
+      sendCalls.push(message);
+      return { sent: true };
+    };
+
+    await drainTelegramOutbox({ stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 }, { send: fakeSend });
+
+    const matching = sendCalls.filter((call) => call.event?.type === "spec-adversaried");
+    const text = matching.map((call) => call.text).join(" ");
+    assert.match(text, /\b1 achado\b/, "a single finding must be the singular '1 achado'");
+    assert.doesNotMatch(text, /1 achados/, "a single finding must never pluralize as '1 achados'");
+  } finally {
+    fs.rmSync(obsStateDir, { recursive: true, force: true });
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  }
+});
+
+test("#spec-adversaried-3 drainTelegramOutbox: a BLOCK verdict renders as 'bloqueado'", async () => {
+  const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-outbox-"));
+  const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "notify-telegram-worktree-"));
+  try {
+    const metaPath = createRun({ issueNumber: 203, project: "proj", worktreePath }, obsStateDir);
+    updateMeta(metaPath, { threadId: 555 });
+    appendEvent(metaPath, { type: "spec-adversaried", verdict: "BLOCK", findings: 2 });
+
+    const sendCalls = [];
+    const fakeSend = async (message) => {
+      sendCalls.push(message);
+      return { sent: true };
+    };
+
+    await drainTelegramOutbox({ stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 }, { send: fakeSend });
+
+    const matching = sendCalls.filter((call) => call.event?.type === "spec-adversaried");
+    const text = matching.map((call) => call.text).join(" ");
+    assert.match(text, /bloqueado/, "a BLOCK verdict must render as 'bloqueado'");
+  } finally {
+    fs.rmSync(obsStateDir, { recursive: true, force: true });
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  }
+});
+
+test("#spec-adversaried-4 isCuratedFeedEvent: a spec-adversaried event reaches the curated Telegram feed", () => {
+  assert.equal(isCuratedFeedEvent({ type: "spec-adversaried" }), true);
 });
