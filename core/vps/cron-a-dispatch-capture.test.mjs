@@ -274,12 +274,23 @@ test("dispatch: stdin pipe targets the runner (not ulimit) so the prompt reaches
     }
     // OpenCode path — same invariant; empty stdin was the production failure mode
     {
-      const fake = makeFakeSpawn();
+      // Custom spawn that REALLY materializes `git worktree add` as a real directory
+      // (mkdirSync) so seedOpencodeRootConfig's writeFileSync into the worktree has a real
+      // destination to land in, mirroring cron-a-dispatch.test.mjs's "seeds opencode.json
+      // into the worktree on the real dispatch path" fixture.
+      const calls = [];
+      const spawn = (command, args = [], spawnOpts = {}) => {
+        calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
+        if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+          mkdirSync(args[2], { recursive: true });
+        }
+        return { ok: true };
+      };
       await dispatch(
         { number: 43, body: "hello oc" },
-        { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }), runtime: "opencode" }
+        { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }), runtime: "opencode" }
       );
-      const sessionCommand = sessionCommandOf(findTmuxCall(fake.calls));
+      const sessionCommand = sessionCommandOf(findTmuxCall(calls));
       assert.ok(sessionCommand);
       assert.match(
         sessionCommand,
