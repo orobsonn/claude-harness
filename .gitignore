@@ -3,7 +3,9 @@
 .claude/plans/
 .claude/plans/current.md
 .claude/plans/*.local.md
-.opencode/plans/
+
+# OpenCode local vendor — mirrors .claude/: source of truth is core/opencode/, never committed
+.opencode/
 
 # Secrets — Ollama auth token (dispatch-hand) and any env file, never commit
 .dev.vars
