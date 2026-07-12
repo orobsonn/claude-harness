@@ -741,6 +741,7 @@ if (isMain) {
       sessionId,
       featureId,
       taskId,
+      model: typeof args.model === "string" ? args.model : undefined,
     });
   } else if (action === "capture-verified") {
     result = stampCaptureVerified({

@@ -3,6 +3,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   eventForPipelineType,
   eventForPlanPath,
@@ -14,6 +17,9 @@ import {
   obsAppend,
   resolveObsMetaPath,
   isEyeRole,
+  isFullExecutionPlan,
+  dedupeByType,
+  resolveHookArgs,
 } from "./obs-emit.mjs";
 
 test("eventForPipelineType normalizes modes", () => {
@@ -26,12 +32,28 @@ test("eventForPipelineType normalizes modes", () => {
   assert.equal(eventForPipelineType(""), null);
 });
 
-test("eventForPlanPath: execution-plan vs spec", () => {
+test("eventForPlanPath: anchored under .opencode/plans; rejects .state and bare basename", () => {
   assert.deepEqual(eventForPlanPath(".opencode/plans/x/execution-plan.json"), {
     type: "plan-created",
   });
   assert.deepEqual(eventForPlanPath("/w/.opencode/plans/f/spec.md"), { type: "spec-created" });
+  assert.equal(eventForPlanPath("execution-plan.json"), null);
+  assert.equal(eventForPlanPath(".opencode/plans/.state/s/execution-plan.json"), null);
   assert.equal(eventForPlanPath("README.md"), null);
+});
+
+test("isFullExecutionPlan: stub empty tasks vs full", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-full-"));
+  try {
+    const stub = join(dir, "stub.json");
+    const full = join(dir, "full.json");
+    writeFileSync(stub, JSON.stringify({ kind: "stub", tasks: [] }));
+    writeFileSync(full, JSON.stringify({ tasks: [{ id: "t1" }] }));
+    assert.equal(isFullExecutionPlan(stub), false);
+    assert.equal(isFullExecutionPlan(full), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("eventForEyeRole: plan-reviewer verdict; adversary pre-plan", () => {
@@ -69,7 +91,15 @@ test("eventForHandRan / task-executing validation", () => {
   assert.equal(eventForTaskExecuting({ n: 0, total: 3 }), null);
 });
 
-test("obsAppend: no-op without meta; calls append when meta exists; fail-open on throw", () => {
+test("resolveHookArgs prefers output.args (OC contract)", () => {
+  assert.deepEqual(
+    resolveHookArgs({ args: { a: 1 } }, { args: { subagent_type: "adversary" } }),
+    { subagent_type: "adversary" },
+  );
+  assert.deepEqual(resolveHookArgs({ args: { filePath: "x" } }, null), { filePath: "x" });
+});
+
+test("obsAppend: no-op without meta; dedupe plan-created; fail-open on throw", () => {
   assert.equal(resolveObsMetaPath({}), null);
   assert.equal(obsAppend({ type: "x" }, { env: {} }), false);
   const calls = [];
@@ -85,7 +115,20 @@ test("obsAppend: no-op without meta; calls append when meta exists; fail-open on
     true,
   );
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].e.type, "pipeline-type");
+  // dedupe
+  assert.equal(
+    obsAppend(
+      { type: "plan-created" },
+      {
+        env: { HARNESS_OBSERVABILITY_RUN_PATH: "/tmp/obs-meta.json" },
+        metaExists: () => true,
+        readEvents: () => [{ type: "plan-created" }],
+        dedupe: dedupeByType,
+        appendEvent: (p, e) => calls.push({ p, e }),
+      },
+    ),
+    false,
+  );
   assert.equal(
     obsAppend(
       { type: "x" },
@@ -99,4 +142,6 @@ test("obsAppend: no-op without meta; calls append when meta exists; fail-open on
     ),
     false,
   );
+  assert.equal(dedupeByType([{ type: "plan-created" }], { type: "plan-created" }), true);
+  assert.equal(dedupeByType([], { type: "plan-created" }), false);
 });

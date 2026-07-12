@@ -188,6 +188,24 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
+**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` + classify `pipeline-type`). Additionally, the conductor MUST run these mark-gate CLI side-effects (idempotent / fail-open if env unset):
+
+```bash
+# After dual plan-reviewer merge (APPROVE|REVISE):
+node core/opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
+
+# After upfront / final spec adversary (SHIP|BLOCK, findings count):
+node core/opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findings 0
+
+# At the top of each task loop (1-based n / total from plan.tasks):
+node core/opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
+
+# Right after each hand (executor/sniper/test-author) returns:
+node core/opencode/plugin/lib/mark-gate.mjs hand-finished --session <sessionId> --feature <feature_id> --task <task_id> --model <model_id>
+```
+
+Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
+
 **Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `core/opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
 
 ```bash

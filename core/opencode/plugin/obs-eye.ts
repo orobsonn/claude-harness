@@ -1,7 +1,7 @@
 /**
  * @description Post-task observability for eye agents (OC port of CC obs-eye-append).
- * On tool.execute.after for task: if subagent is plan-reviewer/adversary/security/compliance,
- * append plan-reviewed / spec-adversary / eye. Fail-open always.
+ * tool.execute.after: args from output.args (OC contract). Full plan = non-empty tasks.
+ * Default export is the OC plugin load contract.
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import fs from "node:fs";
@@ -13,42 +13,34 @@ function isTaskTool(name: unknown): boolean {
   return n === "task" || n === "agent" || n.endsWith(".task") || n.endsWith(".agent");
 }
 
-/**
- * @description Extract subagent_type / agent from task tool args.
- */
-function extractRole(toolArgs: unknown): string {
-  if (toolArgs == null || typeof toolArgs !== "object" || Array.isArray(toolArgs)) return "";
-  const a = toolArgs as Record<string, unknown>;
+function extractRole(args: Record<string, unknown> | null): string {
+  if (!args) return "";
   const nested =
-    a.input != null && typeof a.input === "object" && !Array.isArray(a.input)
-      ? (a.input as Record<string, unknown>)
+    args.input != null && typeof args.input === "object" && !Array.isArray(args.input)
+      ? (args.input as Record<string, unknown>)
       : null;
   const raw =
-    a.subagent_type ??
-    a.subagentType ??
-    a.agent ??
-    a.role ??
+    args.subagent_type ??
+    args.subagentType ??
+    args.agent ??
+    args.role ??
     nested?.subagent_type ??
     nested?.agent;
   return typeof raw === "string" ? raw : "";
 }
 
 /**
- * @description Best-effort: does any execution-plan.json exist under .opencode/plans?
+ * @description True when a FULL execution plan exists (tasks.length > 0). Classify stub = false.
  */
-function planExists(cwd: string): boolean {
+function fullPlanExists(cwd: string, isFull: (p: string) => boolean): boolean {
   try {
     const plans = path.join(cwd, ".opencode", "plans");
     const entries = fs.readdirSync(plans, { withFileTypes: true });
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      const planPath = path.join(plans, e.name, "execution-plan.json");
       try {
-        if (fs.statSync(path.join(plans, e.name, "execution-plan.json")).isFile()) {
-          // stub vs full: treat presence as plan exists (post-classify stub counts as "plan phase started")
-          // For spec-adversary we want pre-plan: only count non-stub (has tasks)?
-          // CC checks any execution-plan.json. Keep same.
-          return true;
-        }
+        if (fs.statSync(planPath).isFile() && isFull(planPath)) return true;
       } catch {
         /* continue */
       }
@@ -59,14 +51,12 @@ function planExists(cwd: string): boolean {
   return false;
 }
 
-/**
- * @description Extract response text from after-hook payload.
- */
 function extractResponse(input: any, output: any): string {
   try {
     const r =
       output?.output ??
       output?.content ??
+      output?.result ??
       input?.tool_response ??
       input?.result ??
       "";
@@ -82,16 +72,19 @@ function extractResponse(input: any, output: any): string {
 export async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
-  const { eventForEyeRole, isEyeRole, obsAppend } = await import("./lib/obs-emit.mjs");
+  const { eventForEyeRole, isEyeRole, obsAppend, isFullExecutionPlan, resolveHookArgs } =
+    await import("./lib/obs-emit.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
         if (!isTaskTool(input?.tool)) return;
-        const role = extractRole(input?.args ?? input?.toolArgs);
+        const args = resolveHookArgs(input, output);
+        const role = extractRole(args);
         if (!isEyeRole(role)) return;
         const text = extractResponse(input, output);
-        const ev = eventForEyeRole(role, text, { planExists: planExists(cwd) });
+        const planExists = fullPlanExists(cwd, isFullExecutionPlan);
+        const ev = eventForEyeRole(role, text, { planExists });
         if (ev) obsAppend(ev);
       } catch {
         /* fail-open */
@@ -102,3 +95,6 @@ export async function createObsEyeHooks(
 
 export const obsEye: Plugin = async ({ directory }) =>
   createObsEyeHooks(typeof directory === "string" ? directory : undefined);
+
+/** @description OC load contract — default export required. */
+export default obsEye;

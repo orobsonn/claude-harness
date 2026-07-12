@@ -3,10 +3,11 @@
  * Producers: classify, mark-gate, obs-plan-write plugin, obs-eye plugin.
  * Event types must match core/vps/notify-telegram FEED_ALLOWLIST.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   appendEvent as defaultAppendEvent,
   metaExists as defaultMetaExists,
+  readEvents as defaultReadEvents,
 } from "../../../shared/lib/obs-append.mjs";
 
 const EYE_ROLES = new Set([
@@ -36,8 +37,10 @@ export function resolveObsMetaPath(env = process.env) {
  *   appendEvent?: typeof defaultAppendEvent,
  *   metaExists?: typeof defaultMetaExists,
  *   existsSync?: typeof existsSync,
+ *   dedupe?: (existing: object[], event: object) => boolean,
+ *   readEvents?: typeof defaultReadEvents,
  * }} [deps]
- * @returns {boolean} true if append attempted (meta present)
+ * @returns {boolean} true if append attempted
  */
 export function obsAppend(event, deps = {}) {
   try {
@@ -45,12 +48,29 @@ export function obsAppend(event, deps = {}) {
     const metaPath = resolveObsMetaPath(env);
     const exists = deps.metaExists ?? defaultMetaExists;
     if (!exists(metaPath, { existsSync: deps.existsSync ?? existsSync })) return false;
+    if (typeof deps.dedupe === "function") {
+      const read = deps.readEvents ?? defaultReadEvents;
+      const existing = read(metaPath);
+      if (deps.dedupe(existing, event)) return false;
+    }
     const append = deps.appendEvent ?? defaultAppendEvent;
     append(metaPath, event);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * @description Dedupe: skip if same type already present (plan-created / spec-created once per run).
+ * @param {object[]} existing
+ * @param {object} event
+ * @returns {boolean} true = skip append
+ */
+export function dedupeByType(existing, event) {
+  if (!event || typeof event.type !== "string") return false;
+  if (event.type !== "plan-created" && event.type !== "spec-created") return false;
+  return (existing || []).some((e) => e && e.type === event.type);
 }
 
 /**
@@ -73,23 +93,41 @@ export function eventForPipelineType(mode) {
 
 /**
  * @description Map a written path to plan-created / spec-created / null.
+ * Anchored under `.opencode/plans/` (not `.state`). Basename alone is insufficient.
  * @param {unknown} filePath
- * @returns {{ type: string, tasks?: number }|null}
+ * @returns {{ type: string }|null}
  */
 export function eventForPlanPath(filePath) {
   if (typeof filePath !== "string" || !filePath) return null;
   const norm = filePath.replace(/\\/g, "/");
-  const base = norm.split("/").pop() || "";
-  const lower = base.toLowerCase();
-  if (lower === "execution-plan.json") return { type: "plan-created" };
-  if (lower.includes("spec") && (lower.endsWith(".md") || lower.endsWith(".json"))) {
-    return { type: "spec-created" };
-  }
-  // path segment: .../specs/... or *spec*.md under plans
-  if (norm.includes("/plans/") && /spec/i.test(norm) && (lower.endsWith(".md") || lower.endsWith(".json"))) {
+  const segs = norm.split("/").filter(Boolean).map((s) => s.toLowerCase());
+  const oc = segs.indexOf(".opencode");
+  if (oc === -1 || segs[oc + 1] !== "plans") return null;
+  // reject .opencode/plans/.state/**
+  if (segs[oc + 2] === ".state") return null;
+  const base = segs[segs.length - 1] || "";
+  if (base === "execution-plan.json") return { type: "plan-created" };
+  if (base.includes("spec") && (base.endsWith(".md") || base.endsWith(".json"))) {
     return { type: "spec-created" };
   }
   return null;
+}
+
+/**
+ * @description True when path is a FULL plan (tasks array non-empty), not classify stub.
+ * @param {string} planFilePath
+ * @param {{ readFileSync?: typeof readFileSync }} [io]
+ * @returns {boolean}
+ */
+export function isFullExecutionPlan(planFilePath, io = {}) {
+  try {
+    const read = io.readFileSync ?? readFileSync;
+    const raw = read(planFilePath, "utf8");
+    const j = JSON.parse(raw);
+    return Array.isArray(j?.tasks) && j.tasks.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -102,7 +140,6 @@ export function bareEyeRole(raw) {
   let s = raw.trim();
   if (s.startsWith("@")) s = s.slice(1);
   if (s.includes("/")) s = s.split("/").pop() || s;
-  // strip .md
   s = s.replace(/\.md$/i, "");
   return s.toLowerCase();
 }
@@ -148,7 +185,6 @@ export function eventForEyeRole(roleRaw, responseText, opts = {}) {
       : { type: "plan-reviewed", role: baseRole };
   }
   if (baseRole === "adversary") {
-    // Pre-plan adversary → spec-adversary (CC naming in eye-append); drain also knows spec-adversaried
     if (opts.planExists === false) {
       return { type: "spec-adversary", role: baseRole };
     }
@@ -189,4 +225,26 @@ export function eventForTaskExecuting(args = {}) {
  */
 export function isEyeRole(roleRaw) {
   return EYE_ROLES.has(bareEyeRole(roleRaw));
+}
+
+/**
+ * @description Resolve tool args from OC hook payload (output.args is primary — entry-gate contract).
+ * @param {unknown} input
+ * @param {unknown} output
+ * @returns {Record<string, unknown>|null}
+ */
+export function resolveHookArgs(input, output) {
+  const o =
+    output != null && typeof output === "object" && !Array.isArray(output)
+      ? /** @type {Record<string, unknown>} */ (output)
+      : null;
+  const i =
+    input != null && typeof input === "object" && !Array.isArray(input)
+      ? /** @type {Record<string, unknown>} */ (input)
+      : null;
+  const raw = o?.args ?? i?.args ?? i?.toolArgs ?? o?.toolArgs ?? null;
+  if (raw != null && typeof raw === "object" && !Array.isArray(raw)) {
+    return /** @type {Record<string, unknown>} */ (raw);
+  }
+  return null;
 }
