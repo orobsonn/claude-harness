@@ -33,7 +33,23 @@ export async function createObsPlanWriteHooks(): Promise<
         const args = resolveHookArgs(input, output);
         const filePath = extractPath(args);
         const ev = eventForPlanPath(filePath);
-        if (ev) obsAppend(ev, { dedupe: dedupeByType });
+        if (!ev) return;
+        if (ev.type === "plan-created" && filePath) {
+          try {
+            const fs = await import("node:fs");
+            // Prefer on-disk file after write; fall back to args content if present.
+            let raw = "";
+            if (typeof args?.content === "string") raw = args.content;
+            else if (fs.existsSync(filePath)) raw = fs.readFileSync(filePath, "utf8");
+            if (raw) {
+              const j = JSON.parse(raw);
+              if (Array.isArray(j?.tasks)) (ev as { tasks?: number }).tasks = j.tasks.length;
+            }
+          } catch {
+            /* optional enrichment */
+          }
+        }
+        obsAppend(ev, { dedupe: dedupeByType });
       } catch {
         /* fail-open */
       }

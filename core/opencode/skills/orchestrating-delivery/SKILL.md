@@ -192,25 +192,25 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 
 ```bash
 # After dual plan-reviewer merge (APPROVE|REVISE):
-node core/opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
+node .opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
 
 # After upfront / final spec adversary (SHIP|BLOCK, findings count):
-node core/opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findings 0
+node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findings 0
 
 # At the top of each task loop (1-based n / total from plan.tasks):
-node core/opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
+node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
 
 # Right after each hand (executor/sniper/test-author) returns:
-node core/opencode/plugin/lib/mark-gate.mjs hand-finished --session <sessionId> --feature <feature_id> --task <task_id> --model <model_id>
+node .opencode/plugin/lib/mark-gate.mjs hand-finished --session <sessionId> --feature <feature_id> --task <task_id> --model <model_id>
 ```
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
-**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `core/opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
+**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `.opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
 
 ```bash
 node --input-type=module -e "
-import { stampFidelityPass } from './core/opencode/plugin/lib/mark-gate.mjs';
+import { stampFidelityPass } from './.opencode/plugin/lib/mark-gate.mjs';
 const r = stampFidelityPass({
   projectRoot: process.cwd(),
   sessionId: '<session_id>',
