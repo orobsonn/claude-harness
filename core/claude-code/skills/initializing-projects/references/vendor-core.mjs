@@ -531,6 +531,13 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   copyFrameworkOwned(claudeCodeDir, claudeDir);
   ok("agents/skills/rules/hooks copied (*.test.mjs excluded)");
 
+  // Hooks import core/shared pure (absolution, regate, git-state, real-file). Mirror into
+  // .claude/shared and rewrite monorepo-relative imports so vendored hooks resolve.
+  const sharedMirrored = copyClaudeSharedDeps(coreDir, claudeDir);
+  ok(`hooks' shared deps → .claude/shared/: ${sharedMirrored}`);
+  const sharedRewrites = rewriteClaudeHookSharedImports(claudeDir);
+  ok(`hooks shared import rewrites: ${sharedRewrites}`);
+
   const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir);
   ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps}`);
 
@@ -610,6 +617,58 @@ function copyFrameworkOwned(claudeCodeDir, claudeDir) {
     const src = join(claudeCodeDir, file);
     if (existsSync(src)) cpSync(src, join(claudeDir, file));
   }
+}
+
+/**
+ * @description Mirror core/shared into .claude/shared (exclude *.test.mjs) so vendored
+ * hooks that import shared pure modules resolve under the project.
+ * @param {string} coreDir
+ * @param {string} claudeDir
+ * @returns {string}
+ */
+function copyClaudeSharedDeps(coreDir, claudeDir) {
+  const sharedDir = join(coreDir, "shared");
+  if (!existsSync(sharedDir)) return "skipped (no core/shared)";
+  const dest = join(claudeDir, "shared");
+  copyOcTree(sharedDir, dest, "shared");
+  return existsSync(join(dest, "lib")) ? "copied" : "empty";
+}
+
+/**
+ * @description Rewrite monorepo core/claude-code/hooks → core/shared imports to
+ * .claude/hooks → .claude/shared. hooks/*.mjs: ../../shared → ../shared;
+ * hooks/lib/*.mjs: ../../../shared → ../../shared.
+ * @param {string} claudeDir
+ * @returns {number} files rewritten
+ */
+function rewriteClaudeHookSharedImports(claudeDir) {
+  const hooksDir = join(claudeDir, "hooks");
+  if (!existsSync(hooksDir)) return 0;
+  let n = 0;
+  const walk = (dir, relFromHooks) => {
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      const rel = relFromHooks ? `${relFromHooks}/${name}` : name;
+      if (statSync(abs).isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (!name.endsWith(".mjs") && !name.endsWith(".js") && !name.endsWith(".ts")) continue;
+      const before = readFileSync(abs, "utf8");
+      let after = before;
+      if (rel.startsWith("lib/") || rel.includes("/lib/")) {
+        after = after.split("../../../shared/").join("../../shared/");
+      } else {
+        after = after.split("../../shared/").join("../shared/");
+      }
+      if (after !== before) {
+        writeFileSync(abs, after);
+        n += 1;
+      }
+    }
+  };
+  walk(hooksDir, "");
+  return n;
 }
 
 /**
