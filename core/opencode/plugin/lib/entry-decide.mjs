@@ -4,6 +4,7 @@ import {
   bareRole,
   isDeliveryRole,
   isExecutorRole,
+  isSniperRole,
   isPlannerRole,
   isTestAuthorRole,
   isAdversaryRole,
@@ -42,7 +43,7 @@ export function hasFidelityPass(fidelityPass, featureId, taskId) {
  * @description Decide whether a task subagent dispatch is allowed.
  * Ceremony: delivery roles need classified/triaged markers (or mode stamped by classify).
  * Planner: brainstormed + adversary_fired.
- * Fidelity: executor blocked until fidelity_pass; test-author always exempt.
+ * Fidelity: executor + sniper blocked until fidelity_pass; test-author always exempt.
  * @param {{
  *   subagentType?: unknown,
  *   gateState?: unknown,
@@ -104,12 +105,12 @@ export function decideEntryTask(input = {}) {
       return { ok: true, decision: "allow", reason: "adversary-allowed" };
     }
 
-    // Fidelity rail: test-author EXEMPT; executor blocked until pass
+    // Fidelity rail: test-author EXEMPT; executor + sniper blocked until pass
     if (isTestAuthorRole(sub)) {
       return { ok: true, decision: "allow", reason: "test-author-fidelity-exempt" };
     }
 
-    if (isExecutorRole(sub)) {
+    if (isExecutorRole(sub) || isSniperRole(sub)) {
       const featureId =
         typeof input.featureId === "string"
           ? input.featureId
@@ -118,11 +119,11 @@ export function decideEntryTask(input = {}) {
             : "";
       const taskId = typeof input.taskId === "string" ? input.taskId : undefined;
       if (!hasFidelityPass(gs.fidelity_pass, featureId, taskId)) {
+        const roleLabel = isSniperRole(sub) ? "sniper" : "executor";
         return {
           ok: false,
           decision: "deny",
-          reason:
-            "[entry-gate] Blocked: executor requires fidelity-pass for the task before spawn; dispatch test-author first.",
+          reason: `[entry-gate] Blocked: ${roleLabel} requires fidelity-pass for the task before spawn; dispatch test-author first.`,
           details: { featureId, taskId },
         };
       }

@@ -12,6 +12,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import {
+  parseAbsolutionEntry,
+  absolutionPrefix,
+  matchesAbsolution,
+} from "../../../shared/lib/absolution.mjs";
+
+export { parseAbsolutionEntry, absolutionPrefix, matchesAbsolution };
 
 /**
  * Kebab-case token pattern: lowercase alphanumeric segments separated by hyphens.
@@ -253,72 +260,11 @@ export function currentHeadSha() {
 }
 
 /**
- * @description Splits an absolution entry into its `<feature>/<task>` prefix and `@<sha>` suffix.
- * Splits on the LAST '@' (feature/task ids are kebab-case and shas are hex — neither contains '@').
- * Returns null when the entry is not a string, carries no '@', or has an empty prefix/sha
- * (legacy/unqualified/malformed → treated as ABSENT by matchesAbsolution).
- * @param {unknown} entry
- * @returns {{ prefix: string, sha: string } | null}
- */
-function parseAbsolutionEntry(entry) {
-  if (typeof entry !== "string") return null;
-  const at = entry.lastIndexOf("@");
-  if (at <= 0 || at >= entry.length - 1) return null;
-  return { prefix: entry.slice(0, at), sha: entry.slice(at + 1) };
-}
-
-/**
- * @description Returns the `<feature>/<task>` prefix of an absolution entry — the part before the
- * last '@', or the whole string when there is no '@' (an unqualified/legacy entry). Used by the
- * LENIENT consumers (the fidelity precondition + the compaction-recovery summary) that match by
- * task identity only, ignoring sha freshness. Non-strings return "".
- * @param {unknown} entry
- * @returns {string}
- */
-export function absolutionPrefix(entry) {
-  if (typeof entry !== "string") return "";
-  const at = entry.lastIndexOf("@");
-  return at > 0 ? entry.slice(0, at) : entry;
-}
-
-/**
- * @description Returns true iff `absolutionArray` contains an entry whose `<feature>/<task>` prefix
- * equals `pendingId` AND whose `@<sha>` suffix is present AND `isAncestorFn(sha) === true` (the
- * absolution's sha is an ancestor of, or equal to, current HEAD). An entry with NO '@sha'
- * (legacy/unqualified) or whose sha is NOT a positive ancestor (isAncestorFn returns false OR null
- * — the undetermined case) is treated as ABSENT and does not clear the obligation.
- *
- * Rationale: a healthy multi-task run advances HEAD with each task's commit, so a per-task
- * absolution earned at an EARLIER (ancestor) commit MUST still count at delivery — hence is-ancestor,
- * never strict sha===HEAD equality. A re-dispatch that DISCARDS the prior attempt (git reset/stash)
- * produces a DIVERGENT new HEAD of which the old absolution's sha is NOT an ancestor → invalidated.
- * @param {string} pendingId - the UNqualified obligation id `<feature>/<task>`
- * @param {unknown} absolutionArray - the sha-qualified absolution array (regate_passed / capture_verified)
- * @param {(sha: string) => boolean|null} isAncestorFn - positive-ancestor probe (true/false/null)
- * @returns {boolean}
- */
-export function matchesAbsolution(pendingId, absolutionArray, isAncestorFn) {
-  if (!Array.isArray(absolutionArray)) return false;
-  for (const entry of absolutionArray) {
-    const parsed = parseAbsolutionEntry(entry);
-    if (parsed === null) continue; // unqualified/legacy/malformed → absent
-    if (parsed.prefix !== pendingId) continue;
-    let ancestor = false;
-    try {
-      ancestor = isAncestorFn(parsed.sha) === true;
-    } catch {
-      ancestor = false;
-    }
-    if (ancestor) return true;
-  }
-  return false;
-}
-
-/**
  * @description True iff an absolution array entry is sha-QUALIFIED (`<feature>/<task>@<sha>` with a
  * non-empty prefix and sha). The purge belt in resetGateState uses it to DROP unqualified
  * (pre-migration/legacy) absolutions so a stale unqualified entry cannot clear an obligation for the
- * first re-dispatch.
+ * first re-dispatch. parseAbsolutionEntry / absolutionPrefix / matchesAbsolution are 1:1 re-exports
+ * from core/shared/lib/absolution.mjs (shared is source of truth).
  * @param {unknown} entry
  * @returns {boolean}
  */

@@ -345,6 +345,45 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
   }
 });
 
+// ---- capturedVerifiedAt stamp (DONE only) ----
+
+test("buildHandRunRecord: DONE must NOT set capturedVerifiedAt (mark-gate only)", () => {
+  const record = buildHandRunRecord({
+    featureId: "feat",
+    taskId: "task-6",
+    sessionId: "ses_1",
+    freezeCommitSha: "abc",
+    outcome: OUTCOME.DONE,
+    agent: "executor-medium-spawn",
+  });
+  assert.equal(record.capturedVerifiedAt, undefined);
+  assert.equal("capturedVerifiedAt" in record, false);
+});
+
+test("buildHandRunRecord: non-DONE outcomes never stamp capturedVerifiedAt", () => {
+  for (const outcome of [
+    OUTCOME.FAILED,
+    OUTCOME.NOT_DONE,
+    OUTCOME.CAPTURE_ERROR,
+    OUTCOME.CONFIG_ERROR,
+  ]) {
+    const record = buildHandRunRecord({
+      featureId: "feat",
+      taskId: "task-6",
+      sessionId: "ses_1",
+      freezeCommitSha: "abc",
+      outcome,
+      agent: "executor-medium-spawn",
+    });
+    assert.equal(
+      record.capturedVerifiedAt,
+      undefined,
+      `outcome ${outcome} must not set capturedVerifiedAt`
+    );
+    assert.equal("capturedVerifiedAt" in record, false);
+  }
+});
+
 // ---- captureHandResult integration with pure oracle ----
 
 test("captureHandResult: DONE never from child exit 0 alone; needs independent capture", async () => {

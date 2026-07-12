@@ -21,6 +21,7 @@ import {
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
 import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
 import { decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
+import { bareRole, isDeliveryRole, isExecutorRole, isSniperRole } from "./roles.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -336,6 +337,47 @@ test("t5-fidelity: test-author exempt from fidelity-pass; executor blocked until
 
   assert.equal(hasFidelityPass(["feat-x/task-1@abc"], "feat-x", "task-1"), true);
   assert.equal(hasFidelityPass([], "feat-x", "task-1"), false);
+});
+
+test("bareRole is case-insensitive — Executor-High is delivery/executor", () => {
+  assert.equal(bareRole("Executor-High"), "executor-high");
+  assert.equal(bareRole("harness:Executor-High"), "executor-high");
+  assert.equal(bareRole("SNIPER-HIGH"), "sniper-high");
+  assert.equal(isDeliveryRole("Executor-High"), true);
+  assert.equal(isExecutorRole("Executor-High"), true);
+  assert.equal(isSniperRole("Sniper-Medium"), true);
+  assert.equal(isExecutorRole("Sniper-High"), false);
+});
+
+test("t5-fidelity: sniper requires fidelity-pass like executor", () => {
+  const baseState = {
+    mode: "LIGHT",
+    classified: true,
+    triaged: true,
+    feature_id: "feat-x",
+    fidelity_pass: [],
+  };
+
+  const sniperBlocked = decideEntryTask({
+    subagentType: "sniper-high",
+    gateState: baseState,
+    featureId: "feat-x",
+    taskId: "task-1",
+  });
+  assert.equal(sniperBlocked.decision, "deny");
+  assert.match(sniperBlocked.reason, /\[entry-gate\].*sniper.*fidelity-pass/);
+
+  const withPass = {
+    ...baseState,
+    fidelity_pass: ["feat-x/task-1"],
+  };
+  const sniperOk = decideEntryTask({
+    subagentType: "sniper-medium",
+    gateState: withPass,
+    featureId: "feat-x",
+    taskId: "task-1",
+  });
+  assert.equal(sniperOk.decision, "allow");
 });
 
 // ---------------------------------------------------------------------------
