@@ -186,25 +186,29 @@ function defaultPrecreateLog(logPath) {
  * @returns {string}
  */
 function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log = null, runtime = "claude" }) {
-  const preamble =
-    `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
+  // ulimit MUST sit before the stdin pipe — `| ulimit; runner` would feed the prompt into ulimit
+  // and leave the runner with empty stdin (OC: "You must provide a message or a command").
+  const envPreamble = `set -a; . ${shellQuoteSingle(envFile)}; set +a; `;
+  const pipeIn =
     `{ printf '%s\\n\\n' ${shellQuoteSingle(runtime === "opencode" ? OPENCODE_TRIGGER_PROMPT : TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | `;
   // Claude path stays byte-identical to pre-runtime: `claude -p --permission-mode auto`.
-  // OpenCode: prompt still arrives via stdin (preamble pipe); no --permission-mode (Claude-only).
+  // OpenCode: prompt still arrives via stdin (pipeIn); no --permission-mode (Claude-only).
   const runner =
     runtime === "opencode"
       ? `opencode run --dir ${shellQuoteSingle(worktreePath)} --format json --auto --agent build`
       : `claude -p --permission-mode auto`;
   if (log) {
     return (
-      preamble +
+      envPreamble +
       `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
+      pipeIn +
       `${runner} > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
-    preamble +
+    envPreamble +
+    pipeIn +
     `${runner}; ` +
     `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
@@ -278,8 +282,9 @@ function renderUntrustedFindingsBlock(fixFindings, nonce) {
  */
 function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce, log = null, runtime = "claude" }) {
   const block = renderUntrustedFindingsBlock(fixFindings, nonce);
-  const preamble =
-    `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
+  // Same pipe-before-runner discipline as composeSessionCommand (ulimit must not sit between `|` and runner).
+  const envPreamble = `set -a; . ${shellQuoteSingle(envFile)}; set +a; `;
+  const pipeIn =
     `{ printf '%s\\n\\n' ${shellQuoteSingle(FIX_MODE_TRIGGER)}; ` +
     `printf '%s\\n\\n' ${shellQuoteSingle(block)}; ` +
     `cat < ${shellQuoteSingle(bodyFile)}; } | `;
@@ -290,14 +295,16 @@ function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktree
       : `claude -p --permission-mode auto`;
   if (log) {
     return (
-      preamble +
+      envPreamble +
       `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
+      pipeIn +
       `${runner} > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
-    preamble +
+    envPreamble +
+    pipeIn +
     `${runner}; ` +
     `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
