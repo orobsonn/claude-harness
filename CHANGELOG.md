@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.41.0](https://github.com/orobsonn/claude-harness/compare/v0.40.0...v0.41.0) (2026-07-12)
+
+
+### Features
+
+* oc-port-vps-headless T12+T13 (NDJSON oracle + opencode run spawn) ([#273](https://github.com/orobsonn/claude-harness/issues/273)) ([921c993](https://github.com/orobsonn/claude-harness/commit/921c993a7f856d13905d4b3610ae67d5bd797f6b))
+* **onboarding:** torna vendoring runtime-aware (Claude Code + OpenCode) ([#272](https://github.com/orobsonn/claude-harness/issues/272)) ([fd1ecd2](https://github.com/orobsonn/claude-harness/commit/fd1ecd2278812117d1dc03d7feb62c986e7e673f))
+
 ## [0.40.0](https://github.com/orobsonn/claude-harness/compare/v0.39.0...v0.40.0) (2026-07-12)
 
 
