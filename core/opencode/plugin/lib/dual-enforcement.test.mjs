@@ -16,6 +16,7 @@ import {
   isFullDualCoverage,
   isTaskTool,
   extractSubagentType,
+  extractHookTaskContext,
   readRequireDualOn,
   dualStatusGatePatch,
   loadGateStateFromDisk,
@@ -444,4 +445,54 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
       // ignore cleanup errors on some FS
     }
   }
+});
+
+// ---- extractHookTaskContext (OC hook shape: input.tool + output.args) ----
+
+test("extractHookTaskContext({tool:'task',sessionID:'ses_x'},{args:{subagent_type:'executor-low'}}) returns toolName, subagentType, sessionId", () => {
+  const ctx = extractHookTaskContext(
+    { tool: "task", sessionID: "ses_x" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctx.toolName, "task");
+  assert.equal(ctx.subagentType, "executor-low");
+  assert.equal(ctx.sessionId, "ses_x");
+  assert.deepEqual(ctx.toolArgs, { subagent_type: "executor-low" });
+});
+
+test("extractHookTaskContext({tool:'task',args:...}, {}) or first-arg-only wrong shape returns empty subagentType", () => {
+  const ctx1 = extractHookTaskContext(
+    { tool: "task", args: { subagent_type: "executor-low" } },
+    {},
+  );
+  assert.equal(ctx1.subagentType, "");
+  assert.equal(ctx1.toolName, "task");
+
+  const ctx2 = extractHookTaskContext(
+    { tool: "task", args: { subagent_type: "executor-low" } },
+    null,
+  );
+  assert.equal(ctx2.subagentType, "");
+
+  const ctx3 = extractHookTaskContext({ tool: "task" }, {});
+  assert.equal(ctx3.subagentType, "");
+});
+
+// ---- enforceDualOrThrow entry-gate + executor-low missing (if not covered) ----
+test("enforceDualOrThrow with missing dual + executor-low throws [entry-gate]", () => {
+  let threw = false;
+  try {
+    enforceDualOrThrow("[entry-gate]", {
+      subagentType: "executor-low",
+      gateState: {},
+      routing: ROUTING,
+      toolName: "task",
+    });
+  } catch (err) {
+    threw = true;
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /^\[entry-gate\]/);
+    assert.match(err.message, /missing|dual_status/i);
+  }
+  assert.equal(threw, true);
 });
