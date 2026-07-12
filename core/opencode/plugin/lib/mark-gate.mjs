@@ -15,6 +15,7 @@ import {
 } from "../../../shared/lib/path-helpers.mjs";
 import { dualStatusGatePatch } from "./dual-enforcement.mjs";
 import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
+import { eventForHandRan, eventForTaskExecuting, obsAppend } from "./obs-emit.mjs";
 
 /**
  * @description Build fidelity_pass entry: feature/task or feature/task@sha.
@@ -488,7 +489,26 @@ export function stampRegatePassed({
  * @returns {{ ok: true, entry: string, state: Record<string, unknown> } | { ok: false, reason: string }}
  */
 export function stampHandFinished(args = {}) {
-  return stampUnqualifiedArrayMarker({ ...args, key: "hand_finished" });
+  const result = stampUnqualifiedArrayMarker({ ...args, key: "hand_finished" });
+  // Mid-run obs (#284): hand-ran for Telegram (fail-open).
+  if (result && result.ok) {
+    try {
+      const task =
+        typeof args.taskId === "string"
+          ? args.taskId
+          : typeof args.task === "string"
+            ? args.task
+            : "";
+      const ev = eventForHandRan({
+        task,
+        model: typeof args.model === "string" ? args.model : undefined,
+      });
+      if (ev) obsAppend(ev);
+    } catch {
+      /* fail-open */
+    }
+  }
+  return result;
 }
 
 /**
@@ -730,9 +750,39 @@ if (isMain) {
       taskId,
       sha: shaArg,
     });
+  } else if (action === "task-executing") {
+    // Observability-only (#284) — no gate-state write.
+    const ev = eventForTaskExecuting({ n: args.n, total: args.total });
+    if (!ev) {
+      console.error("task-executing requires --n <int>=1 and --total <int>=1");
+      process.exit(1);
+    }
+    obsAppend(ev);
+    result = { ok: true };
+  } else if (action === "plan-reviewed") {
+    const verdict = String(args.verdict || "").toUpperCase();
+    if (verdict !== "APPROVE" && verdict !== "REVISE") {
+      console.error("plan-reviewed requires --verdict APPROVE|REVISE");
+      process.exit(1);
+    }
+    obsAppend({ type: "plan-reviewed", verdict });
+    result = { ok: true };
+  } else if (action === "spec-adversaried") {
+    const verdict = String(args.verdict || "").toUpperCase();
+    if (verdict !== "SHIP" && verdict !== "BLOCK") {
+      console.error("spec-adversaried requires --verdict SHIP|BLOCK");
+      process.exit(1);
+    }
+    const findings = Number(args.findings ?? 0);
+    obsAppend({
+      type: "spec-adversaried",
+      verdict,
+      findings: Number.isFinite(findings) ? findings : 0,
+    });
+    result = { ok: true };
   } else {
     console.error(
-      "usage: mark-gate.mjs brainstormed|adversary_fired|fidelity|dual|regate-pending|regate-passed|hand-finished|capture-verified --session <id> [--root <dir>] ...",
+      "usage: mark-gate.mjs brainstormed|adversary_fired|fidelity|dual|regate-pending|regate-passed|hand-finished|capture-verified|task-executing|plan-reviewed|spec-adversaried --session <id> [--root <dir>] ...",
     );
     process.exit(2);
   }
