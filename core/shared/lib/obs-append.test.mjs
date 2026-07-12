@@ -37,7 +37,7 @@ test("appendEvent + readEvents: round-trip with ts stamp; never throws on bad pa
     appendEvent(meta, { type: "picked", ts: "2020-01-01T00:00:00.000Z" });
     const ev2 = readEvents(meta);
     assert.equal(ev2[1].ts, "2020-01-01T00:00:00.000Z");
-    // fail-open
+    // fail-open (best-effort smoke: a bad path may or may not throw depending on OS/user perms)
     assert.doesNotThrow(() => appendEvent("/no/such/dir/obs.json", { type: "x" }));
     assert.deepEqual(readEvents("/no/such/obs.json"), []);
     assert.equal(eventsPathFor(meta), meta.replace(/\.json$/, ".events.jsonl"));
@@ -45,4 +45,25 @@ test("appendEvent + readEvents: round-trip with ts stamp; never throws on bad pa
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("appendEvent: fail-open when the write itself throws (hermetic, no reliance on OS perms)", () => {
+  const throwingIo = {
+    mkdirSync: () => {
+      throw new Error("disk full");
+    },
+    appendFileSync: () => {
+      throw new Error("disk full");
+    },
+  };
+  assert.doesNotThrow(() => appendEvent("/any/path/obs.json", { type: "x" }, throwingIo));
+});
+
+test("readEvents: fail-open when the read itself throws (hermetic, no reliance on OS perms)", () => {
+  const throwingIo = {
+    readFileSync: () => {
+      throw new Error("ENOENT");
+    },
+  };
+  assert.deepEqual(readEvents("/any/path/obs.json", throwingIo), []);
 });
