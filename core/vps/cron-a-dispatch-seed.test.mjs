@@ -199,3 +199,74 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("seedOpencodeRootConfig: [security] force-enforces deny entries for the additional dangerous-command classes (sudo, pipe-to-shell, chmod 777, netcat, dd, fork-bomb) alongside the pre-existing git/rm-rf denies", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-extra-dangerous-classes-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const bash = cfg.permission.bash;
+    const additionalDangerousClasses = [
+      "sudo *",
+      "* | sh",
+      "* | bash",
+      "chmod 777*",
+      "chmod -R 777*",
+      "nc *",
+      "ncat *",
+      "dd if=*",
+      ":(){ :|:& };:",
+    ];
+    for (const key of additionalDangerousClasses) {
+      assert.equal(
+        bash[key],
+        "deny",
+        `permission.bash[${JSON.stringify(key)}] must be forced to 'deny' as an additional dangerous-command class`,
+      );
+    }
+    assert.equal(
+      bash["git push --force*"],
+      "deny",
+      "the pre-existing git push --force* deny must still be present alongside the additional classes",
+    );
+    assert.equal(
+      bash["rm -rf /"],
+      "deny",
+      "the pre-existing rm -rf / deny must still be present alongside the additional classes",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [orphan-state, double-fault] on a genuine double-fault (malformed source AND no readable example), the worktree opencode.json still carries a non-empty plugin array including './.opencode/plugin/obs-eye.ts'", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-double-fault-plugin-");
+  try {
+    writeFileSync(join(projectRoot, "opencode.json"), "{ invalid json");
+    // Deliberately no core/opencode/opencode.json.example, no .opencode/opencode.json.example under
+    // projectRoot, and no .opencode/opencode.json.example under worktree — a genuine double-fault,
+    // reusing the same setup as the double-fault test above.
+    assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot), "a double-fault (malformed source + no example) must never throw");
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.ok(
+      Array.isArray(cfg.plugin) && cfg.plugin.length > 0,
+      "even in the degenerate double-fault path, the seeded config must carry a non-empty 'plugin' array — never omitted",
+    );
+    assert.ok(
+      cfg.plugin.includes("./.opencode/plugin/obs-eye.ts"),
+      "the canonical plugin list must include './.opencode/plugin/obs-eye.ts' even on a double-fault",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
