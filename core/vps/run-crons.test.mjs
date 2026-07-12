@@ -90,6 +90,7 @@ test("[integration HIGH closed] run-cron-a wires buildScopedEnvFromDisk (not the
   assert.equal(dispatchOptsSeen.project, config.project);
   assert.equal(dispatchOptsSeen.stateDir, config.stateDir);
   assert.equal(dispatchOptsSeen.projectRoot, config.projectRoot);
+  assert.equal(dispatchOptsSeen.runtime, "opencode", "runCronA threads config.runtime into dispatch opts as runtime (default opencode when omitted)");
   assert.equal(
     fromDiskCalls.length,
     1,
@@ -1858,4 +1859,10 @@ test("#ac-1.9 a corrupt (non-JSON) retention-permission-state.json at the inject
     rmSync(homeDir, { recursive: true, force: true });
     rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+test("run-cron-review.mjs source does not read config.runtime for session spawn (review remains Claude path)", () => {
+  const src = readFileSync(new URL("./run-cron-review.mjs", import.meta.url), "utf8");
+  const readsRuntime = /config\.runtime|resolveRuntime|runtime\s*[:=]/.test(src);
+  assert.equal(readsRuntime, false, "run-cron-review.mjs source does not read config.runtime for session spawn (review remains Claude path)");
 });

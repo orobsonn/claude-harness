@@ -122,13 +122,22 @@ const TRIGGER_PROMPT =
   "feat/fix/docs branch (the cron tracks your PR by this branch). Add 'Closes #<issue>' to the PR " +
   "body. Open a draft PR when done; never merge or deploy.";
 
+const OPENCODE_TRIGGER_PROMPT =
+  "You are an autonomous VPS cron harness session running headless-local. " +
+  "Work the issue delivered below to completion without asking questions or waiting for " +
+  "operator input. Follow the vendored .opencode/ entry policy and orchestrating-delivery " +
+  "pipeline. IMPORTANT: you are ALREADY checked out on the correct per-run branch " +
+  "(harness/<issue-number>) — commit and open your draft PR ON THIS BRANCH; do NOT create a new " +
+  "feat/fix/docs branch (the cron tracks your PR by this branch). Add 'Closes #<issue>' to the PR " +
+  "body. Open a draft PR when done; never merge or deploy.";
+
 /**
- * @description Wraps a string in single quotes for safe use in a POSIX shell word, escaping
- * embedded single quotes as `'`\''`.
- * @param {string} s
- * @returns {string}
- */
-function shellQuoteSingle(s) {
+  * @description Wraps a string in single quotes for safe use in a POSIX shell word, escaping
+  * embedded single quotes as `'`\''`.
+  * @param {string} s
+  * @returns {string}
+  */
+ function shellQuoteSingle(s) {
   return `'${String(s).replace(/'/g, "'\\''")}'`;
 }
 
@@ -176,21 +185,27 @@ function defaultPrecreateLog(logPath) {
  * @param {string|null} [parts.log] - Pre-created output-log path, or null to fall back to legacy.
  * @returns {string}
  */
-function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log = null }) {
+function composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log = null, runtime = "claude" }) {
   const preamble =
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
-    `{ printf '%s\\n\\n' ${shellQuoteSingle(TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | `;
+    `{ printf '%s\\n\\n' ${shellQuoteSingle(runtime === "opencode" ? OPENCODE_TRIGGER_PROMPT : TRIGGER_PROMPT)}; cat < ${shellQuoteSingle(bodyFile)}; } | `;
+  // Claude path stays byte-identical to pre-runtime: `claude -p --permission-mode auto`.
+  // OpenCode: prompt still arrives via stdin (preamble pipe); no --permission-mode (Claude-only).
+  const runner =
+    runtime === "opencode"
+      ? `opencode run --dir ${shellQuoteSingle(worktreePath)} --format json --auto --agent build`
+      : `claude -p --permission-mode auto`;
   if (log) {
     return (
       preamble +
       `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
-      `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
+      `${runner} > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
     preamble +
-    `claude -p --permission-mode auto; ` +
+    `${runner}; ` +
     `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
@@ -261,24 +276,29 @@ function renderUntrustedFindingsBlock(fixFindings, nonce) {
  * @param {string|null} [parts.log] - Pre-created output-log path, or null to fall back to legacy.
  * @returns {string}
  */
-function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce, log = null }) {
+function composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce, log = null, runtime = "claude" }) {
   const block = renderUntrustedFindingsBlock(fixFindings, nonce);
   const preamble =
     `set -a; . ${shellQuoteSingle(envFile)}; set +a; ` +
     `{ printf '%s\\n\\n' ${shellQuoteSingle(FIX_MODE_TRIGGER)}; ` +
     `printf '%s\\n\\n' ${shellQuoteSingle(block)}; ` +
     `cat < ${shellQuoteSingle(bodyFile)}; } | `;
+  // Same runtime split as composeSessionCommand — Claude byte-compat; OC via stdin + --auto.
+  const runner =
+    runtime === "opencode"
+      ? `opencode run --dir ${shellQuoteSingle(worktreePath)} --format json --auto --agent build`
+      : `claude -p --permission-mode auto`;
   if (log) {
     return (
       preamble +
       `ulimit -f ${RAW_LOG_ULIMIT_BLOCKS}; ` +
-      `claude -p --permission-mode auto > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
+      `${runner} > ${shellQuoteSingle(log)} 2>&1; ec=$?; ` +
       `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile} ${shellQuoteSingle(log)} "$ec"`
     );
   }
   return (
     preamble +
-    `claude -p --permission-mode auto; ` +
+    `${runner}; ` +
     `node ${shellQuoteSingle(CRON_A_EXIT_PATH)} ${issueNumber} ${worktreePath} ${bodyFile} ${envFile}`
   );
 }
@@ -337,21 +357,23 @@ function defaultPrHeadSha(branch, { cwd, env }) {
 const defaultNow = () => Math.floor(Date.now() / 1000);
 
 /**
- * @description Resolves the per-run `.claude/plans` dir to purge after `cp -a`, or null when the
+ * @description Resolves the per-run `<runtimeDir>/plans` dir to purge after `cp -a`, or null when the
  * removal MUST be skipped. Guards the rmSync against a blind delete: the target must live strictly
  * inside the run's OWN worktree and must NEVER resolve to the projectRoot's plans — the operator's
  * live primary tree, always referenced by a running session. Returns null (skip) on a missing/
  * non-string worktreePath or when the worktree resolves to projectRoot; otherwise the run's plans dir.
+ * Default runtimeDir is `.claude` so the Claude path stays byte-identical for existing callers.
  * @param {string} worktreePath - Absolute path to this run's per-run worktree.
  * @param {string} projectRoot - Absolute path to the primary tree (never purged).
+ * @param {string} [runtimeDir=".claude"] - Runtime root dirname (`.claude` or `.opencode`).
  * @returns {string|null}
  */
-export function resolveRunPlansDir(worktreePath, projectRoot) {
+export function resolveRunPlansDir(worktreePath, projectRoot, runtimeDir = ".claude") {
   if (typeof worktreePath !== "string" || !worktreePath) return null;
   if (typeof projectRoot !== "string" || !projectRoot) return null;
   const worktree = resolve(worktreePath);
   if (worktree === resolve(projectRoot)) return null;
-  return join(worktree, ".claude", "plans");
+  return join(worktree, runtimeDir, "plans");
 }
 
 /**
@@ -654,6 +676,7 @@ export async function dispatch(issue, opts) {
     freeMem,
     memGuardBytes,
     precreateLog,
+    runtime = "claude",
   } = opts;
   const resolvedPrecreateLog = precreateLog ?? defaultPrecreateLog;
   const issueNumber = issue.number;
@@ -901,6 +924,23 @@ export async function dispatch(issue, opts) {
     // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
   }
 
+  // 1c) Same bootstrap for `.opencode` when runtime is opencode (gitignored harness absent from the
+  //      worktree). Claude path above is untouched. Purge `.opencode/plans` after `cp -a` for the
+  //      same P11 reason. Best-effort: missing src or a copy hiccup must never fail the dispatch.
+  if (runtime === "opencode") {
+    try {
+      const ocSrc = join(projectRoot, ".opencode");
+      const ocDst = join(worktreePath, ".opencode");
+      if (existsSync(ocSrc) && !existsSync(ocDst)) {
+        spawn("cp", ["-a", ocSrc, ocDst], { cwd: projectRoot, env });
+        const runOcPlansDir = resolveRunPlansDir(worktreePath, projectRoot, ".opencode");
+        if (runOcPlansDir) rmSync(runOcPlansDir, { recursive: true, force: true });
+      }
+    } catch {
+      // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
+    }
+  }
+
   // 2) Write the issue body to a file (byte-identical) — delivered via stdin redirect, never
   //    interpolated into any argv or command string.
   let bodyFile;
@@ -931,8 +971,8 @@ export async function dispatch(issue, opts) {
   //    fix-mode the stdin is the FIX_MODE_TRIGGER + a nonce-delimited UNTRUSTED findings block (the
   //    nonce is per-invocation, so a finding summary cannot forge the closing marker) + the body.
   const sessionCommand = fixMode
-    ? composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce: randomUUID(), log })
-    : composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log });
+    ? composeFixModeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, fixFindings, nonce: randomUUID(), log, runtime })
+    : composeSessionCommand({ envFile, bodyFile, issueNumber, worktreePath, log, runtime });
   try {
     spawn(
       "tmux",

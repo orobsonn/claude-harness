@@ -266,6 +266,40 @@ test("dispatch: drops the ephemeral .claude/plans/ from the copied worktree harn
   }
 });
 
+test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plans/ (mirror of P11)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    mkdirSync(join(projectRoot, ".opencode", "plans", "old-feature"), { recursive: true });
+    writeFileSync(join(projectRoot, ".opencode", "plans", "old-feature", "execution-plan.json"), '{"tasks":[1]}');
+    mkdirSync(join(projectRoot, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(projectRoot, ".opencode", "plugin", "keep.ts"), "plugin");
+
+    const calls = [];
+    const spawn = (command, args = []) => {
+      calls.push({ command, args });
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+        mkdirSync(args[2], { recursive: true });
+      } else if (command === "cp") {
+        cpSync(args[1], args[2], { recursive: true });
+      }
+      return { ok: true };
+    };
+
+    dispatch(
+      { number: 78, body: "b" },
+      { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }), runtime: "opencode" }
+    );
+
+    const ocCp = calls.find((c) => c.command === "cp" && String(c.args[1]).endsWith(".opencode"));
+    assert.ok(ocCp, "runtime=opencode must cp -a .opencode into the worktree when src exists");
+    const ocDst = ocCp.args[2];
+    assert.ok(!existsSync(join(ocDst, "plans")), "the ephemeral .opencode/plans/ must be dropped from the worktree");
+    assert.ok(existsSync(join(ocDst, "plugin", "keep.ts")), "plugin/ must survive the copy");
+  } finally {
+    cleanup();
+  }
+});
+
 test("dispatch: the composed tmux session command is shell-syntax-valid despite TRIGGER_PROMPT containing single quotes (P10 — no early-close / # comment truncation)", () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {

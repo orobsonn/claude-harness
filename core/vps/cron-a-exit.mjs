@@ -54,6 +54,7 @@ import {
   readMeta as defaultReadMeta,
   updateMeta as defaultUpdateMeta,
 } from "./obs-outbox.mjs";
+import { parseOcRunLog } from "../shared/lib/oc-run-outcome.mjs";
 
 const LABEL_IN_PROGRESS = "harness:in-progress";
 const LABEL_IN_REVIEW = "harness:in-review";
@@ -496,7 +497,7 @@ const SECRET_PATTERNS = [
   /Basic\s+[A-Za-z0-9+/=]+/g,
   /\bsk-[A-Za-z0-9_-]{20,}/g,
   /\bgl(?:pat|ptt|rt)-[A-Za-z0-9_-]+/g,
-  /Bearer\s+[A-Za-z0-9._\-+/=]+/g,
+  /Bearer\s+[A-Za-z0-9._\-+/=]/g,
   /\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?[^\s"',]+/gi,
 ];
 const SECRET_REDACTION_MARKER = "[REDACTED]";
@@ -553,6 +554,35 @@ export function scrubSecrets(text, env = process.env) {
 }
 
 /**
+ * @description Deep-scrubs secret-bearing string fields on a parseOcRunLog result before it is
+ * persisted into exit-reason.json. Only `toolErrors[].message` and `reasons[]` carry raw log text;
+ * booleans/counts/outcome enums stay intact so category and forensics remain valid.
+ * @param {object|null|undefined} parserOutcome
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {object|null|undefined}
+ */
+function scrubParserOutcome(parserOutcome, env = process.env) {
+  if (!parserOutcome || typeof parserOutcome !== "object") return parserOutcome;
+  return {
+    ...parserOutcome,
+    toolErrors: Array.isArray(parserOutcome.toolErrors)
+      ? parserOutcome.toolErrors.map((e) =>
+          e && typeof e === "object"
+            ? {
+                ...e,
+                message:
+                  typeof e.message === "string" ? scrubSecrets(e.message, env) : e.message,
+              }
+            : e
+        )
+      : parserOutcome.toolErrors,
+    reasons: Array.isArray(parserOutcome.reasons)
+      ? parserOutcome.reasons.map((r) => (typeof r === "string" ? scrubSecrets(r, env) : r))
+      : parserOutcome.reasons,
+  };
+}
+
+/**
  * @description Categorizes a non-PR exit for the diagnostic reason file: exitCode===0 is the
  * dominant graceful requeue (`no-pr-produced`), any other numeric exitCode is `tool-error`, and a
  * missing/unparseable exitCode is `unknown`.
@@ -566,41 +596,62 @@ function categorizeExit(exitCode) {
 }
 
 /**
- * @description Max number of trailing bytes read from a raw log to derive the last-200-lines
- * summary. Bounds memory regardless of log size — a whole-file read on a huge agentic log can OOM,
- * and an OOM mid-read would skip the finally-unlink, leaving the raw unscrubbed log on disk.
+ * @description Per-window byte budget for the dual-window log read (first + last). Total memory
+ * stays ≤ 2× this value. Bounds memory regardless of log size — a whole-file read on a huge
+ * agentic log can OOM, and an OOM mid-read would skip the finally-unlink, leaving the raw
+ * unscrubbed log on disk. Dual window (not tail-only) so an early gate-deny in a long session is
+ * still visible to parseOcRunLog.
  */
-const LOG_TAIL_MAX_BYTES = 256 * 1024;
+const LOG_WINDOW_BYTES = 128 * 1024;
 
 /**
- * @description Reads only the last `maxBytes` of a file (or the whole file when smaller) via
- * statSync + openSync/readSync into a bounded Buffer — never loads the full file into memory.
+ * @description Reads the first `windowBytes` and last `windowBytes` of a file (or the whole file
+ * when size ≤ 2×windowBytes) via statSync + openSync/readSync into bounded Buffers — never loads
+ * the full file into memory. Concatenates head+tail so parseOcRunLog can see early gate-denies
+ * that a pure tail read would drop on long sessions.
  * @param {string} path
- * @param {number} maxBytes
- * @returns {string} The trailing slice of the file, decoded as utf8.
+ * @param {number} windowBytes
+ * @returns {string} Head+tail (or whole file) decoded as utf8.
  */
-function readTail(path, maxBytes) {
+function readDualWindow(path, windowBytes) {
   const { size } = statSync(path);
-  const start = Math.max(0, size - maxBytes);
-  const length = size - start;
-  const buffer = Buffer.alloc(length);
+  if (size <= 0) return "";
   const fd = openSync(path, "r");
   try {
-    readSync(fd, buffer, 0, length, start);
+    if (size <= windowBytes * 2) {
+      const buffer = Buffer.alloc(size);
+      readSync(fd, buffer, 0, size, 0);
+      return buffer.toString("utf8");
+    }
+    const head = Buffer.alloc(windowBytes);
+    const tail = Buffer.alloc(windowBytes);
+    readSync(fd, head, 0, windowBytes, 0);
+    readSync(fd, tail, 0, windowBytes, size - windowBytes);
+    return head.toString("utf8") + tail.toString("utf8");
   } finally {
     closeSync(fd);
   }
-  return buffer.toString("utf8");
 }
 
 /**
  * @description Best-effort persists the diagnostic exit-reason file for a non-PR session exit;
  * NEVER throws and never alters the exit. On a 'done' (PR-produced) outcome it writes nothing.
  * On any non-'done' outcome it reads the last 200 lines of `logPath` (when present/readable),
- * scrubs secrets from the summary, categorizes the exit, and writes
+ * scrubs secrets from the summary AND deep-scrubs parserOutcome string fields (toolErrors
+ * messages, reasons), categorizes the exit, and writes
  * `stateDir/issue-<issueNumber>-exit-reason.json` (mode 0o600). On EVERY outcome, including
  * 'done', it best-effort unlinks the raw log at `logPath` in a finally so unscrubbed session
  * output never persists.
+ *
+ * Task-4 judgments (literal):
+ *   pr_wins_over_parser=true
+ *   parser_role=auxiliary-enrichment
+ *   enrich_only_when_no_pr=true
+ *   exit_reason_parser_field=parserOutcome
+ *   exit_reason_keep_category=true
+ *   parser_overrides_category_on_deny=true
+ *   tool_deny_category_map=tool-deny
+ *   exit_reason_fields=outcome|timestamp|category|summary|parserOutcome
  * @param {object} args
  * @param {string} args.stateDir
  * @param {{ outcome: string, issueNumber: number, hadPr: boolean, finding: string|null }} args.outcome
@@ -613,23 +664,33 @@ export function captureExitReason({ stateDir, outcome, exitCode, logPath, now = 
   try {
     if (outcome && outcome.outcome !== "done") {
       let summary = "";
+      let parserOutcome = null;
+      let category = categorizeExit(exitCode);
       if (logPath) {
         try {
-          const rawLog = readTail(logPath, LOG_TAIL_MAX_BYTES);
+          const rawLog = readDualWindow(logPath, LOG_WINDOW_BYTES);
           const lines = rawLog.split("\n");
           const last200 = lines.slice(Math.max(0, lines.length - 200));
           summary = scrubSecrets(last200.join("\n"), process.env);
+          parserOutcome = parseOcRunLog(rawLog, { processExitCode: exitCode });
+          if (parserOutcome?.toolErrors?.some((e) => e.gateDeny)) category = "tool-deny";
+          // Category uses gateDeny booleans already computed; scrub string fields after so
+          // secrets in toolErrors messages / reasons never land in exit-reason.json.
+          parserOutcome = scrubParserOutcome(parserOutcome, process.env);
         } catch {
           summary = "";
         }
       }
 
       const reasonFile = join(stateDir, `issue-${outcome.issueNumber}-exit-reason.json`);
+      // per judgments: pr wins, parser auxiliary-enrichment, enrich only when no_pr, keep category,
+      // parser overrides category on deny -> "tool-deny", include parserOutcome field
       const payload = {
         outcome: outcome.outcome,
         timestamp: now(),
-        category: categorizeExit(exitCode),
+        category,
         summary,
+        parserOutcome,
       };
       try {
         // Remove any pre-existing reason file first so the create-fresh writeFileSync mode 0o600
