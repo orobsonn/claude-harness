@@ -412,6 +412,12 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
  * `core/opencode/opencode.json.example`'s `permission.bash` deny entries; kept in sync manually
  * since — on a double-fault (malformed source AND unreadable/absent example) — this constant, not
  * the example file, is the ONLY source of the deny-list actually written to disk.
+ *
+ * [security] This is defense-in-depth against obvious foot-guns via a STRING-MATCH pattern list —
+ * it is NOT a sandbox. It cannot contain a genuinely adversarial or prompt-injected agent (a
+ * differently-worded or obfuscated command bypasses a string match trivially). Real containment of
+ * an adversarial agent requires OS-level isolation — an unprivileged/dedicated account, no ambient
+ * credentials, and controlled egress — which this list does not implement and is not a substitute for.
  */
 const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "git push --force*": "deny",
@@ -426,6 +432,15 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "git add -A*": "deny",
   "git add --all*": "deny",
   "git commit --no-verify*": "deny",
+  "sudo *": "deny",
+  "* | sh": "deny",
+  "* | bash": "deny",
+  "chmod 777*": "deny",
+  "chmod -R 777*": "deny",
+  "nc *": "deny",
+  "ncat *": "deny",
+  "dd if=*": "deny",
+  ":(){ :|:& };:": "deny",
 });
 
 /**
@@ -450,6 +465,41 @@ const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
   websearch: "allow",
   lsp: "allow",
 });
+
+/**
+ * @description Canonical, FROZEN in-code list of the harness's OpenCode governance plugin paths.
+ * Mirrors `defaultOcPluginPaths()` in
+ * `core/claude-code/skills/initializing-projects/references/vendor-core.mjs` EXACTLY (kept in sync
+ * manually) — this is the double-fault safety net for `seedOpencodeRootConfig`'s `plugin` key, the
+ * same role `DANGEROUS_BASH_DENYLIST` plays for `permission.bash`. Without a non-empty `plugin[]` in
+ * the seeded worktree config, a headless double-fault run loads OpenCode with NONE of the pipeline's
+ * governance plugins (entry-gate, plan-gate, loop-guard, etc.) — no security gate at all.
+ */
+const CANONICAL_OC_PLUGINS = Object.freeze([
+  "./.opencode/plugin/entry-gate.ts",
+  "./.opencode/plugin/plan-gate.ts",
+  "./.opencode/plugin/loop-guard.ts",
+  "./.opencode/plugin/reinject-state.ts",
+  "./.opencode/plugin/version-check.ts",
+  "./.opencode/plugin/harvest-guard.ts",
+  "./.opencode/plugin/obs-plan-write.ts",
+  "./.opencode/plugin/obs-eye.ts",
+  "./.opencode/plugin/obs-hand.ts",
+]);
+
+/**
+ * @description Guarantees the config being written always carries a non-empty `plugin` array. A
+ * project's own `baseConfig.plugin` (a real, non-empty array) is always preserved as-is — this
+ * function never overwrites a project's actual plugin configuration. Only when `plugin` is
+ * absent/empty/non-array (the double-fault case, where `baseConfig` is `{}`) does it fall back to
+ * `CANONICAL_OC_PLUGINS`, so a double-fault run never ships headless with zero governance plugins.
+ * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
+ * @returns {string[]}
+ */
+function resolveOcPlugins(baseConfig) {
+  const basePlugins = baseConfig && Array.isArray(baseConfig.plugin) ? baseConfig.plugin : [];
+  return basePlugins.length > 0 ? basePlugins : [...CANONICAL_OC_PLUGINS];
+}
 
 /**
  * @description Best-effort JSON-object file read. Returns null on ANY failure — missing file,
@@ -586,6 +636,7 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
   }
 
   const finalConfig = enforceOpencodePermissions(baseConfig, exampleConfig);
+  finalConfig.plugin = resolveOcPlugins(baseConfig);
   const dstCfg = join(worktreePath, "opencode.json");
   writeFileSync(dstCfg, `${JSON.stringify(finalConfig, null, 2)}\n`, "utf8");
   if (!copied.includes("opencode.json")) copied.push("opencode.json");
