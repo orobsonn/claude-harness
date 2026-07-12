@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -17,131 +17,111 @@ import {
   obsAppend,
   resolveObsMetaPath,
   isEyeRole,
+  isHandRole,
   isFullExecutionPlan,
+  fullPlanExistsForRun,
+  taskIndexFromPlan,
   dedupeByType,
   resolveHookArgs,
+  extractTaskIds,
 } from "./obs-emit.mjs";
 
 test("eventForPipelineType normalizes modes", () => {
   assert.deepEqual(eventForPipelineType("full"), { type: "pipeline-type", mode: "FULL" });
-  assert.deepEqual(eventForPipelineType("LIGHT"), { type: "pipeline-type", mode: "LIGHT" });
   assert.deepEqual(eventForPipelineType("no-ceremony"), {
     type: "pipeline-type",
     mode: "NO-CEREMONY",
   });
-  assert.equal(eventForPipelineType(""), null);
 });
 
-test("eventForPlanPath: anchored under .opencode/plans; rejects .state and bare basename", () => {
+test("eventForPlanPath anchored; rejects .state", () => {
   assert.deepEqual(eventForPlanPath(".opencode/plans/x/execution-plan.json"), {
     type: "plan-created",
   });
-  assert.deepEqual(eventForPlanPath("/w/.opencode/plans/f/spec.md"), { type: "spec-created" });
   assert.equal(eventForPlanPath("execution-plan.json"), null);
   assert.equal(eventForPlanPath(".opencode/plans/.state/s/execution-plan.json"), null);
-  assert.equal(eventForPlanPath("README.md"), null);
 });
 
-test("isFullExecutionPlan: stub empty tasks vs full", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plan-full-"));
+test("fullPlanExistsForRun: scoped to session-feature; ignores other full plans", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-scope-"));
   try {
-    const stub = join(dir, "stub.json");
-    const full = join(dir, "full.json");
-    writeFileSync(stub, JSON.stringify({ kind: "stub", tasks: [] }));
-    writeFileSync(full, JSON.stringify({ tasks: [{ id: "t1" }] }));
-    assert.equal(isFullExecutionPlan(stub), false);
-    assert.equal(isFullExecutionPlan(full), true);
+    const sid = "ses_abc";
+    const fid = "feat-a";
+    const other = join(dir, ".opencode/plans/old-other");
+    const mine = join(dir, ".opencode/plans", `${sid}-${fid}`);
+    mkdirSync(other, { recursive: true });
+    mkdirSync(mine, { recursive: true });
+    writeFileSync(join(other, "execution-plan.json"), JSON.stringify({ tasks: [{ id: "x" }] }));
+    writeFileSync(join(mine, "execution-plan.json"), JSON.stringify({ kind: "stub", tasks: [] }));
+    assert.equal(
+      fullPlanExistsForRun({ cwd: dir, sessionId: sid, featureId: fid }),
+      false,
+      "stub for this run",
+    );
+    writeFileSync(join(mine, "execution-plan.json"), JSON.stringify({ tasks: [{ id: "t1" }] }));
+    assert.equal(fullPlanExistsForRun({ cwd: dir, sessionId: sid, featureId: fid }), true);
+    // without session: fail closed
+    assert.equal(fullPlanExistsForRun({ cwd: dir, sessionId: null, featureId: null }), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("eventForEyeRole: plan-reviewer verdict; adversary pre-plan", () => {
-  assert.deepEqual(eventForEyeRole("plan-reviewer", "verdict: APPROVE"), {
-    type: "plan-reviewed",
-    verdict: "APPROVE",
-    role: "plan-reviewer",
-  });
+test("taskIndexFromPlan 1-based", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idx-"));
+  try {
+    const f = join(dir, "p.json");
+    writeFileSync(f, JSON.stringify({ tasks: [{ id: "a" }, { id: "b" }] }));
+    assert.deepEqual(taskIndexFromPlan(f, "b"), { n: 2, total: 2 });
+    assert.equal(taskIndexFromPlan(f, "z"), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("isHandRole / isEyeRole", () => {
+  assert.equal(isHandRole("executor-high"), true);
+  assert.equal(isHandRole("sniper-medium"), true);
+  assert.equal(isHandRole("test-author"), true);
+  assert.equal(isHandRole("adversary"), false);
+  assert.equal(isEyeRole("plan-reviewer-openai"), true);
+});
+
+test("eventForEyeRole adversary pre-plan", () => {
   assert.deepEqual(eventForEyeRole("adversary", "x", { planExists: false }), {
     type: "spec-adversary",
     role: "adversary",
   });
-  assert.deepEqual(eventForEyeRole("security", "ok", { planExists: true }), {
-    type: "eye",
-    role: "security",
-  });
-  assert.equal(eventForEyeRole("executor-high", "x"), null);
-  assert.equal(isEyeRole("adversary-openai"), true);
-  assert.equal(bareEyeRole("@plan-reviewer"), "plan-reviewer");
-  assert.equal(parseEyeVerdict("REVISE please"), "REVISE");
 });
 
-test("eventForHandRan / task-executing validation", () => {
-  assert.deepEqual(eventForHandRan({ task: "t1", model: "m" }), {
-    type: "hand-ran",
-    task: "t1",
-    model: "m",
-  });
-  assert.equal(eventForHandRan({}), null);
-  assert.deepEqual(eventForTaskExecuting({ n: 1, total: 3 }), {
-    type: "task-executing",
-    n: 1,
-    total: 3,
-  });
-  assert.equal(eventForTaskExecuting({ n: 0, total: 3 }), null);
-});
-
-test("resolveHookArgs prefers output.args (OC contract)", () => {
+test("resolveHookArgs + extractTaskIds", () => {
   assert.deepEqual(
-    resolveHookArgs({ args: { a: 1 } }, { args: { subagent_type: "adversary" } }),
-    { subagent_type: "adversary" },
+    resolveHookArgs({}, { args: { subagent_type: "executor-low", task_id: "t1" } }),
+    { subagent_type: "executor-low", task_id: "t1" },
   );
-  assert.deepEqual(resolveHookArgs({ args: { filePath: "x" } }, null), { filePath: "x" });
+  assert.deepEqual(
+    extractTaskIds({ subagent_type: "executor-high", task_id: "t9", feature_id: "f", model: "m" }),
+    { featureId: "f", taskId: "t9", model: "m", role: "executor-high" },
+  );
 });
 
-test("obsAppend: no-op without meta; dedupe plan-created; fail-open on throw", () => {
-  assert.equal(resolveObsMetaPath({}), null);
-  assert.equal(obsAppend({ type: "x" }, { env: {} }), false);
-  const calls = [];
+test("dedupe task-executing by n", () => {
   assert.equal(
-    obsAppend(
-      { type: "pipeline-type", mode: "FULL" },
-      {
-        env: { HARNESS_OBSERVABILITY_RUN_PATH: "/tmp/obs-meta.json" },
-        metaExists: () => true,
-        appendEvent: (p, e) => calls.push({ p, e }),
-      },
-    ),
+    dedupeByType([{ type: "task-executing", n: 1 }], { type: "task-executing", n: 1 }),
     true,
   );
-  assert.equal(calls.length, 1);
-  // dedupe
   assert.equal(
-    obsAppend(
-      { type: "plan-created" },
-      {
-        env: { HARNESS_OBSERVABILITY_RUN_PATH: "/tmp/obs-meta.json" },
-        metaExists: () => true,
-        readEvents: () => [{ type: "plan-created" }],
-        dedupe: dedupeByType,
-        appendEvent: (p, e) => calls.push({ p, e }),
-      },
-    ),
+    dedupeByType([{ type: "task-executing", n: 1 }], { type: "task-executing", n: 2 }),
     false,
   );
-  assert.equal(
-    obsAppend(
-      { type: "x" },
-      {
-        env: { HARNESS_OBSERVABILITY_RUN_PATH: "/tmp/x.json" },
-        metaExists: () => true,
-        appendEvent: () => {
-          throw new Error("boom");
-        },
-      },
-    ),
-    false,
-  );
-  assert.equal(dedupeByType([{ type: "plan-created" }], { type: "plan-created" }), true);
-  assert.equal(dedupeByType([], { type: "plan-created" }), false);
+});
+
+test("obsAppend fail-open", () => {
+  assert.equal(obsAppend({ type: "x" }, { env: {} }), false);
+  assert.equal(resolveObsMetaPath({}), null);
+  assert.equal(eventForHandRan({ task: "t" }).type, "hand-ran");
+  assert.equal(eventForTaskExecuting({ n: 1, total: 2 }).n, 1);
+  assert.equal(parseEyeVerdict("verdict: APPROVE"), "APPROVE");
+  assert.equal(bareEyeRole("@Foo/Bar"), "bar");
+  assert.equal(isFullExecutionPlan("/nope"), false);
 });

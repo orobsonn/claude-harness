@@ -345,6 +345,7 @@ export function defaultOcPluginPaths() {
     "./.opencode/plugin/harvest-guard.ts",
     "./.opencode/plugin/obs-plan-write.ts",
     "./.opencode/plugin/obs-eye.ts",
+    "./.opencode/plugin/obs-hand.ts",
   ];
 }
 

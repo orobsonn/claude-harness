@@ -502,3 +502,28 @@ test("LOCKED 8: regate-pending / hand-finished → feature/task form, union idem
     );
   });
 });
+
+test("stampHandFinished emits hand-ran to outbox when HARNESS_OBSERVABILITY_RUN_PATH set", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hand-obs-"));
+  try {
+    const meta = path.join(dir, "obs.json");
+    fs.writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sessionId = "ses_hand1";
+    const r = stampHandFinished({
+      projectRoot: dir,
+      sessionId,
+      featureId: "f1",
+      taskId: "task-9",
+      model: "grok-4.3",
+    });
+    assert.equal(r.ok, true);
+    const raw = fs.readFileSync(path.join(dir, "obs.events.jsonl"), "utf8");
+    assert.ok(raw.includes("hand-ran"), raw);
+    assert.ok(raw.includes("task-9"), raw);
+    assert.ok(raw.includes("grok-4.3"), raw);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

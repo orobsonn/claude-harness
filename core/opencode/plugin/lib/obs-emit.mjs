@@ -1,9 +1,10 @@
 /**
  * @description OC session-side observability emitters — pure decides + fail-open append.
- * Producers: classify, mark-gate, obs-plan-write plugin, obs-eye plugin.
+ * Producers: classify, mark-gate, obs-plan-write, obs-eye, obs-hand plugins.
  * Event types must match core/vps/notify-telegram FEED_ALLOWLIST.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   appendEvent as defaultAppendEvent,
   metaExists as defaultMetaExists,
@@ -32,15 +33,8 @@ export function resolveObsMetaPath(env = process.env) {
 /**
  * @description Fail-open append when meta exists. Never throws.
  * @param {object} event
- * @param {{
- *   env?: NodeJS.ProcessEnv,
- *   appendEvent?: typeof defaultAppendEvent,
- *   metaExists?: typeof defaultMetaExists,
- *   existsSync?: typeof existsSync,
- *   dedupe?: (existing: object[], event: object) => boolean,
- *   readEvents?: typeof defaultReadEvents,
- * }} [deps]
- * @returns {boolean} true if append attempted
+ * @param {object} [deps]
+ * @returns {boolean}
  */
 export function obsAppend(event, deps = {}) {
   try {
@@ -62,19 +56,25 @@ export function obsAppend(event, deps = {}) {
 }
 
 /**
- * @description Dedupe: skip if same type already present (plan-created / spec-created once per run).
+ * @description Dedupe plan-created/spec-created once; task-executing by (type,n).
  * @param {object[]} existing
  * @param {object} event
- * @returns {boolean} true = skip append
+ * @returns {boolean} true = skip
  */
 export function dedupeByType(existing, event) {
   if (!event || typeof event.type !== "string") return false;
-  if (event.type !== "plan-created" && event.type !== "spec-created") return false;
-  return (existing || []).some((e) => e && e.type === event.type);
+  if (event.type === "plan-created" || event.type === "spec-created") {
+    return (existing || []).some((e) => e && e.type === event.type);
+  }
+  if (event.type === "task-executing" && event.n != null) {
+    return (existing || []).some(
+      (e) => e && e.type === "task-executing" && e.n === event.n,
+    );
+  }
+  return false;
 }
 
 /**
- * @description Build pipeline-type event from classify mode.
  * @param {unknown} mode
  * @returns {{ type: string, mode: string }|null}
  */
@@ -92,10 +92,8 @@ export function eventForPipelineType(mode) {
 }
 
 /**
- * @description Map a written path to plan-created / spec-created / null.
- * Anchored under `.opencode/plans/` (not `.state`). Basename alone is insufficient.
  * @param {unknown} filePath
- * @returns {{ type: string }|null}
+ * @returns {{ type: string, tasks?: number }|null}
  */
 export function eventForPlanPath(filePath) {
   if (typeof filePath !== "string" || !filePath) return null;
@@ -103,7 +101,6 @@ export function eventForPlanPath(filePath) {
   const segs = norm.split("/").filter(Boolean).map((s) => s.toLowerCase());
   const oc = segs.indexOf(".opencode");
   if (oc === -1 || segs[oc + 1] !== "plans") return null;
-  // reject .opencode/plans/.state/**
   if (segs[oc + 2] === ".state") return null;
   const base = segs[segs.length - 1] || "";
   if (base === "execution-plan.json") return { type: "plan-created" };
@@ -114,7 +111,6 @@ export function eventForPlanPath(filePath) {
 }
 
 /**
- * @description True when path is a FULL plan (tasks array non-empty), not classify stub.
  * @param {string} planFilePath
  * @param {{ readFileSync?: typeof readFileSync }} [io]
  * @returns {boolean}
@@ -131,7 +127,99 @@ export function isFullExecutionPlan(planFilePath, io = {}) {
 }
 
 /**
- * @description Bare role from subagent_type (strip @ and path).
+ * @description Canonical plan dir: .opencode/plans/<sessionId>-<featureId>
+ * @param {string} cwd
+ * @param {string} sessionId
+ * @param {string} featureId
+ * @returns {string|null}
+ */
+export function planDirForRun(cwd, sessionId, featureId) {
+  if (typeof cwd !== "string" || !cwd) return null;
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  if (typeof featureId !== "string" || !featureId) return null;
+  return join(cwd, ".opencode", "plans", `${sessionId}-${featureId}`);
+}
+
+/**
+ * @description Full plan exists for THIS run only (session+feature). Stub = false.
+ * Falls back to gate-state feature_id when featureId empty.
+ * @param {{
+ *   cwd: string,
+ *   sessionId?: string|null,
+ *   featureId?: string|null,
+ *   isFull?: (p: string) => boolean,
+ *   existsSync?: typeof existsSync,
+ *   readFileSync?: typeof readFileSync,
+ * }} opts
+ * @returns {boolean}
+ */
+export function fullPlanExistsForRun(opts) {
+  const {
+    cwd,
+    sessionId,
+    featureId,
+    isFull = isFullExecutionPlan,
+    existsSync: exists = existsSync,
+    readFileSync: read = readFileSync,
+  } = opts;
+  try {
+    const sid = typeof sessionId === "string" ? sessionId : "";
+    let fid = typeof featureId === "string" ? featureId : "";
+    if (!fid && sid) {
+      // gate-state feature_id
+      try {
+        const gs = join(cwd, ".opencode", "plans", ".state", sid, "gate-state.json");
+        if (exists(gs)) {
+          const j = JSON.parse(read(gs, "utf8"));
+          if (typeof j.feature_id === "string") fid = j.feature_id;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (sid && fid) {
+      const planPath = join(
+        cwd,
+        ".opencode",
+        "plans",
+        `${sid}-${fid}`,
+        "execution-plan.json",
+      );
+      if (exists(planPath) && isFull(planPath, { readFileSync: read })) return true;
+      return false;
+    }
+    // No session/feature: fail closed to "no full plan" (prefer spec-adversary over wrong eye)
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @description 1-based task index and total from full plan for taskId.
+ * @param {string} planFilePath
+ * @param {string} taskId
+ * @param {{ readFileSync?: typeof readFileSync }} [io]
+ * @returns {{ n: number, total: number }|null}
+ */
+export function taskIndexFromPlan(planFilePath, taskId, io = {}) {
+  try {
+    if (typeof taskId !== "string" || !taskId) return null;
+    const read = io.readFileSync ?? readFileSync;
+    const j = JSON.parse(read(planFilePath, "utf8"));
+    const tasks = Array.isArray(j?.tasks) ? j.tasks : [];
+    if (tasks.length === 0) return null;
+    const idx = tasks.findIndex(
+      (t) => t && (t.id === taskId || t.task_id === taskId),
+    );
+    if (idx < 0) return null;
+    return { n: idx + 1, total: tasks.length };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {unknown} raw
  * @returns {string}
  */
@@ -140,12 +228,12 @@ export function bareEyeRole(raw) {
   let s = raw.trim();
   if (s.startsWith("@")) s = s.slice(1);
   if (s.includes("/")) s = s.split("/").pop() || s;
+  if (s.includes(":")) s = s.slice(s.lastIndexOf(":") + 1);
   s = s.replace(/\.md$/i, "");
   return s.toLowerCase();
 }
 
 /**
- * @description Parse APPROVE|REVISE from eye response text.
  * @param {unknown} responseText
  * @returns {'APPROVE'|'REVISE'|null}
  */
@@ -168,7 +256,6 @@ export function parseEyeVerdict(responseText) {
 }
 
 /**
- * @description Map eye role + response to outbox event.
  * @param {unknown} roleRaw
  * @param {unknown} responseText
  * @param {{ planExists?: boolean }} [opts]
@@ -194,7 +281,6 @@ export function eventForEyeRole(roleRaw, responseText, opts = {}) {
 }
 
 /**
- * @description hand-ran event after hand-finished mark.
  * @param {{ task?: string, model?: string }} args
  * @returns {object|null}
  */
@@ -207,7 +293,6 @@ export function eventForHandRan(args = {}) {
 }
 
 /**
- * @description task-executing event.
  * @param {{ n?: unknown, total?: unknown }} args
  * @returns {object|null}
  */
@@ -219,7 +304,6 @@ export function eventForTaskExecuting(args = {}) {
 }
 
 /**
- * @description Whether role string is an observability eye.
  * @param {unknown} roleRaw
  * @returns {boolean}
  */
@@ -228,7 +312,19 @@ export function isEyeRole(roleRaw) {
 }
 
 /**
- * @description Resolve tool args from OC hook payload (output.args is primary — entry-gate contract).
+ * @param {unknown} roleRaw
+ * @returns {boolean}
+ */
+export function isHandRole(roleRaw) {
+  const bare = bareEyeRole(roleRaw);
+  if (!bare) return false;
+  if (bare === "test-author" || bare.startsWith("test-author")) return true;
+  if (bare === "executor" || bare.startsWith("executor-")) return true;
+  if (bare === "sniper" || bare.startsWith("sniper-")) return true;
+  return false;
+}
+
+/**
  * @param {unknown} input
  * @param {unknown} output
  * @returns {Record<string, unknown>|null}
@@ -247,4 +343,26 @@ export function resolveHookArgs(input, output) {
     return /** @type {Record<string, unknown>} */ (raw);
   }
   return null;
+}
+
+/**
+ * @param {Record<string, unknown>|null} args
+ * @returns {{ featureId: string, taskId: string, model: string, role: string }}
+ */
+export function extractTaskIds(args) {
+  if (!args) return { featureId: "", taskId: "", model: "", role: "" };
+  const nested =
+    args.input != null && typeof args.input === "object" && !Array.isArray(args.input)
+      ? /** @type {Record<string, unknown>} */ (args.input)
+      : null;
+  const str = (v) => (typeof v === "string" ? v : "");
+  const role = str(
+    args.subagent_type ?? args.subagentType ?? args.agent ?? args.role ?? nested?.subagent_type ?? nested?.agent,
+  );
+  const featureId = str(
+    args.feature_id ?? args.featureId ?? args.feature ?? nested?.feature_id ?? nested?.featureId,
+  );
+  const taskId = str(args.task_id ?? args.taskId ?? args.task ?? nested?.task_id ?? nested?.taskId);
+  const model = str(args.model ?? nested?.model);
+  return { featureId, taskId, model, role };
 }
