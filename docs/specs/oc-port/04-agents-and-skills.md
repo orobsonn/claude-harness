@@ -126,13 +126,13 @@ Planner and build must never write a full plan with uppercase triage modes.
 
 T6 = **artifacts + prose only**. Runtime dual merge wiring is **T8**.
 
-- [ ] All required agents exist under `core/opencode/agents` with routing-aligned models  
-- [ ] test-author present  
-- [ ] dual eye agent pair files present for plan-reviewer + adversary  
-- [ ] skills listed as required present under `core/opencode/skills`  
-- [ ] build.md **states** dual-always protocol in prose (implementation of merge/fail-open = T8)  
-- [ ] Spawn/primary vs subagent pattern documented for hands (P2)  
-- [ ] IMPLEMENTATION-TRACK T6 done  
+- [x] All required agents exist under `core/opencode/agents` with routing-aligned models  
+- [x] test-author present  
+- [x] dual eye agent pair files present for plan-reviewer + adversary  
+- [x] skills listed as required present under `core/opencode/skills`  
+- [x] build.md **states** dual-always protocol in prose (implementation of merge/fail-open = T8)  
+- [x] Spawn/primary vs subagent pattern documented for hands (P2)  
+- [x] IMPLEMENTATION-TRACK T6 done  
 
 ---
 
