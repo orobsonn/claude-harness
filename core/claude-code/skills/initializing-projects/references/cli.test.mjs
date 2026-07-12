@@ -37,6 +37,13 @@ test("parseCliArgs", () => {
     withCodex: false,
     runtimeTarget: "both",
   });
+  assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "claude"]), {
+    command: "init",
+    withCodex: false,
+    runtimeTarget: "claude",
+  });
+  // A garbage --target must fail loud, not silently fall back to claude-only.
+  assert.throws(() => parseCliArgs(["node", "cli.mjs", "init", "--target", "codex"]), /invalid --target/);
 });
 
 test("decideCodex: explicit flag wins without prompting", async () => {

@@ -5,9 +5,13 @@ description: "Installs (vendors) the Claude Harness core into a project's .claud
 
 # Initializing-Projects — Vendor the harness core into a project
 
-**This skill installs the framework into a target project.** It copies the source `core/` into the
-project's `.claude/` (the only place cloud routines can see), so the pipeline runs both locally and
-headless. It does not plan, implement, or review.
+**This skill installs the framework into a target project.** It vendors the source `core/` into the
+project — into `.claude/` for the **Claude Code** runtime, into `.opencode/` for the **OpenCode**
+runtime, or both — so the pipeline runs both locally and headless. It does not plan, implement, or review.
+
+The source `core/` is split into three parts: `core/shared/` (runtime-neutral engine + libs),
+`core/claude-code/` (the Claude Code shell), and `core/opencode/` (the OpenCode shell). The vendoring
+engine reads the split and writes only the shell(s) you target.
 
 **Announce at start (pt-br):** "Instalando o Claude Harness no `.claude/` do projeto."
 
@@ -31,18 +35,33 @@ later re-run can update deliberately.
 
 ## Pipeline
 
-### Step 1 — Confirm target and source
-- **Target:** the project root to onboard (default: current directory). Confirm with the operator.
+### Step 1 — Confirm target, source, and runtime
+- **Target dir:** the project root to onboard (default: current directory). Confirm with the operator.
 - **Source:** the claude-harness git URL (preferred) or a local clone path. If the operator has not
   configured a URL yet (the repo may be unpublished), use a local clone path.
+- **Runtime shell** — which shell(s) to vendor:
+  - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, or
+    `both`, honor it verbatim — including `both` on a project that today has only Claude Code (the
+    common way to add OpenCode to an existing project).
+  - **default (fresh project, no intent given):** `claude`.
+  - **LOCAL:** if unsure and the operator is present, ask which runtime(s). **HEADLESS:** never ask —
+    resolve deterministically from the routine prompt, else default `claude`.
+
+  This maps to the engine's **`--runtime claude|opencode|both`** flag. Do **not** confuse it with
+  `--target`, which is the destination **directory** — passing a runtime word to `--target` is
+  rejected by the engine (it would create a junk `./both/` dir).
 
 ### Step 2 — Run the vendoring installer
 Run the deterministic installer (Node builtins only, no install needed):
 
 ```bash
 node .claude/skills/initializing-projects/references/vendor-core.mjs \
-  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>]
+  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>] [--runtime claude|opencode|both]
 ```
+
+`--runtime opencode` (or `both`) vendors the OpenCode shell into `.opencode/` (agents, skills, plugins,
+tools, `AGENTS.md`, `opencode.json`, `harness.routing.json`); `--runtime claude` (default) vendors the
+Claude shell into `.claude/`. Both destinations are idempotent and non-clobber (see contract below).
 
 It performs, **idempotently**:
 - **framework-owned (overwritten):** `agents/`, `skills/`, `rules/`, `CLAUDE-HARNESS-MEMORY-MODEL.md`.
@@ -160,17 +179,22 @@ and branch protection status (applied, not applied due to missing token, or fail
 
 ## Idempotency contract
 
-Re-running the installer **updates** a project safely:
+Re-running the installer **updates** a project safely, per shell:
 - Framework files are refreshed to the new version.
-- The operator's accumulated memory (`.claude/memory/`), kaizen outbox, and project-specific `CLAUDE.md`
-  content (outside the markers) and `settings.json` are **never** overwritten.
-- `.harness-version` reflects the new source version.
+- **Claude shell:** the operator's accumulated memory (`.claude/memory/`), kaizen outbox, project-specific
+  `CLAUDE.md` content (outside the markers) and `settings.json` are **never** overwritten.
+- **OpenCode shell:** the same non-clobber parity holds — `MEMORY.md`/`kaizen.md` are seeded only if
+  absent, `AGENTS.md` is merged between markers (project content preserved), and an existing
+  `opencode.json` is left untouched (the harness config is written beside it as `opencode.harness.json`
+  for manual merge).
+- `.harness-version` (in each vendored shell) reflects the new source version.
 
 ---
 
 ## Anti-patterns
 
-- **Copying outside `.claude/`** — the harness lives under `.claude/` (agents/rules must be at its top for cloud discovery). Do not scatter files into the repo root.
+- **Copying outside the vendored shell** — the harness lives under `.claude/` (Claude) or `.opencode/` (OpenCode); agents/rules must be at that shell's top for discovery. Do not scatter files into the repo root (the engine already places `AGENTS.md`/`opencode.json` at the root for OpenCode — do not add more).
+- **Passing a runtime word to `--target`** — `--target` is the destination directory; the runtime shell is `--runtime`. `--target both` is rejected by the engine, not silently treated as claude.
 - **Clobbering project state** — never overwrite an existing `settings.json`, `memory/`, `kaizen.md`, or project content in `CLAUDE.md`. The marker merge and settings-merge step exist precisely to avoid this.
 - **Hardcoding the source path** — resolve the source via `--source` (git URL preferred); do not bake a machine-specific path into the skill.
 - **Enabling add-ons by default** — RTK and MV are opt-in. The core must work with neither.

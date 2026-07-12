@@ -225,16 +225,57 @@ export function resolveOpenCodeDir(coreDir) {
   return null;
 }
 
+/** @description Tokens that name a runtime shell (never a project directory). */
+export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "both", "all"]);
+
 /**
  * @description Normalize runtime target flag: claude | opencode | both.
+ * Fails LOUD on an unrecognized non-empty value instead of silently defaulting
+ * to claude — a typo / stale-binary / wrong-flag must never masquerade as a
+ * successful claude-only vendor. Only an ABSENT (or empty) value defaults to
+ * claude for backward compatibility.
  * @param {unknown} raw
  * @returns {"claude"|"opencode"|"both"}
+ * @throws {Error} when raw is a non-empty string that is not a known token
  */
 export function normalizeRuntimeTarget(raw) {
-  const v = String(raw ?? "claude").toLowerCase().trim();
+  const v = String(raw ?? "").toLowerCase().trim();
+  if (v === "" || v === "claude") return "claude";
   if (v === "opencode" || v === "oc") return "opencode";
   if (v === "both" || v === "all") return "both";
-  return "claude";
+  throw new Error(
+    `invalid --runtime "${raw}" — expected one of: claude | opencode | both`,
+  );
+}
+
+/**
+ * @description Resolve the project destination dir from an explicit `--target`.
+ * Guards the CLI↔vendor-core naming clash: the public CLI's `--target` names a
+ * RUNTIME (claude|opencode|both), but vendor-core's `--target` is a DIRECTORY.
+ * If a runtime token is passed where a directory is expected (and no such dir
+ * exists), fail with a hint pointing at `--runtime`, instead of silently
+ * creating a junk `./both/` directory.
+ * @param {unknown} raw - the raw `--target` value (undefined → cwd)
+ * @param {string} cwd - fallback when raw is absent
+ * @returns {string} an existing directory path
+ * @throws {Error} when the target is a runtime token or a non-existent dir
+ */
+export function resolveProjectTarget(raw, cwd) {
+  if (raw == null) return cwd;
+  const value = String(raw);
+  // Check the runtime-token guard FIRST (before existence): a stray `./both` dir
+  // must not defeat the hint. Strip a trailing slash so `both/` is still caught.
+  const bare = value.replace(/\/+$/, "").toLowerCase().trim();
+  if (RUNTIME_TOKENS.has(bare)) {
+    throw new Error(
+      `--target "${value}" looks like a runtime, not a directory. ` +
+        `vendor-core's --target is the project DIR; use --runtime ${bare} to pick the shell.`,
+    );
+  }
+  if (!existsSync(value) || !statSync(value).isDirectory()) {
+    throw new Error(`--target "${value}" is not an existing directory`);
+  }
+  return value;
 }
 
 /**
@@ -820,10 +861,17 @@ if (
   })()
 ) {
   const args = parseArgs(process.argv.slice(2));
-  const target = args.target ?? process.cwd();
   const stampDate = args.date ?? new Date().toISOString();
-  // --runtime: claude|opencode|both (CLI maps public --target to this). Default claude for BC.
-  const runtime = normalizeRuntimeTarget(args.runtime ?? "claude");
+  // --target is the project DIR; --runtime is the shell (claude|opencode|both).
+  // Both resolvers fail LOUD on bad input instead of silently defaulting.
+  let target;
+  let runtime;
+  try {
+    target = resolveProjectTarget(args.target, process.cwd());
+    runtime = normalizeRuntimeTarget(args.runtime);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
 
   const { coreDir, claudeCodeDir, version, cleanup } = resolveSource(args.source, args.ref);
 
