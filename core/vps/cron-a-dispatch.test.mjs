@@ -370,17 +370,31 @@ test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME in
     writeFileSync(join(homeDir, ".local", "share", "opencode", "auth.json"), "{}");
     mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
 
-    const fake = makeFakeSpawn();
+    // Spawn seam that REALLY materializes the worktree path (mkdirSync on `git worktree add`) so
+    // seedOpencodeRootConfig has a real destination dir to write into — dispatch now aborts BEFORE
+    // spawning tmux when the worktree does not actually exist on disk (HIGH security fix: never
+    // spawn a headless session without the hardened permission config successfully seeded).
+    const calls = [];
+    const spawn = (command, args = [], spawnOpts = {}) => {
+      calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+        mkdirSync(args[2], { recursive: true });
+      } else if (command === "cp") {
+        cpSync(args[1], args[2], { recursive: true });
+      }
+      return { ok: true };
+    };
+
     dispatch(
       { number: 275, body: "b" },
-      { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }), runtime: "opencode", homeDir }
+      { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }), runtime: "opencode", homeDir }
     );
 
     const expected = join(stateDir, "oc-data-275");
     assert.ok(existsSync(join(expected, "opencode", "auth.json")), "oc-data dir must exist after dispatch");
     // env-file is cleaned only on exit; during dispatch it is still on disk until session ends —
     // but spawn failure paths may remove it. Prefer asserting via the env handed to tmux spawn.
-    const tmux = findTmuxCall(fake.calls);
+    const tmux = findTmuxCall(calls);
     assert.ok(tmux, "tmux must be spawned");
     const envFromSpawn = tmux.env || {};
     // spawn may receive env via spawnOpts; also the session command sources the env-file.

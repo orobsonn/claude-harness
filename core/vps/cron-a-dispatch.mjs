@@ -403,17 +403,144 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
 }
 
 /**
+ * @description Canonical, FROZEN in-code source of truth for the dangerous-bash-command deny-list
+ * force-enforced onto every seeded worktree `opencode.json`, independent of whether the vendored
+ * `opencode.json.example` exists or is reachable at seed time. Before this hardening, a project
+ * vendored BEFORE this change with a stale root `opencode.json` missing these keys still hung
+ * headless `opencode run --auto` on `permission=ask` (issue #282 recurrence) — the fix must not
+ * depend on the example file being present, so this list is the double-fault safety net. Mirrors
+ * `core/opencode/opencode.json.example`'s `permission.bash` deny entries; kept in sync manually
+ * since — on a double-fault (malformed source AND unreadable/absent example) — this constant, not
+ * the example file, is the ONLY source of the deny-list actually written to disk.
+ */
+const DANGEROUS_BASH_DENYLIST = Object.freeze({
+  "git push --force*": "deny",
+  "git push -f*": "deny",
+  "git reset --hard*": "deny",
+  "git clean -f*": "deny",
+  "rm -rf /": "deny",
+  "rm -rf /*": "deny",
+  "rm -fr /": "deny",
+  "rm -fr /*": "deny",
+  "git add .": "deny",
+  "git add -A*": "deny",
+  "git add --all*": "deny",
+  "git commit --no-verify*": "deny",
+});
+
+/**
+ * @description Frozen safe defaults for every non-forced `permission` key. `enforceOpencodePermissions`
+ * force-overwrites only `question`, `external_directory`, and `bash` — a minimalist but otherwise valid
+ * source config (e.g. one that only sets `permission.bash`) leaves the other keys (`edit`, `read`, etc.)
+ * undefined, and if OpenCode defaults an undefined key to `"ask"`, a headless run hangs on the first use
+ * of that tool with no operator to answer. Spread FIRST in the final `permission` object so a key the
+ * source config DOES define still wins (spread order), while an ABSENT key falls back to `"allow"`
+ * instead of staying undefined. Mirrors `core/opencode/opencode.json.example`'s non-bash permission keys.
+ */
+const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
+  edit: "allow",
+  read: "allow",
+  glob: "allow",
+  grep: "allow",
+  list: "allow",
+  task: "allow",
+  skill: "allow",
+  todowrite: "allow",
+  webfetch: "allow",
+  websearch: "allow",
+  lsp: "allow",
+});
+
+/**
+ * @description Best-effort JSON-object file read. Returns null on ANY failure — missing file,
+ * unreadable, malformed JSON, or a parsed value that is not a plain object (array/primitive) — so
+ * every caller treats null uniformly as "no usable config here" and never has to catch a throw
+ * itself. This is the fail-safe seam that keeps `seedOpencodeRootConfig` from ever propagating a
+ * corrupted source config or crashing the seed.
+ * @param {string} path
+ * @returns {object|null}
+ */
+function tryReadJsonObject(path) {
+  try {
+    if (!existsSync(path)) return null;
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Force-enforces the critical opencode permission keys onto a base config object.
+ * `permission.question` and `permission.external_directory` are ALWAYS overwritten to the safe
+ * values regardless of what the base config carried. `permission.bash` is a UNION, never a
+ * replacement: `{'*':'allow'} ∪ base.bash ∪ example.bash ∪ DANGEROUS_BASH_DENYLIST` — a
+ * project-specific extra deny already present in `base.bash` always survives, and no canonical deny
+ * is ever dropped just because the source config omitted it. `'*': 'allow'` is spread LAST so no
+ * deny entry (from any source) can ever shadow the forced wildcard allow.
+ * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
+ * @param {object|null} exampleConfig - The vendored example, read independently of whether it was
+ *   the base, purely so its deny entries also join the union (belt-and-suspenders vs. drift between
+ *   the example file and the in-code constant).
+ * @returns {object}
+ */
+function enforceOpencodePermissions(baseConfig, exampleConfig) {
+  const config = baseConfig && typeof baseConfig === "object" ? { ...baseConfig } : {};
+  const basePermission = config.permission && typeof config.permission === "object" ? config.permission : {};
+  const baseBash = basePermission.bash && typeof basePermission.bash === "object" ? basePermission.bash : {};
+  const examplePermission =
+    exampleConfig && typeof exampleConfig.permission === "object" ? exampleConfig.permission : {};
+  const exampleBash = examplePermission.bash && typeof examplePermission.bash === "object" ? examplePermission.bash : {};
+  // Deny-only extraction: an entry from a LATER source can never overwrite a 'deny' already set by
+  // an EARLIER source — plain object-spread union would let exampleBash's (or the denylist's) value
+  // for a key silently clobber a project-specific deny already present in baseBash, resurrecting a
+  // permissive value for a key the project explicitly locked down. "ask" is normalized to "deny"
+  // per-source before the never-overwrite-a-deny check runs.
+  const bash = { "*": "allow" };
+  for (const source of [baseBash, exampleBash, DANGEROUS_BASH_DENYLIST]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (key === "*") continue;
+      const normalized = value === "ask" ? "deny" : value;
+      if (normalized === "deny" || !(key in bash)) {
+        bash[key] = normalized;
+      }
+    }
+  }
+  bash["*"] = "allow";
+  config.permission = {
+    ...HEADLESS_SAFE_PERMISSION_DEFAULTS,
+    ...basePermission,
+    question: "deny",
+    external_directory: "allow",
+    bash,
+  };
+  return config;
+}
+
+/**
  * @description Seeds OpenCode root config into a headless worktree.
  * `opencode.json` + `AGENTS.md` live at the project root (not under `.opencode/`), so a
  * `git worktree add` from origin/main often lacks them — and without `permission.external_directory`
  * / bash allow, headless `opencode run --auto` still hangs on `permission=ask` (issue #282).
  *
- * Prefer projectRoot copies (operator/vendored truth). Fallback: write `opencode.json` from the
- * vendored example under `.opencode/` sibling path `core/opencode/opencode.json.example` when the
- * worktree already has `.opencode` but no root config (harness source repo layout).
+ * Hardened contract: the projectRoot `opencode.json` is no longer blindly `copyFileSync`'d — it is
+ * PARSED, then the critical permission keys are FORCED (`enforceOpencodePermissions`) before the
+ * worktree file is written, so a stale root config vendored before this hardening (missing the
+ * critical keys) can never leave a headless run stuck on `permission=ask`. If the projectRoot source
+ * is malformed (JSON parse throws), the seed NEVER propagates the error and NEVER crashes: it falls
+ * back to the vendored `opencode.json.example` as a safe base and force-enforces the same keys. On a
+ * genuine double-fault (malformed source AND every vendored example candidate also
+ * absent/unreadable), it builds a minimal safe object whose bash deny-list comes from the in-code
+ * `DANGEROUS_BASH_DENYLIST` constant — never an empty or allow-all bash lacking denies.
  *
- * Always overwrites worktree `opencode.json` when projectRoot has one — permissions must track the
- * vendored example, not a stale checkout.
+ * Tradeoff (deliberate): the config SOURCE is the operator's mutable primary tree (`projectRoot`),
+ * not a pinned `origin/main` checkout — so an in-flight edit to the primary tree's `opencode.json`
+ * between dispatch cycles changes what gets seeded. This is intentional: permissions must track the
+ * vendored example/operator truth, not a stale checkout, and the fail-safe fallback above bounds the
+ * downside of that mutability (a malformed edit never crashes the seed or ships a permissive config).
+ *
+ * Always overwrites worktree `opencode.json`, whichever base config was resolved — permissions must
+ * track the vendored example, not a stale checkout.
  *
  * @param {string} worktreePath
  * @param {string} projectRoot
@@ -425,31 +552,58 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
   if (typeof worktreePath !== "string" || !worktreePath) return { copied, wroteExample };
   if (typeof projectRoot !== "string" || !projectRoot) return { copied, wroteExample };
 
-  for (const name of ["opencode.json", "AGENTS.md"]) {
-    const src = join(projectRoot, name);
-    const dst = join(worktreePath, name);
-    if (existsSync(src)) {
-      copyFileSync(src, dst);
-      copied.push(name);
-    }
-  }
+  // The projectRoot opencode.json is PARSED (never blindly copyFileSync'd) so the critical keys can
+  // be validated/forced regardless of what the source actually contains. tryReadJsonObject returns
+  // null uniformly on missing/unreadable/malformed — that null is what routes to the example fallback.
+  const cfgSrcPath = join(projectRoot, "opencode.json");
+  const sourceConfig = tryReadJsonObject(cfgSrcPath);
 
-  // Fallback when projectRoot has no opencode.json (not yet vendored at root): use example next to
-  // the copied harness tree if present under projectRoot/core/opencode or worktree/.opencode parent.
-  const dstCfg = join(worktreePath, "opencode.json");
-  if (!existsSync(dstCfg)) {
-    const candidates = [
-      join(projectRoot, "core", "opencode", "opencode.json.example"),
-      join(projectRoot, ".opencode", "opencode.json.example"),
-      join(worktreePath, ".opencode", "opencode.json.example"),
-    ];
-    for (const ex of candidates) {
-      if (!existsSync(ex)) continue;
-      copyFileSync(ex, dstCfg);
-      wroteExample = true;
+  // The example is resolved independently of whether it is the write BASE — its deny entries also
+  // join the union in enforceOpencodePermissions even when a valid projectRoot source is used as
+  // base (belt-and-suspenders against drift between the example file and DANGEROUS_BASH_DENYLIST).
+  const exampleCandidates = [
+    join(projectRoot, "core", "opencode", "opencode.json.example"),
+    join(projectRoot, ".opencode", "opencode.json.example"),
+    join(worktreePath, ".opencode", "opencode.json.example"),
+  ];
+  let exampleConfig = null;
+  for (const candidate of exampleCandidates) {
+    const parsed = tryReadJsonObject(candidate);
+    if (parsed) {
+      exampleConfig = parsed;
       break;
     }
   }
+
+  // Base resolution: valid projectRoot source wins; otherwise fall back to the example; on a genuine
+  // double-fault (both null) fall back to {} — enforceOpencodePermissions still forces every critical
+  // key (including the bash deny-list, from DANGEROUS_BASH_DENYLIST) onto an empty base, so a
+  // double-fault NEVER ships a permissive config.
+  let baseConfig = sourceConfig;
+  if (!baseConfig) {
+    wroteExample = true;
+    baseConfig = exampleConfig ?? {};
+  }
+
+  const finalConfig = enforceOpencodePermissions(baseConfig, exampleConfig);
+  const dstCfg = join(worktreePath, "opencode.json");
+  writeFileSync(dstCfg, `${JSON.stringify(finalConfig, null, 2)}\n`, "utf8");
+  if (!copied.includes("opencode.json")) copied.push("opencode.json");
+
+  // AGENTS.md copy happens AFTER the hardened opencode.json write, wrapped in its own best-effort
+  // try/catch: a copy failure (e.g. AGENTS.md is a directory, or unreadable) must never prevent or
+  // undo the config write above — that write is the whole point of this function.
+  try {
+    const agentsSrc = join(projectRoot, "AGENTS.md");
+    const agentsDst = join(worktreePath, "AGENTS.md");
+    if (existsSync(agentsSrc)) {
+      copyFileSync(agentsSrc, agentsDst);
+      copied.push("AGENTS.md");
+    }
+  } catch {
+    // best-effort: AGENTS.md is a nice-to-have; the hardened opencode.json is already written above
+  }
+
   return { copied, wroteExample };
 }
 
@@ -1047,11 +1201,35 @@ export async function dispatch(issue, opts) {
         const runOcPlansDir = resolveRunPlansDir(worktreePath, projectRoot, ".opencode");
         if (runOcPlansDir) rmSync(runOcPlansDir, { recursive: true, force: true });
       }
-      // Root config (permissions + instructions) must be in the worktree — not only .opencode/.
-      // Without this, headless hangs on external_directory/bash ask (vendored permissions never load).
-      seedOpencodeRootConfig(worktreePath, projectRoot);
     } catch {
       // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
+    }
+
+    // Root config (permissions + instructions) must be in the worktree — not only .opencode/.
+    // Without this, headless hangs on external_directory/bash ask (vendored permissions never load).
+    // NOT best-effort: a silent failure here would spawn a headless session without the enforced
+    // permission.question/external_directory/bash — recreating the exact permission=ask hang /
+    // silent-permissive regression this seed exists to prevent. Fail the dispatch instead of
+    // continuing, mirroring the bodyFile-write failure recovery path below.
+    try {
+      seedOpencodeRootConfig(worktreePath, projectRoot);
+    } catch {
+      try {
+        spawn("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot, env });
+      } catch {
+        // best-effort: a lingering worktree is bounded by layer-3 uniqueness; do not mask the failure
+      }
+      try {
+        rmSync(envFile);
+      } catch {
+        // best-effort cleanup
+      }
+      try {
+        rmSync(logPath, { force: true });
+      } catch {
+        // best-effort cleanup of the pre-created output-log
+      }
+      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
     }
   }
 
