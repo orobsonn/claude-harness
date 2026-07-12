@@ -5,6 +5,19 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.42.0](https://github.com/orobsonn/claude-harness/compare/v0.41.0...v0.42.0) (2026-07-12)
+
+
+### Features
+
+* add npm publish workflow triggered by release ([#278](https://github.com/orobsonn/claude-harness/issues/278)) ([17cdffb](https://github.com/orobsonn/claude-harness/commit/17cdffb578921bdcb321ce4ad346df65b87795d9))
+* **oc:** U2 trilhos completos de delivery bash (paridade CC) ([#281](https://github.com/orobsonn/claude-harness/issues/281)) ([3ed4ad1](https://github.com/orobsonn/claude-harness/commit/3ed4ad1ece7374f1a886c91c5c8ce8998b43c135))
+
+
+### Bug Fixes
+
+* pipe do prompt headless vai pro runner, nao pro ulimit ([#276](https://github.com/orobsonn/claude-harness/issues/276)) ([2c82f56](https://github.com/orobsonn/claude-harness/commit/2c82f567c1a3c4b7e4150764efe47835f71d05c1))
+
 ## [0.41.0](https://github.com/orobsonn/claude-harness/compare/v0.40.0...v0.41.0) (2026-07-12)
 
 
