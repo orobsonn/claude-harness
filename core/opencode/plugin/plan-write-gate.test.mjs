@@ -37,3 +37,15 @@ test("carve-out test fixtures pass", () => {
   const r = decide(p);
   assert.equal(r.allow, true);
 });
+
+test("traversal to state denied (no carve bypass)", () => {
+  const p = { tool_input: { file_path: "../../../__fixtures__/.opencode/plans/.state/s/gate-state.json" } };
+  const r = decide(p);
+  assert.equal(r.allow, false);
+});
+
+test("absolute path to plan does not hit oracle (fail-open)", () => {
+  const p = { tool_input: { file_path: "/tmp/.opencode/plans/foo/execution-plan.json" } };
+  const r = decide(p);
+  assert.equal(r.allow, true);
+});

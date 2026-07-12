@@ -15,7 +15,10 @@ function pathSegments(filePath) {
 }
 
 function isCarvedOut(filePath) {
-  const segs = pathSegments(filePath);
+  if (typeof filePath !== "string") return false;
+  const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
+  if (norm.includes("..")) return false; // traversal → no carve bypass
+  const segs = norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
   return segs.some((s) => s === "__fixtures__" || s.includes(".test."));
 }
 
@@ -28,6 +31,7 @@ function isForbiddenStateBasename(filePath) {
 function isStateFilePath(filePath) {
   if (typeof filePath !== "string" || filePath.length === 0) return false;
   const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
+  if (norm.startsWith("/") || norm.includes("..")) return false; // reject absolute/traversal
   const segs = norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
   if (!segs[segs.length - 1].endsWith(".json")) return false;
   const ci = segs.indexOf(".opencode");
@@ -37,6 +41,7 @@ function isStateFilePath(filePath) {
 function isExecutionPlanPath(filePath) {
   if (typeof filePath !== "string" || filePath.length === 0) return false;
   const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
+  if (norm.startsWith("/") || norm.includes("..")) return false; // reject absolute/traversal
   const segs = norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
   if (segs.length < 2) return false;
   if (segs[segs.length - 1] !== "execution-plan.json") return false;
