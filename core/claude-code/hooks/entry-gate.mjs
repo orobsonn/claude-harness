@@ -1264,13 +1264,17 @@ export function decide(payload, deps = {}) {
       }
       if (!record) return false;
       // A GENUINE run that did not reach DONE (FAILED or NOT_DONE) is what authorizes the K=1
-      // Claude escalation; a config error wrote no record and never lands here.
-      if (!AUTHORIZING_OUTCOMES.has(record?.outcome?.status)) return false;
+      // Claude escalation; a config error wrote no record and never lands here. SNIPER-ONLY widen:
+      // a record whose provider rate-limited the spawn before it could reach a locked-test verdict
+      // (rateLimited === true) ALSO authorizes — but only for the sniper's post-gate fix escalation,
+      // never the executor's escape hatch (which stays gated on AUTHORIZING_OUTCOMES alone).
+      const rateLimitedAuthorizes = role === "sniper" && record?.rateLimited === true;
+      if (!AUTHORIZING_OUTCOMES.has(record?.outcome?.status) && !rateLimitedAuthorizes) return false;
       // Freshness: a record is anchored to the freeze it ran against. If we can read HEAD and the
       // record is anchored, REJECT a record whose freeze differs from the current HEAD — a stale
       // FAILED from a prior run/freeze must never authorize a later, unfailed escalation. Only a
       // POSITIVE mismatch denies; an unreadable HEAD or an unanchored record fails open (the
-      // ticket + genuine-failure outcome still gate it).
+      // ticket + genuine-failure outcome still gate it). Same freshness check for the rate-limited path.
       if (head && record.freezeCommitSha && record.freezeCommitSha !== head) return false;
       return true;
     });

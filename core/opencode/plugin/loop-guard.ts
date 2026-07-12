@@ -20,7 +20,7 @@ export async function createLoopGuardHooks(
   } = await import("./lib/loop-decide.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { applyGateStatePatch } = await import("../../shared/lib/gate-state-shape.mjs")
+  const { mergeGateStatePatch } = await import("../../shared/lib/gate-state-shape.mjs")
 
   function statePathFor(sessionID: string): string | null {
     const res = gateStatePath({
@@ -46,7 +46,7 @@ export async function createLoopGuardHooks(
       const result = withGateStateLock(sp, (prev) => {
         const step = nextLoopCount(prev, sub)
         if (!step) return prev
-        const applied = applyGateStatePatch(prev, { [step.key]: step.next })
+        const applied = mergeGateStatePatch(prev, { [step.key]: step.next })
         return applied.ok ? applied.state : prev
       })
 

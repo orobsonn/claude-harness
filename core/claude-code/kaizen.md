@@ -929,3 +929,25 @@ manual-merge the queue.
   reject non-finite-safe integers (`Number.isSafeInteger` instead of `Number.isInteger`). The same
   pattern likely applies to any other marker taking a numeric `--n`/`--total`/`--findings` flag.
 - **Rationale:** low priority — bundle with the next `mark.mjs` touch rather than a dedicated fix.
+
+### 2026-07-12 — oc gate-state: `mergeGateStatePatch` validates dual-fields over the WHOLE merged state (self-brick risk when dual_status persistence is wired)
+
+- **Observed:** while resolving PR #269 against a `main` broken by #270, the OC consumers
+  (`core/opencode/plugin/lib/gate-state.mjs`, `loop-guard.ts`, `gate-state.test.mjs`) still imported the
+  removed `applyGateStatePatch` — a broken ESM import → 4 red tests on `main` (the CI does not run on
+  push-to-main, only on PRs, so #270's merge landed the break silently). Fixed by renaming the 3
+  consumers to the new `mergeGateStatePatch`. Adversarial review confirmed no live call-site hits the
+  OLD-vs-NEW semantic divergences (invalid-patch `{ok}` flip, non-marker array union-vs-replace,
+  `dual_completed`/`dual_status` strict validation) — all callers pass scalars, marker arrays, or
+  integer counters only.
+- **Latent risk (not fixed — no live trigger today):** `mergeGateStatePatch` runs
+  `validateGateStateDualFields` over `base ∪ patch`, i.e. the ENTIRE merged state read from disk. If any
+  OC code ever persists `dual_completed` or an invalid `dual_status` into a gate-state file, then EVERY
+  later merge — even a loop-counter increment or a fidelity stamp — begins returning `{ok:false}` and
+  denies. Today unreachable: `dual-enforcement.mjs` only READS dual fields; nothing writes them via
+  `mergeGateState`.
+- **Proposed change:** when dual_status persistence is wired, force the write path through
+  `dualStatusGatePatch` (enum-only) and never let a raw `dual_status`/`dual_completed` reach a
+  gate-state file, or scope `validateGateStateDualFields` to the patch delta rather than the whole state.
+- **Process gap:** add a `push: [main]` trigger (or a required merge-queue check) to `ci.yml` so a
+  non-squash merge / direct push can't land a red `main` unseen — this is how #270 broke it.

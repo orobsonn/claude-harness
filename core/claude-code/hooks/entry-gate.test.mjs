@@ -433,6 +433,158 @@ test("decide: executor with non-empty ticket array but only a FORGED (recordless
   assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow, false);
 });
 
+// ---------------------------------------------------------------------------
+// #ac-1.1 through #ac-1.5 — rate-limited sniper escalation widen (additive to
+// AUTHORIZING_OUTCOMES). These pin the contract for a `rateLimited` flag on the
+// on-disk run-record: a sniper's main-loop escalation is ALSO authorized when the
+// ticketed record shows `rateLimited === true` AND a fresh (HEAD-matching)
+// `freezeCommitSha`, even when `outcome.status` is not itself FAILED/NOT_DONE
+// (e.g. the hand never reached a locked-test verdict because the provider
+// rate-limited the spawn before it could run). The widen is sniper-only and
+// additive: it never relaxes the existing FAILED/NOT_DONE authorization, never
+// widens the executor's escape hatch, and the freshness cross-check still denies
+// a stale (non-HEAD) freezeCommitSha exactly as it does for the FAILED path.
+// ---------------------------------------------------------------------------
+
+test(
+  "#ac-1.1: sniper, ticket → record with rateLimited:true + non-authorizing outcome + fresh freeze → allow",
+  () => {
+    const payload = makeAgentPayload("ses_ratelimited_allow", "sniper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+    const readHandRecordFn = (qid) =>
+      qid === "feat/task-1"
+        ? { outcome: { status: "DONE" }, rateLimited: true, freezeCommitSha: "abc123" }
+        : null;
+    const headShaFn = () => "abc123"; // HEAD matches the record's freeze → fresh
+
+    const verdict = decide(payload, {
+      readTriage,
+      readGateStateFn,
+      readHandRecordFn,
+      headShaFn,
+      isHeadlessFn: () => false,
+    });
+
+    assert.equal(
+      verdict.allow,
+      true,
+      "a rate-limited record with a fresh freeze must authorize the sniper's K=1 escalation even without a FAILED/NOT_DONE outcome",
+    );
+  },
+);
+
+test(
+  "#ac-1.2: sniper, ticket → record with rateLimited false/absent + non-authorizing outcome → deny",
+  () => {
+    const payload = makeAgentPayload("ses_ratelimited_absent", "sniper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+    const readHandRecordFn = (qid) =>
+      qid === "feat/task-1" ? { outcome: { status: "DONE" }, freezeCommitSha: "abc123" } : null;
+    const headShaFn = () => "abc123";
+
+    const verdict = decide(payload, {
+      readTriage,
+      readGateStateFn,
+      readHandRecordFn,
+      headShaFn,
+      isHeadlessFn: () => false,
+    });
+
+    assert.equal(
+      verdict.allow,
+      false,
+      "without rateLimited:true, a non-authorizing outcome must still deny the sniper escalation",
+    );
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  },
+);
+
+test(
+  "#ac-1.3: sniper, ticket → record with rateLimited:true but STALE freezeCommitSha (differs from HEAD) → deny",
+  () => {
+    const payload = makeAgentPayload("ses_ratelimited_stale", "sniper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+    const readHandRecordFn = (qid) =>
+      qid === "feat/task-1"
+        ? { outcome: { status: "DONE" }, rateLimited: true, freezeCommitSha: "OLD-freeze" }
+        : null;
+    const headShaFn = () => "NEW-head"; // HEAD advanced past the record's freeze → stale
+
+    const verdict = decide(payload, {
+      readTriage,
+      readGateStateFn,
+      readHandRecordFn,
+      headShaFn,
+      isHeadlessFn: () => false,
+    });
+
+    assert.equal(
+      verdict.allow,
+      false,
+      "a rate-limited record whose freeze does not match HEAD must NOT authorize the sniper escalation",
+    );
+  },
+);
+
+test(
+  "#ac-1.4: sniper, ticket → record with rateLimited:true AND outcome FAILED + fresh freeze → allow (additive, does not regress the FAILED path)",
+  () => {
+    const payload = makeAgentPayload("ses_ratelimited_and_failed", "sniper");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+    const readHandRecordFn = (qid) =>
+      qid === "feat/task-1"
+        ? { outcome: { status: "FAILED" }, rateLimited: true, freezeCommitSha: "abc123" }
+        : null;
+    const headShaFn = () => "abc123";
+
+    const verdict = decide(payload, {
+      readTriage,
+      readGateStateFn,
+      readHandRecordFn,
+      headShaFn,
+      isHeadlessFn: () => false,
+    });
+
+    assert.equal(
+      verdict.allow,
+      true,
+      "rateLimited:true stacked with a genuine FAILED outcome must still allow — the widen is additive, never a regression of the existing FAILED authorization",
+    );
+  },
+);
+
+test(
+  "#ac-1.5: SAME record shape as #ac-1.1 but role=executor (not sniper) → deny (widen is sniper-only, never widens the executor escape hatch)",
+  () => {
+    const payload = makeAgentPayload("ses_ratelimited_executor_denied", "executor");
+    const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+    const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+    const readHandRecordFn = (qid) =>
+      qid === "feat/task-1"
+        ? { outcome: { status: "DONE" }, rateLimited: true, freezeCommitSha: "abc123" }
+        : null;
+    const headShaFn = () => "abc123";
+
+    const verdict = decide(payload, {
+      readTriage,
+      readGateStateFn,
+      readHandRecordFn,
+      headShaFn,
+      isHeadlessFn: () => false,
+    });
+
+    assert.equal(
+      verdict.allow,
+      false,
+      "the rateLimited widen must be sniper-only — the same record shape must NOT authorize the executor's main-loop escape",
+    );
+  },
+);
+
 test("decide: executor with triage mode QUICK → deny (Gate 1: QUICK not in {LIGHT,FULL})", () => {
   const payload = makeAgentPayload("ses_exec_quick", "executor");
   const readTriage = () => ({ mode: "QUICK", feature_id: "feat" });

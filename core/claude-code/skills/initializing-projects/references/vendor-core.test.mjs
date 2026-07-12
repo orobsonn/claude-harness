@@ -507,10 +507,14 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     }
     assert.deepEqual(cfg.plugin, defaultOcPluginPaths());
 
-    // rewritten shared imports must not point outside .opencode via absolute home
+    // entry-gate delegates shared logic to ./lib/dual-enforcement.mjs; its imports (and the
+    // shared imports rewritten inside dual-enforcement) must be relative, never absolute home.
     const entry = readFileSync(join(tempDir, ".opencode/plugin/entry-gate.ts"), "utf8");
-    assert.match(entry, /from "\.\.\/shared\/lib\/path-helpers\.mjs"|import\("\.\.\/shared\/lib\/path-helpers\.mjs"\)/);
+    assert.match(entry, /from "\.\/lib\/dual-enforcement\.mjs"|import\("\.\/lib\/dual-enforcement\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
+    const dualEnf = readFileSync(join(tempDir, ".opencode/plugin/lib/dual-enforcement.mjs"), "utf8");
+    assert.match(dualEnf, /from "\.\.\/\.\.\/shared\/lib\/gate-state-shape\.mjs"/);
+    assert.ok(!dualEnf.includes("/Users/"), "vendored shared import must be relative, not home path");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
