@@ -312,3 +312,15 @@ Spec pack: [`docs/specs/oc-port/`](docs/specs/oc-port/).
 ## Status
 
 Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado; motor VPS OC é fase 2.
+
+## Publicação no npm (mantenedor)
+
+O workflow `.github/workflows/npm-publish.yml` dispara automaticamente em `release: [published]`.
+
+**Setup único (primeira vez):**
+1. No GitHub → Settings → Secrets and variables → Actions → New repository secret
+2. Nome: `NPM_TOKEN`
+3. Valor: token de publish do npm (com permissão para o pacote scoped `@orobsonn/claude-harness`)
+4. A primeira publicação (≥0.40.0) pode exigir OTP/2FA manual do mantenedor no npm.
+
+Subsequentes publicações são automáticas, sem passos manuais.
