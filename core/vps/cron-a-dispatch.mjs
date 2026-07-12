@@ -63,7 +63,7 @@
  *   DEFAULT_MEM_GUARD_BYTES).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
-import { writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, existsSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -362,6 +362,96 @@ function defaultPrHeadSha(branch, { cwd, env }) {
  * inject a fixed `now` so the stamped closedAt is deterministic; production uses the default.
  */
 const defaultNow = () => Math.floor(Date.now() / 1000);
+
+/**
+ * @description Prepares an ephemeral OpenCode data home for one headless issue run.
+ * Isolation is load-bearing: interactive `opencode` and cron `opencode run` both default to
+ * `~/.local/share/opencode/opencode.db` — concurrent writers hit SQLite WAL checkpoint errors
+ * and the headless session dies in seconds (issue #275 re-dispatch).
+ *
+ * Cheap by design — does NOT copy the operator's fat interactive DB:
+ *   - fresh empty dir under stateDir (`oc-data-<issue>`)
+ *   - copies only `auth.json` (~1KB) so the model provider still authenticates
+ *   - wiped at the start of each dispatch and again on cron-a-exit
+ *
+ * @param {{ stateDir: string, issueNumber: number, homeDir?: string }} opts
+ * @returns {string} Absolute XDG_DATA_HOME path to inject into the session env.
+ */
+export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
+  const dataHome = join(stateDir, `oc-data-${issueNumber}`);
+  try {
+    rmSync(dataHome, { recursive: true, force: true });
+  } catch {
+    // best-effort wipe of a prior run
+  }
+  const ocDir = join(dataHome, "opencode");
+  mkdirSync(ocDir, { recursive: true });
+  const home = typeof homeDir === "string" && homeDir.length > 0 ? homeDir : process.env.HOME || "";
+  if (home) {
+    const srcAuth = join(home, ".local", "share", "opencode", "auth.json");
+    if (existsSync(srcAuth)) {
+      const dstAuth = join(ocDir, "auth.json");
+      copyFileSync(srcAuth, dstAuth);
+      try {
+        chmodSync(dstAuth, 0o600);
+      } catch {
+        // best-effort mode lock
+      }
+    }
+  }
+  return dataHome;
+}
+
+/**
+ * @description Seeds OpenCode root config into a headless worktree.
+ * `opencode.json` + `AGENTS.md` live at the project root (not under `.opencode/`), so a
+ * `git worktree add` from origin/main often lacks them — and without `permission.external_directory`
+ * / bash allow, headless `opencode run --auto` still hangs on `permission=ask` (issue #282).
+ *
+ * Prefer projectRoot copies (operator/vendored truth). Fallback: write `opencode.json` from the
+ * vendored example under `.opencode/` sibling path `core/opencode/opencode.json.example` when the
+ * worktree already has `.opencode` but no root config (harness source repo layout).
+ *
+ * Always overwrites worktree `opencode.json` when projectRoot has one — permissions must track the
+ * vendored example, not a stale checkout.
+ *
+ * @param {string} worktreePath
+ * @param {string} projectRoot
+ * @returns {{ copied: string[], wroteExample: boolean }}
+ */
+export function seedOpencodeRootConfig(worktreePath, projectRoot) {
+  const copied = [];
+  let wroteExample = false;
+  if (typeof worktreePath !== "string" || !worktreePath) return { copied, wroteExample };
+  if (typeof projectRoot !== "string" || !projectRoot) return { copied, wroteExample };
+
+  for (const name of ["opencode.json", "AGENTS.md"]) {
+    const src = join(projectRoot, name);
+    const dst = join(worktreePath, name);
+    if (existsSync(src)) {
+      copyFileSync(src, dst);
+      copied.push(name);
+    }
+  }
+
+  // Fallback when projectRoot has no opencode.json (not yet vendored at root): use example next to
+  // the copied harness tree if present under projectRoot/core/opencode or worktree/.opencode parent.
+  const dstCfg = join(worktreePath, "opencode.json");
+  if (!existsSync(dstCfg)) {
+    const candidates = [
+      join(projectRoot, "core", "opencode", "opencode.json.example"),
+      join(projectRoot, ".opencode", "opencode.json.example"),
+      join(worktreePath, ".opencode", "opencode.json.example"),
+    ];
+    for (const ex of candidates) {
+      if (!existsSync(ex)) continue;
+      copyFileSync(ex, dstCfg);
+      wroteExample = true;
+      break;
+    }
+  }
+  return { copied, wroteExample };
+}
 
 /**
  * @description Resolves the per-run `<runtimeDir>/plans` dir to purge after `cp -a`, or null when the
@@ -684,6 +774,7 @@ export async function dispatch(issue, opts) {
     memGuardBytes,
     precreateLog,
     runtime = "claude",
+    homeDir,
   } = opts;
   const resolvedPrecreateLog = precreateLog ?? defaultPrecreateLog;
   const issueNumber = issue.number;
@@ -819,6 +910,19 @@ export async function dispatch(issue, opts) {
     env.HARNESS_FIX_FINDINGS_PATH = fixFindingsPath;
   }
 
+  // OpenCode headless isolation: ephemeral XDG_DATA_HOME (empty DB + auth only) so this run never
+  // shares ~/.local/share/opencode/opencode.db with an interactive session or another issue.
+  // Claude path is untouched (no XDG_DATA_HOME injection).
+  if (runtime === "opencode") {
+    try {
+      const ocDataHome = prepareOpencodeDataHome({ stateDir, issueNumber, homeDir });
+      env.XDG_DATA_HOME = ocDataHome;
+      env.HARNESS_OC_DATA_HOME = ocDataHome; // exit cleans this; guarded basename oc-data-<n>
+    } catch {
+      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    }
+  }
+
   // Write the scoped env to a 0600 env-file. Sourced by the session command so the variables reach
   // the tmux session even when a server already exists (spawn env is ignored in that case).
   let envFile;
@@ -943,6 +1047,9 @@ export async function dispatch(issue, opts) {
         const runOcPlansDir = resolveRunPlansDir(worktreePath, projectRoot, ".opencode");
         if (runOcPlansDir) rmSync(runOcPlansDir, { recursive: true, force: true });
       }
+      // Root config (permissions + instructions) must be in the worktree — not only .opencode/.
+      // Without this, headless hangs on external_directory/bash ask (vendored permissions never load).
+      seedOpencodeRootConfig(worktreePath, projectRoot);
     } catch {
       // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
     }
