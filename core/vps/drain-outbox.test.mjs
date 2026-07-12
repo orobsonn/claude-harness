@@ -391,6 +391,30 @@ test("drainTelegramOutbox derives {type:'plan-created', tasks:9} once, idempoten
  * thread) AND the rendered message body contains '#141' (per-message run identity on the
  * fallback path — #ac-1.2).
  */
+test("drainTelegramOutbox does NOT derive plan-created from classify stub tasks:[] (OC)", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-stub-"));
+  mkdirSync(join(worktreePath, ".opencode", "plans", "ses_x-feat"), { recursive: true });
+  writeFileSync(
+    join(worktreePath, ".opencode", "plans", "ses_x-feat", "execution-plan.json"),
+    JSON.stringify({ kind: "stub", tasks: [] }),
+    "utf8",
+  );
+  writeMeta(stateDir, 284, {
+    issueNumber: 284,
+    project: "demo",
+    worktreePath,
+    threadId: 808,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 284, []);
+  const opts = { stateDir, homeDir: stateDir, chatId: 999, ratePerMinute: 30 };
+  await drainTelegramOutbox(opts, { ...seams, send: async () => ({ sent: true }) });
+  const plans = readEvents(metaPath(stateDir, 284)).filter((e) => e.type === "plan-created");
+  assert.strictEqual(plans.length, 0, "stub tasks:[] must not sticky plan-created");
+});
+
 test("drainTelegramOutbox routes a fallback-status run to the shared config threadId with a '#141' prefix in the body", async () => {
   const stateDir = makeStateDir();
   writeMeta(stateDir, 141, {

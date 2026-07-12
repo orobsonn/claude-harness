@@ -128,6 +128,15 @@ export async function executeClassify(
     })
   }
 
+  // Mid-run observability (#284): pipeline-type → Telegram drain (fail-open).
+  try {
+    const { eventForPipelineType, obsAppend } = await import("../plugin/lib/obs-emit.mjs")
+    const ev = eventForPipelineType(mode)
+    if (ev) obsAppend(ev)
+  } catch {
+    /* fail-open */
+  }
+
   const metadata = { plan_path: planPath, mode, feature_id: featureId }
   return {
     title: `classify: ${featureId} → ${mode}`,

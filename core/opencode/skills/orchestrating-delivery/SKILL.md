@@ -188,11 +188,32 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
-**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `core/opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
+**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author — do not rely on prose alone. **Every Task dispatch for a hand MUST pass top-level `feature_id` and `task_id`** (and optional `model`) so structural obs can fire; without them, obs-hand no-ops (no `unknown` spam). Additionally, the conductor MUST run these mark-gate CLI side-effects (idempotent / fail-open if env unset):
+
+```bash
+# After dual plan-reviewer merge (APPROVE|REVISE):
+node .opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
+
+# After upfront / final spec adversary (SHIP|BLOCK, findings count):
+node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findings 0
+
+# At the top of each task loop (1-based n / total from plan.tasks):
+node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
+
+# Right after each hand (executor/sniper/test-author) returns:
+node .opencode/plugin/lib/mark-gate.mjs hand-finished --session <sessionId> --feature <feature_id> --task <task_id> --model <model_id>
+
+# After final dual review join (Phase 3):
+node .opencode/plugin/lib/mark-gate.mjs final-review-done
+```
+
+Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
+
+**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `.opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
 
 ```bash
 node --input-type=module -e "
-import { stampFidelityPass } from './core/opencode/plugin/lib/mark-gate.mjs';
+import { stampFidelityPass } from './.opencode/plugin/lib/mark-gate.mjs';
 const r = stampFidelityPass({
   projectRoot: process.cwd(),
   sessionId: '<session_id>',

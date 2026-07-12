@@ -12,9 +12,9 @@ import { mergeGateState, readGateState } from "./gate-state.mjs";
 import {
   gateStatePath,
   handRecordPath,
-} from "../../../shared/lib/path-helpers.mjs";
+} from "../../shared/lib/path-helpers.mjs";
 import { dualStatusGatePatch } from "./dual-enforcement.mjs";
-import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
+import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs";
 import { eventForHandRan, eventForTaskExecuting, obsAppend, dedupeByType } from "./obs-emit.mjs";
 
 /**

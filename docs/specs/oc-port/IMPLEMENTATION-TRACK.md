@@ -60,6 +60,17 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 
 ---
 
+
+---
+
+## Phase 2b — OC observability parity (post T13)
+
+| ID | Item | Status | Date | Notes |
+|---|---|---|---|---|
+| T15 | OC mid-run outbox (stamp/eye/plan-write → Telegram) | done | 2026-07-12 | Issue #284 / PR #287 — dual BLOCK fixed: output.args, vendor plugins, full-plan probe, default export, skill belt |
+| T16 | OC headless permissions + dual nudge | pending | | Issue #285 |
+| T17 | Skills parity + auto-merge T14 closeout | pending | | Issue #286; T14 remains gated |
+
 ## Blockers log
 
 | Date | Item | Blocker | Resolution |

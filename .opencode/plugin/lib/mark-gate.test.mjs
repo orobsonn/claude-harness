@@ -21,7 +21,7 @@ import { mergeGateState, readGateState } from "./gate-state.mjs";
 import {
   gateStatePath,
   handRecordPath,
-} from "../../../shared/lib/path-helpers.mjs";
+} from "../../shared/lib/path-helpers.mjs";
 
 /**
  * @param {(ctx: { projectRoot: string, sessionId: string, statePath: string }) => void | Promise<void>} fn

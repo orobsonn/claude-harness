@@ -954,35 +954,47 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
   const worktreePath = meta?.worktreePath;
   if (typeof worktreePath !== "string" || !worktreePath) return;
 
-  const plansDir = join(worktreePath, ".claude", "plans");
+  // Runtime-aware: Claude uses .claude/plans; OpenCode uses .opencode/plans (scan both).
+  const plansDirs = [
+    join(worktreePath, ".claude", "plans"),
+    join(worktreePath, ".opencode", "plans"),
+  ];
   let hasSpec = false;
   let taskCount = null;
-  try {
-    const entries = readdirSync(plansDir);
-    for (const entry of entries) {
-      const subPath = join(plansDir, entry);
-      let st;
-      try {
-        st = statSync(subPath);
-      } catch {
-        continue;
+  for (const plansDir of plansDirs) {
+    try {
+      const entries = readdirSync(plansDir);
+      for (const entry of entries) {
+        if (entry === ".state" || entry.startsWith(".")) continue;
+        const subPath = join(plansDir, entry);
+        let st;
+        try {
+          st = statSync(subPath);
+        } catch {
+          continue;
+        }
+        if (!st.isDirectory()) continue;
+
+        const specPath = join(subPath, "spec.md");
+        try {
+          if (statSync(specPath).isFile()) hasSpec = true;
+        } catch {}
+
+        const planPath = join(subPath, "execution-plan.json");
+        try {
+          const raw = readFileSync(planPath, "utf8");
+          const parsed = JSON.parse(raw);
+          // Full plan only (mirror isFullExecutionPlan) — never sticky plan-created from classify stub.
+          if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+            const n = parsed.tasks.length;
+            // Prefer the largest full plan if multiple dirs exist (avoid last-wins wrong count).
+            if (taskCount == null || n > taskCount) taskCount = n;
+          }
+        } catch {}
       }
-      if (!st.isDirectory()) continue;
-
-      const specPath = join(subPath, "spec.md");
-      try {
-        if (statSync(specPath).isFile()) hasSpec = true;
-      } catch {}
-
-      const planPath = join(subPath, "execution-plan.json");
-      try {
-        const raw = readFileSync(planPath, "utf8");
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed.tasks)) taskCount = parsed.tasks.length;
-      } catch {}
+    } catch {
+      // fail-open: missing or unreadable plans dir is not an error
     }
-  } catch {
-    // fail-open: missing or unreadable plans dir is not an error
   }
 
   if (hasSpec && !events.some((event) => event.type === "spec-created")) {
