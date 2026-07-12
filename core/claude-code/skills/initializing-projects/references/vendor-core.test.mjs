@@ -31,6 +31,8 @@ import {
   rewriteSharedImportsForVendor,
   pluginsAreRelative,
   defaultOcPluginPaths,
+  normalizeRuntimeTarget,
+  resolveProjectTarget,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -515,6 +517,44 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     const dualEnf = readFileSync(join(tempDir, ".opencode/plugin/lib/dual-enforcement.mjs"), "utf8");
     assert.match(dualEnf, /from "\.\.\/\.\.\/shared\/lib\/gate-state-shape\.mjs"/);
     assert.ok(!dualEnf.includes("/Users/"), "vendored shared import must be relative, not home path");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("normalizeRuntimeTarget: absent/empty → claude; known tokens map; garbage THROWS (no silent fail-open)", () => {
+  assert.equal(normalizeRuntimeTarget(undefined), "claude");
+  assert.equal(normalizeRuntimeTarget(null), "claude");
+  assert.equal(normalizeRuntimeTarget(""), "claude");
+  assert.equal(normalizeRuntimeTarget("claude"), "claude");
+  assert.equal(normalizeRuntimeTarget("opencode"), "opencode");
+  assert.equal(normalizeRuntimeTarget("oc"), "opencode");
+  assert.equal(normalizeRuntimeTarget("both"), "both");
+  assert.equal(normalizeRuntimeTarget("all"), "both");
+  assert.equal(normalizeRuntimeTarget("BOTH"), "both");
+  // The fail-open bug: a typo / stale-binary token must NOT become a silent claude-only vendor.
+  assert.throws(() => normalizeRuntimeTarget("codex"), /invalid --runtime/);
+  assert.throws(() => normalizeRuntimeTarget("cluade"), /invalid --runtime/);
+});
+
+test("resolveProjectTarget: existing dir passes; runtime token → hint at --runtime; missing dir throws", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vc-target-"));
+  try {
+    assert.equal(resolveProjectTarget(undefined, tempDir), tempDir);
+    assert.equal(resolveProjectTarget(tempDir, "/unused"), tempDir);
+    // The --target/--runtime footgun: `--target both` (not a dir) must not create ./both/.
+    assert.throws(() => resolveProjectTarget("both", tempDir), /use --runtime both/);
+    assert.throws(() => resolveProjectTarget("opencode", tempDir), /use --runtime opencode/);
+    assert.throws(() => resolveProjectTarget("both/", tempDir), /use --runtime both/);
+    assert.throws(() => resolveProjectTarget(join(tempDir, "nope"), tempDir), /not an existing directory/);
+    // F2: a file path is NOT a directory — reject at the boundary, not later at mkdir.
+    const aFile = join(tempDir, "afile.txt");
+    writeFileSync(aFile, "x");
+    assert.throws(() => resolveProjectTarget(aFile, tempDir), /not an existing directory/);
+    // F3: a stray dir literally named `both` must STILL get the runtime hint, not vendor into ./both.
+    const bothDir = join(tempDir, "both");
+    mkdirSync(bothDir);
+    assert.throws(() => resolveProjectTarget("both", bothDir), /use --runtime both/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

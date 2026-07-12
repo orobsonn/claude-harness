@@ -48,9 +48,10 @@ export function parseCliArgs(argv) {
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--target" && argv[i + 1]) {
       const v = String(argv[++i]).toLowerCase();
-      if (v === "opencode" || v === "oc") runtimeTarget = "opencode";
+      if (v === "claude") runtimeTarget = "claude";
+      else if (v === "opencode" || v === "oc") runtimeTarget = "opencode";
       else if (v === "both" || v === "all") runtimeTarget = "both";
-      else runtimeTarget = "claude";
+      else throw new Error(`invalid --target "${v}" — expected: opencode | claude | both`);
     }
   }
   return {
@@ -309,11 +310,18 @@ function setupVpsSeams() {
 }
 
 async function main() {
+  let parsed;
+  try {
+    parsed = parseCliArgs(process.argv);
+  } catch (err) {
+    process.stderr.write(`[claude-harness] ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
   const {
     command: rawCommand,
     withCodex: withCodexFlag,
     runtimeTarget,
-  } = parseCliArgs(process.argv);
+  } = parsed;
   // `init` is a backward-compatible alias for `setup-local` (vendors the harness locally).
   const command = rawCommand === "init" ? "setup-local" : rawCommand;
 

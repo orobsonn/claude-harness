@@ -7,7 +7,16 @@ description: "Use to install or update the Claude Harness in the CURRENT project
 
 This skill is the **one-call shortcut** for keeping a project's vendored harness in sync. The operator
 just invokes it in the repo; the source URL lives here, so there is no URL to copy/paste. It does not
-plan, implement, or review — it only vendors the framework `core/` into the project's `.claude/`.
+plan, implement, or review — it only vendors the framework `core/` into the project's runtime shell(s)
+(`.claude/` for Claude Code, `.opencode/` for OpenCode).
+
+**Two distinct verbs — do not conflate them:**
+- **Sync (default):** refresh the shell(s) the project **already has** to the latest version. Detected
+  automatically (see Step 2), no operator input needed.
+- **Add a runtime:** vendor a shell the project does **not** yet have (e.g. add OpenCode to a
+  Claude-only project). This is **never** inferred from detection — detection is blind to a shell that
+  isn't there yet. It requires **explicit operator intent** (`opencode` / `both`), passed through to
+  the engine's `--runtime`.
 
 **Announce at start (pt-br):** "Atualizando o Claude Harness a partir do repo-fonte."
 
@@ -44,31 +53,53 @@ project is already at the latest tag, say so and ask whether to re-vendor anyway
 
 ---
 
-## Step 2 — Install or update (auto-detect)
+## Step 2 — Install or update (auto-detect + resolve runtime)
 
-Detect by the presence of the vendored installer:
+**2a — Detect install-vs-update.** Look for the vendored installer under **either** shell (a project
+may have only `.claude/`, only `.opencode/`, or both):
 
 ```bash
-test -f .claude/skills/initializing-projects/references/vendor-core.mjs && echo update || echo install
+{ test -f .claude/skills/initializing-projects/references/vendor-core.mjs || \
+  test -f .opencode/.harness-version; } && echo update || echo install
 ```
 
+**2b — Resolve the runtime to vendor** (the `--runtime` value for the engine):
+- **Sync (default):** the set of shells already present — `.claude/` present → include `claude`;
+  `.opencode/` present → include `opencode`; both present → `both`.
+- **Add a runtime (explicit intent only):** if the operator asked to add a shell (e.g. "add opencode",
+  "vendor both"), use that intent instead — it is a **superset** of what's present, never inferred from
+  detection. `both` on a Claude-only project is the normal way to add OpenCode.
+- Never pass a runtime word to `--target` (that flag is the destination dir); the runtime is `--runtime`.
+
 - **update** (installer already vendored — the common case): run it directly, **pinned to the latest
-  release tag** for a reproducible sync. **Run it TWICE** — the first pass may execute a STALE
-  vendored `vendor-core` (an old copy that predates a step, e.g. the `vps/` mirroring); that pass
-  overwrites the installer itself with the current version, so the **second pass always runs the
-  current logic** (mirroring + the integrity self-check) and self-heals the stale-jump. The second
-  pass is idempotent — a no-op when the first was already current:
+  release tag** for a reproducible sync, passing the resolved `--runtime`. **Run it TWICE** — the first
+  pass may execute a STALE vendored `vendor-core` (an old copy that predates a step — e.g. the `vps/`
+  mirroring, or the `--runtime` flag itself). A stale copy silently ignores an unknown `--runtime`, but
+  that same pass overwrites the installer with the current version, so the **second pass always runs the
+  current logic** (understands `--runtime`, does the mirroring + integrity self-check) and self-heals the
+  stale-jump. **Pass `--runtime` identically to BOTH passes** — otherwise a newly-added shell (e.g.
+  `both`) is created only if the flag reaches the second, current pass:
   ```bash
   node .claude/skills/initializing-projects/references/vendor-core.mjs \
-    --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target . &&
+    --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target . --runtime <resolved> &&
   node .claude/skills/initializing-projects/references/vendor-core.mjs \
-    --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target .
+    --source https://github.com/orobsonn/claude-harness.git --ref <latest-tag> --target . --runtime <resolved>
   ```
   The current `vendor-core` ends with an **integrity gate**: if any vendored hook imports a
   `../vps/<mod>.mjs` that was NOT mirrored into `.claude/vps/`, it exits **non-zero with a loud
   FATAL** instead of silently shipping a hook that crashes on load (ERR_MODULE_NOT_FOUND) and blocks
   the entry-gate. If the second pass still fails the gate, STOP and surface it — do not commit a
   broken `.claude/`.
+
+  **OC-only project (no local `.claude/` engine):** if detection matched on `.opencode/.harness-version`
+  and there is no `.claude/skills/.../vendor-core.mjs` to run, run the CLI from the **pinned git release
+  tag** (it fetches the engine from that release — do NOT use npm `@latest`, which lags and may predate
+  OpenCode support, silently vendoring a stale Claude-only harness):
+  ```bash
+  npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>
+  ```
+  (`--target` here is the **public CLI** flag = runtime shell; the CLI maps it to the engine's
+  `--runtime`. Use `opencode` or `both`.)
 
 - **install** (first time — no installer in the project yet): invoke the **`initializing-projects`**
   skill and hand it the baked `SOURCE_URL` and the latest tag. It bootstraps the clone and runs the
