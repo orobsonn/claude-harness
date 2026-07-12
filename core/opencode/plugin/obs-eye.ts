@@ -1,9 +1,24 @@
 /**
  * @description Post-task observability for eye agents (OC port of CC obs-eye-append).
  * tool.execute.after: args from output.args. Full plan scoped to session+feature (not global scan).
+ * Also extends the hook with a deterministic dual-eye nudge (compute → persist → mutate) for
+ * eligible primary eyes (plan-reviewer / adversary, never the -openai secondary) — see
+ * ./lib/dual-nudge.mjs for the pure, atomic gate-state read-decide-write.
  * Default export is the OC plugin load contract.
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
+
+const FALSY_ENV_VALUES = new Set(["", "0", "false", "off", "no"]);
+
+/**
+ * @description True when HARNESS_CODEX_ADVERSARY is set to a non-falsy sentinel.
+ * @param {string|undefined} raw
+ * @returns {boolean}
+ */
+function isCrossFamilyEnabled(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  return !FALSY_ENV_VALUES.has(raw.toLowerCase());
+}
 
 function isTaskTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
@@ -41,6 +56,7 @@ export async function createObsEyeHooks(
     fullPlanExistsForRun,
     resolveHookArgs,
     extractTaskIds,
+    bareEyeRole,
   } = await import("./lib/obs-emit.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   return {
@@ -62,6 +78,56 @@ export async function createObsEyeHooks(
         });
         const ev = eventForEyeRole(ids.role, text, { planExists });
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
+
+        // Deterministic dual-eye nudge — eligible PRIMARY eyes only (bare role
+        // plan-reviewer/adversary; the -openai secondary never triggers a nudge).
+        try {
+          const bareRole = bareEyeRole(ids.role);
+          const rawPhase =
+            typeof args?.phase === "string" && args.phase.length > 0
+              ? args.phase
+              : null;
+          const phase =
+            rawPhase ??
+            (bareRole === "plan-reviewer"
+              ? "plan"
+              : planExists
+                ? "task"
+                : "spec");
+          if (
+            (bareRole === "plan-reviewer" || bareRole === "adversary") &&
+            sessionId &&
+            phase &&
+            ids.featureId &&
+            ids.taskId
+          ) {
+            const { applyDualNudge } = await import("./lib/dual-nudge.mjs");
+            const { gateStatePath } = await import(
+              "../../shared/lib/path-helpers.mjs"
+            );
+            const crossFamilyEnabled = isCrossFamilyEnabled(
+              process.env.HARNESS_CODEX_ADVERSARY,
+            );
+            const nudge = applyDualNudge({
+              role: bareRole,
+              featureId: ids.featureId,
+              taskId: ids.taskId,
+              phase,
+              crossFamilyEnabled,
+              gateStatePath: () =>
+                gateStatePath({ projectRoot: cwd, runtime: "opencode", sessionId }),
+            });
+            // STEP 3 (MUTATE): only after a successful persist — never before, never on deny.
+            if (nudge.ok) {
+              if (!output.metadata || typeof output.metadata !== "object") {
+                output.metadata = {};
+              }
+              output.metadata.dual_nudge = nudge.message;
+            }
+          }
+        } catch {
+          /* fail-open — dual-nudge never blocks observability */
+        }
       } catch {
         /* fail-open */
       }
