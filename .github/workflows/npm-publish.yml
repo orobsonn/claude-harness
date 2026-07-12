@@ -1,0 +1,33 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Verify version matches release tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch: package.json has $PKG_VERSION but tag is v$TAG_VERSION"
+            exit 1
+          fi
+          echo "Version $PKG_VERSION matches tag"
+
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
