@@ -37,6 +37,7 @@ export async function createObsEyeHooks(
     isEyeRole,
     isHandRole,
     obsAppend,
+    dedupeByType,
     fullPlanExistsForRun,
     resolveHookArgs,
     extractTaskIds,
@@ -60,7 +61,7 @@ export async function createObsEyeHooks(
           featureId: ids.featureId || null,
         });
         const ev = eventForEyeRole(ids.role, text, { planExists });
-        if (ev) obsAppend(ev);
+        if (ev) obsAppend(ev, { dedupe: dedupeByType });
       } catch {
         /* fail-open */
       }

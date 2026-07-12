@@ -63,12 +63,27 @@ export function obsAppend(event, deps = {}) {
  */
 export function dedupeByType(existing, event) {
   if (!event || typeof event.type !== "string") return false;
-  if (event.type === "plan-created" || event.type === "spec-created") {
+  if (event.type === "plan-created" || event.type === "spec-created" || event.type === "final-review-done") {
     return (existing || []).some((e) => e && e.type === event.type);
   }
   if (event.type === "task-executing" && event.n != null) {
     return (existing || []).some(
       (e) => e && e.type === "task-executing" && e.n === event.n,
+    );
+  }
+  // plan-reviewed: same type+verdict (dual eyes + CLI belt)
+  if (event.type === "plan-reviewed") {
+    return (existing || []).some(
+      (e) =>
+        e &&
+        e.type === "plan-reviewed" &&
+        (e.verdict ?? null) === (event.verdict ?? null),
+    );
+  }
+  // hand-ran: same task id
+  if (event.type === "hand-ran" && event.task) {
+    return (existing || []).some(
+      (e) => e && e.type === "hand-ran" && e.task === event.task,
     );
   }
   return false;

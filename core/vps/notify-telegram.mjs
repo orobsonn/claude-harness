@@ -984,7 +984,12 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
         try {
           const raw = readFileSync(planPath, "utf8");
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed.tasks)) taskCount = parsed.tasks.length;
+          // Full plan only (mirror isFullExecutionPlan) — never sticky plan-created from classify stub.
+          if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+            const n = parsed.tasks.length;
+            // Prefer the largest full plan if multiple dirs exist (avoid last-wins wrong count).
+            if (taskCount == null || n > taskCount) taskCount = n;
+          }
         } catch {}
       }
     } catch {

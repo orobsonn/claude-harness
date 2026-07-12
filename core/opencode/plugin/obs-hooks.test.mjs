@@ -100,3 +100,29 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("obs-hand: without task_id does not emit hand-ran unknown", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-skip-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const hooks = await createObsHandHooks(dir);
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: "ses_x" },
+      { args: { subagent_type: "executor-high" } },
+    );
+    // no events file or empty
+    let raw = "";
+    try {
+      raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
+    } catch {
+      raw = "";
+    }
+    assert.equal(raw.includes("unknown"), false, raw);
+    assert.equal(raw.includes("hand-ran"), false, raw);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

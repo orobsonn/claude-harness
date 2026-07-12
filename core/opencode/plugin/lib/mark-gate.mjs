@@ -15,7 +15,7 @@ import {
 } from "../../../shared/lib/path-helpers.mjs";
 import { dualStatusGatePatch } from "./dual-enforcement.mjs";
 import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
-import { eventForHandRan, eventForTaskExecuting, obsAppend } from "./obs-emit.mjs";
+import { eventForHandRan, eventForTaskExecuting, obsAppend, dedupeByType } from "./obs-emit.mjs";
 
 /**
  * @description Build fidelity_pass entry: feature/task or feature/task@sha.
@@ -503,7 +503,7 @@ export function stampHandFinished(args = {}) {
         task,
         model: typeof args.model === "string" ? args.model : undefined,
       });
-      if (ev) obsAppend(ev);
+      if (ev) obsAppend(ev, { dedupe: dedupeByType });
     } catch {
       /* fail-open */
     }
@@ -766,7 +766,7 @@ if (isMain) {
       console.error("plan-reviewed requires --verdict APPROVE|REVISE");
       process.exit(1);
     }
-    obsAppend({ type: "plan-reviewed", verdict });
+    obsAppend({ type: "plan-reviewed", verdict }, { dedupe: dedupeByType });
     result = { ok: true };
   } else if (action === "spec-adversaried") {
     const verdict = String(args.verdict || "").toUpperCase();
@@ -781,9 +781,12 @@ if (isMain) {
       findings: Number.isFinite(findings) ? findings : 0,
     });
     result = { ok: true };
+  } else if (action === "final-review-done") {
+    obsAppend({ type: "final-review-done" }, { dedupe: dedupeByType });
+    result = { ok: true };
   } else {
     console.error(
-      "usage: mark-gate.mjs brainstormed|adversary_fired|fidelity|dual|regate-pending|regate-passed|hand-finished|capture-verified|task-executing|plan-reviewed|spec-adversaried --session <id> [--root <dir>] ...",
+      "usage: mark-gate.mjs brainstormed|adversary_fired|fidelity|dual|regate-pending|regate-passed|hand-finished|capture-verified|task-executing|plan-reviewed|spec-adversaried|final-review-done --session <id> [--root <dir>] ...",
     );
     process.exit(2);
   }

@@ -6,3 +6,6 @@ export const versionCheck: Plugin = ({ app, client }) => ({
     // advisory only (no block)
   },
 })
+
+/** @description OC load contract — default export required. */
+export default versionCheck;

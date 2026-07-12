@@ -75,9 +75,14 @@ export async function createObsHandHooks(
         const args = resolveHookArgs(input, output);
         const ids = extractTaskIds(args);
         if (!isHandRole(ids.role)) return;
-        const task = ids.taskId || "unknown";
-        const ev = eventForHandRan({ task, model: ids.model || ids.role });
-        if (ev) obsAppend(ev);
+        // No structured task_id → skip (avoid hand-ran task:"unknown" spam).
+        // Trustworthy hand-ran comes from stampHandFinished / mark-gate CLI with real ids.
+        if (!ids.taskId) return;
+        const ev = eventForHandRan({
+          task: ids.taskId,
+          model: ids.model || ids.role,
+        });
+        if (ev) obsAppend(ev, { dedupe: dedupeByType });
       } catch {
         /* fail-open */
       }

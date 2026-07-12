@@ -9,3 +9,6 @@ export const reinjectState: Plugin = ({ app, client }) => ({
     }
   },
 })
+
+/** @description OC load contract — default export required. */
+export default reinjectState;

@@ -125,3 +125,28 @@ test("obsAppend fail-open", () => {
   assert.equal(bareEyeRole("@Foo/Bar"), "bar");
   assert.equal(isFullExecutionPlan("/nope"), false);
 });
+
+test("dedupe plan-reviewed by verdict; hand-ran by task", () => {
+  assert.equal(
+    dedupeByType([{ type: "plan-reviewed", verdict: "APPROVE" }], {
+      type: "plan-reviewed",
+      verdict: "APPROVE",
+    }),
+    true,
+  );
+  assert.equal(
+    dedupeByType([{ type: "plan-reviewed", verdict: "APPROVE" }], {
+      type: "plan-reviewed",
+      verdict: "REVISE",
+    }),
+    false,
+  );
+  assert.equal(
+    dedupeByType([{ type: "hand-ran", task: "t1" }], { type: "hand-ran", task: "t1" }),
+    true,
+  );
+  assert.equal(
+    dedupeByType([{ type: "final-review-done" }], { type: "final-review-done" }),
+    true,
+  );
+});
