@@ -1,11 +1,13 @@
 /**
- * @description OC gate markers — stamp fidelity_pass (and future marks) via mergeGateState.
- * Orchestrator calls stampFidelityPass after compliance fidelity PASS, before executor spawn.
+ * @description OC gate markers — stamp ceremony + fidelity via mergeGateState.
+ * stampBrainstormed / stampAdversaryFired / stampDualStatus / stampFidelityPass.
+ * dual_status only via dualStatusGatePatch (enum). CLI: node mark-gate.mjs <action> ...
  * Never throws.
  */
 import { spawnSync } from "node:child_process";
 import { mergeGateState } from "./gate-state.mjs";
 import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
+import { dualStatusGatePatch } from "./dual-enforcement.mjs";
 
 /**
  * @description Build fidelity_pass entry: feature/task or feature/task@sha.
@@ -131,4 +133,195 @@ export function stampFidelityPass({
       reason: err instanceof Error ? err.message : "stampFidelityPass failed",
     };
   }
+}
+
+/**
+ * @description Stamp a boolean ceremony marker via mergeGateState.
+ * @param {{ projectRoot: string, sessionId: string, key: "brainstormed"|"adversary_fired", merge?: typeof mergeGateState, resolvePath?: typeof gateStatePath }} args
+ * @returns {{ ok: true, state: Record<string, unknown> } | { ok: false, reason: string }}
+ */
+export function stampCeremonyMarker({
+  projectRoot,
+  sessionId,
+  key,
+  merge = mergeGateState,
+  resolvePath = gateStatePath,
+} = {}) {
+  try {
+    if (key !== "brainstormed" && key !== "adversary_fired") {
+      return { ok: false, reason: "key must be brainstormed or adversary_fired" };
+    }
+    if (
+      typeof projectRoot !== "string" ||
+      !projectRoot ||
+      typeof sessionId !== "string" ||
+      !sessionId
+    ) {
+      return { ok: false, reason: "projectRoot and sessionId required" };
+    }
+    const gp = resolvePath({
+      projectRoot,
+      runtime: "opencode",
+      sessionId,
+    });
+    if (!gp.ok) {
+      return { ok: false, reason: gp.reason ?? "gateStatePath failed" };
+    }
+    const merged = merge(gp.path, { [key]: true });
+    if (!merged.ok) {
+      return { ok: false, reason: merged.reason ?? "mergeGateState failed" };
+    }
+    if (merged.state?.[key] !== true) {
+      return { ok: false, reason: `${key} read-back failed` };
+    }
+    return { ok: true, state: merged.state };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "stampCeremonyMarker failed",
+    };
+  }
+}
+
+/**
+ * @description Stamp brainstormed=true.
+ * @param {object} args
+ * @returns {ReturnType<typeof stampCeremonyMarker>}
+ */
+export function stampBrainstormed(args) {
+  return stampCeremonyMarker({ ...args, key: "brainstormed" });
+}
+
+/**
+ * @description Stamp adversary_fired=true.
+ * @param {object} args
+ * @returns {ReturnType<typeof stampCeremonyMarker>}
+ */
+export function stampAdversaryFired(args) {
+  return stampCeremonyMarker({ ...args, key: "adversary_fired" });
+}
+
+/**
+ * @description Stamp dual_status via dualStatusGatePatch only (enum).
+ * @param {{ projectRoot: string, sessionId: string, dualStatus: string, merge?: typeof mergeGateState, resolvePath?: typeof gateStatePath }} args
+ * @returns {{ ok: true, state: Record<string, unknown> } | { ok: false, reason: string }}
+ */
+export function stampDualStatus({
+  projectRoot,
+  sessionId,
+  dualStatus,
+  merge = mergeGateState,
+  resolvePath = gateStatePath,
+} = {}) {
+  try {
+    if (
+      typeof projectRoot !== "string" ||
+      !projectRoot ||
+      typeof sessionId !== "string" ||
+      !sessionId
+    ) {
+      return { ok: false, reason: "projectRoot and sessionId required" };
+    }
+
+    // dualStatusGatePatch: {ok:false,reason} OR plain patch with dual_status (enum only)
+    const patch = dualStatusGatePatch(dualStatus);
+    if (!patch || typeof patch !== "object") {
+      return { ok: false, reason: "invalid dual_status (enum only)" };
+    }
+    if (patch.ok === false) {
+      return {
+        ok: false,
+        reason:
+          typeof patch.reason === "string" && patch.reason
+            ? patch.reason
+            : "invalid dual_status (enum only)",
+      };
+    }
+    if (
+      typeof patch.dual_status !== "string" ||
+      !("dual_status" in patch)
+    ) {
+      return { ok: false, reason: "invalid dual_status (enum only)" };
+    }
+
+    const gp = resolvePath({
+      projectRoot,
+      runtime: "opencode",
+      sessionId,
+    });
+    if (!gp.ok) {
+      return { ok: false, reason: gp.reason ?? "gateStatePath failed" };
+    }
+
+    /** @type {Record<string, unknown>} */
+    const toMerge = { dual_status: patch.dual_status };
+    if (patch.dual_error_class != null) {
+      toMerge.dual_error_class = patch.dual_error_class;
+    }
+    if (patch.dual_secondary_attempts != null) {
+      toMerge.dual_secondary_attempts = patch.dual_secondary_attempts;
+    }
+
+    const merged = merge(gp.path, toMerge);
+    if (!merged.ok) {
+      return { ok: false, reason: merged.reason ?? "mergeGateState failed" };
+    }
+    return { ok: true, state: merged.state };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "stampDualStatus failed",
+    };
+  }
+}
+
+// CLI: node mark-gate.mjs <brainstormed|adversary_fired|fidelity|dual> ...
+const isMain =
+  typeof process !== "undefined" &&
+  process.argv[1] &&
+  (process.argv[1].endsWith("mark-gate.mjs") ||
+    process.argv[1].endsWith("mark-gate"));
+
+if (isMain) {
+  const [, , action, ...rest] = process.argv;
+  const args = Object.fromEntries(
+    rest
+      .map((a, i, arr) =>
+        a.startsWith("--") ? [a.slice(2), arr[i + 1]] : null,
+      )
+      .filter(Boolean),
+  );
+  const projectRoot = args.root || process.cwd();
+  const sessionId = args.session || args.sessionId || "";
+  let result;
+  if (action === "brainstormed") {
+    result = stampBrainstormed({ projectRoot, sessionId });
+  } else if (action === "adversary_fired") {
+    result = stampAdversaryFired({ projectRoot, sessionId });
+  } else if (action === "fidelity") {
+    result = stampFidelityPass({
+      projectRoot,
+      sessionId,
+      featureId: args.feature || args.featureId || "",
+      taskId: args.task || args.taskId || "",
+      sha: args.sha ?? null,
+    });
+  } else if (action === "dual") {
+    result = stampDualStatus({
+      projectRoot,
+      sessionId,
+      dualStatus: args.status || args.dualStatus || "",
+    });
+  } else {
+    console.error(
+      "usage: mark-gate.mjs brainstormed|adversary_fired|fidelity|dual --session <id> [--root <dir>] ...",
+    );
+    process.exit(2);
+  }
+  if (!result.ok) {
+    console.error(result.reason);
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ ok: true }));
+  process.exit(0);
 }

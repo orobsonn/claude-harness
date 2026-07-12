@@ -18,13 +18,16 @@ export const DELIVERY_ROLES = new Set([
 export const HAND_ROLES = new Set(["executor", "sniper", "test-author"]);
 
 /**
+ * @description Strip namespace prefix then lowercase so Executor-High is delivery.
  * @param {unknown} subagentType
  * @returns {string}
  */
 export function bareRole(subagentType) {
   if (typeof subagentType !== "string") return "";
-  if (!subagentType.includes(":")) return subagentType;
-  return subagentType.slice(subagentType.lastIndexOf(":") + 1);
+  const s = subagentType.trim();
+  if (!s) return "";
+  const bare = s.includes(":") ? s.slice(s.lastIndexOf(":") + 1) : s;
+  return bare.toLowerCase();
 }
 
 /**
