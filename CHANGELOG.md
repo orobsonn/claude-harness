@@ -5,6 +5,15 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.40.0](https://github.com/orobsonn/claude-harness/compare/v0.39.0...v0.40.0) (2026-07-12)
+
+
+### Features
+
+* **hooks:** autoriza fallback sniper via sinal rateLimited no entry-gate ([#269](https://github.com/orobsonn/claude-harness/issues/269)) ([699fef0](https://github.com/orobsonn/claude-harness/commit/699fef09205d55319c8ec22b7c4eed578d3b6e04))
+* implement ADR-003 dual enforcement for OC gates (task-3) ([add167c](https://github.com/orobsonn/claude-harness/commit/add167c6dbb40501d69fe6ef36129a65c0259c25))
+* implement ADR-003 dual enforcement for OC gates (task-3) ([26ce9a1](https://github.com/orobsonn/claude-harness/commit/26ce9a10b81929d6f4cae1b43b574a3403303af2))
+
 ## [0.39.0](https://github.com/orobsonn/claude-harness/compare/v0.38.0...v0.39.0) (2026-07-11)
 
 
