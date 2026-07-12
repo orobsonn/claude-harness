@@ -5,6 +5,24 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.39.0](https://github.com/orobsonn/claude-harness/compare/v0.38.0...v0.39.0) (2026-07-11)
+
+
+### Features
+
+* **oc-port:** phase-1 dual runtime + shared core + opencode vendoring + cutover ([#257](https://github.com/orobsonn/claude-harness/issues/257)) — includes `primary_only_failopen` (secondary auth/unavailable yields primary findings only; not full dual coverage) + stop-rule met. All fixes included: gitignore, 3 mediums, 2 boundary, predicate, locked test, vendor sync.
+* **vps:** captura motivo de exit em sessões autônomas sem PR ([#261](https://github.com/orobsonn/claude-harness/issues/261)) ([1de8751](https://github.com/orobsonn/claude-harness/commit/1de8751))
+* **vps:** guard de spawn de sessão sob pouca memória livre na VPS ([#265](https://github.com/orobsonn/claude-harness/issues/265)) ([0062148](https://github.com/orobsonn/claude-harness/commit/0062148)), closes [#241](https://github.com/orobsonn/claude-harness/issues/241)
+* **observability:** checkpoint determinístico do spec-adversary no Telegram ([#267](https://github.com/orobsonn/claude-harness/issues/267)) ([2e06f29](https://github.com/orobsonn/claude-harness/commit/2e06f29)), closes [#260](https://github.com/orobsonn/claude-harness/issues/260)
+
+
+### Chores
+
+* .gitignore rule for .opencode/plans/
+* medium fixes: T5c real (reinject-state), loop-guard dual count (loop-decide + roles), ceremony stamp timing (entry-gate + tests)
+* 2 boundary fixes, predicate (isRefuteVehicle in merge-findings), locked test (t5-loop-dual-secondary-no-inc), vendor sync
+* merge main post-0.38.0 work into oc-port release line as v0.39.0
+
 ## [0.38.0](https://github.com/orobsonn/claude-harness/compare/v0.37.0...v0.38.0) (2026-07-10)
 
 
