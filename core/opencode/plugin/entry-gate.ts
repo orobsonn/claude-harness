@@ -1,122 +1,142 @@
-/** @description OC entry-gate plugin — ceremony + fidelity rail (test-author exempt). State on disk. */
-import type { Plugin, Hooks } from "@opencode-ai/plugin"
+/**
+ * @description OC entry-gate plugin — deterministic ceremony + ADR-003 dual enforcement.
+ * On tool.execute.before for task delivery hands (executor*/sniper*), requires
+ * dual_status recorded attempt when requireDualOn is configured.
+ * Reads gate-state and harness.routing.json from disk via input.directory.
+ * Deny: throw Error with stable [entry-gate] prefix. No Map-only state.
+ * Fail-closed on unreadable gate-state for delivery hands.
+ */
 
-const subagentOf = (args: any): string =>
-  args?.subagent_type ?? args?.subagentType ?? args?.agent ?? ""
+import {
+  decideDualBeforeDelivery,
+  enforceDualOrThrow,
+  enforceDualFromDiskOrThrow,
+  extractSubagentType,
+  extractSessionId,
+  isTaskTool,
+  isDeliveryHandRequiringDual,
+  loadGateStateFromDisk,
+  loadRoutingFromDisk,
+  readRequireDualOn,
+  readDualStatus,
+} from "./lib/dual-enforcement.mjs";
 
-const skillNameOf = (args: any): string => {
-  if (args && typeof args === "object") {
-    const n = args.name ?? args.skill ?? args.skillName
-    if (typeof n === "string") return n
+const PREFIX = "[entry-gate]";
+
+/**
+ * @description Pure dual check for entry-gate (testable without OC runtime).
+ */
+export function decideEntryDual(input: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  gateState?: unknown;
+  routing?: unknown;
+}) {
+  const { toolName, toolArgs, gateState, routing } = input;
+  if (toolName != null && toolName !== "" && !isTaskTool(toolName)) {
+    return {
+      ok: true,
+      decision: "allow" as const,
+      reason: "not-task-tool",
+    };
   }
-  return ""
+  const subagentType = extractSubagentType(toolArgs);
+  return decideDualBeforeDelivery({
+    subagentType,
+    gateState,
+    routing,
+    requireDualCheck: true,
+    toolName: toolName ?? "task",
+  });
 }
 
 /**
- * @description Builds entry-gate hooks bound to project directory (async load of pure mjs).
+ * @description Throw [entry-gate] when dual_status pending/missing before executor.
  */
-export async function createEntryGateHooks(
-  directory: string,
-): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
-  const dirSafe = typeof directory === "string" ? directory : ""
-
-  const { decideEntryTask, throwIfDenied } = await import("./lib/entry-decide.mjs")
-  const { mergeGateState, readGateState } = await import("./lib/gate-state.mjs")
-  const { isAdversaryRole, isDeliveryRole } = await import("./lib/roles.mjs")
-  const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-
-  function statePathFor(sessionID: string): string | null {
-    const res = gateStatePath({
-      projectRoot: dirSafe,
-      runtime: "opencode",
-      sessionId: sessionID,
-    })
-    return res.ok ? res.path : null
+export function enforceEntryDualOrThrow(input: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  gateState?: unknown;
+  routing?: unknown;
+}) {
+  if (input.toolName != null && input.toolName !== "" && !isTaskTool(input.toolName)) {
+    return { ok: true, decision: "allow" as const, reason: "not-task-tool" };
   }
+  const subagentType = extractSubagentType(input.toolArgs);
+  return enforceDualOrThrow(PREFIX, {
+    subagentType,
+    gateState: input.gateState,
+    routing: input.routing,
+    requireDualCheck: true,
+    toolName: input.toolName ?? "task",
+  });
+}
+
+/**
+ * @description OpenCode plugin factory. Uses input.directory for disk paths.
+ * No 3rd-arg deps — OC only passes (input, options).
+ * Optional options.readGateState / options.readRouting for unit tests only.
+ */
+export default async function entryGatePlugin(
+  input: { directory?: string },
+  options?: Record<string, unknown>,
+) {
+  const directory =
+    typeof input?.directory === "string" && input.directory.length > 0
+      ? input.directory
+      : process.cwd();
+
+  const optReadGate =
+    options && typeof options.readGateState === "function"
+      ? (options.readGateState as () => unknown)
+      : null;
+  const optReadRouting =
+    options && typeof options.readRouting === "function"
+      ? (options.readRouting as () => unknown)
+      : null;
 
   return {
-    "tool.execute.after": async (input, output) => {
-      const tool = input?.tool
-      const sessionID = input?.sessionID ?? ""
-      if (!sessionID) return
+    "tool.execute.before": async (ctx: {
+      tool?: string;
+      args?: unknown;
+    }) => {
+      const toolName = ctx?.tool ?? "";
+      if (!isTaskTool(toolName)) return;
 
-      if (tool === "classify") {
-        const meta = (output as any)?.metadata
-        if (meta && typeof meta.plan_path === "string" && !meta.error) {
-          const sp = statePathFor(sessionID)
-          if (sp) {
-            mergeGateState(sp, {
-              session_id: sessionID,
-              classified: true,
-              triaged: true,
-              mode: typeof meta.mode === "string" ? meta.mode : undefined,
-              feature_id: typeof meta.feature_id === "string" ? meta.feature_id : undefined,
-            })
-          }
-        }
+      // Test injectors via options bag only (not a non-standard 3rd plugin arg).
+      if (optReadGate || optReadRouting) {
+        const subagentType = extractSubagentType(ctx?.args);
+        enforceDualOrThrow(PREFIX, {
+          subagentType,
+          gateState: optReadGate ? optReadGate() : {},
+          routing: optReadRouting ? optReadRouting() : null,
+          requireDualCheck: true,
+          toolName,
+        });
+        return;
       }
-      if (tool === "skill" && !output?.error) {
-        const name = skillNameOf(output?.args ?? input?.args)
-        const sp = statePathFor(sessionID)
-        if (sp) {
-          if (name.includes("triaging-requests")) mergeGateState(sp, { triaged: true, session_id: sessionID })
-          if (name.includes("brainstorming")) mergeGateState(sp, { brainstormed: true, session_id: sessionID })
-        }
-      }
-      if (tool === "task" && !output?.error) {
-        const subagent = subagentOf(output?.args ?? input?.args)
-        if (isAdversaryRole(subagent) && statePathFor(sessionID)) {
-          const sp = statePathFor(sessionID)
-          if (sp) mergeGateState(sp, { adversary_fired: true, session_id: sessionID })
-        }
-      }
+
+      // Production path: real disk gate-state + routing under input.directory.
+      enforceDualFromDiskOrThrow(PREFIX, {
+        projectRoot: directory,
+        toolName,
+        toolArgs: ctx?.args,
+      });
     },
-
-    "tool.execute.before": async (input, output) => {
-      const tool = input?.tool
-      const sessionID = input?.sessionID ?? ""
-      const args = output?.args
-      if (!sessionID) return
-
-      if (tool === "skill") {
-        return
-      }
-
-      if (tool !== "task") return
-
-      const subagent = subagentOf(args)
-      if (!isDeliveryRole(subagent)) return
-
-      const sp = statePathFor(sessionID)
-      const gateState = sp ? readGateState(sp) : {}
-
-      const decision = decideEntryTask({
-        subagentType: subagent,
-        gateState,
-        mode: gateState.mode,
-        featureId: gateState.feature_id,
-        taskId: args?.task_id ?? args?.taskId,
-      })
-      throwIfDenied(decision)
-
-    },
-  }
+  };
 }
 
-export const EntryGate: Plugin = async ({ directory, worktree }: any) => {
-  if (process.env.OC_ENTRY_GATE_OFF === "1") return {}
-  const dir: string =
-    typeof directory === "string"
-      ? directory
-      : typeof worktree === "string"
-        ? worktree
-        : String(
-            (directory as any)?.directory ??
-              (directory as any)?.worktree ??
-              (worktree as any)?.directory ??
-              "",
-          )
-  return createEntryGateHooks(dir)
-}
-
-export default EntryGate
+export {
+  decideDualBeforeDelivery,
+  enforceDualOrThrow,
+  enforceDualFromDiskOrThrow,
+  extractSubagentType,
+  extractSessionId,
+  isTaskTool,
+  isDeliveryHandRequiringDual,
+  loadGateStateFromDisk,
+  loadRoutingFromDisk,
+  readRequireDualOn,
+  readDualStatus,
+  PREFIX as ENTRY_GATE_PREFIX,
+};

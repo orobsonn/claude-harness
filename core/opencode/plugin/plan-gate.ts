@@ -1,80 +1,143 @@
-/** @description OC plan-gate plugin — require full plan (expect full) before executor task dispatch. */
-import type { Plugin, Hooks } from "@opencode-ai/plugin"
-import { readFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
+/**
+ * @description OC plan-gate plugin — full plan required + ADR-003 dual enforcement.
+ * Before executor task dispatch: dual_status must be a recorded attempt enum
+ * (both | primary_only_failopen | primary_only_error). Deny throws [plan-gate].
+ * Reads gate-state and harness.routing.json from disk via input.directory.
+ * primary_only_failopen allows continue (OpenAI unavailable) but is not full dual.
+ * Fail-closed on unreadable gate-state for delivery hands. No Map-only state.
+ */
 
-const subagentOf = (args: any): string =>
-  args?.subagent_type ?? args?.subagentType ?? args?.agent ?? ""
+import {
+  decideDualBeforeDelivery,
+  enforceDualOrThrow,
+  enforceDualFromDiskOrThrow,
+  extractSubagentType,
+  extractSessionId,
+  isTaskTool,
+  isDeliveryHandRequiringDual,
+  loadGateStateFromDisk,
+  loadRoutingFromDisk,
+  readRequireDualOn,
+  readDualStatus,
+  isFullDualCoverage,
+} from "./lib/dual-enforcement.mjs";
+
+const PREFIX = "[plan-gate]";
 
 /**
- * @description Builds plan-gate hooks (async load of pure mjs).
+ * @description Pure dual check for plan-gate (testable without OC runtime).
  */
-export async function createPlanGateHooks(
-  directory: string,
-): Promise<Pick<Hooks, "tool.execute.before">> {
-  const dirSafe = typeof directory === "string" ? directory : ""
-
-  const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
-  const { isExecutorRole } = await import("./lib/roles.mjs")
-  const { isSafeFeatureId, isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
-  const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { readGateState } = await import("./lib/gate-state.mjs")
-
-  function loadPlan(sessionID: string, featureId: string): unknown | null {
-    if (!isSafeSessionId(sessionID) || !isSafeFeatureId(featureId)) return null
-    const pd = planDir({
-      projectRoot: dirSafe,
-      runtime: "opencode",
-      sessionId: sessionID,
-      featureId,
-    })
-    if (!pd.ok) return null
-    const planPath = join(pd.path, "execution-plan.json")
-    if (!existsSync(planPath)) return null
-    try {
-      return JSON.parse(readFileSync(planPath, "utf8"))
-    } catch {
-      return null
-    }
+export function decidePlanDual(input: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  gateState?: unknown;
+  routing?: unknown;
+}) {
+  const { toolName, toolArgs, gateState, routing } = input;
+  if (toolName != null && toolName !== "" && !isTaskTool(toolName)) {
+    return {
+      ok: true,
+      decision: "allow" as const,
+      reason: "not-task-tool",
+    };
   }
+  const subagentType = extractSubagentType(toolArgs);
+  return decideDualBeforeDelivery({
+    subagentType,
+    gateState,
+    routing,
+    requireDualCheck: true,
+    toolName: toolName ?? "task",
+  });
+}
+
+/**
+ * @description Throw [plan-gate] when dual_status pending/missing before executor.
+ */
+export function enforcePlanDualOrThrow(input: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  gateState?: unknown;
+  routing?: unknown;
+}) {
+  if (input.toolName != null && input.toolName !== "" && !isTaskTool(input.toolName)) {
+    return { ok: true, decision: "allow" as const, reason: "not-task-tool" };
+  }
+  const subagentType = extractSubagentType(input.toolArgs);
+  return enforceDualOrThrow(PREFIX, {
+    subagentType,
+    gateState: input.gateState,
+    routing: input.routing,
+    requireDualCheck: true,
+    toolName: input.toolName ?? "task",
+  });
+}
+
+/**
+ * @description OpenCode plugin factory. Uses input.directory for disk paths.
+ * No 3rd-arg deps — OC only passes (input, options).
+ * Optional options.readGateState / options.readRouting for unit tests only.
+ */
+export default async function planGatePlugin(
+  input: { directory?: string },
+  options?: Record<string, unknown>,
+) {
+  const directory =
+    typeof input?.directory === "string" && input.directory.length > 0
+      ? input.directory
+      : process.cwd();
+
+  const optReadGate =
+    options && typeof options.readGateState === "function"
+      ? (options.readGateState as () => unknown)
+      : null;
+  const optReadRouting =
+    options && typeof options.readRouting === "function"
+      ? (options.readRouting as () => unknown)
+      : null;
 
   return {
-    "tool.execute.before": async (input, output) => {
-      if (input?.tool !== "task") return
-      const sessionID = input?.sessionID ?? ""
-      if (!sessionID) return
-      const sub = subagentOf(output?.args)
-      if (!isExecutorRole(sub)) return
+    "tool.execute.before": async (ctx: {
+      tool?: string;
+      args?: unknown;
+    }) => {
+      const toolName = ctx?.tool ?? "";
+      if (!isTaskTool(toolName)) return;
 
-      const spRes = gateStatePath({
-        projectRoot: dirSafe,
-        runtime: "opencode",
-        sessionId: sessionID,
-      })
-      const gs = spRes.ok ? readGateState(spRes.path) : {}
-      const featureId =
-        typeof gs.feature_id === "string"
-          ? gs.feature_id
-          : typeof output?.args?.feature_id === "string"
-            ? output.args.feature_id
-            : ""
+      if (optReadGate || optReadRouting) {
+        const subagentType = extractSubagentType(ctx?.args);
+        enforceDualOrThrow(PREFIX, {
+          subagentType,
+          gateState: optReadGate ? optReadGate() : {},
+          routing: optReadRouting ? optReadRouting() : null,
+          requireDualCheck: true,
+          toolName,
+        });
+        return;
+      }
 
-      const plan = featureId ? loadPlan(sessionID, featureId) : null
-      const decision = decidePlanGate({ plan, expect: "full" })
-      throwIfPlanDenied(decision)
+      // Production path: real disk gate-state + routing under input.directory.
+      enforceDualFromDiskOrThrow(PREFIX, {
+        projectRoot: directory,
+        toolName,
+        toolArgs: ctx?.args,
+      });
     },
-  }
+  };
 }
 
-export const PlanGate: Plugin = async ({ directory, worktree }: any) => {
-  if (process.env.OC_PLAN_GATE_OFF === "1") return {}
-  const dir: string =
-    typeof directory === "string"
-      ? directory
-      : typeof worktree === "string"
-        ? worktree
-        : String((directory as any)?.directory ?? "")
-  return createPlanGateHooks(dir)
-}
-
-export default PlanGate
+export {
+  decideDualBeforeDelivery,
+  enforceDualOrThrow,
+  enforceDualFromDiskOrThrow,
+  extractSubagentType,
+  extractSessionId,
+  isTaskTool,
+  isDeliveryHandRequiringDual,
+  loadGateStateFromDisk,
+  loadRoutingFromDisk,
+  readRequireDualOn,
+  readDualStatus,
+  isFullDualCoverage,
+  PREFIX as PLAN_GATE_PREFIX,
+};
