@@ -263,7 +263,9 @@ export function writeGateStateAtomic(statePath, state) {
 }
 
 /**
+/** @description Under ownership-token lock: read → mergeGateStatePatch → atomic write → release.
  * @description Under ownership-token lock: read → mergeGateStatePatch → atomic write → release.
+  * @description Under ownership-token lock: read → mergeGateStatePatch → atomic write → release.
  * @param {string} statePath
  * @param {Record<string, unknown>} patch
  * @param {{ timeoutMs?: number, staleMs?: number, now?: () => number, sleepMs?: (ms: number) => void }} [opts]

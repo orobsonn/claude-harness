@@ -66,6 +66,8 @@ import {
   advanceCursor,
 } from "./obs-outbox.mjs";
 
+import { resolveRuntime } from "./resolve-runtime.mjs";
+
 /** @description Required fields every per-project VPS cron config must supply. */
 export const REQUIRED_CONFIG_FIELDS = [
   "project",
@@ -196,6 +198,8 @@ export function runCronA(config, deps = {}) {
   const obsSeam = deps.obs ?? realObsSeam;
   const observabilityEnabled = forumTopicSeams.enabled;
 
+  const runtime = resolveRuntime(config);
+
   // The dispatch seam handed to cronASelect: cronASelect calls dispatch(issue, lock); the seam
   // composes the full dispatch opts from config + the already-held lock handle + the wired seams.
   // It also observes dispatch's structured result: a {ok:false} (spawn failure → re-queued) fires
@@ -221,6 +225,7 @@ export function runCronA(config, deps = {}) {
       obs: observabilityEnabled ? obsSeam : undefined,
       createForumTopic: forumTopicSeams.createForumTopic,
       closeForumTopic: forumTopicSeams.closeForumTopic,
+      runtime,
     });
     // dispatch is async, so in production `result` is a Promise — a sync `result.ok` read sees
     // undefined and silently drops the dispatch-failed notification on every spawn failure. Chain

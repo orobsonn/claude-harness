@@ -15,6 +15,12 @@ test("#ac-1.1 resolveRunPlansDir: a normal per-run worktree returns the run's pl
   assert.equal(result, join(worktreePath, ".claude", "plans"));
 });
 
+test("resolveRunPlansDir: runtimeDir=.opencode returns the run's .opencode/plans dir", () => {
+  const worktreePath = "/tmp/wt/harness-9";
+  const result = resolveRunPlansDir(worktreePath, "/tmp/project", ".opencode");
+  assert.equal(result, join(worktreePath, ".opencode", "plans"));
+});
+
 test("#ac-1.1 resolveRunPlansDir: SKIP (null) when the worktree resolves to the same dir as projectRoot", () => {
   assert.equal(resolveRunPlansDir("/tmp/project", "/tmp/project"), null);
 });

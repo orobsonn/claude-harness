@@ -38,7 +38,7 @@ export const HARNESS_SKILLS = [
 /** Personal skills allowed to remain in global after cutover. */
 export const PERSONAL_SKILLS_KEEP = ["blog-post", "quiz", "copy"];
 
-/** Phase-2 artifact path patterns (T12–T14) that must NOT exist in phase 1. */
+/** Phase-2 artifact path patterns (T14 autoMerge focus; T12/T13 files allowed post-done) that must NOT exist in phase 1. */
 export const PHASE2_FORBIDDEN_GLOBS = [
   "core/shared/lib/ndjson-session-parser.mjs",
   "core/shared/lib/session-result-parser.mjs",
@@ -232,7 +232,7 @@ export function checkProjectPluginsRelative(repoRoot) {
 }
 
 /**
- * @description Fail if phase-2 OC VPS implementation artifacts exist or TRACK T12–T14 are done.
+ * * @description Fail if phase-2 OC VPS implementation artifacts exist or TRACK T14 done (T12/T13 allowed done) or autoMergeEnabled for opencode.
  * @param {string} repoRoot
  * @param {string} trackText
  * @returns {{ ok: boolean, reason: string, found: string[] }}
@@ -289,23 +289,23 @@ export function checkNoPhase2Artifacts(repoRoot, trackText) {
     }
   }
 
-  for (const id of ["T12", "T13", "T14"]) {
+  for (const id of ["T14"]) {
     const row = parseTrackRow(trackText, id);
     if (row && (row.status === "done" || row.status === "in_progress")) {
-      found.push(`IMPLEMENTATION-TRACK ${id} status=${row.status} (must remain pending)`);
+      found.push(`IMPLEMENTATION-TRACK ${id} status=${row.status} (T14 must remain pending; T12/T13 done allowed)`);
     }
   }
 
   if (found.length > 0) {
     return {
       ok: false,
-      reason: `phase-2 OC VPS artifacts or TRACK rows not pending: ${found.join(", ")}`,
+      reason: `phase-2 OC VPS artifacts or T14 not pending or autoMerge+opencode: ${found.join(", ")}`,
       found,
     };
   }
   return {
     ok: true,
-    reason: "no phase-2 OC VPS implementation artifacts; T12–T14 pending",
+    reason: "no phase-2 OC VPS implementation artifacts; T14 pending (T12/T13 done ok); autoMerge+opencode still blocks",
     found: [],
   };
 }
@@ -692,7 +692,7 @@ describe("cutover-preflight", () => {
     assert.equal(bad.ok, false);
   });
 
-  it("t10-no-phase2: fails when phase-2 OC VPS implementation artifacts exist; T12-T14 remain pending", () => {
+  it("t10-no-phase2: fails when phase-2 OC VPS artifacts or T14 done or autoMerge+opencode; T12/T13 done unblocks", () => {
     const liveTrack = readFileSync(
       join(REPO_ROOT, "docs/specs/oc-port/IMPLEMENTATION-TRACK.md"),
       "utf8"
@@ -700,13 +700,13 @@ describe("cutover-preflight", () => {
     const live = checkNoPhase2Artifacts(REPO_ROOT, liveTrack);
     assert.equal(live.ok, true, live.reason);
 
-    // Synthetic: pretend T12 done
+    // Synthetic: T12 done is now allowed (unblock); use T14 done to force fail
     const badTrack = liveTrack.replace(
-      /\| T12 \|[^|]*\|[^|]*\| pending \|/,
-      "| T12 | NDJSON | 09 | done | 2026-07-10 |"
+      /\| T14 \|[^|]*\|[^|]*\| pending \|/,
+      "| T14 | Auto-merge | 09 | done | 2026-07-12 |"
     );
     const bad = checkNoPhase2Artifacts(REPO_ROOT, badTrack);
-    assert.equal(bad.ok, false, "T12 done must fail phase-2 gate");
+    assert.equal(bad.ok, false, "T14 done must fail phase-2 gate");
   });
 
   it("apply refuses without confirm and without preflight", () => {

@@ -54,8 +54,8 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 
 | ID | Item | Contract docs | Status | Date | Notes |
 |---|---|---|---|---|---|
-| T12 | NDJSON session result parser | 09, 03 | pending | | Exit code is not oracle |
-| T13 | VPS spawn `opencode run` | 09 | pending | | |
+| T12 | NDJSON session result parser | 09, 03 | done | 2026-07-12 | T12 complete (NDJSON oracle) |
+| T13 | VPS spawn `opencode run` | 09 | done | 2026-07-12 | T13 complete (opencode run spawn) |
 | T14 | Auto-merge only after T12+T13 proven | 09 | pending | | **Do not enable early** |
 
 ---
