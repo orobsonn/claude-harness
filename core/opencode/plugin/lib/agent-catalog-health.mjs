@@ -19,33 +19,40 @@ export const EXPECTED_HARNESS_AGENTS = Object.freeze([
   "executor-low",
   "executor-medium",
   "executor-high",
+  "executor-low-spawn",
+  "executor-medium-spawn",
+  "executor-high-spawn",
   "sniper-low",
   "sniper-medium",
   "sniper-high",
+  "sniper-low-spawn",
+  "sniper-medium-spawn",
+  "sniper-high-spawn",
   "test-author",
+  "test-author-spawn",
   "harvester",
   "shipper",
 ]);
 
 /**
- * @description Candidate agent directories under project root (vendored + source).
+ * @description Authoritative agent directory under project root.
  * @param {string} projectRoot
  * @returns {string[]}
  */
-export function agentCatalogDirs(projectRoot) {
+export function agentCatalogDirs(projectRoot, exists = fs.existsSync) {
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd();
-  return [
-    path.join(root, ".opencode", "agents"),
-    path.join(root, "core", "opencode", "agents"),
-  ];
+  const runtimeAgents = path.join(root, ".opencode", "agents");
+  // A present runtime catalog is authoritative, including when it is incomplete.
+  // Falling back here would hide a partial vendor operation from the operator.
+  if (exists(runtimeAgents)) return [runtimeAgents];
+  return [path.join(root, "core", "opencode", "agents")];
 }
 
 /**
- * @description List expected agents missing from all candidate dirs.
- * An agent is present if any candidate dir has `<name>.md`.
+ * @description List expected agents missing from the authoritative catalog.
  * @param {string} [projectRoot]
  * @param {{ existsSync?: typeof fs.existsSync, expected?: readonly string[] }} [deps]
  * @returns {{ ok: true, missing: string[], checkedDirs: string[] }}
@@ -54,10 +61,10 @@ export function checkAgentCatalogHealth(projectRoot, deps = {}) {
   try {
     const exists = deps.existsSync ?? fs.existsSync;
     const expected = deps.expected ?? EXPECTED_HARNESS_AGENTS;
-    const dirs = agentCatalogDirs(projectRoot);
+    const dirs = agentCatalogDirs(projectRoot, exists);
     const missing = [];
     for (const name of expected) {
-      const found = dirs.some((dir) => exists(path.join(dir, `${name}.md`)));
+      const found = exists(path.join(dirs[0], `${name}.md`));
       if (!found) missing.push(name);
     }
     return { ok: true, missing, checkedDirs: dirs };
@@ -76,7 +83,7 @@ export function agentCatalogAdvisoryMessage(missing) {
   if (list.length === 0) return "";
   return (
     `[harness] Catálogo de agents incompleto (faltam: ${list.join(", ")}). ` +
-    `Hands/eyes nativos podem não disparar via task. ` +
-    `Reabra a sessão depois de re-vendorizar o harness (.opencode/).`
+    `Hands/eyes nativos podem não disparar via task. Re-vendorize o harness (.opencode/) e reabra a sessão. ` +
+    `Agents já carregados não são atualizados nesta sessão.`
   );
 }

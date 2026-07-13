@@ -2,7 +2,7 @@
 description: "CLI spawn twin of sniper-low (mode primary for opencode run). Surgical fix for LOW-severity defects (typo, naming, dead code, cosmetic). ollama-cloud/gemma4:31b. Minimum delta only, no new files."
 mode: primary
 model: ollama-cloud/gemma4:31b
-temperature: 0.1
+temperature: 0.0
 tools:
   task: false
 permission:

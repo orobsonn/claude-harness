@@ -20,8 +20,11 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
     "adversary",
     "planner",
     "executor-low",
+    "executor-low-spawn",
     "sniper-high",
+    "sniper-high-spawn",
     "test-author",
+    "test-author-spawn",
     "shipper",
   ]) {
     assert.ok(EXPECTED_HARNESS_AGENTS.includes(name), name);
@@ -29,25 +32,63 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
   assert.ok(!EXPECTED_HARNESS_AGENTS.includes("SPAWN-PATTERN"));
 });
 
-test("checkAgentCatalogHealth on harness repo finds agents (core/opencode)", () => {
+test("checkAgentCatalogHealth on harness repo validates its vendored runtime", () => {
   const result = checkAgentCatalogHealth(REPO_ROOT);
   assert.equal(result.ok, true);
   assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.checkedDirs, [path.join(REPO_ROOT, ".opencode", "agents")]);
 });
 
-test("checkAgentCatalogHealth reports missing when neither dir has files", () => {
-  const result = checkAgentCatalogHealth("/tmp/nonexistent-harness-root-xyz", {
-    existsSync: () => false,
+test("checkAgentCatalogHealth does not mask an incomplete runtime catalog with core", () => {
+  const root = "/tmp/harness-runtime-first";
+  const runtime = path.join(root, ".opencode", "agents");
+  const source = path.join(root, "core", "opencode", "agents");
+  const expected = ["build", "adversary"];
+  const existing = new Set([
+    runtime,
+    path.join(runtime, "build.md"),
+    path.join(source, "build.md"),
+    path.join(source, "adversary.md"),
+  ]);
+  const result = checkAgentCatalogHealth(root, {
+    expected,
+    existsSync: (candidate) => existing.has(candidate),
   });
   assert.equal(result.ok, true);
-  assert.ok(result.missing.length >= 10);
-  assert.ok(result.missing.includes("adversary"));
+  assert.deepEqual(result.checkedDirs, [runtime]);
+  assert.deepEqual(result.missing, ["adversary"]);
+});
+
+test("checkAgentCatalogHealth marks a missing spawn twin unhealthy", () => {
+  const root = "/tmp/harness-missing-spawn";
+  const runtime = path.join(root, ".opencode", "agents");
+  const existing = new Set([runtime, path.join(runtime, "executor-low.md")]);
+  const result = checkAgentCatalogHealth(root, {
+    expected: ["executor-low", "executor-low-spawn"],
+    existsSync: (candidate) => existing.has(candidate),
+  });
+  assert.deepEqual(result.missing, ["executor-low-spawn"]);
+});
+
+test("checkAgentCatalogHealth falls back to core only when runtime catalog is absent", () => {
+  const root = "/tmp/harness-source-fallback";
+  const runtime = path.join(root, ".opencode", "agents");
+  const source = path.join(root, "core", "opencode", "agents");
+  const expected = ["build", "adversary"];
+  const existing = new Set([path.join(source, "build.md"), path.join(source, "adversary.md")]);
+  const result = checkAgentCatalogHealth(root, {
+    expected,
+    existsSync: (candidate) => existing.has(candidate),
+  });
+  assert.deepEqual(result.checkedDirs, [source]);
+  assert.deepEqual(result.missing, []);
 });
 
 test("agentCatalogAdvisoryMessage is pt-br and mentions reopen", () => {
   const msg = agentCatalogAdvisoryMessage(["adversary", "executor-low"]);
   assert.match(msg, /Catálogo|agents/i);
-  assert.match(msg, /Reabra a sessão|reabra/i);
+  assert.match(msg, /Re-vendorize.*reabra a sessão/i);
+  assert.match(msg, /já carregados não são atualizados/i);
   assert.match(msg, /adversary/);
   assert.equal(agentCatalogAdvisoryMessage([]), "");
 });

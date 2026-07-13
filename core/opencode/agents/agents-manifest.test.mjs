@@ -12,6 +12,7 @@ const AGENTS_DIR = __dirname;
 const OC_ROOT = join(__dirname, "..");
 const SKILLS_DIR = join(OC_ROOT, "skills");
 const ROUTING_PATH = join(OC_ROOT, "harness.routing.json");
+const DECISIONS_DIR = join(OC_ROOT, "..", "..", "docs", "specs", "oc-port", "decisions");
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -187,4 +188,34 @@ test("t6-models-match-routing: agent frontmatter models match harness.routing.js
     const fm = frontmatter(read(path));
     assert.equal(fmField(fm, "model"), model, `${name}.md model must be ${model}`);
   }
+});
+
+test("executor and sniper tiers use the Ollama Cloud default ladder", () => {
+  const routing = JSON.parse(read(ROUTING_PATH));
+  const expected = [
+    "ollama-cloud/gemma4:31b",
+    "ollama-cloud/glm-5.2",
+    "ollama-cloud/kimi-k2.7-code",
+  ];
+  for (const role of ["executor", "sniper"]) {
+    assert.deepEqual(
+      ["low", "medium", "high"].map((tier) => routing.roles[role].tiers[tier].model),
+      expected,
+      `${role} must use the Ollama Cloud ladder`,
+    );
+  }
+  assert.match(read(join(DECISIONS_DIR, "ADR-001-no-ollama-default.md")), /superseded by ADR-004/i);
+  assert.match(read(join(DECISIONS_DIR, "ADR-004-ollama-cloud-default-hands.md")), /Ollama Cloud/i);
+});
+
+test("sniper-low spawn twin preserves model, temperature, and role contract", () => {
+  const base = read(join(AGENTS_DIR, "sniper-low.md"));
+  const spawn = read(join(AGENTS_DIR, "sniper-low-spawn.md"));
+  const baseFm = frontmatter(base);
+  const spawnFm = frontmatter(spawn);
+  assert.equal(fmField(baseFm, "model"), fmField(spawnFm, "model"));
+  assert.equal(fmField(baseFm, "temperature"), fmField(spawnFm, "temperature"));
+  assert.ok(spawn.includes(base.slice(base.indexOf("# Sniper"), base.indexOf("## Output format"))));
+  assert.equal(fmField(spawnFm, "mode"), "primary");
+  assert.equal(fmNestedBool(spawnFm, "tools", "task"), false);
 });

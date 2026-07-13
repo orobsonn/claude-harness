@@ -443,7 +443,7 @@ test("vendored module resolves canonical sources from .claude/agents (vendored l
 
 // --- T9: OpenCode vendor target ------------------------------------------------
 
-test("t9-creates: --runtime opencode creates .opencode agents skills plugin tools and harness.routing.json", () => {
+test("t9-creates: --runtime opencode creates .opencode agents docs skills plugin tools and harness.routing.json", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-"));
   try {
     const result = spawnSync(
@@ -455,6 +455,7 @@ test("t9-creates: --runtime opencode creates .opencode agents skills plugin tool
 
     const required = [
       ".opencode/agents",
+      ".opencode/docs/SPAWN-PATTERN.md",
       ".opencode/skills",
       ".opencode/plugin",
       ".opencode/tools",
@@ -471,6 +472,11 @@ test("t9-creates: --runtime opencode creates .opencode agents skills plugin tool
     }
     // default runtime remains claude-only — OC path must NOT create .claude
     assert.ok(!existsSync(join(tempDir, ".claude/agents")), "opencode-only must not vendor .claude agents");
+    assert.ok(!existsSync(join(tempDir, ".opencode/agents/SPAWN-PATTERN.md")), "documentation must not be callable as an agent");
+    assert.equal(
+      readFileSync(join(tempDir, ".opencode/docs/SPAWN-PATTERN.md"), "utf8"),
+      readFileSync(join(harnessRoot, "core/opencode/docs/SPAWN-PATTERN.md"), "utf8"),
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -581,6 +587,13 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
       "plugin/lib/gate-state.mjs",
     ),
     'import { x } from "../../shared/lib/gate-state-shape.mjs";',
+  );
+  assert.equal(
+    rewriteSharedImportsForVendor(
+      "node core/opencode/plugin/lib/mark-gate.mjs stamp",
+      "plugin/lib/bash-decide.mjs",
+    ),
+    "node .opencode/plugin/lib/mark-gate.mjs stamp",
   );
 });
 

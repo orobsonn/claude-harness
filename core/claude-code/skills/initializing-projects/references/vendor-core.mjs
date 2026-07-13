@@ -63,7 +63,7 @@ const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 
 /** OpenCode framework-owned dirs (overwritten on every vendor). */
-const OC_FRAMEWORK_OWNED = ["agents", "skills", "plugin", "tools", "hands", "rules"];
+const OC_FRAMEWORK_OWNED = ["agents", "docs", "skills", "plugin", "tools", "hands", "rules"];
 const OC_FRAMEWORK_FILES = ["harness.routing.json", "AGENTS.md"];
 
 // Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
@@ -287,6 +287,12 @@ export function resolveProjectTarget(raw, cwd) {
  */
 export function rewriteSharedImportsForVendor(content, relFromOpencodeRoot) {
   if (typeof content !== "string" || typeof relFromOpencodeRoot !== "string") return content;
+  // Source-checkout marker paths must target the vendored runtime after copy.
+  content = content.split("core/opencode/plugin/lib/mark-gate.mjs").join(".opencode/plugin/lib/mark-gate.mjs");
+  content = content.replace(
+    '  ".opencode/plugin/lib/mark-gate.mjs",\n  ".opencode/plugin/lib/mark-gate.mjs",',
+    '  ".opencode/plugin/lib/mark-gate.mjs",',
+  );
   const parts = relFromOpencodeRoot.replace(/\\/g, "/").split("/").filter(Boolean);
   const depth = Math.max(0, parts.length - 1);
   // monorepo: from core/opencode/<path>, shared is (depth+1) levels up then shared/
