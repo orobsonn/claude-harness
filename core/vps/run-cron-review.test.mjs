@@ -630,7 +630,10 @@ test("run-cron-review: autoMergeEnabled is threaded into cronReview opts with a 
     assert.equal(omitted.autoMergeEnabled, false, "omitted config => false");
     const truthyString = await captureCronReviewOpts({ stateDir, autoMergeEnabled: "true" }, { gh, loadCodexDriver: async () => null });
     assert.equal(truthyString.autoMergeEnabled, false, "a truthy non-true config value must NOT enable auto-merge (strict ===)");
-    const enabled = await captureCronReviewOpts({ stateDir, autoMergeEnabled: true }, { gh, loadCodexDriver: async () => null });
+    // runtime:"claude" short-circuits ocAutoMergeGateOpen to true (non-OC no-op path) so this test
+    // does not depend on the live, operator-mutable core/opencode/oc-automerge-preconditions.json —
+    // a red suite here must never block the whole auto-merge-gated fleet if an operator flips a key.
+    const enabled = await captureCronReviewOpts({ stateDir, autoMergeEnabled: true, runtime: "claude" }, { gh, loadCodexDriver: async () => null });
     assert.equal(enabled.autoMergeEnabled, true, "autoMergeEnabled:true threads true");
   } finally {
     cleanup();

@@ -15,6 +15,7 @@ import {
 import { join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
+import { resolveRuntime } from "../core/vps/resolve-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -259,7 +260,7 @@ export function checkNoPhase2Artifacts(repoRoot, trackText) {
     if (!existsSync(path)) continue;
     try {
       const j = JSON.parse(readFileSync(path, "utf8"));
-      if (j.autoMergeEnabled === true && (j.runtime === "opencode" || j.driver === "opencode")) {
+      if (j.autoMergeEnabled === true && resolveRuntime(j) === "opencode") {
         found.push(`${path}: autoMergeEnabled true for OC`);
       }
     } catch {
