@@ -51,6 +51,16 @@ import {
 } from "./lib/gate-lib.mjs";
 import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from "../vps/obs-outbox.mjs";
 
+// fail-open diagnostic: exactly one stderr line, never throws
+export function failOpenDiag(scope, err, writeStderr = console.error) {
+  try {
+    const msg = `[stamp-triage] ${scope} fail-open: ${err?.message || String(err)}`;
+    writeStderr(msg);
+  } catch {
+    // never throw
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pure decision layer — no I/O
 // ---------------------------------------------------------------------------
@@ -934,14 +944,18 @@ export function handle(payload, opts = {}) {
     const current = readGateState(decision.session_id);
     const finished = Array.isArray(current.hand_finished) ? current.hand_finished : [];
     if (!finished.includes(decision.task_id)) {
-      return; // intentional no-op guard — no read-back
+      const remediation = `stamp hand-finished first for ${decision.task_id}; do not re-run capture-verified alone`;
+      try { console.error(`[stamp-triage] capture-verified precondition: ${remediation}`); } catch { /* never throw */ }
+      return { ok: false, reason: "no-hand-finished" };
     }
     // Second, independent guard: a real on-disk run-record must exist for this qualified id.
     // hand_finished is a manually-stamped array (prose-driven, proven skippable); the run-record
     // is written unconditionally by spawn-hand.mjs's runLiveDispatch, so requiring BOTH means a
     // forged marker with no genuine dispatch behind it stamps nothing anywhere, ever.
     if (readHandRecord(decision.task_id) === null) {
-      return; // intentional no-op guard — no read-back
+      const remediation = `no hand-record on disk for ${decision.task_id} (dispatch never wrote run-record); capture-verified cannot authorize`;
+      try { console.error(`[stamp-triage] capture-verified precondition: ${remediation}`); } catch { /* never throw */ }
+      return { ok: false, reason: "no-hand-record" };
     }
     // Durable stamp runs unconditionally AFTER both guards pass — it is idempotent (overwrites
     // the timestamp) so it self-heals a prior partial failure on every retry.
@@ -1036,6 +1050,80 @@ export function handle(payload, opts = {}) {
   // action === 'none', 'marker-ambiguous', 'hand-config-error-nudge': nothing to persist
 }
 
+/**
+ * Thin CLI seam for tests: runs handle with injected deps, builds at most one nudge,
+ * returns { handleResult, nudge, exitCode: 0 } — never throws, exit always 0.
+ */
+export function runCliHandle(payload, deps = {}) {
+  const handleFn = deps.handleFn || handle;
+  const writeStderr = deps.writeStderr || console.error;
+  const decideFn = deps.decideFn || decide;
+  const writeStdout = deps.writeStdout || ((s) => process.stdout.write(s));
+
+  let handleResult;
+  try {
+    handleResult = handleFn(payload);
+  } catch (err) {
+    failOpenDiag("cli-handle", err, writeStderr);
+    handleResult = undefined;
+  }
+
+  // Build at most ONE nudge. Precedence: hand-config-error → marker-ambiguous → precondition-failed → read-back-failed
+  let nudge = null;
+  try {
+    const decision = decideFn(payload);
+    if (decision.action === "hand-config-error-nudge") {
+      const qualifiedId =
+        decision.feature_id && decision.task_id ? `${decision.feature_id}/${decision.task_id}` : "this task";
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          `spawn-hand.mjs reported a PRE-SPAWN CONFIG ERROR for ${qualifiedId} — this is not a ` +
+          `network policy, sandbox, or Auto Mode block. The real, verbatim reason: "${decision.reason}". ` +
+          "Surface this exact reason to the operator. Do not invent an alternative explanation.",
+      };
+    } else if (decision.action === "marker-ambiguous") {
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "marker shadowed/duplicated — run mark.mjs alone. " +
+          "Multiple marker JSON objects with the same marker name were detected on stdout. " +
+          "The stamp was NOT persisted. Re-run the mark.mjs command in isolation to resolve.",
+      };
+    } else if (handleResult && handleResult.ok === false && (handleResult.reason === "no-hand-finished" || handleResult.reason === "no-hand-record")) {
+      const id = decision.task_id || "task";
+      const remediation =
+        handleResult.reason === "no-hand-finished"
+          ? "stamp hand-finished first for <id>; do not re-run capture-verified alone".replace("<id>", id)
+          : "no hand-record on disk for <id> (dispatch never wrote run-record); capture-verified cannot authorize".replace("<id>", id);
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext: remediation,
+      };
+    } else if (handleResult && handleResult.readBackOk === false) {
+      nudge = {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "read-back failed after gate-state write — the marker was processed but the " +
+          "post-write presence check did not confirm the expected id landed in gate-state.json. " +
+          "Re-run the mark.mjs command to retry the persist.",
+      };
+    }
+  } catch {
+    // fail-open
+  }
+
+  if (nudge) {
+    try {
+      writeStdout(JSON.stringify({ hookSpecificOutput: nudge }));
+    } catch {
+      // fail-open
+    }
+  }
+
+  return { handleResult, nudge, exitCode: 0 };
+}
+
 // ---------------------------------------------------------------------------
 // CLI entry point — guarded so imports from tests do not trigger side effects
 // ---------------------------------------------------------------------------
@@ -1067,56 +1155,6 @@ if (isDirectCli()) {
     process.exit(0);
   }
 
-  let handleResult;
-  try {
-    handleResult = handle(payload);
-  } catch {
-    // Unexpected error — fail-open, never block a Bash call
-  }
-
-  // Build at most ONE hookSpecificOutput across the 3 mutually-exclusive nudges.
-  // Precedence: hand-config-error → marker-ambiguous → read-back-failed.
-  let nudge = null;
-  try {
-    const decision = decide(payload);
-    if (decision.action === "hand-config-error-nudge") {
-      const qualifiedId =
-        decision.feature_id && decision.task_id ? `${decision.feature_id}/${decision.task_id}` : "this task";
-      nudge = {
-        hookEventName: "PostToolUse",
-        additionalContext:
-          `spawn-hand.mjs reported a PRE-SPAWN CONFIG ERROR for ${qualifiedId} — this is not a ` +
-          `network policy, sandbox, or Auto Mode block. The real, verbatim reason: "${decision.reason}". ` +
-          "Surface this exact reason to the operator. Do not invent an alternative explanation.",
-      };
-    } else if (decision.action === "marker-ambiguous") {
-      nudge = {
-        hookEventName: "PostToolUse",
-        additionalContext:
-          "marker shadowed/duplicated — run mark.mjs alone. " +
-          "Multiple marker JSON objects with the same marker name were detected on stdout. " +
-          "The stamp was NOT persisted. Re-run the mark.mjs command in isolation to resolve.",
-      };
-    } else if (handleResult && handleResult.readBackOk === false) {
-      nudge = {
-        hookEventName: "PostToolUse",
-        additionalContext:
-          "read-back failed after gate-state write — the marker was processed but the " +
-          "post-write presence check did not confirm the expected id landed in gate-state.json. " +
-          "Re-run the mark.mjs command to retry the persist.",
-      };
-    }
-  } catch {
-    // fail-open — never block a Bash call over a nudge
-  }
-
-  if (nudge) {
-    try {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: nudge }));
-    } catch {
-      // fail-open
-    }
-  }
-
-  process.exit(0);
+  const result = runCliHandle(payload);
+  process.exit(result.exitCode);
 }

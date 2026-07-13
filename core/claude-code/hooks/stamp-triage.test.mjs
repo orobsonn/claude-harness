@@ -1365,3 +1365,103 @@ test(
     });
   },
 );
+
+// --- locked_tests for task-1 (capture-verified silent failure fix) ---
+
+import { failOpenDiag, runCliHandle } from "./stamp-triage.mjs";
+
+test("lt-no-hand-record-shape", () => {
+  withTempDir(() => {
+    const sessionId = "ses_lt_no_record";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+    // no hand-record on disk
+    const res = handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"));
+    assert.deepEqual(res, { ok: false, reason: "no-hand-record" });
+    assert.equal(res?.readBackOk, undefined);
+  });
+});
+
+test("lt-no-hand-finished-shape", () => {
+  withTempDir(() => {
+    const sessionId = "ses_lt_no_finished";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    // no feat-a/task-2 in hand_finished
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+    const res = handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-2"));
+    assert.deepEqual(res, { ok: false, reason: "no-hand-finished" });
+    assert.equal(res?.readBackOk, undefined);
+  });
+});
+
+test("lt-fail-open-diag-cli", () => {
+  let stderrs = [];
+  const fakeWrite = (m) => { stderrs.push(m); };
+  const throwingHandle = () => { throw new Error("boom"); };
+  const res = runCliHandle({}, { handleFn: throwingHandle, writeStderr: fakeWrite });
+  assert.equal(res.exitCode, 0);
+  assert.equal(stderrs.length, 1);
+  assert.ok(stderrs[0].includes("boom"));
+});
+
+test("lt-precondition-nudge-not-rerun", () => {
+  const res1 = runCliHandle({}, { handleFn: () => ({ ok: false, reason: "no-hand-finished" }) });
+  assert.ok(res1.nudge?.additionalContext.includes("stamp hand-finished first"));
+  assert.ok(!res1.nudge?.additionalContext.includes("Re-run the mark.mjs"));
+
+  const res2 = runCliHandle({}, { handleFn: () => ({ ok: false, reason: "no-hand-record" }) });
+  assert.ok(res2.nudge?.additionalContext.includes("no hand-record on disk"));
+  assert.ok(!res2.nudge?.additionalContext.includes("Re-run the mark.mjs"));
+});
+
+test("lt-happy-path-sha-qualified", () => {
+  withTempDir(() => {
+    const sessionId = "ses_lt_happy";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+    const recordPath = handRecordPathFor("feat-a/task-1");
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
+
+    // object-shaped payload + headShaFn
+    const payload = {
+      ...makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"),
+      tool_response: { stdout: JSON.stringify({ marker: "capture-verified", feature_id: "feat-a", task_id: "task-1" }) },
+    };
+    const res = handle(payload, { headShaFn: () => "deadbeef" });
+    const after = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.ok(after.capture_verified.includes("feat-a/task-1@deadbeef"));
+  });
+});
+
+test("lt-forged-still-no-stamp", () => {
+  withTempDir(() => {
+    const sessionId = "ses_lt_forged";
+    const stateDir = `.claude/plans/.state/${sessionId}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      "utf8",
+    );
+    // no hand-record → must not stamp
+    handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-1"));
+    const after = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.equal(after.capture_verified, undefined);
+  });
+});
