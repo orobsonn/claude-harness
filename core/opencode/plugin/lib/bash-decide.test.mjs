@@ -192,14 +192,14 @@ test("forge triage.json → deny", () => {
   assert.equal(d.decision, "deny");
 });
 
-test("forge execution-plan.json → deny", () => {
+test("execution-plan.json bash write → allow (orchestrator plan channel)", () => {
   const d = decideBashForge({
     command: "cat > .opencode/plans/feat/execution-plan.json <<EOF\n{}\nEOF",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
 });
 
-test("mark-gate pure allowlist basename → allow forge path", () => {
+test("mark-gate path-bound harness script → allow forge path", () => {
   assert.equal(firstArgvBasename("node core/opencode/plugin/lib/mark-gate.mjs stamp"), "mark-gate");
   // pure single command: oracle path as arg, no chain/redirect
   const d = decideBashForge({
@@ -207,6 +207,238 @@ test("mark-gate pure allowlist basename → allow forge path", () => {
       "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
   });
   assert.equal(d.decision, "allow");
+  const vendored = decideBashForge({
+    command:
+      "node .opencode/plugin/lib/mark-gate.mjs dual --session ses_x --status both",
+  });
+  assert.equal(vendored.decision, "allow");
+});
+
+test("impostor /tmp/mark-gate.mjs basename → deny forge", () => {
+  const d = decideBashForge({
+    command:
+      "node /tmp/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /anti-forgery|path-bound|gate-state/i);
+});
+
+test("impostor ./evil/mark-gate.mjs → deny forge", () => {
+  const d = decideBashForge({
+    command:
+      "node ./evil/mark-gate.mjs stamp .opencode/plans/.state/s/gate-state.json",
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("node -e encoded/concat path forge → deny (no literal oracle required)", () => {
+  const joinPath = decideBashForge({
+    command:
+      'node -e \'require("fs").writeFileSync([".opencode","plans",".state","s","gate"+"-state.json"].join("/"),"{}")\'',
+  });
+  assert.equal(joinPath.decision, "deny");
+  assert.match(joinPath.reason, /eval one-liner|anti-forgery/i);
+
+  const b64 = decideBashForge({
+    command:
+      'node -e \'require("fs").writeFileSync(Buffer.from("Lm9wZW5jb2RlL3BsYW5zLy5zdGF0ZS9zL2dhdGUtc3RhdGUuanNvbg==","base64").toString(),"{}")\'',
+  });
+  assert.equal(b64.decision, "deny");
+
+  const py = decideBashForge({
+    command: 'python3 -c \'open("/tmp/x","w").write("x")\'',
+  });
+  assert.equal(py.decision, "deny");
+});
+
+test("node /tmp/evil.mjs drop → deny even without oracle substring", () => {
+  const d = decideBashForge({
+    command: "node /tmp/evil.mjs",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /\/tmp|impostor|anti-forgery/i);
+});
+
+test("suffix impostor evil/.opencode/plugin/lib/mark-gate.mjs → deny", () => {
+  const d = decideBashForge({
+    command:
+      "node evil/.opencode/plugin/lib/mark-gate.mjs stamp .opencode/plans/.state/s/gate-state.json",
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("cwd-drop node w.mjs → deny (two-step forge)", () => {
+  const d = decideBashForge({ command: "node w.mjs" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /two-step|markers|anti-forgery/i);
+});
+
+test("multi-seg scripts/forge.mjs → deny (two-step forge)", () => {
+  const d = decideBashForge({ command: "node scripts/forge-gate.mjs" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /two-step|markers|anti-forgery/i);
+});
+
+test("bash -c encoded write → deny", () => {
+  const d = decideBashForge({
+    command: 'bash -c "echo hi > /tmp/x"',
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /nested shells|anti-forgery/i);
+});
+
+test("ash -c also deny", () => {
+  assert.equal(decideBashForge({ command: "ash -c 'echo x'" }).decision, "deny");
+});
+
+test("node --require=./x.js -e eval → deny", () => {
+  const d = decideBashForge({
+    command: 'node --require=./x.js -e "console.log(1)"',
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /eval one-liner|preload|anti-forgery/i);
+});
+
+test("node --require=./forge.js core/x.mjs → deny preload", () => {
+  const d = decideBashForge({
+    command: "node --require=./forge.js core/opencode/plugin/lib/bash-decide.test.mjs",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /preload|anti-forgery/i);
+});
+
+test("node *.test.mjs multi-segment still allow", () => {
+  const d = decideBashForge({
+    command: "node core/opencode/plugin/lib/bash-decide.test.mjs",
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("node --test suite allow", () => {
+  const d = decideBashForge({
+    command: "node --test core/opencode/plugin/lib/bash-decide.test.mjs",
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("allowlisted vendor-core tooling allow", () => {
+  const d = decideBashForge({
+    command:
+      "node core/claude-code/skills/initializing-projects/references/vendor-core.mjs --help",
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("cwd evil.test.mjs → deny (test only under core|modules|.opencode)", () => {
+  assert.equal(decideBashForge({ command: "node evil.test.mjs" }).decision, "deny");
+});
+
+test("node --test evil.mjs → deny", () => {
+  assert.equal(
+    decideBashForge({ command: "node --test evil.mjs" }).decision,
+    "deny",
+  );
+});
+
+test("node --import=./forge.mjs marker → deny preload", () => {
+  assert.equal(
+    decideBashForge({
+      command:
+        "node --import=./forge.mjs core/opencode/plugin/lib/mark-gate.mjs dual --session s --status both",
+    }).decision,
+    "deny",
+  );
+});
+
+test("NODE_OPTIONS=--require=./f.js node marker → deny", () => {
+  assert.equal(
+    decideBashForge({
+      command:
+        "NODE_OPTIONS=--require=./f.js node core/opencode/plugin/lib/mark-gate.mjs dual --session s --status both",
+    }).decision,
+    "deny",
+  );
+});
+
+test("env node evil.mjs → deny", () => {
+  assert.equal(decideBashForge({ command: "env node evil.mjs" }).decision, "deny");
+});
+
+test("./evil.mjs direct exec → deny", () => {
+  assert.equal(decideBashForge({ command: "./evil.mjs" }).decision, "deny");
+});
+
+test("bash scripts/x.sh → deny", () => {
+  assert.equal(
+    decideBashForge({ command: "bash scripts/x.sh" }).decision,
+    "deny",
+  );
+});
+
+test("base64 | bash → deny", () => {
+  assert.equal(
+    decideBashForge({ command: "base64 -d <<< abc | bash" }).decision,
+    "deny",
+  );
+});
+
+test("redirect with $ expansion → deny", () => {
+  assert.equal(
+    decideBashForge({
+      command: "echo x > .opencode/$p/.$s/sess/$g.json",
+    }).decision,
+    "deny",
+  );
+});
+
+test("plan heredoc without $ still allow", () => {
+  assert.equal(
+    decideBashForge({
+      command:
+        "cat > .opencode/plans/feat/execution-plan.json <<EOF\n{}\nEOF",
+    }).decision,
+    "allow",
+  );
+});
+
+test("tar extract → deny", () => {
+  assert.equal(
+    decideBashForge({ command: "tar -xzf drop.tgz" }).decision,
+    "deny",
+  );
+  assert.equal(decideBashForge({ command: "tar xf drop.tgz" }).decision, "deny");
+  assert.equal(decideBashForge({ command: "7z x drop.7z" }).decision, "deny");
+});
+
+test("cp overwrite mark-gate.mjs → deny", () => {
+  assert.equal(
+    decideBashForge({
+      command: "cp /tmp/x core/opencode/plugin/lib/mark-gate.mjs",
+    }).decision,
+    "deny",
+  );
+});
+
+test("source evil.sh → deny", () => {
+  assert.equal(decideBashForge({ command: "source evil.sh" }).decision, "deny");
+  assert.equal(decideBashForge({ command: ". ./evil.sh" }).decision, "deny");
+  assert.equal(decideBashForge({ command: "bash < evil.sh" }).decision, "deny");
+});
+
+test("npm run / make / npm test → deny; npm ci allow", () => {
+  assert.equal(decideBashForge({ command: "npm run build" }).decision, "deny");
+  assert.equal(decideBashForge({ command: "make all" }).decision, "deny");
+  assert.equal(decideBashForge({ command: "npm test" }).decision, "deny");
+  assert.equal(decideBashForge({ command: "npm ci" }).decision, "allow");
+});
+
+test("cp forged.json $GS expansion → deny", () => {
+  assert.equal(
+    decideBashForge({
+      command: "GS=.opencode/plans/.state/s/gate-state.json cp forged.json $GS",
+    }).decision,
+    "deny",
+  );
 });
 
 test("mark-gate with stdout redirect to .state → deny forge", () => {
@@ -267,7 +499,7 @@ test("forge node -e writeFileSync gate-state → deny", () => {
   assert.equal(d.decision, "deny");
 });
 
-test("forge mv/rsync oracle paths → deny", () => {
+test("forge mv/rsync state oracle paths → deny", () => {
   assert.equal(
     decideBashForge({
       command: "mv /tmp/x .opencode/plans/.state/s/triage.json",
@@ -276,9 +508,16 @@ test("forge mv/rsync oracle paths → deny", () => {
   );
   assert.equal(
     decideBashForge({
-      command: "rsync /tmp/x .opencode/plans/feat/execution-plan.json",
+      command: "rsync /tmp/x .opencode/plans/.state/s/gate-state.json",
     }).decision,
     "deny",
+  );
+  // plan path is not a state oracle
+  assert.equal(
+    decideBashForge({
+      command: "rsync /tmp/x .opencode/plans/feat/execution-plan.json",
+    }).decision,
+    "allow",
   );
 });
 

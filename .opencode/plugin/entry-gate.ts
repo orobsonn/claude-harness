@@ -153,7 +153,7 @@ export async function createEntryGateHooks(
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
   } = await import("./lib/entry-decide.mjs")
-  const { computeGitState } = await import("../../shared/lib/git-state.mjs")
+  const { computeGitState } = await import("../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
 
   const gitStateFn =

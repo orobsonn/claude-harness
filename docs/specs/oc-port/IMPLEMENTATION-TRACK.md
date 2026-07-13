@@ -68,8 +68,9 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 | ID | Item | Status | Date | Notes |
 |---|---|---|---|---|
 | T15 | OC mid-run outbox (stamp/eye/plan-write → Telegram) | done | 2026-07-12 | Issue #284 / PR #287 — dual BLOCK fixed: output.args, vendor plugins, full-plan probe, default export, skill belt |
-| T16 | OC headless permissions + dual nudge | pending | | Issue #285 |
+| T16 | OC headless permissions + dual nudge | done | 2026-07-13 | Issue #285 closed; dual-nudge in obs-eye + permissions in opencode.json.example |
 | T17 | Skills parity + auto-merge T14 closeout | done | 2026-07-13 | Issue #286; T14 closeout done — objective code gate (T12+T13+T15 + `ocAutoMergeGateOpen`) plus operator-judgment `autoMergeEnabled:true` flip split per spec-adversary #4 |
+| T18 | plan-write-gate live Plugin (state anti-forge only) | done | 2026-07-13 | LIGHT: Plugin factory + throw + OC args; deny gate-state/triage/.state only; execution-plan allowed; registered in example/vendor/cron seed; dogfood re-vendor |
 
 ## Blockers log
 
