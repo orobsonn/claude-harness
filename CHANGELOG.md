@@ -5,6 +5,18 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.43.2](https://github.com/orobsonn/claude-harness/compare/v0.43.1...v0.43.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* alinha prosa OC com routing e sinais reais ([#307](https://github.com/orobsonn/claude-harness/issues/307)) ([1085b50](https://github.com/orobsonn/claude-harness/commit/1085b50b75acb77f762a59561acd8bbf416fcd2a))
+* calibra wall bash OC com carve-out harness ([#306](https://github.com/orobsonn/claude-harness/issues/306)) ([5ea7176](https://github.com/orobsonn/claude-harness/commit/5ea717687281788d743977feb67b874d4985242a)), closes [#300](https://github.com/orobsonn/claude-harness/issues/300)
+* capture-verified deixa de falhar em silêncio ([#291](https://github.com/orobsonn/claude-harness/issues/291)) ([#309](https://github.com/orobsonn/claude-harness/issues/309)) ([a769d5e](https://github.com/orobsonn/claude-harness/commit/a769d5ea11b93c46b0638c84c0429bc1397672e8))
+* **oc:** paridade de gates scope/eyes/QUICK ([#299](https://github.com/orobsonn/claude-harness/issues/299)) ([#305](https://github.com/orobsonn/claude-harness/issues/305)) ([1373158](https://github.com/orobsonn/claude-harness/commit/1373158be6da9c0a3fbbd4908700e41a34694e35))
+* **oc:** sessionId distinto de ceremony no entry-gate ([#298](https://github.com/orobsonn/claude-harness/issues/298)) ([#303](https://github.com/orobsonn/claude-harness/issues/303)) ([66dfaba](https://github.com/orobsonn/claude-harness/commit/66dfaba6dfd0a8ee896c41b3c20f53ee01b9fcbc))
+* paridade OC idle-nudge e limpeza oc-data no reaper ([#308](https://github.com/orobsonn/claude-harness/issues/308)) ([0257317](https://github.com/orobsonn/claude-harness/commit/02573178eb420d1f11fcfe16967d8f33cced04a4))
+
 ## [0.43.1](https://github.com/orobsonn/claude-harness/compare/v0.43.0...v0.43.1) (2026-07-13)
 
 
