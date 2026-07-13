@@ -85,6 +85,9 @@ OpenCode rejects `mode: subagent` for `opencode run --agent <name>` (falls back 
 | importing-claude-memory | optional one-shot |
 
 ### Claude-only or later
+Final decisions on porting status are documented in [full-map.md](./inventory/full-map.md).
+
+| Skill | Notes |
 
 | Skill | Notes |
 |---|---|
