@@ -34,7 +34,6 @@ Detect the mode **first**; it changes whether you may ask questions or wait for 
 - **HEADLESS:** no operator is reachable. Active when **any** of:
   - the trigger prompt says to run **autonomously** / VPS cron / "without asking questions"
   - env `$HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS mid-run outbox)
-  - env `$CLAUDE_CODE_REMOTE` is set
   - env `$HARNESS_OC_DATA_HOME` is set (OC isolated data home for cron)
 
 In **HEADLESS** mode: never wait for a human, never ask clarifying questions, never block on veto. Steps 2 and 4 have explicit headless branches.

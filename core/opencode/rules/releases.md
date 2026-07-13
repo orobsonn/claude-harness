@@ -61,9 +61,9 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 - **2 modos** — skill `/deploy` pergunta sempre, nao decide sozinha:
   - **Direto** (`wrangler deploy`): ~5s, sobe 100% direto. Recomendado pra MVP/staging/projetos sem usuario real ainda. Sem preview, sem smoke entre etapas
   - **Versionado** (`wrangler versions upload` → smoke preview → `versions deploy @100%` → smoke prod): ~30s a mais. Recomendado pra prod com usuario real. `versions upload` gera URL `<version-id>-<worker>.<subdomain>.workers.dev` sem roteamento publico — bate `/health` antes de promover
-- **Default sugerido pela skill** baseado em sinais do `<projeto>/.claude/CLAUDE.md` (tem dominio custom em prod? menciona usuarios reais?). Sempre confirma com usuario
+- **Default sugerido pela skill** baseado em sinais do `<projeto>/AGENTS.md` (tem dominio custom em prod? menciona usuarios reais?). Sempre confirma com usuario
 - Rollback rapido (vale pros 2 modos — Cloudflare versiona internamente todo deploy): `wrangler rollback [version-id-anterior]` — segundos, sem rebuild
-- Outras plataformas (Vercel, Pages): seguir convencao equivalente do `<projeto>/.claude/CLAUDE.md`
+- Outras plataformas (Vercel, Pages): seguir convencao equivalente do `<projeto>/AGENTS.md`
 
 ### Smoke test pos-deploy
 - **Modo versionado**: smoke contra preview URL ANTES de promover, e contra prod APOS promover. Falha de smoke = parar e investigar

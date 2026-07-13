@@ -1,5 +1,5 @@
 ---
-description: "CLI spawn twin of sniper-medium (mode primary for opencode run). Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). MiniMax M2.5. Minimum delta only, no new files."
+description: "CLI spawn twin of sniper-medium (mode primary for opencode run). Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). xai/grok-4.3. Minimum delta only, no new files."
 mode: primary
 model: xai/grok-4.3
 temperature: 0.1

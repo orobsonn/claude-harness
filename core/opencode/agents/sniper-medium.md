@@ -1,5 +1,5 @@
 ---
-description: Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). MiniMax M2.5. Minimum delta only, no new files.
+description: Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). xai/grok-4.3. Minimum delta only, no new files.
 mode: subagent
 model: xai/grok-4.3
 temperature: 0.1
