@@ -63,7 +63,18 @@
  *   DEFAULT_MEM_GUARD_BYTES).
  * @returns {{ ok: boolean, sessionName?: string, worktreePath?: string }}
  */
-import { writeFileSync, readFileSync, rmSync, existsSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
+import {
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  chmodSync,
+  mkdirSync,
+  copyFileSync,
+  cpSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -74,6 +85,7 @@ import {
   readMemGuardBytesFromEnv,
   DEFAULT_MEM_GUARD_BYTES,
 } from "./mem-guard.mjs";
+import { rewriteSharedImportsForVendor } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -599,6 +611,23 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
  * @returns {{ copied: string[], wroteExample: boolean }}
  */
 
+/** OpenCode framework-owned dirs (materialized into worktree `.opencode/`). */
+const OC_RUNTIME_DIRS = Object.freeze(["agents", "skills", "plugin", "tools", "hands", "rules"]);
+/** OpenCode framework files copied next to those dirs. */
+const OC_RUNTIME_FILES = Object.freeze(["harness.routing.json", "AGENTS.md"]);
+/**
+ * Critical paths under `.opencode/` that headless `opencode run` needs. Missing any after
+ * materialize means skills/tools/gates will not load (smoke #311/#313/#318) — fail-closed.
+ */
+const OC_RUNTIME_CRITICAL = Object.freeze([
+  "skills/triaging-requests/SKILL.md",
+  "skills/orchestrating-delivery/SKILL.md",
+  "skills/brainstorming/SKILL.md",
+  "plugin/entry-gate.ts",
+  "tools/classify.ts",
+  "agents/build.md",
+]);
+
 /**
  * @description True when every plugin path exists under root (strip leading ./).
  * @param {string} root
@@ -618,8 +647,159 @@ export function ocPluginFilesExist(root, plugins) {
 }
 
 /**
+ * @description True when an OpenCode runtime root (core/opencode or .opencode) has the critical
+ * skills/plugins/tools/agents headless delivery needs.
+ * @param {string} runtimeRoot
+ * @returns {boolean}
+ */
+export function isOpencodeRuntimeComplete(runtimeRoot) {
+  if (typeof runtimeRoot !== "string" || !runtimeRoot || !existsSync(runtimeRoot)) return false;
+  return OC_RUNTIME_CRITICAL.every((rel) => existsSync(join(runtimeRoot, rel)));
+}
+
+/**
+ * @description First missing critical relative path under runtimeRoot, or null if complete.
+ * @param {string} runtimeRoot
+ * @returns {string|null}
+ */
+function firstMissingOcCritical(runtimeRoot) {
+  for (const rel of OC_RUNTIME_CRITICAL) {
+    if (!existsSync(join(runtimeRoot, rel))) return rel;
+  }
+  return null;
+}
+
+/**
+ * @description Copy a tree excluding *.test.mjs; rewrite monorepo→vendored shared imports in text.
+ * Mirrors vendor-core copyOcTree (not exported there).
+ * @param {string} srcDir
+ * @param {string} destDir
+ * @param {string} relPrefix - path relative to opencode root for import rewrite
+ */
+function copyOcRuntimeTree(srcDir, destDir, relPrefix = "") {
+  if (!existsSync(srcDir)) return;
+  mkdirSync(destDir, { recursive: true });
+  for (const name of readdirSync(srcDir)) {
+    const src = join(srcDir, name);
+    const dest = join(destDir, name);
+    const rel = relPrefix ? `${relPrefix}/${name}` : name;
+    const info = statSync(src);
+    if (info.isDirectory()) {
+      copyOcRuntimeTree(src, dest, rel);
+    } else if (info.isFile()) {
+      if (name.endsWith(".test.mjs")) continue;
+      if (/\.(mjs|ts|js|tsx|jsx|json|md)$/.test(name)) {
+        const text = readFileSync(src, "utf8");
+        writeFileSync(dest, rewriteSharedImportsForVendor(text, rel));
+      } else {
+        cpSync(src, dest);
+      }
+    }
+  }
+}
+
+/**
+ * @description Materialize a full `.opencode/` runtime into the worktree from monorepo
+ * `core/opencode` (preferred) or an already-vendored `projectRoot/.opencode`, with shared libs
+ * and import rewrite so plugins resolve. Fail-closed when critical skills/gates/tools are still
+ * missing afterward — rewrite-only `plugin[] → core/opencode/plugin` is not enough for headless
+ * skill/tool load (#322, smoke #311/#313/#318).
+ *
+ * Source priority:
+ * 1. `projectRoot/core/opencode` if complete
+ * 2. `projectRoot/.opencode` if complete
+ * 3. worktree `.opencode` already complete (consumer after cp -a) — leave/re-sync no-op
+ *
+ * @param {string} worktreePath
+ * @param {string} projectRoot
+ * @returns {{ source: "monorepo"|"vendored"|"worktree-complete", ocDir: string }}
+ */
+export function materializeOpencodeRuntime(worktreePath, projectRoot) {
+  if (typeof worktreePath !== "string" || !worktreePath) {
+    throw new Error("materializeOpencodeRuntime: worktreePath required");
+  }
+  if (typeof projectRoot !== "string" || !projectRoot) {
+    throw new Error("materializeOpencodeRuntime: projectRoot required");
+  }
+
+  const ocDir = join(worktreePath, ".opencode");
+  const monorepoSrc = join(projectRoot, "core", "opencode");
+  const vendoredSrc = join(projectRoot, ".opencode");
+  const sharedSrc = join(projectRoot, "core", "shared");
+
+  let sourceKind = null;
+  let openCodeSrc = null;
+  if (isOpencodeRuntimeComplete(monorepoSrc)) {
+    sourceKind = "monorepo";
+    openCodeSrc = monorepoSrc;
+  } else if (isOpencodeRuntimeComplete(vendoredSrc)) {
+    sourceKind = "vendored";
+    openCodeSrc = vendoredSrc;
+  } else if (isOpencodeRuntimeComplete(ocDir)) {
+    return { source: "worktree-complete", ocDir };
+  } else {
+    const missingMono = firstMissingOcCritical(monorepoSrc);
+    const missingVend = firstMissingOcCritical(vendoredSrc);
+    throw new Error(
+      `OC runtime materialize failed: no complete source under projectRoot/core/opencode ` +
+        `or projectRoot/.opencode (and worktree .opencode incomplete). ` +
+        `monorepo missing: ${missingMono ?? "(root absent)"}; ` +
+        `vendored missing: ${missingVend ?? "(root absent)"}. ` +
+        `Headless opencode run would lack triaging-requests / entry-gate / classify.`,
+    );
+  }
+
+  mkdirSync(ocDir, { recursive: true });
+  for (const dir of OC_RUNTIME_DIRS) {
+    const src = join(openCodeSrc, dir);
+    if (existsSync(src)) copyOcRuntimeTree(src, join(ocDir, dir), dir);
+  }
+  for (const file of OC_RUNTIME_FILES) {
+    const src = join(openCodeSrc, file);
+    if (!existsSync(src)) continue;
+    const text = readFileSync(src, "utf8");
+    writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
+  }
+
+  // Monorepo plugins import core/shared via relative paths; vendor layout needs .opencode/shared.
+  // Fail-closed if shared cannot be materialized — entry-gate/plan-gate load would throw at import
+  // time while plugin[] still "exists" (same class as #315: path present, gate dead).
+  const sharedFromVendor = join(openCodeSrc, "shared");
+  const sharedMarker = join(ocDir, "shared", "lib", "path-helpers.mjs");
+  if (sourceKind === "monorepo") {
+    if (!existsSync(sharedSrc)) {
+      throw new Error(
+        `OC runtime materialize failed: monorepo source lacks core/shared ` +
+          `(gates import shared libs; headless would load dead plugins). ` +
+          `Expected: ${sharedSrc}`,
+      );
+    }
+    copyOcRuntimeTree(sharedSrc, join(ocDir, "shared"), "shared");
+  } else if (existsSync(sharedFromVendor)) {
+    copyOcRuntimeTree(sharedFromVendor, join(ocDir, "shared"), "shared");
+  }
+
+  const stillMissing = firstMissingOcCritical(ocDir);
+  if (stillMissing) {
+    throw new Error(
+      `OC runtime materialize incomplete under worktree .opencode (fail-closed). ` +
+        `Missing critical: ${stillMissing}. Source was ${sourceKind} (${openCodeSrc}).`,
+    );
+  }
+  if (sourceKind === "monorepo" && !existsSync(sharedMarker)) {
+    throw new Error(
+      `OC runtime materialize incomplete: shared libs missing after copy ` +
+        `(expected ${sharedMarker}). Gates would fail on import.`,
+    );
+  }
+
+  return { source: sourceKind, ocDir };
+}
+
+/**
  * @description Rewrite `./.opencode/plugin/X` → `./core/opencode/plugin/X` for monorepo dogfood
  * where gates live under core/opencode but opencode.json lists the vendored path.
+ * Fallback only after materialize — happy path uses `./.opencode/plugin/*` (#322).
  * @param {unknown} plugins
  * @returns {string[]}
  */
@@ -634,9 +814,9 @@ export function rewriteOcPluginsToMonorepoCore(plugins) {
 
 /**
  * @description Ensure every entry in plugin[] resolves to a real file under the worktree.
- * Prefer paths as listed (consumer vendored `.opencode/plugin`); else rewrite to monorepo
- * `core/opencode/plugin` when those files exist. Throws fail-closed if still missing — a
- * headless session with plugin[] pointing at absent files loads ZERO governance gates
+ * Prefer paths as listed (canonical `.opencode/plugin` after materialize); else rewrite to monorepo
+ * `core/opencode/plugin` when those files exist (legacy fallback). Throws fail-closed if still
+ * missing — a headless session with plugin[] pointing at absent files loads ZERO governance gates
  * (repro: smoke #311/#313, issue #315).
  * @param {string} worktreePath
  * @param {string[]} plugins
@@ -671,6 +851,10 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
   let wroteExample = false;
   if (typeof worktreePath !== "string" || !worktreePath) return { copied, wroteExample };
   if (typeof projectRoot !== "string" || !projectRoot) return { copied, wroteExample };
+
+  // Full runtime first (#322): skills/agents/plugin/tools/hands/rules + shared imports.
+  // Fail-closed — never seed permissions then start headless without triaging-requests.
+  materializeOpencodeRuntime(worktreePath, projectRoot);
 
   // The projectRoot opencode.json is PARSED (never blindly copyFileSync'd) so the critical keys can
   // be validated/forced regardless of what the source actually contains. tryReadJsonObject returns
