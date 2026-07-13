@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "xai/grok-4.3",
+  "model": "xai/grok-4.5",
   "small_model": "xai/grok-build-0.1",
   "instructions": [
     "AGENTS.md"

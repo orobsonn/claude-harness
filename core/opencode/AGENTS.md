@@ -94,7 +94,7 @@ Any match in plan `scope_paths` forces FULL mode.
 
 | Role | Model |
 |---|---|
-| build | `xai/grok-4.3` |
+| build | `xai/grok-4.5` |
 | planner | `xai/grok-4.5` |
 | plan-reviewer | `xai/grok-4.5` + dual `openai/gpt-5.5` |
 | adversary | `xai/grok-4.5` + dual `openai/gpt-5.5` |
