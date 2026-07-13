@@ -35,6 +35,12 @@ test("root opencode.json plugins exist under .opencode/plugin and default-export
     // monorepo may not commit root config in all checkouts — skip soft
     return;
   }
+  // Dogfood .opencode/ is gitignored in this monorepo (source of truth = core/opencode/).
+  // Soft-skip when not vendored locally; CI fresh checkout has no .opencode/plugin.
+  const dogfoodPluginDir = join(root, ".opencode", "plugin");
+  if (!existsSync(dogfoodPluginDir)) {
+    return;
+  }
   await assertPlugins(cfgPath, (rel) => {
     // ./.opencode/plugin/foo.ts → <root>/.opencode/plugin/foo.ts
     const name = rel.replace(/^\.\//, "");
