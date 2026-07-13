@@ -108,7 +108,14 @@ test("t6-agents: required agent files exist including test-author.md", () => {
     assert.ok(existsSync(path), `missing agent ${name}.md`);
   }
   assert.ok(existsSync(join(AGENTS_DIR, "test-author.md")), "test-author.md restored");
-  assert.ok(existsSync(join(AGENTS_DIR, "SPAWN-PATTERN.md")), "SPAWN-PATTERN.md documents P2");
+  assert.ok(
+    !existsSync(join(AGENTS_DIR, "SPAWN-PATTERN.md")),
+    "SPAWN-PATTERN.md must not live under agents/ (not a loadable agent)",
+  );
+  assert.ok(
+    existsSync(join(OC_ROOT, "docs", "SPAWN-PATTERN.md")),
+    "SPAWN-PATTERN.md documents P2 under docs/",
+  );
 });
 
 test("t6-dual-files: plan-reviewer-openai and adversary-openai dual pair files exist", () => {

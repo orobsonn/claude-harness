@@ -1,7 +1,7 @@
 ---
-description: "CLI spawn twin of executor-low (mode primary for opencode run). Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Grok-build cheapest executor."
+description: "CLI spawn twin of executor-low (mode primary for opencode run). Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Ollama Cloud cheap hand (gemma4:31b)."
 mode: primary
-model: xai/grok-build-0.1
+model: ollama-cloud/gemma4:31b
 temperature: 0.1
 tools:
   task: false

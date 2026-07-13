@@ -20,6 +20,10 @@ const PREFIX = "[plan-gate]"
 export async function createPlanGateHooks(
   projectRoot: string,
 ): Promise<Pick<Hooks, "tool.execute.before">> {
+  const root =
+    typeof projectRoot === "string" && projectRoot.length > 0
+      ? projectRoot
+      : process.cwd()
   const {
     enforceDualFromDiskOrThrow,
     extractHookTaskContext,
@@ -39,7 +43,7 @@ export async function createPlanGateHooks(
       const subagentType = extractSubagentType(toolArgs)
       if (isDeliveryHandRequiringDual(subagentType)) {
         const sid = sessionId ?? undefined
-        const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+        const loaded = loadGateStateFromDisk(root, { sessionId: sid })
         if (!loaded.ok) {
           throw new Error(`${PREFIX} gate-state-unreadable: ${loaded.reason}`)
         }
@@ -52,7 +56,7 @@ export async function createPlanGateHooks(
         const featureId =
           typeof state.feature_id === "string" ? state.feature_id : undefined
         const pd = planDir({
-          projectRoot,
+          projectRoot: root,
           runtime: "opencode",
           sessionId: sid,
           featureId,
@@ -72,7 +76,7 @@ export async function createPlanGateHooks(
       }
 
       enforceDualFromDiskOrThrow(PREFIX, {
-        projectRoot,
+        projectRoot: root,
         toolName,
         toolArgs,
         sessionId: sessionId ?? undefined,
@@ -82,16 +86,27 @@ export async function createPlanGateHooks(
 }
 
 /**
+ * @description Resolve project root — never empty string into hooks.
+ */
+function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
+  if (typeof directory === "string" && directory.length > 0) return directory
+  if (typeof worktree === "string" && worktree.length > 0) return worktree
+  if (
+    directory != null &&
+    typeof directory === "object" &&
+    !Array.isArray(directory)
+  ) {
+    const nested = (directory as { directory?: unknown }).directory
+    if (typeof nested === "string" && nested.length > 0) return nested
+  }
+  return process.cwd()
+}
+
+/**
  * @description OpenCode plugin factory — named const + default (OC load contract).
  */
 export const PlanGate: Plugin = async ({ directory, worktree }: any) => {
-  const dir: string =
-    typeof directory === "string" && directory.length > 0
-      ? directory
-      : typeof worktree === "string" && worktree.length > 0
-        ? worktree
-        : String((directory as any)?.directory ?? process.cwd())
-  return createPlanGateHooks(dir)
+  return createPlanGateHooks(resolveProjectRoot(directory, worktree))
 }
 
 export default PlanGate

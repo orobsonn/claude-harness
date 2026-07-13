@@ -450,7 +450,8 @@ export function isTaskTool(toolName) {
  */
 export function extractHookTaskContext(input, output) {
   const toolName = input?.tool ?? "";
-  const toolArgs = output?.args ?? null;
+  // Belt: OC may put task args on output.args (primary) or input.args.
+  const toolArgs = output?.args ?? input?.args ?? null;
   const sessionId = input?.sessionID ?? input?.sessionId ?? null;
   const subagentType = extractSubagentType(toolArgs);
   return { toolName, toolArgs, sessionId, subagentType };
@@ -503,12 +504,16 @@ export function extractSessionId(toolArgs, env = process.env) {
  */
 export function loadRoutingFromDisk(projectRoot) {
   try {
-    if (typeof projectRoot !== "string" || projectRoot.length === 0) {
+    const root =
+      typeof projectRoot === "string" && projectRoot.length > 0
+        ? projectRoot
+        : process.cwd();
+    if (typeof root !== "string" || root.length === 0) {
       return { ok: false, reason: "projectRoot missing" };
     }
     const candidates = [
-      path.join(projectRoot, ".opencode", "harness.routing.json"),
-      path.join(projectRoot, "harness.routing.json"),
+      path.join(root, ".opencode", "harness.routing.json"),
+      path.join(root, "harness.routing.json"),
     ];
     for (const p of candidates) {
       try {
@@ -541,10 +546,14 @@ export function loadRoutingFromDisk(projectRoot) {
  */
 export function loadGateStateFromDisk(projectRoot, opts = {}) {
   try {
-    if (typeof projectRoot !== "string" || projectRoot.length === 0) {
+    const root =
+      typeof projectRoot === "string" && projectRoot.length > 0
+        ? projectRoot
+        : process.cwd();
+    if (typeof root !== "string" || root.length === 0) {
       return { ok: false, reason: "projectRoot missing" };
     }
-    const stateRoot = path.join(projectRoot, ".opencode", "plans", ".state");
+    const stateRoot = path.join(root, ".opencode", "plans", ".state");
     const sessionId = opts.sessionId;
 
     /** @param {string} p */

@@ -35,26 +35,26 @@
     "executor": {
       "tiers": {
         "low": {
-          "model": "xai/grok-build-0.1"
+          "model": "ollama-cloud/gemma4:31b"
         },
         "medium": {
-          "model": "xai/grok-4.3"
+          "model": "ollama-cloud/glm-5.2"
         },
         "high": {
-          "model": "xai/grok-4.5"
+          "model": "ollama-cloud/kimi-k2.7-code"
         }
       }
     },
     "sniper": {
       "tiers": {
         "low": {
-          "model": "xai/grok-build-0.1"
+          "model": "ollama-cloud/gemma4:31b"
         },
         "medium": {
-          "model": "xai/grok-4.3"
+          "model": "ollama-cloud/glm-5.2"
         },
         "high": {
-          "model": "xai/grok-4.5"
+          "model": "ollama-cloud/kimi-k2.7-code"
         }
       }
     },
@@ -90,6 +90,15 @@
     },
     "openai/gpt-5.5": {
       "supportsReasoningEffort": true
+    },
+    "ollama-cloud/gemma4:31b": {
+      "supportsReasoningEffort": false
+    },
+    "ollama-cloud/glm-5.2": {
+      "supportsReasoningEffort": false
+    },
+    "ollama-cloud/kimi-k2.7-code": {
+      "supportsReasoningEffort": false
     }
   }
 }

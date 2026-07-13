@@ -10,7 +10,10 @@ const subagentOf = (args: any): string =>
 export async function createLoopGuardHooks(
   directory: string,
 ): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
-  const dirSafe = typeof directory === "string" ? directory : ""
+  const dirSafe =
+    typeof directory === "string" && directory.length > 0
+      ? directory
+      : process.cwd()
 
   const {
     decideLoopGuard,
@@ -66,15 +69,26 @@ export async function createLoopGuardHooks(
   }
 }
 
+/**
+ * @description Resolve project root — never empty string into hooks.
+ */
+function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
+  if (typeof directory === "string" && directory.length > 0) return directory
+  if (typeof worktree === "string" && worktree.length > 0) return worktree
+  if (
+    directory != null &&
+    typeof directory === "object" &&
+    !Array.isArray(directory)
+  ) {
+    const nested = (directory as { directory?: unknown }).directory
+    if (typeof nested === "string" && nested.length > 0) return nested
+  }
+  return process.cwd()
+}
+
 export const LoopGuard: Plugin = async ({ directory, worktree }: any) => {
   if (process.env.OC_LOOP_GUARD_OFF === "1") return {}
-  const dir: string =
-    typeof directory === "string"
-      ? directory
-      : typeof worktree === "string"
-        ? worktree
-        : String((directory as any)?.directory ?? "")
-  return createLoopGuardHooks(dir)
+  return createLoopGuardHooks(resolveProjectRoot(directory, worktree))
 }
 
 export default LoopGuard

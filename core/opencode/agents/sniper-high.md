@@ -1,7 +1,7 @@
 ---
-description: Surgical fix for HIGH-severity defects (race condition, security, data corruption, auth-bypass). xai/grok-4.5. Minimum delta only, no new files.
+description: Surgical fix for HIGH-severity defects (race condition, security, data corruption, auth-bypass). ollama-cloud/kimi-k2.7-code. Minimum delta only, no new files.
 mode: subagent
-model: xai/grok-4.5
+model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
 permission:
   edit: allow

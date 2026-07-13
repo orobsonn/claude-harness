@@ -1,7 +1,7 @@
 ---
-description: Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Grok-build cheapest executor.
+description: Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Ollama Cloud cheap hand (gemma4:31b).
 mode: subagent
-model: xai/grok-build-0.1
+model: ollama-cloud/gemma4:31b
 temperature: 0.1
 permission:
   edit: allow

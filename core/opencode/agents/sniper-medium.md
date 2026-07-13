@@ -1,7 +1,7 @@
 ---
-description: Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). xai/grok-4.3. Minimum delta only, no new files.
+description: Surgical fix for MEDIUM-severity defects (logic error, missing case, off-by-one, missing validation). ollama-cloud/glm-5.2. Minimum delta only, no new files.
 mode: subagent
-model: xai/grok-4.3
+model: ollama-cloud/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

@@ -137,6 +137,10 @@ export async function createEntryGateHooks(
   projectRoot: string,
   deps: EntryGateDeps = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
+  const root =
+    typeof projectRoot === "string" && projectRoot.length > 0
+      ? projectRoot
+      : process.cwd()
   const {
     enforceDualFromDiskOrThrow,
     extractHookTaskContext,
@@ -162,7 +166,7 @@ export async function createEntryGateHooks(
   const isAncestorFn = deps.isAncestorFn ?? defaultIsAncestor
   const listHandRecordsForFeatureFn =
     deps.listHandRecordsForFeatureFn ??
-    ((featureId: string) => listHandRecordsForFeature(projectRoot, featureId))
+    ((featureId: string) => listHandRecordsForFeature(root, featureId))
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -177,7 +181,7 @@ export async function createEntryGateHooks(
           typeof sessionId === "string" && sessionId.length > 0
             ? sessionId
             : undefined
-        const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+        const loaded = loadGateStateFromDisk(root, { sessionId: sid })
         if (isDeliveryCommand(command) && !loaded.ok) {
           throw new Error(`${PREFIX} ${loaded.reason}`)
         }
@@ -214,7 +218,7 @@ export async function createEntryGateHooks(
         typeof sessionId === "string" && sessionId.length > 0
           ? sessionId
           : undefined
-      const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+      const loaded = loadGateStateFromDisk(root, { sessionId: sid })
       if (!loaded.ok && isDeliveryRole(subagentType)) {
         throw new Error(`${PREFIX} ${loaded.reason}`)
       }
@@ -231,7 +235,7 @@ export async function createEntryGateHooks(
       )
 
       enforceDualFromDiskOrThrow(PREFIX, {
-        projectRoot,
+        projectRoot: root,
         toolName,
         toolArgs,
         sessionId: sid ?? null,
@@ -241,16 +245,27 @@ export async function createEntryGateHooks(
 }
 
 /**
+ * @description Resolve project root — never empty string into hooks.
+ */
+function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
+  if (typeof directory === "string" && directory.length > 0) return directory
+  if (typeof worktree === "string" && worktree.length > 0) return worktree
+  if (
+    directory != null &&
+    typeof directory === "object" &&
+    !Array.isArray(directory)
+  ) {
+    const nested = (directory as { directory?: unknown }).directory
+    if (typeof nested === "string" && nested.length > 0) return nested
+  }
+  return process.cwd()
+}
+
+/**
  * @description OpenCode plugin factory — named const + default (OC load contract).
  */
 export const EntryGate: Plugin = async ({ directory, worktree }: any) => {
-  const dir: string =
-    typeof directory === "string" && directory.length > 0
-      ? directory
-      : typeof worktree === "string" && worktree.length > 0
-        ? worktree
-        : String((directory as any)?.directory ?? process.cwd())
-  return createEntryGateHooks(dir)
+  return createEntryGateHooks(resolveProjectRoot(directory, worktree))
 }
 
 export default EntryGate
