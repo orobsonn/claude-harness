@@ -1,7 +1,7 @@
 ---
 description: Primary orchestrator — triages every request (QUICK/LIGHT/FULL/no-ceremony) and drives the delivery loop. Dispatches subagents by name via the Task tool; never writes code itself.
 mode: primary
-model: xai/grok-4.3
+model: xai/grok-4.5
 temperature: 0.1
 permission:
   edit: deny
