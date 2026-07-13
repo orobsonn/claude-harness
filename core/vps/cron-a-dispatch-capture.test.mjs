@@ -173,9 +173,13 @@ function extractLogRedirectPath(sessionCommand) {
   return bare ? bare[1] : undefined;
 }
 
-/** @description Minimal monorepo plugin stubs for seedOpencodeRootConfig fail-closed check. */
+/**
+ * @description Minimal complete monorepo OC runtime for materialize/seed fail-closed pass.
+ * @param {string} root
+ */
 function plantMonorepoOcPlugins(root) {
-  const dir = join(root, "core", "opencode", "plugin");
+  const oc = join(root, "core", "opencode");
+  const dir = join(oc, "plugin");
   mkdirSync(dir, { recursive: true });
   for (const name of [
     "entry-gate.ts", "plan-gate.ts", "plan-write-gate.ts", "loop-guard.ts",
@@ -184,6 +188,15 @@ function plantMonorepoOcPlugins(root) {
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }
+  for (const skill of ["triaging-requests", "orchestrating-delivery", "brainstorming"]) {
+    const d = join(oc, "skills", skill);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "SKILL.md"), `# ${skill}\n`, "utf8");
+  }
+  mkdirSync(join(oc, "tools"), { recursive: true });
+  writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
+  mkdirSync(join(oc, "agents"), { recursive: true });
+  writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
 }
 
 
@@ -292,12 +305,12 @@ test("dispatch: stdin pipe targets the runner (not ulimit) so the prompt reaches
       // (mkdirSync) so seedOpencodeRootConfig's writeFileSync into the worktree has a real
       // destination to land in, mirroring cron-a-dispatch.test.mjs's "seeds opencode.json
       // into the worktree on the real dispatch path" fixture.
+      plantMonorepoOcPlugins(projectRoot);
       const calls = [];
       const spawn = (command, args = [], spawnOpts = {}) => {
         calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
         if (command === "git" && args[0] === "worktree" && args[1] === "add") {
           mkdirSync(args[2], { recursive: true });
-          plantMonorepoOcPlugins(args[2]);
         }
         return { ok: true };
       };

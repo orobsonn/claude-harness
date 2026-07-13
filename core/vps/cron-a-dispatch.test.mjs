@@ -270,6 +270,7 @@ test("dispatch: drops the ephemeral .claude/plans/ from the copied worktree harn
 test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plans/ (mirror of P11)", () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
+    plantMonorepoOcPlugins(projectRoot);
     mkdirSync(join(projectRoot, ".opencode", "plans", "old-feature"), { recursive: true });
     writeFileSync(join(projectRoot, ".opencode", "plans", "old-feature", "execution-plan.json"), '{"tasks":[1]}');
     mkdirSync(join(projectRoot, ".opencode", "plugin"), { recursive: true });
@@ -280,7 +281,6 @@ test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plan
       calls.push({ command, args });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
-        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -296,7 +296,12 @@ test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plan
     assert.ok(ocCp, "runtime=opencode must cp -a .opencode into the worktree when src exists");
     const ocDst = ocCp.args[2];
     assert.ok(!existsSync(join(ocDst, "plans")), "the ephemeral .opencode/plans/ must be dropped from the worktree");
-    assert.ok(existsSync(join(ocDst, "plugin", "keep.ts")), "plugin/ must survive the copy");
+    // Materialize from monorepo overwrites framework-owned plugin/ with entry-gate etc.; keep.ts
+    // is non-framework. After materialize, critical runtime must exist.
+    assert.ok(
+      existsSync(join(ocDst, "skills", "triaging-requests", "SKILL.md")),
+      "materialize must plant skills after cp -a stub"
+    );
   } finally {
     cleanup();
   }
@@ -323,9 +328,14 @@ test("prepareOpencodeDataHome: fresh empty dir + auth only (never copies opencod
 
 
 
-/** @description Minimal monorepo plugin stubs so seedOpencodeRootConfig fail-closed check can rewrite. */
+/**
+ * @description Minimal complete monorepo OC runtime under root/core/opencode so
+ * materializeOpencodeRuntime / seedOpencodeRootConfig can fail-closed-pass.
+ * @param {string} root
+ */
 function plantMonorepoOcPlugins(root) {
-  const dir = join(root, "core", "opencode", "plugin");
+  const oc = join(root, "core", "opencode");
+  const dir = join(oc, "plugin");
   mkdirSync(dir, { recursive: true });
   for (const name of [
     "entry-gate.ts",
@@ -342,6 +352,15 @@ function plantMonorepoOcPlugins(root) {
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }
+  for (const skill of ["triaging-requests", "orchestrating-delivery", "brainstorming"]) {
+    const d = join(oc, "skills", skill);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "SKILL.md"), `# ${skill}\n`, "utf8");
+  }
+  mkdirSync(join(oc, "tools"), { recursive: true });
+  writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
+  mkdirSync(join(oc, "agents"), { recursive: true });
+  writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
 }
 
 test("seedOpencodeRootConfig: copies opencode.json + AGENTS.md from projectRoot (permissions vendored)", () => {
@@ -351,7 +370,7 @@ test("seedOpencodeRootConfig: copies opencode.json + AGENTS.md from projectRoot 
     const worktree = join(root, "wt");
     mkdirSync(projectRoot, { recursive: true });
     mkdirSync(worktree, { recursive: true });
-    plantMonorepoOcPlugins(worktree);
+    plantMonorepoOcPlugins(projectRoot);
     writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify({ permission: { external_directory: "allow", bash: { "*": "allow" } } }));
     writeFileSync(join(projectRoot, "AGENTS.md"), "# agents");
     const r = seedOpencodeRootConfig(worktree, projectRoot);
@@ -371,9 +390,8 @@ test("seedOpencodeRootConfig: falls back to opencode.json.example when root conf
   try {
     const projectRoot = join(root, "proj");
     const worktree = join(root, "wt");
-    mkdirSync(join(projectRoot, "core", "opencode"), { recursive: true });
     mkdirSync(worktree, { recursive: true });
-    plantMonorepoOcPlugins(worktree);
+    plantMonorepoOcPlugins(projectRoot);
     writeFileSync(
       join(projectRoot, "core", "opencode", "opencode.json.example"),
       JSON.stringify({ permission: { external_directory: "allow" } })
@@ -395,6 +413,7 @@ test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME in
     mkdirSync(join(homeDir, ".local", "share", "opencode"), { recursive: true });
     writeFileSync(join(homeDir, ".local", "share", "opencode", "auth.json"), "{}");
     mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+    plantMonorepoOcPlugins(projectRoot);
 
     // Spawn seam that REALLY materializes the worktree path (mkdirSync on `git worktree add`) so
     // seedOpencodeRootConfig has a real destination dir to write into — dispatch now aborts BEFORE
@@ -405,7 +424,6 @@ test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME in
       calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
-        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -1243,6 +1261,7 @@ test("mem-guard: an explicit opts.memGuardBytes overrides a stricter HARNESS_MEM
 test("dispatch: runtime=opencode seeds opencode.json into the worktree on the real dispatch path (seedOpencodeRootConfig runs inside dispatch, not only in isolation)", () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
+    plantMonorepoOcPlugins(projectRoot);
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({ permission: { external_directory: "allow", bash: { "*": "allow" } } })
@@ -1256,7 +1275,6 @@ test("dispatch: runtime=opencode seeds opencode.json into the worktree on the re
       calls.push({ command, args });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
-        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -1274,6 +1292,10 @@ test("dispatch: runtime=opencode seeds opencode.json into the worktree on the re
     assert.ok(
       existsSync(join(worktreePath, "opencode.json")),
       "seedOpencodeRootConfig must run on the real dispatch() path — opencode.json must exist in the worktree afterward, not only when seedOpencodeRootConfig is called in isolation"
+    );
+    assert.ok(
+      existsSync(join(worktreePath, ".opencode", "skills", "triaging-requests", "SKILL.md")),
+      "materialize must plant triaging-requests on the real dispatch path (#322)"
     );
   } finally {
     cleanup();

@@ -1,13 +1,8 @@
 /**
- * @description Pins the hardened contract for `seedOpencodeRootConfig` (task-N, opencode headless
- * hardening). The function existing at authoring time returns `{ copied, wroteExample }` and simply
- * copies whatever `projectRoot/opencode.json` (or, as fallback, a vendored `opencode.json.example`
- * candidate) already contains. This suite fixes a STRONGER contract: the seeded worktree
- * `opencode.json` must always carry a safe, key-enforced `permission` block — `question: 'deny'`,
- * `external_directory: 'allow'`, `bash['*']: 'allow'` plus the dangerous-command deny-list — even
- * when the source config is stale, incomplete, malformed, or entirely absent (double-fault). These
- * assertions describe the CONTRACT the hardened implementation must satisfy; they are authored
- * against the CURRENT (pre-hardening) function and are expected to fail until that hardening lands.
+ * @description Pins the hardened contract for `seedOpencodeRootConfig` + `materializeOpencodeRuntime`
+ * (opencode headless hardening, #322 full runtime materialize). Permissions stay key-enforced;
+ * the worktree must also receive a complete `.opencode/{skills,agents,plugin,tools,…}` layout so
+ * headless `opencode run` can load triaging-requests / classify / entry-gate.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,6 +12,8 @@ import { join } from "node:path";
 
 import {
   seedOpencodeRootConfig,
+  materializeOpencodeRuntime,
+  isOpencodeRuntimeComplete,
   ocPluginFilesExist,
   rewriteOcPluginsToMonorepoCore,
   ensureOcPluginPathsExist,
@@ -37,13 +34,75 @@ const CANONICAL_STUBS = [
   "agent-idle-nudge.ts",
 ];
 
-/** @description Write stub plugin files under root/core/opencode/plugin. */
+const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
+
+/**
+ * @description Minimal complete monorepo OC runtime under root/core/opencode (+ optional shared).
+ * @param {string} root
+ * @param {{ withSharedImport?: boolean }} [opts]
+ */
+function writeMinimalOcRuntime(root, opts = {}) {
+  const oc = join(root, "core", "opencode");
+  const plugin = join(oc, "plugin");
+  mkdirSync(plugin, { recursive: true });
+  for (const name of CANONICAL_STUBS) {
+    let body = `// stub ${name}\n`;
+    if (opts.withSharedImport && name === "entry-gate.ts") {
+      body =
+        `// stub entry-gate\n` +
+        `const { x } = await import("../../shared/lib/path-helpers.mjs");\n`;
+    }
+    writeFileSync(join(plugin, name), body, "utf8");
+  }
+  for (const skill of CRITICAL_SKILLS) {
+    const d = join(oc, "skills", skill);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "SKILL.md"), `# ${skill}\n`, "utf8");
+  }
+  mkdirSync(join(oc, "tools"), { recursive: true });
+  writeFileSync(join(oc, "tools", "classify.ts"), "// classify stub\n", "utf8");
+  mkdirSync(join(oc, "agents"), { recursive: true });
+  writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  mkdirSync(join(oc, "hands"), { recursive: true });
+  mkdirSync(join(oc, "rules"), { recursive: true });
+  writeFileSync(join(oc, "harness.routing.json"), "{}\n", "utf8");
+
+  if (opts.withSharedImport) {
+    const sharedLib = join(root, "core", "shared", "lib");
+    mkdirSync(sharedLib, { recursive: true });
+    writeFileSync(join(sharedLib, "path-helpers.mjs"), "export const x = 1;\n", "utf8");
+  }
+}
+
+/** @description Write stub plugin files under root/core/opencode/plugin only (rewrite fallback). */
 function writeMonorepoPluginStubs(root) {
   const corePlugin = join(root, "core", "opencode", "plugin");
   mkdirSync(corePlugin, { recursive: true });
   for (const name of CANONICAL_STUBS) {
     writeFileSync(join(corePlugin, name), `// stub ${name}\n`, "utf8");
   }
+}
+
+/**
+ * @description Consumer-shaped complete .opencode under root.
+ * @param {string} root
+ */
+function writeVendoredOcRuntime(root) {
+  const oc = join(root, ".opencode");
+  const plugin = join(oc, "plugin");
+  mkdirSync(plugin, { recursive: true });
+  for (const name of CANONICAL_STUBS) {
+    writeFileSync(join(plugin, name), `// vendored ${name}\n`, "utf8");
+  }
+  for (const skill of CRITICAL_SKILLS) {
+    const d = join(oc, "skills", skill);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "SKILL.md"), `# ${skill}\n`, "utf8");
+  }
+  mkdirSync(join(oc, "tools"), { recursive: true });
+  writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
+  mkdirSync(join(oc, "agents"), { recursive: true });
+  writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
 }
 
 /** @description Fresh temp root with projectRoot + worktree dirs. */
@@ -54,9 +113,23 @@ function makeSeedDirs(prefix, opts = {}) {
   mkdirSync(projectRoot, { recursive: true });
   mkdirSync(worktree, { recursive: true });
   if (!opts.bare) {
-    writeMonorepoPluginStubs(worktree);
+    writeMinimalOcRuntime(projectRoot);
   }
   return { root, projectRoot, worktree };
+}
+
+/** @description Assert #ac-1.1 critical paths under worktree .opencode. */
+function assertCriticalRuntime(worktree) {
+  for (const rel of [
+    ".opencode/skills/triaging-requests/SKILL.md",
+    ".opencode/skills/orchestrating-delivery/SKILL.md",
+    ".opencode/skills/brainstorming/SKILL.md",
+    ".opencode/plugin/entry-gate.ts",
+    ".opencode/tools/classify.ts",
+    ".opencode/agents/build.md",
+  ]) {
+    assert.equal(existsSync(join(worktree, rel)), true, `missing ${rel}`);
+  }
 }
 
 test("seedOpencodeRootConfig: forces permission.question to 'deny' even when the projectRoot source omits it", () => {
@@ -144,7 +217,6 @@ test("seedOpencodeRootConfig: union-enforces canonical denies without dropping a
 test("seedOpencodeRootConfig: the example-fallback path is ALSO key-enforced when projectRoot has no opencode.json", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-fallback-enforce-");
   try {
-    mkdirSync(join(projectRoot, "core", "opencode"), { recursive: true });
     writeFileSync(
       join(projectRoot, "core", "opencode", "opencode.json.example"),
       JSON.stringify({ permission: { bash: { "*": "allow" } } }),
@@ -185,7 +257,6 @@ test("seedOpencodeRootConfig: fail-safe on malformed projectRoot opencode.json �
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-malformed-");
   try {
     writeFileSync(join(projectRoot, "opencode.json"), "{ invalid json");
-    mkdirSync(join(projectRoot, "core", "opencode"), { recursive: true });
     writeFileSync(
       join(projectRoot, "core", "opencode", "opencode.json.example"),
       JSON.stringify({
@@ -215,8 +286,7 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-double-fault-");
   try {
     writeFileSync(join(projectRoot, "opencode.json"), "{ invalid json");
-    // Deliberately no core/opencode/opencode.json.example, no .opencode/opencode.json.example under
-    // projectRoot, and no .opencode/opencode.json.example under worktree — a genuine double-fault.
+    // Deliberately no opencode.json.example — a genuine double-fault for config, but runtime source exists.
     assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot), "a double-fault (malformed source + no example) must never throw");
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.equal(cfg.permission.question, "deny");
@@ -281,16 +351,16 @@ test("seedOpencodeRootConfig: [security] force-enforces deny entries for the add
   }
 });
 
-test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source still seeds permissions + monorepo plugin rewrite when core/opencode/plugin stubs exist", () => {
+test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source still seeds permissions + canonical .opencode plugin paths after materialize", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-double-fault-plugin-");
   try {
     writeFileSync(join(projectRoot, "opencode.json"), "{ this is not json");
-    assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot), "malformed source must not throw when plugin files exist on worktree");
+    assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot), "malformed source must not throw when runtime source exists");
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.ok(Array.isArray(cfg.plugin) && cfg.plugin.length > 0, "plugin[] must be non-empty");
     assert.ok(
-      cfg.plugin.every((p) => String(p).startsWith("./core/opencode/plugin/")),
-      `plugin[] must be monorepo-rewritten when only core/opencode/plugin exists, got ${JSON.stringify(cfg.plugin)}`,
+      cfg.plugin.every((p) => String(p).startsWith("./.opencode/plugin/")),
+      `plugin[] must be canonical .opencode/plugin after materialize, got ${JSON.stringify(cfg.plugin)}`,
     );
     assert.ok(cfg.plugin.some((p) => String(p).includes("obs-eye.ts")), "includes obs-eye");
     assert.equal(cfg.permission.question, "deny");
@@ -300,7 +370,7 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source stil
 });
 
 
-// ── #315 OC plugin path materialization / monorepo rewrite ─────────────────
+// ── #315 / #322 OC runtime materialize + plugin paths ─────────────────────
 
 test("rewriteOcPluginsToMonorepoCore: maps .opencode/plugin → core/opencode/plugin", () => {
   assert.deepEqual(
@@ -312,10 +382,9 @@ test("rewriteOcPluginsToMonorepoCore: maps .opencode/plugin → core/opencode/pl
   );
 });
 
-test("seedOpencodeRootConfig: monorepo worktree without .opencode/plugin rewrites plugin[] to core/opencode/plugin and files exist (#ac-1.1 #ac-1.2)", () => {
-  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-mono-");
+test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + canonical plugin[] (#ac-1.1 #ac-1.2 #ac-1.3)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-mono-mat-");
   try {
-    writeMonorepoPluginStubs(worktree);
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
@@ -323,27 +392,63 @@ test("seedOpencodeRootConfig: monorepo worktree without .opencode/plugin rewrite
         permission: { bash: { "*": "allow" } },
       }),
     );
+    const mat = materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(mat.source, "monorepo");
+    assertCriticalRuntime(worktree);
+    assert.equal(isOpencodeRuntimeComplete(join(worktree, ".opencode")), true);
+
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.ok(Array.isArray(cfg.plugin) && cfg.plugin.length > 0, "plugin[] non-empty");
     assert.ok(
-      cfg.plugin.every((p) => String(p).startsWith("./core/opencode/plugin/")),
-      `expected monorepo rewrite, got ${JSON.stringify(cfg.plugin)}`,
+      cfg.plugin.every((p) => String(p).startsWith("./.opencode/plugin/")),
+      `expected canonical .opencode/plugin paths, got ${JSON.stringify(cfg.plugin)}`,
     );
     assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
-    assert.equal(existsSync(join(worktree, "core/opencode/plugin/entry-gate.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("seedOpencodeRootConfig: consumer vendored .opencode/plugin keeps paths (#ac-1.5)", () => {
-  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-");
+test("materializeOpencodeRuntime: missing source throws fail-closed (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-missing-mat-", { bare: true });
   try {
-    const vendored = join(worktree, ".opencode", "plugin");
-    mkdirSync(vendored, { recursive: true });
-    writeFileSync(join(vendored, "entry-gate.ts"), "// vendored\n", "utf8");
-    writeFileSync(join(vendored, "plan-gate.ts"), "// vendored\n", "utf8");
+    assert.throws(
+      () => materializeOpencodeRuntime(worktree, projectRoot),
+      /materialize failed|incomplete|no complete source/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: no runtime source anywhere → throws fail-closed (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-missing-", { bare: true });
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        plugin: ["./.opencode/plugin/entry-gate.ts"],
+        permission: { bash: { "*": "allow" } },
+      }),
+    );
+    assert.throws(
+      () => seedOpencodeRootConfig(worktree, projectRoot),
+      /materialize failed|incomplete|no complete source|plugins missing|gates would be dead|First missing/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: consumer vendored .opencode preserved + canonical plugin[] (#ac-1.5)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-", { bare: true });
+  try {
+    writeVendoredOcRuntime(projectRoot);
+    // Simulate cp -a of consumer .opencode into worktree
+    writeVendoredOcRuntime(worktree);
+    writeFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "// consumer-marker\n", "utf8");
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
@@ -358,35 +463,35 @@ test("seedOpencodeRootConfig: consumer vendored .opencode/plugin keeps paths (#a
       "./.opencode/plugin/plan-gate.ts",
     ]);
     assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
+    assertCriticalRuntime(worktree);
+    // Re-sync from projectRoot vendored source is OK; files must still exist
+    assert.equal(existsSync(join(worktree, ".opencode", "skills", "triaging-requests", "SKILL.md")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("seedOpencodeRootConfig: no plugin source anywhere → throws fail-closed (#ac-1.3)", () => {
-  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-missing-", { bare: true });
+test("materializeOpencodeRuntime: rewrites monorepo shared imports + copies shared (#ac-1.6)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-shared-", { bare: true });
   try {
-    writeFileSync(
-      join(projectRoot, "opencode.json"),
-      JSON.stringify({
-        plugin: ["./.opencode/plugin/entry-gate.ts"],
-        permission: { bash: { "*": "allow" } },
-      }),
-    );
-    assert.throws(
-      () => seedOpencodeRootConfig(worktree, projectRoot),
-      /plugins missing|gates would be dead|First missing/i,
-    );
+    writeMinimalOcRuntime(projectRoot, { withSharedImport: true });
+    const mat = materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(mat.source, "monorepo");
+    const entry = readFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "utf8");
+    assert.ok(entry.includes("../shared/lib/path-helpers.mjs"), "import must target vendored shared");
+    assert.ok(!entry.includes("../../shared/"), "monorepo ../../shared must be rewritten");
+    assert.equal(existsSync(join(worktree, ".opencode", "shared", "lib", "path-helpers.mjs")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("ensureOcPluginPathsExist: monorepo core plugins → rewritten paths", () => {
-  const { root, worktree } = makeSeedDirs("oc-seed-ensure-");
+test("ensureOcPluginPathsExist: monorepo core plugins → rewritten paths (fallback)", () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-ensure-"));
+  const worktree = join(root, "wt");
+  mkdirSync(worktree, { recursive: true });
   try {
     writeMonorepoPluginStubs(worktree);
-    // only one file needed for this unit test of ensure
     const out = ensureOcPluginPathsExist(worktree, ["./.opencode/plugin/entry-gate.ts"]);
     assert.deepEqual(out, ["./core/opencode/plugin/entry-gate.ts"]);
   } finally {
