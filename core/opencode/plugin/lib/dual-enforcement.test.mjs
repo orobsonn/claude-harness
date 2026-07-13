@@ -487,13 +487,13 @@ test("loadGateStateFromDisk / loadRoutingFromDisk fall back to cwd when projectR
   // critical: never fail with projectRoot missing when cwd is available.
   assert.notEqual(routing.ok === false && routing.reason === "projectRoot missing", true);
   if (!routing.ok) {
-    assert.notMatch(routing.reason, /projectRoot missing/);
+    assert.equal(/projectRoot missing/.test(routing.reason), false);
   }
 
   const gate = loadGateStateFromDisk("", { sessionId: "ses_testfallback01" });
   assert.notEqual(gate.ok === false && gate.reason === "projectRoot missing", true);
   if (!gate.ok) {
-    assert.notMatch(gate.reason, /projectRoot missing/);
+    assert.equal(/projectRoot missing/.test(gate.reason), false);
   }
 });
 
