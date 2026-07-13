@@ -173,6 +173,20 @@ function extractLogRedirectPath(sessionCommand) {
   return bare ? bare[1] : undefined;
 }
 
+/** @description Minimal monorepo plugin stubs for seedOpencodeRootConfig fail-closed check. */
+function plantMonorepoOcPlugins(root) {
+  const dir = join(root, "core", "opencode", "plugin");
+  mkdirSync(dir, { recursive: true });
+  for (const name of [
+    "entry-gate.ts", "plan-gate.ts", "plan-write-gate.ts", "loop-guard.ts",
+    "reinject-state.ts", "version-check.ts", "harvest-guard.ts", "obs-plan-write.ts",
+    "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts",
+  ]) {
+    writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
+  }
+}
+
+
 test("dispatch: normal dispatch with a writable stateDir redirects claude -p's combined output to issue-42-output.log, composed BEFORE the chained cron-a-exit.mjs invocation", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
@@ -283,6 +297,7 @@ test("dispatch: stdin pipe targets the runner (not ulimit) so the prompt reaches
         calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd, timeout: spawnOpts.timeout });
         if (command === "git" && args[0] === "worktree" && args[1] === "add") {
           mkdirSync(args[2], { recursive: true });
+          plantMonorepoOcPlugins(args[2]);
         }
         return { ok: true };
       };
