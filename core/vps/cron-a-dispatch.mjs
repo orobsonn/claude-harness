@@ -598,6 +598,74 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
  * @param {string} projectRoot
  * @returns {{ copied: string[], wroteExample: boolean }}
  */
+
+/**
+ * @description True when every plugin path exists under root (strip leading ./).
+ * @param {string} root
+ * @param {unknown} plugins
+ * @returns {boolean}
+ */
+export function ocPluginFilesExist(root, plugins) {
+  if (typeof root !== "string" || !root || !Array.isArray(plugins) || plugins.length === 0) {
+    return false;
+  }
+  for (const p of plugins) {
+    if (typeof p !== "string" || p.length === 0) return false;
+    const rel = p.replace(/^\.\//, "");
+    if (!existsSync(join(root, rel))) return false;
+  }
+  return true;
+}
+
+/**
+ * @description Rewrite `./.opencode/plugin/X` → `./core/opencode/plugin/X` for monorepo dogfood
+ * where gates live under core/opencode but opencode.json lists the vendored path.
+ * @param {unknown} plugins
+ * @returns {string[]}
+ */
+export function rewriteOcPluginsToMonorepoCore(plugins) {
+  if (!Array.isArray(plugins)) return [];
+  return plugins.map((p) =>
+    typeof p === "string"
+      ? p.replace(/^\.\/\.opencode\/plugin\//, "./core/opencode/plugin/")
+      : p,
+  );
+}
+
+/**
+ * @description Ensure every entry in plugin[] resolves to a real file under the worktree.
+ * Prefer paths as listed (consumer vendored `.opencode/plugin`); else rewrite to monorepo
+ * `core/opencode/plugin` when those files exist. Throws fail-closed if still missing — a
+ * headless session with plugin[] pointing at absent files loads ZERO governance gates
+ * (repro: smoke #311/#313, issue #315).
+ * @param {string} worktreePath
+ * @param {string[]} plugins
+ * @returns {string[]}
+ */
+export function ensureOcPluginPathsExist(worktreePath, plugins) {
+  if (typeof worktreePath !== "string" || !worktreePath) {
+    throw new Error("ensureOcPluginPathsExist: worktreePath required");
+  }
+  const list =
+    Array.isArray(plugins) && plugins.length > 0 ? plugins.filter((p) => typeof p === "string") : [...CANONICAL_OC_PLUGINS];
+  if (list.length === 0) {
+    throw new Error("ensureOcPluginPathsExist: empty plugin list");
+  }
+  if (ocPluginFilesExist(worktreePath, list)) {
+    return list;
+  }
+  const rewritten = rewriteOcPluginsToMonorepoCore(list);
+  if (ocPluginFilesExist(worktreePath, rewritten)) {
+    return rewritten;
+  }
+  const firstMissing = list.find((p) => !existsSync(join(worktreePath, p.replace(/^\.\//, "")))) || list[0];
+  throw new Error(
+    `OC plugins missing under worktree after seed (gates would be dead). ` +
+      `Neither .opencode/plugin nor core/opencode/plugin has the configured files. ` +
+      `First missing: ${firstMissing}`,
+  );
+}
+
 export function seedOpencodeRootConfig(worktreePath, projectRoot) {
   const copied = [];
   let wroteExample = false;
@@ -638,7 +706,10 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
   }
 
   const finalConfig = enforceOpencodePermissions(baseConfig, exampleConfig);
-  finalConfig.plugin = resolveOcPlugins(baseConfig);
+  // Fail-closed materialization: plugin[] must point at files that EXIST on the worktree.
+  // Monorepo dogfood has gates under core/opencode/plugin; consumers under .opencode/plugin.
+  // Listing absent paths used to load OpenCode with zero governance plugins (#315).
+  finalConfig.plugin = ensureOcPluginPathsExist(worktreePath, resolveOcPlugins(baseConfig));
   const dstCfg = join(worktreePath, "opencode.json");
   writeFileSync(dstCfg, `${JSON.stringify(finalConfig, null, 2)}\n`, "utf8");
   if (!copied.includes("opencode.json")) copied.push("opencode.json");
