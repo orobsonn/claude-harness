@@ -31,3 +31,11 @@ One line per durable, reusable, non-obvious project pattern or anti-pattern. Ful
 
 **How to apply:** keep claude-code/ and opencode/ trees in sync via port tasks; update package.json bin/files + imports in lockstep; scope_paths in plan must list both when touching shared.
 
+
+- [sessionid-not-ceremony-mask](#sessionid-not-ceremony-mask) — entry-gate must never substitute `{}` when gate-state load fails; missing sessionId is a distinct deny reason, not "ceremony missing"
+
+## sessionid-not-ceremony-mask
+
+**Why:** masking load failure as empty state produced false "ceremony missing" while disk ceremony was complete (issue #298).
+
+**How to apply:** on `!loadGateStateFromDisk.ok` for delivery task/bash, throw `loaded.reason` (must include contiguous `sessionId` when unbound). Only pass loaded.state into decideEntryTask when load ok. Ceremony bind = hook sessionID|sessionId only.

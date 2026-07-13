@@ -268,3 +268,200 @@ test("bash git push FULL dual + DONE hand-record capturedVerifiedAt + freeze anc
     },
   )
 })
+
+test("lt-pure-planner-full-ceremony-allow — decideEntryTask planner + full ceremony → allow (import decideEntryTask from entry-decide.mjs)", async () => {
+  const { decideEntryTask } = await import("./lib/entry-decide.mjs")
+  const decision = decideEntryTask({
+    subagentType: "planner",
+    gateState: fullCeremony(),
+  })
+  assert.equal(decision.ok, true)
+  assert.equal(decision.decision, "allow")
+})
+
+test("lt-entry-planner-s1-full-ceremony-allow — write fullCeremony under SID, hook sessionID SID, task planner → doesNotReject", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony())
+    const before = hooks["tool.execute.before"]
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner" } },
+      ),
+    )
+  })
+})
+
+test("lt-entry-planner-null-sessionid-deny — task planner without sessionID → rejects with /sessionId/ and NOT /ceremony missing/", async () => {
+  await withHooks(async (hooks) => {
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task" },
+          { args: { subagent_type: "planner" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /sessionId/)
+        assert.ok(
+          !/ceremony missing/.test(err.message),
+          "must not contain generic ceremony missing when sessionId is the cause",
+        )
+        return true
+      },
+    )
+  })
+})
+
+test('lt-entry-delivery-bash-null-sessionid-deny — bash "gh pr create" without sessionID → rejects with /sessionId/', async () => {
+  await withHooks(async (hooks) => {
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "bash" },
+          { args: { command: "gh pr create" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /sessionId/)
+        return true
+      },
+    )
+  })
+})
+
+test("lt-entry-s1-load-reads-classified — fullCeremony with classified under S1 + planner + sessionID S1 → allow", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony())
+    const before = hooks["tool.execute.before"]
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner" } },
+      ),
+    )
+  })
+})
+
+// #ac-1.5 regression matrix (task-3) — explicit lt-reg-* names per spec; reuse helpers; foreign S2 written to prove no toolArgs bind
+// 1+2 covered by identical lt-entry-* (task-2); thin aliases with comment only (per instruction)
+test("lt-reg-full-ceremony-s1-planner-allow — full ceremony S1 + planner allow (thin alias; identical to lt-entry-planner-s1-full-ceremony-allow which task-2 covers; explicit lt-reg name for AC matrix)", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony())
+    const before = hooks["tool.execute.before"]
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner" } },
+      ),
+    )
+  })
+})
+
+test("lt-reg-null-sessionid-not-ceremony — null sessionId deny /sessionId/ not ceremony (thin alias; identical to lt-entry-planner-null-sessionid-deny which task-2 covers; explicit lt-reg name for AC matrix)", async () => {
+  await withHooks(async (hooks) => {
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task" },
+          { args: { subagent_type: "planner" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /sessionId/)
+        assert.ok(
+          !/ceremony missing/.test(err.message),
+          "must not contain generic ceremony missing when sessionId is the cause",
+        )
+        return true
+      },
+    )
+  })
+})
+
+// 3,4,5: missing coverage for matrix; use planner + fullCeremony state on disk; foreign S2
+test("lt-reg-empty-ceremony-valid-sid-fail-closed — valid S1 empty/missing state + planner → deny ceremony or brainstorm (NOT allow)", async () => {
+  // missing file case (load returns ok+{} )
+  await withHooks(async (hooks, root) => {
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "planner" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /\[entry-gate\]/)
+        const m = err.message
+        assert.ok(
+          /ceremony missing|brainstormed|adversary_fired/.test(m),
+          "deny with ceremony/brainstorm reason on empty state"
+        )
+        return true
+      },
+    )
+  })
+  // explicit empty object
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, {})
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "planner" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /\[entry-gate\]/)
+        return true
+      },
+    )
+  })
+})
+
+test("lt-reg-toolargs-foreign-hook-s1 — hook S1 full ceremony + toolArgs.session_id foreign S2 → still allow via S1 (planner)", async () => {
+  await withHooks(async (hooks, root) => {
+    const S1 = "ses_reg_s1"
+    const S2 = "ses_reg_s2"
+    writeGateState(root, S1, fullCeremony())
+    // write foreign S2 with full ceremony to prove toolArgs does not bind / leak
+    writeGateState(root, S2, fullCeremony())
+    const before = hooks["tool.execute.before"]
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "task", sessionID: S1 },
+        { args: { subagent_type: "planner", session_id: S2 } },
+      ),
+    )
+  })
+})
+
+test("lt-reg-toolargs-foreign-hook-missing — hook missing sessionID + toolArgs foreign full ceremony → deny /sessionId/ NOT allow", async () => {
+  await withHooks(async (hooks, root) => {
+    const S2 = "ses_reg_s2"
+    writeGateState(root, S2, fullCeremony())
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task" },
+          { args: { subagent_type: "planner", session_id: S2 } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /\[entry-gate\]/)
+        assert.match(err.message, /sessionId/)
+        assert.ok(
+          !/ceremony missing/.test(err.message),
+          "sessionId cause must not be masked as ceremony"
+        )
+        return true
+      },
+    )
+  })
+})
