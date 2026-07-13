@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.43.3](https://github.com/orobsonn/claude-harness/compare/v0.43.2...v0.43.3) (2026-07-13)
+
+
+### Bug Fixes
+
+* materializa runtime OC completo no seed do Cron A ([#323](https://github.com/orobsonn/claude-harness/issues/323)) ([2a14441](https://github.com/orobsonn/claude-harness/commit/2a14441a129dfceb232aa810f46891f49672733b))
+* seed OC materializa/reescreve paths de plugins ([#315](https://github.com/orobsonn/claude-harness/issues/315)) ([#316](https://github.com/orobsonn/claude-harness/issues/316)) ([3e4537b](https://github.com/orobsonn/claude-harness/commit/3e4537baea355c9aa7b80dfe6d3b69b5529bc0f1))
+
 ## [0.43.2](https://github.com/orobsonn/claude-harness/compare/v0.43.1...v0.43.2) (2026-07-13)
 
 
