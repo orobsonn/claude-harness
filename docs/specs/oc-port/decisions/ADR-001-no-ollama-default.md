@@ -1,9 +1,13 @@
 # ADR-001 — No Ollama in default routing
 
-**Status:** accepted  
+**Status:** superseded by ADR-004
 **Date:** 2026-07-10
 
-## Decision
+## Supersession
+
+This decision is superseded by [ADR-004](ADR-004-ollama-cloud-default-hands.md). OpenCode now uses the Ollama Cloud executor/sniper ladder by default; evaluator eyes remain on the strong Grok and OpenAI pair.
+
+## Historical Decision
 
 Default OpenCode harness routing uses **xAI Grok** for motor/hands and **OpenAI** for evaluator eyes. Ollama is not part of the default map.
 
