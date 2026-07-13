@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.43.1](https://github.com/orobsonn/claude-harness/compare/v0.43.0...v0.43.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **oc:** fecha portabilidade CC→OC que matava cron ([#291](https://github.com/orobsonn/claude-harness/issues/291)) ([#295](https://github.com/orobsonn/claude-harness/issues/295)) ([8c84ff3](https://github.com/orobsonn/claude-harness/commit/8c84ff318e036192649df73a0dc60c7577688930))
+
 ## [0.43.0](https://github.com/orobsonn/claude-harness/compare/v0.42.0...v0.43.0) (2026-07-13)
 
 
