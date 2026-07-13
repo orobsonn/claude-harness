@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.43.4](https://github.com/orobsonn/claude-harness/compare/v0.43.3...v0.43.4) (2026-07-13)
+
+
+### Bug Fixes
+
+* endurece catálogo de agents do OpenCode ([199c7cc](https://github.com/orobsonn/claude-harness/commit/199c7cc135fa8a292a906cd04388c54674dd76f2))
+* maos Ollama + catalogo de agents no OpenCode ([#328](https://github.com/orobsonn/claude-harness/issues/328)) ([501f4d5](https://github.com/orobsonn/claude-harness/commit/501f4d550f0649d91753c6ad7f14afcbb479bc85))
+
 ## [0.43.3](https://github.com/orobsonn/claude-harness/compare/v0.43.2...v0.43.3) (2026-07-13)
 
 
