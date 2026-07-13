@@ -58,7 +58,7 @@ Headless = **VPS crons** under `core/vps/` selecting issues, spawning sessions, 
 
 - [ ] T12 parser + tests  
 - [ ] T13 VPS spawn OC smoke on VPS or local  
-- [ ] T14 auto-merge still off by default; enable only after operator sign-off  
+- [ ] T14 auto-merge governed by fail-closed precondition gate (ocAutoMergeGateOpen); operator flips autoMergeEnabled manually after reviewing runs (ref: ac-3.2 skills-parity)  
 
 ---
 

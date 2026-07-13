@@ -99,7 +99,7 @@ Silent delete is forbidden. TRACK must record confirmation or deferred-apply sta
 
 ## 8. Minor release handoff
 
-After phase-1 TRACK complete: ship via feature branch + PR; **minor** release (`releasing-versions` / release-please). Phase 2 (T12–T14) stays out of this release.
+After phase-1 TRACK complete: ship via feature branch + PR; **minor** release (`releasing-versions` / release-please). Phase 2 (T12, T13, T15) stays out of this release; T14 is a runtime fail-closed gate (ocAutoMergeGateOpen gating OC auto-merge on T12+T13+T15 green).
 
 ---
 
