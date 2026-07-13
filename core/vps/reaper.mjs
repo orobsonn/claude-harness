@@ -204,6 +204,45 @@ function defaultRmOutputLog(stateDir, issueNumber) {
 }
 
 /**
+ * @description Best-effort default for removing the oc-data-<n> directory under stateDir.
+ * issueNumber must be digits-only (production is numeric) so path traversal via
+ * `../../victim/oc-data-42` cannot join/normalize outside stateDir. The regex guard
+ * is a second line of defense (issueNumber variants like '42-backup' produce
+ * `oc-data-42-backup` and are rejected).
+ */
+export function defaultRmOcDataHome(stateDir, issueNumber) {
+  try {
+    // issueNumber must be digits only (production is numeric; reject traversal)
+    if (typeof issueNumber !== "number" && (typeof issueNumber !== "string" || !/^\d+$/.test(issueNumber))) {
+      return;
+    }
+    if (typeof issueNumber === "number" && (!Number.isInteger(issueNumber) || issueNumber < 0)) {
+      return;
+    }
+    const p = join(stateDir, `oc-data-${issueNumber}`);
+    const normalized = p.replace(/\/+$/, "");
+    if (!/\/oc-data-\d+$/.test(normalized)) return;
+    rmSync(normalized, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * @description Best-effort wrapper around the injected (or default) rmOcDataHome seam.
+ * A throwing injection must never abort crash-recover lock release / worktree prune.
+ */
+function safeRmOcDataHome(opts, stateDir, issueNumber) {
+  try {
+    if (typeof opts.rmOcDataHome === "function") {
+      opts.rmOcDataHome(stateDir, issueNumber);
+    }
+  } catch {
+    // best-effort — never abort lock release / worktree prune
+  }
+}
+
+/**
  * @description Decides holder liveness with the SAME two-branch rule as run-lock.mjs's acquire()
  * — the reaper never drifts from it. REGISTERED (tmux_session_id present) -> alive iff
  * `tmuxHasSession(id)` alone, launcher pid never consulted. NOT-YET-REGISTERED -> alive iff
@@ -269,6 +308,12 @@ function crashRecover(worktree, holder, opts) {
     // (unscrubbed) output log would otherwise linger on disk until the next dispatch attempt
     // truncates it. Best-effort; never blocks or alters the relabel/lock outcome above.
     opts.rmOutputLog(worktree.stateDir, worktree.issueNumber);
+    if (label === LABEL_BLOCKED) {
+      safeRmOcDataHome(opts, worktree.stateDir, worktree.issueNumber);
+    }
+  } else {
+    // PR exists: still clean oc-data (auth residue); not active ready re-dispatch
+    safeRmOcDataHome(opts, worktree.stateDir, worktree.issueNumber);
   }
   opts.runLock.release({ stateDir: worktree.stateDir, acquireTs: holder.acquire_ts });
   return true;
@@ -350,6 +395,7 @@ function reapCompletedWorktree(worktree, opts) {
       })
     );
     opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot, { force: true });
+    safeRmOcDataHome(opts, worktree.stateDir, worktree.issueNumber);
     opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
     return { ...actionOf(worktree, "completed-cleaned"), dirtyPaths };
   }
@@ -410,6 +456,7 @@ function reapWorktree(worktree, opts) {
   }
 
   if (liveness.holderMissing) {
+    safeRmOcDataHome(opts, worktree.stateDir, worktree.issueNumber);
     opts.gitWorktreeRemove(worktree.worktreePath, worktree.projectRoot);
     opts.gitBranchDelete(worktree.branch, worktree.projectRoot);
     return actionOf(worktree, "orphan-cleaned");
@@ -845,6 +892,7 @@ export function reaper(opts) {
     gitBranchDelete = defaultGitBranchDelete,
     gitWorktreeRemove = defaultGitWorktreeRemove,
     rmOutputLog = defaultRmOutputLog,
+    rmOcDataHome = defaultRmOcDataHome,
   } = opts;
 
   const resolved = {
@@ -855,6 +903,7 @@ export function reaper(opts) {
     gitBranchDelete,
     gitWorktreeRemove,
     rmOutputLog,
+    rmOcDataHome,
   };
 
   const actions = [];

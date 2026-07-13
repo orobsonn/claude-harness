@@ -16,6 +16,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { reaper } from "./reaper.mjs";
+import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const LIVENESS_CEILING_HOURS = 2;
 const REGISTRATION_GRACE_SECONDS = 120;
@@ -94,6 +97,12 @@ function makeTmuxKillSession() {
 function makeRmOutputLog() {
   const calls = [];
   return { rmOutputLog: (stateDir, issueNumber) => calls.push({ stateDir, issueNumber }), calls };
+}
+
+/** @description Records every `rmOcDataHome(stateDir, issueNumber)` call into an array. */
+function makeRmOcDataHome() {
+  const calls = [];
+  return { rmOcDataHome: (stateDir, issueNumber) => calls.push({ stateDir, issueNumber }), calls };
 }
 
 /** @description Fake token-bound closeForumTopic seam; records every `{threadId}` call and resolves with `ack`. */
@@ -1208,5 +1217,314 @@ test("#235/task-3 reaper: sweepOrphanTopics KEEPS status:'closed' (no revert) wh
   assert.ok(
     !updateCalls.some((c) => c.partial.status === "active"),
     "a successful close must never revert — no regression"
+  );
+});
+
+/**
+ * @description reaper calls rmOcDataHome once for dead holder with no PR when counter >= retryCeilingK (blocked path)
+ */
+test("lt-reaper-blocked-rm-oc-data: dead holder, no PR, counter >= retryCeilingK → rmOcDataHome called once with stateDir+issueNumber", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-42",
+    issueNumber: 42,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 4242, acquire_ts: 50_000, tmux_session_id: "sess-42" },
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false,
+      prExists: makePrExists(),
+      counter: makeFakeCounter({ 42: RETRY_CEILING_K }),
+      rmOcDataHome,
+    })
+  );
+
+  assert.deepEqual(
+    calls,
+    [{ stateDir: "/root/dev/demo-project/.claude/state", issueNumber: 42 }],
+    "blocked crash-recovery must best-effort rmOcDataHome"
+  );
+});
+
+/**
+ * @description reaper does not call rmOcDataHome for dead holder with no PR when counter < retryCeilingK (ready path)
+ */
+test("lt-reaper-ready-keeps-oc-data: dead holder, no PR, counter < ceiling → rmOcDataHome NOT called", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-43",
+    issueNumber: 43,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 4343, acquire_ts: 50_000, tmux_session_id: "sess-43" },
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false,
+      prExists: makePrExists(),
+      counter: makeFakeCounter({ 43: 1 }),
+      rmOcDataHome,
+    })
+  );
+
+  assert.deepEqual(calls, [], "ready crash-recovery must not call rmOcDataHome");
+});
+
+/**
+ * @description reaper calls rmOcDataHome for dead holder even when prExists is true
+ */
+test("lt-reaper-pr-exists-rm-oc-data: dead holder, prExists true → rmOcDataHome called once", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-88",
+    issueNumber: 88,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 8888, acquire_ts: 50_000, tmux_session_id: "sess-88" },
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false,
+      prExists: makePrExists(new Set([88])),
+      counter: makeFakeCounter({ 88: 0 }),
+      rmOcDataHome,
+    })
+  );
+
+  assert.deepEqual(
+    calls,
+    [{ stateDir: "/root/dev/demo-project/.claude/state", issueNumber: 88 }],
+    "dead holder with PR must call rmOcDataHome (credentials residue)"
+  );
+});
+
+/**
+ * @description reaper calls rmOcDataHome on the holderMissing orphan-cleaned path
+ */
+test("lt-reaper-orphan-cleaned-rm-oc-data: holderMissing orphan path → called once", () => {
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-99",
+    issueNumber: 99,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: null,
+    lockDirAgeSeconds: 200,
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+  const { gitBranchDelete } = makeGitBranchDelete();
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      rmOcDataHome,
+      gitBranchDelete,
+    })
+  );
+
+  assert.deepEqual(
+    calls,
+    [{ stateDir: "/root/dev/demo-project/.claude/state", issueNumber: 99 }],
+    "orphan-cleaned must call rmOcDataHome"
+  );
+});
+
+/**
+ * @description reaper calls rmOcDataHome on the completed-cleaned safe path
+ */
+test("lt-reaper-completed-cleaned-rm-oc-data: completed-cleaned safe path → called once", () => {
+  const entry = makeEntry({
+    issueNumber: 83,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-83",
+    branch: "harness/83",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+  const { gitWorktreeRemove } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(true);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => false,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+      rmOcDataHome,
+    })
+  );
+
+  assert.deepEqual(
+    calls,
+    [{ stateDir: "/root/dev/demo-project/.claude/state", issueNumber: 83 }],
+    "completed-cleaned must call rmOcDataHome"
+  );
+});
+
+/**
+ * @description reaper does not call rmOcDataHome on the keep-branch path
+ */
+test("lt-reaper-keep-branch-keeps-oc-data: keep-branch path → NOT called", () => {
+  const entry = makeEntry({
+    issueNumber: 85,
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-85",
+    branch: "harness/85",
+    holder: null,
+    lockDirAgeSeconds: null,
+  });
+  const { rmOcDataHome, calls } = makeRmOcDataHome();
+  const { gitWorktreeRemove } = makeGitWorktreeRemoveDetailed();
+  const { gitBranchDelete } = makeGitBranchDelete();
+  const { issueClosed } = makeIssueClosed(true);
+  const { prMerged } = makePrMerged(false);
+  const { branchMerged } = makeBranchMerged(false);
+  const { inspectWorktree } = makeInspectWorktree({ unmergedCommits: ["abc123 wip"], dirtyPaths: [] });
+
+  reaper(
+    baseOpts({
+      listWorktrees: () => [entry],
+      tmuxHasSession: makeTmuxHasSession(new Set()),
+      prOpen: () => true,
+      issueClosed,
+      prMerged,
+      branchMerged,
+      inspectWorktree,
+      gitWorktreeRemove,
+      gitBranchDelete,
+      rmOcDataHome,
+    })
+  );
+
+  assert.deepEqual(calls, [], "keep-branch must not call rmOcDataHome");
+});
+
+/**
+ * @description defaultRmOcDataHome path guard rejects non-canonical names (e.g. oc-data-42-backup) and never throws
+ */
+test("lt-reaper-path-guard-rejects-backup: filesystem — create temp dir with oc-data-42-backup, call exported defaultRmOcDataHome(stateDir, '42-backup'), assert dir still exists, no throw", async () => {
+  const root = mkdtempSync(join(tmpdir(), "reaper-oc-guard-reject-"));
+  try {
+    const stateDir = root;
+    const badDir = join(stateDir, "oc-data-42-backup");
+    mkdirSync(badDir, { recursive: true });
+    assert.ok(existsSync(badDir), "precondition: backup dir exists");
+
+    const { defaultRmOcDataHome } = await import("./reaper.mjs");
+    assert.doesNotThrow(() => {
+      defaultRmOcDataHome(stateDir, "42-backup");
+    });
+    assert.ok(existsSync(badDir), "path guard must leave non-matching oc-data-*-backup untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description defaultRmOcDataHome path guard accepts canonical oc-data-<digits> and removes it, never throws
+ */
+test("lt-reaper-path-guard-accepts-canonical: create temp oc-data-42, call defaultRmOcDataHome(stateDir, 42), assert removed, no throw", async () => {
+  const root = mkdtempSync(join(tmpdir(), "reaper-oc-guard-accept-"));
+  try {
+    const stateDir = root;
+    const goodDir = join(stateDir, "oc-data-42");
+    mkdirSync(goodDir, { recursive: true });
+    assert.ok(existsSync(goodDir), "precondition: canonical dir exists");
+
+    const { defaultRmOcDataHome } = await import("./reaper.mjs");
+    assert.doesNotThrow(() => {
+      defaultRmOcDataHome(stateDir, 42);
+    });
+    assert.equal(existsSync(goodDir), false, "canonical oc-data-<digits> must be removed by defaultRmOcDataHome");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description defaultRmOcDataHome rejects path-traversal issueNumber (e.g. '../oc-data-99')
+ * and never deletes a planted directory outside stateDir.
+ */
+test("lt-reaper-path-guard-rejects-traversal: issueNumber '../oc-data-99' / '../../x/oc-data-1' must not delete outside stateDir", async () => {
+  const root = mkdtempSync(join(tmpdir(), "reaper-oc-guard-trav-"));
+  try {
+    const stateDir = join(root, "state");
+    mkdirSync(stateDir, { recursive: true });
+    // Plant a victim dir OUTSIDE stateDir that a naive join+regex would hit via traversal.
+    const victimOutside = join(root, "oc-data-99");
+    mkdirSync(victimOutside, { recursive: true });
+    const victimOutside2 = join(root, "x");
+    mkdirSync(victimOutside2, { recursive: true });
+    const victimOutside2Dir = join(victimOutside2, "oc-data-1");
+    mkdirSync(victimOutside2Dir, { recursive: true });
+
+    const { defaultRmOcDataHome } = await import("./reaper.mjs");
+    assert.doesNotThrow(() => {
+      defaultRmOcDataHome(stateDir, "../oc-data-99");
+    });
+    assert.doesNotThrow(() => {
+      defaultRmOcDataHome(stateDir, "../../x/oc-data-1");
+    });
+    assert.ok(existsSync(victimOutside), "traversal issueNumber must not delete outside stateDir (../oc-data-99)");
+    assert.ok(existsSync(victimOutside2Dir), "traversal issueNumber must not delete outside stateDir (../../x/oc-data-1)");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description A throwing injected rmOcDataHome must not abort crash-recover lock release.
+ */
+test("lt-reaper-rm-oc-data-throw-safe: injected rmOcDataHome that throws still releases the stale lock", () => {
+  const now = () => 100_000;
+  const entry = makeEntry({
+    worktreePath: "/root/dev/demo-project/.worktrees/harness-demo-project-42",
+    issueNumber: 42,
+    stateDir: "/root/dev/demo-project/.claude/state",
+    holder: { pid: 4242, acquire_ts: 50_000, tmux_session_id: "sess-42" },
+  });
+  const { runLock, releaseCalls } = makeFakeRunLock();
+  const { gitWorktreeRemove, calls: removeCalls } = makeGitWorktreeRemove();
+
+  reaper(
+    baseOpts({
+      now,
+      listWorktrees: () => [entry],
+      tmuxHasSession: () => false,
+      prExists: makePrExists(),
+      counter: makeFakeCounter({ 42: RETRY_CEILING_K }), // blocked path → calls rmOcDataHome
+      runLock,
+      gitWorktreeRemove,
+      rmOcDataHome: () => {
+        throw new Error("injected rmOcDataHome boom");
+      },
+    })
+  );
+
+  assert.ok(
+    releaseCalls.some((args) => args.acquireTs === 50_000),
+    "throwing rmOcDataHome must never abort crash-recover lock release"
+  );
+  assert.ok(
+    removeCalls.includes(entry.worktreePath),
+    "throwing rmOcDataHome must never abort worktree prune after crash-recover"
   );
 });
