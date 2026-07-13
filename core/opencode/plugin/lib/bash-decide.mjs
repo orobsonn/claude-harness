@@ -25,20 +25,20 @@ const FORGE_ALLOWLIST = new Set(["classify", "mark", "mark-gate"]);
  */
 const HARNESS_MARKER_RELATIVE = new Set([
   ".opencode/plugin/lib/mark-gate.mjs",
-  ".opencode/plugin/lib/mark.mjs",
-  ".opencode/plugin/lib/classify.mjs",
   "core/opencode/plugin/lib/mark-gate.mjs",
-  "core/opencode/plugin/lib/mark.mjs",
-  "core/opencode/plugin/lib/classify.mjs",
-  ".claude/hooks/mark-gate.mjs",
-  ".claude/hooks/mark.mjs",
-  ".claude/hooks/classify.mjs",
 ]);
+
+/**
+ * CC-only marker CLIs — under OC they print JSON but NEVER write `.opencode` gate-state
+ * (no stamp-triage PostToolUse). Allowlisting them caused silent ceremony miss (#291).
+ */
+const CC_MARKER_PATH_RE =
+  /(?:^|[\s"'=])(?:\.\/)?(?:\.claude\/hooks\/|core\/claude-code\/hooks\/)(?:mark-gate|mark|classify)\.mjs\b/;
 
 // State oracles only — execution-plan.json is intentionally NOT forge-blocked so
 // build/orchestrator may materialize the plan via bash (edit is denied on build).
 const ORACLE_PATH_RE =
-  /\.opencode\/plans\/\.state\b|gate-state\.json\b|triage\.json\b/;
+  /\.(?:opencode|claude)\/plans\/\.state\b|gate-state\.json\b|triage\.json\b/;
 
 /** Drop-dir script runners — common impostor home for forged markers. */
 const TMP_SCRIPT_RE =
@@ -55,14 +55,11 @@ const SHELL_C_RE =
 const ALLOWED_TOOLING_SCRIPTS = new Set([
   "scripts/probe-oc-gates-headless.mjs",
   "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
-  "core/claude-code/hooks/mark.mjs",
-  "core/claude-code/hooks/classify.mjs",
 ]);
 
 /** Paths that must not be bash-written (cp/mv/tee/sed targets) — same freeze as plan-write. */
 const FROZEN_BASH_PATH_RES = [
-  /(?:^|[\s"'=])(?:\.\/)?(?:core\/opencode\/plugin\/lib\/|\.opencode\/plugin\/lib\/)(?:mark-gate|mark|classify)\.mjs\b/,
-  /(?:^|[\s"'=])(?:\.\/)?(?:\.claude\/hooks\/|core\/claude-code\/hooks\/)(?:mark-gate|mark|classify)\.mjs\b/,
+  /(?:^|[\s"'=])(?:\.\/)?(?:core\/opencode\/plugin\/lib\/|\.opencode\/plugin\/lib\/)mark-gate\.mjs\b/,
   /(?:^|[\s"'=])(?:\.\/)?scripts\/probe-oc-gates-headless\.mjs\b/,
   /(?:^|[\s"'=])(?:\.\/)?core\/claude-code\/skills\/initializing-projects\/references\/vendor-core\.mjs\b/,
 ];
@@ -606,6 +603,15 @@ export function decideBashForge(input = {}) {
       return { ok: true, decision: "allow", reason: "not-state-forge" };
     }
     const command = stripCommandWrappers(raw);
+    // CC marker CLIs under OC never write .opencode gate-state — hard deny with redirect.
+    if (CC_MARKER_PATH_RE.test(raw) || CC_MARKER_PATH_RE.test(command)) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason:
+          "[entry-gate] Blocked: Claude-Code marker CLIs (.claude/hooks/mark|classify) do not stamp OpenCode gate-state. Use the native `classify` tool and `node .opencode/plugin/lib/mark-gate.mjs` only.",
+      };
+    }
     // Preload checks raw too (NODE_OPTIONS=--require lost after strip).
     if (isNodePreload(raw) || isNodePreload(command)) {
       return {

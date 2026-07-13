@@ -129,6 +129,8 @@ No Ollama in default map. Reconfigure via skill `configuring-model-routing`.
 | Durable memory | project root `MEMORY.md` |
 | Routing | `harness.routing.json` / `.opencode/harness.routing.json` |
 
+**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session — they do not write OC gate-state. Use the `classify` tool + `node .opencode/plugin/lib/mark-gate.mjs`.
+
 ## 11. Folder law — .opencode/ (OpenCode vendored harness)
 
 - Plans, gate-state, hand-records under `.opencode/plans/` and `.opencode/plans/.state/` are run-ephemeral (deleted at harvest); only execution-plan.json and shared_context.md (pre-delete) live in the feature subdir.

@@ -71,13 +71,14 @@ const DEFAULT_RETRY_CEILING_K = 2;
 const defaultNow = () => Math.floor(Date.now() / 1000);
 
 /**
- * @description Path the autonomous session writes a deliberate-block marker to (the finding
- * message body). Lives under the worktree's `.claude/` (git-excluded via `.git/info/exclude`, so
- * it never dirties the tracked tree); the exit handler reads it best-effort and treats absence as
- * "no deliberate blocking stop".
+ * @description Paths the autonomous session may write a deliberate-block marker to.
+ * OC sessions write under `.opencode/`; CC under `.claude/`. Exit checks both.
  */
-function blockingMarkerPath(worktree) {
-  return join(worktree, ".claude", "harness-blocked.md");
+function blockingMarkerPaths(worktree) {
+  return [
+    join(worktree, ".opencode", "harness-blocked.md"),
+    join(worktree, ".claude", "harness-blocked.md"),
+  ];
 }
 
 /**
@@ -310,19 +311,22 @@ function realPrExists(issueNumber) {
 }
 
 /**
- * @description Real blockingFinding seam for the CLI: reads the deliberate-block marker the
- * autonomous session writes at `<worktree>/.claude/harness-blocked.md`. Absent/empty → null (no
- * deliberate blocking stop), else the trimmed finding message to post via `gh issue comment`.
+ * @description Real blockingFinding seam for the CLI: reads the deliberate-block marker from
+ * `.opencode/harness-blocked.md` (OC) or `.claude/harness-blocked.md` (CC). First non-empty wins.
+ * Absent/empty → null (no deliberate blocking stop).
  * @param {string} worktree
  * @returns {string | null}
  */
 function realBlockingFinding(worktree) {
-  try {
-    const text = readFileSync(blockingMarkerPath(worktree), "utf8").trim();
-    return text || null;
-  } catch {
-    return null;
+  for (const marker of blockingMarkerPaths(worktree)) {
+    try {
+      const text = readFileSync(marker, "utf8").trim();
+      if (text) return text;
+    } catch {
+      // try next path
+    }
   }
+  return null;
 }
 
 /**

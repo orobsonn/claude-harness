@@ -166,6 +166,31 @@ test("#7 readEvents: a truncated last line (in-flight append, no trailing newlin
   }
 });
 
+test("#8b createRun: re-dispatch on orphan reactivates → active, truncates events, preserves threadId, refreshes worktreePath (#291 telegram silence)", () => {
+  const stateDir = makeStateDir();
+  try {
+    const metaPath = createRun({ issueNumber: 291, project: "claude-harness", worktreePath: "/old/wt" }, stateDir);
+    updateMeta(metaPath, { status: "orphan", threadId: 1653, cursor: 2, chatId: -100 });
+    appendEvent(metaPath, { type: "picked" });
+    appendEvent(metaPath, { type: "pipeline-type", mode: "LIGHT" });
+    advanceCursor(metaPath, 2);
+
+    const returnedPath = createRun(
+      { issueNumber: 291, project: "claude-harness", worktreePath: "/new/wt-291" },
+      stateDir,
+    );
+    assert.equal(returnedPath, metaPath);
+    const meta = readMeta(metaPath);
+    assert.equal(meta.status, "active", "orphan must reactivate to active");
+    assert.equal(meta.threadId, 1653, "threadId preserved for existing forum topic");
+    assert.equal(meta.cursor, 0, "cursor reset so new picked is drainable");
+    assert.equal(meta.worktreePath, "/new/wt-291", "worktreePath refreshed");
+    assert.deepEqual(readEvents(metaPath), [], "events truncated for clean re-dispatch feed");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("#8 createRun: re-dispatch on an 'awaiting-review' meta truncates events + resets cursor, but preserves threadId (reuse-with-truncate)", () => {
   const stateDir = makeStateDir();
   try {

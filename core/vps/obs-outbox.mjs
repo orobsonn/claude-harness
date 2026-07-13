@@ -13,6 +13,8 @@ const INITIAL_STATUS = "active";
 const INITIAL_THREAD_ID = null;
 const CLOSED_STATUS = "closed";
 const AWAITING_REVIEW_STATUS = "awaiting-review";
+/** @description Terminal-ish non-closed statuses that must reactivate on re-dispatch (Telegram silence bug). */
+const REACTIVATE_STATUSES = new Set(["orphan", "fallback", AWAITING_REVIEW_STATUS]);
 const TEMP_SUFFIX = `.${process.pid}.tmp`;
 const FOSSIL_KEYS = ["closedAt", "topicDeletedAt"];
 // PIPE_BUF (4096 on Linux) is the largest write guaranteed atomic per-line across concurrent
@@ -79,16 +81,13 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
   const metaPath = join(stateDir, `obs-${issueNumber}.json`);
   const existing = readMetaRecord(metaPath);
   if (existing && existing.status !== CLOSED_STATUS) {
-    // DISTINCT branch for awaiting-review: reuse-with-truncate
-    if (existing.status === AWAITING_REVIEW_STATUS) {
-      // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
-      // and strip the fossil timestamps (closedAt/topicDeletedAt) off a meta returning to active.
-      // Truncate the events log FIRST, gating the meta reset on truncate success: a drain tick
-      // landing between a reset meta and a pending/failed truncate would read the reset meta
-      // (criticalSent: [], cursor: 0) against the still-intact old events log and re-send every
-      // previously-acknowledged critical. Truncating first leaves an interleaved drain observing
-      // an empty log (zero events to send, nothing to write back); on truncate failure the meta
-      // stays consistent with the still-intact old log instead of entering the re-send state.
+    // Reactivate terminal-ish statuses (awaiting-review / orphan / fallback): reuse-with-truncate.
+    // orphan/fallback used to be "idempotent reuse AS-IS" — that left status stuck, cursor advanced,
+    // and no new `picked` event → Telegram silence on re-dispatch after a died run (#291).
+    // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
+    // refresh worktreePath, strip fossils. Truncate FIRST so an interleaved drain never re-sends
+    // the old log against a reset cursor.
+    if (REACTIVATE_STATUSES.has(existing.status)) {
       let truncated = false;
       try {
         writeFileSync(eventsPathFor(metaPath), "", "utf8");
@@ -100,6 +99,8 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
       if (truncated) {
         atomicWriteMeta(metaPath, stripFossilTimestamps({
           ...existing,
+          worktreePath,
+          project,
           cursor: INITIAL_CURSOR,
           status: INITIAL_STATUS,
           criticalSent: [],
@@ -109,15 +110,20 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
       return metaPath;
     }
 
-    // Idempotent reuse: never reset events/cursor/threadId on a still-active (or fallback/orphan) run.
-    // The reuse branch MUST NEVER touch the events log. It only strips a fossil timestamp if one is
-    // actually present; a fossil-free reuse is byte-write-free (no rewrite at all).
+    // Idempotent reuse for still-active runs: never reset events/cursor/threadId.
+    // Only refresh worktreePath + strip fossils when present.
     const freshExisting = readMetaRecord(metaPath);
     if (!freshExisting) return metaPath;
+    let dirty = false;
     if (hasFossilTimestamps(freshExisting)) {
       for (const key of FOSSIL_KEYS) delete freshExisting[key];
-      atomicWriteMeta(metaPath, freshExisting);
+      dirty = true;
     }
+    if (worktreePath && freshExisting.worktreePath !== worktreePath) {
+      freshExisting.worktreePath = worktreePath;
+      dirty = true;
+    }
+    if (dirty) atomicWriteMeta(metaPath, freshExisting);
     return metaPath;
   }
   const meta = {

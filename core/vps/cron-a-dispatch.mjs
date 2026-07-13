@@ -889,7 +889,13 @@ async function setupObservability({ obs, createForumTopic, issueNumber, title, p
   const meta = (obs.readMeta(metaPath) || {});
   const CLOSED = "closed";
   let threadId = meta.threadId ?? null;
-  const hasOpenThread = threadId != null && meta.status !== CLOSED;
+  // createRun reactivates orphan/fallback → active; still treat non-active as no open thread so a
+  // stuck zombie status (pre-fix meta) mints a fresh topic instead of posting into a dead one.
+  const hasOpenThread =
+    threadId != null &&
+    meta.status !== CLOSED &&
+    meta.status !== "orphan" &&
+    meta.status !== "fallback";
   if (!hasOpenThread && typeof createForumTopic === "function") {
     const name = buildTopicName(issueNumber, title, project);
     let result = null;
@@ -1216,29 +1222,24 @@ export async function dispatch(issue, opts) {
 
   // 1b) git worktree only checks out TRACKED files. When `.claude` is gitignored (e.g. the harness
   //      source repo), the vendored harness — skills, agents, entry policy, hooks, settings — is
-  //      ABSENT from the worktree, so the spawned `claude -p` runs with NO pipeline (no
-  //      triaging-requests, no orchestrating-delivery, no planner/adversary/plan-reviewer/cheap
-  //      hands). Copy it in from projectRoot when the worktree lacks it, so the session actually runs
-  //      the harness. Best-effort: a project without .claude simply has nothing to copy, and a copy
-  //      hiccup must never fail the dispatch.
-  try {
-    const claudeSrc = join(projectRoot, ".claude");
-    const claudeDst = join(worktreePath, ".claude");
-    if (existsSync(claudeSrc) && !existsSync(claudeDst)) {
-      spawn("cp", ["-a", claudeSrc, claudeDst], { cwd: projectRoot, env });
-      // The physical `cp -a` ignores .gitignore and drags in the ephemeral per-run `plans/` HISTORY
-      // (a `git worktree add` in a normal project never would — `plans/` is gitignored, so the
-      // checkout leaves it out). Drop it so the run starts with an empty plans dir: otherwise the
-      // drain's deriveBorderCheckpoints and the spec-adversary phase-probe scan the worktree and pick
-      // a STALE foreign plan, emitting false spec-created/plan-created and mislabeling the spec
-      // adversary (P11). `memory/` and `kaizen.md` are NOT dropped — the shipper commits them back.
-      // The removal is GUARDED (resolveRunPlansDir): never a blind rmSync — skipped unless the target
-      // is strictly inside THIS run's worktree, and never the projectRoot's live plans.
-      const runPlansDir = resolveRunPlansDir(worktreePath, projectRoot);
-      if (runPlansDir) rmSync(runPlansDir, { recursive: true, force: true });
+  //      ABSENT from the worktree, so the spawned `claude -p` runs with NO pipeline. Copy it in from
+  //      projectRoot when the worktree lacks it. SKIPPED for runtime=opencode: dual-copying `.claude`
+  //      into an OC worktree let the agent run CC marker CLIs (stdout-only, no stamp-triage) and
+  //      write ceremony into the wrong root while OC gates read `.opencode` — silent ceremony miss
+  //      (#291). OC path seeds `.opencode` only in step 1c.
+  if (runtime !== "opencode") {
+    try {
+      const claudeSrc = join(projectRoot, ".claude");
+      const claudeDst = join(worktreePath, ".claude");
+      if (existsSync(claudeSrc) && !existsSync(claudeDst)) {
+        spawn("cp", ["-a", claudeSrc, claudeDst], { cwd: projectRoot, env });
+        // Drop ephemeral plans/ history dragged by cp -a (P11 stale foreign plan).
+        const runPlansDir = resolveRunPlansDir(worktreePath, projectRoot);
+        if (runPlansDir) rmSync(runPlansDir, { recursive: true, force: true });
+      }
+    } catch {
+      // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
     }
-  } catch {
-    // best-effort — the reaper/next cycle bound the blast radius if the harness copy fails
   }
 
   // 1c) Same bootstrap for `.opencode` when runtime is opencode (gitignored harness absent from the

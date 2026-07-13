@@ -214,6 +214,22 @@ test("mark-gate path-bound harness script → allow forge path", () => {
   assert.equal(vendored.decision, "allow");
 });
 
+test("CC marker CLI .claude/hooks/classify.mjs → deny with OC redirect (#291)", () => {
+  const d = decideBashForge({
+    command: "node .claude/hooks/classify.mjs --mode LIGHT --feature-id capture-verified",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /Claude-Code marker|classify tool|mark-gate/i);
+});
+
+test("CC marker CLI core/claude-code/hooks/mark.mjs → deny under OC", () => {
+  const d = decideBashForge({
+    command: "node core/claude-code/hooks/mark.mjs brainstorm-done --feature-id f",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /Claude-Code marker|mark-gate/i);
+});
+
 test("impostor /tmp/mark-gate.mjs basename → deny forge", () => {
   const d = decideBashForge({
     command:
