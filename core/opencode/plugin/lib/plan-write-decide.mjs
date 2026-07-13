@@ -1,13 +1,29 @@
 /**
- * @description Pure decide for plan-write-gate parity (OC port of CC plan-write-gate decide).
- * Denies Write/Edit to execution-plan.json, gate-state.json, triage.json under .opencode/plans/
- * except planner role (via task context). Absolute paths with oracle segments also deny
- * (string oracle, same wall as bash forge). Fail-open only on non-oracle infra shape errors.
- * Mirrors CC #ac-u1.1..#ac-u1.3; adapted paths (.opencode vs .claude).
+ * @description Pure decide for OC plan-write-gate (LIGHT: state anti-forge only).
+ * Denies Write/Edit to gate-state.json, triage.json, and any JSON under
+ * .opencode/plans/.state/ — absolute or relative. Does NOT deny execution-plan.json
+ * (orchestrator/build may author the plan via Write or bash; bash forge is separate).
+ * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
+ * Fail-open only on non-oracle infra shape errors.
  */
+
 import path from "node:path";
 
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
+/** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */
+const FORBIDDEN_MARKER_BASENAMES = new Set([
+  "mark-gate.mjs",
+  "mark.mjs",
+  "classify.mjs",
+]);
+/** Tooling scripts on bash allowlist — freeze against Write overwrite. */
+const FROZEN_TOOLING_RELATIVE = new Set([
+  "scripts/probe-oc-gates-headless.mjs",
+  "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
+  "core/claude-code/hooks/mark.mjs",
+  "core/claude-code/hooks/classify.mjs",
+]);
+const PREFIX = "[plan-write-gate]";
 
 /**
  * @param {unknown} filePath
@@ -16,19 +32,34 @@ const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 function pathSegments(filePath) {
   if (typeof filePath !== "string" || filePath.length === 0) return [];
   const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
-  return norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
+  return norm
+    .split("/")
+    .filter((s) => s.length > 0)
+    .map((s) => s.toLowerCase());
 }
 
 /**
+ * @description Fixture carve only — never mid-path ".test." (session ids may contain dots).
+ * Real oracle basenames (gate-state.json / triage.json) are never carved.
  * @param {unknown} filePath
  * @returns {boolean}
  */
 function isCarvedOut(filePath) {
   if (typeof filePath !== "string") return false;
   const norm = path.posix.normalize(filePath.replace(/\\/g, "/"));
-  if (norm.includes("..")) return false; // traversal → no carve bypass
-  const segs = norm.split("/").filter((s) => s.length > 0).map((s) => s.toLowerCase());
-  return segs.some((s) => s === "__fixtures__" || s.includes(".test."));
+  if (norm.includes("..")) return false;
+  const segs = norm
+    .split("/")
+    .filter((s) => s.length > 0)
+    .map((s) => s.toLowerCase());
+  if (segs.length === 0) return false;
+  const base = segs[segs.length - 1];
+  // Live oracle filenames are never fixtures, even under a .test. session segment.
+  if (FORBIDDEN_STATE_BASENAMES.has(base)) return false;
+  if (segs.includes("__fixtures__")) return true;
+  // Basename-only test fixtures e.g. gate-state.test.json
+  if (base.includes(".test.")) return true;
+  return false;
 }
 
 /**
@@ -42,8 +73,7 @@ function isForbiddenStateBasename(filePath) {
 }
 
 /**
- * @description Oracle for plans/.state/** JSON — works on relative and absolute paths.
- * Traversal (`..`) does not clear the oracle when segments still match.
+ * @description Oracle for plans/.state/** JSON — relative or absolute.
  * @param {unknown} filePath
  * @returns {boolean}
  */
@@ -57,66 +87,138 @@ function isStateFilePath(filePath) {
 }
 
 /**
- * @description Oracle for execution-plan.json under .opencode/plans — absolute or relative.
+ * @description Write to harness marker scripts (path-bound forge allowlist targets).
  * @param {unknown} filePath
  * @returns {boolean}
  */
-function isExecutionPlanPath(filePath) {
+function isMarkerScriptPath(filePath) {
   if (typeof filePath !== "string" || filePath.length === 0) return false;
   const segs = pathSegments(filePath);
-  if (segs.length < 2) return false;
-  if (segs[segs.length - 1] !== "execution-plan.json") return false;
-  const ci = segs.indexOf(".opencode");
-  return ci !== -1 && segs[ci + 1] === "plans";
+  if (segs.length === 0) return false;
+  const base = segs[segs.length - 1];
+  if (!FORBIDDEN_MARKER_BASENAMES.has(base)) return false;
+  // plugin/lib/mark-gate.mjs or hooks/mark-gate.mjs (any parent tree)
+  const libIdx = segs.lastIndexOf("lib");
+  if (libIdx >= 1 && segs[libIdx - 1] === "plugin") return true;
+  if (segs.includes("hooks")) return true;
+  return false;
 }
 
 /**
+ * @description Frozen tooling allowlist paths (exact relative).
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isFrozenToolingPath(filePath) {
+  if (typeof filePath !== "string" || filePath.length === 0) return false;
+  let norm = filePath.replace(/\\/g, "/").trim();
+  while (norm.startsWith("./")) norm = norm.slice(2);
+  // absolute → take suffix match against known relative
+  for (const rel of FROZEN_TOOLING_RELATIVE) {
+    if (norm === rel || norm.endsWith(`/${rel}`)) return true;
+  }
+  return false;
+}
+
+/**
+ * @description Extract file path from CC or OC payload shapes.
  * @param {unknown} payload
- * @returns {{ allow: boolean, hookSpecificOutput?: object }}
+ * @returns {string}
+ */
+export function extractWritePath(payload) {
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) {
+    return "";
+  }
+  const p = /** @type {Record<string, unknown>} */ (payload);
+  const fromToolInput =
+    p.tool_input != null &&
+    typeof p.tool_input === "object" &&
+    !Array.isArray(p.tool_input)
+      ? /** @type {Record<string, unknown>} */ (p.tool_input)
+      : null;
+  const fromArgs =
+    p.args != null && typeof p.args === "object" && !Array.isArray(p.args)
+      ? /** @type {Record<string, unknown>} */ (p.args)
+      : null;
+  const candidates = [
+    fromToolInput?.file_path,
+    fromToolInput?.filePath,
+    fromToolInput?.path,
+    fromArgs?.filePath,
+    fromArgs?.file_path,
+    fromArgs?.path,
+    fromArgs?.file,
+    fromArgs?.target,
+    p.filePath,
+    p.file_path,
+    p.path,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 0) return c;
+  }
+  return "";
+}
+
+/**
+ * @typedef {{ allow: boolean, reason?: string }} Decision
+ */
+
+/**
+ * @param {unknown} payload
+ * @returns {Decision}
  */
 export function decide(payload) {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+  try {
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+      return { allow: true };
+    }
+    const filePath = extractWritePath(payload);
+    // Fail-closed: write/edit with unparseable path must not silently forge.
+    if (!filePath) {
+      return {
+        allow: false,
+        reason: `${PREFIX} Blocked: write/edit path missing — cannot validate anti-forge oracle.`,
+      };
+    }
+    const carved = isCarvedOut(filePath);
+    if (!carved && isForbiddenStateBasename(filePath)) {
+      return {
+        allow: false,
+        reason: `${PREFIX} Blocked: gate-state/triage written ONLY by harness markers, never Write/Edit.`,
+      };
+    }
+    if (!carved && isStateFilePath(filePath)) {
+      return {
+        allow: false,
+        reason: `${PREFIX} Blocked: .opencode/plans/.state/ JSONs written ONLY by harness markers.`,
+      };
+    }
+    if (!carved && isMarkerScriptPath(filePath)) {
+      return {
+        allow: false,
+        reason: `${PREFIX} Blocked: harness marker scripts (mark-gate/mark/classify) are read-only via Write/Edit.`,
+      };
+    }
+    if (!carved && isFrozenToolingPath(filePath)) {
+      return {
+        allow: false,
+        reason: `${PREFIX} Blocked: allowlisted tooling scripts are read-only via Write/Edit (anti-forgery).`,
+      };
+    }
+    // execution-plan.json is allowed (LIGHT model C — orchestrator may author plan)
+    return { allow: true };
+  } catch {
     return { allow: true };
   }
-  const filePath = payload?.tool_input?.file_path;
-  const carved = isCarvedOut(filePath);
-  if (!carved && isForbiddenStateBasename(filePath)) {
-    return {
-      allow: false,
-      hookSpecificOutput: {
-        hookEventName: "tool.execute.before",
-        permissionDecision: "deny",
-        permissionDecisionReason:
-          "[plan-write-gate] Blocked: gate-state/triage (basename) written ONLY by harness hooks, never Write/Edit tool.",
-      },
-    };
+}
+
+/**
+ * @description Map Decision to throw for OC plugin (fail-closed).
+ * @param {Decision} decision
+ * @returns {void}
+ */
+export function throwIfDenied(decision) {
+  if (decision && decision.allow === false) {
+    throw new Error(decision.reason || `${PREFIX} denied`);
   }
-  if (!carved && isStateFilePath(filePath)) {
-    return {
-      allow: false,
-      hookSpecificOutput: {
-        hookEventName: "tool.execute.before",
-        permissionDecision: "deny",
-        permissionDecisionReason:
-          "[plan-write-gate] Blocked: .opencode/plans/.state/ JSONs written ONLY by harness hooks.",
-      },
-    };
-  }
-  if (!isExecutionPlanPath(filePath)) {
-    return { allow: true };
-  }
-  // OC: planner role via task context (agent_type or dispatch marker); main loop denied.
-  const isPlanner = payload?.agent_type && payload.agent_type.toLowerCase().includes("planner");
-  if (isPlanner) {
-    return { allow: true };
-  }
-  return {
-    allow: false,
-    hookSpecificOutput: {
-      hookEventName: "tool.execute.before",
-      permissionDecision: "deny",
-      permissionDecisionReason:
-        "[plan-write-gate] Blocked: orchestrator must not author execution-plan.json. Planner task only.",
-    },
-  };
 }

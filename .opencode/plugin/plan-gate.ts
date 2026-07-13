@@ -29,7 +29,7 @@ export async function createPlanGateHooks(
     loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
-  const { planDir } = await import("../../shared/lib/path-helpers.mjs")
+  const { planDir } = await import("../shared/lib/path-helpers.mjs")
 
   return {
     "tool.execute.before": async (input: any, output: any) => {

@@ -339,6 +339,7 @@ export function defaultOcPluginPaths() {
   return [
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/plan-gate.ts",
+    "./.opencode/plugin/plan-write-gate.ts",
     "./.opencode/plugin/loop-guard.ts",
     "./.opencode/plugin/reinject-state.ts",
     "./.opencode/plugin/version-check.ts",
