@@ -319,7 +319,13 @@ const _isCli =
 if (_isCli) {
   const rootDir = process.cwd();
   const { findings } = scanSecretsInTree(rootDir, {
-    exclude: ["core/rules/", "core/claude-code/rules/", "**/*.md"],
+    exclude: [
+      "core/rules/",
+      "core/claude-code/rules/",
+      "core/opencode/rules/",
+      "**/*.md",
+      "**/*.test.mjs",
+    ],
   });
 
   if (findings.length === 0) {
