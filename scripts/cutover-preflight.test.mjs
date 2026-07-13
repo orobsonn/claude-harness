@@ -6,6 +6,7 @@ import {
   existsSync,
   readdirSync,
   mkdirSync,
+  mkdtempSync,
   cpSync,
   rmSync,
   writeFileSync,
@@ -13,7 +14,8 @@ import {
 } from "node:fs";
 import { join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { resolveRuntime } from "../core/vps/resolve-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,35 +50,12 @@ export const PHASE2_FORBIDDEN_GLOBS = [
   "core/vps/run-opencode-session.mjs",
 ];
 
-/**
- * @description Parse IMPLEMENTATION-TRACK.md for a phase-1/2 row status.
- * @param {string} trackText
- * @param {string} id e.g. "T10", "T11", "T12"
- * @returns {{ id: string, status: string, notes: string } | null}
- */
-export function parseTrackRow(trackText, id) {
-  const lines = trackText.split("\n");
-  const re = new RegExp(
-    `^\\|\\s*${id}\\s*\\|[^|]*\\|[^|]*\\|\\s*(\\w+)\\s*\\|\\s*([^|]*)\\|\\s*(.*)\\|\\s*$`
-  );
-  // Phase 1 table: | ID | Item | Contract docs | Status | Date | Notes |
-  const reP1 = new RegExp(
-    `^\\|\\s*${id}\\s*\\|[^|]*\\|[^|]*\\|\\s*(\\w+)\\s*\\|\\s*([^|]*)\\|\\s*(.*)\\|\\s*$`
-  );
-  // Phase 2 table: | ID | Item | Contract docs | Status | Date | Notes | (same shape)
-  for (const line of lines) {
-    const m = line.match(reP1);
-    if (m) {
-      return {
-        id,
-        status: m[1].trim(),
-        date: m[2].trim(),
-        notes: m[3].trim(),
-      };
-    }
-  }
-  return null;
-}
+// Dual-shape TRACK-row parser (6-column Phase-1/2 + 5-column Phase-0/2b). Extracted to
+// scripts/track-parse.mjs so importing it does not drag the whole preflight suite in as a
+// side-effect, and so T15/T17 (which live in the 5-column Phase-2b table) parse correctly.
+// Re-exported here for backward compatibility with any caller still importing from this module.
+export { parseTrackRow } from "./track-parse.mjs";
+import { parseTrackRow } from "./track-parse.mjs";
 
 /**
  * @description True when T11 is done and notes mention parity + project-vendored smoke.
@@ -232,7 +211,7 @@ export function checkProjectPluginsRelative(repoRoot) {
 }
 
 /**
- * * @description Fail if phase-2 OC VPS implementation artifacts exist or TRACK T14 done (T12/T13 allowed done) or autoMergeEnabled for opencode.
+ * * @description Fail if phase-2 OC VPS implementation artifacts exist or autoMergeEnabled for opencode. T14 `done` is now allowed (runtime fail-closed gate ocAutoMergeGateOpen, ac-3.3, enforces T12+T13+T15); the static autoMergeEnabled+opencode config-file guard is the load-bearing premature-merge guard and is preserved.
  * @param {string} repoRoot
  * @param {string} trackText
  * @returns {{ ok: boolean, reason: string, found: string[] }}
@@ -281,7 +260,7 @@ export function checkNoPhase2Artifacts(repoRoot, trackText) {
     if (!existsSync(path)) continue;
     try {
       const j = JSON.parse(readFileSync(path, "utf8"));
-      if (j.autoMergeEnabled === true && (j.runtime === "opencode" || j.driver === "opencode")) {
+      if (j.autoMergeEnabled === true && resolveRuntime(j) === "opencode") {
         found.push(`${path}: autoMergeEnabled true for OC`);
       }
     } catch {
@@ -289,23 +268,21 @@ export function checkNoPhase2Artifacts(repoRoot, trackText) {
     }
   }
 
-  for (const id of ["T14"]) {
-    const row = parseTrackRow(trackText, id);
-    if (row && (row.status === "done" || row.status === "in_progress")) {
-      found.push(`IMPLEMENTATION-TRACK ${id} status=${row.status} (T14 must remain pending; T12/T13 done allowed)`);
-    }
-  }
+  // T14 is now allowed `done` once the runtime fail-closed gate (ocAutoMergeGateOpen, ac-3.3)
+  // mirrors the T12+T13+T15-done TRACK state. The load-bearing guard against premature OC
+  // auto-merge is the static autoMergeEnabled+opencode config-file check above — that guard
+  // is intentionally preserved. T14's TRACK status is no longer hard-asserted pending here.
 
   if (found.length > 0) {
     return {
       ok: false,
-      reason: `phase-2 OC VPS artifacts or T14 not pending or autoMerge+opencode: ${found.join(", ")}`,
+      reason: `phase-2 OC VPS artifacts or autoMerge+opencode config: ${found.join(", ")}`,
       found,
     };
   }
   return {
     ok: true,
-    reason: "no phase-2 OC VPS implementation artifacts; T14 pending (T12/T13 done ok); autoMerge+opencode still blocks",
+    reason: "no phase-2 OC VPS implementation artifacts; autoMerge+opencode config guard still blocks",
     found: [],
   };
 }
@@ -692,7 +669,7 @@ describe("cutover-preflight", () => {
     assert.equal(bad.ok, false);
   });
 
-  it("t10-no-phase2: fails when phase-2 OC VPS artifacts or T14 done or autoMerge+opencode; T12/T13 done unblocks", () => {
+  it("t10-no-phase2: fails on phase-2 OC VPS artifacts or autoMerge+opencode config; T14 done is now allowed (runtime gate enforces T12+T13+T15)", () => {
     const liveTrack = readFileSync(
       join(REPO_ROOT, "docs/specs/oc-port/IMPLEMENTATION-TRACK.md"),
       "utf8"
@@ -700,13 +677,24 @@ describe("cutover-preflight", () => {
     const live = checkNoPhase2Artifacts(REPO_ROOT, liveTrack);
     assert.equal(live.ok, true, live.reason);
 
-    // Synthetic: T12 done is now allowed (unblock); use T14 done to force fail
-    const badTrack = liveTrack.replace(
-      /\| T14 \|[^|]*\|[^|]*\| pending \|/,
-      "| T14 | Auto-merge | 09 | done | 2026-07-12 |"
+    // T14 done is now allowed — the runtime fail-closed gate (ocAutoMergeGateOpen, ac-3.3)
+    // enforces T12+T13+T15. The static autoMergeEnabled+opencode config-file guard is the
+    // load-bearing premature-merge guard and must still fire. Verify it on a temp repo.
+    const tempRoot = mkdtempSync(join(tmpdir(), "cutover-preflight-no-phase2-"));
+    const ocDir = join(tempRoot, "core/opencode");
+    mkdirSync(ocDir, { recursive: true });
+    writeFileSync(
+      join(ocDir, "harness.routing.json"),
+      JSON.stringify({ autoMergeEnabled: true, runtime: "opencode" }),
+      "utf8"
     );
-    const bad = checkNoPhase2Artifacts(REPO_ROOT, badTrack);
-    assert.equal(bad.ok, false, "T14 done must fail phase-2 gate");
+    const bad = checkNoPhase2Artifacts(tempRoot, liveTrack);
+    assert.equal(bad.ok, false, "autoMergeEnabled+opencode config must still fail phase-2 gate");
+    assert.ok(
+      bad.found.some((entry) => entry.includes("autoMergeEnabled")),
+      `found should include autoMergeEnabled entry, got: ${JSON.stringify(bad.found)}`
+    );
+    rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it("apply refuses without confirm and without preflight", () => {

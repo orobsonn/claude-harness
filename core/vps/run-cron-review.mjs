@@ -78,6 +78,7 @@ import { scopedGh, defaultGhExec } from "./gh-exec.mjs";
 import { makeNotifier, closeForumTopic as realCloseForumTopic } from "./notify-telegram.mjs";
 import { loadConfig } from "./run-cron-a.mjs";
 import { drainWithLock } from "./drain-lock.mjs";
+import { ocAutoMergeGateOpen } from "./oc-automerge-gate.mjs";
 // #235/task-7: reuses run-reaper.mjs's gh-scoped makeDefaultIssueClosed for the drain's issueOpen
 // seam (no new dependency) — same pattern as run-drain.mjs/run-cron-a.mjs (task-5/task-6).
 import { makeDefaultIssueClosed } from "./run-reaper.mjs";
@@ -433,7 +434,7 @@ export async function runCronReview(config, deps = {}) {
       return crossFamilyEligible(pr, { available: false, secondFamilyVerdict: null });
     });
 
-  const autoMergeEnabled = config.autoMergeEnabled === true;
+  const autoMergeEnabled = config.autoMergeEnabled === true && ocAutoMergeGateOpen(config);
 
   const chain = {
     increment: (root) => cronState.incrementChain(root, { stateDir: reviewStateDir }),

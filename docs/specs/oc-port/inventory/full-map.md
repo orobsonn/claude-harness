@@ -48,9 +48,9 @@ This is the exhaustive reference. Implementation contracts live in `../0x-*.md`.
 | authoring-rules | BOTH | 1 | |
 | initializing-projects | PKG | 1 | multi-target |
 | updating-harness | BOTH/PKG | 1 | |
-| creating-issues | BOTH optional | 1 | |
-| measuring-cost | BOTH | 1–2 | NDJSON on OC |
-| reviewing-pull-requests | VPS | 2 | |
+| creating-issues | CC-only-deferred | 1 | authors GitHub issue forms; no OC-specific need, not required for OC parity |
+| measuring-cost | CC-only-deferred | 1–2 | wraps ccusage over the Claude Code transcript JSONL — Claude-specific tooling |
+| reviewing-pull-requests | CC-only-deferred | 2 | VPS phase-2 Claude-tier fresh-eyes review skill |
 | configuring-model-routing | OC | 1 | new |
 | importing-claude-memory | OC | 1 | |
 | personal domain skills | DROP vendor | — | |

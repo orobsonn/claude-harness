@@ -118,7 +118,7 @@ T10 10 cutover               → global empty + docs (after T11)
 ---- phase 2 ----
 T12 09 NDJSON session parser → shared/VPS oracle (exit code is not success)
 T13 09 VPS spawn opencode    → cron session driver
-T14 09 auto-merge gate       → still OFF until T12+T13 proven
+T14 09 auto-merge gate       → gated-by-precondition (fail-closed gate ocAutoMergeGateOpen)
 ```
 
 ---
