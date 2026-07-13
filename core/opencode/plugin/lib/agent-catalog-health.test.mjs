@@ -3,6 +3,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import {
   EXPECTED_HARNESS_AGENTS,
   checkAgentCatalogHealth,
@@ -32,11 +33,13 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
   assert.ok(!EXPECTED_HARNESS_AGENTS.includes("SPAWN-PATTERN"));
 });
 
-test("checkAgentCatalogHealth on harness repo validates its vendored runtime", () => {
+test("checkAgentCatalogHealth on harness repo uses the authoritative available catalog", () => {
   const result = checkAgentCatalogHealth(REPO_ROOT);
   assert.equal(result.ok, true);
   assert.deepEqual(result.missing, []);
-  assert.deepEqual(result.checkedDirs, [path.join(REPO_ROOT, ".opencode", "agents")]);
+  const runtime = path.join(REPO_ROOT, ".opencode", "agents");
+  const source = path.join(REPO_ROOT, "core", "opencode", "agents");
+  assert.deepEqual(result.checkedDirs, [existsSync(runtime) ? runtime : source]);
 });
 
 test("checkAgentCatalogHealth does not mask an incomplete runtime catalog with core", () => {
