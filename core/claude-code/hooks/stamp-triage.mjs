@@ -94,7 +94,9 @@ function parseLastJsonObject(stdout) {
     if (typeof whole === "object" && whole !== null && !Array.isArray(whole)) {
       return whole;
     }
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     // fall back to line-by-line
   }
 
@@ -107,7 +109,9 @@ function parseLastJsonObject(stdout) {
     let parsed;
     try {
       parsed = JSON.parse(line);
-    } catch {
+    } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
       continue;
     }
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
@@ -187,7 +191,9 @@ function countMarkerObjectsByName(stdout, markerName) {
     let parsed;
     try {
       parsed = JSON.parse(trimmed);
-    } catch {
+    } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
       continue;
     }
     if (
@@ -690,7 +696,9 @@ function obsAppend(event, appendFn, opts = {}) {
       }
     }
     appendFn(metaPath, event);
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     // fail-open: an outbox append never blocks the gate-state write / triage persist
   }
 }
@@ -724,7 +732,9 @@ function readDescriptorForHandRan(descriptorPath) {
       return null;
     }
     return parsed;
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     return null;
   }
 }
@@ -758,7 +768,9 @@ export function handle(payload, opts = {}) {
     let sha = null;
     try {
       sha = headShaFn();
-    } catch {
+    } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
       sha = null;
     }
     return typeof sha === "string" && sha.length > 0 ? `${bareId}@${sha}` : bareId;
@@ -767,7 +779,9 @@ export function handle(payload, opts = {}) {
   let decision;
   try {
     decision = decide(payload);
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     return; // paranoid guard — decide() must never throw but just in case
   }
 
@@ -791,7 +805,9 @@ export function handle(payload, opts = {}) {
       // (Re)classify resets per-feature ceremony: overwrite gate-state with only the
       // new feature_id so brainstormed/adversary_fired never carry across features.
       resetGateState(session_id, feature_id);
-    } catch {
+    } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
       // fail-open: a failed write never surfaces as an error
     }
     // Observability: append a {type:'pipeline-type', mode} checkpoint AFTER the triage write +
@@ -1045,7 +1061,9 @@ function isDirectCli() {
   const modulePath = fileURLToPath(import.meta.url);
   try {
     return fs.realpathSync(process.argv[1]) === modulePath;
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     return process.argv[1] === modulePath;
   }
 }
@@ -1055,14 +1073,18 @@ if (isDirectCli()) {
   let raw = "";
   try {
     raw = fs.readFileSync(0, "utf8");
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     process.exit(0);
   }
 
   let payload;
   try {
     payload = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     // Malformed or empty payload — fail-open
     process.exit(0);
   }
@@ -1070,7 +1092,8 @@ if (isDirectCli()) {
   let handleResult;
   try {
     handleResult = handle(payload);
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
     // Unexpected error — fail-open, never block a Bash call
   }
 
@@ -1106,14 +1129,18 @@ if (isDirectCli()) {
           "Re-run the mark.mjs command to retry the persist.",
       };
     }
-  } catch {
+  } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
     // fail-open — never block a Bash call over a nudge
   }
 
   if (nudge) {
     try {
       process.stdout.write(JSON.stringify({ hookSpecificOutput: nudge }));
-    } catch {
+    } catch (err) {
+    console.error("stamp-triage unexpected error (fail-open):", err);
+    // Unexpected error — fail-open, never block a Bash call
       // fail-open
     }
   }

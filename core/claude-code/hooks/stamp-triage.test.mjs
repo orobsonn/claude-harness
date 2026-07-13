@@ -1365,3 +1365,16 @@ test(
     });
   },
 );
+
+test("handle unexpected error logs to stderr (regression for silent catch)", () => {
+  // Force handle to throw by passing opts that cause error inside (e.g. bad mergeFn)
+  const origErr = console.error;
+  let logged = false;
+  console.error = (...args) => { logged = true; origErr(...args); };
+  try {
+    // This will throw inside handle because mergeGateStateFn is not a function when called
+    handle({ session_id: "s1", tool_input: { command: "classify" } }, { mergeGateStateFn: null });
+  } catch {}
+  console.error = origErr;
+  assert.equal(logged, true, "unexpected error in handle must have been logged to stderr");
+});
