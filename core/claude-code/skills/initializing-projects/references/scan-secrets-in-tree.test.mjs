@@ -36,7 +36,13 @@ test("locked-2: real repo tree (core/rules/ and *.md excluded) reports ZERO find
   // and walkDir skips symlinks, so both prefixes must be listed).
   // .git, node_modules, .dev.vars, .env*, lockfiles are always skipped by the scanner itself.
   const { findings } = scanSecretsInTree(REPO_ROOT, {
-    exclude: ["core/rules/", "core/claude-code/rules/", "**/*.md"],
+    exclude: [
+      "core/rules/",
+      "core/claude-code/rules/",
+      "core/opencode/rules/",
+      "**/*.md",
+      "**/*.test.mjs", // test mocks often contain fake high-entropy strings
+    ],
   });
 
   assert.deepStrictEqual(
