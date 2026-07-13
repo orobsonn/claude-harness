@@ -214,6 +214,16 @@ export function cronAExit(issueNumber, worktree, bodyFile, envFile, opts) {
     } catch {
       // best-effort: a vanished env file is the desired end state
     }
+    // Ephemeral OpenCode data home (XDG_DATA_HOME for headless). Fail-closed path guard: only
+    // delete dirs named oc-data-<digits> so a mangled env never rm -rf's an operator path.
+    try {
+      const ocData = process.env.HARNESS_OC_DATA_HOME;
+      if (typeof ocData === "string" && /\/oc-data-\d+$/.test(ocData.replace(/\/+$/, ""))) {
+        rmSync(ocData, { recursive: true, force: true });
+      }
+    } catch {
+      // best-effort: next dispatch for the same issue wipes and recreates
+    }
   }
 }
 
@@ -265,8 +275,14 @@ export function pickSessionPr(prs, issueNumber) {
 }
 
 /**
- * @description Real PR lookup: lists open/merged PRs and picks this session's one by branch
+ * @description Real PR lookup: lists OPEN PRs only and picks this session's one by branch
  * (harness/<N>) or issue link. Fail-soft → null on any gh/parse error.
+ *
+ * OPEN-only is load-bearing for reopened issues: a prior MERGED PR on harness/<N> (or with
+ * Closes #N) must NOT count as "this session delivered" — otherwise a re-dispatch exits in
+ * seconds, stamps awaiting-review, and never runs the pipeline (incident: issue #275 re-run
+ * after #278 merged). Auto-merge race is acceptable: review cron is slower than session exit;
+ * if a PR merges mid-exit, the issue requeues once and the next cycle sees no open work.
  * @param {number} issueNumber
  * @returns {{number:number,url:string}|null}
  */
@@ -274,7 +290,7 @@ function realPrLookup(issueNumber) {
   try {
     const { stdout, status } = spawnSync(
       "gh",
-      ["pr", "list", "--state", "all", "--json", "number,headRefName,url,body", "--limit", "50"],
+      ["pr", "list", "--state", "open", "--json", "number,headRefName,url,body", "--limit", "50"],
       { encoding: "utf8" }
     );
     if (status !== 0) return null;

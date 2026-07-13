@@ -226,6 +226,7 @@ export function runCronA(config, deps = {}) {
       createForumTopic: forumTopicSeams.createForumTopic,
       closeForumTopic: forumTopicSeams.closeForumTopic,
       runtime,
+      homeDir: config.homeDir,
     });
     // dispatch is async, so in production `result` is a Promise — a sync `result.ok` read sees
     // undefined and silently drops the dispatch-failed notification on every spawn failure. Chain

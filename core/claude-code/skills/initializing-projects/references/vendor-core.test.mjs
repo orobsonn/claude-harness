@@ -14,6 +14,7 @@ import {
   spawnSync,
 } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdtempSync,
   readdirSync,
@@ -33,6 +34,7 @@ import {
   defaultOcPluginPaths,
   normalizeRuntimeTarget,
   resolveProjectTarget,
+  writeOpencodeConfig,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -46,6 +48,11 @@ const vendorCoreScript = join(__dirname, "vendor-core.mjs");
 const harnessRoot = existsSync(join(__dirname, "../../../../../package.json"))
   ? join(__dirname, "../../../../..")
   : join(__dirname, "../../../..");
+
+// core/opencode/opencode.json.example (4 up from references/ to reach core/)
+const OC_EXAMPLE_PATH = join(__dirname, "../../../../opencode/opencode.json.example");
+// repo-root opencode.json (5 up from references/ to reach the repo root)
+const ROOT_OPENCODE_JSON_PATH = join(__dirname, "../../../../../opencode.json");
 
 test("findMissingHookVpsDeps: flags a hook whose ../vps import has no file in .claude/vps, and passes when present", () => {
   const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
@@ -575,4 +582,58 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
     ),
     'import { x } from "../../shared/lib/gate-state-shape.mjs";',
   );
+});
+
+// --- OC plugin-registry parity (guard/regression) ------------------------------
+//
+// These four pin an existing, already-green parity contract across the three surfaces that
+// must agree on the OpenCode plugin registry: defaultOcPluginPaths(), the
+// core/opencode/opencode.json.example fixture, and the repo-root opencode.json — plus the
+// permission.question / permission.external_directory contract those surfaces carry, including
+// through writeOpencodeConfig's fresh-project write path.
+
+test("defaultOcPluginPaths() matches the plugin[] parsed from the example and the repo-root opencode.json", () => {
+  const fromFn = defaultOcPluginPaths();
+  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
+  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
+
+  assert.deepStrictEqual(fromExample, fromFn);
+  assert.deepStrictEqual(fromRoot, fromFn);
+});
+
+test("all three plugin registration surfaces include the obs-eye dual-nudge carrier", () => {
+  const fromFn = defaultOcPluginPaths();
+  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
+  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
+
+  assert.ok(fromFn.includes("./.opencode/plugin/obs-eye.ts"));
+  assert.ok(fromExample.includes("./.opencode/plugin/obs-eye.ts"));
+  assert.ok(fromRoot.includes("./.opencode/plugin/obs-eye.ts"));
+});
+
+test("core/opencode/opencode.json.example sets permission.question deny and permission.external_directory allow", () => {
+  const cfg = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8"));
+
+  assert.strictEqual(cfg.permission.question, "deny");
+  assert.strictEqual(cfg.permission.external_directory, "allow");
+});
+
+test("writeOpencodeConfig propagates the example's permission block into a fresh vendored project", () => {
+  const root = mkdtempSync(join(tmpdir(), "vendor-core-writeconfig-"));
+  try {
+    const openCodeDir = join(root, "oc-src");
+    const targetDir = join(root, "target");
+    mkdirSync(openCodeDir, { recursive: true });
+    mkdirSync(targetDir, { recursive: true });
+    cpSync(OC_EXAMPLE_PATH, join(openCodeDir, "opencode.json.example"));
+
+    const status = writeOpencodeConfig(openCodeDir, targetDir);
+    assert.strictEqual(status, "created");
+
+    const written = JSON.parse(readFileSync(join(targetDir, "opencode.json"), "utf8"));
+    assert.strictEqual(written.permission.question, "deny");
+    assert.strictEqual(written.permission.external_directory, "allow");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

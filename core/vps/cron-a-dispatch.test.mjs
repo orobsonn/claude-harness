@@ -52,12 +52,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, cpSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, cpSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { dispatch } from "./cron-a-dispatch.mjs";
+import { dispatch, prepareOpencodeDataHome, seedOpencodeRootConfig } from "./cron-a-dispatch.mjs";
 
 /** @description Fresh temp projectRoot/worktreeRoot/stateDir for one test, plus cleanup. */
 function makeTempDirs() {
@@ -295,6 +295,121 @@ test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plan
     const ocDst = ocCp.args[2];
     assert.ok(!existsSync(join(ocDst, "plans")), "the ephemeral .opencode/plans/ must be dropped from the worktree");
     assert.ok(existsSync(join(ocDst, "plugin", "keep.ts")), "plugin/ must survive the copy");
+  } finally {
+    cleanup();
+  }
+});
+
+test("prepareOpencodeDataHome: fresh empty dir + auth only (never copies opencode.db)", () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-data-prep-"));
+  try {
+    const homeDir = join(root, "home");
+    const stateDir = join(root, "state");
+    mkdirSync(join(homeDir, ".local", "share", "opencode"), { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(homeDir, ".local", "share", "opencode", "auth.json"), '{"x":1}');
+    writeFileSync(join(homeDir, ".local", "share", "opencode", "opencode.db"), "FAT-DB-MUST-NOT-COPY");
+    const dataHome = prepareOpencodeDataHome({ stateDir, issueNumber: 275, homeDir });
+    assert.equal(dataHome, join(stateDir, "oc-data-275"));
+    assert.ok(existsSync(join(dataHome, "opencode", "auth.json")), "auth.json must be seeded");
+    assert.equal(readFileSync(join(dataHome, "opencode", "auth.json"), "utf8"), '{"x":1}');
+    assert.ok(!existsSync(join(dataHome, "opencode", "opencode.db")), "fat interactive DB must never be copied");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("seedOpencodeRootConfig: copies opencode.json + AGENTS.md from projectRoot (permissions vendored)", () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-"));
+  try {
+    const projectRoot = join(root, "proj");
+    const worktree = join(root, "wt");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify({ permission: { external_directory: "allow", bash: { "*": "allow" } } }));
+    writeFileSync(join(projectRoot, "AGENTS.md"), "# agents");
+    const r = seedOpencodeRootConfig(worktree, projectRoot);
+    assert.deepEqual(r.copied.sort(), ["AGENTS.md", "opencode.json"]);
+    assert.equal(r.wroteExample, false);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(cfg.permission.external_directory, "allow");
+    assert.equal(cfg.permission.bash["*"], "allow");
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "# agents");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: falls back to opencode.json.example when root config missing", () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-ex-"));
+  try {
+    const projectRoot = join(root, "proj");
+    const worktree = join(root, "wt");
+    mkdirSync(join(projectRoot, "core", "opencode"), { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "opencode.json.example"),
+      JSON.stringify({ permission: { external_directory: "allow" } })
+    );
+    const r = seedOpencodeRootConfig(worktree, projectRoot);
+    assert.equal(r.wroteExample, true);
+    assert.ok(existsSync(join(worktree, "opencode.json")));
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(cfg.permission.external_directory, "allow");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME into the env-file", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const homeDir = join(stateDir, "fake-home");
+    mkdirSync(join(homeDir, ".local", "share", "opencode"), { recursive: true });
+    writeFileSync(join(homeDir, ".local", "share", "opencode", "auth.json"), "{}");
+    mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+
+    // Spawn seam that REALLY materializes the worktree path (mkdirSync on `git worktree add`) so
+    // seedOpencodeRootConfig has a real destination dir to write into — dispatch now aborts BEFORE
+    // spawning tmux when the worktree does not actually exist on disk (HIGH security fix: never
+    // spawn a headless session without the hardened permission config successfully seeded).
+    const calls = [];
+    const spawn = (command, args = [], spawnOpts = {}) => {
+      calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+        mkdirSync(args[2], { recursive: true });
+      } else if (command === "cp") {
+        cpSync(args[1], args[2], { recursive: true });
+      }
+      return { ok: true };
+    };
+
+    dispatch(
+      { number: 275, body: "b" },
+      { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }), runtime: "opencode", homeDir }
+    );
+
+    const expected = join(stateDir, "oc-data-275");
+    assert.ok(existsSync(join(expected, "opencode", "auth.json")), "oc-data dir must exist after dispatch");
+    // env-file is cleaned only on exit; during dispatch it is still on disk until session ends —
+    // but spawn failure paths may remove it. Prefer asserting via the env handed to tmux spawn.
+    const tmux = findTmuxCall(calls);
+    assert.ok(tmux, "tmux must be spawned");
+    const envFromSpawn = tmux.env || {};
+    // spawn may receive env via spawnOpts; also the session command sources the env-file.
+    // Fall back to reading any remaining issue-*-env-*.env under stateDir.
+    let envBody = "";
+    if (envFromSpawn.XDG_DATA_HOME) {
+      assert.equal(envFromSpawn.XDG_DATA_HOME, expected);
+      assert.equal(envFromSpawn.HARNESS_OC_DATA_HOME, expected);
+    } else {
+      const envFiles = readdirSync(stateDir).filter((n) => n.startsWith("issue-275-env-"));
+      assert.ok(envFiles.length >= 1, "env-file must exist after successful dispatch");
+      envBody = readFileSync(join(stateDir, envFiles[0]), "utf8");
+      assert.ok(envBody.includes(`XDG_DATA_HOME='${expected}'`) || envBody.includes(`XDG_DATA_HOME=${expected}`), envBody);
+      assert.ok(envBody.includes("HARNESS_OC_DATA_HOME="), "HARNESS_OC_DATA_HOME must be set for exit cleanup");
+    }
   } finally {
     cleanup();
   }
@@ -1094,6 +1209,82 @@ test("mem-guard: an explicit opts.memGuardBytes overrides a stricter HARNESS_MEM
   } finally {
     if (hadEnv) process.env.HARNESS_MEM_GUARD_BYTES = prevEnv;
     else delete process.env.HARNESS_MEM_GUARD_BYTES;
+    cleanup();
+  }
+});
+
+test("dispatch: runtime=opencode seeds opencode.json into the worktree on the real dispatch path (seedOpencodeRootConfig runs inside dispatch, not only in isolation)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({ permission: { external_directory: "allow", bash: { "*": "allow" } } })
+    );
+
+    // Spawn seam that REALLY runs the fs ops seedOpencodeRootConfig depends on: `git worktree add`
+    // creates the worktree path (mkdirSync) so seedOpencodeRootConfig has a real destination dir to
+    // copyFileSync into; `cp -a` copies `.opencode` when present. Everything else is a no-op.
+    const calls = [];
+    const spawn = (command, args = []) => {
+      calls.push({ command, args });
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+        mkdirSync(args[2], { recursive: true });
+      } else if (command === "cp") {
+        cpSync(args[1], args[2], { recursive: true });
+      }
+      return { ok: true };
+    };
+
+    dispatch(
+      { number: 279, body: "b" },
+      { ...baseOpts({ projectRoot, worktreeRoot, stateDir, spawn }), runtime: "opencode" }
+    );
+
+    const gitCall = calls.find((c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add");
+    assert.ok(gitCall, "dispatch must run `git worktree add`");
+    const worktreePath = gitCall.args[2];
+    assert.ok(
+      existsSync(join(worktreePath, "opencode.json")),
+      "seedOpencodeRootConfig must run on the real dispatch() path — opencode.json must exist in the worktree afterward, not only when seedOpencodeRootConfig is called in isolation"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("dispatch: with the default runtime (claude, runtime !== 'opencode'), the tmux spawn env and the scoped env-file carry no XDG_DATA_HOME and no HARNESS_OC_DATA_HOME (Claude path stays byte-identical — no OpenCode isolation leak)", () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const fake = makeFakeSpawn();
+    dispatch({ number: 314, body: "hi" }, baseOpts({ projectRoot, worktreeRoot, stateDir, spawn: fake.spawn }));
+
+    const tmuxCall = findTmuxCall(fake.calls);
+    assert.ok(tmuxCall, "dispatch must spawn the tmux session");
+    assert.equal(
+      "XDG_DATA_HOME" in (tmuxCall.env ?? {}),
+      false,
+      "the default (claude) runtime must never carry XDG_DATA_HOME into the tmux spawn's env"
+    );
+    assert.equal(
+      "HARNESS_OC_DATA_HOME" in (tmuxCall.env ?? {}),
+      false,
+      "the default (claude) runtime must never carry HARNESS_OC_DATA_HOME into the tmux spawn's env"
+    );
+
+    const envFiles = readdirSync(stateDir).filter((n) => n.startsWith("issue-314-env-"));
+    assert.ok(envFiles.length >= 1, "env-file must exist after a successful dispatch");
+    const envBody = readFileSync(join(stateDir, envFiles[0]), "utf8");
+    assert.equal(
+      envBody.includes("XDG_DATA_HOME"),
+      false,
+      "the scoped env-file must contain no XDG_DATA_HOME key for the default (claude) runtime"
+    );
+    assert.equal(
+      envBody.includes("HARNESS_OC_DATA_HOME"),
+      false,
+      "the scoped env-file must contain no HARNESS_OC_DATA_HOME key for the default (claude) runtime"
+    );
+  } finally {
     cleanup();
   }
 });

@@ -512,6 +512,54 @@ test("cronAExit: PR exists on harness/42 -> `gh label create harness:in-review -
   }
 });
 
+test("cronAExit: HARNESS_OC_DATA_HOME set to a real dir matching /oc-data-<digits>$/ is removed on exit cleanup, while a sibling dir whose name does NOT match the guard is left present on disk (fail-closed path guard never deletes a non-oc-data path)", () => {
+  const { stateDir, cleanup } = makeTempDirs();
+  const ocDataRoot = mkdtempSync(join(tmpdir(), "cron-a-exit-ocdata-"));
+  const ocDataDir = join(ocDataRoot, "oc-data-42");
+  const siblingDir = join(ocDataRoot, "oc-data-42-backup");
+  const previousOcDataHome = process.env.HARNESS_OC_DATA_HOME;
+  try {
+    mkdirSync(ocDataDir, { recursive: true });
+    mkdirSync(siblingDir, { recursive: true });
+    assert.ok(existsSync(ocDataDir), "precondition: the oc-data-<digits> dir exists before cronAExit runs");
+    assert.ok(existsSync(siblingDir), "precondition: the sibling non-matching dir exists before cronAExit runs");
+
+    process.env.HARNESS_OC_DATA_HOME = ocDataDir;
+
+    const { gh } = makeFakeGh();
+    const runLock = makeFakeRunLock();
+    const counter = makeFakeCounter({ 42: 0 });
+
+    cronAExit(
+      42,
+      "/fake/worktree",
+      join(stateDir, "issue-42-body.txt"),
+      join(stateDir, "issue-42-env.env"),
+      baseOpts({ stateDir, gh, runLock, counter, prExists: () => false, blockingFinding: () => null })
+    );
+
+    assert.equal(
+      existsSync(ocDataDir),
+      false,
+      "the oc-data-<digits> dir referenced by HARNESS_OC_DATA_HOME must be removed by exit cleanup"
+    );
+    assert.equal(
+      existsSync(siblingDir),
+      true,
+      "a sibling dir whose name does NOT match /oc-data-<digits>$/ must be left present on disk — " +
+        "the fail-closed path guard never deletes a non-oc-data path"
+    );
+  } finally {
+    if (previousOcDataHome === undefined) {
+      delete process.env.HARNESS_OC_DATA_HOME;
+    } else {
+      process.env.HARNESS_OC_DATA_HOME = previousOcDataHome;
+    }
+    rmSync(ocDataRoot, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
 test("notifyExit: 'done' outcome on the observability path keeps the forum topic OPEN (never calls closeForumTopic) and sets status 'awaiting-review'", async () => {
   const { runPath, cleanup } = makeObsRunPath();
   try {
