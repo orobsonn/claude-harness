@@ -347,6 +347,7 @@ export function defaultOcPluginPaths() {
     "./.opencode/plugin/obs-plan-write.ts",
     "./.opencode/plugin/obs-eye.ts",
     "./.opencode/plugin/obs-hand.ts",
+    "./.opencode/plugin/agent-idle-nudge.ts",
   ];
 }
 

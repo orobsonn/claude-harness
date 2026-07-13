@@ -485,7 +485,8 @@ const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/harvest-guard.ts",
   "./.opencode/plugin/obs-plan-write.ts",
   "./.opencode/plugin/obs-eye.ts",
-  "./.opencode/plugin/obs-hand.ts",
+    "./.opencode/plugin/obs-hand.ts",
+  "./.opencode/plugin/agent-idle-nudge.ts",
 ]);
 
 /**

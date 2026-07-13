@@ -611,6 +611,16 @@ test("all three plugin registration surfaces include the obs-eye dual-nudge carr
   assert.ok(fromRoot.includes("./.opencode/plugin/obs-eye.ts"));
 });
 
+test("lt-idle-four-surface-registration: defaultOcPluginPaths(), example plugin[], root opencode.json plugin[] ALL include `./.opencode/plugin/agent-idle-nudge.ts`", () => {
+  const fromFn = defaultOcPluginPaths();
+  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
+  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
+
+  assert.ok(fromFn.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+  assert.ok(fromExample.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+  assert.ok(fromRoot.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+});
+
 test("core/opencode/opencode.json.example sets permission.question deny and permission.external_directory allow", () => {
   const cfg = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8"));
 

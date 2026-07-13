@@ -266,6 +266,10 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] on a genuine double-f
       cfg.plugin.includes("./.opencode/plugin/obs-eye.ts"),
       "the canonical plugin list must include './.opencode/plugin/obs-eye.ts' even on a double-fault",
     );
+    assert.ok(
+      cfg.plugin.includes("./.opencode/plugin/agent-idle-nudge.ts"),
+      "double-fault seed must include agent-idle-nudge.ts in plugin[] (parity registration)",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
