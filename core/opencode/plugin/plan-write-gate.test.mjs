@@ -4,6 +4,9 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   decide,
   extractWritePath,
@@ -104,6 +107,18 @@ test("absolute path under .state hits oracle (deny)", () => {
   assert.equal(decide(absPlan).allow, true);
 });
 
+test("absolute path with decoy .opencode parent still hits .state oracle (deny)", () => {
+  // First .opencode is not plans/.state — must scan every segment, not only indexOf
+  const p = {
+    tool_input: {
+      file_path: "/tmp/.opencode/work/proj/.opencode/plans/.state/s/other.json",
+    },
+  };
+  const r = decide(p);
+  assert.equal(r.allow, false);
+  assert.match(r.reason ?? "", /\.state|harness markers/);
+});
+
 test("extractWritePath accepts OC filePath args", () => {
   assert.equal(
     extractWritePath({ args: { filePath: ".opencode/plans/.state/s/gate-state.json" } }),
@@ -181,4 +196,596 @@ test("hermetic plugin: OC write to gate-state throws; plan and normal file allow
       ),
     /\[plan-write-gate\]/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Scope rail locked tests (A3 parity for OC plan-write-decide + hook)
+// ---------------------------------------------------------------------------
+
+test("lt-scope-out-deny: active_dispatch scope_paths=['src/a.ts'] role executor, actingRole executor-high, isSubagent true, write src/b.ts → allow false, reason includes src/b.ts and scope", () => {
+  const payload = { tool_input: { file_path: "src/b.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "feat",
+      task_id: "t1",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, false);
+  assert.match(r.reason ?? "", /src\/b\.ts/);
+  assert.match(r.reason ?? "", /scope/);
+});
+
+test("lt-scope-in-allow: same, write src/a.ts → allow true", () => {
+  const payload = { tool_input: { file_path: "src/a.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "feat",
+      task_id: "t1",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, true);
+});
+
+test("lt-scope-file-not-prefix: scope ['src/a.ts'], write src/a.ts/evil.ts → allow false", () => {
+  const payload = { tool_input: { file_path: "src/a.ts/evil.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, false);
+});
+
+test("lt-scope-dir-prefix-allow: scope ['src/lib'] or ['src/lib/'], write src/lib/foo.ts → allow true", () => {
+  const gateStateDir = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/lib"],
+      allowed_writes: [],
+    },
+  };
+  const gateStateDirSlash = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/lib/"],
+      allowed_writes: [],
+    },
+  };
+  const p = { tool_input: { file_path: "src/lib/foo.ts" } };
+  assert.equal(
+    decide(p, { gateState: gateStateDir, actingRole: "executor-high", isSubagent: true }).allow,
+    true,
+  );
+  assert.equal(
+    decide(p, { gateState: gateStateDirSlash, actingRole: "executor-high", isSubagent: true }).allow,
+    true,
+  );
+});
+
+test("lt-scope-family-match: ad.role='executor', acting executor-high, out of scope → deny", () => {
+  const payload = { tool_input: { file_path: "src/b.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, false);
+});
+
+test("lt-scope-role-mismatch-failopen: ad.role sniper, acting executor, out of sniper scope → allow true", () => {
+  const payload = { tool_input: { file_path: "src/b.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "sniper",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/fix.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor", isSubagent: true });
+  assert.equal(r.allow, true);
+});
+
+test("lt-scope-no-dispatch-failopen: no active_dispatch → allow true for src/anywhere.ts", () => {
+  const payload = { tool_input: { file_path: "src/anywhere.ts" } };
+  const r = decide(payload, { gateState: {}, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, true);
+});
+
+test("lt-anti-forge-still-denies: armed scope that includes gate-state path, write gate-state.json → deny anti-forge reason", () => {
+  const payload = {
+    tool_input: { file_path: ".opencode/plans/.state/ses/gate-state.json" },
+  };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: [".opencode/plans/.state/ses/gate-state.json"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, false);
+  assert.match(r.reason ?? "", /gate-state|harness markers/);
+});
+
+test("lt-allowed-writes-allow: scope src/a.ts, allowed_writes docs/x.md, write docs/x.md → allow true", () => {
+  const payload = { tool_input: { file_path: "docs/x.md" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: ["docs/x.md"],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, true);
+});
+
+test("lt-scope-path-normalize-escape: scope ['src/lib'], write src/lib/../b.ts → allow false", () => {
+  const payload = { tool_input: { file_path: "src/lib/../b.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "f",
+      task_id: "t",
+      scope_paths: ["src/lib"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  assert.equal(r.allow, false);
+});
+
+test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope/gate-state.json containing active_dispatch; createPlanWriteGateHooks(projectRoot); tool.execute.before write src/b.ts with session + role context → throws [plan-write-gate]; write src/a.ts → no throw", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-scope-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_scope");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-scope",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+    assert.equal(typeof before, "function");
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_scope",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+
+    await assert.doesNotReject(() =>
+      before(
+        {
+          tool: "write",
+          sessionID: "ses_scope",
+          agent: "executor-high",
+        },
+        {
+          args: {
+            filePath: "src/a.ts",
+            content: "x",
+          },
+        },
+      ),
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test("lt-factory-hook-input-agent-no-subagent_type: armed dispatch + Write args only filePath src/b.ts + input.agent executor-high (no subagent_type on args) → deny out-of-scope", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-agent-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_agent");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-agent",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_agent",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// HIGH sniper re-gate: role spoof (A), case-sensitive scope (B), agent_id-only (C)
+// ---------------------------------------------------------------------------
+
+test("lt-scope-role-spoof-compliance-args: input.agent=executor-high + args.subagent_type=compliance + armed + write src/b.ts → DENY (not fail-open)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-spoof-c-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_spoof_c");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-spoof",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_spoof_c",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+              subagent_type: "compliance",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test("lt-scope-role-spoof-sniper-args: input.agent=executor-high + args.subagent_type=sniper-high + armed + write src/b.ts → DENY (no family-mismatch fail-open from spoofed args)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-spoof-s-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_spoof_s");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-spoof-s",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_spoof_s",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+              subagent_type: "sniper-high",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test("lt-scope-case-sensitive-deny: scope ['src/a.ts'], write 'SRC/A.TS' → deny when rail armed", () => {
+  const payload = { tool_input: { file_path: "SRC/A.TS" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "feat-case",
+      task_id: "t1",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, {
+    gateState,
+    actingRole: "executor-high",
+    isSubagent: true,
+  });
+  assert.equal(r.allow, false);
+  assert.match(r.reason ?? "", /SRC\/A\.TS|scope|OUTSIDE/i);
+});
+
+test("lt-scope-agent-id-only-no-role: isSubagent true + empty actingRole + armed executor dispatch + write src/b.ts → DENY (no fail-open)", () => {
+  const payload = { tool_input: { file_path: "src/b.ts" } };
+  const gateState = {
+    active_dispatch: {
+      role: "executor",
+      feature_id: "feat-id-only",
+      task_id: "t1",
+      scope_paths: ["src/a.ts"],
+      allowed_writes: [],
+    },
+  };
+  const r = decide(payload, {
+    gateState,
+    actingRole: "",
+    isSubagent: true,
+  });
+  assert.equal(r.allow, false);
+  assert.match(r.reason ?? "", /identity|acting role|agent_id/i);
+});
+
+test("lt-factory-hook-agent-id-only: input.agent_id only (no role) + armed executor + write src/b.ts → deny", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-id-only-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_id_only");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-id-only",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_id_only",
+            agent_id: "ag_sub_1",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test("lt-factory-hook-agent-id-only-spoof-args-sniper: input.agent_id only + args.subagent_type=sniper-high + armed executor + write src/b.ts → DENY (args cannot set actingRole)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-id-spoof-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_id_spoof");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-id-spoof",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_id_spoof",
+            agent_id: "ag_sub_spoof",
+          },
+          {
+            args: {
+              filePath: "src/b.ts",
+              content: "x",
+              subagent_type: "sniper-high",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,src/a.ts) allow; absolute out-of-scope deny", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-abs-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_abs");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        active_dispatch: {
+          role: "executor",
+          feature_id: "feat-abs",
+          task_id: "t1",
+          scope_paths: ["src/a.ts"],
+          allowed_writes: [],
+        },
+      }),
+      "utf8",
+    );
+    const hooks = await createPlanWriteGateHooks(root);
+    const before = hooks["tool.execute.before"];
+
+    await assert.doesNotReject(() =>
+      before(
+        {
+          tool: "write",
+          sessionID: "ses_abs",
+          agent: "executor-high",
+        },
+        {
+          args: {
+            filePath: path.join(root, "src", "a.ts"),
+            content: "x",
+          },
+        },
+      ),
+    );
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_abs",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: path.join(root, "src", "b.ts"),
+              content: "x",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+
+    await assert.rejects(
+      () =>
+        before(
+          {
+            tool: "write",
+            sessionID: "ses_abs",
+            agent: "executor-high",
+          },
+          {
+            args: {
+              filePath: "/tmp/outside-project/evil.ts",
+              content: "x",
+            },
+          },
+        ),
+      /\[plan-write-gate\]/,
+    );
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
 });

@@ -6,6 +6,9 @@ temperature: 0.3
 permission:
   edit: deny
   bash: deny
+  webfetch: deny
+  websearch: deny
+  task: deny
 ---
 
 # Adversary (primary — Grok)
