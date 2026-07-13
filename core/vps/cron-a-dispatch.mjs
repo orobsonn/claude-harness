@@ -762,14 +762,21 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
   }
 
   // Monorepo plugins import core/shared via relative paths; vendor layout needs .opencode/shared.
-  // Vendored source already carries shared/ (or already-rewritten imports) — copy if present.
+  // Fail-closed if shared cannot be materialized — entry-gate/plan-gate load would throw at import
+  // time while plugin[] still "exists" (same class as #315: path present, gate dead).
   const sharedFromVendor = join(openCodeSrc, "shared");
-  if (sourceKind === "monorepo" && existsSync(sharedSrc)) {
+  const sharedMarker = join(ocDir, "shared", "lib", "path-helpers.mjs");
+  if (sourceKind === "monorepo") {
+    if (!existsSync(sharedSrc)) {
+      throw new Error(
+        `OC runtime materialize failed: monorepo source lacks core/shared ` +
+          `(gates import shared libs; headless would load dead plugins). ` +
+          `Expected: ${sharedSrc}`,
+      );
+    }
     copyOcRuntimeTree(sharedSrc, join(ocDir, "shared"), "shared");
   } else if (existsSync(sharedFromVendor)) {
     copyOcRuntimeTree(sharedFromVendor, join(ocDir, "shared"), "shared");
-  } else if (sourceKind === "monorepo") {
-    // Plugins that import shared would break; still require critical paths below.
   }
 
   const stillMissing = firstMissingOcCritical(ocDir);
@@ -777,6 +784,12 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     throw new Error(
       `OC runtime materialize incomplete under worktree .opencode (fail-closed). ` +
         `Missing critical: ${stillMissing}. Source was ${sourceKind} (${openCodeSrc}).`,
+    );
+  }
+  if (sourceKind === "monorepo" && !existsSync(sharedMarker)) {
+    throw new Error(
+      `OC runtime materialize incomplete: shared libs missing after copy ` +
+        `(expected ${sharedMarker}). Gates would fail on import.`,
     );
   }
 

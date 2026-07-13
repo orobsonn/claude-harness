@@ -197,6 +197,9 @@ function plantMonorepoOcPlugins(root) {
   writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
   mkdirSync(join(oc, "agents"), { recursive: true });
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  const sharedLib = join(root, "core", "shared", "lib");
+  mkdirSync(sharedLib, { recursive: true });
+  writeFileSync(join(sharedLib, "path-helpers.mjs"), "export const x = 1;\n", "utf8");
 }
 
 

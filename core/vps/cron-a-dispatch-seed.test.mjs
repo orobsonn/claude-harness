@@ -113,7 +113,8 @@ function makeSeedDirs(prefix, opts = {}) {
   mkdirSync(projectRoot, { recursive: true });
   mkdirSync(worktree, { recursive: true });
   if (!opts.bare) {
-    writeMinimalOcRuntime(projectRoot);
+    // Default monorepo fixture includes shared — materialize fail-closes without it.
+    writeMinimalOcRuntime(projectRoot, { withSharedImport: true });
   }
   return { root, projectRoot, worktree };
 }
@@ -442,13 +443,15 @@ test("seedOpencodeRootConfig: no runtime source anywhere → throws fail-closed 
   }
 });
 
-test("seedOpencodeRootConfig: consumer vendored .opencode preserved + canonical plugin[] (#ac-1.5)", () => {
+test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned + canonical plugin[] (#ac-1.5)", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-", { bare: true });
   try {
     writeVendoredOcRuntime(projectRoot);
-    // Simulate cp -a of consumer .opencode into worktree
+    writeFileSync(join(projectRoot, ".opencode", "plugin", "entry-gate.ts"), "// source-of-truth\n", "utf8");
+    // Worktree has stale framework file + a non-framework extra that must survive merge-copy
     writeVendoredOcRuntime(worktree);
-    writeFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "// consumer-marker\n", "utf8");
+    writeFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "// stale-worktree\n", "utf8");
+    writeFileSync(join(worktree, ".opencode", "plugin", "local-extra.ts"), "// project-local\n", "utf8");
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
@@ -464,8 +467,16 @@ test("seedOpencodeRootConfig: consumer vendored .opencode preserved + canonical 
     ]);
     assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
     assertCriticalRuntime(worktree);
-    // Re-sync from projectRoot vendored source is OK; files must still exist
-    assert.equal(existsSync(join(worktree, ".opencode", "skills", "triaging-requests", "SKILL.md")), true);
+    assert.equal(
+      readFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "utf8"),
+      "// source-of-truth\n",
+      "framework-owned files re-sync from projectRoot vendored source (intentional overwrite)",
+    );
+    assert.equal(
+      existsSync(join(worktree, ".opencode", "plugin", "local-extra.ts")),
+      true,
+      "non-framework extra under .opencode/plugin survives merge-copy",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -481,6 +492,21 @@ test("materializeOpencodeRuntime: rewrites monorepo shared imports + copies shar
     assert.ok(entry.includes("../shared/lib/path-helpers.mjs"), "import must target vendored shared");
     assert.ok(!entry.includes("../../shared/"), "monorepo ../../shared must be rewritten");
     assert.equal(existsSync(join(worktree, ".opencode", "shared", "lib", "path-helpers.mjs")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: monorepo critical without core/shared → throws fail-closed (gates would be dead)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-no-shared-", { bare: true });
+  try {
+    writeMinimalOcRuntime(projectRoot, { withSharedImport: false });
+    // Deliberately no core/shared — critical skills/plugins alone must not pass materialize.
+    assert.equal(existsSync(join(projectRoot, "core", "shared")), false);
+    assert.throws(
+      () => materializeOpencodeRuntime(worktree, projectRoot),
+      /core\/shared|shared libs missing|dead plugins/i,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
