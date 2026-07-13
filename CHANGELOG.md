@@ -5,6 +5,17 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.43.0](https://github.com/orobsonn/claude-harness/compare/v0.42.0...v0.43.0) (2026-07-13)
+
+
+### Features
+
+* **oc:** cinto de observabilidade mid-run → Telegram ([#287](https://github.com/orobsonn/claude-harness/issues/287)) ([9d6d40d](https://github.com/orobsonn/claude-harness/commit/9d6d40d813d929a62ea772be8f609027b5c2c92f))
+* **oc:** oc-headless-rails — nudges + permissões headless ([#289](https://github.com/orobsonn/claude-harness/issues/289)) ([2ba1205](https://github.com/orobsonn/claude-harness/commit/2ba12058472a3c1c4f99869997299f6831b49608))
+* **oc:** oc-port-closeout — skills parity + auto-merge T14 fail-closed gate ([#290](https://github.com/orobsonn/claude-harness/issues/290)) ([9d63d7a](https://github.com/orobsonn/claude-harness/commit/9d63d7a551d39da5d39db24290560611a517240b))
+* **oc:** paridade de prosa CC→OC (triagem investiga antes de classificar) ([#294](https://github.com/orobsonn/claude-harness/issues/294)) ([d21fe5d](https://github.com/orobsonn/claude-harness/commit/d21fe5d20131912fed8716d2597f1d50fa9a7f79))
+* **oc:** plan-write-gate live + bash forge wall endurecido ([#292](https://github.com/orobsonn/claude-harness/issues/292)) ([953373c](https://github.com/orobsonn/claude-harness/commit/953373cb6b874ede3cdcaf615e9caf24ec41600d))
+
 ## [0.42.0](https://github.com/orobsonn/claude-harness/compare/v0.41.0...v0.42.0) (2026-07-12)
 
 
