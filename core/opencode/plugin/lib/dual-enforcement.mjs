@@ -550,6 +550,11 @@ export function loadGateStateFromDisk(projectRoot, opts = {}) {
     /** @param {string} p */
     function readStateFile(p) {
       try {
+        if (!fs.existsSync(p)) {
+          // Missing file = empty ceremony (not yet classified), not infra failure.
+          // Fail-closed on dual/plan still applies via empty dual_status / missing plan.
+          return { ok: true, state: {}, path: p };
+        }
         const raw = fs.readFileSync(p, "utf8");
         const state = JSON.parse(raw);
         if (state == null || typeof state !== "object" || Array.isArray(state)) {

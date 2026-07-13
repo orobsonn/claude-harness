@@ -71,6 +71,18 @@ Compliance and security are **single-eye** by default (OpenAI evaluator family) 
 
 Read all rules from project `AGENTS.md` and nested folder law. Prefer project-vendored `.opencode/` over global `~/.config/opencode` after cutover. **Never** read harness orchestration from `~/.claude`.
 
+## OC ceremony paths (HARD — wrong path = silent ceremony miss)
+
+Under OpenCode, **gate-state lives only under `.opencode/`**. Never run Claude-Code marker CLIs:
+
+| Wrong (CC — does NOT stamp OC) | Right (OC) |
+|---|---|
+| `node .claude/hooks/classify.mjs …` | native tool **`classify({ mode, feature_id })`** |
+| `node .claude/hooks/mark.mjs …` | `node .opencode/plugin/lib/mark-gate.mjs … --session <sessionID>` |
+| plans under `.claude/plans/…` | `.opencode/plans/<sessionID>-<feature_id>/` |
+
+The entry-gate **denies** CC marker CLIs. If you see that deny, switch to the OC row — do not retry the CC path.
+
 ---
 
 # (B) TRIAGE — entry gate

@@ -413,7 +413,9 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
     const missing = loadGateStateFromDisk(root, {
       sessionId: "ses_doesNotExist999",
     });
-    assert.equal(missing.ok, false);
+    // Missing file = empty ceremony state (not infra unreadable)
+    assert.equal(missing.ok, true);
+    assert.deepEqual(missing.state, {});
 
     const allowed = enforceDualFromDiskOrThrow("[plan-gate]", {
       projectRoot: root,
@@ -435,9 +437,10 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
     } catch (err) {
       threw = true;
       assert.ok(err instanceof Error);
-      assert.match(err.message, /\[entry-gate\].*gate-state-unreadable/i);
+      // Empty missing gate-state → dual_status missing (ceremony fail), not unreadable
+      assert.match(err.message, /\[entry-gate\].*(dual_status|missing)/i);
     }
-    assert.equal(threw, true, "expected throw on missing gate-state");
+    assert.equal(threw, true, "expected throw on empty dual ceremony");
   } finally {
     try {
       fs.rmSync(root, { recursive: true, force: true });
