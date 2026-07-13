@@ -1,13 +1,18 @@
 /**
- * @description Pure decide for OC plan-write-gate (LIGHT: state anti-forge only).
+ * @description Pure decide for OC plan-write-gate: anti-forge + optional scope rail.
  * Denies Write/Edit to gate-state.json, triage.json, and any JSON under
  * .opencode/plans/.state/ — absolute or relative. Does NOT deny execution-plan.json
  * (orchestrator/build may author the plan via Write or bash; bash forge is separate).
  * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
- * Fail-open only on non-oracle infra shape errors.
+ * Anti-forge is fail-closed (outside soft catch). Scope rail fail-opens when context
+ * is incomplete or on rail errors; armed active_dispatch denies executor/sniper
+ * subagent writes outside scope_paths ∪ allowed_writes (family match). Under an
+ * armed hand dispatch, subagent writes with empty/non-hand actingRole are denied
+ * (cannot verify identity — no fail-open on agent_id-only).
  */
 
 import path from "node:path";
+import { isExecutorRole, isSniperRole } from "./roles.mjs";
 
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 /** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */
@@ -82,8 +87,17 @@ function isStateFilePath(filePath) {
   const segs = pathSegments(filePath);
   if (segs.length === 0) return false;
   if (!segs[segs.length - 1].endsWith(".json")) return false;
-  const ci = segs.indexOf(".opencode");
-  return ci !== -1 && segs[ci + 1] === "plans" && segs[ci + 2] === ".state";
+  // Every segment: first .opencode may be a decoy parent (e.g. /tmp/.opencode/work/proj/...)
+  for (let i = 0; i < segs.length - 2; i++) {
+    if (
+      segs[i] === ".opencode" &&
+      segs[i + 1] === "plans" &&
+      segs[i + 2] === ".state"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -160,56 +174,213 @@ export function extractWritePath(payload) {
 }
 
 /**
+ * @description Normalize path for scope compare: backslash→slash, posix normalize.
+ * Case-sensitive (Linux) — do not lower-case; role folding lives in roles.mjs only.
+ * @param {unknown} p
+ * @returns {string}
+ */
+export function normalizeScopePath(p) {
+  if (typeof p !== "string" || p.length === 0) return "";
+  return path.posix.normalize(p.replace(/\\/g, "/"));
+}
+
+/**
+ * @description True iff file is inside scope entry — exact always; directory prefix only
+ * when entry ends with `/` OR has no file extension. File entries are exact-only
+ * (src/a.ts does not contain src/a.ts/evil.ts).
+ * @param {unknown} filePath
+ * @param {unknown} entry
+ * @returns {boolean}
+ */
+export function scopeContains(filePath, entry) {
+  if (typeof filePath !== "string" || typeof entry !== "string") return false;
+  if (filePath.length === 0 || entry.length === 0) return false;
+
+  const entryRaw = entry.replace(/\\/g, "/");
+  const hadTrailingSlash = entryRaw.endsWith("/");
+  const normFile = normalizeScopePath(filePath);
+  const normEntry = normalizeScopePath(entry);
+  if (normFile.length === 0 || normEntry.length === 0) return false;
+
+  // Exact match always (after normalize — catches .. that collapses to the entry).
+  if (normFile === normEntry) return true;
+
+  // Directory prefix only when trailing slash OR no extension.
+  const isDir =
+    hadTrailingSlash ||
+    normEntry.endsWith("/") ||
+    path.extname(normEntry) === "";
+  if (!isDir) return false;
+
+  const prefix = normEntry.endsWith("/") ? normEntry : `${normEntry}/`;
+  return normFile.startsWith(prefix);
+}
+
+/**
+ * @description Same hand family (executor* or sniper*) — not exact string equality.
+ * @param {unknown} actingRole
+ * @param {unknown} dispatchRole
+ * @returns {boolean}
+ */
+function sameHandFamily(actingRole, dispatchRole) {
+  if (isExecutorRole(actingRole) && isExecutorRole(dispatchRole)) return true;
+  if (isSniperRole(actingRole) && isSniperRole(dispatchRole)) return true;
+  return false;
+}
+
+/**
+ * @description Scope rail: deny out-of-scope executor/sniper subagent writes when
+ * active_dispatch is armed. Returns null when rail is off / allow; Decision when deny.
+ * Fail-open (null) on incomplete context. Under armed hand dispatch, empty/non-hand
+ * actingRole on a subagent is DENY (identity unverifiable). Never throws to caller.
+ * @param {string} filePath
+ * @param {{
+ *   gateState?: unknown,
+ *   actingRole?: unknown,
+ *   isSubagent?: unknown,
+ * }} opts
+ * @returns {Decision | null}
+ */
+function decideScopeRail(filePath, opts) {
+  if (opts.isSubagent !== true) return null;
+
+  const gateState = opts.gateState;
+  if (gateState == null || typeof gateState !== "object" || Array.isArray(gateState)) {
+    return null;
+  }
+  const ad = /** @type {Record<string, unknown>} */ (gateState).active_dispatch;
+  if (ad == null || typeof ad !== "object" || Array.isArray(ad)) return null;
+
+  const adObj = /** @type {Record<string, unknown>} */ (ad);
+  // Rail only arms for hand-family dispatches with non-empty scope.
+  if (!isExecutorRole(adObj.role) && !isSniperRole(adObj.role)) return null;
+
+  const scopePathsRaw = adObj.scope_paths;
+  if (!Array.isArray(scopePathsRaw) || scopePathsRaw.length === 0) return null;
+  const scopePaths = scopePathsRaw.filter((s) => typeof s === "string" && s.length > 0);
+  if (scopePaths.length === 0) return null;
+
+  const actingRole = opts.actingRole;
+  const actingIsHand =
+    isExecutorRole(actingRole) || isSniperRole(actingRole);
+
+  // Armed hand rail + subagent without verifiable hand identity → DENY (no fail-open).
+  if (!actingIsHand) {
+    const featureId =
+      typeof adObj.feature_id === "string" ? adObj.feature_id : "?";
+    const taskId = typeof adObj.task_id === "string" ? adObj.task_id : "?";
+    return {
+      allow: false,
+      reason:
+        `${PREFIX} Blocked: subagent write to '${filePath}' under armed hand dispatch ` +
+        `(${featureId}/${taskId}) cannot verify acting role identity. ` +
+        `Refusing fail-open when only agent_id (or non-hand role) is present.`,
+    };
+  }
+
+  // Family mismatch still fail-open (different hand family is not this rail's subject).
+  if (!sameHandFamily(actingRole, adObj.role)) return null;
+
+  const allowedWritesRaw = adObj.allowed_writes;
+  const allowedWrites = Array.isArray(allowedWritesRaw)
+    ? allowedWritesRaw.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+
+  const inScope = scopePaths.some((s) => scopeContains(filePath, s));
+  const inAllowed = allowedWrites.some((s) => scopeContains(filePath, s));
+  if (inScope || inAllowed) return null;
+
+  const roleLabel = isSniperRole(actingRole) ? "sniper" : "executor";
+  const featureId =
+    typeof adObj.feature_id === "string" ? adObj.feature_id : "?";
+  const taskId = typeof adObj.task_id === "string" ? adObj.task_id : "?";
+  const scopeList = scopePaths.join(", ");
+  const allowedSuffix =
+    allowedWrites.length > 0
+      ? ` (plus allowed writes: ${allowedWrites.join(", ")})`
+      : "";
+
+  return {
+    allow: false,
+    reason:
+      `${PREFIX} Blocked: ${roleLabel} hand write to '${filePath}' is OUTSIDE its dispatch scope. ` +
+      `The active dispatch (${featureId}/${taskId}) is scoped to: ${scopeList}` +
+      `${allowedSuffix}. Stay inside scope_paths, or fold this path into the plan's scope deliberately before writing it.`,
+  };
+}
+
+/**
  * @typedef {{ allow: boolean, reason?: string }} Decision
  */
 
 /**
+ * @description Anti-forge first (fail-closed), then optional scope rail (fail-open).
  * @param {unknown} payload
+ * @param {{
+ *   gateState?: unknown,
+ *   actingRole?: unknown,
+ *   isSubagent?: unknown,
+ * }} [opts]
  * @returns {Decision}
  */
-export function decide(payload) {
-  try {
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-      return { allow: true };
-    }
-    const filePath = extractWritePath(payload);
-    // Fail-closed: write/edit with unparseable path must not silently forge.
-    if (!filePath) {
-      return {
-        allow: false,
-        reason: `${PREFIX} Blocked: write/edit path missing — cannot validate anti-forge oracle.`,
-      };
-    }
-    const carved = isCarvedOut(filePath);
-    if (!carved && isForbiddenStateBasename(filePath)) {
-      return {
-        allow: false,
-        reason: `${PREFIX} Blocked: gate-state/triage written ONLY by harness markers, never Write/Edit.`,
-      };
-    }
-    if (!carved && isStateFilePath(filePath)) {
-      return {
-        allow: false,
-        reason: `${PREFIX} Blocked: .opencode/plans/.state/ JSONs written ONLY by harness markers.`,
-      };
-    }
-    if (!carved && isMarkerScriptPath(filePath)) {
-      return {
-        allow: false,
-        reason: `${PREFIX} Blocked: harness marker scripts (mark-gate/mark/classify) are read-only via Write/Edit.`,
-      };
-    }
-    if (!carved && isFrozenToolingPath(filePath)) {
-      return {
-        allow: false,
-        reason: `${PREFIX} Blocked: allowlisted tooling scripts are read-only via Write/Edit (anti-forgery).`,
-      };
-    }
-    // execution-plan.json is allowed (LIGHT model C — orchestrator may author plan)
-    return { allow: true };
-  } catch {
+export function decide(payload, opts = {}) {
+  // --- Anti-forge: fail-closed, outside soft catch ---
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { allow: true };
   }
+  const filePath = extractWritePath(payload);
+  // Fail-closed: write/edit with unparseable path must not silently forge.
+  if (!filePath) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: write/edit path missing — cannot validate anti-forge oracle.`,
+    };
+  }
+  const carved = isCarvedOut(filePath);
+  if (!carved && isForbiddenStateBasename(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: gate-state/triage written ONLY by harness markers, never Write/Edit.`,
+    };
+  }
+  if (!carved && isStateFilePath(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: .opencode/plans/.state/ JSONs written ONLY by harness markers.`,
+    };
+  }
+  if (!carved && isMarkerScriptPath(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: harness marker scripts (mark-gate/mark/classify) are read-only via Write/Edit.`,
+    };
+  }
+  if (!carved && isFrozenToolingPath(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: allowlisted tooling scripts are read-only via Write/Edit (anti-forgery).`,
+    };
+  }
+
+  // --- Scope rail: fail-open on incomplete context or rail errors ---
+  try {
+    // Prefer opts.gateState; allow payload.gateState as secondary injection surface.
+    const p = /** @type {Record<string, unknown>} */ (payload);
+    const gateState =
+      opts.gateState !== undefined ? opts.gateState : p.gateState;
+    const scopeDeny = decideScopeRail(filePath, {
+      gateState,
+      actingRole: opts.actingRole,
+      isSubagent: opts.isSubagent,
+    });
+    if (scopeDeny) return scopeDeny;
+  } catch {
+    // scope_rail_errors_fail_open
+    return { allow: true };
+  }
+
+  // execution-plan.json is allowed (LIGHT model C — orchestrator may author plan)
+  return { allow: true };
 }
 
 /**

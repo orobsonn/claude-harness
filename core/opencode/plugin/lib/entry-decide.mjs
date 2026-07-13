@@ -8,6 +8,7 @@ import {
   isPlannerRole,
   isTestAuthorRole,
   isAdversaryRole,
+  isQuickCeremonyBlockedRole,
 } from "./roles.mjs";
 
 /**
@@ -77,6 +78,16 @@ export function decideEntryTask(input = {}) {
         decision: "deny",
         reason:
           "[entry-gate] Blocked: ceremony missing — run triaging-requests and classify before dispatching delivery agents.",
+      };
+    }
+
+    // QUICK/no-ceremony backstop: block the four roles (compliance etc); executor exempt
+    const modeNorm = String(gs.mode || "").trim().toLowerCase();
+    if ((modeNorm === "quick" || modeNorm === "no-ceremony") && isQuickCeremonyBlockedRole(sub)) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `[entry-gate] Blocked: ${modeNorm} forbids ${sub} (compliance/security/harvester/shipper require LIGHT/FULL).`,
       };
     }
 

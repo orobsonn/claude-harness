@@ -97,3 +97,13 @@ export function isAdversaryRole(subagentType) {
 export function isPlannerRole(subagentType) {
   return bareRole(subagentType) === "planner";
 }
+
+/**
+ * @description Roles blocked under QUICK/no-ceremony (eyes that require full ceremony).
+ * @param {unknown} subagentType
+ * @returns {boolean}
+ */
+export function isQuickCeremonyBlockedRole(subagentType) {
+  const bare = bareRole(subagentType);
+  return ["compliance", "security", "harvester", "shipper"].includes(bare);
+}

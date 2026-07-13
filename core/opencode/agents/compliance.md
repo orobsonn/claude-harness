@@ -6,6 +6,9 @@ temperature: 0.1
 permission:
   edit: deny
   bash: allow
+  webfetch: deny
+  websearch: deny
+  task: deny
 ---
 
 # Compliance

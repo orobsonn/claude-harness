@@ -525,3 +525,59 @@ test("gate-state is disk-backed (not Map-only): second process sees markers", as
     assert.deepEqual(raw.fidelity_pass, ["f/t"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// lt- quick/no-ceremony backstop for four roles (compliance etc) + executor carve-out
+// (locked per gate-parity spec; do not weaken)
+// ---------------------------------------------------------------------------
+
+test("lt-quick-no-ceremony-four-roles-matrix: QUICK/quick/no-ceremony + classified → compliance/security/harvester/shipper all deny", () => {
+  const modes = ["QUICK", "quick", "no-ceremony"];
+  const roles = ["compliance", "security", "harvester", "shipper"];
+  for (const mode of modes) {
+    for (const role of roles) {
+      const d = decideEntryTask({
+        subagentType: role,
+        gateState: { mode, classified: true },
+      });
+      assert.equal(d.decision, "deny");
+    }
+  }
+});
+
+test("lt-full-four-roles-allow: FULL/full + classified → the four roles allow", () => {
+  const modes = ["FULL", "full"];
+  const roles = ["compliance", "security", "harvester", "shipper"];
+  for (const mode of modes) {
+    for (const role of roles) {
+      const d = decideEntryTask({
+        subagentType: role,
+        gateState: { mode, classified: true },
+      });
+      assert.equal(d.decision, "allow");
+    }
+  }
+});
+
+test("lt-ceremony-missing-still-deny: empty gateState + compliance → deny with ceremony-missing reason (existing behavior preserved)", () => {
+  const d = decideEntryTask({
+    subagentType: "compliance",
+    gateState: {},
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /ceremony missing/);
+});
+
+test("lt-quick-executor-still-allow: QUICK + classified + fidelity_pass allows executor-medium (executor not blocked by four-role backstop)", () => {
+  const d = decideEntryTask({
+    subagentType: "executor-medium",
+    gateState: {
+      mode: "QUICK",
+      classified: true,
+      fidelity_pass: ["feat/t1"],
+    },
+    featureId: "feat",
+    taskId: "t1",
+  });
+  assert.equal(d.decision, "allow");
+});
