@@ -12,12 +12,18 @@ metadata:
 
 Turn an idea (issue, request) into a fully-formed design and spec through natural collaborative dialogue **with the operator**.
 
-This skill runs inside the `build` (primary) agent — it asks the operator and waits for answers. It is **never** run in a headless subagent. Its output is the approved spec that Phase 1 hands to the `planner`.
+This skill runs inside the `build` (primary) agent. Its output is the approved (or multi-agent-validated) spec that Phase 1 hands to the `planner`.
 
-Start by understanding the current project context, then ask questions **one at a time** to refine the idea. Once you understand what you're building, present the design and get operator approval.
+## Interactive vs headless
+
+- **INTERACTIVE:** ask the operator **one question at a time**; present design; wait for approval.
+- **HEADLESS** (autonomous / VPS cron / `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / trigger says "without asking"): **do not wait for a human**. Simulate exploration with **read-only** investigation + optional fan-out `task` exploration lenses (user-journeys, edge-cases, constraints), synthesize a spec from the trigger + codebase, then run **spec-adversary** (`adversary` dual if configured). If blocking product decisions cannot be resolved from the trigger, stop and comment on the issue/PR — do not invent product judgments silently.
+
+Start by understanding the current project context (files, MEMORY, AGENTS). Interactive: refine with the operator. Headless: refine from trigger + investigation.
 
 <HARD-GATE>
-Do NOT produce a final spec, dispatch the planner, write code, or take any implementation action until you have presented a design and the operator has approved it. This applies to EVERY task regardless of perceived simplicity.
+**INTERACTIVE:** Do NOT produce a final spec, dispatch the planner, write code, or implement until you have presented a design and the operator has approved it.
+**HEADLESS:** Do NOT dispatch the planner until a written spec exists AND the upfront adversary pass has run (blocking issues stop the run). Operator approval is replaced by multi-agent validation — never "auto-approve blindly" without investigation + adversary.
 </HARD-GATE>
 
 ## Why this exists (the root failure it prevents)
@@ -75,13 +81,15 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 
 Fix issues inline; no need to re-review.
 
-**Operator Review Gate:**
+**Operator Review Gate (INTERACTIVE only):**
 > "Spec written and committed to `<path>`. Please review it and tell me if you want changes before we write the implementation plan."
 
 Wait for the operator. If they request changes, make them and re-run the spec review. Only proceed once approved.
 
+**HEADLESS:** skip the wait. After self-review + adversary on the spec, stamp brainstorm/spec markers (`mark-gate brainstormed` / adversary_fired as required by entry-gate) and hand off to Phase 1.
+
 **Transition:**
-- Hand the approved spec to `build` Phase 1 (the `planner` dispatch). Do NOT invoke any other skill.
+- Hand the approved (or headless-validated) spec to `build` Phase 1 (the `planner` dispatch). Do NOT invoke any other skill.
 
 ## Key Principles
 

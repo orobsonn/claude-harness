@@ -44,6 +44,25 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 
 ---
 
+## Interactive vs headless
+
+Detect **first** (same signals as `triaging-requests`):
+
+- **HEADLESS** when the trigger says autonomous / VPS cron, or `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / `$CLAUDE_CODE_REMOTE` is set.
+- Otherwise **INTERACTIVE**.
+
+| Touchpoint | INTERACTIVE | HEADLESS |
+|---|---|---|
+| Brainstorm / spec | `brainstorming` with operator | exploration + synthesize + **spec adversary** — never wait |
+| HARD-GATE 1 (spec) | operator confirms | adversary clean → proceed; write spec into PR body |
+| HARD-GATE 2 (plan) | operator confirms | `plan-reviewer` dual **APPROVE** is the gate |
+| HARD-GATE 3 (demo) | operator tests | auto-validate ACs; attach to PR |
+| Delivery | merge on operator OK | **draft PR only — never merge** |
+
+**Headless golden rules:** never block on questions; never invent product decisions when the trigger is silent (stop + comment); never skip dual eyes when configured; never dispatch `executor-*` until a **full** plan (not classify stub) exists and plan-gate allows.
+
+---
+
 ## Dispatchable subagents (exact names only)
 
 | Role | Exact `subagent_type` names |
@@ -102,10 +121,12 @@ Never use the edit tool.
 
 1. Read the native durable index — global/project `AGENTS.md` and any root router table (folder → what lives there). This is your macro view.
    - **Cold-start check:** if this is a non-trivial existing codebase and the index is cold (no entries in MEMORY.md, root router unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code, then read the now-populated index before shaping the spec.
-2. **Load and follow the `brainstorming` skill.** It elicits the operator's non-codifiable decisions one question at a time, proposes 2–3 approaches, presents the design for approval, and produces the spec (`#uj-N` user journeys, `#ac-N.M` acceptance criteria, constraints, and a **locked-decisions** section the operator owns). Because brainstorming asks the operator and waits, it runs here in `build` (primary), never in a headless subagent.
+2. **Load and follow the `brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
 3. Write the spec file **via bash** (`cat >`) — `edit` is denied.
+4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary` (+ dual `adversary-openai` when dual-always). Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
 
-**HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms** (e.g. "a foto não repete por X dias — confirma?"). The operator validates the decisions themselves, not just the framing. **Do not show code or schema.**
+**HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
+**HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the PR body.
 
 ---
 
@@ -127,7 +148,8 @@ Never use the edit tool.
    `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).
    **ANY match FORCES FULL**, overriding triage. Determinism on the plan; judgment on entry.
 
-**HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.** The operator approves the product-level go, not the engineering.
+**HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.**  
+**HEADLESS:** plan-reviewer dual **APPROVE** is the gate; on REVISE past cap, stop and comment — do not ship.
 
 ---
 

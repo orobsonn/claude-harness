@@ -71,6 +71,7 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 | T16 | OC headless permissions + dual nudge | done | 2026-07-13 | Issue #285 closed; dual-nudge in obs-eye + permissions in opencode.json.example |
 | T17 | Skills parity + auto-merge T14 closeout | done | 2026-07-13 | Issue #286; T14 closeout done — objective code gate (T12+T13+T15 + `ocAutoMergeGateOpen`) plus operator-judgment `autoMergeEnabled:true` flip split per spec-adversary #4 |
 | T18 | plan-write-gate live Plugin (state anti-forge only) | done | 2026-07-13 | LIGHT: Plugin factory + throw + OC args; deny gate-state/triage/.state only; execution-plan allowed; registered in example/vendor/cron seed; dogfood re-vendor |
+| T19 | OC prose parity (triage headless + investigate-before-classify, brainstorm/orchestrate headless, creating-plans skill, rules vendor) | done | 2026-07-13 | Closes CC→OC skill/rules gaps that caused headless QUICK mis-triage |
 
 ## Blockers log
 
