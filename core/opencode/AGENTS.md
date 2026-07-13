@@ -99,13 +99,13 @@ Any match in plan `scope_paths` forces FULL mode.
 | plan-reviewer | `xai/grok-4.5` + dual `openai/gpt-5.5` |
 | adversary | `xai/grok-4.5` + dual `openai/gpt-5.5` |
 | compliance / security | `openai/gpt-5.5` |
-| executor/sniper low | `xai/grok-build-0.1` |
-| executor/sniper medium | `xai/grok-4.3` |
-| executor/sniper high | `xai/grok-4.5` |
+| executor/sniper low | `ollama-cloud/gemma4:31b` |
+| executor/sniper medium | `ollama-cloud/glm-5.2` |
+| executor/sniper high | `ollama-cloud/kimi-k2.7-code` |
 | test-author / harvester / shipper | `xai/grok-build-0.1` |
 
 **Dual-always** on plan-reviewer and adversary (two `task` dispatches + shared merge).
-No Ollama in default map. Reconfigure via skill `configuring-model-routing`.
+Default hands use Ollama Cloud ladder; eyes stay Grok + OpenAI dual. Reconfigure via skill `configuring-model-routing`.
 
 ---
 
@@ -113,7 +113,7 @@ No Ollama in default map. Reconfigure via skill `configuring-model-routing`.
 
 - **Eyes** (read-only): planner, plan-reviewer*, adversary*, compliance, security.
 - **Hands** (write): executor-*, sniper-*, test-author.
-- CLI cheap hands use `*-spawn` agents (`mode: primary`, `tools.task: false`) — see `agents/SPAWN-PATTERN.md`.
+- CLI cheap hands use `*-spawn` agents (`mode: primary`, `tools.task: false`) — see `docs/SPAWN-PATTERN.md`.
 - test-author is **fidelity-exempt** (creates the locked test); executor is blocked until fidelity-pass.
 
 ---

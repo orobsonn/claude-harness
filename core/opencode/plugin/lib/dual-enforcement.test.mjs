@@ -463,22 +463,38 @@ test("extractHookTaskContext({tool:'task',sessionID:'ses_x'},{args:{subagent_typ
   assert.deepEqual(ctx.toolArgs, { subagent_type: "executor-low" });
 });
 
-test("extractHookTaskContext({tool:'task',args:...}, {}) or first-arg-only wrong shape returns empty subagentType", () => {
+test("extractHookTaskContext belt-reads input.args when output.args missing", () => {
   const ctx1 = extractHookTaskContext(
     { tool: "task", args: { subagent_type: "executor-low" } },
     {},
   );
-  assert.equal(ctx1.subagentType, "");
+  assert.equal(ctx1.subagentType, "executor-low");
   assert.equal(ctx1.toolName, "task");
 
   const ctx2 = extractHookTaskContext(
-    { tool: "task", args: { subagent_type: "executor-low" } },
+    { tool: "task", args: { subagent_type: "adversary" } },
     null,
   );
-  assert.equal(ctx2.subagentType, "");
+  assert.equal(ctx2.subagentType, "adversary");
 
   const ctx3 = extractHookTaskContext({ tool: "task" }, {});
   assert.equal(ctx3.subagentType, "");
+});
+
+test("loadGateStateFromDisk / loadRoutingFromDisk fall back to cwd when projectRoot empty", () => {
+  const routing = loadRoutingFromDisk("");
+  // cwd is this repo during tests — routing file may or may not exist under cwd;
+  // critical: never fail with projectRoot missing when cwd is available.
+  assert.notEqual(routing.ok === false && routing.reason === "projectRoot missing", true);
+  if (!routing.ok) {
+    assert.notMatch(routing.reason, /projectRoot missing/);
+  }
+
+  const gate = loadGateStateFromDisk("", { sessionId: "ses_testfallback01" });
+  assert.notEqual(gate.ok === false && gate.reason === "projectRoot missing", true);
+  if (!gate.ok) {
+    assert.notMatch(gate.reason, /projectRoot missing/);
+  }
 });
 
 // ---- enforceDualOrThrow entry-gate + executor-low missing (if not covered) ----

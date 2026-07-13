@@ -1,7 +1,7 @@
 ---
-description: Implements MEDIUM-complexity tasks — the DEFAULT executor. Grok 4.3 hand.
+description: Implements MEDIUM-complexity tasks — the DEFAULT executor. Ollama Cloud hand (glm-5.2).
 mode: subagent
-model: xai/grok-4.3
+model: ollama-cloud/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

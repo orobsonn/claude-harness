@@ -33,9 +33,16 @@ One line per durable, reusable, non-obvious project pattern or anti-pattern. Ful
 
 
 - [sessionid-not-ceremony-mask](#sessionid-not-ceremony-mask) — entry-gate must never substitute `{}` when gate-state load fails; missing sessionId is a distinct deny reason, not "ceremony missing"
+- [oc-prefer-opencode-skills](#oc-prefer-opencode-skills) — dual .claude + .opencode skills confuse OC sessions; prefer .opencode; reopen session after re-vendor
 
 ## sessionid-not-ceremony-mask
 
 **Why:** masking load failure as empty state produced false "ceremony missing" while disk ceremony was complete (issue #298).
 
 **How to apply:** on `!loadGateStateFromDisk.ok` for delivery task/bash, throw `loaded.reason` (must include contiguous `sessionId` when unbound). Only pass loaded.state into decideEntryTask when load ok. Ceremony bind = hook sessionID|sessionId only.
+
+## oc-prefer-opencode-skills
+
+**Why:** OC sessions can see both `.claude/skills` and `.opencode/skills`; stale dual catalogs cause wrong skill load or missing native agents until session restart.
+
+**How to apply:** prefer `.opencode/` as the OC source of truth; after re-vendor/init, reopen the OpenCode session so agents/skills catalog reloads.

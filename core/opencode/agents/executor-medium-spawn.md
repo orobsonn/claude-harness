@@ -1,7 +1,7 @@
 ---
-description: "CLI spawn twin of executor-medium (mode primary for opencode run). Implements MEDIUM-complexity tasks — the DEFAULT executor. Grok 4.3 hand."
+description: "CLI spawn twin of executor-medium (mode primary for opencode run). Implements MEDIUM-complexity tasks — the DEFAULT executor. Ollama Cloud hand (glm-5.2)."
 mode: primary
-model: xai/grok-4.3
+model: ollama-cloud/glm-5.2
 temperature: 0.1
 tools:
   task: false
