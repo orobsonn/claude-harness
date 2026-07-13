@@ -1,5 +1,5 @@
 ---
-description: "CLI spawn twin of sniper-high (mode primary for opencode run). Surgical fix for HIGH-severity defects (race condition, security, data corruption, auth-bypass). Strong fixer (Qwen). Minimum delta only, no new files."
+description: "CLI spawn twin of sniper-high (mode primary for opencode run). Surgical fix for HIGH-severity defects (race condition, security, data corruption, auth-bypass). xai/grok-4.5. Minimum delta only, no new files."
 mode: primary
 model: xai/grok-4.5
 temperature: 0.1

@@ -1,5 +1,5 @@
 ---
-description: Surgical fix for LOW-severity defects (typo, naming, dead code, cosmetic). MiMo V2.5 via the Go plan. Minimum delta only, no new files.
+description: Surgical fix for LOW-severity defects (typo, naming, dead code, cosmetic). xai/grok-build-0.1. Minimum delta only, no new files.
 mode: subagent
 model: xai/grok-build-0.1
 temperature: 0.0

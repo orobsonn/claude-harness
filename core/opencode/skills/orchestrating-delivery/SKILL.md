@@ -48,7 +48,7 @@ HARD-GATES (human, pt-br, product-language): **approve spec → approve plan →
 
 Detect **first** (same signals as `triaging-requests`):
 
-- **HEADLESS** when the trigger says autonomous / VPS cron, or `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / `$CLAUDE_CODE_REMOTE` is set.
+- **HEADLESS** when the trigger says autonomous / VPS cron, or `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` is set.
 - Otherwise **INTERACTIVE**.
 
 | Touchpoint | INTERACTIVE | HEADLESS |
@@ -201,7 +201,7 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 |---|---|---|
 | a | Pick executor tier | `executor-<tiers[task.complexity ?? task.severity]>` (low/medium/high; `max`→high). If `complexity` absent, fall back to `severity`. Re-score a path via `complexity-scorer` tool if needed (one call/path). |
 | a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **fidelity mode** (pre-freeze: full-observable fidelity only, no green required). On fidelity **PASS**, stamp disk marker **before** any executor spawn (see Fidelity-rail stamp below). Freeze the locked test, then proceed to implement. |
-| b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → supply the missing `resolved_judgment` or escalate. |
+| b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → supply the missing `resolved_judgment` or escalate. (route to critical exception — do not retry) |
 | c | Compliance | Dispatch `compliance` (read-only, bash allow) with **diff + ACs + locked_tests only** — NOT shared_context, NOT adversary findings. Reads back `pass \| partial \| fail`. |
 | d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary` **VIRGIN** — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero attested findings is a **VALID result** — never re-dispatch to hit a count. A `BLOCKED` return is **NOT a pass** — halt and escalate. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
@@ -247,13 +247,15 @@ console.log(JSON.stringify(r));
 "
 ```
 
-An executor hand spawn is **DENIED** (`CONFIG_ERROR`) unless `fidelity_pass` contains this feature/task (optional `@sha`). `test-author` is exempt — it creates the test that enables fidelity. Freeze-commit alone is not enough; the stamp is the on-disk signal `run-hand` and the entry-gate consume.
+An executor hand spawn is **DENIED** (`CONFIG_ERROR`) unless `fidelity_pass` contains this feature/task (optional `@sha`). `test-author` is exempt — it creates the test that enables fidelity. Freeze-commit alone is not enough; the stamp is the on-disk signal `run-hand` and the entry-gate consume. (route to critical exception — do not retry)
 
 Advance to the next task only when its gates are green.
 
 ### Escalation ladder (engineering — never handed to the human)
 
 retry same tier (bounded) → bump tier → still failing → **CRITICAL EXCEPTION**: translate to product impact, surface to operator in pt-br ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa?"), never as a technical problem.
+
+**Hand CONFIG_ERROR → critical exception (NOT a K=1 escalation):** when a hand dispatch fails precondition / never ran (e.g. missing fidelity_pass stamp, missing/invalid setup, CONFIG_ERROR from spawn), do NOT retry same tier and do NOT bump tier. Route to CRITICAL EXCEPTION: INTERACTIVE surface to operator in pt-br product language; HEADLESS record as open PR risk item.
 
 A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. **Any split/re-plan that re-runs `planner` → write the new plan to `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json` via bash and re-run `validate-plan` before resuming executors.**
 
