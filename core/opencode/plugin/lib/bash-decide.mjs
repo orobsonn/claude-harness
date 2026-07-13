@@ -44,9 +44,18 @@ const ORACLE_PATH_RE =
 const TMP_SCRIPT_RE =
   /\b(?:node(?:js)?|python3?|bun|deno)\s+(?:["']?)(?:\/tmp\/|\/var\/tmp\/|\.\/tmp\/)/i;
 
-/** Nested shell -c / -lc — encoded oracle writes hide from substring wall. */
-const SHELL_C_RE =
-  /\b(?:bash|sh|zsh|dash|ksh|ash|fish|csh|tcsh)\s+(?:-[a-zA-Z]*c|-lc|--command)\b/;
+/** Shell basenames that support -c / --command (token-scanned in isShellCCommand). */
+const SHELL_BINARIES = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "dash",
+  "ksh",
+  "ash",
+  "fish",
+  "csh",
+  "tcsh",
+]);
 
 /**
  * Exact relative tooling scripts allowed beyond markers/tests (orchestrator ops).
@@ -95,6 +104,7 @@ export function isRecordedDual(dualStatus) {
 
 /**
  * @description Strip env/VAR= wrappers so `env node` / `FOO=1 node` still gate.
+ * Does NOT strip `env -i …` / complex env options — residual `env` is fail-closed.
  * @param {string} command
  * @returns {string}
  */
@@ -103,7 +113,10 @@ export function stripCommandWrappers(command) {
   let c = command.trim();
   for (let n = 0; n < 16; n += 1) {
     if (/^env\s+/i.test(c)) {
-      c = c.replace(/^env\s+/i, "").trim();
+      const rest = c.replace(/^env\s+/i, "").trim();
+      // Complex env (`env -i …`, `env -u FOO …`) — leave `env` for fail-closed deny.
+      if (/^-/.test(rest)) break;
+      c = rest;
       continue;
     }
     // NODE_OPTIONS=... or OTHER=val prefix
@@ -117,6 +130,17 @@ export function stripCommandWrappers(command) {
 }
 
 /**
+ * @description Residual `env` after strip = options/flags remain (fail-closed).
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isComplexEnvCommand(command) {
+  if (typeof command !== "string" || command.length === 0) return false;
+  const c = stripCommandWrappers(command);
+  return /^env(?:\s|$)/i.test(c);
+}
+
+/**
  * @description Script path token for node/bare invocation (empty for eval one-liners).
  * @param {string} command
  * @returns {string}
@@ -125,15 +149,22 @@ export function extractNodeScriptPath(command) {
   if (typeof command !== "string") return "";
   const tokens = stripCommandWrappers(command).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return "";
+  // Find interpreter basename anywhere (prefix wrappers: time/command/nice/…).
   let i = 0;
-  const head = tokens[0] ?? "";
-  const isNode =
-    head === "node" ||
-    head === "nodejs" ||
-    head.endsWith("/node") ||
-    head.endsWith("/nodejs");
+  for (; i < tokens.length; i += 1) {
+    const rawBase = tokens[i].split(/[/\\]/).pop() ?? tokens[i];
+    const base = unquoteToken(rawBase);
+    if (isInterpreterHead(base)) break;
+  }
+  if (i >= tokens.length) {
+    // No interpreter — bare path / binary form (./script.mjs, ls, …).
+    return tokens[0] ?? "";
+  }
+  const headTok = tokens[i] ?? "";
+  const headBase = unquoteToken(headTok.split(/[/\\]/).pop() ?? headTok);
+  const isNode = headBase === "node" || headBase === "nodejs";
   if (isNode) {
-    i = 1;
+    i += 1;
     while (i < tokens.length && tokens[i].startsWith("-")) {
       const flag = tokens[i];
       if (
@@ -163,13 +194,10 @@ export function extractNodeScriptPath(command) {
     }
     return tokens[i] ?? "";
   }
-  // python/others: first non-flag after head
-  if (isInterpreterHead(head)) {
-    i = 1;
-    while (i < tokens.length && tokens[i].startsWith("-")) i += 1;
-    return tokens[i] ?? "";
-  }
-  return tokens[0] ?? "";
+  // python/others: first non-flag after interpreter
+  i += 1;
+  while (i < tokens.length && tokens[i].startsWith("-")) i += 1;
+  return tokens[i] ?? "";
 }
 
 /**
@@ -256,14 +284,46 @@ export function isTmpScriptRunner(command) {
   );
 }
 
+/** Shell options that consume the next argv token as a value. */
+const SHELL_VALUE_OPTS = new Set(["-o", "-O", "--rcfile", "--init-file"]);
+
 /**
  * @description bash/sh -c (encoded oracle write hides from substring wall).
+ * Token-scan any shell basename in argv (not only argv0) so prefixes like
+ * `time bash -c` / `command bash --noprofile -c` still deny. Skips value-taking
+ * options (`-o`, `--rcfile`, `--init-file`, `-O`) so `bash -o pipefail -c` denies.
  * @param {unknown} command
  * @returns {boolean}
  */
 export function isShellCCommand(command) {
   if (typeof command !== "string" || command.length === 0) return false;
-  return SHELL_C_RE.test(command);
+  const c = stripCommandWrappers(command);
+  const tokens = c.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  // Find first shell binary anywhere in argv (prefix wrappers: time/command/nice/…).
+  let shellIdx = -1;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const base = (tokens[i].split(/[/\\]/).pop() ?? tokens[i]).toLowerCase();
+    if (SHELL_BINARIES.has(base)) {
+      shellIdx = i;
+      break;
+    }
+  }
+  if (shellIdx < 0) return false;
+  for (let i = shellIdx + 1; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (t === "-c" || t === "--command" || t === "-lc") return true;
+    // Combined short options containing c: -xc, -ec, …
+    if (!t.startsWith("--") && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) return true;
+    // Value-taking options: skip the next token (option value).
+    if (SHELL_VALUE_OPTS.has(t)) {
+      i += 1;
+      continue;
+    }
+    // Non-option before -c → script-file form (handled by isShellScriptOrPipeToShell).
+    if (!t.startsWith("-")) return false;
+  }
+  return false;
 }
 
 /**
@@ -288,7 +348,22 @@ function isInterpreterHead(head) {
 }
 
 /**
+ * @description Strip one layer of surrounding " or ' from a token (shell-quoted argv).
+ * @param {string} t
+ * @returns {string}
+ */
+function unquoteToken(t) {
+  if (typeof t !== "string" || t.length < 2) return t;
+  const q = t[0];
+  if ((q === '"' || q === "'") && t[t.length - 1] === q) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+/**
  * @description Authorized test file path: under core|modules|.opencode + *.test.*
+ * Rejects `..` and empty segments (//) so core/../evil.test.mjs cannot pass.
  * @param {string} norm
  * @returns {boolean}
  */
@@ -296,11 +371,14 @@ export function isAuthorizedTestPath(norm) {
   if (typeof norm !== "string" || !norm) return false;
   if (!/\.test\.(mjs|js|cjs|mts|cts)$/i.test(norm)) return false;
   if (!norm.includes("/")) return false;
+  const segments = norm.split("/");
+  if (segments.some((s) => s === ".." || s === "")) return false;
   return TEST_ROOT_RE.test(norm);
 }
 
 /**
- * @description True when node --test with only authorized test file args (or none).
+ * @description True when node --test with ≥1 authorized test file arg.
+ * Empty file list (cwd discovery) is NOT authorized — require explicit paths.
  * @param {string} command
  * @returns {boolean}
  */
@@ -310,17 +388,29 @@ export function isNodeTestRunner(command) {
   if (!/\bnode(?:js)?\b/i.test(c) || !/(?:^|\s)--test(?:\s|$)/.test(c)) {
     return false;
   }
+  // Fail-closed: --test-reporter loads an arbitrary reporter module (path or package).
+  if (/(?:^|\s)--test-reporter(?:\s|=|$)/.test(c)) {
+    return false;
+  }
   const tokens = c.trim().split(/\s+/).filter(Boolean);
+  // Start after first node/nodejs basename (prefix wrappers: time/command/…).
+  let start = 0;
+  for (; start < tokens.length; start += 1) {
+    const rawBase = tokens[start].split(/[/\\]/).pop() ?? tokens[start];
+    const base = unquoteToken(rawBase);
+    if (base === "node" || base === "nodejs") break;
+  }
+  if (start >= tokens.length) return false;
   const files = [];
-  for (let i = 1; i < tokens.length; i += 1) {
+  for (let i = start + 1; i < tokens.length; i += 1) {
     const t = tokens[i];
     if (t.startsWith("-")) {
       if (
         t === "--test-name-pattern" ||
-        t === "--test-reporter" ||
         t === "-r" ||
         t === "--require" ||
-        t === "--import"
+        t === "--import" ||
+        t === "--test-reporter"
       ) {
         i += 1;
       }
@@ -328,7 +418,8 @@ export function isNodeTestRunner(command) {
     }
     files.push(normalizeScriptPath(t));
   }
-  if (files.length === 0) return true;
+  // Require ≥1 authorized test path — bare `node --test` (cwd discovery) is deny.
+  if (files.length === 0) return false;
   return files.every((f) => isAuthorizedTestPath(f));
 }
 
@@ -342,11 +433,36 @@ export function isNodeTestRunner(command) {
 export function isUnauthorizedInterpreter(command) {
   if (typeof command !== "string" || command.length === 0) return false;
   const c = stripCommandWrappers(command);
-  const head = c.split(/\s+/)[0] ?? "";
-  if (!isInterpreterHead(head)) return false;
-  if (isHarnessMarkerScript(c)) return false;
-  if (isNodeTestRunner(c)) return false;
-  const script = extractNodeScriptPath(c);
+  const tokens = c.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  // Find first interpreter basename anywhere (prefix wrappers: time/command/nice/…).
+  let interpIdx = -1;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const rawBase = tokens[i].split(/[/\\]/).pop() ?? tokens[i];
+    const base = unquoteToken(rawBase);
+    if (isInterpreterHead(base)) {
+      interpIdx = i;
+      break;
+    }
+  }
+  if (interpIdx < 0) return false;
+  // Slice from interpreter so extract/marker/--test checks see argv0=node|python|…
+  const fromInterp = tokens.slice(interpIdx).join(" ");
+  // Chain/subshell turns an authorized interpreter into a multi-command forge.
+  if (hasShellChainMetacharacters(c) || hasShellChainMetacharacters(command)) {
+    return true;
+  }
+  if (isHarnessMarkerScript(fromInterp)) return false;
+  if (isNodeTestRunner(fromInterp)) return false;
+  // node --test present but not authorized (empty files / bad paths) → unauthorized.
+  // Bare `node --test` has no script path so the extract path below would miss it.
+  if (
+    /\bnode(?:js)?\b/i.test(fromInterp) &&
+    /(?:^|\s)--test(?:\s|$)/.test(fromInterp)
+  ) {
+    return true;
+  }
+  const script = extractNodeScriptPath(fromInterp);
   if (!script) return false;
   const norm = normalizeScriptPath(script);
   if (!norm || norm.startsWith("-")) return false;
@@ -362,9 +478,9 @@ export function isUnauthorizedInterpreter(command) {
  */
 export function isNodePreload(command) {
   if (typeof command !== "string" || command.length === 0) return false;
-  // NODE_OPTIONS=--require=... before strip loses the payload — check raw first.
+  // NODE_OPTIONS=--require=... / --test-reporter=... before strip loses the payload.
   if (
-    /(?:^|\s)NODE_OPTIONS=(?:["']?)[^'"\n]*(?:--require|-r\b|--import|--loader|--eval|(?:^|[=\s])-[ep](?:\s|=|$))/i.test(
+    /(?:^|\s)NODE_OPTIONS=(?:["']?)[^'"\n]*(?:--require|-r\b|--import|--loader|--eval|--test-reporter|(?:^|[=\s])-[ep](?:\s|=|$))/i.test(
       command,
     )
   ) {
@@ -379,6 +495,8 @@ export function isNodePreload(command) {
   if (/(?:^|\s)--import(?:\s|=|$)/.test(scan)) return true;
   if (/(?:^|\s)--loader(?:\s|=|$)/.test(scan)) return true;
   if (/(?:^|\s)--experimental-loader(?:\s|=|$)/.test(scan)) return true;
+  // --test-reporter loads an arbitrary reporter module (CLI or NODE_OPTIONS residual).
+  if (/(?:^|\s)--test-reporter(?:\s|=|$)/.test(scan)) return true;
   return false;
 }
 
@@ -504,9 +622,30 @@ export function isShellSourceOrStdin(command) {
   return false;
 }
 
+/** Lifecycle subcommands that execute package.json scripts (not install/ci). */
+const NPM_LIFECYCLE = new Set([
+  "test",
+  "start",
+  "stop",
+  "restart",
+  "exec",
+  "explore",
+  "run",
+  "run-script",
+  "x",
+]);
+const YARN_LIFECYCLE = new Set(["test", "start", "run", "dlx", "node", "exec"]);
+const PNPM_LIFECYCLE = new Set(["test", "start", "exec", "run", "dlx", "node"]);
+
+/** Package-manager basenames scanned anywhere in argv (prefix wrappers). */
+const PACKAGE_MANAGER_BINARIES = new Set(["npm", "yarn", "pnpm"]);
+
 /**
- * @description npm/yarn/pnpm script lifecycle + make/npx (package.json indirection).
- * Allows install/ci/pack only — not test/start/run/exec.
+ * @description npm/yarn/pnpm script lifecycle + make/npx/bunx (package.json indirection).
+ * Token-scans package-manager basenames anywhere (not only argv0) so prefixes like
+ * `time npm run evil` / `corepack npm test` still deny. Detects lifecycle even with
+ * global flags between binary and subcommand (`npm --prefix /tmp/evil test`).
+ * install/ci are NOT package-runners. bunx / yarn dlx / pnpm dlx always deny.
  * @param {unknown} command
  * @returns {boolean}
  */
@@ -515,13 +654,29 @@ export function isPackageRunner(command) {
   const c = stripCommandWrappers(command);
   if (/\bmake\b/.test(c)) return true;
   if (/\bnpx\b/.test(c)) return true;
-  if (/\bnpm\s+run\b/.test(c)) return true;
-  if (/\byarn\s+run\b/.test(c)) return true;
-  if (/\bpnpm\s+run\b/.test(c)) return true;
-  // lifecycle scripts that execute package.json "scripts"
-  if (/\bnpm\s+(test|start|stop|restart|exec|explore)\b/.test(c)) return true;
-  if (/\byarn\s+(test|start)\b/.test(c)) return true;
-  if (/\bpnpm\s+(test|start|exec)\b/.test(c)) return true;
+  // bunx / pnpx are always package-runners (no prescribed form).
+  if (/\bbunx\b/.test(c)) return true;
+  if (/\bpnpx\b/.test(c)) return true;
+  const tokens = c.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  // Find first package-manager basename anywhere (prefix: time/command/nice/nohup/corepack).
+  let pmIdx = -1;
+  let lifecycle = null;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const rawBase = tokens[i].split(/[/\\]/).pop() ?? tokens[i];
+    const base = unquoteToken(rawBase);
+    if (!PACKAGE_MANAGER_BINARIES.has(base)) continue;
+    if (base === "npm") lifecycle = NPM_LIFECYCLE;
+    else if (base === "yarn") lifecycle = YARN_LIFECYCLE;
+    else if (base === "pnpm") lifecycle = PNPM_LIFECYCLE;
+    pmIdx = i;
+    break;
+  }
+  if (pmIdx < 0 || !lifecycle) return false;
+  // Any later token matching lifecycle (flags may intervene; strip shell quotes).
+  for (let i = pmIdx + 1; i < tokens.length; i += 1) {
+    if (lifecycle.has(unquoteToken(tokens[i]))) return true;
+  }
   return false;
 }
 
@@ -540,7 +695,8 @@ export function hasShellChainMetacharacters(command) {
     command.includes("|") ||
     command.includes("\n") ||
     command.includes("$(") ||
-    command.includes("`")
+    command.includes("`") ||
+    command.includes("&")
   );
 }
 
@@ -556,6 +712,66 @@ export function hasShellRedirectOperators(command) {
   return command.includes(">") || command.includes("<");
 }
 
+/** Closed override flags for package managers (deny even on prescribed base). */
+const NPM_OVERRIDE_FLAGS = [
+  "--prefix",
+  "-C",
+  "--userconfig",
+  "--globalconfig",
+  "--workspace",
+  "-w",
+  "--workspaces",
+  "--script-shell",
+  "--node-options",
+  "--location",
+];
+
+/**
+ * @description Harness-prescribed package commands only (raw tool string).
+ * Unsafe if pre-stripped — caller must pass original input.command.
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isHarnessPrescribedPackageCommand(command) {
+  if (typeof command !== "string" || command.length === 0) return false;
+  const raw = command.trim();
+  if (stripCommandWrappers(raw) !== raw) return false;
+  if (
+    hasShellChainMetacharacters(raw) ||
+    hasShellRedirectOperators(raw) ||
+    raw.includes("$")
+  ) {
+    return false;
+  }
+  // Flags start with `-` so `\b` before them never matches — use space/start anchor.
+  // Short -C / -w also match attached forms: -C/tmp/evil, -w@scope, -C=path.
+  for (const flag of NPM_OVERRIDE_FLAGS) {
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (flag === "-C") {
+      if (/(?:^|\s)-C(?:=|\s|\/|$)/.test(raw)) return false;
+      continue;
+    }
+    if (flag === "-w") {
+      if (/(?:^|\s)-w(?:=|\s|@|\/|$)/.test(raw)) return false;
+      continue;
+    }
+    if (new RegExp(`(?:^|\\s)${escaped}(?:=|\\s|$)`).test(raw)) {
+      return false;
+    }
+  }
+  if (/^npx\s+tsc\s+--noEmit\s*$/.test(raw)) return true;
+  if (/^npm\s+test\s*$/.test(raw)) return true;
+  if (/^npm\s+run\s+typecheck\s*$/.test(raw)) return true;
+  if (
+    /^npx(?:\s+-y)?\s+(?:"github:orobsonn\/claude-harness#|github:orobsonn\/claude-harness#|'github:orobsonn\/claude-harness#)[A-Za-z0-9._/-]+(?:['"])?\s+init(?:\s|$)/.test(
+      raw,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * @description Fail-closed anti-forgery wall (text oracle + structural denials).
  * Always forge: eval one-liners, bash -c, /tmp runners, cwd-drop `node w.mjs`.
@@ -567,14 +783,15 @@ export function hasShellRedirectOperators(command) {
 export function isStateForgeCommand(command) {
   if (typeof command !== "string" || command.length === 0) return false;
   const c = stripCommandWrappers(command);
+  if (isComplexEnvCommand(command) || isComplexEnvCommand(c)) return true;
   if (isEvalOneLiner(c)) return true;
   if (isNodePreload(command) || isNodePreload(c)) return true;
-  if (isShellCCommand(c)) return true;
+  if (isShellCCommand(c) || isShellCCommand(command)) return true;
   if (isShellScriptOrPipeToShell(c)) return true;
   if (isShellSourceOrStdin(c)) return true;
   if (isExpandingRedirect(command) || isExpandingRedirect(c)) return true;
   if (isArchiveUnpack(c)) return true;
-  if (isPackageRunner(c)) return true;
+  if (isPackageRunner(c) && !isHarnessPrescribedPackageCommand(command)) return true;
   if (isFrozenPathBashWrite(command) || isFrozenPathBashWrite(c)) return true;
   if (isTmpScriptRunner(c)) return true;
   if (isDirectScriptExec(c)) return true;
@@ -612,6 +829,15 @@ export function decideBashForge(input = {}) {
           "[entry-gate] Blocked: Claude-Code marker CLIs (.claude/hooks/mark|classify) do not stamp OpenCode gate-state. Use the native `classify` tool and `node .opencode/plugin/lib/mark-gate.mjs` only.",
       };
     }
+    // Complex env (`env -i node …`) — residual env after strip is fail-closed.
+    if (isComplexEnvCommand(raw) || isComplexEnvCommand(command)) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason:
+          "[entry-gate] Blocked: complex env invocations (env -i / env options) cannot run via bash (anti-forgery).",
+      };
+    }
     // Preload checks raw too (NODE_OPTIONS=--require lost after strip).
     if (isNodePreload(raw) || isNodePreload(command)) {
       return {
@@ -629,7 +855,7 @@ export function decideBashForge(input = {}) {
           "[entry-gate] Blocked: interpreter eval one-liners (node -e / python -c / …) cannot touch gate-state (anti-forgery).",
       };
     }
-    if (isShellCCommand(command)) {
+    if (isShellCCommand(command) || isShellCCommand(raw)) {
       return {
         ok: false,
         decision: "deny",
@@ -670,12 +896,14 @@ export function decideBashForge(input = {}) {
       };
     }
     if (isPackageRunner(command) || isPackageRunner(raw)) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: npm run / make / npx cannot run via bash (anti-forgery package indirection).",
-      };
+      if (!isHarnessPrescribedPackageCommand(raw)) {
+        return {
+          ok: false,
+          decision: "deny",
+          reason:
+            "[entry-gate] Blocked: npm run / make / npx cannot run via bash (anti-forgery package indirection).",
+        };
+      }
     }
     if (isFrozenPathBashWrite(raw) || isFrozenPathBashWrite(command)) {
       return {
