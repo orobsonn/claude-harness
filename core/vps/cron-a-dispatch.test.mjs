@@ -249,6 +249,7 @@ test("dispatch: drops the ephemeral .claude/plans/ from the copied worktree harn
       calls.push({ command, args });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
+        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -279,6 +280,7 @@ test("dispatch: when runtime=opencode, copies .opencode and drops ephemeral plan
       calls.push({ command, args });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
+        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -320,6 +322,28 @@ test("prepareOpencodeDataHome: fresh empty dir + auth only (never copies opencod
 });
 
 
+
+/** @description Minimal monorepo plugin stubs so seedOpencodeRootConfig fail-closed check can rewrite. */
+function plantMonorepoOcPlugins(root) {
+  const dir = join(root, "core", "opencode", "plugin");
+  mkdirSync(dir, { recursive: true });
+  for (const name of [
+    "entry-gate.ts",
+    "plan-gate.ts",
+    "plan-write-gate.ts",
+    "loop-guard.ts",
+    "reinject-state.ts",
+    "version-check.ts",
+    "harvest-guard.ts",
+    "obs-plan-write.ts",
+    "obs-eye.ts",
+    "obs-hand.ts",
+    "agent-idle-nudge.ts",
+  ]) {
+    writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
+  }
+}
+
 test("seedOpencodeRootConfig: copies opencode.json + AGENTS.md from projectRoot (permissions vendored)", () => {
   const root = mkdtempSync(join(tmpdir(), "oc-seed-"));
   try {
@@ -327,6 +351,7 @@ test("seedOpencodeRootConfig: copies opencode.json + AGENTS.md from projectRoot 
     const worktree = join(root, "wt");
     mkdirSync(projectRoot, { recursive: true });
     mkdirSync(worktree, { recursive: true });
+    plantMonorepoOcPlugins(worktree);
     writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify({ permission: { external_directory: "allow", bash: { "*": "allow" } } }));
     writeFileSync(join(projectRoot, "AGENTS.md"), "# agents");
     const r = seedOpencodeRootConfig(worktree, projectRoot);
@@ -348,6 +373,7 @@ test("seedOpencodeRootConfig: falls back to opencode.json.example when root conf
     const worktree = join(root, "wt");
     mkdirSync(join(projectRoot, "core", "opencode"), { recursive: true });
     mkdirSync(worktree, { recursive: true });
+    plantMonorepoOcPlugins(worktree);
     writeFileSync(
       join(projectRoot, "core", "opencode", "opencode.json.example"),
       JSON.stringify({ permission: { external_directory: "allow" } })
@@ -379,6 +405,7 @@ test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME in
       calls.push({ command, args, env: spawnOpts.env, stdin: spawnOpts.stdin, cwd: spawnOpts.cwd });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
+        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
@@ -1229,6 +1256,7 @@ test("dispatch: runtime=opencode seeds opencode.json into the worktree on the re
       calls.push({ command, args });
       if (command === "git" && args[0] === "worktree" && args[1] === "add") {
         mkdirSync(args[2], { recursive: true });
+        plantMonorepoOcPlugins(args[2]);
       } else if (command === "cp") {
         cpSync(args[1], args[2], { recursive: true });
       }
