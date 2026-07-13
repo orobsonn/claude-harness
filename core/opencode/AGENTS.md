@@ -70,6 +70,7 @@ The full per-task delivery loop lives in the `orchestrating-delivery` skill.
 - Atomic functions; DRY with limit; TypeScript strict (no `any`).
 - Comments only for WHY. JSDoc `/** @description ... */` on every new `.ts`/`.tsx`.
 - Forbidden generic files: `helpers.ts`, `utils.ts`, `misc.ts`, `common.ts`.
+- Full law also lives under `.opencode/rules/` (git, security, testing, architecture) — load when relevant; AGENTS is the summary.
 
 ---
 
