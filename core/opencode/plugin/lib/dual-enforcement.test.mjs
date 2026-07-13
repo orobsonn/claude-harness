@@ -499,3 +499,166 @@ test("enforceDualOrThrow with missing dual + executor-low throws [entry-gate]", 
   }
   assert.equal(threw, true);
 });
+
+// ---- task-1 locked tests: sessionId ceremony for load / extract / dual bind (no toolArgs rebind) ----
+
+test("lt-load-missing-sessionid — loadGateStateFromDisk without sessionId / null / empty → ok===false, reason matches /sessionId/", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-missing-sid-"));
+  try {
+    const r1 = loadGateStateFromDisk(root);
+    assert.equal(r1.ok, false);
+    assert.match(String(r1.reason || ""), /sessionId/);
+
+    const r2 = loadGateStateFromDisk(root, {});
+    assert.equal(r2.ok, false);
+    assert.match(String(r2.reason || ""), /sessionId/);
+
+    const r3 = loadGateStateFromDisk(root, { sessionId: null });
+    assert.equal(r3.ok, false);
+    assert.match(String(r3.reason || ""), /sessionId/);
+
+    const r4 = loadGateStateFromDisk(root, { sessionId: "" });
+    assert.equal(r4.ok, false);
+    assert.match(String(r4.reason || ""), /sessionId/);
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
+});
+
+test("lt-load-unsafe-sessionid — unsafe sessionId like '../evil' → ok===false, reason matches /sessionId/ (contiguous token — current code says \"unsafe session id\" with space and WILL FAIL until production fix)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-unsafe-sid-"));
+  try {
+    const r = loadGateStateFromDisk(root, { sessionId: "../evil" });
+    assert.equal(r.ok, false);
+    assert.match(String(r.reason || ""), /sessionId/);
+
+    assert.equal(isSafeSessionIdSegment("../evil"), false);
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
+});
+
+test("lt-load-missing-file-empty-ceremony — safe S1 no file → ok===true, state {}", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-missingfile-"));
+  try {
+    const S1 = "ses_safeNoFile123";
+    // intentionally do not create dir or gate-state.json
+    const r = loadGateStateFromDisk(root, { sessionId: S1 });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.state, {});
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
+});
+
+test("lt-extract-hook-sessionid-alias — extractHookTaskContext accepts sessionId camelCase AND sessionID; toolArgs.session_id alone does NOT set sessionId from extractHookTaskContext", () => {
+  const ctxUpper = extractHookTaskContext(
+    { tool: "task", sessionID: "ses_upperID" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctxUpper.sessionId, "ses_upperID");
+
+  const ctxCamel = extractHookTaskContext(
+    { tool: "task", sessionId: "ses_camelId" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctxCamel.sessionId, "ses_camelId");
+
+  // toolArgs must never populate sessionId in this extractor (hook input only)
+  const ctxArgs = extractHookTaskContext(
+    { tool: "task" },
+    { args: { session_id: "ses_fromToolArgsOnly" } },
+  );
+  assert.equal(ctxArgs.sessionId, null);
+  assert.equal(ctxArgs.toolName, "task");
+});
+
+test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow with caller sessionId S1 (incomplete dual) + toolArgs.session_id S2 (full dual ceremony on disk) → must use S1 (deny dual_status class, not allow from S2). AND when caller passes sessionId: null (key present / unbound) + toolArgs S2 full dual → must NOT allow via toolArgs rebind (throw with sessionId or gate-state-unreadable/sessionId)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-callerbind-"));
+  try {
+    const S1 = "ses_S1_incomplete";
+    const S2 = "ses_S2_fullDual";
+
+    // S1: incomplete (pending) → will cause dual_status deny
+    const d1 = path.join(root, ".opencode", "plans", ".state", S1);
+    fs.mkdirSync(d1, { recursive: true });
+    fs.writeFileSync(
+      path.join(d1, "gate-state.json"),
+      JSON.stringify({ dual_status: "pending", feature_id: "oc-sid-ceremony" }),
+      "utf8",
+    );
+
+    // S2: full dual
+    const d2 = path.join(root, ".opencode", "plans", ".state", S2);
+    fs.mkdirSync(d2, { recursive: true });
+    fs.writeFileSync(
+      path.join(d2, "gate-state.json"),
+      JSON.stringify({ dual_status: "both", feature_id: "oc-sid-ceremony" }),
+      "utf8",
+    );
+
+    // ensure routing present (defaults would also enforce but explicit)
+    fs.writeFileSync(
+      path.join(root, ".opencode", "harness.routing.json"),
+      JSON.stringify(ROUTING),
+      "utf8",
+    );
+
+    // Subcase A: explicit caller sessionId S1 must win over toolArgs S2
+    let threwA = false;
+    let errA;
+    try {
+      enforceDualFromDiskOrThrow("[plan-gate]", {
+        projectRoot: root,
+        toolName: "task",
+        toolArgs: { subagent_type: "executor-high", session_id: S2 },
+        sessionId: S1,
+      });
+    } catch (e) {
+      threwA = true;
+      errA = e;
+    }
+    assert.equal(threwA, true);
+    assert.ok(errA instanceof Error);
+    assert.match(errA.message, /^\[plan-gate\]/);
+    assert.match(errA.message, /dual_status|pending/i);
+
+    // Subcase B: explicit sessionId: null (unbound) must NOT fallback to toolArgs S2
+    // (must fail with sessionId-related reason, not allow from S2's full dual)
+    let threwB = false;
+    let errB;
+    try {
+      enforceDualFromDiskOrThrow("[entry-gate]", {
+        projectRoot: root,
+        toolName: "task",
+        toolArgs: { subagent_type: "executor-high", session_id: S2 },
+        sessionId: null,
+      });
+    } catch (e) {
+      threwB = true;
+      errB = e;
+    }
+    assert.equal(threwB, true, "expected throw for unbound sessionId even with toolArgs present");
+    assert.ok(errB instanceof Error);
+    assert.match(errB.message, /^\[entry-gate\]/);
+    assert.match(errB.message, /sessionId|gate-state-unreadable/i);
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors on some FS
+    }
+  }
+});

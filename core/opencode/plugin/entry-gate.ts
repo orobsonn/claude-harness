@@ -153,6 +153,7 @@ export async function createEntryGateHooks(
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
   } = await import("./lib/entry-decide.mjs")
+  const { isDeliveryRole } = await import("./lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
 
@@ -177,6 +178,9 @@ export async function createEntryGateHooks(
             ? sessionId
             : undefined
         const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+        if (isDeliveryCommand(command) && !loaded.ok) {
+          throw new Error(`${PREFIX} ${loaded.reason}`)
+        }
         const gateState = loaded.ok ? loaded.state : {}
 
         /** Delivery-only rails: never probe git/list/ancestor for non-delivery bash. */
@@ -211,6 +215,9 @@ export async function createEntryGateHooks(
           ? sessionId
           : undefined
       const loaded = loadGateStateFromDisk(projectRoot, { sessionId: sid })
+      if (!loaded.ok && isDeliveryRole(subagentType)) {
+        throw new Error(`${PREFIX} ${loaded.reason}`)
+      }
       const gateState = loaded.ok ? loaded.state : {}
       const { featureId, taskId } = extractFeatureTaskIds(toolArgs)
 
@@ -227,7 +234,7 @@ export async function createEntryGateHooks(
         projectRoot,
         toolName,
         toolArgs,
-        sessionId: sid,
+        sessionId: sid ?? null,
       })
     },
   }

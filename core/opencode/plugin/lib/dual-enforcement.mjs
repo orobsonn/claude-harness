@@ -451,7 +451,7 @@ export function isTaskTool(toolName) {
 export function extractHookTaskContext(input, output) {
   const toolName = input?.tool ?? "";
   const toolArgs = output?.args ?? null;
-  const sessionId = input?.sessionID ?? null;
+  const sessionId = input?.sessionID ?? input?.sessionId ?? null;
   const subagentType = extractSubagentType(toolArgs);
   return { toolName, toolArgs, sessionId, subagentType };
 }
@@ -533,7 +533,7 @@ export function loadRoutingFromDisk(projectRoot) {
 
 /**
  * @description Load gate-state.json from disk under `.opencode/plans/.state/`.
- * Prefer sessionId when safe; else most recently mtime'd gate-state.json.
+ * Requires explicit safe sessionId; explicit fail when missing (no cross-session mtime).
  * Fail-closed Result when unreadable. Never throws.
  * @param {string} projectRoot
  * @param {{ sessionId?: string | null }} [opts]
@@ -577,7 +577,7 @@ export function loadGateStateFromDisk(projectRoot, opts = {}) {
 
     if (sessionId != null && sessionId !== "") {
       if (!isSafeSessionIdSegment(sessionId)) {
-        return { ok: false, reason: "unsafe session id" };
+        return { ok: false, reason: "unsafe sessionId" };
       }
       const p = path.join(
         stateRoot,
@@ -621,10 +621,9 @@ export function enforceDualFromDiskOrThrow(prefix, input) {
     return { ok: true, decision: "allow", reason: "not-a-delivery-hand" };
   }
 
-  const sessionId =
-    input.sessionId !== undefined && input.sessionId !== null
-      ? input.sessionId
-      : extractSessionId(input.toolArgs);
+  const sessionId = Object.hasOwn(input, "sessionId")
+    ? input.sessionId
+    : extractSessionId(input.toolArgs);
   const loaded = loadGateStateFromDisk(input.projectRoot, {
     sessionId: sessionId ?? undefined,
   });
