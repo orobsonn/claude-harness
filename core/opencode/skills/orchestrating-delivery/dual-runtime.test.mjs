@@ -93,7 +93,7 @@ test("t8-failopen: unavailable secondary yields primary_only_failopen and keeps 
   const r = driveDualEye({
     post: "adversary",
     primaryResult: primary,
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: () => {
       secondaryCalls += 1;
@@ -148,7 +148,7 @@ test("t8-retry: primary_only_error retries secondary once then continues fail-op
   const r = driveDualEye({
     post: "adversary",
     primaryResult: primary,
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     runSecondary: () => {
       calls += 1;
       return {
@@ -175,7 +175,7 @@ test("t8-retry: primary_only_error retries secondary once then continues fail-op
   const r2 = driveDualEye({
     post: "adversary",
     primaryResult: primary,
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: ({ attempt }) => {
       calls2 += 1;
@@ -273,7 +273,7 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
   const merged = mergeDualFindings(
     [onlyPrimary, sharedA],
     [onlySecondary, sharedB, freeTextDisagree],
-    { a: "grok", b: "openai" },
+    { a: "glm", b: "openai" },
   );
 
   assert.equal(merged.policy, "B");
@@ -283,7 +283,7 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
   assert.ok(titles.includes(sharedTitle), "shared key present");
 
   // Explicit refute drops the target
-  const target = finding({ id: "drop-me", title: "false positive", severity: "low", family: "grok" });
+  const target = finding({ id: "drop-me", title: "false positive", severity: "low", family: "glm" });
   const refuter = finding({
     id: "ref-1",
     title: "not a real issue",
@@ -291,15 +291,15 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
     family: "openai",
     refutes: {
       target_id: "drop-me",
-      target_family: "grok",
+      target_family: "glm",
       reason: "guard already present upstream",
     },
   });
   // classifyFindings tags family; finalizeFindings needs family on candidates
   const withRefute = mergeDualFindings(
-    [{ ...target, family: "grok" }],
+    [{ ...target, family: "glm" }],
     [{ ...refuter, family: "openai" }],
-    { a: "grok", b: "openai" },
+    { a: "glm", b: "openai" },
   );
   // After classify, family is set from labels; refute target_family must match
   // Re-run finalize path via driveDualEye both success
@@ -311,7 +311,7 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
         finding({ id: "drop-me", title: "false positive", severity: "low" }),
       ],
     },
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: () => ({
       ok: true,
@@ -323,7 +323,7 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
             severity: "low",
             refutes: {
               target_id: "drop-me",
-              target_family: "grok",
+                target_family: "glm",
               reason: "guard already present upstream",
             },
           }),
@@ -347,7 +347,7 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
   const both = driveDualEye({
     post: "adversary",
     primaryResult: { findings: [onlyPrimary] },
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: () => ({ ok: true, result: { findings: [onlySecondary] } }),
   });
@@ -380,7 +380,7 @@ test("t8-merge-description-only: two primary description-only highs + one second
   const dual = driveDualEye({
     post: "adversary",
     primaryResult: { findings: [primaryDescA, primaryDescB] },
-    primaryFamily: "grok",
+    primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: () => ({ ok: true, result: { findings: [secondaryDesc] } }),
   });
@@ -414,9 +414,14 @@ test("t8-merge-description-only: two primary description-only highs + one second
 
 // ---- supporting contracts (not locked ids but required by DoD) ----
 
-test("t8-posts: dual posts are plan-reviewer and adversary with openai secondary agents", () => {
-  assert.equal(DUAL_POSTS["plan-reviewer"].secondary, "plan-reviewer-openai");
-  assert.equal(DUAL_POSTS.adversary.secondary, "adversary-openai");
+test("t8-posts: dual posts dispatch canonical provider-agnostic family agents", () => {
+  assert.equal(DUAL_POSTS["plan-reviewer"].primary, "plan-reviewer-family-1");
+  assert.equal(DUAL_POSTS["plan-reviewer"].secondary, "plan-reviewer-family-2");
+  assert.equal(DUAL_POSTS.adversary.primary, "adversary-family-1");
+  assert.equal(DUAL_POSTS.adversary.secondary, "adversary-family-2");
+  for (const post of Object.values(DUAL_POSTS)) {
+    assert.doesNotMatch(`${post.primary} ${post.secondary}`, /openai|anthropic|xai|ollama/i);
+  }
   assert.equal(DUAL_POSTS["plan-reviewer"].shape, "verdict");
   assert.equal(DUAL_POSTS.adversary.shape, "findings");
 });
@@ -444,14 +449,14 @@ test("t8-verdict-merge: mergeDualVerdicts sets dual_status enum", () => {
   const m = mergeDualVerdicts(
     { verdict: "APPROVE" },
     { verdict: "REVISE", issues: [{ note: "x" }] },
-    { primaryFamily: "grok", secondaryFamily: "openai" },
+    { primaryFamily: "glm", secondaryFamily: "openai" },
   );
   assert.equal(m.ok, true);
   assert.equal(m.dual_status, DUAL_STATUS.BOTH);
   assert.equal(m.isFullDualCoverage, true);
 
   const fo = mergeDualVerdicts({ verdict: "APPROVE" }, null, {
-    primaryFamily: "grok",
+    primaryFamily: "glm",
   });
   assert.equal(fo.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
   assert.equal(fo.isFullDualCoverage, false);

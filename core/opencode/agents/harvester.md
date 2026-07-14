@@ -1,7 +1,7 @@
 ---
 description: Knowledge consolidation — routes durable learnings after feature completion and deletes the ephemeral run buffers. Edit+bash for docs/memory updates.
 mode: subagent
-model: xai/grok-build-0.1
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: allow

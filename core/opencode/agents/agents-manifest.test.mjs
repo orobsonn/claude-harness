@@ -48,8 +48,12 @@ const REQUIRED_AGENTS = [
   "planner",
   "plan-reviewer",
   "plan-reviewer-openai",
+  "plan-reviewer-family-1",
+  "plan-reviewer-family-2",
   "adversary",
   "adversary-openai",
+  "adversary-family-1",
+  "adversary-family-2",
   "compliance",
   "security",
   "executor-low",
@@ -87,8 +91,12 @@ function expectedModels(routing) {
     planner: r.planner.model,
     "plan-reviewer": r["plan-reviewer"].model,
     "plan-reviewer-openai": r["plan-reviewer"].dual[0].model,
+    "plan-reviewer-family-1": r["plan-reviewer"].model,
+    "plan-reviewer-family-2": r["plan-reviewer"].dual[0].model,
     adversary: r.adversary.model,
     "adversary-openai": r.adversary.dual[0].model,
+    "adversary-family-1": r.adversary.model,
+    "adversary-family-2": r.adversary.dual[0].model,
     compliance: r.compliance.model,
     security: r.security.model,
     "executor-low": r.executor.tiers.low.model,
@@ -119,24 +127,24 @@ test("t6-agents: required agent files exist including test-author.md", () => {
   );
 });
 
-test("t6-dual-files: plan-reviewer-openai and adversary-openai dual pair files exist", () => {
+test("t6-dual-files: canonical family files and compatibility aliases exist", () => {
   assert.ok(existsSync(join(AGENTS_DIR, "plan-reviewer-openai.md")));
   assert.ok(existsSync(join(AGENTS_DIR, "adversary-openai.md")));
-  const pr = frontmatter(read(join(AGENTS_DIR, "plan-reviewer.md")));
-  const pro = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-openai.md")));
-  const ad = frontmatter(read(join(AGENTS_DIR, "adversary.md")));
-  const ado = frontmatter(read(join(AGENTS_DIR, "adversary-openai.md")));
-  assert.equal(fmField(pr, "model"), "xai/grok-4.5");
-  assert.equal(fmField(pro, "model"), "openai/gpt-5.5");
-  assert.equal(fmField(ad, "model"), "xai/grok-4.5");
-  assert.equal(fmField(ado, "model"), "openai/gpt-5.5");
+  const pr = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-1.md")));
+  const pro = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-2.md")));
+  const ad = frontmatter(read(join(AGENTS_DIR, "adversary-family-1.md")));
+  const ado = frontmatter(read(join(AGENTS_DIR, "adversary-family-2.md")));
+  assert.equal(fmField(pr, "model"), "ollama-cloud/glm-5.2");
+  assert.equal(fmField(pro, "model"), "openai/gpt-5.6-sol");
+  assert.equal(fmField(ad, "model"), "ollama-cloud/glm-5.2");
+  assert.equal(fmField(ado, "model"), "openai/gpt-5.6-sol");
 });
 
 test("t6-build-prose: build.md contains dual-always protocol text", () => {
   const body = read(join(AGENTS_DIR, "build.md"));
   assert.match(body, /dual-always|Dual-always|Always dual/i);
-  assert.match(body, /plan-reviewer-openai/);
-  assert.match(body, /adversary-openai/);
+  assert.match(body, /plan-reviewer-family-2/);
+  assert.match(body, /adversary-family-2/);
   assert.match(body, /requireDualOn|ADR-003|policy B/i);
 });
 

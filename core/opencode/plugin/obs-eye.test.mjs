@@ -369,6 +369,52 @@ test("secondary eye (plan-reviewer-openai) → no dual_status write and no dual_
   }
 });
 
+test("canonical family-1 eyes reach the hook and family-2 eyes never trigger the primary nudge", async () => {
+  const prevEnv = setCrossFamily(true);
+  try {
+    for (const role of ["plan-reviewer-family-1", "adversary-family-1"]) {
+      const projectRoot = makeProjectRoot("obs-eye-canonical-primary-");
+      try {
+        const hooks = await createObsEyeHooks(projectRoot);
+        const { input, output } = makeTaskCall({
+          role,
+          featureId: FEATURE_ID,
+          taskId: TASK_ID,
+          phase: PHASE,
+        });
+        await hooks["tool.execute.after"](input, output);
+        const state = readGateStateFile(projectRoot, SID);
+        assert.equal(state.dual_status, "pending", role);
+        assert.ok(state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`), role);
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true });
+      }
+    }
+
+    for (const role of ["plan-reviewer-family-2", "adversary-family-2"]) {
+      const projectRoot = makeProjectRoot("obs-eye-canonical-secondary-");
+      try {
+        writeGateState(projectRoot, SID, { mode: "FULL", feature_id: FEATURE_ID });
+        const hooks = await createObsEyeHooks(projectRoot);
+        const { input, output } = makeTaskCall({
+          role,
+          featureId: FEATURE_ID,
+          taskId: TASK_ID,
+          phase: PHASE,
+        });
+        await hooks["tool.execute.after"](input, output);
+        const state = readGateStateFile(projectRoot, SID);
+        assert.equal(state.dual_status, undefined, role);
+        assert.equal(state.dual_nudge_attempts, undefined, role);
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    restoreCrossFamily(prevEnv);
+  }
+});
+
 test("[dual-nudge pure] applyDualNudge — a withGateStateLock seam that throws is fail-open: never re-throws, reports the nudge as not applied", async () => {
   const projectRoot = makeProjectRoot("obs-eye-nudge-throw-");
   try {

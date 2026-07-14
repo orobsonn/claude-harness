@@ -1,17 +1,17 @@
 ---
 name: creating-plans
-description: "INTERNAL to the planner agent — NOT a main-loop skill. Do NOT invoke this directly from the orchestrator or main loop; instead dispatch the `planner` agent (always the planner model (routing: grok-4.5)), which runs this skill in isolation. Describes how the planner decomposes an approved spec/PRD into a validated execution-plan.json (atomic tasks, locked tests, severity tiers, adversarial flags, scope_paths) consumed by orchestrating-delivery."
+description: "INTERNAL to the planner agent — NOT a main-loop skill. Do NOT invoke this directly from the orchestrator or main loop; instead dispatch the `planner` agent (always the planner model from routing), which runs this skill in isolation. Describes how the planner decomposes an approved spec/PRD into a validated execution-plan.json (atomic tasks, locked tests, severity tiers, adversarial flags, scope_paths) consumed by orchestrating-delivery."
 source: adapted from pi-agent/skills/plan-make/SKILL.md
 adaptation_date: 2026-06-01
 ---
 
 <PLANNER-ONLY>
-This skill runs ONLY inside the `planner` agent (always the planner model (routing: grok-4.5)), dispatched by orchestrating-delivery in Phase 1. If you are the main loop or the orchestrator and reached here directly, STOP: do not generate the plan yourself. **Dispatch the `planner` agent** and hand it the approved spec. Generating the plan in the main loop defeats the context isolation and the model routing the harness depends on (a cheap orchestrator must delegate architecture-grade reasoning to planner-tier model, not do it inline). The only exception is the `planner` agent itself running this skill.
+This skill runs ONLY inside the `planner` agent (always the planner model from routing), dispatched by orchestrating-delivery in Phase 1. If you are the main loop or the orchestrator and reached here directly, STOP: do not generate the plan yourself. **Dispatch the `planner` agent** and hand it the approved spec. Generating the plan in the main loop defeats the context isolation and the model routing the harness depends on (a cheap orchestrator must delegate architecture-grade reasoning to planner-tier model, not do it inline). The only exception is the `planner` agent itself running this skill.
 </PLANNER-ONLY>
 
 # Creating-Plans — Generating execution-plan.json from an approved spec
 
-**This skill runs inside the planner agent (always the planner model (routing: grok-4.5)).** It does not write code and does not invoke orchestrating-delivery. Its only output is a validated `execution-plan.json`.
+**This skill runs inside the planner agent (always the planner model from routing).** It does not write code and does not invoke orchestrating-delivery. Its only output is a validated `execution-plan.json`.
 
 **Announce at the start (in pt-br):** "Usando creating-plans para gerar o execution-plan.json a partir da spec aprovada."
 

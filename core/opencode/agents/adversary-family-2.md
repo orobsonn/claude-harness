@@ -1,5 +1,5 @@
 ---
-description: Compatibility alias for adversary-family-2. Remove only after the two-release compatibility window.
+description: Optional family-2 adversary eye for a cross-family virgin attack surface. Read-only.
 mode: subagent
 model: openai/gpt-5.6-sol
 temperature: 0.3

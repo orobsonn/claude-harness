@@ -1,7 +1,7 @@
 ---
 description: Transcribes pinned locked_test assertions into one test file (and narrow maintenance edits). Hand role — fidelity-exempt (creates the frozen test). In-session mode subagent; CLI uses test-author-spawn.
 mode: subagent
-model: xai/grok-build-0.1
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: allow

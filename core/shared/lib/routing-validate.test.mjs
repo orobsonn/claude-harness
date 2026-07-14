@@ -27,7 +27,7 @@ describe("routing-validate", () => {
 
   it("t1-same-provider: same provider on dual pair → error", () => {
     const cfg = structuredClone(defaultRouting);
-    cfg.roles.adversary.dual = [{ model: "xai/grok-4.5", label: "same" }];
+    cfg.roles.adversary.dual = [{ model: "ollama-cloud/glm-5.2", label: "same" }];
     const res = validateRouting(cfg);
     assert.equal(res.ok, false);
     assert.match(res.reason, /same provider on dual for adversary/);
@@ -45,7 +45,7 @@ describe("routing-validate", () => {
       { version: 1, roles: { adversary: null }, constraints: { requireDualOn: ["adversary"], crossFamilyRoles: [] }, modelCapabilities: {} },
       {
         version: 1,
-        roles: { adversary: { model: "xai/g", dual: [null] } },
+        roles: { adversary: { model: "ollama-cloud/g", dual: [null] } },
         constraints: { requireDualOn: ["adversary"], crossFamilyRoles: ["adversary"] },
         modelCapabilities: {},
       },
@@ -57,9 +57,9 @@ describe("routing-validate", () => {
       },
       {
         version: 1,
-        roles: { adversary: { model: "xai/g", dual: [{}] } },
+        roles: { adversary: { model: "ollama-cloud/g", dual: [{}] } },
         constraints: { requireDualOn: ["adversary"], crossFamilyRoles: ["adversary"] },
-        modelCapabilities: { "xai/g": { supportsReasoningEffort: true } },
+        modelCapabilities: { "ollama-cloud/g": { supportsReasoningEffort: true } },
       },
     ];
     for (const c of cases) {
@@ -73,15 +73,15 @@ describe("routing-validate", () => {
     }
   });
 
-  it("t1-reasoning-effort: grok-build-0.1 must have supportsReasoningEffort false", () => {
+  it("t1-reasoning-effort: each model capability declares a boolean flag", () => {
     const cfg = structuredClone(defaultRouting);
-    cfg.modelCapabilities["xai/grok-build-0.1"].supportsReasoningEffort = true;
+    cfg.modelCapabilities["openai/gpt-5.6-terra"].supportsReasoningEffort = "true";
     const res = validateRouting(cfg);
     assert.equal(res.ok, false);
-    assert.match(res.reason, /grok-build-0\.1 must not support reasoningEffort/);
+    assert.match(res.reason, /missing supportsReasoningEffort for openai\/gpt-5\.6-terra/);
 
     const ok = validateRouting(defaultRouting);
     assert.equal(ok.ok, true);
-    assert.equal(defaultRouting.modelCapabilities["xai/grok-build-0.1"].supportsReasoningEffort, false);
+    assert.equal(defaultRouting.modelCapabilities["openai/gpt-5.6-terra"].supportsReasoningEffort, true);
   });
 });

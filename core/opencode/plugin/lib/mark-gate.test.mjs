@@ -515,13 +515,13 @@ test("stampHandFinished emits hand-ran to outbox when HARNESS_OBSERVABILITY_RUN_
       sessionId,
       featureId: "f1",
       taskId: "task-9",
-      model: "grok-4.3",
+      model: "gpt-5.6-terra",
     });
     assert.equal(r.ok, true);
     const raw = fs.readFileSync(path.join(dir, "obs.events.jsonl"), "utf8");
     assert.ok(raw.includes("hand-ran"), raw);
     assert.ok(raw.includes("task-9"), raw);
-    assert.ok(raw.includes("grok-4.3"), raw);
+    assert.ok(raw.includes("gpt-5.6-terra"), raw);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     fs.rmSync(dir, { recursive: true, force: true });

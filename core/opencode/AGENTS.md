@@ -4,7 +4,7 @@ Native top-of-tree rules for this OpenCode harness when vendored into a project
 (`.opencode/` + project root). Written in English (harness convention);
 operator-facing messages are **pt-br** (see Language convention).
 
-Models come from `harness.routing.json` (default: Grok motor + OpenAI eyes).
+Models come from `harness.routing.json`.
 Do not invent role models in prose that disagree with that file.
 
 ---
@@ -94,18 +94,19 @@ Any match in plan `scope_paths` forces FULL mode.
 
 | Role | Model |
 |---|---|
-| build | `xai/grok-4.5` |
-| planner | `xai/grok-4.5` |
-| plan-reviewer | `xai/grok-4.5` + dual `openai/gpt-5.5` |
-| adversary | `xai/grok-4.5` + dual `openai/gpt-5.5` |
-| compliance / security | `openai/gpt-5.5` |
+| build | `openai/gpt-5.6-terra` |
+| planner | `openai/gpt-5.6-terra` |
+| plan-reviewer | `ollama-cloud/glm-5.2` + dual `openai/gpt-5.6-sol` |
+| adversary | `ollama-cloud/glm-5.2` + dual `openai/gpt-5.6-sol` |
+| compliance | `openai/gpt-5.6-terra` |
+| security | `openai/gpt-5.5` |
 | executor/sniper low | `ollama-cloud/gemma4:31b` |
 | executor/sniper medium | `ollama-cloud/glm-5.2` |
 | executor/sniper high | `ollama-cloud/kimi-k2.7-code` |
-| test-author / harvester / shipper | `xai/grok-build-0.1` |
+| test-author / harvester / shipper | `openai/gpt-5.6-terra` |
 
 **Dual-always** on plan-reviewer and adversary (two `task` dispatches + shared merge).
-Default hands use Ollama Cloud ladder; eyes stay Grok + OpenAI dual. Reconfigure via skill `configuring-model-routing`.
+Default hands use Ollama Cloud ladder; eyes use the configured GLM + OpenAI dual. Reconfigure via skill `configuring-model-routing`.
 
 ---
 
@@ -145,4 +146,3 @@ See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths), 
 | Folder | What lives there | See |
 |--------|------------------|-----|
 | .opencode/ | OC vendored agents/skills/plugins + runtime state (ephemeral plans) | core/opencode/AGENTS.md (source) + this section |
-

@@ -10,6 +10,7 @@ import {
   isRefuteVehicle,
 } from "../../../shared/lib/merge-findings.mjs";
 import { mergeVerdicts } from "../../../shared/lib/merge-verdicts.mjs";
+import { reviewDispatchFor } from "../../agents/review-catalog.mjs";
 
 /** Locked dual_status enum (07-cross-family). Never store dual_completed: true. */
 export const DUAL_STATUS = Object.freeze({
@@ -32,13 +33,11 @@ export const DUAL_STATUS_VALUES = Object.freeze(
 /** Always-dual posts (ADR-003). */
 export const DUAL_POSTS = Object.freeze({
   "plan-reviewer": Object.freeze({
-    primary: "plan-reviewer",
-    secondary: "plan-reviewer-openai",
+    ...reviewDispatchFor("plan-reviewer"),
     shape: "verdict",
   }),
   adversary: Object.freeze({
-    primary: "adversary",
-    secondary: "adversary-openai",
+    ...reviewDispatchFor("adversary"),
     shape: "findings",
   }),
 });

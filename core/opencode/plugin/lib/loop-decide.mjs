@@ -1,6 +1,7 @@
 /** @description Pure loop-guard counters for plan-review and adversary. Never throws. Disk persistence is shell. */
 
-import { bareRole, isAdversaryRole, isPlanReviewerRole } from "./roles.mjs";
+import { bareRole } from "./roles.mjs";
+import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 
 /** Defaults from resolved_judgments */
 export const LOOP_THRESHOLDS = {
@@ -18,10 +19,12 @@ export const LOOP_THRESHOLDS = {
  * @returns {"plan_review_count"|"adversary_loop_count"|null}
  */
 export function loopCounterKey(subagentType) {
-  const bare = bareRole(subagentType);
-  if (bare.includes("-openai")) return null; // secondary dual-eye does not increment
-  if (isPlanReviewerRole(subagentType)) return "plan_review_count";
-  if (isAdversaryRole(subagentType)) return "adversary_loop_count";
+  const identity = reviewAgentIdentity(subagentType);
+  if (identity) {
+    if (!identity.countsLoop) return null;
+    if (identity.logicalRole === "plan-reviewer") return "plan_review_count";
+    if (identity.logicalRole === "adversary") return "adversary_loop_count";
+  }
   return null;
 }
 
