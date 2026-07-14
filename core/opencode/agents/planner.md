@@ -1,7 +1,7 @@
 ---
 description: Solution architect — decomposes an approved spec into a validated execution-plan JSON. Read-only. Refuses trivial (QUICK) requests.
 mode: subagent
-model: openai/gpt-5.6-terra
+model: openai/gpt-5.6-sol
 temperature: 0.1
 permission:
   edit: deny

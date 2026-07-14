@@ -1,7 +1,7 @@
 ---
 description: Family-1 adversary eye — enters VIRGIN and finds failure modes that make the implementation unviable. Read-only.
 mode: subagent
-model: ollama-cloud/glm-5.2
+model: openai/gpt-5.6-sol
 temperature: 0.3
 permission:
   edit: deny

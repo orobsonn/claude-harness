@@ -89,14 +89,14 @@ function expectedModels(routing) {
   return {
     build: r.build.model,
     planner: r.planner.model,
-    "plan-reviewer": r["plan-reviewer"].model,
-    "plan-reviewer-openai": r["plan-reviewer"].dual[0].model,
-    "plan-reviewer-family-1": r["plan-reviewer"].model,
-    "plan-reviewer-family-2": r["plan-reviewer"].dual[0].model,
-    adversary: r.adversary.model,
-    "adversary-openai": r.adversary.dual[0].model,
-    "adversary-family-1": r.adversary.model,
-    "adversary-family-2": r.adversary.dual[0].model,
+    "plan-reviewer": r["plan-reviewer"].families["family-1"].model,
+    "plan-reviewer-openai": r["plan-reviewer"].families["family-2"].model,
+    "plan-reviewer-family-1": r["plan-reviewer"].families["family-1"].model,
+    "plan-reviewer-family-2": r["plan-reviewer"].families["family-2"].model,
+    adversary: r.adversary.families["family-1"].model,
+    "adversary-openai": r.adversary.families["family-2"].model,
+    "adversary-family-1": r.adversary.families["family-1"].model,
+    "adversary-family-2": r.adversary.families["family-2"].model,
     compliance: r.compliance.model,
     security: r.security.model,
     "executor-low": r.executor.tiers.low.model,
@@ -134,10 +134,10 @@ test("t6-dual-files: canonical family files and compatibility aliases exist", ()
   const pro = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-2.md")));
   const ad = frontmatter(read(join(AGENTS_DIR, "adversary-family-1.md")));
   const ado = frontmatter(read(join(AGENTS_DIR, "adversary-family-2.md")));
-  assert.equal(fmField(pr, "model"), "ollama-cloud/glm-5.2");
-  assert.equal(fmField(pro, "model"), "openai/gpt-5.6-sol");
-  assert.equal(fmField(ad, "model"), "ollama-cloud/glm-5.2");
-  assert.equal(fmField(ado, "model"), "openai/gpt-5.6-sol");
+  assert.equal(fmField(pr, "model"), "openai/gpt-5.6-sol");
+  assert.equal(fmField(pro, "model"), "ollama-cloud/kimi-k2.7-code");
+  assert.equal(fmField(ad, "model"), "openai/gpt-5.6-sol");
+  assert.equal(fmField(ado, "model"), "ollama-cloud/kimi-k2.7-code");
 });
 
 test("t6-build-prose: build.md contains dual-always protocol text", () => {

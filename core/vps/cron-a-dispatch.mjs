@@ -86,6 +86,8 @@ import {
   DEFAULT_MEM_GUARD_BYTES,
 } from "./mem-guard.mjs";
 import { rewriteSharedImportsForVendor } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
+import { adaptRoutingV1, migrateLegacyDefaultModel } from "../shared/lib/routing-adapter.mjs";
+import { validateRouting } from "../shared/lib/routing-validate.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -581,6 +583,15 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
   return config;
 }
 
+function migrateLegacyOpencodeModels(config) {
+  const migrated = { ...config };
+  const model = migrateLegacyDefaultModel(migrated.model, "openai/gpt-5.6-sol");
+  const smallModel = migrateLegacyDefaultModel(migrated.small_model, "openai/gpt-5.5");
+  migrated.model = typeof model === "string" && model.length > 0 ? model : "openai/gpt-5.6-sol";
+  migrated.small_model = typeof smallModel === "string" && smallModel.length > 0 ? smallModel : "openai/gpt-5.5";
+  return migrated;
+}
+
 /**
  * @description Seeds OpenCode root config into a headless worktree.
  * `opencode.json` + `AGENTS.md` live at the project root (not under `.opencode/`), so a
@@ -698,6 +709,24 @@ function copyOcRuntimeTree(srcDir, destDir, relPrefix = "") {
   }
 }
 
+function normalizeMaterializedRouting(ocDir) {
+  const routingPath = join(ocDir, "harness.routing.json");
+  const routing = tryReadJsonObject(routingPath);
+  if (!routing) {
+    if (existsSync(routingPath)) throw new Error("OC runtime routing invalid or unreadable after materialize");
+    return;
+  }
+  if (routing.version !== 1 && routing.version !== 2) {
+    throw new Error(`OC runtime routing version unsupported: ${String(routing.version)}`);
+  }
+  const normalized = adaptRoutingV1(routing);
+  const validation = validateRouting(normalized);
+  if (!validation.ok) {
+    throw new Error(`OC runtime routing invalid after materialize: ${validation.reason}`);
+  }
+  writeFileSync(routingPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+}
+
 /**
  * @description Materialize a full `.opencode/` runtime into the worktree from monorepo
  * `core/opencode` (preferred) or an already-vendored `projectRoot/.opencode`, with shared libs
@@ -736,6 +765,7 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     sourceKind = "vendored";
     openCodeSrc = vendoredSrc;
   } else if (isOpencodeRuntimeComplete(ocDir)) {
+    normalizeMaterializedRouting(ocDir);
     return { source: "worktree-complete", ocDir };
   } else {
     const missingMono = firstMissingOcCritical(monorepoSrc);
@@ -760,6 +790,8 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
+
+  normalizeMaterializedRouting(ocDir);
 
   // Monorepo plugins import core/shared via relative paths; vendor layout needs .opencode/shared.
   // Fail-closed if shared cannot be materialized — entry-gate/plan-gate load would throw at import
@@ -889,7 +921,7 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
     baseConfig = exampleConfig ?? {};
   }
 
-  const finalConfig = enforceOpencodePermissions(baseConfig, exampleConfig);
+  const finalConfig = enforceOpencodePermissions(migrateLegacyOpencodeModels(baseConfig), exampleConfig);
   // Fail-closed materialization: plugin[] must point at files that EXIST on the worktree.
   // Monorepo dogfood has gates under core/opencode/plugin; consumers under .opencode/plugin.
   // Listing absent paths used to load OpenCode with zero governance plugins (#315).

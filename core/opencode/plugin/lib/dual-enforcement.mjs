@@ -23,6 +23,10 @@ import {
   dualStatusGatePatch,
   validateGateStateDualFields,
 } from "../../../shared/lib/gate-state-shape.mjs";
+import { adaptRoutingV1 } from "../../../shared/lib/routing-adapter.mjs";
+import { validateRouting } from "../../../shared/lib/routing-validate.mjs";
+
+const warnedLegacyRoutingPaths = new Set();
 
 /** Default requireDualOn roles (ADR-003). */
 export const DEFAULT_REQUIRE_DUAL_ON = Object.freeze([
@@ -518,7 +522,14 @@ export function loadRoutingFromDisk(projectRoot) {
     for (const p of candidates) {
       try {
         const raw = fs.readFileSync(p, "utf8");
-        const routing = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        const routing = adaptRoutingV1(parsed);
+        const validation = validateRouting(routing);
+        if (!validation.ok) throw new Error(validation.reason);
+        if (parsed?.version === 1 && !warnedLegacyRoutingPaths.has(p)) {
+          warnedLegacyRoutingPaths.add(p);
+          console.warn(`[harness] routing v1 compatibility adapter used for ${p}; migrate to version 2`);
+        }
         return { ok: true, routing, path: p };
       } catch {
         // try next candidate

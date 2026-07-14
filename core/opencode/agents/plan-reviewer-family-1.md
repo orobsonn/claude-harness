@@ -1,7 +1,7 @@
 ---
 description: Family-1 plan-reviewer eye. Engineering audit of the execution-plan JSON BEFORE execution. Read-only. Returns APPROVE or REVISE.
 mode: subagent
-model: ollama-cloud/glm-5.2
+model: openai/gpt-5.6-sol
 temperature: 0.1
 permission:
   edit: deny

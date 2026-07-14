@@ -1,7 +1,7 @@
 ---
 description: Optional family-2 adversary eye for a cross-family virgin attack surface. Read-only.
 mode: subagent
-model: openai/gpt-5.6-sol
+model: ollama-cloud/kimi-k2.7-code
 temperature: 0.3
 permission:
   edit: deny

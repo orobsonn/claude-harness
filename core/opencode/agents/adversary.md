@@ -1,7 +1,7 @@
 ---
 description: Compatibility alias for adversary-family-1. Remove only after the two-release compatibility window.
 mode: subagent
-model: ollama-cloud/glm-5.2
+model: openai/gpt-5.6-sol
 temperature: 0.3
 permission:
   edit: deny

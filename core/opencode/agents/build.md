@@ -1,7 +1,7 @@
 ---
 description: Primary orchestrator — triages every request (QUICK/LIGHT/FULL/no-ceremony) and drives the delivery loop. Dispatches subagents by name via the Task tool; never writes code itself.
 mode: primary
-model: openai/gpt-5.6-terra
+model: openai/gpt-5.6-sol
 temperature: 0.1
 permission:
   edit: deny
@@ -36,8 +36,8 @@ CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: fal
 
 | Post | Primary eye | Second-family eye |
 |---|---|---|
-| plan-reviewer | `plan-reviewer-family-1` (`ollama-cloud/glm-5.2`) | `plan-reviewer-family-2` (`openai/gpt-5.6-sol`) |
-| adversary | `adversary-family-1` (`ollama-cloud/glm-5.2`) | `adversary-family-2` (`openai/gpt-5.6-sol`) |
+| plan-reviewer | `plan-reviewer-family-1` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` (`ollama-cloud/kimi-k2.7-code`) |
+| adversary | `adversary-family-1` (`openai/gpt-5.6-sol`) | `adversary-family-2` (`ollama-cloud/kimi-k2.7-code`) |
 
 **Runtime wiring:** pure module `skills/orchestrating-delivery/dual-runtime.mjs` (`driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `isFullDualCoverage`). Shared policy B via `core/shared/lib/merge-findings.mjs` + `merge-verdicts.mjs`.
 

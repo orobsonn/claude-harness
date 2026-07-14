@@ -1,7 +1,7 @@
 ---
 description: Optional family-2 plan-reviewer eye for cross-family engineering audit. Read-only.
 mode: subagent
-model: openai/gpt-5.6-sol
+model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
 permission:
   edit: deny

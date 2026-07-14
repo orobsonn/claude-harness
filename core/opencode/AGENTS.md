@@ -94,19 +94,20 @@ Any match in plan `scope_paths` forces FULL mode.
 
 | Role | Model |
 |---|---|
-| build | `openai/gpt-5.6-terra` |
-| planner | `openai/gpt-5.6-terra` |
-| plan-reviewer | `ollama-cloud/glm-5.2` + dual `openai/gpt-5.6-sol` |
-| adversary | `ollama-cloud/glm-5.2` + dual `openai/gpt-5.6-sol` |
-| compliance | `openai/gpt-5.6-terra` |
+| build | `openai/gpt-5.6-sol` |
+| planner | `openai/gpt-5.6-sol` |
+| plan-reviewer | required family 1 `openai/gpt-5.6-sol` + optional family 2 `ollama-cloud/kimi-k2.7-code` |
+| adversary | required family 1 `openai/gpt-5.6-sol` + optional family 2 `ollama-cloud/kimi-k2.7-code` |
+| compliance | `openai/gpt-5.5` |
 | security | `openai/gpt-5.5` |
 | executor/sniper low | `ollama-cloud/gemma4:31b` |
 | executor/sniper medium | `ollama-cloud/glm-5.2` |
 | executor/sniper high | `ollama-cloud/kimi-k2.7-code` |
-| test-author / harvester / shipper | `openai/gpt-5.6-terra` |
+| test-author | `ollama-cloud/glm-5.2` |
+| harvester / shipper | `openai/gpt-5.5` |
 
-**Dual-always** on plan-reviewer and adversary (two `task` dispatches + shared merge).
-Default hands use Ollama Cloud ladder; eyes use the configured GLM + OpenAI dual. Reconfigure via skill `configuring-model-routing`.
+**Family 1 is mandatory; family 2 is optional and fail-open** on plan-reviewer and adversary (two `task` dispatches + shared merge when available).
+Default hands use the Ollama Cloud ladder. Reconfigure via skill `configuring-model-routing`.
 
 ---
 

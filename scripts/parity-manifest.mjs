@@ -1,6 +1,7 @@
 /** @description Parity manifesto CI checker: verifies both runtime targets have required agents, dual config, gates, oracle, no token reads; used by parity-manifest.test.mjs and CI. */
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { validateRouting } from "../core/shared/lib/routing-validate.mjs";
 
 /** OC-canonical agent files (tiered executor/sniper). */
 export const OC_REQUIRED_AGENTS = [
@@ -8,8 +9,12 @@ export const OC_REQUIRED_AGENTS = [
   "planner",
   "plan-reviewer",
   "plan-reviewer-openai",
+  "plan-reviewer-family-1",
+  "plan-reviewer-family-2",
   "adversary",
   "adversary-openai",
+  "adversary-family-1",
+  "adversary-family-2",
   "compliance",
   "security",
   "executor-low",
@@ -115,18 +120,8 @@ export function checkDualConfig(targetDir) {
   } catch (err) {
     return { ok: false, reason: `invalid routing JSON: ${err.message}` };
   }
-  const roles = json.roles || json;
-  const pr = roles["plan-reviewer"] || {};
-  const adv = roles["adversary"] || {};
-  const hasDualPR = Array.isArray(pr.dual) && pr.dual.length > 0 && pr.dual.every((d) => d && d.model);
-  const hasDualAdv = Array.isArray(adv.dual) && adv.dual.length > 0 && adv.dual.every((d) => d && d.model);
-  if (!hasDualPR || !hasDualAdv) {
-    return {
-      ok: false,
-      reason: `dual missing: plan-reviewer=${hasDualPR} adversary=${hasDualAdv}`,
-    };
-  }
-  return { ok: true };
+  const validation = validateRouting(json);
+  return validation.ok ? { ok: true } : { ok: false, reason: validation.reason };
 }
 
 /**
