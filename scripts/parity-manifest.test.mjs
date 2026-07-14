@@ -1,7 +1,7 @@
 /** @description Parity manifesto tests exercising locked gates: agents presence, no token reads, dual config, vendored smoke. Hard asserts — no theater. */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -14,6 +14,9 @@ import {
 } from "./parity-manifest.mjs";
 
 describe("parity-manifest", () => {
+  const canonicalRouting = JSON.parse(
+    readFileSync(new URL("../core/opencode/harness.routing.json", import.meta.url), "utf8"),
+  );
   it("t11-agents: fails when required OC agent file missing unless on skip list", () => {
     const res = checkAgentsPresent("core/opencode", "opencode");
     assert.equal(res.ok, true, `missing OC agents: ${(res.missing || []).join(", ")}`);
@@ -29,6 +32,29 @@ describe("parity-manifest", () => {
       assert.ok(bad.missing.includes("build"));
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-canonical-review-agents: all four provider-agnostic family agents are mandatory", () => {
+    const canonical = [
+      "plan-reviewer-family-1",
+      "plan-reviewer-family-2",
+      "adversary-family-1",
+      "adversary-family-2",
+    ];
+    for (const missing of canonical) {
+      const tmp = mkdtempSync(join(tmpdir(), "parity-canonical-agent-"));
+      try {
+        mkdirSync(join(tmp, "agents"), { recursive: true });
+        for (const agent of OC_REQUIRED_AGENTS.filter((name) => name !== missing)) {
+          writeFileSync(join(tmp, "agents", `${agent}.md`), `# ${agent}\n`);
+        }
+        const result = checkAgentsPresent(tmp, "opencode");
+        assert.equal(result.ok, false);
+        assert.deepEqual(result.missing, [missing]);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     }
   });
 
@@ -57,6 +83,28 @@ describe("parity-manifest", () => {
     assert.equal(res.ok, true, res.reason || "dual config required");
   });
 
+  it("t11-routing-validator: fails on manipulated constraints, catalog policy, and model capabilities", () => {
+    for (const mutate of [
+      (routing) => { routing.constraints.requireDualOn = []; },
+      (routing) => { routing.roles.adversary.families["family-1"].countsLoop = false; },
+      (routing) => { routing.roles.build.model = "tampered/missing-capability"; },
+    ]) {
+      const tmp = mkdtempSync(join(tmpdir(), "parity-routing-validator-"));
+      try {
+        mkdirSync(join(tmp, "plugin"), { recursive: true });
+        writeFileSync(join(tmp, "plugin", "entry-gate.ts"), "export {};\n");
+        const routing = structuredClone(canonicalRouting);
+        mutate(routing);
+        writeFileSync(join(tmp, "harness.routing.json"), JSON.stringify(routing));
+        const result = checkDualConfig(tmp);
+        assert.equal(result.ok, false);
+        assert.equal(typeof result.reason, "string");
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("t11-smoke: new-clone / project-vendored smoke proves harness works without relying on global ~/.config/opencode (#ac-5.3)", () => {
     const tmp = mkdtempSync(join(tmpdir(), "parity-smoke-"));
     try {
@@ -77,7 +125,10 @@ describe("parity-manifest", () => {
         writeFileSync(join(tgt, ".opencode/plugin/plan-gate.ts"), "export {}\n");
         writeFileSync(join(tgt, ".opencode/plugin/loop-guard.ts"), "export {}\n");
         writeFileSync(join(tgt, ".opencode/shared/lib/capture-oracle.mjs"), "export {}\n");
-        writeFileSync(join(tgt, ".opencode/harness.routing.json"), JSON.stringify({ roles: { "plan-reviewer": { dual: [{ model: "x" }] }, adversary: { dual: [{ model: "x" }] } } }));
+        writeFileSync(
+          join(tgt, ".opencode/harness.routing.json"),
+          JSON.stringify(canonicalRouting),
+        );
         const gates = checkGatesAndOracle(join(tgt, ".opencode"));
         assert.equal(gates.ok, true);
         const res = runParity([join(tgt, ".opencode")]);

@@ -34,6 +34,33 @@ const ROUTING = {
     requireDualOn: ["plan-reviewer", "adversary"],
   },
 };
+const DEFAULT_ROUTING = JSON.parse(
+  fs.readFileSync(new URL("../../harness.routing.json", import.meta.url), "utf8"),
+);
+
+function asLegacyRouting(routing) {
+  const legacy = structuredClone(routing);
+  legacy.version = 1;
+  legacy.roles.build.model = "xai/grok-4.3";
+  legacy.roles.planner.model = "xai/grok-4.5";
+  legacy.roles["test-author"].model = "xai/grok-build-0.1";
+  legacy.modelCapabilities["xai/grok-4.3"] = { supportsReasoningEffort: true };
+  legacy.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: true };
+  legacy.modelCapabilities["xai/grok-build-0.1"] = { supportsReasoningEffort: false };
+  for (const role of ["plan-reviewer", "adversary"]) {
+    const primary = { ...legacy.roles[role].families["family-1"] };
+    const secondary = { ...legacy.roles[role].families["family-2"] };
+    delete primary.primary;
+    delete primary.optional;
+    delete primary.countsLoop;
+    delete secondary.primary;
+    delete secondary.optional;
+    delete secondary.countsLoop;
+    primary.model = "xai/grok-4.5";
+    legacy.roles[role] = { ...primary, dual: [secondary] };
+  }
+  return legacy;
+}
 
 // ---- locked: pending/missing throws deny before executor ----
 
@@ -391,7 +418,7 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
     );
     fs.writeFileSync(
       path.join(root, ".opencode", "harness.routing.json"),
-      JSON.stringify(ROUTING),
+      JSON.stringify(DEFAULT_ROUTING),
       "utf8",
     );
 
@@ -447,6 +474,35 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
     } catch {
       // ignore cleanup errors on some FS
     }
+  }
+});
+
+test("loadRoutingFromDisk adapts v1 and warns exactly once per path", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "routing-v1-"));
+  const warnings = [];
+  const originalWarn = console.warn;
+  try {
+    fs.mkdirSync(path.join(root, ".opencode"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".opencode", "harness.routing.json"),
+      JSON.stringify(asLegacyRouting(DEFAULT_ROUTING)),
+    );
+    console.warn = (message) => warnings.push(message);
+    const first = loadRoutingFromDisk(root);
+    const second = loadRoutingFromDisk(root);
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(first.routing.version, 2);
+    assert.equal(first.routing.roles.adversary.families["family-1"].primary, true);
+    assert.equal(first.routing.roles.adversary.families["family-1"].model, "openai/gpt-5.6-sol");
+    assert.equal(first.routing.roles.build.model, "openai/gpt-5.6-sol");
+    assert.equal(first.routing.roles["test-author"].model, "ollama-cloud/glm-5.2");
+    assert.equal(Object.keys(first.routing.modelCapabilities).some((model) => model.startsWith("xai/grok")), false);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /routing v1 compatibility adapter used/);
+  } finally {
+    console.warn = originalWarn;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

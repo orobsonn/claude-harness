@@ -660,3 +660,17 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("writeOpencodeConfig writes approved defaults to the non-clobber sidecar", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-sidecar-"));
+  try {
+    writeFileSync(join(tempDir, "opencode.json"), "{}\n");
+    const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
+    assert.match(status, /opencode\.harness\.json/);
+    const sidecar = JSON.parse(readFileSync(join(tempDir, "opencode.harness.json"), "utf8"));
+    assert.equal(sidecar.model, "openai/gpt-5.6-sol");
+    assert.equal(sidecar.small_model, "openai/gpt-5.5");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});

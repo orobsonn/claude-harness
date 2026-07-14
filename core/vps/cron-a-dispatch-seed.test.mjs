@@ -35,6 +35,24 @@ const CANONICAL_STUBS = [
 ];
 
 const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
+const CANONICAL_ROUTING = JSON.parse(
+  readFileSync(new URL("../opencode/harness.routing.json", import.meta.url), "utf8"),
+);
+
+function legacyRouting() {
+  const legacy = structuredClone(CANONICAL_ROUTING);
+  legacy.version = 1;
+  for (const role of ["plan-reviewer", "adversary"]) {
+    const primary = { ...legacy.roles[role].families["family-1"] };
+    const secondary = { ...legacy.roles[role].families["family-2"] };
+    for (const key of ["primary", "optional", "countsLoop"]) {
+      delete primary[key];
+      delete secondary[key];
+    }
+    legacy.roles[role] = { ...primary, dual: [secondary] };
+  }
+  return legacy;
+}
 
 /**
  * @description Minimal complete monorepo OC runtime under root/core/opencode (+ optional shared).
@@ -65,7 +83,7 @@ function writeMinimalOcRuntime(root, opts = {}) {
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
   mkdirSync(join(oc, "hands"), { recursive: true });
   mkdirSync(join(oc, "rules"), { recursive: true });
-  writeFileSync(join(oc, "harness.routing.json"), "{}\n", "utf8");
+  writeFileSync(join(oc, "harness.routing.json"), `${JSON.stringify(CANONICAL_ROUTING)}\n`, "utf8");
 
   if (opts.withSharedImport) {
     const sharedLib = join(root, "core", "shared", "lib");
@@ -229,6 +247,66 @@ test("seedOpencodeRootConfig: the example-fallback path is ALSO key-enforced whe
       cfg.permission.external_directory,
       "allow",
       "fallback-sourced config must also have permission.external_directory forced to 'allow'",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: migrates active Grok defaults and preserves custom non-Grok models", () => {
+  for (const input of [
+    { model: "xai/grok-4.5", small_model: "xai/grok-build-0.1", expected: ["openai/gpt-5.6-sol", "openai/gpt-5.5"] },
+    { model: "custom/primary", small_model: "custom/small", expected: ["custom/primary", "custom/small"] },
+    { model: "custom/grok-finetune", small_model: "acme/not-grok-small", expected: ["custom/grok-finetune", "acme/not-grok-small"] },
+    { model: "xai/grok-private", small_model: "xai/grok-build-custom", expected: ["xai/grok-private", "xai/grok-build-custom"] },
+  ]) {
+    const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-model-migrate-");
+    try {
+      writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify(input));
+      seedOpencodeRootConfig(worktree, projectRoot);
+      const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+      assert.deepEqual([cfg.model, cfg.small_model], input.expected);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("seedOpencodeRootConfig: never promotes an unmerged sidecar and materializes routing v2", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-sidecar-routing-");
+  try {
+    writeFileSync(join(projectRoot, "opencode.harness.json"), JSON.stringify({
+      model: "xai/grok-4.3",
+      small_model: "xai/grok-build-0.1",
+      custom: "UNMERGED_SENTINEL",
+    }));
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "harness.routing.json"),
+      JSON.stringify(legacyRouting()),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const routing = JSON.parse(readFileSync(join(worktree, ".opencode", "harness.routing.json"), "utf8"));
+    assert.equal(cfg.model, "openai/gpt-5.6-sol");
+    assert.equal(cfg.small_model, "openai/gpt-5.5");
+    assert.equal(cfg.custom, undefined);
+    assert.equal(routing.version, 2);
+    assert.equal(routing.roles.adversary.families["family-1"].primary, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: rejects an unknown materialized routing version", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-routing-v3-");
+  try {
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "harness.routing.json"),
+      JSON.stringify({ ...CANONICAL_ROUTING, version: 3 }),
+    );
+    assert.throws(
+      () => seedOpencodeRootConfig(worktree, projectRoot),
+      /routing version unsupported: 3/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

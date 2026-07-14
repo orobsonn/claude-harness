@@ -1,33 +1,47 @@
 {
   "$schema": "../../shared/schemas/harness-routing.schema.json",
-  "version": 1,
+  "version": 2,
   "roles": {
     "build": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "openai/gpt-5.6-sol"
     },
     "planner": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "openai/gpt-5.6-sol"
     },
     "plan-reviewer": {
-      "model": "ollama-cloud/glm-5.2",
-      "dual": [
-        {
+      "families": {
+        "family-1": {
           "model": "openai/gpt-5.6-sol",
-          "label": "openai"
+          "primary": true,
+          "optional": false,
+          "countsLoop": true
+        },
+        "family-2": {
+          "model": "ollama-cloud/kimi-k2.7-code",
+          "primary": false,
+          "optional": true,
+          "countsLoop": false
         }
-      ]
+      }
     },
     "adversary": {
-      "model": "ollama-cloud/glm-5.2",
-      "dual": [
-        {
+      "families": {
+        "family-1": {
           "model": "openai/gpt-5.6-sol",
-          "label": "openai"
+          "primary": true,
+          "optional": false,
+          "countsLoop": true
+        },
+        "family-2": {
+          "model": "ollama-cloud/kimi-k2.7-code",
+          "primary": false,
+          "optional": true,
+          "countsLoop": false
         }
-      ]
+      }
     },
     "compliance": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "openai/gpt-5.5"
     },
     "security": {
       "model": "openai/gpt-5.5"
@@ -59,13 +73,13 @@
       }
     },
     "test-author": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "ollama-cloud/glm-5.2"
     },
     "harvester": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "openai/gpt-5.5"
     },
     "shipper": {
-      "model": "openai/gpt-5.6-terra"
+      "model": "openai/gpt-5.5"
     }
   },
   "constraints": {
@@ -79,10 +93,10 @@
     ]
   },
   "modelCapabilities": {
-    "openai/gpt-5.6-terra": {
+    "openai/gpt-5.6-sol": {
       "supportsReasoningEffort": true
     },
-    "openai/gpt-5.6-sol": {
+    "openai/gpt-5.5": {
       "supportsReasoningEffort": true
     },
     "ollama-cloud/gemma4:31b": {
