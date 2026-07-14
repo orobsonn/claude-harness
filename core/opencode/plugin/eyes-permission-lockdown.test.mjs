@@ -14,8 +14,12 @@ const AGENTS_DIR = path.resolve(__dirname, "../agents")
 const EYE_FILES = [
   "adversary.md",
   "adversary-openai.md",
+  "adversary-family-1.md",
+  "adversary-family-2.md",
   "plan-reviewer.md",
   "plan-reviewer-openai.md",
+  "plan-reviewer-family-1.md",
+  "plan-reviewer-family-2.md",
   "security.md",
   "planner.md",
   "compliance.md",

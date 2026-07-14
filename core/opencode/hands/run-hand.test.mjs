@@ -28,7 +28,7 @@ import { stampFidelityPass } from "../plugin/lib/mark-gate.mjs";
 const PRIMARY_SPAWN_FM = `---
 description: "test spawn"
 mode: primary
-model: xai/grok-4.5
+model: openai/gpt-5.6-terra
 tools:
   task: false
 permission:
@@ -40,7 +40,7 @@ permission:
 const SUBAGENT_FM = `---
 description: "subagent hand"
 mode: subagent
-model: xai/grok-4.5
+model: openai/gpt-5.6-terra
 tools:
   task: false
 ---
@@ -49,7 +49,7 @@ tools:
 
 const PRIMARY_WITH_TASK_TRUE = `---
 mode: primary
-model: xai/grok-4.5
+model: openai/gpt-5.6-terra
 tools:
   task: true
 ---

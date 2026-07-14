@@ -86,7 +86,7 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       subagent_type: "executor-medium",
       feature_id: fid,
       task_id: "t-b",
-      model: "grok-4.3",
+      model: "gpt-5.6-terra",
     };
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid }, { args });
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sid }, { args });

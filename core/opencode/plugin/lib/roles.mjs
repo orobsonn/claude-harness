@@ -24,10 +24,12 @@ export const HAND_ROLES = new Set(["executor", "sniper", "test-author"]);
  */
 export function bareRole(subagentType) {
   if (typeof subagentType !== "string") return "";
-  const s = subagentType.trim();
+  let s = subagentType.trim();
   if (!s) return "";
-  const bare = s.includes(":") ? s.slice(s.lastIndexOf(":") + 1) : s;
-  return bare.toLowerCase();
+  if (s.startsWith("@")) s = s.slice(1);
+  if (s.includes("/")) s = s.split("/").pop() || s;
+  if (s.includes(":")) s = s.slice(s.lastIndexOf(":") + 1);
+  return s.replace(/\.md$/i, "").toLowerCase();
 }
 
 /**

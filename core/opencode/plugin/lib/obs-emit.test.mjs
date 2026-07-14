@@ -84,7 +84,44 @@ test("isHandRole / isEyeRole", () => {
   assert.equal(isHandRole("sniper-medium"), true);
   assert.equal(isHandRole("test-author"), true);
   assert.equal(isHandRole("adversary"), false);
-  assert.equal(isEyeRole("plan-reviewer-openai"), true);
+  for (const role of [
+    "plan-reviewer-family-1",
+    "plan-reviewer-family-2",
+    "adversary-family-1",
+    "adversary-family-2",
+    "plan-reviewer",
+    "plan-reviewer-openai",
+    "adversary",
+    "adversary-openai",
+  ]) {
+    assert.equal(isEyeRole(role), true, role);
+  }
+});
+
+test("canonical and alias review eyes emit the same logical roles", () => {
+  for (const role of [
+    "plan-reviewer-family-1",
+    "plan-reviewer-family-2",
+    "plan-reviewer",
+    "plan-reviewer-openai",
+  ]) {
+    assert.deepEqual(eventForEyeRole(role, "verdict: APPROVE"), {
+      type: "plan-reviewed",
+      verdict: "APPROVE",
+      role: "plan-reviewer",
+    });
+  }
+  for (const role of [
+    "adversary-family-1",
+    "adversary-family-2",
+    "adversary",
+    "adversary-openai",
+  ]) {
+    assert.deepEqual(eventForEyeRole(role, "{}", { planExists: false }), {
+      type: "spec-adversary",
+      role: "adversary",
+    });
+  }
 });
 
 test("eventForEyeRole adversary pre-plan", () => {

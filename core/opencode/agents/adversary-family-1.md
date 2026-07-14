@@ -1,5 +1,5 @@
 ---
-description: Compatibility alias for adversary-family-1. Remove only after the two-release compatibility window.
+description: Family-1 adversary eye — enters VIRGIN and finds failure modes that make the implementation unviable. Read-only.
 mode: subagent
 model: ollama-cloud/glm-5.2
 temperature: 0.3

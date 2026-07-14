@@ -2,7 +2,7 @@
  * @description Post-task observability for eye agents (OC port of CC obs-eye-append).
  * tool.execute.after: args from output.args. Full plan scoped to session+feature (not global scan).
  * Also extends the hook with a deterministic dual-eye nudge (compute → persist → mutate) for
- * eligible primary eyes (plan-reviewer / adversary, never the -openai secondary) — see
+ * eligible primary review eyes (family 1, including compatibility aliases) — see
  * ./lib/dual-nudge.mjs for the pure, atomic gate-state read-decide-write.
  * Default export is the OC plugin load contract.
  */
@@ -57,6 +57,7 @@ export async function createObsEyeHooks(
     resolveHookArgs,
     extractTaskIds,
     bareEyeRole,
+    reviewAgentIdentity,
   } = await import("./lib/obs-emit.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   return {
@@ -79,23 +80,24 @@ export async function createObsEyeHooks(
         const ev = eventForEyeRole(ids.role, text, { planExists });
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
 
-        // Deterministic dual-eye nudge — eligible PRIMARY eyes only (bare role
-        // plan-reviewer/adversary; the -openai secondary never triggers a nudge).
+        // Deterministic dual-eye nudge — catalog primary eyes only; family 2 never triggers it.
         try {
           const bareRole = bareEyeRole(ids.role);
+          const reviewIdentity = reviewAgentIdentity(bareRole);
+          const logicalRole = reviewIdentity?.logicalRole ?? bareRole;
           const rawPhase =
             typeof args?.phase === "string" && args.phase.length > 0
               ? args.phase
               : null;
           const phase =
             rawPhase ??
-            (bareRole === "plan-reviewer"
+            (logicalRole === "plan-reviewer"
               ? "plan"
               : planExists
                 ? "task"
                 : "spec");
           if (
-            (bareRole === "plan-reviewer" || bareRole === "adversary") &&
+            reviewIdentity?.primary === true &&
             sessionId &&
             phase &&
             ids.featureId &&
@@ -109,7 +111,7 @@ export async function createObsEyeHooks(
               process.env.HARNESS_CODEX_ADVERSARY,
             );
             const nudge = applyDualNudge({
-              role: bareRole,
+              role: logicalRole,
               featureId: ids.featureId,
               taskId: ids.taskId,
               phase,

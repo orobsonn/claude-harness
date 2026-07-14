@@ -10,14 +10,17 @@ import {
   metaExists as defaultMetaExists,
   readEvents as defaultReadEvents,
 } from "../../../shared/lib/obs-append.mjs";
+import {
+  REVIEW_AGENT_ALIASES,
+  REVIEW_AGENT_CATALOG,
+  reviewAgentIdentity,
+} from "../../agents/review-catalog.mjs";
 
 const EYE_ROLES = new Set([
   "compliance",
-  "adversary",
   "security",
-  "plan-reviewer",
-  "plan-reviewer-openai",
-  "adversary-openai",
+  ...Object.keys(REVIEW_AGENT_CATALOG),
+  ...Object.keys(REVIEW_AGENT_ALIASES),
 ]);
 
 /**
@@ -279,7 +282,7 @@ export function parseEyeVerdict(responseText) {
 export function eventForEyeRole(roleRaw, responseText, opts = {}) {
   const role = bareEyeRole(roleRaw);
   if (!role || !EYE_ROLES.has(role)) return null;
-  const baseRole = role.replace(/-openai$/, "");
+  const baseRole = reviewAgentIdentity(role)?.logicalRole ?? role;
   if (baseRole === "plan-reviewer") {
     const verdict = parseEyeVerdict(responseText);
     return verdict
@@ -325,6 +328,8 @@ export function eventForTaskExecuting(args = {}) {
 export function isEyeRole(roleRaw) {
   return EYE_ROLES.has(bareEyeRole(roleRaw));
 }
+
+export { reviewAgentIdentity };
 
 /**
  * @param {unknown} roleRaw

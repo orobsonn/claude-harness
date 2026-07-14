@@ -63,6 +63,17 @@ test("entry-gate allows non-delivery roles without ceremony", () => {
   assert.equal(d.decision, "allow");
 });
 
+test("entry-gate normalizes namespaced canonical review roles and still requires ceremony", () => {
+  assert.equal(bareRole("@harness/adversary-family-1"), "adversary-family-1");
+  assert.equal(isDeliveryRole("@harness/adversary-family-1"), true);
+  const decision = decideEntryTask({
+    subagentType: "@harness/adversary-family-1",
+    gateState: {},
+  });
+  assert.equal(decision.decision, "deny");
+  assert.match(decision.reason, /ceremony missing/i);
+});
+
 // ---------------------------------------------------------------------------
 // t5-concurrent
 // ---------------------------------------------------------------------------
@@ -490,22 +501,49 @@ test("t5-loop-thresh: after configured warn threshold emits warn; after deny thr
 // t5-loop-dual-secondary-no-inc
 // ---------------------------------------------------------------------------
 
-test("t5-loop-dual-secondary-no-inc: loopCounterKey returns null for *-openai secondaries; decideLoopGuard allows secondary (not-loop-guarded then-clause) even when primary counter >= deny", () => {
-  assert.equal(loopCounterKey("adversary-openai"), null);
-  assert.equal(loopCounterKey("plan-reviewer-openai"), null);
+test("t5-loop-catalog-counts: canonical and alias roles follow catalog countsLoop", () => {
+  for (const role of ["adversary-family-1", "adversary"]) {
+    assert.equal(loopCounterKey(role), "adversary_loop_count", role);
+    assert.deepEqual(nextLoopCount({ adversary_loop_count: 2 }, role), {
+      key: "adversary_loop_count",
+      next: 3,
+    });
+  }
+  for (const role of ["plan-reviewer-family-1", "plan-reviewer"]) {
+    assert.equal(loopCounterKey(role), "plan_review_count", role);
+    assert.deepEqual(nextLoopCount({ plan_review_count: 2 }, role), {
+      key: "plan_review_count",
+      next: 3,
+    });
+  }
+  for (const role of [
+    "adversary-family-2",
+    "adversary-openai",
+    "plan-reviewer-family-2",
+    "plan-reviewer-openai",
+  ]) {
+    assert.equal(loopCounterKey(role), null, role);
+    assert.equal(nextLoopCount({}, role), null, role);
+  }
+  assert.equal(loopCounterKey("adversary-family-99"), null);
+  assert.equal(loopCounterKey("plan-reviewer-experimental"), null);
+  assert.equal(loopCounterKey("@harness/adversary-family-99"), null);
 
   // primary at/above deny
   const p = decideLoopGuard({ subagentType: "adversary", count: 4 });
   assert.equal(p.decision, "deny");
 
   // secondary uses the !key then-clause and is allowed regardless of passed count
-  const s = decideLoopGuard({ subagentType: "adversary-openai", count: 4 });
-  assert.equal(s.decision, "allow");
-  assert.equal(s.reason, "not-loop-guarded");
-
-  const s2 = decideLoopGuard({ subagentType: "plan-reviewer-openai", count: 5 });
-  assert.equal(s2.decision, "allow");
-  assert.equal(s2.reason, "not-loop-guarded");
+  for (const role of [
+    "adversary-family-2",
+    "adversary-openai",
+    "plan-reviewer-family-2",
+    "plan-reviewer-openai",
+  ]) {
+    const secondary = decideLoopGuard({ subagentType: role, count: 5 });
+    assert.equal(secondary.decision, "allow", role);
+    assert.equal(secondary.reason, "not-loop-guarded", role);
+  }
 });
 
 // ---------------------------------------------------------------------------

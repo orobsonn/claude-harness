@@ -86,10 +86,6 @@ export function validateRouting(config) {
       }
     }
 
-    if (caps["xai/grok-build-0.1"] && caps["xai/grok-build-0.1"].supportsReasoningEffort !== false) {
-      return { ok: false, reason: "grok-build-0.1 must not support reasoningEffort" };
-    }
-
     return { ok: true };
   } catch (err) {
     return {

@@ -1,5 +1,5 @@
 ---
-description: Compatibility alias for plan-reviewer-family-2. Remove only after the two-release compatibility window.
+description: Optional family-2 plan-reviewer eye for cross-family engineering audit. Read-only.
 mode: subagent
 model: openai/gpt-5.6-sol
 temperature: 0.1

@@ -67,9 +67,9 @@ Detect **first** (same signals as `triaging-requests`):
 
 | Role | Exact `subagent_type` names |
 |---|---|
-| Plan | `planner`, `plan-reviewer`, `plan-reviewer-openai` |
+| Plan | `planner`, `plan-reviewer-family-1`, `plan-reviewer-family-2` |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
-| Verify | `compliance`, `adversary`, `adversary-openai`, `security` |
+| Verify | `compliance`, `adversary-family-1`, `adversary-family-2`, `security` |
 | Fix | `sniper-low`, `sniper-medium`, `sniper-high` |
 | Close | `harvester`, `shipper` |
 
@@ -77,14 +77,14 @@ There is **NO** single `executor` or `sniper` agent — tiered names only. Tier 
 
 ### Dual-always (plan-reviewer + adversary)
 
-Always dispatch **both** primary and OpenAI dual eyes for plan-reviewer and adversary (ADR-003). Task tool has no model field — dual = two agent files.
+Always dispatch mandatory family 1 and attempt optional family 2 for plan-reviewer and adversary (ADR-003). Task tool has no model field — dual = two canonical agent files.
 
 **Runtime module:** `dual-runtime.mjs` in this skill folder — `driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `virginSecondaryBrief`, `isFullDualCoverage`, `dualStatusGatePatch`.
 
 | Step | Action |
 |---|---|
-| 1 | Dispatch primary (`plan-reviewer` / `adversary`) |
-| 2 | Dispatch secondary (`plan-reviewer-openai` / `adversary-openai`) with **virgin** brief — same contract, no primary verdict, no compliance output, no `shared_context` |
+| 1 | Dispatch primary (`plan-reviewer-family-1` / `adversary-family-1`) |
+| 2 | Dispatch secondary (`plan-reviewer-family-2` / `adversary-family-2`) with **virgin** brief — same contract, no primary verdict, no compliance output, no `shared_context` |
 | 3 | On secondary auth/unavailable → `dual_status: "primary_only_failopen"`; keep primary findings only; **never invent** secondary findings; warn operator (pt-br) |
 | 4 | On secondary infra error (rate limit / 5xx / crash) → `dual_status: "primary_only_error"`; **retry secondary once (K=1)**; if retry ok → upgrade to `both` + merge; if retry fails → keep primary only + warn; continue loop |
 | 5 | On both ok → merge via policy B (shared `finalizeFindings` / `mergeVerdicts`); `dual_status: "both"` |
@@ -123,7 +123,7 @@ Never use the edit tool.
    - **Cold-start check:** if this is a non-trivial existing codebase and the index is cold (no entries in MEMORY.md, root router unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code, then read the now-populated index before shaping the spec.
 2. **Load and follow the `brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
 3. Write the spec file **via bash** (`cat >`) — `edit` is denied.
-4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary` (+ dual `adversary-openai` when dual-always). Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
+4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary-family-1` (+ optional `adversary-family-2`). Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
 **HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the PR body.
@@ -142,7 +142,7 @@ Never use the edit tool.
 
 3. Run the **`validate-plan` tool** on that file — a deterministic **structural** gate. On FAIL, hand its error list to `planner` and re-plan. **Cap 2 loops**, then escalate to the operator in product-language.
 
-4. Dispatch `plan-reviewer` (read-only) for **engineering soundness** → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Cap 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product-language.
+4. Dispatch `plan-reviewer-family-1` (read-only) for **engineering soundness**, then attempt `plan-reviewer-family-2` → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Cap 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product-language.
 
 5. **DETERMINISTIC sensitive-path override:** compare the plan's `scope_paths` against the allowlist:
    `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).
@@ -180,7 +180,7 @@ Curate **layered** context per agent (budget ~2k–8k tokens/step), never the wh
 
 ### LIGHT: upfront spec-adversary
 
-In LIGHT mode, before the first task, dispatch `adversary` **VIRGIN** against the spec + a read of the existing codebase to surface tech-debt risks. Consume its findings before the first task: route every actionable finding — severity ≥ medium, or any finding with a `fix_hint` — to `sniper-<tiers[finding.severity]>`. Each sniper pass re-runs the affected gates. Zero findings (or all ≤ low with no `fix_hint`) is a valid outcome. Upfront findings not dispatched to a sniper must be explicitly recorded as accepted-risk in `shared_context.md` before the per-task loop begins.
+In LIGHT mode, before the first task, dispatch `adversary-family-1` **VIRGIN** against the spec + a read of the existing codebase to surface tech-debt risks. Consume its findings before the first task: route every actionable finding — severity ≥ medium, or any finding with a `fix_hint` — to `sniper-<tiers[finding.severity]>`. Each sniper pass re-runs the affected gates. Zero findings (or all ≤ low with no `fix_hint`) is a valid outcome. Upfront findings not dispatched to a sniper must be explicitly recorded as accepted-risk in `shared_context.md` before the per-task loop begins.
 
 ### Adversary re-dispatch stop-rule
 
@@ -203,10 +203,10 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **fidelity mode** (pre-freeze: full-observable fidelity only, no green required). On fidelity **PASS**, stamp disk marker **before** any executor spawn (see Fidelity-rail stamp below). Freeze the locked test, then proceed to implement. |
 | b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → supply the missing `resolved_judgment` or escalate. (route to critical exception — do not retry) |
 | c | Compliance | Dispatch `compliance` (read-only, bash allow) with **diff + ACs + locked_tests only** — NOT shared_context, NOT adversary findings. Reads back `pass \| partial \| fail`. |
-| d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary` **VIRGIN** — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero attested findings is a **VALID result** — never re-dispatch to hit a count. A `BLOCKED` return is **NOT a pass** — halt and escalate. |
+| d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary-family-1` **VIRGIN**, then attempt `adversary-family-2` — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero attested findings is a **VALID result** — never re-dispatch to hit a count. A `BLOCKED` return is **NOT a pass** — halt and escalate. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
 | f | Gates (deterministic, no LLM) | **You** run via Bash: task's `locked_tests` + `npm run typecheck` (tsc --noEmit) + lint. Failure → issue list. |
-| g | Fix | Map ALL issues (compliance + adversary + security + gates) to `sniper-<tiers[issue.severity]>`. Sniper is the ONLY fixer (`edit` allow, `bash` deny, no new files). **HIGH fix — or a `medium` in an irreversible class (orphan-state/race/idempotency) — re-dispatch `adversary` fresh-virgin after, to attack the NEW surface the fix created.** Re-run the affected gate after every sniper pass. |
+| g | Fix | Map ALL issues (compliance + adversary + security + gates) to `sniper-<tiers[issue.severity]>`. Sniper is the ONLY fixer (`edit` allow, `bash` deny, no new files). **HIGH fix — or a `medium` in an irreversible class (orphan-state/race/idempotency) — re-dispatch `adversary-family-1` fresh-virgin after, to attack the NEW surface the fix created.** Re-run the affected gate after every sniper pass. |
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 

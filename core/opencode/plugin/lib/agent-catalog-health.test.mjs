@@ -19,7 +19,11 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
   for (const name of [
     "build",
     "adversary",
+    "adversary-family-1",
+    "adversary-family-2",
     "planner",
+    "plan-reviewer-family-1",
+    "plan-reviewer-family-2",
     "executor-low",
     "executor-low-spawn",
     "sniper-high",

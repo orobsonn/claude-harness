@@ -44,7 +44,7 @@ Summarize roles → models in a short table (pt-br labels). Highlight dual posts
 
 Ask one question at a time:
 
-- Preset (e.g. keep Grok+OpenAI default) vs per-role edit?
+- Preset (e.g. keep the configured default) vs per-role edit?
 - Which role?
 - New model slug (must be a real OC provider/model the operator can auth)?
 

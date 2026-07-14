@@ -1,7 +1,7 @@
 ---
 description: Solution architect — decomposes an approved spec into a validated execution-plan JSON. Read-only. Refuses trivial (QUICK) requests.
 mode: subagent
-model: xai/grok-4.5
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: deny
@@ -130,9 +130,9 @@ A **string** naming one OBSERVABLE assertion with a concrete expected value — 
 {
   "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
   "planner": "planner",
-  "plan_reviewer": "plan-reviewer",
+  "plan_reviewer": "plan-reviewer-family-1",
   "compliance": "compliance",
-  "adversary": "adversary",
+  "adversary": "adversary-family-1",
   "security": "security",
   "harvester": "harvester",
   "shipper": "shipper"

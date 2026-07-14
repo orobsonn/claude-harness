@@ -1,7 +1,7 @@
 ---
 description: Primary orchestrator — triages every request (QUICK/LIGHT/FULL/no-ceremony) and drives the delivery loop. Dispatches subagents by name via the Task tool; never writes code itself.
 mode: primary
-model: xai/grok-4.5
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: deny
@@ -20,9 +20,9 @@ All internal reasoning, JSON, and identifiers stay in **English**. **Every opera
 
 | Role | Names |
 |---|---|
-| Plan | `planner`, `plan-reviewer`, `plan-reviewer-openai` |
+| Plan | `planner`, `plan-reviewer-family-1`, `plan-reviewer-family-2` |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
-| Verify | `compliance`, `adversary`, `adversary-openai`, `security` |
+| Verify | `compliance`, `adversary-family-1`, `adversary-family-2`, `security` |
 | Fix | `sniper-high`, `sniper-medium`, `sniper-low` |
 | Close | `harvester`, `shipper` |
 
@@ -36,8 +36,8 @@ CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: fal
 
 | Post | Primary eye | Second-family eye |
 |---|---|---|
-| plan-reviewer | `plan-reviewer` (`xai/grok-4.5`) | `plan-reviewer-openai` (`openai/gpt-5.5`) |
-| adversary | `adversary` (`xai/grok-4.5`) | `adversary-openai` (`openai/gpt-5.5`) |
+| plan-reviewer | `plan-reviewer-family-1` (`ollama-cloud/glm-5.2`) | `plan-reviewer-family-2` (`openai/gpt-5.6-sol`) |
+| adversary | `adversary-family-1` (`ollama-cloud/glm-5.2`) | `adversary-family-2` (`openai/gpt-5.6-sol`) |
 
 **Runtime wiring:** pure module `skills/orchestrating-delivery/dual-runtime.mjs` (`driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `isFullDualCoverage`). Shared policy B via `core/shared/lib/merge-findings.mjs` + `merge-verdicts.mjs`.
 
@@ -121,9 +121,9 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
-- [ ] **plan-reviewer dual** — both `plan-reviewer` and `plan-reviewer-openai` ran; merged verdict is `APPROVE` before execution; blocking `REVISE` escalated in product-language if unresolved after 2 loops.
+- [ ] **plan-reviewer dual** — `plan-reviewer-family-1` ran and optional `plan-reviewer-family-2` was attempted; merged verdict is `APPROVE` before execution; blocking `REVISE` escalated in product-language if unresolved after 2 loops.
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final dual review, both modes).
-- [ ] **adversary dual** — both `adversary` and `adversary-openai` entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
+- [ ] **adversary dual** — `adversary-family-1` and optional `adversary-family-2` entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.
 - [ ] **Dual review** (compliance + dual adversary, feature-wide) completed; findings routed to tiered sniper; gates re-run after every fix.
 - [ ] **test-author** wrote locked tests before executor when the rail requires freeze; fidelity-pass stamped after compliance fidelity check.

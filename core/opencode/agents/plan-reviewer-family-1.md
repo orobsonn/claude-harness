@@ -1,5 +1,5 @@
 ---
-description: Compatibility alias for plan-reviewer-family-1. Remove only after the two-release compatibility window.
+description: Family-1 plan-reviewer eye. Engineering audit of the execution-plan JSON BEFORE execution. Read-only. Returns APPROVE or REVISE.
 mode: subagent
 model: ollama-cloud/glm-5.2
 temperature: 0.1
