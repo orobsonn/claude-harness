@@ -57,7 +57,7 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
     seedOpencodeRootConfig(worktree, repoRoot);
 
     const jsonPaths = [
-      join(vendored, "opencode.harness.json"),
+      join(vendored, "opencode.json"),
       join(vendored, ".opencode", "harness.routing.json"),
       join(worktree, "opencode.json"),
       join(worktree, ".opencode", "harness.routing.json"),
@@ -74,9 +74,8 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
     }
     assert.deepEqual(active.filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
 
-    const sidecar = JSON.parse(readFileSync(join(vendored, "opencode.harness.json"), "utf8"));
-    assert.equal(sidecar.model, "openai/gpt-5.6-sol");
-    assert.equal(sidecar.small_model, "openai/gpt-5.5");
+    const merged = JSON.parse(readFileSync(join(vendored, "opencode.json"), "utf8"));
+    assert.ok(merged.plugin.includes("./.opencode/plugin/planner-recovery.ts"));
     for (const routingPath of [jsonPaths[1], jsonPaths[3]]) {
       assert.equal(JSON.parse(readFileSync(routingPath, "utf8")).version, 2);
     }

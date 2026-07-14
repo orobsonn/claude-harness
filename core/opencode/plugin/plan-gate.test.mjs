@@ -8,6 +8,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createPlanGateHooks } from "./plan-gate.ts"
+import { readPlannerArtifact, writeBoundPlanSnapshot } from "./lib/planner-artifact.mjs"
 
 const SESSION = "ses_planGateTest01"
 const FEATURE = "feat-plan-gate"
@@ -87,9 +88,16 @@ function seedProject(root, gateState, plan) {
  */
 async function runHook(root, subagentType) {
   const hooks = await createPlanGateHooks(root)
+  const taskLevel = /^(?:executor|sniper|test-author)/.test(subagentType)
   return hooks["tool.execute.before"](
     { tool: "task", sessionID: SESSION },
-    { args: { subagent_type: subagentType } },
+    { args: {
+      description: `dispatch ${subagentType}`,
+      prompt: taskLevel
+        ? `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nDo the task.`
+        : "Review the bound plan.",
+      subagent_type: subagentType,
+    } },
   )
 }
 
@@ -104,7 +112,7 @@ test("lt-pg-missing: executor + missing plan throws [plan-gate]", async () => {
       (err) => {
         assert.ok(err instanceof Error)
         assert.match(err.message, /\[plan-gate\]/)
-        assert.match(err.message, /plan missing|full plan required/i)
+        assert.match(err.message, /usable bound artifact|required/i)
         return true
       },
     )
@@ -123,7 +131,7 @@ test("lt-pg-stub: sniper + stub plan throws [plan-gate]", async () => {
       (err) => {
         assert.ok(err instanceof Error)
         assert.match(err.message, /\[plan-gate\]/)
-        assert.match(err.message, /stub|empty tasks|expect full/i)
+        assert.match(err.message, /stub|empty tasks|expect full|usable bound artifact/i)
         return true
       },
     )
@@ -147,6 +155,70 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
       { feature_id: FEATURE, dual_status: "both" },
       GOLDEN_FULL,
     )
+    const artifact = readPlannerArtifact(root, SESSION, FEATURE)
+    const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+    assert.equal(snapshot.ok, true)
+    const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
+    fs.writeFileSync(statePath, JSON.stringify({
+      feature_id: FEATURE,
+      dual_status: "both",
+      planner_status: "usable",
+      planner_plan_binding: {
+        session_id: SESSION,
+        feature_id: FEATURE,
+        semantic_hash: artifact.semanticHash,
+        file_hash: artifact.fileHash,
+        fingerprint: artifact.fingerprint,
+        snapshot_path: snapshot.relativePath,
+        snapshot_hash: artifact.semanticHash,
+      },
+    }))
     await assert.doesNotReject(() => runHook(root, "executor-low"))
+  })
+})
+
+test("lt-pg-dispatch-identity: official Task shape derives feature from session and task from strict prompt marker", async () => {
+  await withTempRoot(async (root) => {
+    seedProject(root, { feature_id: FEATURE, dual_status: "both" }, GOLDEN_FULL)
+    const artifact = readPlannerArtifact(root, SESSION, FEATURE)
+    const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+    const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
+    fs.writeFileSync(statePath, JSON.stringify({
+      feature_id: FEATURE,
+      dual_status: "both",
+      planner_status: "usable",
+      planner_plan_binding: {
+        session_id: SESSION,
+        feature_id: FEATURE,
+        semantic_hash: artifact.semanticHash,
+        snapshot_path: snapshot.relativePath,
+        snapshot_hash: artifact.semanticHash,
+      },
+    }))
+    const hooks = await createPlanGateHooks(root)
+    const dispatch = (prompt, extras = {}) => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION },
+      { args: { description: "implement", prompt, subagent_type: "executor-low", ...extras } },
+    )
+    const valid = `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nImplement.`
+    await assert.doesNotReject(() => dispatch(valid))
+    await assert.rejects(() => dispatch(valid, { feature_id: "foreign" }), /feature_id/)
+    await assert.rejects(() => dispatch(`[HARNESS_TASK_CONTEXT]{"task_id":"missing-task"}[/HARNESS_TASK_CONTEXT]`), /task_id/)
+    await assert.rejects(() => dispatch("Implement without marker."), /marker/)
+    await assert.rejects(() => dispatch(valid, { task_id: "missing-task" }), /conflicts/)
+    const review = (args) => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION },
+      { args: { description: "review", prompt: "Review plan.", subagent_type: "plan-reviewer-family-1", ...args } },
+    )
+    await assert.rejects(() => review({ feature_id: "foreign" }), /feature_id/)
+    await assert.rejects(() => review({ feature_id: FEATURE, task_id: "missing-task" }), /task_id/)
+    await assert.doesNotReject(() => review({}))
+  })
+})
+
+test("lt-pg-legacy: structurally valid old plan without planner binding fails closed", async () => {
+  await withTempRoot(async (root) => {
+    seedProject(root, { feature_id: FEATURE, dual_status: "both" }, GOLDEN_FULL)
+    await assert.rejects(() => runHook(root, "plan-reviewer-family-1"), /usable bound artifact/)
   })
 })

@@ -67,7 +67,7 @@ Detect **first** (same signals as `triaging-requests`):
 
 | Role | Exact `subagent_type` names |
 |---|---|
-| Plan | `planner`, `plan-reviewer-family-1`, `plan-reviewer-family-2` |
+| Plan | `planner`, optional `planner-fallback`, `plan-reviewer-family-1`, `plan-reviewer-family-2` |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
 | Verify | `compliance`, `adversary-family-1`, `adversary-family-2`, `security` |
 | Fix | `sniper-low`, `sniper-medium`, `sniper-high` |
@@ -134,6 +134,10 @@ Never use the edit tool.
 
 1. Dispatch `planner` via Task with the approved spec. The planner returns one `execution-plan.json` (schema in `planner.md`; the planner self-validates structure first).
 
+   **Provider recovery:** `planner-recovery` atomically claims each Task using OpenCode's `callID` plus a persisted attempt token. Successful Task output is not success yet: it becomes `plan_pending_write`. Rewrite the returned plan at the canonical path before any downstream dispatch; `plan-gate` verifies one coherent locked snapshot against the current attempt's session/feature, exact `plan.feature_id`, semantic hash, prior-file fingerprint, final file hash/mtime/size, and structural validity before persisting `usable`. Missing/legacy planner state fails closed. Once bound, the canonical plan is immutable through harness Write/Edit/Bash until a new planner claim moves state back to planning. Never reuse an old plan.
+
+   Real Task rejection is observed through OpenCode's `message.part.updated` / `ToolStateError` event (not only `tool.execute.after`). Authentication, credit, timeout, and provider failures set `planner_status: "planner_unavailable"` plus a bounded `planner_retry_outcome`. If `roles.planner.fallback` is configured and its agent model matches, dispatch `planner-fallback` exactly once; otherwise report `delivery-blocked` in pt-br and stop. A malformed, empty, stub, or prose-only output is `plan_invalid` even when its prose says `429`/provider; it never activates fallback. Active claims have a bounded lease: an expired primary converges to the configured fallback policy, while an expired/failed fallback converges to `delivery-blocked`. Until gate-state says `usable`, do not dispatch plan reviewers, test-author, executors, or snipers.
+
 2. **CANONICAL PATH — write/overwrite the full plan at:**
    ```
    .opencode/plans/<sessionID>-<feature_id>/execution-plan.json
@@ -170,6 +174,7 @@ Curate **layered** context per agent (budget ~2k–8k tokens/step), never the wh
 - **compliance enters lean** — diff + ACs/locked_tests only; no shared_context, no adversary findings.
 - **executor/sniper** receive the curated `shared_context` — a budget-capped knowledge ledger (key decisions, gotchas, insights), not a task log.
 - L3 nested folder rules: you read that folder's `AGENTS.md` deliberately and inject it — do not rely on auto-load.
+- **Official Task shape only:** dispatch with `{ description, prompt, subagent_type }`. For every `test-author`, `executor-*`, or `sniper-*` dispatch, include exactly one strict identity marker in `prompt`: `[HARNESS_TASK_CONTEXT]{"task_id":"<task id exactly as in the bound plan>"}[/HARNESS_TASK_CONTEXT]`. Do not invent top-level `feature_id` or `task_id` Task args. The runtime derives feature identity from trusted session gate-state and verifies this prompt marker against the bound snapshot.
 
 ---
 
@@ -210,7 +215,7 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
-**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author — do not rely on prose alone. **Every Task dispatch for a hand MUST pass top-level `feature_id` and `task_id`** (and optional `model`) so structural obs can fire; without them, obs-hand no-ops (no `unknown` spam). Additionally, the conductor MUST run these mark-gate CLI side-effects (idempotent / fail-open if env unset):
+**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Additionally, the conductor MUST run these mark-gate CLI side-effects (idempotent / fail-open if env unset):
 
 ```bash
 # After dual plan-reviewer merge (APPROVE|REVISE):

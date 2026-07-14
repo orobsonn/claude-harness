@@ -492,6 +492,7 @@ const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
 const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/entry-gate.ts",
   "./.opencode/plugin/plan-gate.ts",
+  "./.opencode/plugin/planner-recovery.ts",
   "./.opencode/plugin/plan-write-gate.ts",
   "./.opencode/plugin/loop-guard.ts",
   "./.opencode/plugin/reinject-state.ts",
@@ -499,22 +500,23 @@ const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/harvest-guard.ts",
   "./.opencode/plugin/obs-plan-write.ts",
   "./.opencode/plugin/obs-eye.ts",
-    "./.opencode/plugin/obs-hand.ts",
+  "./.opencode/plugin/obs-hand.ts",
   "./.opencode/plugin/agent-idle-nudge.ts",
 ]);
 
 /**
  * @description Guarantees the config being written always carries a non-empty `plugin` array. A
- * project's own `baseConfig.plugin` (a real, non-empty array) is always preserved as-is — this
- * function never overwrites a project's actual plugin configuration. Only when `plugin` is
- * absent/empty/non-array (the double-fault case, where `baseConfig` is `{}`) does it fall back to
- * `CANONICAL_OC_PLUGINS`, so a double-fault run never ships headless with zero governance plugins.
+ * Project plugins keep their order and every missing canonical governance plugin is appended once.
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @returns {string[]}
  */
 function resolveOcPlugins(baseConfig) {
   const basePlugins = baseConfig && Array.isArray(baseConfig.plugin) ? baseConfig.plugin : [];
-  return basePlugins.length > 0 ? basePlugins : [...CANONICAL_OC_PLUGINS];
+  const projectPlugins = basePlugins.filter((entry) => typeof entry === "string");
+  return [
+    ...projectPlugins,
+    ...CANONICAL_OC_PLUGINS.filter((entry) => !projectPlugins.includes(entry)),
+  ];
 }
 
 /**
@@ -635,6 +637,7 @@ const OC_RUNTIME_CRITICAL = Object.freeze([
   "skills/orchestrating-delivery/SKILL.md",
   "skills/brainstorming/SKILL.md",
   "plugin/entry-gate.ts",
+  "plugin/planner-recovery.ts",
   "tools/classify.ts",
   "agents/build.md",
 ]);
@@ -651,6 +654,9 @@ export function ocPluginFilesExist(root, plugins) {
   }
   for (const p of plugins) {
     if (typeof p !== "string" || p.length === 0) return false;
+    // Package/URL plugin identifiers are project-owned and resolved by OpenCode, not materialized files.
+    if (!p.startsWith(".") && !p.startsWith("/") && !p.startsWith("~")) continue;
+    if (p.startsWith("/") || p.startsWith("~")) return false;
     const rel = p.replace(/^\.\//, "");
     if (!existsSync(join(root, rel))) return false;
   }

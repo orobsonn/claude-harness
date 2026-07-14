@@ -29,6 +29,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -345,6 +346,7 @@ export function defaultOcPluginPaths() {
   return [
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/plan-gate.ts",
+    "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
     "./.opencode/plugin/loop-guard.ts",
     "./.opencode/plugin/reinject-state.ts",
@@ -374,7 +376,7 @@ export function pluginsAreRelative(plugins) {
 }
 
 /**
- * @description Write opencode.json with relative plugins if absent; else opencode.harness.json.
+ * @description Create or idempotently merge canonical plugins into a valid project-owned opencode.json.
  * @param {string} openCodeDir - source core/opencode
  * @param {string} targetDir - project root
  * @returns {string} status
@@ -402,8 +404,24 @@ export function writeOpencodeConfig(openCodeDir, targetDir) {
     writeFileSync(dest, body);
     return "created";
   }
-  writeFileSync(join(targetDir, "opencode.harness.json"), body);
-  return "exists → wrote opencode.harness.json for manual merge";
+  try {
+    const existing = JSON.parse(readFileSync(dest, "utf8"));
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) throw new Error("not object");
+    const projectPlugins = Array.isArray(existing.plugin)
+      ? existing.plugin.filter((entry) => typeof entry === "string")
+      : [];
+    existing.plugin = [
+      ...projectPlugins,
+      ...defaultOcPluginPaths().filter((entry) => !projectPlugins.includes(entry)),
+    ];
+    const temp = `${dest}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(existing, null, 2)}\n`);
+    renameSync(temp, dest);
+    return "updated existing opencode.json plugins";
+  } catch {
+    writeFileSync(join(targetDir, "opencode.harness.json"), body);
+    return "invalid existing config → wrote opencode.harness.json for manual repair";
+  }
 }
 
 /**
@@ -508,13 +526,14 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
 
   const cfg = writeOpencodeConfig(openCodeDir, targetDir);
   ok(`opencode.json: ${cfg}`);
-  const cfgPath =
-    cfg === "created"
-      ? join(targetDir, "opencode.json")
-      : join(targetDir, "opencode.harness.json");
+  const cfgPath = cfg.includes("manual repair")
+    ? join(targetDir, "opencode.harness.json")
+    : join(targetDir, "opencode.json");
   const writtenPlugins = JSON.parse(readFileSync(cfgPath, "utf8")).plugin;
-  if (!pluginsAreRelative(writtenPlugins)) {
-    fail("FATAL — plugin paths must be relative (never absolute home paths)");
+  const canonicalPlugins = defaultOcPluginPaths();
+  const installedHarnessPlugins = canonicalPlugins.filter((entry) => writtenPlugins.includes(entry));
+  if (installedHarnessPlugins.length !== canonicalPlugins.length || !pluginsAreRelative(installedHarnessPlugins)) {
+    fail("FATAL — harness plugin paths must all be installed and project-relative");
   }
 
   const acc = seedOcAccumulated(targetDir);

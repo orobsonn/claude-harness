@@ -198,6 +198,25 @@ test("hermetic plugin: OC write to gate-state throws; plan and normal file allow
   );
 });
 
+test("bound execution plan is immutable through Write/Edit until planner reclaims", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-bound-"));
+  try {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_bound");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ planner_status: "usable" }));
+    const before = (await createPlanWriteGateHooks(root))["tool.execute.before"];
+    await assert.rejects(
+      () => before(
+        { tool: "write", sessionID: "ses_bound" },
+        { args: { filePath: ".opencode/plans/ses_bound-feat/execution-plan.json", content: "{}" } },
+      ),
+      /immutable/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Scope rail locked tests (A3 parity for OC plan-write-decide + hook)
 // ---------------------------------------------------------------------------

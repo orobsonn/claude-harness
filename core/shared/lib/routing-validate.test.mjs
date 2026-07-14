@@ -18,6 +18,18 @@ describe("routing-validate", () => {
     assert.equal(res.ok, true);
   });
 
+  it("t1-planner-fallback: optional valid route passes and malformed route fails", () => {
+    const configured = structuredClone(defaultRouting);
+    configured.roles.planner.fallback = { model: "ollama-cloud/kimi-k2.7-code" };
+    assert.equal(validateRouting(configured).ok, true);
+
+    const malformed = structuredClone(defaultRouting);
+    malformed.roles.planner.fallback = {};
+    const result = validateRouting(malformed);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /invalid fallback model route on planner/);
+  });
+
   it("t1-family-missing: missing required family on adversary → error", () => {
     const cfg = structuredClone(defaultRouting);
     delete cfg.roles.adversary.families["family-1"];

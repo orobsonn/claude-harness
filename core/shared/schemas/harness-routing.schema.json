@@ -11,7 +11,7 @@
       "additionalProperties": false,
       "properties": {
         "build": { "$ref": "#/definitions/roleSimple" },
-        "planner": { "$ref": "#/definitions/roleSimple" },
+        "planner": { "$ref": "#/definitions/rolePlanner" },
         "plan-reviewer": { "$ref": "#/definitions/roleFamilies" },
         "adversary": { "$ref": "#/definitions/roleFamilies" },
         "compliance": { "$ref": "#/definitions/roleSimple" },
@@ -51,6 +51,17 @@
         "model": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
         "reasoningEffort": {}
       }
+    },
+    "rolePlanner": {
+      "allOf": [
+        { "$ref": "#/definitions/roleSimple" },
+        {
+          "type": "object",
+          "properties": {
+            "fallback": { "$ref": "#/definitions/roleSimple" }
+          }
+        }
+      ]
     },
     "roleFamilies": {
       "type": "object",

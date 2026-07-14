@@ -48,6 +48,8 @@ test("obs-eye: stub for THIS session-feature → spec-adversary; ignore other fu
       JSON.stringify({ tasks: [{ id: "x" }] }),
     );
     mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ feature_id: fid }));
     writeFileSync(
       join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`),
       JSON.stringify({ kind: "stub", tasks: [] }),
@@ -77,16 +79,17 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
     const sid = "ses_h1";
     const fid = "feat-h";
     mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ feature_id: fid }));
     writeFileSync(
       join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`),
       JSON.stringify({ tasks: [{ id: "t-a" }, { id: "t-b" }] }),
     );
     const hooks = await createObsHandHooks(dir);
     const args = {
+      description: "implement t-b",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t-b"}[/HARNESS_TASK_CONTEXT]\nImplement the task.`,
       subagent_type: "executor-medium",
-      feature_id: fid,
-      task_id: "t-b",
-      model: "gpt-5.6-terra",
     };
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid }, { args });
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sid }, { args });

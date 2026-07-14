@@ -8,6 +8,7 @@
   "plugin": [
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/plan-gate.ts",
+    "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
     "./.opencode/plugin/loop-guard.ts",
     "./.opencode/plugin/reinject-state.ts",

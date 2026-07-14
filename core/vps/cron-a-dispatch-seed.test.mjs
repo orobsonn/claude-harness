@@ -23,6 +23,7 @@ import {
 const CANONICAL_STUBS = [
   "entry-gate.ts",
   "plan-gate.ts",
+  "planner-recovery.ts",
   "plan-write-gate.ts",
   "loop-guard.ts",
   "reinject-state.ts",
@@ -526,6 +527,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned 
   try {
     writeVendoredOcRuntime(projectRoot);
     writeFileSync(join(projectRoot, ".opencode", "plugin", "entry-gate.ts"), "// source-of-truth\n", "utf8");
+    writeFileSync(join(projectRoot, ".opencode", "plugin", "local-extra.ts"), "// project-local\n", "utf8");
     // Worktree has stale framework file + a non-framework extra that must survive merge-copy
     writeVendoredOcRuntime(worktree);
     writeFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "// stale-worktree\n", "utf8");
@@ -533,16 +535,17 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned 
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
-        plugin: ["./.opencode/plugin/entry-gate.ts", "./.opencode/plugin/plan-gate.ts"],
+        plugin: ["./.opencode/plugin/entry-gate.ts", "./.opencode/plugin/plan-gate.ts", "./.opencode/plugin/local-extra.ts"],
         permission: { bash: { "*": "allow" } },
       }),
     );
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
-    assert.deepEqual(cfg.plugin, [
-      "./.opencode/plugin/entry-gate.ts",
-      "./.opencode/plugin/plan-gate.ts",
-    ]);
+    assert.equal(cfg.plugin[0], "./.opencode/plugin/entry-gate.ts");
+    assert.equal(cfg.plugin[1], "./.opencode/plugin/plan-gate.ts");
+    assert.equal(cfg.plugin[2], "./.opencode/plugin/local-extra.ts");
+    assert.equal(cfg.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 1);
+    assert.equal(new Set(cfg.plugin).size, cfg.plugin.length);
     assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
     assertCriticalRuntime(worktree);
     assert.equal(
@@ -598,6 +601,8 @@ test("ensureOcPluginPathsExist: monorepo core plugins → rewritten paths (fallb
     writeMonorepoPluginStubs(worktree);
     const out = ensureOcPluginPathsExist(worktree, ["./.opencode/plugin/entry-gate.ts"]);
     assert.deepEqual(out, ["./core/opencode/plugin/entry-gate.ts"]);
+    const withProjectPackage = ensureOcPluginPathsExist(worktree, ["project-plugin", "./.opencode/plugin/entry-gate.ts"]);
+    assert.deepEqual(withProjectPackage, ["project-plugin", "./core/opencode/plugin/entry-gate.ts"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

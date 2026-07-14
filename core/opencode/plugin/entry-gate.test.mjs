@@ -110,6 +110,24 @@ test("bash ls → does not throw", async () => {
   })
 })
 
+test("bound execution plan blocks bash mutation but permits read", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({ planner_status: "usable" }))
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () => before(
+        { tool: "bash", sessionID: SID },
+        { args: { command: "cat > .opencode/plans/ses-feat/execution-plan.json <<'EOF'\n{}\nEOF" } },
+      ),
+      /immutable/,
+    )
+    await assert.doesNotReject(() => before(
+      { tool: "bash", sessionID: SID },
+      { args: { command: "cat .opencode/plans/ses-feat/execution-plan.json" } },
+    ))
+  })
+})
+
 test("delivery bash missing sessionID → throws", async () => {
   await withHooks(async (hooks) => {
     const before = hooks["tool.execute.before"]
