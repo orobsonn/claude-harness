@@ -661,15 +661,34 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
   }
 });
 
-test("writeOpencodeConfig writes approved defaults to the non-clobber sidecar", () => {
+test("writeOpencodeConfig idempotently activates canonical plugins in existing project config", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-sidecar-"));
   try {
-    writeFileSync(join(tempDir, "opencode.json"), "{}\n");
+    writeFileSync(join(tempDir, "opencode.json"), JSON.stringify({ model: "project/model", plugin: ["project-plugin", "./local/plugin.ts"] }));
     const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
-    assert.match(status, /opencode\.harness\.json/);
+    assert.match(status, /updated existing/);
+    writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
+    const config = JSON.parse(readFileSync(join(tempDir, "opencode.json"), "utf8"));
+    assert.equal(config.model, "project/model");
+    assert.deepEqual(config.plugin.slice(0, 2), ["project-plugin", "./local/plugin.ts"]);
+    assert.equal(config.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 1);
+    assert.equal(new Set(config.plugin).size, config.plugin.length);
+    assert.equal(existsSync(join(tempDir, "opencode.harness.json")), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig preserves malformed project config and emits repair sidecar", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-invalid-config-"));
+  try {
+    const original = "{ project-owned invalid json\n";
+    writeFileSync(join(tempDir, "opencode.json"), original);
+    const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
+    assert.match(status, /manual repair/);
+    assert.equal(readFileSync(join(tempDir, "opencode.json"), "utf8"), original);
     const sidecar = JSON.parse(readFileSync(join(tempDir, "opencode.harness.json"), "utf8"));
-    assert.equal(sidecar.model, "openai/gpt-5.6-sol");
-    assert.equal(sidecar.small_model, "openai/gpt-5.5");
+    assert.ok(sidecar.plugin.includes("./.opencode/plugin/planner-recovery.ts"));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

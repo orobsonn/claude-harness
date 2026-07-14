@@ -51,6 +51,9 @@ export function validateRouting(config) {
     for (const role of SIMPLE_ROLES) {
       if (!isModelRoute(roles[role])) return { ok: false, reason: `invalid model route on ${role}` };
     }
+    if (roles.planner.fallback !== undefined && !isModelRoute(roles.planner.fallback)) {
+      return { ok: false, reason: "invalid fallback model route on planner" };
+    }
     for (const role of TIERED_ROLES) {
       const tiers = roles[role]?.tiers;
       for (const tier of ["low", "medium", "high"]) {

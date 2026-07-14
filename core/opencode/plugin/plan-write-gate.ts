@@ -165,6 +165,16 @@ export async function createPlanWriteGateHooks(
       // Platform input only: agent_id or non-empty role identity → subagent for rail
       const isSubagent = extractIsSubagent(inputRec);
 
+      if (
+        /(?:^|[\\/])execution-plan\.json$/i.test(filePath) &&
+        gateState != null &&
+        typeof gateState === "object" &&
+        !Array.isArray(gateState) &&
+        (gateState as Record<string, unknown>).planner_status === "usable"
+      ) {
+        throw new Error("[plan-write-gate] Blocked: bound execution-plan.json is immutable until a new planner claim.")
+      }
+
       throwIfDenied(
         decide(
           { args: { filePath }, tool_input: { file_path: filePath } },

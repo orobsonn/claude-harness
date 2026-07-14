@@ -36,7 +36,8 @@ export async function executeClassify(
   const { buildClassifyStub } = await import("../../shared/lib/classify-stub.mjs")
   const { isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
   const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { mergeGateState } = await import("../plugin/lib/gate-state.mjs")
+  const { persistClassifyArtifacts } = await import("./lib/classify-persist.mjs")
+  const { plannerCycleResetPatch } = await import("../plugin/lib/planner-state.mjs")
 
   const featureId = typeof args.feature_id === "string" ? args.feature_id.trim() : ""
   const mode = typeof args.mode === "string" ? args.mode.trim() : ""
@@ -86,46 +87,27 @@ export async function executeClassify(
     }
   }
 
-  const tmpPath = `${planPath}.tmp`
-  const dirPreexisted = fs.existsSync(pd.path)
-  let dirCreated = false
-  try {
-    if (!dirPreexisted) {
-      fs.mkdirSync(pd.path, { recursive: true })
-      dirCreated = true
-    }
-    fs.writeFileSync(tmpPath, JSON.stringify(built.stub, null, 2), "utf8")
-    fs.renameSync(tmpPath, planPath)
-  } catch (err) {
-    try {
-      fs.rmSync(tmpPath, { force: true })
-    } catch {
-      /* ignore */
-    }
-    if (dirCreated) {
-      try {
-        fs.rmSync(pd.path, { recursive: true, force: true })
-      } catch {
-        /* ignore */
-      }
-    }
-    const msg = err instanceof Error ? err.message : String(err)
-    return errorResult("write failed", msg.slice(0, 200), planPath)
-  }
-
   const gs = gateStatePath({
     projectRoot: context.directory,
     runtime: "opencode",
     sessionId: sessionID,
   })
-  if (gs.ok) {
-    mergeGateState(gs.path, {
+  if (!gs.ok) return errorResult("invalid gate-state path", gs.reason, sessionID)
+  const persisted = persistClassifyArtifacts({
+    planPath,
+    stub: built.stub,
+    statePath: gs.path,
+    statePatch: {
       session_id: sessionID,
       feature_id: featureId,
       mode,
       classified: true,
       triaged: true,
-    })
+      ...plannerCycleResetPatch(),
+    },
+  })
+  if (!persisted.ok) {
+    return errorResult("persistence failed", persisted.reason.slice(0, 200), planPath)
   }
 
   // Mid-run observability (#284): pipeline-type → Telegram drain (fail-open).

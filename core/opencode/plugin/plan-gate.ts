@@ -1,18 +1,28 @@
 /**
  * @description OC plan-gate plugin — full plan required + ADR-003 dual enforcement.
- * Before executor/sniper task dispatch: load plan via planDir + decidePlanGate(expect full),
+ * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full),
  * then dual_status must be a recorded attempt.
  * Deny throws [plan-gate]. Fail-closed on unreadable gate-state for delivery hands.
- * Non-executor/sniper roles skip plan require.
+ * Roles outside the guarded downstream set skip plan require.
  * Load shape matches loop-guard: dynamic import of pure mjs inside Plugin factory
  * (static import of dual-enforcement.mjs breaks OC plugin loader — "export is not a function").
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
-import fs from "node:fs"
-import path from "node:path"
-
 const PREFIX = "[plan-gate]"
+
+function dispatchIds(args: unknown): { featureId: string; taskId: string } {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return { featureId: "", taskId: "" }
+  const record = args as Record<string, unknown>
+  const nested = record.input && typeof record.input === "object" && !Array.isArray(record.input)
+    ? record.input as Record<string, unknown>
+    : {}
+  const stringValue = (value: unknown) => typeof value === "string" ? value : ""
+  return {
+    featureId: stringValue(record.feature_id ?? record.featureId ?? nested.feature_id ?? nested.featureId),
+    taskId: stringValue(record.task_id ?? record.taskId ?? nested.task_id ?? nested.taskId),
+  }
+}
 
 /**
  * @description Builds plan-gate hooks (async load of pure plan-decide + dual-enforcement mjs).
@@ -28,51 +38,88 @@ export async function createPlanGateHooks(
     enforceDualFromDiskOrThrow,
     extractHookTaskContext,
     extractSubagentType,
-    isDeliveryHandRequiringDual,
     isTaskTool,
-    loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
-  const { planDir } = await import("../../shared/lib/path-helpers.mjs")
-
+  const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs")
+  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const {
+    bareRole,
+    isExecutorRole,
+    isPlanReviewerRole,
+    isSniperRole,
+    isTestAuthorRole,
+  } = await import("./lib/roles.mjs")
   return {
     "tool.execute.before": async (input: any, output: any) => {
       const { toolName, toolArgs, sessionId } = extractHookTaskContext(input, output)
       if (!isTaskTool(toolName)) return
 
       const subagentType = extractSubagentType(toolArgs)
-      if (isDeliveryHandRequiringDual(subagentType)) {
+      const role = bareRole(subagentType)
+      const requiresFullPlan =
+        isPlanReviewerRole(role) ||
+        isTestAuthorRole(role) ||
+        isExecutorRole(role) ||
+        isSniperRole(role)
+      if (requiresFullPlan) {
         const sid = sessionId ?? undefined
-        const loaded = loadGateStateFromDisk(root, { sessionId: sid })
-        if (!loaded.ok) {
-          throw new Error(`${PREFIX} gate-state-unreadable: ${loaded.reason}`)
+        if (!sid) {
+          throw new Error(`${PREFIX} delivery-blocked: downstream dispatch requires planner session binding`)
+        }
+        const reconciled = reconcilePlannerStateFromDisk(root, sid)
+        if (!reconciled.ok) {
+          throw new Error(`${PREFIX} planner-state-unreadable: ${reconciled.reason}`)
         }
         const state =
-          loaded.state != null &&
-          typeof loaded.state === "object" &&
-          !Array.isArray(loaded.state)
-            ? (loaded.state as Record<string, unknown>)
+          reconciled.state != null &&
+          typeof reconciled.state === "object" &&
+          !Array.isArray(reconciled.state)
+            ? (reconciled.state as Record<string, unknown>)
             : {}
-        const featureId =
-          typeof state.feature_id === "string" ? state.feature_id : undefined
-        const pd = planDir({
-          projectRoot: root,
-          runtime: "opencode",
-          sessionId: sid,
-          featureId,
-        })
-        let plan: unknown = null
-        if (pd.ok) {
-          const planPath = path.join(pd.path, "execution-plan.json")
-          try {
-            if (fs.existsSync(planPath)) {
-              plan = JSON.parse(fs.readFileSync(planPath, "utf8"))
-            }
-          } catch {
-            plan = null
-          }
+        if (state.planner_status !== "usable" || !state.planner_plan_binding) {
+          throw new Error(`${PREFIX} delivery-blocked: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
         }
-        throwIfPlanDenied(decidePlanGate({ plan, expect: "full" }))
+        const binding = state.planner_plan_binding as Record<string, unknown>
+        const artifact = reconciled.artifact as Record<string, unknown> | null
+        if (
+          !artifact ||
+          binding.session_id !== sid ||
+          binding.feature_id !== state.feature_id ||
+          artifact.semanticHash !== binding.snapshot_hash
+        ) {
+          throw new Error(`${PREFIX} delivery-blocked: current plan snapshot does not match planner binding`)
+        }
+        throwIfPlanDenied(decidePlanGate({ plan: artifact.plan, expect: "full" }))
+        const ids = dispatchIds(toolArgs)
+        if (ids.featureId && ids.featureId !== binding.feature_id) {
+          throw new Error(`${PREFIX} delivery-blocked: optional dispatch feature_id conflicts with bound planner feature`)
+        }
+        const tasks = Array.isArray((artifact.plan as Record<string, unknown>)?.tasks)
+          ? (artifact.plan as { tasks: Array<Record<string, unknown>> }).tasks
+          : []
+        const requiresTaskId = isTestAuthorRole(role) || isExecutorRole(role) || isSniperRole(role)
+        const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
+          ? (toolArgs as Record<string, unknown>).prompt
+          : undefined
+        const marker = requiresTaskId ? parseTaskDispatchIdentity(prompt) : null
+        if (requiresTaskId && !marker?.ok) {
+          throw new Error(`${PREFIX} delivery-blocked: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
+        }
+        const trustedTaskId = marker?.ok ? marker.taskId : ids.taskId
+        if (ids.taskId && marker?.ok && ids.taskId !== marker.taskId) {
+          throw new Error(`${PREFIX} delivery-blocked: optional dispatch task_id conflicts with trusted prompt marker`)
+        }
+        if (trustedTaskId && !tasks.some((task) => task?.id === trustedTaskId)) {
+          throw new Error(`${PREFIX} delivery-blocked: dispatch task_id does not exist in bound plan`)
+        }
+
+        if (toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)) {
+          const args = toolArgs as Record<string, unknown>
+          const existingPrompt = typeof args.prompt === "string" ? args.prompt : ""
+          const boundPlan = JSON.stringify(artifact.plan)
+          args.prompt = `${existingPrompt}\n\n[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${boundPlan}\n[/HARNESS_BOUND_PLAN]`.trim()
+        }
       }
 
       enforceDualFromDiskOrThrow(PREFIX, {

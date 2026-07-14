@@ -45,6 +45,7 @@ export function isDeliveryRole(subagentType) {
   if (bare.startsWith("sniper")) return true;
   if (bare.startsWith("adversary")) return true;
   if (bare.startsWith("plan-reviewer")) return true;
+  if (bare === "planner-fallback") return true;
   return false;
 }
 
@@ -97,7 +98,8 @@ export function isAdversaryRole(subagentType) {
  * @returns {boolean}
  */
 export function isPlannerRole(subagentType) {
-  return bareRole(subagentType) === "planner";
+  const bare = bareRole(subagentType);
+  return bare === "planner" || bare === "planner-fallback";
 }
 
 /**

@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseTaskDispatchIdentity } from "./task-dispatch-identity.mjs";
 import {
   appendEvent as defaultAppendEvent,
   metaExists as defaultMetaExists,
@@ -382,7 +383,11 @@ export function extractTaskIds(args) {
   const featureId = str(
     args.feature_id ?? args.featureId ?? args.feature ?? nested?.feature_id ?? nested?.featureId,
   );
-  const taskId = str(args.task_id ?? args.taskId ?? args.task ?? nested?.task_id ?? nested?.taskId);
+  const prompt = str(args.prompt ?? nested?.prompt);
+  const marker = parseTaskDispatchIdentity(prompt);
+  const taskId = marker.ok
+    ? marker.taskId
+    : str(args.task_id ?? args.taskId ?? args.task ?? nested?.task_id ?? nested?.taskId);
   const model = str(args.model ?? nested?.model);
   return { featureId, taskId, model, role };
 }

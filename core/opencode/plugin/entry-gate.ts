@@ -55,6 +55,16 @@ function extractBashCommand(toolArgs: unknown): unknown {
   return a.command ?? a.cmd
 }
 
+/** @description Detect shell forms that can replace or mutate execution-plan.json. */
+function mutatesExecutionPlan(command: unknown): boolean {
+  if (typeof command !== "string" || !/execution-plan\.json/i.test(command)) return false
+  return (
+    /(?:>|>>)\s*["']?[^\s"']*execution-plan\.json/i.test(command) ||
+    /\b(?:cp|mv|rsync|tee|rm|truncate)\b[^\n]*execution-plan\.json/i.test(command) ||
+    /\bsed\b[^\n]*\s-i(?:\s|$)[^\n]*execution-plan\.json/i.test(command)
+  )
+}
+
 /**
  * @description Best-effort feature/task ids from task tool args.
  */
@@ -147,6 +157,7 @@ export async function createEntryGateHooks(
     isTaskTool,
     loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
+  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
   const {
     decideBashForge,
     decideBashDelivery,
@@ -186,6 +197,15 @@ export async function createEntryGateHooks(
           throw new Error(`${PREFIX} ${loaded.reason}`)
         }
         const gateState = loaded.ok ? loaded.state : {}
+        if (
+          gateState != null &&
+          typeof gateState === "object" &&
+          !Array.isArray(gateState) &&
+          (gateState as Record<string, unknown>).planner_status === "usable" &&
+          mutatesExecutionPlan(command)
+        ) {
+          throw new Error(`${PREFIX} Blocked: bound execution-plan.json is immutable until a new planner claim.`)
+        }
 
         /** Delivery-only rails: never probe git/list/ancestor for non-delivery bash. */
         const deliveryExtras: {
@@ -223,7 +243,13 @@ export async function createEntryGateHooks(
         throw new Error(`${PREFIX} ${loaded.reason}`)
       }
       const gateState = loaded.ok ? loaded.state : {}
-      const { featureId, taskId } = extractFeatureTaskIds(toolArgs)
+      const optionalIds = extractFeatureTaskIds(toolArgs)
+      const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
+        ? (toolArgs as Record<string, unknown>).prompt
+        : undefined
+      const marker = parseTaskDispatchIdentity(prompt)
+      const featureId = typeof gateState.feature_id === "string" ? gateState.feature_id : optionalIds.featureId
+      const taskId = marker.ok ? marker.taskId : optionalIds.taskId
 
       throwIfEntryDenied(
         decideEntryTask({

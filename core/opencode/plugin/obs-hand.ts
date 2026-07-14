@@ -6,7 +6,7 @@
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 function isTaskTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
@@ -36,10 +36,19 @@ export async function createObsHandHooks(
   function emitTaskExecuting(sessionId: string | null, ids: ReturnType<typeof extractTaskIds>) {
     try {
       if (!ids.taskId) return;
+      let featureId = ids.featureId;
+      if (!featureId && sessionId) {
+        try {
+          const state = JSON.parse(readFileSync(join(cwd, ".opencode", "plans", ".state", sessionId, "gate-state.json"), "utf8"));
+          featureId = typeof state?.feature_id === "string" ? state.feature_id : "";
+        } catch {
+          /* fail-open observability */
+        }
+      }
       let nTotal: { n: number; total: number } | null = null;
-      if (sessionId && ids.featureId) {
+      if (sessionId && featureId) {
         const planPath = join(
-          planDirForRun(cwd, sessionId, ids.featureId) || "",
+          planDirForRun(cwd, sessionId, featureId) || "",
           "execution-plan.json",
         );
         if (planPath && existsSync(planPath)) {

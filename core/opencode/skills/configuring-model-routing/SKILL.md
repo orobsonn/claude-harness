@@ -23,7 +23,7 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 1. Load current `harness.routing.json` (project `.opencode/` or `core/opencode/` source).
 2. Offer family presets or per-role edits (product language — "quem revisa o plano", not model slugs first).
 3. Run shared validate (`core/shared/lib/routing-validate.mjs` or project copy).
-4. On valid config: rewrite routing file + regenerate agent frontmatter `model:` fields to match.
+4. On valid config: rewrite routing file + regenerate agent frontmatter `model:` fields to match, including `planner-fallback.md` when `roles.planner.fallback` is configured.
 5. Never auto-commit secrets. Never invent new roles.
 
 ## Does not
@@ -56,6 +56,7 @@ Run shared `validateRouting` on the proposed JSON. On failure, explain in produc
 
 - Write `harness.routing.json`.
 - Update matching agent frontmatter `model:` (including `*-openai` dual eyes and `*-spawn` twins).
+- A planner fallback is optional. When configured, write `roles.planner.fallback.model`, update `planner-fallback.md`, and require a session restart; removing it disables fallback dispatch.
 - Confirm dual still present on plan-reviewer + adversary unless operator overrode with warning.
 
 ### 5. Close

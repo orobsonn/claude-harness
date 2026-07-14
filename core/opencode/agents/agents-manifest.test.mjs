@@ -46,6 +46,7 @@ function fmNestedBool(fm, parent, key) {
 const REQUIRED_AGENTS = [
   "build",
   "planner",
+  "planner-fallback",
   "plan-reviewer",
   "plan-reviewer-openai",
   "plan-reviewer-family-1",
