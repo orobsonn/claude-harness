@@ -98,6 +98,7 @@ Never skip the second family when configured. Never treat fail-open as cross-fam
 
 - `complexity-scorer` — scores a file path on a 0–60+ scale (0–10 low · 11–30 medium · 31–45 high · 46–60 max→`executor-high` · 61+ split). One call per path.
 - `validate-plan` — deterministic structural gate for `execution-plan.json`: per-task presence of `criterion_refs` + `locked_tests`, acyclic + topologically-ordered `depends_on`, scalar `resolved_judgments`, valid tiers (no Claude slugs), `adversarial.focus` when enabled, `demo` shape. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
+- `ceremony-next` — strict runtime consumer for a planner preflight denial object. Returns only the allowlisted brainstorming/adversary coordinator descriptor valid for current sealed state; any malformed, unknown, or state-inconsistent denial is rejected.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
 ---
@@ -123,14 +124,19 @@ Never use the edit tool.
    - **Cold-start check:** if this is a non-trivial existing codebase and the index is cold (no entries in MEMORY.md, root router unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code, then read the now-populated index before shaping the spec.
 2. **Load and follow the `brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
 3. Write the spec file **via bash** (`cat >`) — `edit` is denied.
+   - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This session+feature-bound artifact is the durable brainstorming completion evidence source; a docs copy alone is not restart evidence.
 4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary-family-1` (+ optional `adversary-family-2`). Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
 **HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the PR body.
 
+**Ordered official transition (all modes):** after spec approval/validation, call native `mark({ action: "brainstormed" })`; after the required primary spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Persist both before attempting planner dispatch. The first transition fingerprints the canonical `spec.md`; the second binds the runtime-captured primary adversary Task result. These are ordered and idempotent; never substitute Bash markers or prose claims.
+
 ---
 
 ## Phase 1 — Plan
+
+0. **Planner preflight / resume:** attempt planner only after the two official ceremony transitions above. A denial is stable structured JSON with `code`, `missing_proof`, and `next_transition`. Pass that exact object to native `ceremony-next({ denial })`; execute only `descriptor.coordinator_step`, and after successful completion/acceptance call `descriptor.completion_transition`. The consumer is the authority for the closed mapping (`brainstorming` skill or `adversary-family-1` Task); if it rejects, stop. Never derive role/tool names from denial strings, and never dispatch `explore`, `general`, or a diagnostic subagent. Preflight may restore a marker after process restart only from session+feature+phase-bound evidence that verifies against the canonical spec/result; an old/unsigned marker is not evidence. If proof is absent or invalid, resume the exact named phase or stop and report `missing_proof` without inventing a terminal state.
 
 1. Dispatch `planner` via Task with the approved spec. The planner returns one `execution-plan.json` (schema in `planner.md`; the planner self-validates structure first).
 

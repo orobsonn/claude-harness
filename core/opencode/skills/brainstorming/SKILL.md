@@ -42,7 +42,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 4. **Propose 2–3 approaches** — with trade-offs; lead with your recommendation and why.
 5. **Present design** — in sections scaled to complexity; get approval after each section. Cover architecture, components, data flow, error handling, testing.
 6. **Capture locked decisions** — record each decision the operator settled as an explicit, **non-negotiable constraint** in the spec (its own clearly-marked section). These are the operator's domain judgments; downstream roles (adversary, compliance) must DEFEND them, not optimize them. Persist each locked decision to `.opencode/decision-ledger.md` using entries with id | decision | operator_resolution — this ledger is the authoritative record for downstream roles (adversary, compliance) to check that the implementation does not violate the operator's locked choices.
-7. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit (via `committing-changes`).
+7. **Write design doc** — save the canonical runtime spec to `.opencode/plans/<sessionID>-<feature_id>/spec.md`; optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit the docs copy (via `committing-changes`).
 8. **Spec self-review** — inline check for placeholders, contradictions, ambiguity, scope.
 9. **Operator reviews written spec** — ask the operator to review the spec file before proceeding.
 10. **Transition** — hand the approved spec back to `build` Phase 1 (dispatch `planner`). Do NOT invoke any other skill.
@@ -69,8 +69,8 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 ## After the Design
 
 **Documentation:**
-- Write the validated design to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (operator preferences override this default). **When run inside `build` (whose `edit` is denied), write the file via bash** (`cat > docs/...`), the same pattern build uses for `shared_context.md` — do not try the edit/write tool.
-- Commit the design document (via `committing-changes`).
+- Write the validated design to the canonical runtime path `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build` (whose `edit` is denied), write via bash** — do not try the edit/write tool.
+- Commit only the durable docs copy (via `committing-changes`); the runtime spec remains session state.
 
 **Spec self-review** — look with fresh eyes:
 1. **Placeholder scan** — any "TBD"/"TODO"/incomplete/vague? Fix.
@@ -86,7 +86,7 @@ Fix issues inline; no need to re-review.
 
 Wait for the operator. If they request changes, make them and re-run the spec review. Only proceed once approved.
 
-**HEADLESS:** skip the wait. After self-review + adversary on the spec, call the native `mark` tool once with `action: brainstormed` and once with `action: adversary_fired`, then hand off to Phase 1. Privileged markers never run through Bash.
+**ALL MODES:** after approval/validation, call the native `mark` tool once with `action: brainstormed`; after the required primary spec-adversary result is accepted, call it once with `action: adversary_fired`. Persist both, in that order, before planner dispatch. HEADLESS skips only the human wait. Privileged markers never run through Bash.
 
 **Transition:**
 - Hand the approved (or headless-validated) spec to `build` Phase 1 (the `planner` dispatch). Do NOT invoke any other skill.

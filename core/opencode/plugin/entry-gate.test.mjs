@@ -48,6 +48,7 @@ async function withHooks(fn, deps = {}) {
 /** @returns {Record<string, unknown>} */
 function fullCeremony(extra = {}, sessionId = SID) {
   const state = {
+    session_id: sessionId,
     mode: "FULL",
     classified: true,
     brainstormed: true,
@@ -133,7 +134,7 @@ test("direct unsigned marker mutation cannot release a delivery role", async () 
         { tool: "task", sessionID: SID },
         { args: { subagent_type: "planner" } },
       ),
-      /unsigned|another process instance/,
+      /CEREMONY_PROOF_REQUIRED|unsigned|another process instance/,
     )
   })
 })
@@ -172,7 +173,7 @@ test("planner rejects ceremony marker bound to another session or feature", asyn
         { tool: "task", sessionID: SID },
         { args: { subagent_type: "planner" } },
       ),
-      /not bound|session binding mismatch|feature binding mismatch/,
+      /CEREMONY_PROOF_REQUIRED|not bound|session binding mismatch|feature binding mismatch/,
     )
   })
 })

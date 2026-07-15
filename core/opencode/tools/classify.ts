@@ -5,6 +5,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin/tool"
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -107,6 +108,9 @@ export async function executeClassify(
       brainstormed_binding: null,
       adversary_fired: false,
       adversary_fired_binding: null,
+      ceremony_generation: crypto.randomUUID(),
+      ceremony_evidence: {},
+      marker_seals: null,
       ...plannerCycleResetPatch(),
     },
   })

@@ -340,6 +340,7 @@ function plantMonorepoOcPlugins(root) {
   for (const name of [
     "entry-gate.ts",
     "marker-authority.ts",
+    "ceremony-coordinator.ts",
     "plan-gate.ts",
     "planner-recovery.ts",
     "plan-write-gate.ts",

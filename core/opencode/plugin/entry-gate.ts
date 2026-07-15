@@ -26,6 +26,7 @@ export type EntryGateDeps = {
   } | null
   isAncestorFn?: (sha: string) => boolean | null
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
+  ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
 }
 
 /**
@@ -161,6 +162,9 @@ export async function createEntryGateHooks(
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
+  const { recoverCeremonyStep } = await import("./lib/ceremony-transition.mjs")
+  const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
+  const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const {
     decideBashForge,
     decideBashDelivery,
@@ -171,7 +175,7 @@ export async function createEntryGateHooks(
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
   } = await import("./lib/entry-decide.mjs")
-  const { isDeliveryRole } = await import("./lib/roles.mjs")
+  const { isDeliveryRole, isPlannerRole } = await import("./lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
 
@@ -271,7 +275,33 @@ export async function createEntryGateHooks(
       if (!loaded.ok && isDeliveryRole(subagentType)) {
         throw new Error(`${PREFIX} ${loaded.reason}`)
       }
-      const gateState = loaded.ok ? loaded.state : {}
+      let gateState = loaded.ok ? loaded.state : {}
+      if (loaded.ok && isPlannerRole(subagentType) && sid) {
+        const stateFile = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId: sid })
+        if (!stateFile.ok) throw new Error(`${PREFIX} ${stateFile.reason}`)
+        const persist = deps.ceremonyPersistFn ?? ((file, mutate) => withGateStateLock(file, mutate))
+        while (true) {
+          let recoveryError: Record<string, unknown> | null = null
+          let recoveredState: Record<string, unknown> | null = null
+          let complete = false
+          const persisted = persist(stateFile.path, (previous) => {
+            const recovery = recoverCeremonyStep(root, previous)
+            recoveredState = recovery.state
+            if (!recovery.ok) {
+              recoveryError = recovery.error
+              return previous
+            }
+            complete = recovery.complete
+            return recovery.changed ? recovery.state : previous
+          })
+          if (!persisted.ok) {
+            throw new Error(`${PREFIX} ${JSON.stringify({ code: "CEREMONY_PERSIST_FAILED", missing_proof: null, next_transition: null, reason: persisted.reason ?? "gate-state persistence failed" })}`)
+          }
+          if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
+          gateState = recoveredState ?? gateState
+          if (complete) break
+        }
+      }
       if (loaded.ok && isDeliveryRole(subagentType)) {
         const seals = validatePrivilegedMarkerSeals(gateState, {
           sessionId: sid,

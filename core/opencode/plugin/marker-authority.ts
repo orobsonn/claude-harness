@@ -12,7 +12,7 @@ import { withGateStateLock } from "./lib/gate-state.mjs"
 import { mergeGateStatePatch, dualStatusGatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
-import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
+import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
 import { fidelityPassEntry, defaultHeadSha } from "./lib/mark-gate.mjs"
 import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
 
@@ -76,14 +76,9 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       let patch: Record<string, unknown>
       let payload: unknown
       if (action === "brainstormed" || action === "adversary_fired") {
-        payload = true
-        const record = sealedMarkerRecord({
-          sessionId: authorization.sessionID,
-          featureId: authorization.featureID,
-          operation: action,
-          payload,
-        })
-        patch = ceremonyMarkerPatch(action, authorization.sessionID, authorization.featureID, record.seal)
+        const transitioned = transitionCeremony(projectRoot, previous, action)
+        if (!transitioned.ok) return transitioned
+        return transitioned.state
       } else if (action === "dual") {
         const dual = dualStatusGatePatch(args.status)
         if ("ok" in dual && dual.ok === false) return dual
@@ -209,6 +204,26 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         throw new Error("[marker-authority] classified runtime identity required")
       }
       authorizedArgs.set(args, { sessionID, callID, featureID, action })
+    },
+    "tool.execute.after": async (input: any, output: any) => {
+      const args = output?.args ?? input?.args
+      const role = args && typeof args === "object" ? args.subagent_type ?? args.subagentType : ""
+      if (input?.tool !== "task" || role !== "adversary-family-1") return
+      const sessionID = typeof input.sessionID === "string" ? input.sessionID : ""
+      const callID = typeof input.callID === "string" ? input.callID : ""
+      const statePath = gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })
+      if (!statePath.ok) return
+      let state: Record<string, unknown>
+      try { state = JSON.parse(fs.readFileSync(statePath.path, "utf8")) } catch { return }
+      if ((state.planner_status && state.planner_status !== "not_started") || state.session_id !== sessionID || typeof state.feature_id !== "string" || typeof state.ceremony_generation !== "string") return
+      captureSpecAdversaryResult(projectRoot, {
+        sessionId: sessionID,
+        featureId: state.feature_id,
+        generation: state.ceremony_generation,
+        callId: callID,
+        role,
+        output: output?.output ?? output?.content ?? output?.result ?? "",
+      })
     },
   }
 }

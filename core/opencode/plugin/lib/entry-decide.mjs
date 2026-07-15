@@ -97,16 +97,14 @@ export function decideEntryTask(input = {}) {
         return {
           ok: false,
           decision: "deny",
-          reason:
-            "[entry-gate] Blocked: planner requires brainstorming complete (brainstormed marker) before dispatch.",
+          reason: JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "brainstorming_completion_evidence", next_transition: { phase: "brainstorming", action: "resume", marker: "brainstormed" } }),
         };
       }
       if (gs.adversary_fired !== true) {
         return {
           ok: false,
           decision: "deny",
-          reason:
-            "[entry-gate] Blocked: planner requires spec-adversary (adversary_fired) before dispatch.",
+          reason: JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "spec_adversary_completion_evidence", next_transition: { phase: "spec-adversary", action: "resume", marker: "adversary_fired" } }),
         };
       }
     }
