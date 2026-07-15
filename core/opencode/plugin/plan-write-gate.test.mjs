@@ -13,6 +13,27 @@ import {
   throwIfDenied,
 } from "./lib/plan-write-decide.mjs";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
+import { createPlanGateHooks } from "./plan-gate.ts";
+import { createObsHandHooks } from "./obs-hand.ts";
+
+async function installComposition(root) {
+  await createPlanGateHooks(root);
+  await createObsHandHooks(root);
+}
+
+function createScopedHooks(root) {
+  return createPlanWriteGateHooks(root, {
+    requireHeartbeat: false,
+    resolveRuntimeIdentity: async (_projectRoot, input) => ({
+      ok: true,
+      parentSessionId: input.sessionID,
+      runtimeSessionId: `child-${input.sessionID}`,
+      callId: "task-call",
+      token: "test-token",
+      role: "executor-high",
+    }),
+  });
+}
 
 test("allow write to execution-plan.json (orchestrator may author plan)", () => {
   const p = {
@@ -212,7 +233,7 @@ test("bound execution plan is immutable through Write/Edit until planner reclaim
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_bound");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ planner_status: "usable" }));
-    const before = (await createPlanWriteGateHooks(root))["tool.execute.before"];
+    const before = (await createScopedHooks(root))["tool.execute.before"];
     await assert.rejects(
       () => before(
         { tool: "write", sessionID: "ses_bound" },
@@ -393,6 +414,7 @@ test("lt-scope-path-normalize-escape: scope ['src/lib'], write src/lib/../b.ts �
 test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope/gate-state.json containing active_dispatch; createPlanWriteGateHooks(projectRoot); tool.execute.before write src/b.ts with session + role context → throws [plan-write-gate]; write src/a.ts → no throw", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-scope-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_scope");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -408,7 +430,7 @@ test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
     assert.equal(typeof before, "function");
 
@@ -457,6 +479,7 @@ test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope
 test("lt-factory-hook-input-agent-no-subagent_type: armed dispatch + Write args only filePath src/b.ts + input.agent executor-high (no subagent_type on args) → deny out-of-scope", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-agent-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_agent");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -472,7 +495,7 @@ test("lt-factory-hook-input-agent-no-subagent_type: armed dispatch + Write args 
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.rejects(
@@ -508,6 +531,7 @@ test("lt-factory-hook-input-agent-no-subagent_type: armed dispatch + Write args 
 test("lt-scope-role-spoof-compliance-args: input.agent=executor-high + args.subagent_type=compliance + armed + write src/b.ts → DENY (not fail-open)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-spoof-c-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_spoof_c");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -523,7 +547,7 @@ test("lt-scope-role-spoof-compliance-args: input.agent=executor-high + args.suba
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.rejects(
@@ -556,6 +580,7 @@ test("lt-scope-role-spoof-compliance-args: input.agent=executor-high + args.suba
 test("lt-scope-role-spoof-sniper-args: input.agent=executor-high + args.subagent_type=sniper-high + armed + write src/b.ts → DENY (no family-mismatch fail-open from spoofed args)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-spoof-s-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_spoof_s");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -571,7 +596,7 @@ test("lt-scope-role-spoof-sniper-args: input.agent=executor-high + args.subagent
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.rejects(
@@ -644,6 +669,7 @@ test("lt-scope-agent-id-only-no-role: isSubagent true + empty actingRole + armed
 test("lt-factory-hook-agent-id-only: input.agent_id only (no role) + armed executor + write src/b.ts → deny", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-id-only-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_id_only");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -659,7 +685,7 @@ test("lt-factory-hook-agent-id-only: input.agent_id only (no role) + armed execu
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.rejects(
@@ -691,6 +717,7 @@ test("lt-factory-hook-agent-id-only: input.agent_id only (no role) + armed execu
 test("lt-factory-hook-agent-id-only-spoof-args-sniper: input.agent_id only + args.subagent_type=sniper-high + armed executor + write src/b.ts → DENY (args cannot set actingRole)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-id-spoof-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_id_spoof");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -706,7 +733,7 @@ test("lt-factory-hook-agent-id-only-spoof-args-sniper: input.agent_id only + arg
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.rejects(
@@ -739,6 +766,7 @@ test("lt-factory-hook-agent-id-only-spoof-args-sniper: input.agent_id only + arg
 test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,src/a.ts) allow; absolute out-of-scope deny", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-abs-"));
   try {
+    await installComposition(root);
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_abs");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -754,7 +782,7 @@ test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,sr
       }),
       "utf8",
     );
-    const hooks = await createPlanWriteGateHooks(root);
+    const hooks = await createScopedHooks(root);
     const before = hooks["tool.execute.before"];
 
     await assert.doesNotReject(() =>
@@ -815,4 +843,128 @@ test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,sr
       /* ignore */
     }
   }
+});
+
+test("shadow mode records out-of-scope Write without blocking", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-"));
+  try {
+    const session = "ses_shadow";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", session);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+      session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
+      scope_paths: ["src/a.ts"], allowed_writes: [], call_id: "task-call",
+    } }));
+    const before = (await createScopedHooks(root))["tool.execute.before"];
+    await assert.doesNotReject(() => before(
+      { tool: "write", sessionID: session, agent: "executor-high" },
+      { args: { filePath: "outside/b.ts", content: "private content must not be logged" } },
+    ));
+    const event = fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8");
+    assert.match(event, /"mode":"shadow"/);
+    assert.match(event, /outside\/b\.ts/);
+    assert.doesNotMatch(event, /private content/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("composition proof enforces Edit and fail-closed Bash-by-effect policy", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-enforce-tools-"));
+  try {
+    await installComposition(root);
+    const session = "ses_tools";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", session);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+      session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
+      scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
+    } }));
+    const before = (await createScopedHooks(root))["tool.execute.before"];
+    await assert.rejects(() => before(
+      { tool: "edit", sessionID: session, agent: "executor-high" },
+      { args: { filePath: "outside/b.ts", oldString: "x", newString: "y" } },
+    ), /OUTSIDE|safe project path/);
+    for (const command of [
+      "touch src/ok.ts outside/evil.ts",
+      "node script.mjs",
+      "python tool.py",
+      "npm test",
+      "git apply fix.patch",
+      "dd if=/dev/zero of=out.bin",
+      "tee out.txt",
+      "env node script.mjs",
+      "bash -c 'touch src/x'",
+      "cat input | sponge output",
+      "git status --short",
+      "git -c core.pager='sh -c evil' status",
+      "rg --pre 'sh -c evil' pattern",
+    ]) {
+      await assert.rejects(() => before(
+        { tool: "bash", sessionID: session, agent: "executor-high" },
+        { args: { command } },
+      ), /Bash is disabled.*cleanup.*compliance\/orchestrator/i, command);
+    }
+    await assert.doesNotReject(() => before(
+      { tool: "apply_patch", sessionID: session, agent: "executor-high" },
+      { args: { patchText: "*** Begin Patch\n*** Update File: src/one.ts\n@@\n-old\n+new\n*** Add File: src/two.ts\n+new\n*** End Patch" } },
+    ));
+    await assert.rejects(() => before(
+      { tool: "functions.apply_patch", sessionID: session, agent: "executor-high" },
+      { args: { patchText: "*** Begin Patch\n*** Update File: src/one.ts\n@@\n-old\n+new\n*** Add File: outside/evil.ts\n+new\n*** End Patch" } },
+    ), /OUTSIDE|safe project path/);
+    await assert.doesNotReject(() => before(
+      { tool: "multi_edit", sessionID: session, agent: "executor-high" },
+      { args: { edits: [{ filePath: "src/one.ts" }, { filePath: "src/two.ts" }] } },
+    ));
+    await assert.rejects(() => before(
+      { tool: "write_file", sessionID: session, agent: "executor-high" },
+      { args: { filePath: "outside/write.ts" } },
+    ), /OUTSIDE|safe project path/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("shadow Bash unknown records evidence, and evidence failure blocks", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-bash-"));
+  try {
+    const session = "ses_shadow_bash";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", session);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+      session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
+      scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
+    } }));
+    const before = (await createScopedHooks(root))["tool.execute.before"];
+    await assert.doesNotReject(() => before(
+      { tool: "bash", sessionID: session, agent: "executor-high" },
+      { args: { command: "node script.mjs" } },
+    ));
+    assert.match(fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8"), /bash-unknown-risk/);
+    fs.rmSync(path.join(stateDir, "scope-events.jsonl"));
+    fs.mkdirSync(path.join(stateDir, "scope-events.jsonl"));
+    await assert.rejects(() => before(
+      { tool: "bash", sessionID: session, agent: "executor-high" },
+      { args: { command: "python tool.py" } },
+    ), /evidence is mandatory/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("shadow apply_patch records the partial multi-file envelope without blocking", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-patch-"));
+  try {
+    const session = "ses_shadow_patch";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", session);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+      session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
+      scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
+    } }));
+    const before = (await createScopedHooks(root))["tool.execute.before"];
+    await assert.doesNotReject(() => before(
+      { tool: "apply_patch", sessionID: session, agent: "executor-high" },
+      { args: { patchText: "*** Begin Patch\n*** Update File: src/in.ts\n@@\n-a\n+b\n*** Update File: ../escape.ts\n@@\n-a\n+b\n*** End Patch" } },
+    ));
+    const events = fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8");
+    assert.match(events, /escape\.ts/);
+    assert.match(events, /unsafe-project-path/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

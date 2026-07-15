@@ -12,7 +12,7 @@
  */
 
 import path from "node:path";
-import { isExecutorRole, isSniperRole } from "./roles.mjs";
+import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 /** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */
@@ -227,6 +227,7 @@ export function scopeContains(filePath, entry) {
 function sameHandFamily(actingRole, dispatchRole) {
   if (isExecutorRole(actingRole) && isExecutorRole(dispatchRole)) return true;
   if (isSniperRole(actingRole) && isSniperRole(dispatchRole)) return true;
+  if (isTestAuthorRole(actingRole) && isTestAuthorRole(dispatchRole)) return true;
   return false;
 }
 
@@ -255,7 +256,7 @@ function decideScopeRail(filePath, opts) {
 
   const adObj = /** @type {Record<string, unknown>} */ (ad);
   // Rail only arms for hand-family dispatches with non-empty scope.
-  if (!isExecutorRole(adObj.role) && !isSniperRole(adObj.role)) return null;
+  if (!isExecutorRole(adObj.role) && !isSniperRole(adObj.role) && !isTestAuthorRole(adObj.role)) return null;
 
   const scopePathsRaw = adObj.scope_paths;
   if (!Array.isArray(scopePathsRaw) || scopePathsRaw.length === 0) return null;
@@ -264,7 +265,7 @@ function decideScopeRail(filePath, opts) {
 
   const actingRole = opts.actingRole;
   const actingIsHand =
-    isExecutorRole(actingRole) || isSniperRole(actingRole);
+    isExecutorRole(actingRole) || isSniperRole(actingRole) || isTestAuthorRole(actingRole);
 
   // Armed hand rail + subagent without verifiable hand identity → DENY (no fail-open).
   if (!actingIsHand) {
@@ -292,7 +293,7 @@ function decideScopeRail(filePath, opts) {
   const inAllowed = allowedWrites.some((s) => scopeContains(filePath, s));
   if (inScope || inAllowed) return null;
 
-  const roleLabel = isSniperRole(actingRole) ? "sniper" : "executor";
+  const roleLabel = isSniperRole(actingRole) ? "sniper" : isTestAuthorRole(actingRole) ? "test-author" : "executor";
   const featureId =
     typeof adObj.feature_id === "string" ? adObj.feature_id : "?";
   const taskId = typeof adObj.task_id === "string" ? adObj.task_id : "?";
