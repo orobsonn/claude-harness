@@ -38,6 +38,8 @@ If a judgment needed to make a decision is **missing**, emit `NEEDS_CONTEXT` imm
 ### locked_tests are immutable gates
 Never edit, delete, or rename files that contain `locked_tests`. They are the acceptance gate — your job is to make them pass, not to change them.
 
+For targeted Vitest, call native `verify` with the exact feature/task ids, `denied_class: "targeted_vitest"`, and the exact snapshot `locked_tests[].path`. Only this runtime-bound active hand may execute the returned descriptor. Never use package launchers, globs, options, or interpreter workarounds. On rejection, `no_equivalent`, `setup_missing`, or `repeated`, report `BLOCKED`; do not guess again.
+
 ### JSDoc on every new file
 New `.ts` / `.tsx` files require `/** @description ... */` at the top per project code-quality rules.
 

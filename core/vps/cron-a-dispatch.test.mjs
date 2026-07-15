@@ -341,6 +341,7 @@ function plantMonorepoOcPlugins(root) {
     "entry-gate.ts",
     "marker-authority.ts",
     "ceremony-coordinator.ts",
+    "command-resolver.ts",
     "plan-gate.ts",
     "planner-recovery.ts",
     "plan-write-gate.ts",

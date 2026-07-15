@@ -489,10 +489,11 @@ const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
  * the seeded worktree config, a headless double-fault run loads OpenCode with NONE of the pipeline's
  * governance plugins (entry-gate, plan-gate, loop-guard, etc.) — no security gate at all.
  */
-const CANONICAL_OC_PLUGINS = Object.freeze([
+export const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/entry-gate.ts",
   "./.opencode/plugin/marker-authority.ts",
   "./.opencode/plugin/ceremony-coordinator.ts",
+  "./.opencode/plugin/command-resolver.ts",
   "./.opencode/plugin/plan-gate.ts",
   "./.opencode/plugin/planner-recovery.ts",
   "./.opencode/plugin/plan-write-gate.ts",

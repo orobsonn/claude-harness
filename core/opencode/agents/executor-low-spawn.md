@@ -41,6 +41,8 @@ If a judgment is missing, emit `NEEDS_CONTEXT` immediately. Do not guess.
 ### locked_tests are immutable gates
 Never edit, delete, or rename files that contain `locked_tests`. They are the acceptance gate.
 
+For targeted Vitest, call native `verify` with the exact feature/task ids, `denied_class: "targeted_vitest"`, and the exact snapshot `locked_tests[].path`. Only this runtime-bound active hand may execute the returned descriptor. Never use package launchers, globs, options, or interpreter workarounds. On rejection, `no_equivalent`, `setup_missing`, or `repeated`, report `BLOCKED`; do not guess again.
+
 ### Stay minimal
 This tier is for config, types, constants, and mechanical wiring fully constrained by locked_tests. Write the smallest change that makes the criteria pass. No new abstractions, no speculative generality, no refactors outside scope.
 

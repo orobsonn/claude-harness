@@ -911,8 +911,9 @@ export function decideBashForge(input = {}) {
         return {
           ok: false,
           decision: "deny",
+          details: { denied_class: "package_launcher", resolver: "verify" },
           reason:
-            "[entry-gate] Blocked: npm run / make / npx cannot run via bash (anti-forgery package indirection).",
+            "[entry-gate] Blocked: denied_class=package_launcher; npm run / make / npx cannot run via bash (anti-forgery package indirection). For an exact registered targeted-test equivalent, call native `verify` once with this denied class, exact command, task id, and named test path; otherwise stop.",
         };
       }
     }
@@ -944,8 +945,9 @@ export function decideBashForge(input = {}) {
       return {
         ok: false,
         decision: "deny",
+        details: { denied_class: "interpreter", resolver: "verify" },
         reason:
-          "[entry-gate] Blocked: only harness markers, authorized *.test.* under core|modules|.opencode, node --test, or allowlisted tooling may run interpreters (anti-forgery two-step).",
+          "[entry-gate] Blocked: denied_class=interpreter; only harness markers, authorized *.test.* under core|modules|.opencode, node --test, or allowlisted tooling may run interpreters (anti-forgery two-step). Call native `verify` once only when this exact interpreter form has a registered targeted-test equivalent; otherwise stop.",
       };
     }
     if (!isStateForgeCommand(raw)) {
