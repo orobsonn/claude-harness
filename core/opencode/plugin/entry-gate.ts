@@ -159,6 +159,7 @@ export async function createEntryGateHooks(
     loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { decideReviewCapBeforeWriting } = await import("./lib/loop-decide.mjs")
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
@@ -320,6 +321,11 @@ export async function createEntryGateHooks(
         required: isDeliveryRole(subagentType) ? ["brainstormed", "adversary_fired"] : [],
       })
       if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
+
+      const reviewCap = decideReviewCapBeforeWriting({ subagentType, gateState })
+      if (reviewCap.decision === "deny") {
+        throw new Error(`${PREFIX} ${reviewCap.reason}`)
+      }
 
       throwIfEntryDenied(
         decideEntryTask({

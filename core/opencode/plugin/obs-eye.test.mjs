@@ -145,7 +145,7 @@ test("eligible primary eye + cross-family enabled + no prior attempt → dual_st
   }
 });
 
-test("eligible primary eye + cross-family disabled (HARNESS_CODEX_ADVERSARY unset) → dual_status primary_only_failopen, hook never throws", async () => {
+test("eligible primary eye + cross-family disabled stays pending/skipped until primary accounting, never terminal fail-open", async () => {
   const projectRoot = makeProjectRoot("obs-eye-nudge-failopen-");
   const prevEnv = setCrossFamily(false);
   try {
@@ -155,9 +155,10 @@ test("eligible primary eye + cross-family disabled (HARNESS_CODEX_ADVERSARY unse
     const state = readGateStateFile(projectRoot, SID);
     assert.equal(
       state.dual_status,
-      "primary_only_failopen",
-      "cross-family disabled must record primary_only_failopen (never blocks) instead of leaving dual_status pending",
+      "pending",
+      "the nudge cannot claim a terminal primary result before report accounting",
     );
+    assert.equal(state.dual_secondary_status, "skipped_disabled");
   } finally {
     restoreCrossFamily(prevEnv);
     rmSync(projectRoot, { recursive: true, force: true });
@@ -324,6 +325,7 @@ test("[dual-nudge pure] applyDualNudge honors a terminal 'both' state that only 
         featureId: FEATURE_ID,
         taskId: TASK_ID,
         phase: PHASE,
+        sessionId: SID,
         crossFamilyEnabled: true,
         gateStatePath: () => gp,
         withGateStateLock: fakeWithGateStateLock,
@@ -433,6 +435,7 @@ test("[dual-nudge pure] applyDualNudge — a withGateStateLock seam that throws 
         featureId: FEATURE_ID,
         taskId: TASK_ID,
         phase: PHASE,
+        sessionId: SID,
         crossFamilyEnabled: true,
         gateStatePath: () => gp,
         withGateStateLock: throwingWithGateStateLock,

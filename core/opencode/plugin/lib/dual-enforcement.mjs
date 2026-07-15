@@ -2,7 +2,7 @@
  * @description Deterministic ADR-003 dual enforcement for OC entry-gate / plan-gate.
  * requireDualOn from harness.routing.json; dual_status enum on gate-state.
  * Before executor/delivery hands: dual_status must be a recorded attempt
- * (both | primary_only_failopen | primary_only_error) — never pending/missing.
+ * (both | primary_only | legacy primary_only_failopen/error) — never pending/missing.
  * primary_only_failopen allows continue; isFullDualCoverage is false for it.
  * Never invents secondary findings; never leaks secondary verdicts.
  * Pure Decision returns — shells throw. Disk loaders return Result (never throw).
@@ -289,7 +289,7 @@ export function decideDualBeforeDelivery(input = {}) {
         ok: false,
         decision: "deny",
         reason:
-          "dual_status missing — requireDualOn post must record a dual attempt before executor (both | primary_only_failopen | primary_only_error)",
+            "dual_status missing — requireDualOn post must record a primary result before executor (both | primary_only)",
         details: {
           dual_status: null,
           isFullDualCoverage: false,
@@ -318,7 +318,7 @@ export function decideDualBeforeDelivery(input = {}) {
         ok: false,
         decision: "deny",
         reason:
-          "dual_status pending — dual attempt not yet recorded; block executor until both | primary_only_failopen | primary_only_error",
+          "dual_status pending — primary result not yet recorded; block executor until both | primary_only",
         details: {
           dual_status: dualStatus,
           isFullDualCoverage: false,
@@ -327,14 +327,16 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // Recorded attempts: both | primary_only_failopen | primary_only_error → allow.
+    // Recorded results: both | primary_only | legacy fail-open statuses → allow.
     if (isRecordedDualAttempt(dualStatus)) {
       const full = isFullDualCoverage(dualStatus);
       return {
         ok: true,
         decision: "allow",
         reason:
-          dualStatus === DUAL_STATUS.PRIMARY_ONLY_FAILOPEN
+          dualStatus === DUAL_STATUS.PRIMARY_ONLY
+            ? "primary_only allows continue (primary authoritative; not full dual coverage)"
+            : dualStatus === DUAL_STATUS.PRIMARY_ONLY_FAILOPEN
             ? "primary_only_failopen allows continue (not full dual coverage)"
             : dualStatus === DUAL_STATUS.PRIMARY_ONLY_ERROR
               ? "primary_only_error allows continue after retry policy (not full dual coverage)"

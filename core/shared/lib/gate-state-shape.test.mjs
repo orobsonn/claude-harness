@@ -16,9 +16,10 @@ import {
   mergeGateStatePatch,
 } from "./gate-state-shape.mjs";
 
-test("dual_status enum is closed set of four string values", () => {
-  assert.equal(DUAL_STATUS_VALUES.size, 4);
+test("dual_status enum includes authoritative primary_only without treating it as full dual", () => {
+  assert.equal(DUAL_STATUS_VALUES.size, 5);
   assert.ok(DUAL_STATUS_VALUES.has("both"));
+  assert.ok(DUAL_STATUS_VALUES.has("primary_only"));
   assert.ok(DUAL_STATUS_VALUES.has("primary_only_failopen"));
   assert.ok(DUAL_STATUS_VALUES.has("pending"));
   assert.ok(DUAL_STATUS_VALUES.has("primary_only_error"));
@@ -30,6 +31,7 @@ test("dual_status enum is closed set of four string values", () => {
 
 test("isFullDualCoverage is true only for both — failopen is not full dual", () => {
   assert.equal(isFullDualCoverage(DUAL_STATUS.BOTH), true);
+  assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY_FAILOPEN), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY_ERROR), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PENDING), false);
@@ -39,6 +41,7 @@ test("isFullDualCoverage is true only for both — failopen is not full dual", (
 
 test("isRecordedDualAttempt excludes pending and missing", () => {
   assert.equal(isRecordedDualAttempt("both"), true);
+  assert.equal(isRecordedDualAttempt("primary_only"), true);
   assert.equal(isRecordedDualAttempt("primary_only_failopen"), true);
   assert.equal(isRecordedDualAttempt("primary_only_error"), true);
   assert.equal(isRecordedDualAttempt("pending"), false);

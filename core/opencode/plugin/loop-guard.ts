@@ -1,4 +1,4 @@
-/** @description OC loop-guard plugin — plan-review + adversary counters on disk (warn=2, deny=4). */
+/** @description OC loop guard: useful family-1 reports count only after execution. */
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
 
 const subagentOf = (args: any): string =>
@@ -9,7 +9,7 @@ const subagentOf = (args: any): string =>
  */
 export async function createLoopGuardHooks(
   directory: string,
-): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
+): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const dirSafe =
     typeof directory === "string" && directory.length > 0
       ? directory
@@ -17,13 +17,61 @@ export async function createLoopGuardHooks(
 
   const {
     decideLoopGuard,
-    nextLoopCount,
+    applyReviewOutcome,
+    classifyReviewBoundaryError,
+    reserveReviewAttempt,
     throwIfLoopDenied,
     loopCounterKey,
   } = await import("./lib/loop-decide.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
+  const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { mergeGateStatePatch } = await import("../../shared/lib/gate-state-shape.mjs")
+
+  function argsOf(input: any, output: any): Record<string, unknown> {
+    const value = output?.args ?? input?.args ?? input?.toolArgs ?? input?.tool_input ?? {}
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {}
+  }
+
+  function featureOf(args: Record<string, unknown>): string {
+    const nested = args.input && typeof args.input === "object" && !Array.isArray(args.input)
+      ? args.input as Record<string, unknown>
+      : {}
+    const value = args.feature_id ?? args.featureId ?? nested.feature_id ?? nested.featureId
+    return typeof value === "string" ? value : ""
+  }
+
+  function stringArg(args: Record<string, unknown>, snake: string, camel: string): string {
+    const nested = args.input && typeof args.input === "object" && !Array.isArray(args.input)
+      ? args.input as Record<string, unknown>
+      : {}
+    const value = args[snake] ?? args[camel] ?? nested[snake] ?? nested[camel]
+    return typeof value === "string" ? value : ""
+  }
+
+  function responseOf(input: any, output: any): unknown {
+    return output?.output ?? output?.content ?? output?.result ?? output?.tool_output ?? input?.tool_response ?? ""
+  }
+
+  function persistOutcome(input: any, output: any, failureClass?: string) {
+    const sessionID = input?.sessionID ?? input?.sessionId ?? ""
+    const callID = input?.callID ?? input?.callId ?? ""
+    const args = argsOf(input, output)
+    const sub = subagentOf(args)
+    if (!sessionID || !callID) return
+    const sp = statePathFor(sessionID)
+    if (!sp) return
+    const result = withGateStateLock(sp, (prev) => applyReviewOutcome(prev, {
+      subagentType: sub,
+      sessionId: sessionID,
+      featureId: featureOf(args),
+      taskId: stringArg(args, "task_id", "taskId"),
+      phase: stringArg(args, "phase", "phase"),
+      callId: callID,
+      response: responseOf(input, output),
+      failureClass,
+    }).state)
+    if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
+  }
 
   function statePathFor(sessionID: string): string | null {
     const res = gateStatePath({
@@ -40,31 +88,54 @@ export async function createLoopGuardHooks(
       const sessionID = input?.sessionID ?? ""
       if (!sessionID) return
       const sub = subagentOf(output?.args)
+      const identity = reviewAgentIdentity(sub)
+      if (!identity) return
       const key = loopCounterKey(sub)
-      if (!key) return
 
       const sp = statePathFor(sessionID)
       if (!sp) return
 
-      const result = withGateStateLock(sp, (prev) => {
-        const step = nextLoopCount(prev, sub)
-        if (!step) return prev
-        const applied = mergeGateStatePatch(prev, { [step.key]: step.next })
-        return applied.ok ? applied.state : prev
+      const args = argsOf(input, output)
+      const reserved = withGateStateLock(sp, (state) => {
+        const transition = reserveReviewAttempt(state, {
+          subagentType: sub,
+          sessionId: sessionID,
+          featureId: featureOf(args),
+          taskId: stringArg(args, "task_id", "taskId"),
+          phase: stringArg(args, "phase", "phase"),
+          callId: input?.callID ?? input?.callId ?? "",
+          projectRoot: dirSafe,
+        })
+        return transition.ok ? transition.state : { ok: false, reason: transition.reason }
       })
+      if (!reserved.ok) throw new Error(`[loop-guard] ${reserved.reason}`)
 
-      if (!result.ok) {
-        throw new Error(`[loop-guard] ${result.reason}`)
+      if (key) {
+        const count = typeof reserved.state[key] === "number" ? reserved.state[key] as number : 0
+        const decision = decideLoopGuard({ subagentType: sub, count })
+        if (decision.decision === "deny") {
+        // reserveReviewAttempt is the slot authority; count-only deny applies only when no slot was reserved.
+          const callID = input?.callID ?? input?.callId ?? ""
+          const hasReservation = Array.isArray(reserved.state.review_inflight) && reserved.state.review_inflight.some((item: any) => item?.call_id === callID)
+          if (!hasReservation) throwIfLoopDenied(decision)
+        }
       }
-
-      const count =
-        typeof result.state[key] === "number" ? (result.state[key] as number) : 0
-      const decision = decideLoopGuard({ subagentType: sub, count })
-      throwIfLoopDenied(decision)
     },
 
-    "tool.execute.after": async () => {
-      // counters incremented in before so deny can fire before dispatch
+    "tool.execute.after": async (input: any, output: any) => {
+      if (input?.tool !== "task") return
+      persistOutcome(input, output)
+    },
+
+    event: async ({ event }: any) => {
+      if (event?.type !== "message.part.updated") return
+      const part = event?.properties?.part
+      if (!part || part.type !== "tool" || part.tool !== "task" || part.state?.status !== "error") return
+      persistOutcome(
+        { tool: "task", sessionID: part.sessionID, callID: part.callID, args: part.state?.input },
+        { args: part.state?.input },
+        classifyReviewBoundaryError(part.state.error),
+      )
     },
   }
 }
