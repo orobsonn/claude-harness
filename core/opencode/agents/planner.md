@@ -9,6 +9,8 @@ permission:
   webfetch: deny
   websearch: deny
   task: deny
+  "mv_*": allow
+  "mp_*": allow
 ---
 
 # Planner
@@ -40,6 +42,8 @@ Before decomposing, read the law that governs the scope so your `scope_paths` an
 When a decomposition or a `resolved_judgment` involves a non-trivial engineering/design call (decomposition boundaries, atomicity, idempotency, escalation-vs-approval, orphan state between components, second-order effects), consult the operator's **Mind Vault** via the `mv` MCP: `recall` with a **domain-literal** query, then **you MUST `get_note` the body of the top 1–2 relevant hits** before resolving the judgment. The `tldr` is a title, not the lens — planning off tldrs alone and skipping `get_note` is the N3 failure mode (the lens content lives in the body). If a recall returns a relevant hit, reading its body is **non-optional**. These are **lenses, not laws** — the spec and codebase are ground truth; the notes are curated mental models (not project facts) that may be stale (MV is best-effort; if absent, proceed).
 
 **Best-effort:** the `mv` MCP may be **absent** in headless/cron runs or error/timeout. If recall is unavailable or fails, plan with your own judgment — **never block on it.**
+
+Also consult the operator's `mp` MCP through retrieval-only `code` for relevant durable memories before resolving a non-trivial judgment. MP is advisory and best-effort; never block if absent. MV/MP access is strictly read-only: never save, create, update, delete, or execute a mutation through either MCP.
 
 ---
 
