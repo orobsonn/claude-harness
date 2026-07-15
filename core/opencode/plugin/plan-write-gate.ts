@@ -1,5 +1,5 @@
 /**
- * @description OC plan-write-gate — anti-forge + active_dispatch scope rail for Write|Edit.
+ * @description OC plan-write-gate — anti-forge + active_dispatch scope rail for official write tools.
  * tool.execute.before: deny throws [plan-write-gate]. Does NOT block execution-plan.json
  * (orchestrator may author plans). Dynamic import of pure mjs (OC load contract).
  * Factory accepts projectRoot / { directory, worktree } so live gate-state load works
@@ -14,14 +14,22 @@ import type { Plugin, Hooks } from "@opencode-ai/plugin";
 function isWriteTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
   const n = name.toLowerCase();
-  return (
-    n === "write" ||
-    n === "edit" ||
-    n.endsWith(".write") ||
-    n.endsWith(".edit") ||
-    n.endsWith("_write") ||
-    n.endsWith("_edit")
-  );
+  const bare = n.split(/[.:/]/).pop() ?? n;
+  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file", "delete_file"].includes(bare) ||
+    n.endsWith(".write") || n.endsWith(".edit") || n.endsWith("_write") || n.endsWith("_edit");
+}
+
+function isPatchTool(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const bare = name.toLowerCase().split(/[.:/]/).pop() ?? "";
+  return bare === "apply_patch" || bare === "applypatch" || bare === "patch";
+}
+
+/** @description Whether tool is a shell command whose concrete write targets must be scoped. */
+function isBashTool(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const n = name.toLowerCase();
+  return n === "bash" || n === "shell" || n.endsWith(".bash") || n.endsWith("_bash") || n.endsWith(".shell") || n.endsWith("_shell");
 }
 
 /**
@@ -45,46 +53,34 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
  * @description Platform input identity candidates (trusted over model-controlled Write args).
  * Order: agent, agentType, agent_type, subagent_type, subagentType.
  */
-function inputRoleCandidates(
-  input: Record<string, unknown> | null,
-): unknown[] {
-  if (!input) return [];
-  return [
-    input.agent,
-    input.agentType,
-    input.agent_type,
-    input.subagent_type,
-    input.subagentType,
-  ];
+function extractPatchPaths(args: Record<string, unknown> | null): string[] {
+  const patch = args?.patchText ?? args?.patch ?? args?.diff ?? args?.input;
+  if (typeof patch !== "string") return [];
+  const paths: string[] = [];
+  const add = (raw: string) => {
+    const value = raw.trim().replace(/^['"]|['"]$/g, "").replace(/^[ab]\//, "");
+    if (value && value !== "/dev/null" && !paths.includes(value)) paths.push(value);
+  };
+  for (const line of patch.split(/\r?\n/)) {
+    const envelope = line.match(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/) ?? line.match(/^\*\*\* Move to:\s*(.+)$/);
+    if (envelope) add(envelope[1]);
+    const unified = line.match(/^\+\+\+\s+([^\t]+)|^---\s+([^\t]+)/);
+    if (unified) add(unified[1] ?? unified[2]);
+  }
+  return paths;
 }
 
-/**
- * @description Acting role from platform input only (anti-spoof).
- * Never reads Write args — those are model-controlled. Empty when input has no role
- * so decideScopeRail's armed-hand empty DENY applies.
- */
-function extractActingRole(
-  input: Record<string, unknown> | null,
-): string {
-  for (const c of inputRoleCandidates(input)) {
-    if (typeof c === "string" && c.trim().length > 0) return c.trim();
+function extractOfficialWritePaths(args: Record<string, unknown> | null, extractWritePath: (payload: unknown) => string): string[] {
+  const paths: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value === "string" && value && !paths.includes(value)) paths.push(value);
+  };
+  add(extractWritePath({ args: args ?? {} }));
+  const edits = Array.isArray(args?.edits) ? args.edits : Array.isArray(args?.files) ? args.files : [];
+  for (const edit of edits) {
+    if (edit && typeof edit === "object" && !Array.isArray(edit)) add(extractWritePath({ args: edit }));
   }
-  return "";
-}
-
-/**
- * @description OC/CC subagent signal from platform input only: agent_id OR any
- * non-empty role identity on input. Never from Write args (spoofable).
- * Unknown → false (scope rail fail-open when rail not armed).
- */
-function extractIsSubagent(
-  input: Record<string, unknown> | null,
-): boolean {
-  if (input?.agent_id != null || input?.agentId != null) return true;
-  for (const s of inputRoleCandidates(input)) {
-    if (typeof s === "string" && s.trim().length > 0) return true;
-  }
-  return false;
+  return paths;
 }
 
 /**
@@ -93,33 +89,42 @@ function extractIsSubagent(
  */
 export async function createPlanWriteGateHooks(
   projectRoot?: string,
-): Promise<Pick<Hooks, "tool.execute.before">> {
+  deps: { client?: any; identityReader?: any; resolveRuntimeIdentity?: any; requireHeartbeat?: boolean } = {},
+): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const { decide, throwIfDenied, extractWritePath } = await import(
     "./lib/plan-write-decide.mjs"
   );
   const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
   const { loadGateStateFromDisk } = await import("./lib/dual-enforcement.mjs");
-  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs");
+  const { invalidateScopeRuntimeIdentity, resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
 
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : "";
+  const { registerScopeComponent, scopeRuntimeCompositionMode } = await import("./lib/scope-runtime-composition.mjs");
+  if (root) registerScopeComponent(root, "plan-write-gate");
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
-      if (!isWriteTool(input?.tool)) return;
+      const writeTool = isWriteTool(input?.tool);
+      const patchTool = isPatchTool(input?.tool);
+      const bashTool = isBashTool(input?.tool);
+      if (!writeTool && !patchTool && !bashTool) return;
       const args = resolveHookArgs(input, output);
-      let filePath =
-        extractWritePath({ args: args ?? {} }) ||
-        extractWritePath({
-          tool_input: {
-            file_path:
-              typeof input?.tool_input?.file_path === "string"
-                ? input.tool_input.file_path
-                : undefined,
-          },
-        });
+      const {
+        appendScopeEvent,
+        hasCleanupPending,
+        heartbeatActiveDispatch,
+        normalizeProjectPath,
+        reconcileExpiredDispatch,
+      } = await import("./lib/dispatch-scope.mjs");
+      const rawPaths = bashTool
+        ? []
+        : patchTool
+          ? extractPatchPaths(args)
+          : extractOfficialWritePaths(args, extractWritePath);
+      let filePath = rawPaths[0] ?? "";
 
       // Absolute paths: relativize under projectRoot so scope_paths (relative) match.
       // Outside root (starts with ..) keeps absolute → scope miss → deny when rail armed;
@@ -145,13 +150,21 @@ export async function createPlanWriteGateHooks(
         input != null && typeof input === "object" && !Array.isArray(input)
           ? (input as Record<string, unknown>)
           : null;
-      const identity = resolveHookIdentity({ input: inputRec, toolArgs: args });
-      if (!identity.ok) {
-        throw new Error(`[plan-write-gate] Blocked: ${identity.reason}`);
-      }
-
       let gateState: unknown = undefined;
-      const sessionId = inputRec?.sessionID ?? inputRec?.sessionId ?? null;
+      const adapterSession = process.env.HARNESS_ACTIVE_DISPATCH_SESSION_ID;
+      const adapterToken = process.env.HARNESS_ACTIVE_DISPATCH_CLAIM_TOKEN;
+      const resolveRuntimeIdentity = deps.resolveRuntimeIdentity ?? resolveScopeRuntimeIdentity;
+      const trusted = await resolveRuntimeIdentity(root, inputRec, {
+        client: deps.client,
+        reader: deps.identityReader,
+        adapterParentSessionId: adapterSession,
+        adapterToken,
+      });
+      const mode = root ? scopeRuntimeCompositionMode(root) : "shadow";
+      if (!trusted.ok && mode === "enforce" && trusted.notWritingSession !== true) {
+        throw new Error(`[plan-write-gate] Blocked: trusted session/message identity unavailable (${trusted.reason}).`);
+      }
+      let sessionId = trusted.ok ? trusted.parentSessionId : inputRec?.sessionID ?? inputRec?.sessionId ?? null;
       if (
         root.length > 0 &&
         typeof sessionId === "string" &&
@@ -165,14 +178,46 @@ export async function createPlanWriteGateHooks(
           gateState = undefined;
         }
       }
+      const actingRole = trusted.ok ? trusted.role : "";
+      const isSubagent = trusted.ok;
 
-      const actingRole = identity.roleSource === "runtime-envelope"
-        ? identity.role
-        : extractActingRole(inputRec);
-      // Platform input only: agent_id or non-empty role identity → subagent for rail
-      const isSubagent = extractIsSubagent(inputRec);
+      let active = gateState != null && typeof gateState === "object" && !Array.isArray(gateState)
+        ? (gateState as Record<string, any>).active_dispatch
+        : null;
+      if (active && !trusted.ok) {
+        throw new Error(`[plan-write-gate] Blocked: trusted writing-session identity required (${trusted.reason}).`);
+      }
+      if (!trusted.ok && (trusted.boundRequired === true || (adapterSession && adapterToken))) {
+        throw new Error(`[plan-write-gate] Blocked: child/adapter dispatch binding invalid (${trusted.reason}).`);
+      }
+      if (root && typeof sessionId === "string" && hasCleanupPending(root, sessionId)) {
+        throw new Error("[plan-write-gate] Blocked: active_dispatch cleanup_pending; authority cleanup must reconcile before writes.");
+      }
+      if (active && root && typeof sessionId === "string") {
+        const heartbeat = heartbeatActiveDispatch(root, {
+          sessionId,
+          callId: trusted.callId,
+          token: trusted.token,
+          role: actingRole,
+        });
+        if (deps.requireHeartbeat !== false && !heartbeat.ok) {
+          throw new Error(`[plan-write-gate] Blocked: active dispatch heartbeat rejected (${heartbeat.reason}).`);
+        }
+        reconcileExpiredDispatch(root, sessionId);
+        const refreshed = loadGateStateFromDisk(root, { sessionId });
+        if (refreshed.ok) {
+          gateState = refreshed.state;
+          active = refreshed.state && typeof refreshed.state === "object" && !Array.isArray(refreshed.state)
+            ? (refreshed.state as Record<string, any>).active_dispatch
+            : null;
+        }
+      }
 
-      if (
+      if (active?.status === "stale") {
+        throw new Error("[plan-write-gate] Blocked: active_dispatch lease is stale; explicit termination reconciliation required.");
+      }
+
+      if ((writeTool || patchTool) &&
         /(?:^|[\\/])execution-plan\.json$/i.test(filePath) &&
         gateState != null &&
         typeof gateState === "object" &&
@@ -182,16 +227,57 @@ export async function createPlanWriteGateHooks(
         throw new Error("[plan-write-gate] Blocked: bound execution-plan.json is immutable until a new planner claim.")
       }
 
-      throwIfDenied(
-        decide(
-          { args: { filePath }, tool_input: { file_path: filePath } },
-          {
-            gateState,
-            actingRole: actingRole || undefined,
-            isSubagent,
-          },
-        ),
-      );
+      if (bashTool && active) {
+        const recorded = appendScopeEvent(root, active, {
+          tool: input?.tool,
+          paths: [],
+          mode,
+          reason: "bash-unknown-risk",
+        });
+        if (!recorded.ok) throw new Error(`[plan-write-gate] Blocked: ${recorded.reason}; shadow evidence is mandatory.`);
+        if (mode === "shadow") return;
+        throw new Error("[plan-write-gate] Blocked: Bash is disabled during an active writing-hand dispatch. Complete cleanup first; tests and commands must run afterward through the compliance/orchestrator phase.");
+      }
+      if (bashTool) return;
+      if ((writeTool || patchTool) && rawPaths.length === 0) {
+        throw new Error("[plan-write-gate] Blocked: official write/patch tool exposed no parseable target paths.");
+      }
+      for (const rawPath of rawPaths) {
+        const normalized = root && active ? normalizeProjectPath(root, rawPath) : { ok: true, path: rawPath };
+        const checkedPath = normalized.ok ? normalized.path : rawPath;
+        const decision = normalized.ok
+          ? decide(
+              { args: { filePath: checkedPath }, tool_input: { file_path: checkedPath } },
+              { gateState, actingRole: actingRole || undefined, isSubagent },
+            )
+          : { allow: false, reason: `[plan-write-gate] Blocked: '${rawPath}' is not a safe project path (${normalized.reason}).` };
+        const scopeViolation = !normalized.ok || /OUTSIDE|armed hand dispatch|acting role identity/i.test(decision.reason ?? "");
+        if (decision.allow === false && scopeViolation && active && typeof active === "object") {
+          const recorded = appendScopeEvent(root, active, {
+            tool: input?.tool,
+            paths: [checkedPath],
+            mode,
+            reason: normalized.ok ? "outside-approved-scope" : "unsafe-project-path",
+          });
+          if (!recorded.ok) throw new Error(`[plan-write-gate] Blocked: ${recorded.reason}; shadow evidence is mandatory.`);
+          if (mode === "shadow") continue;
+        }
+        throwIfDenied(decision);
+      }
+    },
+    "tool.execute.after": async (input: any) => {
+      if (!isWriteTool(input?.tool) && !isPatchTool(input?.tool) && !isBashTool(input?.tool)) return;
+      invalidateScopeRuntimeIdentity(root, input?.sessionID ?? input?.sessionId, input?.callID ?? input?.callId);
+    },
+    event: async ({ event }: any) => {
+      const part = event?.properties?.part ?? event?.part;
+      if (event?.type === "message.part.updated" && part?.type === "tool" && (part?.state?.status === "completed" || part?.state?.status === "error")) {
+        invalidateScopeRuntimeIdentity(root, part.sessionID, part.callID);
+        return;
+      }
+      if (event?.type === "session.idle" || event?.type === "session.error" || event?.type === "session.deleted") {
+        invalidateScopeRuntimeIdentity(root, event?.properties?.sessionID ?? event?.properties?.info?.id);
+      }
     },
   };
 }
@@ -200,9 +286,9 @@ export async function createPlanWriteGateHooks(
  * @description OpenCode plugin factory — named const + default (OC load contract).
  * Accepts { directory, worktree } like entry-gate for projectRoot resolution.
  */
-export const PlanWriteGate: Plugin = async ({ directory, worktree }: any = {}) => {
+export const PlanWriteGate: Plugin = async ({ directory, worktree, client }: any = {}) => {
   const root = resolveProjectRoot(directory, worktree);
-  return createPlanWriteGateHooks(root);
+  return createPlanWriteGateHooks(root, { client });
 };
 
 /** @description OC load contract — default export required. */

@@ -24,6 +24,35 @@ import {
   defaultHasFidelityPass,
 } from "./run-hand.mjs";
 import { mergeGateState } from "../plugin/lib/gate-state.mjs";
+import { semanticPlanHash } from "../plugin/lib/planner-artifact.mjs";
+
+function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]) {
+  const plan = {
+    feature_id: featureId,
+    kind: "full",
+    mode: "full",
+    tasks: [{
+      id: taskId,
+      severity: "medium",
+      complexity: "medium",
+      scope_paths: scopePaths,
+      criterion_refs: ["#ac-1"],
+      locked_tests: [{ id: "lt-1", path: "tests/foo.test.mjs" }],
+    }],
+  };
+  const hash = semanticPlanHash(plan);
+  const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
+  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${hash}.json`;
+  mkdirSync(join(stateDir, "bound-plans"), { recursive: true });
+  writeFileSync(join(root, snapshotRel), JSON.stringify(plan));
+  writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
+    session_id: sessionId,
+    feature_id: featureId,
+    planner_status: "usable",
+    delivery_status: "ready",
+    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash },
+  }));
+}
 
 const PRIMARY_SPAWN_FM = `---
 description: "test spawn"
@@ -478,6 +507,7 @@ test("captureHandResult: vacuous green forces non-zero locked exit → FAILED", 
 test("runHand: FAILED path resets, writes session-scoped record, refuses subagent agent", async () => {
   const root = mkdtempSync(join(tmpdir(), "t7-runhand-"));
   try {
+    seedBoundTask(root, "ses_run1", "feat-x", "task-1");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
     writeFileSync(join(agentsDir, "executor-medium-spawn.md"), PRIMARY_SPAWN_FM);
@@ -510,6 +540,11 @@ test("runHand: FAILED path resets, writes session-scoped record, refuses subagen
         agentsDir,
         checkFidelityPass: () => true,
         spawn: async () => {
+          const active = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch;
+          assert.equal(active.session_id, "ses_run1");
+          assert.equal(active.feature_id, "feat-x");
+          assert.equal(active.task_id, "task-1");
+          assert.deepEqual(active.scope_paths, ["src"]);
           phase = "post";
           return {
             exitCode: 0,
@@ -549,6 +584,7 @@ test("runHand: FAILED path resets, writes session-scoped record, refuses subagen
     assert.equal(result.record.agent, "executor-medium-spawn");
     // process exit was 0 but outcome is FAILED — exit is not oracle
     assert.equal(result.processExitCode, 0);
+    assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch, undefined);
 
     // Refuse bare subagent
     const refused = await runHand(
@@ -594,6 +630,7 @@ test("runHand: FAILED path resets, writes session-scoped record, refuses subagen
 test("runHand: CAPTURE_ERROR sets quarantine when reset fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "t7-quar-"));
   try {
+    seedBoundTask(root, "ses_q", "feat-q", "task-q");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
     writeFileSync(join(agentsDir, "executor-low-spawn.md"), PRIMARY_SPAWN_FM);
@@ -634,6 +671,37 @@ test("runHand: CAPTURE_ERROR sets quarantine when reset fails", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("runHand: cleanup failure is verified and fails closed instead of returning hand outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-cleanup-fail-"));
+  try {
+    seedBoundTask(root, "ses_cleanup", "feat-cleanup", "task-cleanup");
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "test-author-spawn.md"), PRIMARY_SPAWN_FM);
+    const result = await runHand({
+      feature_id: "feat-cleanup",
+      task_id: "task-cleanup",
+      session_id: "ses_cleanup",
+      project_root: root,
+      freeze_commit_sha: "freeze1",
+      role: "test-author",
+      no_tests: true,
+      brief: "x",
+    }, {
+      agentsDir,
+      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      finishDispatch: () => ({ ok: false, cleanup_pending: true, reason: "active_dispatch cleanup pending" }),
+      lsUntracked: () => [],
+      gitResetHard: () => ({ ok: true }),
+      removePath: () => ({ ok: true }),
+      writePath: () => ({ ok: true }),
+      isDirtyVsFreeze: () => false,
+    });
+    assert.equal(result.outcome, OUTCOME.CONFIG_ERROR);
+    assert.match(result.reason, /cleanup pending/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("runHand: CONFIG_ERROR when freeze missing; never DONE", async () => {
@@ -706,6 +774,7 @@ test("runHand: executor with fidelity_pass proceeds past fidelity gate", async (
   let spawned = false;
   const root = mkdtempSync(join(tmpdir(), "t7-fid-ok-"));
   try {
+    seedBoundTask(root, "ses_fidok", "feat-fid", "task-ok");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
     writeFileSync(join(agentsDir, "executor-low-spawn.md"), PRIMARY_SPAWN_FM);
@@ -753,6 +822,7 @@ test("runHand: test-author does not require fidelity_pass (producer exempt)", as
   let spawned = false;
   const root = mkdtempSync(join(tmpdir(), "t7-fid-ta-"));
   try {
+    seedBoundTask(root, "ses_fidta", "feat-fid", "task-ta");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
     writeFileSync(join(agentsDir, "test-author-spawn.md"), PRIMARY_SPAWN_FM);

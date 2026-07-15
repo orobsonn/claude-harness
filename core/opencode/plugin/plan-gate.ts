@@ -34,6 +34,8 @@ export async function createPlanGateHooks(
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd()
+  const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs")
+  registerScopeComponent(root, "plan-gate")
   const {
     enforceDualFromDiskOrThrow,
     extractHookTaskContext,

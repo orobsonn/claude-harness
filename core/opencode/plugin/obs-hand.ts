@@ -2,11 +2,12 @@
  * @description Structural mid-run obs for hand roles (executor/sniper/test-author).
  * before: task-executing (n/total from plan when possible)
  * after: hand-ran
- * Fail-open. Default export = OC load contract.
+ * The Task before/after boundary also owns writing-hand active_dispatch claims.
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import crypto from "node:crypto";
 
 function isTaskTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
@@ -19,7 +20,8 @@ function isTaskTool(name: unknown): boolean {
  */
 export async function createObsHandHooks(
   dir?: string,
-): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
+  deps: { client?: any } = {},
+): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const {
     isHandRole,
     extractTaskIds,
@@ -31,7 +33,36 @@ export async function createObsHandHooks(
     taskIndexFromPlan,
     planDirForRun,
   } = await import("./lib/obs-emit.mjs");
+  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs");
+  const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("./lib/roles.mjs");
+  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBinding } = await import("./lib/dispatch-scope.mjs");
+  const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
+  const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
+  registerScopeComponent(cwd, "obs-hand");
+  const claims = new Map<string, string>();
+  const reader = sdkIdentityReader(deps.client, cwd);
+
+  const writingHand = (role: unknown) =>
+    isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role);
+  const claimKey = (sessionId: string, callId: string) => `${sessionId}\u0000${callId}`;
+
+  function cleanup(sessionId: unknown, callId: unknown) {
+    if (typeof sessionId !== "string" || typeof callId !== "string") return { ok: true };
+    const key = claimKey(sessionId, callId);
+    const token = claims.get(key);
+    if (!token) return { ok: true };
+    const finished = finishActiveDispatch(cwd, { sessionId, callId, token });
+    if (finished.ok) claims.delete(key);
+    return finished;
+  }
+
+  function preservePendingBinding(sessionId: unknown, callId: unknown, childSessionId: unknown, jobId: unknown) {
+    if (typeof sessionId !== "string" || typeof callId !== "string") return { ok: false, reason: "pending dispatch identity missing" };
+    const token = claims.get(claimKey(sessionId, callId));
+    if (!token) return { ok: false, reason: "pending dispatch capability missing" };
+    return markDispatchBindingPending(cwd, { sessionId, callId, token, childSessionId, jobId });
+  }
 
   function emitTaskExecuting(sessionId: string | null, ids: ReturnType<typeof extractTaskIds>) {
     try {
@@ -64,23 +95,91 @@ export async function createObsHandHooks(
     }
   }
 
+  async function cleanupChild(childSessionId: unknown) {
+    if (typeof childSessionId !== "string" || !childSessionId) return { ok: true };
+    const processBinding = getProcessChildBinding(cwd, childSessionId);
+    if (!processBinding) {
+      let session;
+      try {
+        session = await reader.getSession(childSessionId);
+        if (!session?.parentID) return { ok: true };
+      } catch {
+        const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, "SDK unavailable and no verified child binding");
+        return { ok: false, reason: recorded.ok ? "terminal session identity unavailable" : recorded.reason };
+      }
+      const reconciled = reconcilePendingChildBinding(cwd, { parentSessionId: session.parentID, childSessionId });
+      if (!reconciled.ok) {
+        const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, reconciled.reason);
+        return { ok: false, reason: recorded.ok ? reconciled.reason : recorded.reason };
+      }
+    }
+    const verifiedBinding = getProcessChildBinding(cwd, childSessionId);
+    const bound = getChildSessionBinding(cwd, childSessionId, verifiedBinding?.parentSessionId);
+    if (!bound.ok) {
+      const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, bound.reason);
+      return { ok: false, reason: recorded.ok ? bound.reason : recorded.reason };
+    }
+    const finished = finishActiveDispatch(cwd, {
+      sessionId: bound.binding.parentSessionId,
+      callId: bound.binding.callId,
+      token: bound.binding.token,
+    });
+    if (finished.ok) claims.delete(claimKey(bound.binding.parentSessionId, bound.binding.callId));
+    return finished;
+  }
+
   return {
     "tool.execute.before": async (input: any, output: any) => {
+      if (!isTaskTool(input?.tool)) return;
+      const args = resolveHookArgs(input, output);
+      const ids = extractTaskIds(args);
+      if (!isHandRole(ids.role)) return;
+      const sessionId = typeof input?.sessionID === "string" ? input.sessionID : null;
+      const callId = typeof input?.callID === "string" ? input.callID : null;
+      if (writingHand(ids.role)) {
+        const prompt = typeof args?.prompt === "string" ? args.prompt : "";
+        const marker = parseTaskDispatchIdentity(prompt);
+        if (!sessionId || !callId || !marker.ok) {
+          throw new Error(`[obs-hand] writing-hand dispatch requires runtime sessionID/callID and canonical task marker`);
+        }
+        const reconciled = reconcileCleanupPending(cwd, sessionId);
+        if (!reconciled.ok) throw new Error(`[obs-hand] cleanup_pending blocks dispatch: ${reconciled.reason}`);
+        const key = claimKey(sessionId, callId);
+        const token = claims.get(key) ?? crypto.randomUUID();
+        const claimed = claimActiveDispatch(cwd, {
+          sessionId,
+          callId,
+          role: ids.role,
+          taskId: marker.taskId,
+          token,
+        });
+        if (!claimed.ok) throw new Error(`[obs-hand] writing-hand dispatch blocked: ${claimed.reason}`);
+        claims.set(key, token);
+      }
       try {
-        if (!isTaskTool(input?.tool)) return;
-        const args = resolveHookArgs(input, output);
-        const ids = extractTaskIds(args);
-        if (!isHandRole(ids.role)) return;
-        const sessionId =
-          typeof input?.sessionID === "string" ? input.sessionID : null;
         emitTaskExecuting(sessionId, ids);
       } catch {
         /* fail-open */
       }
     },
     "tool.execute.after": async (input: any, output: any) => {
+      const metadata = output?.metadata;
+      const outputText = String(output?.output ?? output?.content ?? output?.result ?? "");
+      const backgroundRunning = metadata?.background === true && /<task\b[^>]*\bstate=["']running["']/i.test(outputText);
+      const childSessionId = typeof metadata?.sessionId === "string" ? metadata.sessionId : outputText.match(/<task\b[^>]*\bid=["']([^"']+)["']/i)?.[1] ?? "";
+      const jobId = metadata?.jobId ?? metadata?.taskId ?? metadata?.id;
+      const terminal = !backgroundRunning;
       try {
         if (!isTaskTool(input?.tool)) return;
+        const parentSessionId = typeof metadata?.parentSessionId === "string" ? metadata.parentSessionId : "";
+        if (childSessionId) {
+          const bound = getChildSessionBinding(cwd, childSessionId, parentSessionId);
+          if (!bound.ok || bound.binding.callId !== input?.callID || parentSessionId !== input?.sessionID) {
+            throw new Error("[obs-hand] Task result child binding does not match parent call");
+          }
+        } else if (backgroundRunning) {
+          throw new Error("[obs-hand] running background Task result has no child identity");
+        }
         const args = resolveHookArgs(input, output);
         const ids = extractTaskIds(args);
         if (!isHandRole(ids.role)) return;
@@ -92,15 +191,46 @@ export async function createObsHandHooks(
           model: ids.model || ids.role,
         });
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
-      } catch {
-        /* fail-open */
+      } catch (error) {
+        if (backgroundRunning) {
+          const pending = preservePendingBinding(input?.sessionID, input?.callID, childSessionId, jobId);
+          if (!pending.ok) throw new Error(`[obs-hand] ${pending.reason}`);
+        }
+      } finally {
+        if (terminal) {
+          const finished = cleanup(input?.sessionID, input?.callID);
+          if (finished && !finished.ok) throw new Error(`[obs-hand] ${finished.reason}`);
+        }
       }
+    },
+    event: async ({ event }: any) => {
+      if (event?.type === "message.updated") {
+        const info = event?.properties?.info;
+        if (info?.role !== "user" || !writingHand(info?.agent) || typeof info?.sessionID !== "string") return;
+        let session;
+        try { session = await reader.getSession(info.sessionID); } catch { return; }
+        if (typeof session?.parentID === "string") {
+          const bound = bindChildSession(cwd, { parentSessionId: session.parentID, childSessionId: info.sessionID, role: info.agent });
+          if (!bound.ok) throw new Error(`[obs-hand] ${bound.reason}`);
+        }
+        return;
+      }
+      if (event?.type === "session.idle" || event?.type === "session.error") {
+        const sessionId = event?.properties?.sessionID;
+        const finished = await cleanupChild(sessionId);
+        if (finished && !finished.ok && !/not bound/.test(String(finished.reason))) throw new Error(`[obs-hand] ${finished.reason}`);
+        return;
+      }
+      const part = event?.properties?.part ?? event?.part;
+      if (event?.type !== "message.part.updated" || part?.type !== "tool" || !isTaskTool(part?.tool) || part?.state?.status !== "error") return;
+      const finished = cleanup(part.sessionID, part.callID);
+      if (finished && !finished.ok) throw new Error(`[obs-hand] ${finished.reason}`);
     },
   };
 }
 
-export const obsHand: Plugin = async ({ directory }) =>
-  createObsHandHooks(typeof directory === "string" ? directory : undefined);
+export const obsHand: Plugin = async ({ directory, client }: any) =>
+  createObsHandHooks(typeof directory === "string" ? directory : undefined, { client });
 
 /** @description OC load contract. */
 export default obsHand;

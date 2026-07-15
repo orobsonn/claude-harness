@@ -63,7 +63,8 @@ export function isExecutorRole(subagentType) {
  * @returns {boolean}
  */
 export function isTestAuthorRole(subagentType) {
-  return bareRole(subagentType) === "test-author";
+  const bare = bareRole(subagentType);
+  return bare === "test-author" || bare === "test-author-spawn";
 }
 
 /**

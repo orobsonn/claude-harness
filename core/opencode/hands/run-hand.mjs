@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { join, dirname, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   OUTCOME,
   evaluateRun,
@@ -26,6 +26,7 @@ import {
 import { handRecordPath, gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { mergeGateState } from "../plugin/lib/gate-state.mjs";
 import { hasFidelityPass } from "../plugin/lib/entry-decide.mjs";
+import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../plugin/lib/dispatch-scope.mjs";
 
 /** Forced non-zero locked-test exit for vacuous-green guard. */
 export const VACUOUS_GREEN_EXIT = 1;
@@ -806,6 +807,9 @@ export async function runHand(descriptor, deps = {}) {
     markHandQuarantine = null,
     checkFidelityPass = null,
     now = () => new Date().toISOString(),
+    dispatchToken = () => randomUUID(),
+    dispatchCallId = () => `run-hand:${randomUUID()}`,
+    finishDispatch = finishActiveDispatch,
   } = deps;
 
   const featureId = descriptor?.feature_id ?? descriptor?.featureId;
@@ -982,6 +986,30 @@ export async function runHand(descriptor, deps = {}) {
     [...preSnap.contents.entries()].map(([p, v]) => [p, v.hash])
   );
 
+  const callId = dispatchCallId();
+  const claimToken = dispatchToken();
+  const reconciledCleanup = reconcileCleanupPending(projectRoot, sessionId);
+  if (!reconciledCleanup.ok) {
+    return failConfig(`cleanup_pending blocks dispatch: ${reconciledCleanup.reason}`, {
+      preUntracked: preSnap.paths,
+      preUntrackedContents: preSnap.contents,
+    });
+  }
+  const claimed = claimActiveDispatch(projectRoot, {
+    sessionId,
+    callId,
+    role,
+    taskId,
+    token: claimToken,
+  });
+  if (!claimed.ok) {
+    return failConfig(`active_dispatch claim failed: ${claimed.reason}`, {
+      preUntracked: preSnap.paths,
+      preUntrackedContents: preSnap.contents,
+    });
+  }
+  const dispatchScope = claimed.claim;
+
   // Spawn subprocess (injectable)
   let child;
   try {
@@ -991,9 +1019,28 @@ export async function runHand(descriptor, deps = {}) {
       title,
       prompt: brief,
       descriptor,
+      dispatchAuthority: {
+        sessionId,
+        callId,
+        claimToken,
+      },
     });
   } catch (err) {
+    const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
+    if (!finished.ok) {
+      return failConfig(`spawn failed and ${finished.reason}`, {
+        preUntracked: preSnap.paths,
+        preUntrackedContents: preSnap.contents,
+      });
+    }
     return failConfig(err instanceof Error ? err.message : "spawn failed", {
+      preUntracked: preSnap.paths,
+      preUntrackedContents: preSnap.contents,
+    });
+  }
+  const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
+  if (!finished.ok) {
+    return failConfig(finished.reason, {
       preUntracked: preSnap.paths,
       preUntrackedContents: preSnap.contents,
     });
@@ -1006,9 +1053,9 @@ export async function runHand(descriptor, deps = {}) {
 
   const capture = captureHandResult({
     dispatch: {
-      scope_paths: descriptor.scope_paths ?? [],
+      scope_paths: dispatchScope.scope_paths,
       frozen_paths: descriptor.frozen_paths ?? [],
-      allowed_writes: descriptor.allowed_writes ?? descriptor.scope_paths ?? [],
+      allowed_writes: dispatchScope.allowed_writes.length > 0 ? dispatchScope.allowed_writes : dispatchScope.scope_paths,
       no_tests,
     },
     child: {
@@ -1205,12 +1252,17 @@ export function realTestRunner(testPath, cwd = process.cwd()) {
 /**
  * @description Default spawn: opencode run (not exercised by unit tests).
  */
-function defaultSpawnOpencode({ projectDir, agent, title, prompt }) {
+function defaultSpawnOpencode({ projectDir, agent, title, prompt, dispatchAuthority }) {
   const args = buildOpencodeRunArgs({ projectDir, agent, title, prompt });
   const r = spawnSync("opencode", args, {
     cwd: projectDir,
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
+    env: {
+      ...process.env,
+      HARNESS_ACTIVE_DISPATCH_SESSION_ID: dispatchAuthority?.sessionId ?? "",
+      HARNESS_ACTIVE_DISPATCH_CLAIM_TOKEN: dispatchAuthority?.claimToken ?? "",
+    },
   });
   return {
     exitCode: typeof r.status === "number" ? r.status : 1,
