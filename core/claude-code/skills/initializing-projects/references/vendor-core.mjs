@@ -22,10 +22,16 @@
 
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
+  constants,
   cpSync,
   existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -35,7 +41,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
@@ -108,13 +114,41 @@ plans/
 const AGENTS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const AGENTS_END = "<!-- harness:end -->";
 
-// Repo-level files vendored OUTSIDE .claude/ (into the project root). Non-clobber:
-// installed only if absent, so a project's own templates are never overwritten.
-// Maps source path under core/ → destination relative to the target repo root.
+// Repo-level files vendored OUTSIDE runtime dirs. Non-clobber: installed only if the exact
+// destination is absent, so arbitrary project templates and same-path customizations survive.
 const REPO_FILES = [
   ["github/ISSUE_TEMPLATE/harness-task.yml", ".github/ISSUE_TEMPLATE/harness-task.yml"],
-  ["dev.vars.example", ".dev.vars.example"],
+  ["claude-code/dev.vars.example", ".dev.vars.example"],
 ];
+
+const REQUIRED_OC_ISSUE_AUTHORING_SOURCE = [
+  { logical: "core/opencode/skills/creating-issues", rel: "opencode/skills/creating-issues", kind: "directory" },
+  { logical: "core/opencode/skills/creating-issues/SKILL.md", rel: "opencode/skills/creating-issues/SKILL.md", kind: "file" },
+  {
+    logical: "core/opencode/skills/creating-issues/references/submit-issue.mjs",
+    rel: "opencode/skills/creating-issues/references/submit-issue.mjs",
+    kind: "file",
+  },
+  { logical: "core/opencode/rules/creating-issues.md", rel: "opencode/rules/creating-issues.md", kind: "file" },
+  {
+    logical: "core/github/ISSUE_TEMPLATE/harness-task.yml",
+    rel: "github/ISSUE_TEMPLATE/harness-task.yml",
+    kind: "file",
+  },
+];
+
+export const FRESH_NATIVE_PATHS = {
+  opencode: [
+    ".opencode/skills/creating-issues/SKILL.md",
+    ".opencode/rules/creating-issues.md",
+    ".github/ISSUE_TEMPLATE/harness-task.yml",
+  ],
+  claude: [
+    ".claude/skills/creating-issues/SKILL.md",
+    ".claude/rules/creating-issues.md",
+    ".github/ISSUE_TEMPLATE/harness-task.yml",
+  ],
+};
 
 const GITIGNORE = `# Claude Harness — ephemeral, never committed
 plans/
@@ -262,7 +296,7 @@ export function normalizeRuntimeTarget(raw) {
  * @throws {Error} when the target is a runtime token or a non-existent dir
  */
 export function resolveProjectTarget(raw, cwd) {
-  if (raw == null) return cwd;
+  if (raw == null) return pinTargetRoot(cwd);
   const value = String(raw);
   // Check the runtime-token guard FIRST (before existence): a stray `./both` dir
   // must not defeat the hint. Strip a trailing slash so `both/` is still caught.
@@ -273,10 +307,36 @@ export function resolveProjectTarget(raw, cwd) {
         `vendor-core's --target is the project DIR; use --runtime ${bare} to pick the shell.`,
     );
   }
-  if (!existsSync(value) || !statSync(value).isDirectory()) {
+  if (!existsSync(value)) {
     throw new Error(`--target "${value}" is not an existing directory`);
   }
-  return value;
+  try {
+    return pinTargetRoot(value);
+  } catch (error) {
+    throw new Error(`--target "${value}" is not an existing directory or real non-symlink target: ${error.message}`);
+  }
+}
+
+/** @description Pins an existing target to a stable real directory and rejects a symlink root. */
+export function pinTargetRoot(targetDir) {
+  const targetAbs = resolve(targetDir);
+  const before = lstatSync(targetAbs);
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new Error(`target root must be a real directory, not a symlink: ${targetAbs}`);
+  }
+  const firstReal = realpathSync(targetAbs);
+  const after = lstatSync(targetAbs);
+  const secondReal = realpathSync(targetAbs);
+  if (
+    after.isSymbolicLink() ||
+    !after.isDirectory() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    firstReal !== secondReal
+  ) {
+    throw new Error(`target root changed during validation: ${targetAbs}`);
+  }
+  return firstReal;
 }
 
 /**
@@ -496,14 +556,127 @@ function mergeOcGitignore(ocDir) {
   return `merged (${missing.length} lines added)`;
 }
 
+function collectDestinationTree(src, destination, entries) {
+  const info = statSync(src);
+  entries.push({ destination, kind: info.isDirectory() ? "directory" : "file" });
+  if (!info.isDirectory()) return;
+  for (const name of readdirSync(src)) {
+    const child = join(src, name);
+    if (statSync(child).isFile() && name.endsWith(".test.mjs")) continue;
+    collectDestinationTree(child, join(destination, name), entries);
+  }
+}
+
+function resolveRepoFileSource(coreDir, rel) {
+  return join(coreDir, rel);
+}
+
+function validateSourceArtifact(coreReal, artifact) {
+  const source = resolveRepoFileSource(coreReal, artifact.rel);
+  const parts = relative(coreReal, source).split(sep).filter(Boolean);
+  let current = coreReal;
+  for (let index = 0; index < parts.length; index += 1) {
+    current = join(current, parts[index]);
+    const info = lstatIfPresent(current);
+    if (info === null) throw new Error(`required OpenCode source artifact missing: ${artifact.logical}`);
+    if (info.isSymbolicLink()) {
+      throw new Error(`required OpenCode source artifact is a symlink: ${artifact.logical}`);
+    }
+    const final = index === parts.length - 1;
+    if (!final && !info.isDirectory()) {
+      throw new Error(`required OpenCode source artifact has invalid ancestor: ${artifact.logical}`);
+    }
+    if (final && artifact.kind === "directory" && !info.isDirectory()) {
+      throw new Error(`required OpenCode source artifact is not a directory: ${artifact.logical}`);
+    }
+    if (final && artifact.kind === "file" && !info.isFile()) {
+      throw new Error(`required OpenCode source artifact is not a regular file: ${artifact.logical}`);
+    }
+    const actual = realpathSync(current);
+    if (!isPathContained(coreReal, actual)) {
+      throw new Error(`required OpenCode source artifact escapes source root: ${artifact.logical}`);
+    }
+  }
+}
+
+function validateRequiredOpenCodeSource(coreDir) {
+  const coreReal = pinTargetRoot(coreDir);
+  for (const artifact of REQUIRED_OC_ISSUE_AUTHORING_SOURCE) validateSourceArtifact(coreReal, artifact);
+  return coreReal;
+}
+
+function preflightDestination(targetReal, destination, kind) {
+  const out = resolve(targetReal, destination);
+  if (!isPathContained(targetReal, out)) {
+    throw new Error(`vendor destination escapes target: ${destination}`);
+  }
+  const parts = relative(targetReal, out).split(sep).filter(Boolean);
+  let current = targetReal;
+  for (let index = 0; index < parts.length; index += 1) {
+    current = join(current, parts[index]);
+    const info = lstatIfPresent(current);
+    if (info === null) break;
+    if (info.isSymbolicLink()) throw new Error(`refusing symlink vendor destination: ${current}`);
+    const final = index === parts.length - 1;
+    if (!final && !info.isDirectory()) {
+      throw new Error(`vendor destination ancestor is not a directory: ${current}`);
+    }
+    if (final && kind === "directory" && !info.isDirectory()) {
+      throw new Error(`vendor directory destination is not a directory: ${current}`);
+    }
+    if (final && kind === "file" && !info.isFile()) {
+      throw new Error(`vendor file destination is not a regular file: ${current}`);
+    }
+    const actual = realpathSync(current);
+    if (!isPathContained(targetReal, actual)) {
+      throw new Error(`vendor destination escapes target: ${current} -> ${actual}`);
+    }
+  }
+}
+
+/** @description Read-only, complete destination preflight performed before the first OC write. */
+export function preflightOpenCodeVendor(coreDir, targetDir) {
+  const targetReal = pinTargetRoot(targetDir);
+  const coreReal = validateRequiredOpenCodeSource(coreDir);
+  const openCodeDir = resolveOpenCodeDir(coreReal);
+  if (!openCodeDir) throw new Error("no core/opencode found under source");
+  const entries = [];
+
+  for (const dir of OC_FRAMEWORK_OWNED) {
+    const src = join(openCodeDir, dir);
+    if (existsSync(src)) collectDestinationTree(src, join(".opencode", dir), entries);
+  }
+  for (const file of OC_FRAMEWORK_FILES) {
+    if (existsSync(join(openCodeDir, file))) entries.push({ destination: join(".opencode", file), kind: "file" });
+  }
+  const sharedDir = join(coreReal, "shared");
+  if (existsSync(sharedDir)) collectDestinationTree(sharedDir, join(".opencode", "shared"), entries);
+
+  entries.push(
+    { destination: ".opencode", kind: "directory" },
+    { destination: ".opencode/.gitignore", kind: "file" },
+    { destination: ".opencode/.harness-version", kind: "file" },
+    { destination: "AGENTS.md", kind: "file" },
+    { destination: "opencode.json", kind: "file" },
+    { destination: "opencode.harness.json", kind: "file" },
+    { destination: "MEMORY.md", kind: "file" },
+    { destination: "kaizen.md", kind: "file" },
+  );
+  for (const [, destination] of REPO_FILES) entries.push({ destination, kind: "file" });
+
+  for (const entry of entries) preflightDestination(targetReal, entry.destination, entry.kind);
+  return { targetReal, openCodeDir };
+}
+
 /**
  * @description Vendor OpenCode harness into project `.opencode/` + root config/memory.
  * @param {{ coreDir: string, targetDir: string, version: string, stampDate: string }} opts
  * @returns {{ ocDir: string }}
  */
 export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
-  const openCodeDir = resolveOpenCodeDir(coreDir);
-  if (!openCodeDir) fail("no core/opencode found under source");
+  const preflight = preflightOpenCodeVendor(coreDir, targetDir);
+  targetDir = preflight.targetReal;
+  const openCodeDir = preflight.openCodeDir;
   const sharedDir = join(coreDir, "shared");
   const ocDir = join(targetDir, ".opencode");
   mkdirSync(ocDir, { recursive: true });
@@ -546,6 +719,10 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   writeFileSync(join(ocDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
   ok(`.opencode/.gitignore (${gi}), .harness-version written`);
 
+  const repoFiles = installRepoFiles(coreDir, targetDir);
+  ok(`repo files (.github/...): ${repoFiles}`);
+  assertFreshNativeInstall(targetDir, "opencode");
+
   process.stdout.write(
     `${dim("!")} Project plugins execute when someone runs opencode in this repo (no hand tokens in plugins).\n`,
   );
@@ -586,8 +763,9 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   const settings = writeSettings(claudeCodeDir, claudeDir);
   ok(`settings.json: ${settings}`);
 
-  const repoFiles = installRepoFiles(claudeCodeDir, targetDir);
+  const repoFiles = installRepoFiles(coreDir, targetDir);
   ok(`repo files (.github/…): ${repoFiles}`);
+  assertFreshNativeInstall(targetDir, "claude");
 
   const devVarsIgnore = existsSync(join(claudeCodeDir, "dev.vars.example"))
     ? ensureDevVarsIgnored(targetDir)
@@ -825,21 +1003,127 @@ function seedAccumulated(coreDir, claudeDir) {
   }
 }
 
+function isPathContained(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function assertSafeDirectory(path, targetReal) {
+  const info = lstatSync(path);
+  if (info.isSymbolicLink()) throw new Error(`refusing symlink directory in repo-file path: ${path}`);
+  if (!info.isDirectory()) throw new Error(`repo-file ancestor is not a directory: ${path}`);
+  const actual = realpathSync(path);
+  if (!isPathContained(targetReal, actual)) {
+    throw new Error(`repo-file path escapes target: ${path} -> ${actual}`);
+  }
+  return actual;
+}
+
+function ensureSafeParent(targetDir, destination) {
+  const targetAbs = resolve(targetDir);
+  const targetInfo = lstatSync(targetAbs);
+  if (targetInfo.isSymbolicLink() || !targetInfo.isDirectory()) {
+    throw new Error(`repo-file target must be a real directory: ${targetAbs}`);
+  }
+  const targetReal = realpathSync(targetAbs);
+  const out = resolve(targetAbs, destination);
+  if (!isPathContained(targetAbs, out)) throw new Error(`repo-file destination escapes target: ${destination}`);
+
+  let current = targetAbs;
+  const parentRel = relative(targetAbs, dirname(out));
+  for (const part of parentRel === "" ? [] : parentRel.split(sep)) {
+    current = join(current, part);
+    if (lstatIfPresent(current) === null) {
+      try {
+        mkdirSync(current);
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+      }
+    }
+    assertSafeDirectory(current, targetReal);
+  }
+  assertSafeDirectory(dirname(out), targetReal);
+  return { out, parent: dirname(out), targetReal };
+}
+
+function assertSafeDestination(out, targetReal) {
+  const info = lstatSync(out);
+  if (info.isSymbolicLink()) throw new Error(`refusing symlink repo-file destination: ${out}`);
+  if (!info.isFile()) throw new Error(`repo-file destination is not a regular file: ${out}`);
+  if (!isPathContained(targetReal, realpathSync(out))) {
+    throw new Error(`repo-file destination escapes target: ${out}`);
+  }
+}
+
 /**
- * @description Installs repo-level files (outside .claude/) into the target repo root,
- * only when absent — never clobbers a project's own files. Returns a status string.
+ * @description Installs repo-level files without following target symlinks. Ancestors are checked
+ * component-by-component and each file is published atomically by an exclusive hard link.
  */
-function installRepoFiles(coreDir, targetDir) {
+export function installRepoFiles(coreDir, targetDir) {
   const installed = [];
   for (const [rel, dest] of REPO_FILES) {
-    const src = join(coreDir, rel);
-    const out = join(targetDir, dest);
-    if (!existsSync(src) || existsSync(out)) continue;
-    mkdirSync(dirname(out), { recursive: true });
-    cpSync(src, out);
+    const src = resolveRepoFileSource(coreDir, rel);
+    if (!existsSync(src)) continue;
+    const { out, parent, targetReal } = ensureSafeParent(targetDir, dest);
+    if (lstatIfPresent(out) !== null) {
+      assertSafeDestination(out, targetReal);
+      continue;
+    }
+    assertSafeDirectory(parent, targetReal);
+    const temp = `${out}.${process.pid}.${Date.now()}.tmp`;
+    let fd;
+    try {
+      fd = openSync(
+        temp,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      writeFileSync(fd, readFileSync(src));
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      assertSafeDirectory(parent, targetReal);
+      try {
+        linkSync(temp, out);
+      } catch (error) {
+        if (error?.code === "EEXIST") {
+          assertSafeDestination(out, targetReal);
+          continue;
+        }
+        throw error;
+      }
+      assertSafeDestination(out, targetReal);
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      rmSync(temp, { force: true });
+    }
     installed.push(dest);
   }
   return installed.length ? installed.join(", ") : "none (already present or no source)";
+}
+
+/** @description Returns exact required native paths absent from a fresh vendored target. */
+export function findMissingFreshNativePaths(targetDir, runtime) {
+  const required = FRESH_NATIVE_PATHS[runtime];
+  if (!required) throw new Error(`unknown runtime for fresh-install check: ${runtime}`);
+  return required.filter((rel) => !existsSync(join(targetDir, rel)));
+}
+
+/** @description Fails a fresh-install integrity check while naming every absent native path. */
+export function assertFreshNativeInstall(targetDir, runtime) {
+  const missing = findMissingFreshNativePaths(targetDir, runtime);
+  if (missing.length > 0) {
+    throw new Error(`fresh-install missing native path(s): ${missing.join(", ")}`);
+  }
 }
 
 /**

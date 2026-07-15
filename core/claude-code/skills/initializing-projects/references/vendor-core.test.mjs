@@ -16,10 +16,13 @@ import {
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +38,8 @@ import {
   normalizeRuntimeTarget,
   resolveProjectTarget,
   writeOpencodeConfig,
+  installRepoFiles,
+  assertFreshNativeInstall,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -53,6 +58,40 @@ const harnessRoot = existsSync(join(__dirname, "../../../../../package.json"))
 const OC_EXAMPLE_PATH = join(__dirname, "../../../../opencode/opencode.json.example");
 // repo-root opencode.json (5 up from references/ to reach the repo root)
 const ROOT_OPENCODE_JSON_PATH = join(__dirname, "../../../../../opencode.json");
+
+function createIssueAuthoringSourceFixture() {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-source-fixture-"));
+  const copies = [
+    ["core/opencode/skills/creating-issues/SKILL.md", "core/opencode/skills/creating-issues/SKILL.md"],
+    [
+      "core/opencode/skills/creating-issues/references/submit-issue.mjs",
+      "core/opencode/skills/creating-issues/references/submit-issue.mjs",
+    ],
+    ["core/opencode/rules/creating-issues.md", "core/opencode/rules/creating-issues.md"],
+    ["core/github/ISSUE_TEMPLATE/harness-task.yml", "core/github/ISSUE_TEMPLATE/harness-task.yml"],
+  ];
+  for (const [from, to] of copies) {
+    const destination = join(sourceRoot, to);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(join(harnessRoot, from), destination);
+  }
+  return sourceRoot;
+}
+
+function snapshotTree(root) {
+  const visit = (path) => {
+    const info = lstatSync(path);
+    if (info.isSymbolicLink()) return { type: "symlink" };
+    if (info.isFile()) return { type: "file", body: readFileSync(path).toString("base64") };
+    return {
+      type: "directory",
+      entries: Object.fromEntries(
+        readdirSync(path).sort().map((name) => [name, visit(join(path, name))]),
+      ),
+    };
+  };
+  return visit(root);
+}
 
 test("findMissingHookVpsDeps: flags a hook whose ../vps import has no file in .claude/vps, and passes when present", () => {
   const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
@@ -466,6 +505,9 @@ test("t9-creates: --runtime opencode creates .opencode agents docs skills plugin
       "AGENTS.md",
       "MEMORY.md",
       "kaizen.md",
+      ".opencode/skills/creating-issues/SKILL.md",
+      ".opencode/rules/creating-issues.md",
+      ".github/ISSUE_TEMPLATE/harness-task.yml",
     ];
     for (const rel of required) {
       assert.ok(existsSync(join(tempDir, rel)), `missing ${rel}`);
@@ -480,6 +522,226 @@ test("t9-creates: --runtime opencode creates .opencode agents docs skills plugin
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("OpenCode vendor rejects a symlink target root before any external or partial write", () => {
+  const parent = mkdtempSync(join(tmpdir(), "vendor-root-link-parent-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-root-link-outside-"));
+  const target = join(parent, "project");
+  try {
+    symlinkSync(outside, target);
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /target root must be a real directory|not an existing real directory/);
+    assert.deepEqual(readdirSync(outside), [], "symlink target must remain byte-empty");
+    assert.deepEqual(readdirSync(parent), ["project"], "no sibling or partial target files may be created");
+  } finally {
+    rmSync(target, { force: true });
+    rmSync(parent, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode vendor preflight rejects .opencode symlink before any root or external write", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-oc-link-target-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-oc-link-outside-"));
+  try {
+    writeFileSync(join(target, "preexisting.txt"), "keep\n");
+    symlinkSync(outside, join(target, ".opencode"));
+    const before = readdirSync(target).sort();
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /symlink vendor destination.*\.opencode/);
+    assert.deepEqual(readdirSync(outside), [], "no vendored file may traverse .opencode symlink");
+    assert.deepEqual(readdirSync(target).sort(), before, "preflight must reject before root partial writes");
+    assert.equal(readFileSync(join(target, "preexisting.txt"), "utf8"), "keep\n");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode source preflight names every required #342 artifact and leaves target byte-identical", () => {
+  const required = [
+    "core/opencode/skills/creating-issues",
+    "core/opencode/skills/creating-issues/SKILL.md",
+    "core/opencode/skills/creating-issues/references/submit-issue.mjs",
+    "core/opencode/rules/creating-issues.md",
+    "core/github/ISSUE_TEMPLATE/harness-task.yml",
+  ];
+  for (const artifact of required) {
+    const sourceRoot = createIssueAuthoringSourceFixture();
+    const target = mkdtempSync(join(tmpdir(), "vendor-source-preflight-target-"));
+    try {
+      mkdirSync(join(target, "existing"));
+      writeFileSync(join(target, "existing/sentinel.bin"), Buffer.from([0, 1, 2, 255]));
+      const before = snapshotTree(target);
+      const sourceArtifact = join(sourceRoot, artifact);
+      renameSync(sourceArtifact, `${sourceArtifact}.missing`);
+
+      const result = spawnSync(
+        "node",
+        [vendorCoreScript, "--source", sourceRoot, "--target", target, "--runtime", "opencode"],
+        { encoding: "utf8", stdio: "pipe" },
+      );
+      assert.notEqual(result.status, 0, `${artifact} absence must fail`);
+      assert.ok(result.stderr.includes(artifact), `failure must name exact source artifact ${artifact}`);
+      assert.deepEqual(snapshotTree(target), before, `${artifact} failure must not mutate target`);
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  }
+});
+
+test("OpenCode source preflight rejects a required source symlink before target writes", () => {
+  const sourceRoot = createIssueAuthoringSourceFixture();
+  const target = mkdtempSync(join(tmpdir(), "vendor-source-link-target-"));
+  const helper = join(sourceRoot, "core/opencode/skills/creating-issues/references/submit-issue.mjs");
+  try {
+    writeFileSync(join(target, "sentinel.txt"), "unchanged\n");
+    const before = snapshotTree(target);
+    rmSync(helper);
+    symlinkSync(join(sourceRoot, "core/opencode/skills/creating-issues/SKILL.md"), helper);
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", sourceRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /source artifact is a symlink/);
+    assert.match(result.stderr, /core\/opencode\/skills\/creating-issues\/references\/submit-issue\.mjs/);
+    assert.deepEqual(snapshotTree(target), before);
+  } finally {
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode source preflight rejects legacy-only template and leaves target byte-identical", () => {
+  const sourceRoot = createIssueAuthoringSourceFixture();
+  const target = mkdtempSync(join(tmpdir(), "vendor-legacy-template-target-"));
+  const canonical = join(sourceRoot, "core/github/ISSUE_TEMPLATE/harness-task.yml");
+  const legacy = join(sourceRoot, "core/claude-code/github/ISSUE_TEMPLATE/harness-task.yml");
+  try {
+    mkdirSync(dirname(legacy), { recursive: true });
+    cpSync(canonical, legacy);
+    rmSync(canonical);
+    writeFileSync(join(target, "sentinel.txt"), "unchanged\n");
+    const before = snapshotTree(target);
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", sourceRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /required OpenCode source artifact missing/);
+    assert.match(result.stderr, /core\/github\/ISSUE_TEMPLATE\/harness-task\.yml/);
+    assert.deepEqual(snapshotTree(target), before);
+  } finally {
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("repo template install is atomic, works beside custom templates, and preserves exact custom path", () => {
+  const empty = mkdtempSync(join(tmpdir(), "vendor-template-empty-"));
+  const custom = mkdtempSync(join(tmpdir(), "vendor-template-custom-"));
+  try {
+    mkdirSync(join(custom, ".github/ISSUE_TEMPLATE"), { recursive: true });
+    writeFileSync(join(custom, ".github/ISSUE_TEMPLATE/bug.yml"), "custom bug\n");
+    assert.match(installRepoFiles(join(harnessRoot, "core"), empty), /harness-task\.yml/);
+    assert.match(installRepoFiles(join(harnessRoot, "core"), custom), /harness-task\.yml/);
+    assert.equal(readFileSync(join(custom, ".github/ISSUE_TEMPLATE/bug.yml"), "utf8"), "custom bug\n");
+    assert.equal(readdirSync(join(empty, ".github/ISSUE_TEMPLATE")).some((name) => name.endsWith(".tmp")), false);
+
+    const exact = join(custom, ".github/ISSUE_TEMPLATE/harness-task.yml");
+    writeFileSync(exact, "operator-owned exact template\n");
+    assert.match(installRepoFiles(join(harnessRoot, "core"), custom), /none/);
+    assert.equal(readFileSync(exact, "utf8"), "operator-owned exact template\n");
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(custom, { recursive: true, force: true });
+  }
+});
+
+test("repo template install rejects symlinked .github without writing outside target", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-template-link-github-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-template-outside-"));
+  try {
+    symlinkSync(outside, join(target, ".github"));
+    assert.throws(() => installRepoFiles(join(harnessRoot, "core"), target), /symlink directory/);
+    assert.equal(existsSync(join(outside, "ISSUE_TEMPLATE/harness-task.yml")), false);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("repo template install rejects symlinked ISSUE_TEMPLATE without writing outside target", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-template-link-dir-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-template-outside-"));
+  try {
+    mkdirSync(join(target, ".github"));
+    symlinkSync(outside, join(target, ".github/ISSUE_TEMPLATE"));
+    assert.throws(() => installRepoFiles(join(harnessRoot, "core"), target), /symlink directory/);
+    assert.equal(existsSync(join(outside, "harness-task.yml")), false);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("repo template install rejects a symlink destination and preserves its outside target", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-template-link-file-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-template-outside-"));
+  const outsideFile = join(outside, "owned.yml");
+  try {
+    mkdirSync(join(target, ".github/ISSUE_TEMPLATE"), { recursive: true });
+    writeFileSync(outsideFile, "outside-owned\n");
+    symlinkSync(outsideFile, join(target, ".github/ISSUE_TEMPLATE/harness-task.yml"));
+    assert.throws(() => installRepoFiles(join(harnessRoot, "core"), target), /symlink repo-file destination/);
+    assert.equal(readFileSync(outsideFile, "utf8"), "outside-owned\n");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("fresh-install check fails while naming each missing native skill/template path", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-fresh-check-"));
+  try {
+    assert.throws(
+      () => assertFreshNativeInstall(target, "opencode"),
+      (error) => {
+        assert.match(error.message, /\.opencode\/skills\/creating-issues\/SKILL\.md/);
+        assert.match(error.message, /\.opencode\/rules\/creating-issues\.md/);
+        assert.match(error.message, /\.github\/ISSUE_TEMPLATE\/harness-task\.yml/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("canonical harness task form exposes every required roadmap field", () => {
+  const form = readFileSync(join(harnessRoot, "core/github/ISSUE_TEMPLATE/harness-task.yml"), "utf8");
+  assert.match(form, /^title: "\[harness\] "$/m);
+  assert.match(form, /^labels: \["harness:ready"\]$/m);
+  for (const id of ["user_journeys", "acceptance_criteria", "scope", "sensitive", "priority", "size"]) {
+    assert.match(form, new RegExp(`^    id: ${id}$`, "m"), `form missing ${id}`);
+  }
+  assert.match(form, /#uj-N/);
+  assert.match(form, /#ac-N\.M/);
 });
 
 test("t9-nonclobber: second run does not clobber existing MEMORY.md or kaizen.md", () => {
