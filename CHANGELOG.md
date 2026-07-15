@@ -5,6 +5,27 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.44.0](https://github.com/orobsonn/claude-harness/compare/v0.43.4...v0.44.0) (2026-07-15)
+
+
+### Features
+
+* **opencode:** adiciona catálogo canônico de revisão ([#344](https://github.com/orobsonn/claude-harness/issues/344)) ([89bdddb](https://github.com/orobsonn/claude-harness/commit/89bdddbb0b02132bf04dfb7b00a5c9dc5bc3d8c3))
+* **opencode:** adiciona criação nativa de issues ([#352](https://github.com/orobsonn/claude-harness/issues/352)) ([be8238e](https://github.com/orobsonn/claude-harness/commit/be8238e803c216cf5828f301e99f2d9c8ecb11ff))
+* **opencode:** migra roteamento para modelos sem Grok ([#345](https://github.com/orobsonn/claude-harness/issues/345)) ([cd95344](https://github.com/orobsonn/claude-harness/commit/cd95344e97087377f981c90bddfea00e7ced8ed8))
+* **opencode:** recupera falhas do planner ([#346](https://github.com/orobsonn/claude-harness/issues/346)) ([f555990](https://github.com/orobsonn/claude-harness/commit/f55599079452275f6ed5437ddd0fa2808f912845))
+
+
+### Bug Fixes
+
+* corrige URL do badge de release ([#332](https://github.com/orobsonn/claude-harness/issues/332)) ([6f34d71](https://github.com/orobsonn/claude-harness/commit/6f34d71033932508ee9a33378c6375008a2fb2bc))
+* **opencode:** contabiliza apenas revisões primárias úteis ([#353](https://github.com/orobsonn/claude-harness/issues/353)) ([c8a71c3](https://github.com/orobsonn/claude-harness/commit/c8a71c34890c11225890af657503dd5540de4148))
+* **opencode:** limita escrita ao escopo da mão ([#349](https://github.com/orobsonn/claude-harness/issues/349)) ([36ee88c](https://github.com/orobsonn/claude-harness/commit/36ee88c31a2f616176b99b2caf7edca6cf2169b0))
+* **opencode:** recupera comandos negados conhecidos ([#351](https://github.com/orobsonn/claude-harness/issues/351)) ([b98dc15](https://github.com/orobsonn/claude-harness/commit/b98dc15ca8e82597569fccf97ad0102e55ba1e19))
+* **opencode:** retoma apenas o contexto da sessão ([#350](https://github.com/orobsonn/claude-harness/issues/350)) ([1415f10](https://github.com/orobsonn/claude-harness/commit/1415f10b4014c2de0d13c60dc430e6e29b89d860))
+* **opencode:** retoma cerimônia de forma determinística ([#348](https://github.com/orobsonn/claude-harness/issues/348)) ([bbb885e](https://github.com/orobsonn/claude-harness/commit/bbb885ee7d77d81b5d75181bb81bd9dac1f51dc7))
+* **opencode:** vincula cerimônia à identidade confiável ([#347](https://github.com/orobsonn/claude-harness/issues/347)) ([de36569](https://github.com/orobsonn/claude-harness/commit/de3656970db2c19e9d63977e97a390e7ba150cb4))
+
 ## [0.43.4](https://github.com/orobsonn/claude-harness/compare/v0.43.3...v0.43.4) (2026-07-13)
 
 
