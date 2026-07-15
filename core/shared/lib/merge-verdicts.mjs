@@ -1,6 +1,7 @@
-/** @description Family-agnostic verdict merge (policy B wiring). Either-REVISE-wins. Never throws; malformed → {ok:false, reason}. dual_status is enum only (both | primary_only_failopen | pending | primary_only_error) — never bare boolean. */
+/** @description Family-agnostic verdict merge. Active coverage is both, primary_only, or pending. */
 const DUAL_STATUS_ENUM = new Set([
   'both',
+  'primary_only',
   'primary_only_failopen',
   'pending',
   'primary_only_error',
@@ -56,11 +57,12 @@ export function mergeVerdicts(primary, secondary, meta = {}) {
         ? meta.dual_status
         : secondary
           ? 'both'
-          : 'primary_only_failopen'
+          : 'primary_only'
     // Never accept bare boolean dual flags from callers
     if (typeof dual_status !== 'string' || !DUAL_STATUS_ENUM.has(dual_status)) {
-      dual_status = secondary ? 'both' : 'primary_only_failopen'
+      dual_status = secondary ? 'both' : 'primary_only'
     }
+    if (dual_status === 'primary_only_failopen' || dual_status === 'primary_only_error') dual_status = 'primary_only'
 
     // Either-REVISE-wins: if either family says REVISE, merged is REVISE.
     // Fail-open (secondary null): primary only — never a spurious REVISE from a missing second opinion.
@@ -100,7 +102,7 @@ export function mergeVerdicts(primary, secondary, meta = {}) {
       reason: err instanceof Error ? err.message : 'mergeVerdicts failed',
       issues: [],
       verdict: 'REVISE',
-      dual_status: 'primary_only_failopen',
+      dual_status: 'primary_only',
     }
   }
 }

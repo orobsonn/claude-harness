@@ -101,6 +101,7 @@ export function normalizeMode(mode) {
 export function isRecordedDual(dualStatus) {
   return (
     dualStatus === "both" ||
+    dualStatus === "primary_only" ||
     dualStatus === "primary_only_failopen" ||
     dualStatus === "primary_only_error"
   );

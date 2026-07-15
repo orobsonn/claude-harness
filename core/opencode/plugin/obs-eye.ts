@@ -115,6 +115,7 @@ export async function createObsEyeHooks(
               featureId: ids.featureId,
               taskId: ids.taskId,
               phase,
+              sessionId,
               crossFamilyEnabled,
               gateStatePath: () =>
                 gateStatePath({ projectRoot: cwd, runtime: "opencode", sessionId }),

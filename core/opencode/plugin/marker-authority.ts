@@ -80,6 +80,9 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         if (!transitioned.ok) return transitioned
         return transitioned.state
       } else if (action === "dual") {
+        if (args.status !== "both" && args.status !== "primary_only" && args.status !== "pending") {
+          return { ok: false, reason: "active dual transition requires both | primary_only | pending" }
+        }
         const dual = dualStatusGatePatch(args.status)
         if ("ok" in dual && dual.ok === false) return dual
         patch = dual as Record<string, unknown>

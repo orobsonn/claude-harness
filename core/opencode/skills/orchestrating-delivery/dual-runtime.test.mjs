@@ -32,14 +32,35 @@ function finding(over = {}) {
   };
 }
 
+function canonicalIssue(raw = {}) {
+  const severity = raw.severity || "medium";
+  return {
+    description: raw.description || raw.title || "review finding",
+    category: raw.category || "other",
+    severity,
+    scope: raw.scope || "src/file.ts",
+    evidence: raw.evidence || "src/file.ts:1",
+    suggested_sniper_tier: `sniper-${severity}`,
+    fix_hint: raw.fix_hint || "src/file.ts:handler: apply the bounded fix",
+  };
+}
+
+function adversaryReport(items = [], family = 1) {
+  return {
+    ...(family === 2 ? { family: "family-2" } : {}),
+    issues: items.map(canonicalIssue),
+  };
+}
+
 // ---- t8-enum ----
 
 test("t8-enum: dual_status is enum not bare boolean after dual attempt", () => {
   assert.ok(DUAL_STATUS_VALUES.has("both"));
+  assert.ok(DUAL_STATUS_VALUES.has("primary_only"));
   assert.ok(DUAL_STATUS_VALUES.has("primary_only_failopen"));
   assert.ok(DUAL_STATUS_VALUES.has("pending"));
   assert.ok(DUAL_STATUS_VALUES.has("primary_only_error"));
-  assert.equal(DUAL_STATUS_VALUES.size, 4);
+  assert.equal(DUAL_STATUS_VALUES.size, 5);
 
   assert.equal(isDualStatusEnum("both"), true);
   assert.equal(isDualStatusEnum("primary_only_failopen"), true);
@@ -48,11 +69,11 @@ test("t8-enum: dual_status is enum not bare boolean after dual attempt", () => {
   assert.equal(isDualStatusEnum(1), false);
   assert.equal(isDualStatusEnum("yes"), false);
 
-  const primary = { findings: [finding()] };
+  const primary = adversaryReport([finding()]);
   const both = driveDualEye({
     post: "adversary",
     primaryResult: primary,
-    runSecondary: () => ({ ok: true, result: { findings: [] } }),
+    runSecondary: () => ({ ok: true, result: adversaryReport([], 2) }),
   });
   assert.equal(typeof both.dual_status, "string");
   assert.equal(isDualStatusEnum(both.dual_status), true);
@@ -70,7 +91,7 @@ test("t8-enum: dual_status is enum not bare boolean after dual attempt", () => {
   });
   assert.equal(typeof failopen.dual_status, "string");
   assert.equal(isDualStatusEnum(failopen.dual_status), true);
-  assert.equal(failopen.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
+  assert.equal(failopen.dual_status, DUAL_STATUS.PRIMARY_ONLY);
 
   const pending = pendingDualState(primary, { post: "adversary" });
   assert.equal(pending.dual_status, DUAL_STATUS.PENDING);
@@ -83,11 +104,27 @@ test("t8-enum: dual_status is enum not bare boolean after dual attempt", () => {
   assert.equal(badPatch.ok, false);
 });
 
+test("t8-boundary: malformed primary is rejected before secondary dispatch", () => {
+  let calls = 0;
+  const result = driveDualEye({
+    post: "adversary",
+    primaryResult: {},
+    runSecondary: () => {
+      calls += 1;
+      return { ok: true, result: adversaryReport([], 2) };
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.dual_status, DUAL_STATUS.PENDING);
+  assert.equal(result.primary_failure_class, "malformed");
+  assert.equal(result.isFullDualCoverage, false);
+});
+
 // ---- t8-failopen ----
 
-test("t8-failopen: unavailable secondary yields primary_only_failopen and keeps primary findings only", () => {
+test("t8-failopen: unavailable secondary yields primary_only and keeps failure reason separate", () => {
   const primaryOnly = finding({ id: "p1", title: "primary-only race" });
-  const primary = { findings: [primaryOnly] };
+  const primary = adversaryReport([primaryOnly]);
 
   let secondaryCalls = 0;
   const r = driveDualEye({
@@ -105,13 +142,15 @@ test("t8-failopen: unavailable secondary yields primary_only_failopen and keeps 
     },
   });
 
-  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
+  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY);
+  assert.equal(r.secondary_status, "unavailable");
+  assert.equal(r.secondary_failure_class, "unavailable");
   assert.equal(r.isFullDualCoverage, false);
   assert.equal(r.secondaryAttempts, 1);
   // Auth/unavailable: no retry storm
   assert.equal(secondaryCalls, 1);
   assert.equal(r.findings.length, 1);
-  assert.equal(r.findings[0].id, "p1");
+  assert.equal(r.findings[0].title, "primary-only race");
   assert.equal(r.findings[0].title, "primary-only race");
   // Never invent secondary findings
   assert.ok(!r.findings.some((f) => f.family === "openai" && f.id !== "p1"));
@@ -121,13 +160,13 @@ test("t8-failopen: unavailable secondary yields primary_only_failopen and keeps 
   let authCalls = 0;
   const r2 = driveDualEye({
     post: "plan-reviewer",
-    primaryResult: { verdict: "APPROVE", issues: [] },
+    primaryResult: { verdict: "APPROVE", findings: [] },
     runSecondary: () => {
       authCalls += 1;
       return { ok: false, errorClass: "auth", reason: "login required" };
     },
   });
-  assert.equal(r2.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
+  assert.equal(r2.dual_status, DUAL_STATUS.PRIMARY_ONLY);
   assert.equal(authCalls, 1);
   assert.equal(r2.isFullDualCoverage, false);
 
@@ -138,11 +177,11 @@ test("t8-failopen: unavailable secondary yields primary_only_failopen and keeps 
 
 // ---- t8-retry ----
 
-test("t8-retry: primary_only_error retries secondary once then continues fail-open without inventing findings", () => {
+test("t8-retry: secondary error retries once then returns primary_only without inventing findings", () => {
   assert.equal(PRIMARY_ONLY_ERROR_RETRY_COUNT, 1);
 
   const primaryFinding = finding({ id: "keep-me", title: "keep primary" });
-  const primary = { findings: [primaryFinding] };
+  const primary = adversaryReport([primaryFinding]);
 
   let calls = 0;
   const r = driveDualEye({
@@ -162,10 +201,12 @@ test("t8-retry: primary_only_error retries secondary once then continues fail-op
   // Initial attempt + K=1 retry = 2
   assert.equal(calls, 1 + PRIMARY_ONLY_ERROR_RETRY_COUNT);
   assert.equal(r.secondaryAttempts, 2);
-  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY_ERROR);
+  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY);
+  assert.equal(r.secondary_status, "failed");
+  assert.equal(r.secondary_failure_class, "rate_limit");
   assert.equal(r.isFullDualCoverage, false);
   assert.equal(r.findings.length, 1);
-  assert.equal(r.findings[0].id, "keep-me");
+  assert.equal(r.findings[0].title, "keep primary");
   // No invented secondary findings
   assert.ok(!r.findings.some((f) => /invent|fabricat|openai-fake/i.test(String(f.id))));
   assert.ok(r.warning);
@@ -184,15 +225,13 @@ test("t8-retry: primary_only_error retries secondary once then continues fail-op
       }
       return {
         ok: true,
-        result: {
-          findings: [
+        result: adversaryReport([
             finding({
               id: "s1",
               title: "secondary-only issue",
               severity: "medium",
             }),
-          ],
-        },
+          ], 2),
       };
     },
   });
@@ -218,8 +257,9 @@ test("t8-retry: primary_only_error retries secondary once then continues fail-op
 
 // ---- t8-not-full-dual ----
 
-test("t8-not-full-dual: primary_only_failopen is not counted as full dual coverage", () => {
+test("t8-not-full-dual: primary_only is not counted as full dual coverage", () => {
   assert.equal(isFullDualCoverage(DUAL_STATUS.BOTH), true);
+  assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY_FAILOPEN), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PRIMARY_ONLY_ERROR), false);
   assert.equal(isFullDualCoverage(DUAL_STATUS.PENDING), false);
@@ -228,14 +268,14 @@ test("t8-not-full-dual: primary_only_failopen is not counted as full dual covera
 
   const r = driveDualEye({
     post: "adversary",
-    primaryResult: { findings: [finding()] },
+    primaryResult: adversaryReport([finding()]),
     runSecondary: () => ({
       ok: false,
       errorClass: "unauthenticated",
       reason: "not authenticated",
     }),
   });
-  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
+  assert.equal(r.dual_status, DUAL_STATUS.PRIMARY_ONLY);
   assert.equal(r.isFullDualCoverage, false);
   assert.equal(isFullDualCoverage(r.dual_status), false);
 
@@ -301,55 +341,33 @@ test("t8-merge: policy B keeps unrefuted single-family findings after dual merge
     [{ ...refuter, family: "openai" }],
     { a: "glm", b: "openai" },
   );
-  // After classify, family is set from labels; refute target_family must match
-  // Re-run finalize path via driveDualEye both success
+  // The runtime boundary rejects merge-only refute vehicles as non-canonical family-2 reports.
   const dual = driveDualEye({
     post: "adversary",
-    primaryResult: {
-      findings: [
+    primaryResult: adversaryReport([
         finding({ id: "keep", title: "real race", severity: "high" }),
         finding({ id: "drop-me", title: "false positive", severity: "low" }),
-      ],
-    },
+      ]),
     primaryFamily: "glm",
     secondaryFamily: "openai",
     runSecondary: () => ({
       ok: true,
-      result: {
-        findings: [
-          finding({
-            id: "ref-1",
-            title: "not a real issue",
-            severity: "low",
-            refutes: {
-              target_id: "drop-me",
-                target_family: "glm",
-              reason: "guard already present upstream",
-            },
-          }),
-        ],
-      },
+      result: {},
     }),
   });
-  assert.equal(dual.dual_status, DUAL_STATUS.BOTH);
-  assert.ok(dual.findings.some((f) => f.id === "keep" || f.title === "real race"));
-  // drop-me should be refuted/dropped when refutes matches
-  const droppedIds = (dual.dropped || []).map((f) => f.id);
-  const keptIds = dual.findings.map((f) => f.id);
-  if (droppedIds.includes("drop-me")) {
-    assert.ok(!keptIds.includes("drop-me"));
-  } else {
-    // Policy B: if refute matched, drop-me not in findings; if family tagging differs, at least unrefuted keep survives
-    assert.ok(keptIds.includes("keep") || dual.findings.some((f) => f.title === "real race"));
-  }
+  assert.equal(dual.dual_status, DUAL_STATUS.PRIMARY_ONLY);
+  assert.equal(dual.secondary_status, "failed");
+  assert.equal(dual.secondary_failure_class, "malformed");
+  assert.equal(dual.isFullDualCoverage, false);
+  assert.ok(dual.findings.some((f) => f.title === "real race"));
 
   // driveDualEye both path keeps unrefuted single-family
   const both = driveDualEye({
     post: "adversary",
-    primaryResult: { findings: [onlyPrimary] },
+    primaryResult: adversaryReport([onlyPrimary]),
     primaryFamily: "glm",
     secondaryFamily: "openai",
-    runSecondary: () => ({ ok: true, result: { findings: [onlySecondary] } }),
+    runSecondary: () => ({ ok: true, result: adversaryReport([onlySecondary], 2) }),
   });
   assert.equal(both.dual_status, DUAL_STATUS.BOTH);
   assert.equal(both.isFullDualCoverage, true);
@@ -379,10 +397,10 @@ test("t8-merge-description-only: two primary description-only highs + one second
 
   const dual = driveDualEye({
     post: "adversary",
-    primaryResult: { findings: [primaryDescA, primaryDescB] },
+    primaryResult: adversaryReport([primaryDescA, primaryDescB]),
     primaryFamily: "glm",
     secondaryFamily: "openai",
-    runSecondary: () => ({ ok: true, result: { findings: [secondaryDesc] } }),
+    runSecondary: () => ({ ok: true, result: adversaryReport([secondaryDesc], 2) }),
   });
 
   assert.equal(dual.dual_status, DUAL_STATUS.BOTH);
@@ -458,7 +476,7 @@ test("t8-verdict-merge: mergeDualVerdicts sets dual_status enum", () => {
   const fo = mergeDualVerdicts({ verdict: "APPROVE" }, null, {
     primaryFamily: "glm",
   });
-  assert.equal(fo.dual_status, DUAL_STATUS.PRIMARY_ONLY_FAILOPEN);
+  assert.equal(fo.dual_status, DUAL_STATUS.PRIMARY_ONLY);
   assert.equal(fo.isFullDualCoverage, false);
 });
 

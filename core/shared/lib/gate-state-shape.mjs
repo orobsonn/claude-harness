@@ -7,6 +7,7 @@
 /** Locked dual_status enum (07-cross-family). Never store dual_completed: true. */
 export const DUAL_STATUS = Object.freeze({
   BOTH: "both",
+  PRIMARY_ONLY: "primary_only",
   PRIMARY_ONLY_FAILOPEN: "primary_only_failopen",
   PENDING: "pending",
   PRIMARY_ONLY_ERROR: "primary_only_error",
@@ -16,6 +17,7 @@ export const DUAL_STATUS = Object.freeze({
 export const DUAL_STATUS_VALUES = Object.freeze(
   new Set([
     DUAL_STATUS.BOTH,
+    DUAL_STATUS.PRIMARY_ONLY,
     DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
     DUAL_STATUS.PENDING,
     DUAL_STATUS.PRIMARY_ONLY_ERROR,
@@ -29,6 +31,7 @@ export const DUAL_STATUS_VALUES = Object.freeze(
 export const RECORDED_DUAL_ATTEMPT_STATUSES = Object.freeze(
   new Set([
     DUAL_STATUS.BOTH,
+    DUAL_STATUS.PRIMARY_ONLY,
     DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
     DUAL_STATUS.PRIMARY_ONLY_ERROR,
   ]),

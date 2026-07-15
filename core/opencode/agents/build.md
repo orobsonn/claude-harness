@@ -51,11 +51,10 @@ CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: fal
    | Value | Meaning |
    |---|---|
    | `both` | primary + secondary ran; merge applied; **only this counts as full dual coverage** |
-   | `primary_only_failopen` | secondary auth/unavailable; warning (pt-br); primary findings only |
+   | `primary_only` | primary report is useful; secondary absent/disabled/failed; primary findings only |
    | `pending` | dual required but not yet attempted |
-   | `primary_only_error` | secondary infra fail (rate limit/5xx/crash); **retry once (K=1)** then fail-open with primary only |
-6. Auth/unavailable secondary → `primary_only_failopen` (no retry storm). Infra error → retry secondary once; if still failing keep `primary_only_error`. Continue the loop (fail-open on secondary infra) unless primary itself failed.
-7. **`primary_only_failopen` / `primary_only_error` must NOT count as full dual coverage** for metrics (`isFullDualCoverage` is true only for `both`).
+6. Auth/unavailable secondary → keep `primary_only` and record `secondary_status` + `secondary_failure_class` separately (no retry storm). Infra error → retry secondary once; if still failing keep `primary_only` with the failure fields. Continue unless primary itself failed.
+7. **`primary_only` must NOT count as full dual coverage** for metrics (`isFullDualCoverage` is true only for `both`).
 8. Surface operator warning in **pt-br product language** when fail-open (do not fake dual).
 
 Compliance and security are **single-eye** by default (OpenAI evaluator family) unless routing enables dual later.

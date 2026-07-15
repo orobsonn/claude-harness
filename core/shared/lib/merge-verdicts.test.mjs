@@ -16,10 +16,17 @@ test("t4-verdicts: malformed input never throws; policy-compatible merged verdic
   const primaryOnly = mergeVerdicts({ verdict: "APPROVE" }, null);
   assert.equal(primaryOnly.ok, true);
   assert.equal(primaryOnly.verdict, "APPROVE");
-  assert.equal(primaryOnly.dual_status, "primary_only_failopen");
+  assert.equal(primaryOnly.dual_status, "primary_only");
 
   const eitherRevise = mergeVerdicts({ verdict: "APPROVE" }, { verdict: "REVISE" });
   assert.equal(eitherRevise.ok, true);
   assert.equal(eitherRevise.verdict, "REVISE");
+
+  const legacyFailure = mergeVerdicts(
+    { verdict: "APPROVE" },
+    null,
+    { dual_status: "primary_only_error" },
+  );
+  assert.equal(legacyFailure.dual_status, "primary_only");
   assert.equal(eitherRevise.merged, true);
 });

@@ -12,10 +12,12 @@
 import { withGateStateLock as defaultWithGateStateLock } from "./gate-state.mjs";
 import { gateStatePath as defaultGateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { DUAL_STATUS } from "../../../shared/lib/gate-state-shape.mjs";
+import { sealedMarkerRecord } from "./marker-seal.mjs";
 
 /** Terminal dual_status values — never regressed back to pending (set membership, not `==='both'`). */
 const TERMINAL_DUAL_STATUSES = new Set([
   DUAL_STATUS.BOTH,
+  DUAL_STATUS.PRIMARY_ONLY,
   DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
   DUAL_STATUS.PRIMARY_ONLY_ERROR,
 ]);
@@ -50,8 +52,9 @@ export function buildDualNudgeMessage(role, tuple) {
  * dual_status/dual_nudge_attempts under a single withGateStateLock call. The read of the
  * current dual_status/dual_nudge_attempts and the conditional write happen INSIDE the same
  * lock callback (never a stale outer readGateState used as a guard). `pending` is only
- * writable when the current dual_status is absent or already `pending`; any terminal value
- * (both | primary_only_failopen | primary_only_error, checked via set membership) is
+ * writable when the current dual_status is absent or already `pending`; a disabled
+ * secondary remains pending/skipped until primary accounting. Any terminal value
+ * (both | primary_only | legacy fail-open statuses, checked via set membership) is
  * preserved as-is. The tuple is appended to dual_nudge_attempts only if not already present
  * (union-idempotent).
  * @param {{
@@ -59,6 +62,7 @@ export function buildDualNudgeMessage(role, tuple) {
  *   featureId: string,
  *   taskId: string,
  *   phase: string,
+ *   sessionId: string,
  *   crossFamilyEnabled: boolean,
  *   gateStatePath?: () => { ok: true, path: string } | { ok: false, reason: string },
  *   withGateStateLock?: (
@@ -73,6 +77,7 @@ export function applyDualNudge({
   featureId,
   taskId,
   phase,
+  sessionId,
   crossFamilyEnabled,
   gateStatePath = defaultGateStatePath,
   withGateStateLock = defaultWithGateStateLock,
@@ -97,10 +102,10 @@ export function applyDualNudge({
         : [];
 
       let nextStatus;
+      let secondaryStatus = base.dual_secondary_status;
       if (isAbsent || currentStatus === DUAL_STATUS.PENDING) {
-        nextStatus = crossFamilyEnabled
-          ? DUAL_STATUS.PENDING
-          : DUAL_STATUS.PRIMARY_ONLY_FAILOPEN;
+        nextStatus = DUAL_STATUS.PENDING;
+        secondaryStatus = crossFamilyEnabled ? "pending" : "skipped_disabled";
       } else if (currentStatus !== undefined && TERMINAL_DUAL_STATUSES.has(currentStatus)) {
         nextStatus = currentStatus;
       } else {
@@ -111,7 +116,16 @@ export function applyDualNudge({
         ? currentAttempts
         : [...currentAttempts, tuple];
 
-      return { ...base, dual_status: nextStatus, dual_nudge_attempts: nextAttempts };
+      const next = { ...base, dual_status: nextStatus, dual_secondary_status: secondaryStatus, dual_nudge_attempts: nextAttempts };
+      if (nextStatus === DUAL_STATUS.PENDING) {
+        if (typeof sessionId !== "string" || !sessionId || typeof featureId !== "string" || !featureId) {
+          return { ok: false, reason: "dual nudge requires session and feature identity" };
+        }
+        const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: nextStatus });
+        const prior = Array.isArray(base.marker_seals) ? base.marker_seals : [];
+        next.marker_seals = [...prior.filter((candidate) => candidate?.operation !== "dual"), seal];
+      }
+      return next;
     });
 
     if (!lockResult || lockResult.ok !== true) {

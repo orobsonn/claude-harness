@@ -85,10 +85,10 @@ Always dispatch mandatory family 1 and attempt optional family 2 for plan-review
 |---|---|
 | 1 | Dispatch primary (`plan-reviewer-family-1` / `adversary-family-1`) |
 | 2 | Dispatch secondary (`plan-reviewer-family-2` / `adversary-family-2`) with **virgin** brief — same contract, no primary verdict, no compliance output, no `shared_context` |
-| 3 | On secondary auth/unavailable → `dual_status: "primary_only_failopen"`; keep primary findings only; **never invent** secondary findings; warn operator (pt-br) |
-| 4 | On secondary infra error (rate limit / 5xx / crash) → `dual_status: "primary_only_error"`; **retry secondary once (K=1)**; if retry ok → upgrade to `both` + merge; if retry fails → keep primary only + warn; continue loop |
+| 3 | On secondary auth/unavailable → `dual_status: "primary_only"`; record the reason separately; keep primary findings only; **never invent** secondary findings; warn operator (pt-br) |
+| 4 | On secondary infra error (rate limit / 5xx / crash) → retry secondary once (K=1); if retry ok → upgrade to `both` + merge; if retry fails → `dual_status: "primary_only"`, record failure separately, keep primary only + warn |
 | 5 | On both ok → merge via policy B (shared `finalizeFindings` / `mergeVerdicts`); `dual_status: "both"` |
-| 6 | Gate-state records **enum only**: `both` \| `primary_only_failopen` \| `pending` \| `primary_only_error` — never bare boolean. `primary_only_failopen` is **not** full dual coverage |
+| 6 | Active gate-state records **enum only**: `both` \| `primary_only` \| `pending` — never bare boolean. `primary_only` is **not** full dual coverage; legacy fail-open/error values are read-only compatibility |
 
 Never skip the second family when configured. Never treat fail-open as cross-family coverage for metrics.
 

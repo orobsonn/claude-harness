@@ -1,7 +1,6 @@
 /**
  * @description Cross-family dual-eye runtime wiring for OC plan-reviewer + adversary.
- * dual_status enum (never bare boolean); fail-open on secondary auth/unavailable;
- * primary_only_error retries secondary once (K=1); never invents secondary findings;
+ * dual_status enum (never bare boolean); secondary failure reason is separate;
  * policy B merge via shared merge-findings / merge-verdicts. Never throws.
  */
 import {
@@ -11,10 +10,12 @@ import {
 } from "../../../shared/lib/merge-findings.mjs";
 import { mergeVerdicts } from "../../../shared/lib/merge-verdicts.mjs";
 import { reviewDispatchFor } from "../../agents/review-catalog.mjs";
+import { validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
 
 /** Locked dual_status enum (07-cross-family). Never store dual_completed: true. */
 export const DUAL_STATUS = Object.freeze({
   BOTH: "both",
+  PRIMARY_ONLY: "primary_only",
   PRIMARY_ONLY_FAILOPEN: "primary_only_failopen",
   PENDING: "pending",
   PRIMARY_ONLY_ERROR: "primary_only_error",
@@ -24,6 +25,7 @@ export const DUAL_STATUS = Object.freeze({
 export const DUAL_STATUS_VALUES = Object.freeze(
   new Set([
     DUAL_STATUS.BOTH,
+    DUAL_STATUS.PRIMARY_ONLY,
     DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
     DUAL_STATUS.PENDING,
     DUAL_STATUS.PRIMARY_ONLY_ERROR,
@@ -67,6 +69,12 @@ export function isFullDualCoverage(dualStatus) {
  */
 export function isDualStatusEnum(value) {
   return typeof value === "string" && DUAL_STATUS_VALUES.has(value);
+}
+
+function activeDualStatus(value, secondaryPresent = false) {
+  if (value === DUAL_STATUS.BOTH) return DUAL_STATUS.BOTH;
+  if (value === DUAL_STATUS.PENDING) return DUAL_STATUS.PENDING;
+  return secondaryPresent ? DUAL_STATUS.BOTH : DUAL_STATUS.PRIMARY_ONLY;
 }
 
 /**
@@ -131,13 +139,13 @@ export function virginSecondaryBrief(originalBrief) {
 
 /**
  * @description Operator-facing fail-open warning (pt-br, product language).
- * @param {"primary_only_failopen" | "primary_only_error"} status
+ * @param {string} status
  * @param {string} [reason]
  * @returns {string}
  */
 export function dualFailOpenWarning(status, reason = "") {
   const detail = reason ? ` (${reason})` : "";
-  if (status === DUAL_STATUS.PRIMARY_ONLY_FAILOPEN) {
+  if (status === DUAL_STATUS.PRIMARY_ONLY || status === DUAL_STATUS.PRIMARY_ONLY_FAILOPEN) {
     return `Revisão com segundo modelo indisponível${detail}. Seguimos só com a revisão principal — cobertura cruzada não rodou.`;
   }
   return `Segundo modelo falhou após 1 nova tentativa${detail}. Seguimos com a revisão principal — não inventamos achados do segundo modelo.`;
@@ -295,17 +303,19 @@ export function mergeDualVerdicts(primary, secondary, meta = {}) {
         reason: merged?.reason || "mergeVerdicts failed",
         dual_status: secondary
           ? DUAL_STATUS.BOTH
-          : DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+          : DUAL_STATUS.PRIMARY_ONLY,
         issues: [],
         isFullDualCoverage: false,
       };
     }
-    const dual_status =
+    const dual_status = activeDualStatus(
       meta.dual_status && isDualStatusEnum(meta.dual_status)
         ? meta.dual_status
         : secondary
           ? DUAL_STATUS.BOTH
-          : DUAL_STATUS.PRIMARY_ONLY_FAILOPEN;
+          : DUAL_STATUS.PRIMARY_ONLY,
+      Boolean(secondary),
+    );
     return {
       ...merged,
       dual_status,
@@ -315,7 +325,7 @@ export function mergeDualVerdicts(primary, secondary, meta = {}) {
     return {
       ok: false,
       reason: err instanceof Error ? err.message : "mergeDualVerdicts failed",
-      dual_status: DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+      dual_status: DUAL_STATUS.PRIMARY_ONLY,
       issues: [],
       isFullDualCoverage: false,
     };
@@ -376,16 +386,39 @@ export function driveDualEye(opts) {
       maxRetries = PRIMARY_ONLY_ERROR_RETRY_COUNT,
     } = opts ?? {};
 
+    const postCfg = DUAL_POSTS[post] || null;
+    const primaryValidation = validateReviewReport(post, primaryResult, 1);
+    if (!postCfg || !primaryValidation.ok) {
+      return {
+        ok: false,
+        dual_status: DUAL_STATUS.PENDING,
+        findings: [],
+        dropped: [],
+        verdict: null,
+        secondaryAttempts: 0,
+        isFullDualCoverage: false,
+        warning: null,
+        reason: primaryValidation.reason || "unknown dual post",
+        primary_status: "failed",
+        primary_failure_class: "malformed",
+        primaryFamily,
+        secondaryFamily: null,
+        post: post ?? null,
+      };
+    }
+
     if (typeof runSecondary !== "function") {
       return {
         ok: false,
-        dual_status: DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+        dual_status: DUAL_STATUS.PRIMARY_ONLY,
         findings: extractFindings(primaryResult),
         dropped: [],
         verdict: primaryResult && typeof primaryResult === "object" ? primaryResult : null,
         secondaryAttempts: 0,
         isFullDualCoverage: false,
-        warning: dualFailOpenWarning(DUAL_STATUS.PRIMARY_ONLY_FAILOPEN, "runSecondary missing"),
+        warning: dualFailOpenWarning(DUAL_STATUS.PRIMARY_ONLY, "runSecondary missing"),
+        secondary_status: "missing",
+        secondary_failure_class: "configuration",
         reason: "runSecondary is required",
         primaryFamily,
         secondaryFamily: null,
@@ -393,7 +426,6 @@ export function driveDualEye(opts) {
       };
     }
 
-    const postCfg = DUAL_POSTS[post] || null;
     const shape = postCfg?.shape || "findings";
     const brief = virginSecondaryBrief(originalBrief);
     const primaryFindings = extractFindings(primaryResult);
@@ -423,6 +455,19 @@ export function driveDualEye(opts) {
       };
 
       if (last.ok === true && last.result != null && typeof last.result === "object") {
+        const secondaryValidation = validateReviewReport(post, last.result, 2);
+        if (!secondaryValidation.ok) {
+          return primaryOnlyResult({
+            dual_status: DUAL_STATUS.PRIMARY_ONLY,
+            primaryResult,
+            primaryFindings,
+            primaryFamily,
+            secondaryAttempts: attempts,
+            post: post ?? null,
+            errorClass: "malformed",
+            reason: secondaryValidation.reason,
+          });
+        }
         // Success path → both + merge
         return finalizeBoth({
           shape,
@@ -441,7 +486,7 @@ export function driveDualEye(opts) {
       // Auth / unavailable: fail-open immediately, no retry storm
       if (failureKind === "auth_unavailable") {
         return primaryOnlyResult({
-          dual_status: DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+          dual_status: DUAL_STATUS.PRIMARY_ONLY,
           primaryResult,
           primaryFindings,
           primaryFamily,
@@ -459,7 +504,7 @@ export function driveDualEye(opts) {
 
       // Exhausted retries → primary_only_error, keep primary only, never invent
       return primaryOnlyResult({
-        dual_status: DUAL_STATUS.PRIMARY_ONLY_ERROR,
+        dual_status: DUAL_STATUS.PRIMARY_ONLY,
         primaryResult,
         primaryFindings,
         primaryFamily,
@@ -472,7 +517,7 @@ export function driveDualEye(opts) {
 
     // Defensive fallback (should not reach)
     return primaryOnlyResult({
-      dual_status: DUAL_STATUS.PRIMARY_ONLY_ERROR,
+      dual_status: DUAL_STATUS.PRIMARY_ONLY,
       primaryResult,
       primaryFindings,
       primaryFamily,
@@ -484,14 +529,14 @@ export function driveDualEye(opts) {
   } catch (err) {
     return {
       ok: false,
-      dual_status: DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+      dual_status: DUAL_STATUS.PRIMARY_ONLY,
       findings: extractFindings(opts?.primaryResult),
       dropped: [],
       verdict: null,
       secondaryAttempts: 0,
       isFullDualCoverage: false,
       warning: dualFailOpenWarning(
-        DUAL_STATUS.PRIMARY_ONLY_FAILOPEN,
+        DUAL_STATUS.PRIMARY_ONLY,
         err instanceof Error ? err.message : "driveDualEye failed",
       ),
       reason: err instanceof Error ? err.message : "driveDualEye failed",
@@ -640,12 +685,14 @@ function primaryOnlyResult(args) {
     secondaryAttempts,
     isFullDualCoverage: false,
     warning: dualFailOpenWarning(
-      /** @type {"primary_only_failopen" | "primary_only_error"} */ (dual_status),
+      dual_status,
       reason,
     ),
     reason,
     primaryFamily,
     secondaryFamily: null,
+    secondary_status: classifySecondaryFailure(errorClass, reason) === "auth_unavailable" ? "unavailable" : "failed",
+    secondary_failure_class: errorClass || "unknown",
     post,
     errorClass,
   };
