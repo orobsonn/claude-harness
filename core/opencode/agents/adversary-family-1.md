@@ -9,6 +9,8 @@ permission:
   webfetch: deny
   websearch: deny
   task: deny
+  "mv_*": allow
+  "mp_*": allow
 ---
 
 # Adversary (family 1)
@@ -44,6 +46,8 @@ Ingest `spec`, `resolved_judgments`, `scope_paths`, and `adversarial.focus` tags
 
 ### 2. Load your ammunition, then run the attested sweep
 **Load `skill(canonical-critical-classes)`** — the 8 canonical failure classes + the irreversibility-first ranking. **If you cannot load it, emit `BLOCKED` and stop — never run a partial, silent sweep.**
+
+For non-trivial attack surfaces, consult `mv` (`recall`, then `get_note` for the top 1-2 hits) and `mp` through retrieval-only `code` for relevant failure lenses and durable memories. Both are advisory and best-effort; continue if unavailable. Never save, create, update, delete, or execute a mutation through either MCP.
 
 Sweep EVERY one of the 8 classes. For each: either report a concrete exploit (a trigger sequence that produces a wrong outcome) **or** attest "swept — N/A because X". **Every attestation, including N/A, MUST cite the `file:function` you inspected** — e.g. `"orphan-state — swept materialize-publicacao.ts:materializePublicacaoForItem, N/A: dedicated column publicacao_feed_id"`. An attestation with no `file:fn` is an incomplete dispatch, not a clearance.
 

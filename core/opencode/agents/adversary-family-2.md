@@ -9,6 +9,8 @@ permission:
   webfetch: deny
   websearch: deny
   task: deny
+  "mv_*": allow
+  "mp_*": allow
 ---
 
 # Adversary (family 2)
@@ -30,6 +32,8 @@ Ingest `spec`, `resolved_judgments`, `scope_paths`, and `adversarial.focus` tags
 
 ### 2. Load ammunition, then run the attested sweep
 **Load `skill(canonical-critical-classes)`**. If you cannot load it, emit `BLOCKED` and stop.
+
+For non-trivial attack surfaces, consult `mv` (`recall`, then `get_note` for the top 1-2 hits) and `mp` through retrieval-only `code` for relevant failure lenses and durable memories. Both are advisory and best-effort; continue if unavailable. Never save, create, update, delete, or execute a mutation through either MCP.
 
 Sweep EVERY one of the 8 classes. For each: either report a concrete exploit **or** attest "swept — N/A because X" with `file:function` citation.
 

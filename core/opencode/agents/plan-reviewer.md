@@ -9,6 +9,8 @@ permission:
   webfetch: deny
   websearch: deny
   task: deny
+  "mv_*": allow
+  "mp_*": allow
 ---
 
 # Plan Reviewer (family 1)
@@ -59,6 +61,8 @@ You are the **primary** engineering reviewer eye. The planner produced an execut
 Before finalizing your verdict, consult the operator's **Mind Vault** via the `mv` MCP for relevant lenses: `recall` with a **domain-literal** query built from the plan's core engineering concern (e.g. `"atomic write ordering idempotency"`, `"separation of responsibilities"`, `"orphan state between components"`, `"second-order effects"`). Read the `tldr`; pull the body (`get_note`) only for the 1–2 directly relevant notes. Use them as **lenses to test the plan against — not as laws.** The spec, plan, and codebase are ground truth; the notes are curated mental models that may be stale.
 
 **Best-effort:** the `mv` MCP may be **absent** in headless/cron runs or error/timeout. If recall is unavailable or fails, proceed with your own engineering judgment — **never block the review on MV.**
+
+Also consult `mp` through retrieval-only `code` for relevant durable memories that could falsify assumptions in the plan. MP is advisory and best-effort. MV/MP access is strictly read-only: never save, create, update, delete, or execute a mutation through either MCP.
 
 ## Verdict rubric
 

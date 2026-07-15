@@ -21,6 +21,16 @@ order before anything else. These are real **skills it loads and follows**:
 Both entry skills run **inside `build` (primary)** — never in a headless subagent.
 The full per-task delivery loop lives in the `orchestrating-delivery` skill.
 
+### Conversational Plan lane
+
+The `plan` primary agent is a separate read-only discovery lane. It is exempt from
+the `build` entry policy: no triage, classify, ceremony markers, implementation, or
+delivery. It may inspect the project, research the web, load only the conversational
+branch of `brainstorming`, and invoke only the read-only `discussion-adversary`.
+Its terminal artifact is a `## Build Spec` in the shared session conversation. The
+operator switches to `build` with Tab when they want that approved spec implemented;
+`build` then applies its normal entry policy.
+
 ---
 
 ## 1. Operator profile
