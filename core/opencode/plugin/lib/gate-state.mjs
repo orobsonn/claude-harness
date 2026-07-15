@@ -317,6 +317,7 @@ export function withGateStateLock(statePath, fn, opts = {}) {
       return { ok: false, decision: "deny", reason: String(next.reason ?? "fn-denied") };
     }
     const state = /** @type {Record<string, unknown>} */ (next);
+    if (state === prev) return { ok: true, state };
     if (!writeGateStateAtomic(statePath, state)) {
       return { ok: false, decision: "deny", reason: "gate-state-write-failed" };
     }

@@ -33,8 +33,11 @@ function statePath(root, sessionID = "ses-authority") {
 function seed(root) {
   const file = statePath(root);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "classified": true\n}\n';
+  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "ceremony_generation": "generation-authority",\n  "classified": true\n}\n';
   fs.writeFileSync(file, bytes);
+  const spec = path.join(root, ".opencode", "plans", "ses-authority-feature-authority", "spec.md");
+  fs.mkdirSync(path.dirname(spec), { recursive: true });
+  fs.writeFileSync(spec, "# Feature\n\n#uj-1\n\n#ac-1.1\n");
   return { file, bytes };
 }
 
@@ -68,6 +71,32 @@ test("real before-hook object identity authorizes one bound mutation", async () 
     });
     assert.equal(typeof state.brainstormed_binding.seal, "string");
     assert.equal(Array.isArray(state.marker_seals), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime adversary result plus accepted official transition persists before planner", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-adversary-"));
+  try {
+    const { file } = seed(root);
+    const hooks = await MarkerAuthority({ directory: root, worktree: root });
+    const brainstormArgs = { action: "brainstormed" };
+    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "brainstorm-call" }, { args: brainstormArgs });
+    assert.equal((await hooks.tool.mark.execute(brainstormArgs, context("ses-authority", "brainstorm-call"))).metadata.ok, true);
+
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: "ses-authority", callID: "adversary-call" },
+      { args: { subagent_type: "adversary-family-1" }, output: '{"issues":[]}' },
+    );
+    const adversaryArgs = { action: "adversary_fired" };
+    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "accept-call" }, { args: adversaryArgs });
+    const accepted = await hooks.tool.mark.execute(adversaryArgs, context("ses-authority", "accept-call"));
+    assert.equal(accepted.metadata.ok, true, accepted.output);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(state.brainstormed, true);
+    assert.equal(state.adversary_fired, true);
+    assert.equal(state.ceremony_evidence.adversary_fired.call_id, "adversary-call");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

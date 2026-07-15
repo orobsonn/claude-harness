@@ -65,6 +65,7 @@ Compliance and security are **single-eye** by default (OpenAI evaluator family) 
 - `complexity-scorer` — score a file path (0–10 low · 11–30 medium · 31–45 high · 46–60 max→executor-high · 61+ split). One call per path.
 - `validate-plan` — deterministic structural gate for `execution-plan.json`. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
 - `classify` — entry triage stub writer (via triaging-requests skill).
+- `ceremony-next` — consumes the exact structured planner denial and returns one state-valid, allowlisted ceremony descriptor; rejection stops recovery.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
 ## Hermetic rule
@@ -82,6 +83,12 @@ Under OpenCode, **gate-state lives only under `.opencode/`**. Never run Claude-C
 | plans under `.claude/plans/…` | `.opencode/plans/<sessionID>-<feature_id>/` |
 
 The entry-gate **denies** CC marker CLIs. If you see that deny, switch to the OC row — do not retry the CC path.
+
+### Deterministic ceremony transition before planner
+
+For LIGHT/FULL, the approved spec is canonical at `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Immediately after brainstorming approval, call native `mark({ action: "brainstormed" })`. Immediately after the required spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Both transitions MUST complete, in that order, before the first planner Task call.
+
+On planner preflight denial, pass the exact structured denial object to native `ceremony-next({ denial })`. Execute only its returned `descriptor.coordinator_step`, then call its `descriptor.completion_transition` after successful completion/acceptance. The consumer validates `code`, `missing_proof`, `phase`, `action`, `marker`, current sealed state, and a closed mapping: `brainstorming` → skill `brainstorming`; `spec-adversary` → Task `adversary-family-1`. Rejection means stop. Never derive a role from strings or dispatch `explore`, `general`, or another diagnostic agent. Preflight may reissue a current-process HMAC seal only when the matching session+feature+phase completion evidence verifies against its canonical spec/result. Missing or invalid evidence means resume that exact prior phase or stop with `missing_proof`; never infer completion from prose, an old marker, or an unsigned boolean.
 
 ---
 
