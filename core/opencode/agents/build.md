@@ -66,6 +66,7 @@ Compliance and security are **single-eye** by default (OpenAI evaluator family) 
 - `validate-plan` — deterministic structural gate for `execution-plan.json`. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
 - `classify` — entry triage stub writer (via triaging-requests skill).
 - `ceremony-next` — consumes the exact structured planner denial and returns one state-valid, allowlisted ceremony descriptor; rejection stops recovery.
+- `verify` — the only coordinator recovery for a registered targeted Vitest denial. Pass exact feature/task ids, `denied_class`, denied command, and the exact snapshot `locked_tests[].path`. Top-level use returns only `{ tool: "verify", registry_id, test_path }`; only the trusted active hand can execute it. Never dispatch `explore`, `general`, or an investigation role. Rejection, `no_equivalent`, `setup_missing`, or `repeated` means stop.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
 ## Hermetic rule

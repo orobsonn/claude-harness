@@ -478,6 +478,18 @@ test("npm run / make → deny; npm test / npm ci allow (paired oracle)", () => {
   assert.equal(isStateForgeCommand(npmCi), false);
 });
 
+test("known package/interpreter denials expose exact closed resolver class", () => {
+  const launcher = decideBashForge({ command: "npx vitest run core/a.test.mjs" });
+  assert.equal(launcher.decision, "deny");
+  assert.deepEqual(launcher.details, { denied_class: "package_launcher", resolver: "verify" });
+  assert.match(launcher.reason, /call native `verify` once/i);
+
+  const interpreter = decideBashForge({ command: "node node_modules/vitest/vitest.mjs run core/a.test.mjs" });
+  assert.equal(interpreter.decision, "deny");
+  assert.deepEqual(interpreter.details, { denied_class: "interpreter", resolver: "verify" });
+  assert.match(interpreter.reason, /registered targeted-test equivalent/i);
+});
+
 test("cp forged.json $GS expansion → deny", () => {
   assert.equal(
     decideBashForge({

@@ -17,13 +17,16 @@ import {
   ocPluginFilesExist,
   rewriteOcPluginsToMonorepoCore,
   ensureOcPluginPathsExist,
+  CANONICAL_OC_PLUGINS,
 } from "./cron-a-dispatch.mjs";
+import { defaultOcPluginPaths } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 
 
 const CANONICAL_STUBS = [
   "entry-gate.ts",
   "marker-authority.ts",
   "ceremony-coordinator.ts",
+  "command-resolver.ts",
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",
@@ -36,6 +39,15 @@ const CANONICAL_STUBS = [
   "obs-hand.ts",
   "agent-idle-nudge.ts",
 ];
+
+test("canonical OpenCode plugin registry is byte-identical across root, example, default vendor, and VPS", () => {
+  const root = JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")).plugin;
+  const example = JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")).plugin;
+  assert.deepEqual(root, defaultOcPluginPaths());
+  assert.deepEqual(example, defaultOcPluginPaths());
+  assert.deepEqual([...CANONICAL_OC_PLUGINS], defaultOcPluginPaths());
+  assert.ok(CANONICAL_OC_PLUGINS.includes("./.opencode/plugin/command-resolver.ts"));
+});
 
 const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
 const CANONICAL_ROUTING = JSON.parse(
@@ -547,6 +559,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned 
     assert.equal(cfg.plugin[1], "./.opencode/plugin/plan-gate.ts");
     assert.equal(cfg.plugin[2], "./.opencode/plugin/local-extra.ts");
     assert.equal(cfg.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 1);
+    assert.equal(cfg.plugin.filter((entry) => entry.includes("command-resolver.ts")).length, 1, "old config gains command resolver exactly once");
     assert.equal(new Set(cfg.plugin).size, cfg.plugin.length);
     assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
     assertCriticalRuntime(worktree);

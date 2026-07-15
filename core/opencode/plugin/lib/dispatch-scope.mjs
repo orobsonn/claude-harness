@@ -104,9 +104,8 @@ function activeExpired(active, now) {
   return Boolean(active && typeof active.expires_at === "string" && Number.isFinite(Date.parse(active.expires_at)) && Date.parse(active.expires_at) <= now);
 }
 
-/** @description Verify the immutable planner binding and derive the canonical task scope. */
-export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) {
-  if (!roleIsWritingHand(role)) return { ok: false, reason: "role is not a writing hand" };
+/** @description Read one exact task from the content-addressed immutable planner snapshot. */
+export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   if (state?.planner_status !== "usable") return { ok: false, reason: "planner_status usable required" };
   if (state?.delivery_status === "delivery-blocked") return { ok: false, reason: "delivery is blocked" };
   const binding = state?.planner_plan_binding;
@@ -119,7 +118,9 @@ export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) 
   }
   const expectedDir = path.resolve(projectRoot, ".opencode", "plans", ".state", String(state.session_id), "bound-plans");
   const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
-  if (!inside(expectedDir, snapshotPath)) return { ok: false, reason: "bound planner snapshot escaped state root" };
+  const expectedPath = path.join(expectedDir, `${binding.snapshot_hash}.json`);
+  const expectedRelative = path.relative(projectRoot, expectedPath).split(path.sep).join("/");
+  if (snapshotPath !== expectedPath || binding.snapshot_path !== expectedRelative) return { ok: false, reason: "bound planner snapshot path is not canonical content-addressed identity" };
   const snapshot = readBoundPlanSnapshot(snapshotPath);
   if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.plan?.feature_id !== state.feature_id) {
     return { ok: false, reason: "bound planner snapshot integrity failed" };
@@ -127,7 +128,15 @@ export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) 
   const tasks = Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : [];
   const matches = tasks.filter((task) => task && task.id === taskId);
   if (matches.length !== 1) return { ok: false, reason: "canonical task id missing or ambiguous in bound plan" };
-  const task = matches[0];
+  return { ok: true, featureId: state.feature_id, taskId, task: matches[0], snapshotHash: snapshot.semanticHash };
+}
+
+/** @description Verify the immutable planner binding and derive the canonical task scope. */
+export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) {
+  if (!roleIsWritingHand(role)) return { ok: false, reason: "role is not a writing hand" };
+  const bound = readCanonicalTaskFromSnapshot(projectRoot, state, taskId);
+  if (!bound.ok) return bound;
+  const task = bound.task;
   const rawScope = Array.isArray(task.scope_paths) ? task.scope_paths : [];
   if (rawScope.length === 0) return { ok: false, reason: "canonical task scope is empty" };
   const scopePaths = [];
@@ -145,11 +154,11 @@ export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) 
   }
   return {
     ok: true,
-    featureId: state.feature_id,
+    featureId: bound.featureId,
     taskId: task.id,
     scopePaths,
     allowedWrites,
-    snapshotHash: snapshot.semanticHash,
+    snapshotHash: bound.snapshotHash,
   };
 }
 
@@ -494,4 +503,4 @@ export function appendScopeEvent(projectRoot, active, { tool, paths, mode, reaso
   } catch { return { ok: false, reason: "scope event persistence failed" }; }
 }
 
-export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, reconcileCleanupPending, reconcileExpiredDispatch, reconcilePendingChildBinding };
+export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileCleanupPending, reconcileExpiredDispatch, reconcilePendingChildBinding };
