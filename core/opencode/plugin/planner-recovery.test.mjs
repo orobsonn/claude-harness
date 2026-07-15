@@ -7,6 +7,7 @@ import path from "node:path";
 import { createPlannerRecoveryHooks } from "./planner-recovery.ts";
 import { createPlanGateHooks } from "./plan-gate.ts";
 import { reconcilePlannerStateFromDisk } from "./lib/planner-artifact.mjs";
+import { sealedMarkerRecord } from "./lib/marker-seal.mjs";
 
 const SESSION = "ses_plannerRecovery01";
 const FEATURE = "planner-recovery";
@@ -25,7 +26,19 @@ async function tempRun(configureFallback, fn, initialPlan = { feature_id: FEATUR
     const planDir = path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`);
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(planDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ feature_id: FEATURE, classified: true, mode: "FULL", brainstormed: true, adversary_fired: true }));
+    const brainstormed = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true });
+    const adversary = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "adversary_fired", payload: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({
+      session_id: SESSION,
+      feature_id: FEATURE,
+      classified: true,
+      mode: "FULL",
+      brainstormed: true,
+      adversary_fired: true,
+      marker_seals: [brainstormed, adversary],
+      brainstormed_binding: { session_id: SESSION, feature_id: FEATURE, operation: "brainstormed", seal: brainstormed.seal },
+      adversary_fired_binding: { session_id: SESSION, feature_id: FEATURE, operation: "adversary_fired", seal: adversary.seal },
+    }));
     fs.writeFileSync(path.join(planDir, "execution-plan.json"), JSON.stringify(initialPlan));
     const planner = { model: "openai/gpt-5.6-sol" };
     if (configureFallback) planner.fallback = { model: FALLBACK_MODEL };

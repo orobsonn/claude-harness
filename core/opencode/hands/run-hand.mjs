@@ -699,7 +699,7 @@ export function buildHandRunRecord({
     finishedAt: now,
     // Adapter attestation — never model prose
     writtenBy: "run-hand-adapter",
-    // capturedVerifiedAt is set only by stampCaptureVerified (mark-gate), never here
+    // capturedVerifiedAt is set only by the host-bound native mark tool, never here
   };
 }
 

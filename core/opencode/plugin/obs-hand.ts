@@ -85,7 +85,7 @@ export async function createObsHandHooks(
         const ids = extractTaskIds(args);
         if (!isHandRole(ids.role)) return;
         // No structured task_id → skip (avoid hand-ran task:"unknown" spam).
-        // Trustworthy hand-ran comes from stampHandFinished / mark-gate CLI with real ids.
+        // Trustworthy hand-ran comes from the host-bound native mark tool with real ids.
         if (!ids.taskId) return;
         const ev = eventForHandRan({
           task: ids.taskId,

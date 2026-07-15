@@ -158,6 +158,9 @@ export async function createEntryGateHooks(
     loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
+  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
+  const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
   const {
     decideBashForge,
     decideBashDelivery,
@@ -181,8 +184,21 @@ export async function createEntryGateHooks(
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
-      const { toolName, toolArgs, sessionId, subagentType } =
+      const { toolName, toolArgs } =
         extractHookTaskContext(input, output)
+
+      const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
+        ? (toolArgs as Record<string, unknown>).prompt
+        : undefined
+      const promptMarker = parseTaskDispatchIdentity(prompt)
+      const identity = resolveHookIdentity({
+        input,
+        toolArgs,
+        promptTaskId: promptMarker.ok ? promptMarker.taskId : "",
+      })
+      if (!identity.ok) throw new Error(`${PREFIX} ${identity.reason}`)
+      const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
+      const subagentType = extractHookTaskContext(input, output).subagentType
 
       if (isBashOrShellTool(toolName)) {
         const command = extractBashCommand(toolArgs)
@@ -197,6 +213,19 @@ export async function createEntryGateHooks(
           throw new Error(`${PREFIX} ${loaded.reason}`)
         }
         const gateState = loaded.ok ? loaded.state : {}
+        if (loaded.ok) {
+          const seals = validatePrivilegedMarkerSeals(gateState, {
+            sessionId: sid,
+            featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
+          })
+          if (!seals.ok && isDeliveryCommand(command)) throw new Error(`${PREFIX} ${seals.reason}`)
+          const binding = validateCeremonyBinding(gateState, {
+            sessionId: sid,
+            featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
+            required: ["brainstormed", "adversary_fired"],
+          })
+          if (!binding.ok && isDeliveryCommand(command)) throw new Error(`${PREFIX} ${binding.reason}`)
+        }
         if (
           gateState != null &&
           typeof gateState === "object" &&
@@ -243,13 +272,24 @@ export async function createEntryGateHooks(
         throw new Error(`${PREFIX} ${loaded.reason}`)
       }
       const gateState = loaded.ok ? loaded.state : {}
+      if (loaded.ok && isDeliveryRole(subagentType)) {
+        const seals = validatePrivilegedMarkerSeals(gateState, {
+          sessionId: sid,
+          featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
+        })
+        if (!seals.ok) throw new Error(`${PREFIX} ${seals.reason}`)
+      }
       const optionalIds = extractFeatureTaskIds(toolArgs)
-      const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
-        ? (toolArgs as Record<string, unknown>).prompt
-        : undefined
-      const marker = parseTaskDispatchIdentity(prompt)
-      const featureId = typeof gateState.feature_id === "string" ? gateState.feature_id : optionalIds.featureId
-      const taskId = marker.ok ? marker.taskId : optionalIds.taskId
+      const featureId = identity.featureIdSource === "runtime-envelope"
+        ? identity.featureId
+        : typeof gateState.feature_id === "string" ? gateState.feature_id : optionalIds.featureId
+      const taskId = identity.taskId || optionalIds.taskId
+      const binding = validateCeremonyBinding(gateState, {
+        sessionId: sid,
+        featureId,
+        required: isDeliveryRole(subagentType) ? ["brainstormed", "adversary_fired"] : [],
+      })
+      if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
 
       throwIfEntryDenied(
         decideEntryTask({

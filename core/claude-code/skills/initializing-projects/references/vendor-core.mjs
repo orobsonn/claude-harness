@@ -345,6 +345,7 @@ function copyOcTree(srcDir, destDir, relPrefix = "") {
 export function defaultOcPluginPaths() {
   return [
     "./.opencode/plugin/entry-gate.ts",
+    "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",

@@ -9,9 +9,21 @@ import os from "node:os"
 import path from "node:path"
 import { createPlanGateHooks } from "./plan-gate.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "./lib/planner-artifact.mjs"
+import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
 
 const SESSION = "ses_planGateTest01"
 const FEATURE = "feat-plan-gate"
+
+function sealGateState(gateState) {
+  const state = { session_id: SESSION, ...gateState }
+  const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
+  const markerSeals = Array.isArray(state.marker_seals) ? [...state.marker_seals] : []
+  if (typeof state.dual_status === "string") markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "dual", payload: state.dual_status }))
+  if (state.brainstormed === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "brainstormed", payload: true }))
+  if (state.adversary_fired === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "adversary_fired", payload: true }))
+  state.marker_seals = markerSeals
+  return state
+}
 
 const GOLDEN_FULL = {
   feature_id: FEATURE,
@@ -55,7 +67,7 @@ function seedProject(root, gateState, plan) {
   fs.mkdirSync(stateDir, { recursive: true })
   fs.writeFileSync(
     path.join(stateDir, "gate-state.json"),
-    JSON.stringify(gateState),
+    JSON.stringify(sealGateState(gateState)),
     "utf8",
   )
   fs.mkdirSync(path.join(root, ".opencode"), { recursive: true })
@@ -159,7 +171,7 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
     const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
     assert.equal(snapshot.ok, true)
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
-    fs.writeFileSync(statePath, JSON.stringify({
+    fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       feature_id: FEATURE,
       dual_status: "both",
       planner_status: "usable",
@@ -172,7 +184,7 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
       },
-    }))
+    })))
     await assert.doesNotReject(() => runHook(root, "executor-low"))
   })
 })
@@ -183,7 +195,7 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
     const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
-    fs.writeFileSync(statePath, JSON.stringify({
+    fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       feature_id: FEATURE,
       dual_status: "both",
       planner_status: "usable",
@@ -194,7 +206,7 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
       },
-    }))
+    })))
     const hooks = await createPlanGateHooks(root)
     const dispatch = (prompt, extras = {}) => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION },
@@ -220,5 +232,36 @@ test("lt-pg-legacy: structurally valid old plan without planner binding fails cl
   await withTempRoot(async (root) => {
     seedProject(root, { feature_id: FEATURE, dual_status: "both" }, GOLDEN_FULL)
     await assert.rejects(() => runHook(root, "plan-reviewer-family-1"), /usable bound artifact/)
+  })
+})
+
+test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony marker", async () => {
+  await withTempRoot(async (root) => {
+    seedProject(root, { feature_id: FEATURE, dual_status: "both" }, GOLDEN_FULL)
+    const artifact = readPlannerArtifact(root, SESSION, FEATURE)
+    const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+    const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
+    fs.writeFileSync(statePath, JSON.stringify(sealGateState({
+      session_id: SESSION,
+      feature_id: FEATURE,
+      brainstormed: true,
+      ceremony_binding: {
+        brainstormed: {
+          session_id: "ses-foreign",
+          feature_id: FEATURE,
+          operation: "brainstormed",
+          seal: sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true }).seal,
+        },
+      },
+      dual_status: "both",
+      planner_status: "usable",
+      planner_plan_binding: {
+        session_id: SESSION,
+        feature_id: FEATURE,
+        snapshot_path: snapshot.relativePath,
+        snapshot_hash: artifact.semanticHash,
+      },
+    })))
+    await assert.rejects(() => runHook(root, "executor-low"), /ceremony|not bound/)
   })
 })

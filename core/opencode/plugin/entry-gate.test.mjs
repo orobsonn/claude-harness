@@ -7,6 +7,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createEntryGateHooks } from "./entry-gate.ts"
+import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
 
 const SID = "ses_test1"
 
@@ -45,8 +46,8 @@ async function withHooks(fn, deps = {}) {
 }
 
 /** @returns {Record<string, unknown>} */
-function fullCeremony(extra = {}) {
-  return {
+function fullCeremony(extra = {}, sessionId = SID) {
+  const state = {
     mode: "FULL",
     classified: true,
     brainstormed: true,
@@ -59,6 +60,22 @@ function fullCeremony(extra = {}) {
     capture_verified: [],
     ...extra,
   }
+  const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
+  const markerSeals = []
+  for (const [key, action] of [["brainstormed", "brainstormed"], ["adversary_fired", "adversary_fired"], ["dual_status", "dual"]]) {
+    if (state[key] === true || typeof state[key] === "string") {
+      markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: state[key] }))
+    }
+  }
+  for (const [key, action] of [["fidelity_pass", "fidelity"], ["regate_pending", "regate-pending"], ["regate_passed", "regate-passed"], ["hand_finished", "hand-finished"], ["capture_verified", "capture-verified"]]) {
+    if (Array.isArray(state[key])) {
+      for (const value of state[key]) markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: value }))
+    }
+  }
+  if (!("marker_seals" in extra)) state.marker_seals = markerSeals
+  if (!("brainstormed_binding" in extra)) state.brainstormed_binding = { session_id: sessionId, feature_id: featureId, operation: "brainstormed", seal: markerSeals.find((record) => record.operation === "brainstormed").seal }
+  if (!("adversary_fired_binding" in extra)) state.adversary_fired_binding = { session_id: sessionId, feature_id: featureId, operation: "adversary_fired", seal: markerSeals.find((record) => record.operation === "adversary_fired").seal }
+  return state
 }
 
 test("bash gh pr create + empty gate-state → throws [entry-gate]", async () => {
@@ -96,6 +113,66 @@ test("task executor without ceremony → throws [entry-gate]", async () => {
         assert.match(err.message, /\[entry-gate\]/)
         return true
       },
+    )
+  })
+})
+
+test("direct unsigned marker mutation cannot release a delivery role", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, {
+      session_id: SID,
+      feature_id: "feat",
+      mode: "FULL",
+      classified: true,
+      brainstormed: true,
+      adversary_fired: true,
+      dual_status: "both",
+    })
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner" } },
+      ),
+      /unsigned|another process instance/,
+    )
+  })
+})
+
+test("task identity aliases conflict before dispatch, while trusted task identity overrides model input", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task"] }))
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () => before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "executor-low", task_id: "task-a", taskId: "task-b" } },
+      ),
+      /taskId.*conflict/,
+    )
+    await assert.doesNotReject(() => before(
+      { tool: "task", sessionID: SID, task_id: "trusted-task" },
+      { args: {
+        subagent_type: "executor-low",
+        task_id: "model-task",
+        prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"model-task"}[/HARNESS_TASK_CONTEXT]',
+      } },
+    ))
+  })
+})
+
+test("planner rejects ceremony marker bound to another session or feature", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({
+      session_id: SID,
+      brainstormed_binding: { session_id: "ses-other", feature_id: "feat", operation: "brainstormed" },
+      adversary_fired_binding: { session_id: SID, feature_id: "other-feature", operation: "adversary_fired" },
+    }))
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner" } },
+      ),
+      /not bound|session binding mismatch|feature binding mismatch/,
     )
   })
 })
@@ -446,9 +523,9 @@ test("lt-reg-toolargs-foreign-hook-s1 — hook S1 full ceremony + toolArgs.sessi
   await withHooks(async (hooks, root) => {
     const S1 = "ses_reg_s1"
     const S2 = "ses_reg_s2"
-    writeGateState(root, S1, fullCeremony())
+    writeGateState(root, S1, fullCeremony({}, S1))
     // write foreign S2 with full ceremony to prove toolArgs does not bind / leak
-    writeGateState(root, S2, fullCeremony())
+    writeGateState(root, S2, fullCeremony({}, S2))
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() =>
       before(

@@ -35,6 +35,10 @@ const HARNESS_MARKER_RELATIVE = new Set([
 const CC_MARKER_PATH_RE =
   /(?:^|[\s"'=])(?:\.\/)?(?:\.claude\/hooks\/|core\/claude-code\/hooks\/)(?:mark-gate|mark|classify)\.mjs\b/;
 
+/** Native marker authority is host-loaded only; Bash may not execute or import it. */
+const NATIVE_MARK_AUTHORITY_RE =
+  /(?:^|[\s"'=])(?:\.\/)?(?:\.opencode\/plugin\/marker-authority\.ts|core\/opencode\/plugin\/marker-authority\.ts|\.opencode\/tools\/mark\.ts|core\/opencode\/tools\/mark\.ts|\.opencode\/plugin\/lib\/marker-capability\.mjs|core\/opencode\/plugin\/lib\/marker-capability\.mjs|\.opencode\/tools\/lib\/mark-native\.mjs|core\/opencode\/tools\/lib\/mark-native\.mjs)\b/;
+
 // State oracles only — execution-plan.json is intentionally NOT forge-blocked so
 // build/orchestrator may materialize the plan via bash (edit is denied on build).
 const ORACLE_PATH_RE =
@@ -820,6 +824,13 @@ export function decideBashForge(input = {}) {
       return { ok: true, decision: "allow", reason: "not-state-forge" };
     }
     const command = stripCommandWrappers(raw);
+    if (NATIVE_MARK_AUTHORITY_RE.test(raw) || NATIVE_MARK_AUTHORITY_RE.test(command)) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: "[entry-gate] Blocked: native marker authority is issued by the OpenCode host and cannot run or import through Bash.",
+      };
+    }
     // CC marker CLIs under OC never write .opencode gate-state — hard deny with redirect.
     if (CC_MARKER_PATH_RE.test(raw) || CC_MARKER_PATH_RE.test(command)) {
       return {

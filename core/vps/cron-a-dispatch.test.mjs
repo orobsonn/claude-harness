@@ -339,6 +339,7 @@ function plantMonorepoOcPlugins(root) {
   mkdirSync(dir, { recursive: true });
   for (const name of [
     "entry-gate.ts",
+    "marker-authority.ts",
     "plan-gate.ts",
     "planner-recovery.ts",
     "plan-write-gate.ts",

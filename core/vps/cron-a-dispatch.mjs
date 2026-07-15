@@ -491,6 +491,7 @@ const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
  */
 const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/entry-gate.ts",
+  "./.opencode/plugin/marker-authority.ts",
   "./.opencode/plugin/plan-gate.ts",
   "./.opencode/plugin/planner-recovery.ts",
   "./.opencode/plugin/plan-write-gate.ts",

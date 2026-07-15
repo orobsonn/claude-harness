@@ -131,7 +131,9 @@ Default hands use the Ollama Cloud ladder. Reconfigure via skill `configuring-mo
 | Durable memory | project root `MEMORY.md` |
 | Routing | `harness.routing.json` / `.opencode/harness.routing.json` |
 
-**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session — they do not write OC gate-state. Use the `classify` tool + `node .opencode/plugin/lib/mark-gate.mjs`.
+**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session. Use the native `classify` tool and the `mark` tool registered by `marker-authority.ts`; `mark-gate.mjs` is observability-only.
+
+**Marker threat boundary:** marker authority binds the runtime before-hook's exact `args` object to session, call, feature, and operation, then consumes it before mutation. Process-instance HMAC seals make direct filesystem writes and markers minted by another process semantically invalid to host gates. It blocks model Bash/import, clones, replay, concurrent reuse, and child-process authority forgery. It does not protect against a compromised OpenCode host/plugin running in the authority process. A host restart rotates the in-memory secret and fails closed for existing privileged markers; durable restart recovery belongs to #340.
 
 ## 11. Folder law — .opencode/ (OpenCode vendored harness)
 

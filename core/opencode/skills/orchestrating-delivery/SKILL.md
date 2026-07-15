@@ -215,7 +215,7 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
-**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Additionally, the conductor MUST run these mark-gate CLI side-effects (idempotent / fail-open if env unset):
+**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Additionally, the conductor MUST run these observability-only mark-gate CLI side-effects (idempotent / fail-open if env unset):
 
 ```bash
 # After dual plan-reviewer merge (APPROVE|REVISE):
@@ -227,30 +227,15 @@ node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findin
 # At the top of each task loop (1-based n / total from plan.tasks):
 node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
 
-# Right after each hand (executor/sniper/test-author) returns:
-node .opencode/plugin/lib/mark-gate.mjs hand-finished --session <sessionId> --feature <feature_id> --task <task_id> --model <model_id>
-
 # After final dual review join (Phase 3):
 node .opencode/plugin/lib/mark-gate.mjs final-review-done
 ```
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
-**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** When compliance returns fidelity **PASS** on the locked test, the orchestrator stamps `fidelity_pass` on disk via `stampFidelityPass` in `.opencode/plugin/lib/mark-gate.mjs` (writes through `mergeGateState` — never Map-only). This stamp **MUST** precede executor dispatch:
+Right after each hand returns, call the native `mark` tool with `action: hand-finished` and that task's `task_id`. This privileged state transition is runtime-bound and must never use Bash.
 
-```bash
-node --input-type=module -e "
-import { stampFidelityPass } from './.opencode/plugin/lib/mark-gate.mjs';
-const r = stampFidelityPass({
-  projectRoot: process.cwd(),
-  sessionId: '<session_id>',
-  featureId: '<feature_id>',
-  taskId: '<task_id>',
-});
-if (!r.ok) { console.error(r.reason); process.exit(1); }
-console.log(JSON.stringify(r));
-"
-```
+**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch; Bash and direct module imports are not privileged marker surfaces.
 
 An executor hand spawn is **DENIED** (`CONFIG_ERROR`) unless `fidelity_pass` contains this feature/task (optional `@sha`). `test-author` is exempt — it creates the test that enables fidelity. Freeze-commit alone is not enough; the stamp is the on-disk signal `run-hand` and the entry-gate consume. (route to critical exception — do not retry)
 

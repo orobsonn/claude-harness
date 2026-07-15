@@ -23,7 +23,7 @@ import {
   isExecutorHandRole,
   defaultHasFidelityPass,
 } from "./run-hand.mjs";
-import { stampFidelityPass } from "../plugin/lib/mark-gate.mjs";
+import { mergeGateState } from "../plugin/lib/gate-state.mjs";
 
 const PRIMARY_SPAWN_FM = `---
 description: "test spawn"
@@ -798,7 +798,7 @@ test("runHand: test-author does not require fidelity_pass (producer exempt)", as
   }
 });
 
-test("defaultHasFidelityPass: true after stampFidelityPass on disk", () => {
+test("defaultHasFidelityPass: true after a host-authorized fidelity marker reaches disk", () => {
   const root = mkdtempSync(join(tmpdir(), "t7-fid-disk-"));
   const sessionId = "ses_fiddisk";
   try {
@@ -812,14 +812,8 @@ test("defaultHasFidelityPass: true after stampFidelityPass on disk", () => {
       false
     );
 
-    const stamped = stampFidelityPass({
-      projectRoot: root,
-      sessionId,
-      featureId: "feat-d",
-      taskId: "task-d",
-      sha: "abc",
-      headSha: () => null,
-    });
+    const statePath = join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    const stamped = mergeGateState(statePath, { fidelity_pass: ["feat-d/task-d@abc"] });
     assert.equal(stamped.ok, true, JSON.stringify(stamped));
 
     assert.equal(
