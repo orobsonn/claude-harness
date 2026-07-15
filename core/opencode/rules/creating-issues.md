@@ -8,10 +8,10 @@ Universal — sem `paths:`, carrega em toda conversa.
 
 ## Conventions
 
-### Issue form — sempre que disponível
-- Ao criar issues no GitHub: SEMPRE usar o issue form do repo `.github/ISSUE_TEMPLATE/harness-task.yml` — nunca `gh issue create` com corpo escrito à mão
-- O CLI `gh issue create` ignora issue forms silenciosamente — sem o form, a issue fica fora do radar do planner autônomo
-- Antes de criar qualquer issue: checar `.github/ISSUE_TEMPLATE/` e reusar o form quando presente
+### Issue form e submissão nativa
+- A estrutura canônica é o issue form `.github/ISSUE_TEMPLATE/harness-task.yml`
+- No OpenCode, submeter somente por `.opencode/skills/creating-issues/references/submit-issue.mjs`: ele replica os campos do form, valida repo/schema/enums/label e envia o body por stdin com argv fixo
+- Nunca montar `gh issue create` em string de shell nem interpolar título ou corpo em comando
 
 ### Tarefa routine-ready (harness)
 - Título obrigatório: `[harness] <slug>` — sem esse prefixo o filtro da routine não identifica a issue
@@ -51,8 +51,8 @@ Universal — sem `paths:`, carrega em toda conversa.
 
 ## Gotchas
 
-- **`gh issue create` sem o form**: issue criada fora do padrão — sem `[harness]`, sem `harness:ready`, sem estrutura — o planner perde a spec e a routine ignora
-- **Corpo escrito à mão**: duplica esforço e diverge da estrutura que o planner espera; qualquer campo faltando causa ambiguidade na geração do plano
+- **`gh issue create` direto**: contorna a validação nativa e pode criar issue sem `[harness]`, `harness:ready` ou estrutura
+- **Corpo escrito à mão**: pode divergir do form; use o JSON validado e o submitter da skill
 - **Label `harness:ready` ausente**: issue visível no GitHub mas invisível para a routine autônoma — entregável perdido
 - **Slug vago no título**: `[harness] fix` ou `[harness] melhoria` não identificam o escopo; usar `[harness] <feature-id>` curto e descritivo (kebab-case, max ~40 chars)
 - **Bloco `harness-deps` quebrado**: se o operador apagar/corromper a cerca ` ```harness-deps `, o parser não vê dependência e a issue roda IMEDIATAMENTE (sem gate) — possível race de ordem. Manter a cerca intacta; editar só os `#N` dentro dela

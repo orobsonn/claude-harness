@@ -79,7 +79,7 @@ body:
       label: Tamanho estimado
       description: Empate de prioridade → a routine pega o menor primeiro.
       options:
-        - "S (1–2 arquivos)"
+        - "S"
         - "M"
         - "L"
     validations:

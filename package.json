@@ -14,6 +14,7 @@
     "core/claude-code/skills/initializing-projects/references/setup-vps.mjs",
     "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
     "core/opencode",
+    "core/github",
     "core/shared",
     "core/claude-code"
   ],
