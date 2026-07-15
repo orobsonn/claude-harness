@@ -86,7 +86,7 @@ Fix issues inline; no need to re-review.
 
 Wait for the operator. If they request changes, make them and re-run the spec review. Only proceed once approved.
 
-**HEADLESS:** skip the wait. After self-review + adversary on the spec, stamp brainstorm/spec markers (`mark-gate brainstormed` / adversary_fired as required by entry-gate) and hand off to Phase 1.
+**HEADLESS:** skip the wait. After self-review + adversary on the spec, call the native `mark` tool once with `action: brainstormed` and once with `action: adversary_fired`, then hand off to Phase 1. Privileged markers never run through Bash.
 
 **Transition:**
 - Hand the approved (or headless-validated) spec to `build` Phase 1 (the `planner` dispatch). Do NOT invoke any other skill.

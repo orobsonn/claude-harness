@@ -99,6 +99,7 @@ export async function createPlanWriteGateHooks(
   );
   const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
   const { loadGateStateFromDisk } = await import("./lib/dual-enforcement.mjs");
+  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs");
 
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
@@ -144,6 +145,10 @@ export async function createPlanWriteGateHooks(
         input != null && typeof input === "object" && !Array.isArray(input)
           ? (input as Record<string, unknown>)
           : null;
+      const identity = resolveHookIdentity({ input: inputRec, toolArgs: args });
+      if (!identity.ok) {
+        throw new Error(`[plan-write-gate] Blocked: ${identity.reason}`);
+      }
 
       let gateState: unknown = undefined;
       const sessionId = inputRec?.sessionID ?? inputRec?.sessionId ?? null;
@@ -161,7 +166,9 @@ export async function createPlanWriteGateHooks(
         }
       }
 
-      const actingRole = extractActingRole(inputRec);
+      const actingRole = identity.roleSource === "runtime-envelope"
+        ? identity.role
+        : extractActingRole(inputRec);
       // Platform input only: agent_id or non-empty role identity → subagent for rail
       const isSubagent = extractIsSubagent(inputRec);
 

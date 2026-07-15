@@ -244,6 +244,19 @@ test("impostor /tmp/mark-gate.mjs basename → deny forge", () => {
   assert.match(d.reason, /anti-forgery|path-bound|gate-state/i);
 });
 
+test("native mark authority cannot execute or import through ordinary bash", () => {
+  for (const command of [
+    "node core/opencode/plugin/marker-authority.ts",
+    "node .opencode/plugin/marker-authority.ts",
+    "node --input-type=module -e \"import './core/opencode/plugin/lib/marker-capability.mjs'\"",
+    "node --input-type=module -e \"import './.opencode/tools/lib/mark-native.mjs'\"",
+  ]) {
+    const decision = decideBashForge({ command });
+    assert.equal(decision.decision, "deny", command);
+    assert.match(decision.reason, /host|authority|marker/i);
+  }
+});
+
 test("impostor ./evil/mark-gate.mjs → deny forge", () => {
   const d = decideBashForge({
     command:

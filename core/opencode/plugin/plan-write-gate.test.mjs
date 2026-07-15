@@ -65,6 +65,14 @@ test("deny Write overwrite of mark-gate.mjs marker script", () => {
   assert.match(r.reason ?? "", /marker scripts|mark-gate/);
 });
 
+test("deny Write overwrite of native mark authority", () => {
+  for (const file_path of ["core/opencode/plugin/marker-authority.ts", ".opencode/plugin/marker-authority.ts"]) {
+    const result = decide({ tool_input: { file_path } });
+    assert.equal(result.allow, false, file_path);
+    assert.match(result.reason ?? "", /tooling|anti-forgery/);
+  }
+});
+
 test("deny Write overwrite of frozen tooling vendor-core", () => {
   const r = decide({
     tool_input: {

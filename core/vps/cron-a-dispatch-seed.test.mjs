@@ -22,6 +22,7 @@ import {
 
 const CANONICAL_STUBS = [
   "entry-gate.ts",
+  "marker-authority.ts",
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",

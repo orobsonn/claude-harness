@@ -27,6 +27,8 @@ const FROZEN_TOOLING_RELATIVE = new Set([
   "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
   "core/claude-code/hooks/mark.mjs",
   "core/claude-code/hooks/classify.mjs",
+  "core/opencode/plugin/marker-authority.ts",
+  ".opencode/plugin/marker-authority.ts",
 ]);
 const PREFIX = "[plan-write-gate]";
 

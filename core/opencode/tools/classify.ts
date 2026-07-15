@@ -103,6 +103,10 @@ export async function executeClassify(
       mode,
       classified: true,
       triaged: true,
+      brainstormed: false,
+      brainstormed_binding: null,
+      adversary_fired: false,
+      adversary_fired_binding: null,
       ...plannerCycleResetPatch(),
     },
   })

@@ -43,6 +43,9 @@ export async function createPlanGateHooks(
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
   const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
+  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
+  const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
   const {
     bareRole,
     isExecutorRole,
@@ -52,9 +55,20 @@ export async function createPlanGateHooks(
   } = await import("./lib/roles.mjs")
   return {
     "tool.execute.before": async (input: any, output: any) => {
-      const { toolName, toolArgs, sessionId } = extractHookTaskContext(input, output)
+      const { toolName, toolArgs } = extractHookTaskContext(input, output)
       if (!isTaskTool(toolName)) return
 
+      const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
+        ? (toolArgs as Record<string, unknown>).prompt
+        : undefined
+      const marker = parseTaskDispatchIdentity(prompt)
+      const identity = resolveHookIdentity({
+        input,
+        toolArgs,
+        promptTaskId: marker.ok ? marker.taskId : "",
+      })
+      if (!identity.ok) throw new Error(`${PREFIX} delivery-blocked: ${identity.reason}`)
+      const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractSubagentType(toolArgs)
       const role = bareRole(subagentType)
       const requiresFullPlan =
@@ -77,6 +91,19 @@ export async function createPlanGateHooks(
           !Array.isArray(reconciled.state)
             ? (reconciled.state as Record<string, unknown>)
             : {}
+        const ceremonyBinding = validateCeremonyBinding(state, {
+          sessionId: sid,
+          featureId: typeof state.feature_id === "string" ? state.feature_id : "",
+          required: ["brainstormed", "adversary_fired"],
+        })
+        if (!ceremonyBinding.ok) {
+          throw new Error(`${PREFIX} delivery-blocked: ${ceremonyBinding.reason}`)
+        }
+        const seals = validatePrivilegedMarkerSeals(state, {
+          sessionId: sid,
+          featureId: typeof state.feature_id === "string" ? state.feature_id : "",
+        })
+        if (!seals.ok) throw new Error(`${PREFIX} delivery-blocked: ${seals.reason}`)
         if (state.planner_status !== "usable" || !state.planner_plan_binding) {
           throw new Error(`${PREFIX} delivery-blocked: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
         }
@@ -92,24 +119,21 @@ export async function createPlanGateHooks(
         }
         throwIfPlanDenied(decidePlanGate({ plan: artifact.plan, expect: "full" }))
         const ids = dispatchIds(toolArgs)
-        if (ids.featureId && ids.featureId !== binding.feature_id) {
+        const featureId = identity.featureId || ids.featureId
+        if (featureId && identity.featureIdSource === "runtime-envelope" && featureId !== binding.feature_id) {
+          throw new Error(`${PREFIX} delivery-blocked: trusted runtime feature_id conflicts with bound planner feature`)
+        }
+        if (ids.featureId && identity.featureIdSource !== "runtime-envelope" && ids.featureId !== binding.feature_id) {
           throw new Error(`${PREFIX} delivery-blocked: optional dispatch feature_id conflicts with bound planner feature`)
         }
         const tasks = Array.isArray((artifact.plan as Record<string, unknown>)?.tasks)
           ? (artifact.plan as { tasks: Array<Record<string, unknown>> }).tasks
           : []
         const requiresTaskId = isTestAuthorRole(role) || isExecutorRole(role) || isSniperRole(role)
-        const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)
-          ? (toolArgs as Record<string, unknown>).prompt
-          : undefined
-        const marker = requiresTaskId ? parseTaskDispatchIdentity(prompt) : null
-        if (requiresTaskId && !marker?.ok) {
+        if (requiresTaskId && !marker.ok && identity.taskIdSource !== "runtime-envelope") {
           throw new Error(`${PREFIX} delivery-blocked: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
         }
-        const trustedTaskId = marker?.ok ? marker.taskId : ids.taskId
-        if (ids.taskId && marker?.ok && ids.taskId !== marker.taskId) {
-          throw new Error(`${PREFIX} delivery-blocked: optional dispatch task_id conflicts with trusted prompt marker`)
-        }
+        const trustedTaskId = identity.taskId || ids.taskId
         if (trustedTaskId && !tasks.some((task) => task?.id === trustedTaskId)) {
           throw new Error(`${PREFIX} delivery-blocked: dispatch task_id does not exist in bound plan`)
         }
