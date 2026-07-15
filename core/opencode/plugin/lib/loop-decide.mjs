@@ -6,6 +6,7 @@ import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
 import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { deriveCanonicalReviewRestart } from "./review-restart.mjs";
+import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 
 export const LOOP_THRESHOLDS = Object.freeze({
   plan_review: Object.freeze({ warn: 2, deny: 4 }),
@@ -165,9 +166,17 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   }
   const identity = reviewAgentIdentity(input.subagentType);
   const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
-  const featureId = typeof input.featureId === "string" ? input.featureId : "";
+  const suppliedFeatureId = typeof input.featureId === "string" ? input.featureId : "";
+  const featureId = typeof state.feature_id === "string" ? state.feature_id : "";
   const callId = typeof input.callId === "string" ? input.callId : "";
-  if (!identity || !sessionId || !featureId || !callId || state.session_id !== sessionId || state.feature_id !== featureId) {
+  if (
+    !identity ||
+    !sessionId ||
+    !callId ||
+    state.session_id !== sessionId ||
+    !isSafeFeatureId(featureId) ||
+    (suppliedFeatureId && suppliedFeatureId !== featureId)
+  ) {
     return { ok: false, reason: "review reservation identity mismatch", state };
   }
   const epoch = epochOf(state);

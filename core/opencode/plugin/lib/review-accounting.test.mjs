@@ -223,6 +223,24 @@ test("primary reservations consume remaining slots atomically without incrementi
   assert.equal(reserveReviewAttempt(failed.state, input({ callId: "replacement" })).ok, true);
 });
 
+test("reservation derives feature from session-bound state and rejects conflicting identities", () => {
+  const derived = reserveReviewAttempt(state(), input({ featureId: undefined }));
+  assert.equal(derived.ok, true, derived.reason);
+  assert.equal(derived.reservation.feature_id, FEATURE);
+
+  const conflictingFeature = reserveReviewAttempt(state(), input({ featureId: "other-feature" }));
+  assert.equal(conflictingFeature.ok, false);
+  assert.equal(conflictingFeature.reason, "review reservation identity mismatch");
+
+  const conflictingSession = reserveReviewAttempt(state({ session_id: "other-session" }), input({ featureId: undefined }));
+  assert.equal(conflictingSession.ok, false);
+  assert.equal(conflictingSession.reason, "review reservation identity mismatch");
+
+  const unsafeFeature = reserveReviewAttempt(state({ feature_id: "../other-feature" }), input({ featureId: undefined }));
+  assert.equal(unsafeFeature.ok, false);
+  assert.equal(unsafeFeature.reason, "review reservation identity mismatch");
+});
+
 test("first terminal outcome wins in both error-after orders", () => {
   const firstReservation = reserveReviewAttempt(state(), input({ callId: "error-first" })).state;
   const errorFirst = applyReviewOutcome(firstReservation, input({ callId: "error-first", failureClass: "provider_error" }));
@@ -344,15 +362,45 @@ test("hook persists reservations before dispatch and consumes them after complet
     fs.writeFileSync(file, JSON.stringify(state()));
     const hooks = await createLoopGuardHooks(root);
     const runtimeInput = { tool: "task", sessionID: SESSION, callID: "hook-call" };
-    const output = { args: { subagent_type: "plan-reviewer-family-1", feature_id: FEATURE, task_id: "task-1", phase: "plan" }, output: report() };
+    const output = {
+      args: {
+        description: "Review the plan",
+        prompt: "Review the canonical plan without prior verdicts.",
+        subagent_type: "plan-reviewer-family-1",
+      },
+      output: report(),
+    };
     await hooks["tool.execute.before"](runtimeInput, output);
     let persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.plan_review_count, undefined);
     assert.equal(persisted.review_inflight.length, 1);
+    assert.equal(persisted.review_inflight[0].feature_id, FEATURE);
     await hooks["tool.execute.after"](runtimeInput, output);
     persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.review_inflight.length, 0);
     assert.equal(persisted.plan_review_count, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hook rejects a gate-state whose embedded session differs from its runtime path", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-session-mismatch-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const mismatched = state({ session_id: "other-session" });
+    fs.writeFileSync(file, JSON.stringify(mismatched));
+    const hooks = await createLoopGuardHooks(root);
+    await assert.rejects(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION, callID: "mismatched-session-call" },
+      { args: {
+        description: "Review the plan",
+        prompt: "Review the canonical plan without prior verdicts.",
+        subagent_type: "plan-reviewer-family-1",
+      } },
+    ), /review reservation identity mismatch/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), mismatched);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
