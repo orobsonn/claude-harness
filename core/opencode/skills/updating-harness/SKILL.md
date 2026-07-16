@@ -20,6 +20,14 @@ session to administer it, nor on the npm release being current.
 
 All identifiers/commands stay in English; every message to the operator is in **the operator's language**, product-language.
 
+<HARD-GATE>
+This is a top-level, interactive lifecycle operation, not a delivery. Run only from a direct operator
+request and only when no delivery is active. Do not call `classify`, create or modify a plan/spec,
+load `brainstorming` or `orchestrating-delivery`, or dispatch any subagent. Run the exact release CLI
+command directly from `build`, report the result, and require a session restart. In headless or relayed
+input, stop without modifying the harness.
+</HARD-GATE>
+
 ---
 
 ## Two distinct verbs — do not conflate them
@@ -39,7 +47,11 @@ test -f .opencode/.harness-version && echo update || echo install
 ```
 
 Resolve which runtime(s) to vendor (the public CLI's `--target`):
-- **Sync (default) on an OpenCode project:** `opencode`.
+- **Both `.claude/.harness-version` and `.opencode/.harness-version` exist:** `both`.
+- **Only `.opencode/.harness-version` exists:** `opencode`.
+- **Only `.claude/.harness-version` exists:** `claude`.
+- **A marker exists without its runtime shell:** stop; do not repair a partial install by inference.
+- **No marker exists:** install only the runtime explicitly requested by the operator.
 - **Add a runtime (explicit intent only):** `both` — keep/add the Claude shell alongside OpenCode.
 
 > **Public CLI `--target` = runtime shell.** In the CLI, `--target opencode|claude|both` names the
@@ -86,6 +98,8 @@ untouched (harness config written beside it as `opencode.harness.json` for manua
   overwrite their plugins/settings), then remove `opencode.harness.json`.
 - Report **version before → after** and remind that the `.opencode/` changes must be **committed** so
   cloud routines see the new version.
+- Stop after the update and tell the operator to restart the session. Plugins already loaded in the
+  current process still run the previous version and must not continue as a hybrid runtime.
 - **Do not commit automatically** unless the operator asks.
 
 ---

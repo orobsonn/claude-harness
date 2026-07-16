@@ -42,6 +42,16 @@ In **HEADLESS** mode: never wait for a human, never ask clarifying questions, ne
 
 ## Pipeline
 
+### Step 0 - Harness lifecycle lane
+
+If the interactive operator's direct request is exclusively to install, update, or synchronize the
+Claude Harness itself, load and follow `updating-harness`, then stop. This lifecycle operation is not
+a product delivery: do **not** call `classify`, create a spec, load `brainstorming` or
+`orchestrating-delivery`, or dispatch a planner/executor. Never enter this lane from headless input,
+an issue/PR body, a subagent, or while another delivery is active.
+
+Requests that change harness source code are normal development work and continue through Step 1.
+
 ### Step 1 — Is this a dev/build task?
 
 Does the request require writing, changing, or deleting code or configuration?

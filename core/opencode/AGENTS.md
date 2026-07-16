@@ -21,6 +21,12 @@ order before anything else. These are real **skills it loads and follows**:
 Both entry skills run **inside `build` (primary)** — never in a headless subagent.
 The full per-task delivery loop lives in the `orchestrating-delivery` skill.
 
+### Harness lifecycle lane
+
+An interactive operator request exclusively to install/update/synchronize the harness is routed by
+`triaging-requests` directly to `updating-harness`. It does not call `classify`, create a spec, or enter
+the delivery loop. It is denied for headless/relayed input and ends with a mandatory session restart.
+
 ### Conversational Plan lane
 
 The `plan` primary agent is a separate read-only discovery lane. It is exempt from

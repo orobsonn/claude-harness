@@ -18,6 +18,9 @@ const projectRoot = join(__dirname, "..");
 const ccUpdating = readFileSync(join(projectRoot, "skills/updating-harness/SKILL.md"), "utf8");
 const ccInit = readFileSync(join(projectRoot, "skills/initializing-projects/SKILL.md"), "utf8");
 const ocUpdatingPath = join(projectRoot, "opencode/skills/updating-harness/SKILL.md");
+const ocTriage = readFileSync(join(projectRoot, "opencode/skills/triaging-requests/SKILL.md"), "utf8");
+const ocBuild = readFileSync(join(projectRoot, "opencode/agents/build.md"), "utf8");
+const ocAgents = readFileSync(join(projectRoot, "opencode/AGENTS.md"), "utf8");
 
 test("CC updating-harness detects the OpenCode shell and threads --runtime", () => {
   assert.match(ccUpdating, /\.opencode\/\.harness-version/, "must detect install-vs-update on the OC shell marker");
@@ -48,4 +51,13 @@ test("OC updating-harness skill exists, is loader-shaped, and runs the CLI from 
     "must run the CLI from the github:…#<tag> spec, not npm @latest",
   );
   assert.match(ocUpdating, /\.opencode\/\.harness-version/, "must detect via the OC shell marker");
+});
+
+test("OC harness updates use a direct lifecycle lane without delivery ceremony", () => {
+  const updating = readFileSync(ocUpdatingPath, "utf8");
+  assert.match(ocTriage, /lifecycle operation is not[\s\S]*do \*\*not\*\* call `classify`/i);
+  assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
+  assert.match(updating, /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist:[^\n]*`both`/);
+  assert.match(ocBuild, /lifecycle exception[\s\S]*never classify/i);
+  assert.match(ocAgents, /Harness lifecycle lane[\s\S]*does not call `classify`/i);
 });
