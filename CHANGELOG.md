@@ -479,6 +479,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **A captura não acusa mais a papelada do próprio harness como escrita fora de escopo da mão.** Um
+  run em que a mão escreveu exatamente o arquivo que devia saía `FAILED` acusando 35 caminhos — entre
+  eles o descriptor que a despachou, o brief, o gate-state e o próprio registro que continha a
+  acusação. A causa não era a papelada: a captura já sabia descontar arquivos que estavam na árvore
+  antes da mão começar, mas essa subtração era desligada por inteiro sempre que UM caminho da árvore
+  não podia ser lido — e caminhos ilegíveis são rotina (a pasta de worktrees do próprio harness, o
+  churn do `.wrangler/`, os stubs de `/dev/null` do sandbox). Com um caminho ilegível, todo arquivo
+  pré-existente virava violação da mão, transformando trabalho bom em `FAILED` e disparando
+  escalação e retrabalho em cima de nada. A subtração agora isola o caminho problemático em vez de se
+  desligar. O controle de segurança fica intacto: escrita nova fora do escopo, adulteração de
+  papelada existente, registro forjado e escape via `.gitignore` continuam todos acusados (#362).
 - **O reaper agora limpa sozinho o worktree de um run já concluído.** Antes, um run que terminava
   normalmente (sem crash) deixava o worktree e a branch parados no disco indefinidamente — o reaper só
   agia em crash ou lock órfão. Agora, quando não há run vivo, o reaper confirma que o trabalho está
