@@ -409,7 +409,11 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
  * non-empty; scope_paths/allowed_writes must be arrays (may be empty). frozen_paths is NOT a
  * descriptor field — it is derived from locked_test so the hand can never touch the frozen test.
  */
-const REQUIRED_STRING_FIELDS = ["feature_id", "task_id", "model", "brief_file", "locked_test", "freeze_commit_sha"];
+// `model` is deliberately NOT required (#ac-1.3): an absent model is the one case that legitimately
+// falls back (to the medium rung, stamping modelFallbackUsed on the record). Requiring it here would
+// refuse the descriptor before resolveHandModel could ever apply that fallback. An absent model is
+// still never a free pass — resolveHandModel only ever yields an approved id.
+const REQUIRED_STRING_FIELDS = ["feature_id", "task_id", "brief_file", "locked_test", "freeze_commit_sha"];
 const REQUIRED_ARRAY_FIELDS = ["scope_paths", "allowed_writes"];
 
 /** @description Default full-tree (UNSCOPED) porcelain probe for the git-universe reconciliation guard. */
