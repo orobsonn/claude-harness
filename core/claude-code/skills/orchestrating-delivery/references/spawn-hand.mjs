@@ -238,8 +238,10 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
   // FAIL CLOSED (#361): only the approved ladder may run as a hand. An id outside it is a hard
   // refusal (never laundered into the fallback) and NO child is spawned — the throw routes to the
   // CLI's exit-2 configError path, which by design writes no run-record and therefore cannot
-  // authorize a Claude escalation. Absence falls back to glm-5.2 and says so via modelFallbackUsed.
-  const { model, modelFallbackUsed } = resolveHandModel(dispatch.model);
+  // authorize a Claude escalation. Absence falls back to glm-5.2. Idempotent when runLiveDispatch
+  // already resolved (an approved id resolves to itself); the record's fallback signal is stamped
+  // there, on the dispatch, not here — this call only decides WHICH model the child gets.
+  const { model } = resolveHandModel(dispatch.model);
 
   // Resolve locked_test path for the Stop hook
   const lockedTest = dispatch.locked_test ?? "";

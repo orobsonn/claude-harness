@@ -117,6 +117,23 @@ test("sniper: the INPUTS are persisted — the record distinguishes arithmetic f
   assert.equal(r.model_resolution.role, "sniper");
 });
 
+// normalizeSeverity maps anything unrecognized to `medium`. Left unchecked, a typo'd "hgih" would
+// quietly run a HIGH batch on the medium hand — the silent degradation this whole issue kills.
+test("sniper: a typo'd severity is refused, never silently degraded to medium", () => {
+  assert.throws(
+    () => resolveSniperModel({ plan: planWith([]), severities: ["hgih"] }),
+    (err) => {
+      assert.match(err.message, /"hgih"/, "the error must name the offending value");
+      assert.match(err.message, /low\|medium\|high\|critical/);
+      return true;
+    },
+  );
+});
+
+test("sniper: a valid severity in any casing still resolves (the guard is not over-strict)", () => {
+  assert.equal(resolveSniperModel({ plan: planWith([]), severities: ["HIGH", " low "] }).model_resolution.tier, "high");
+});
+
 test("sniper: an empty applied set is a hard error — there is nothing to resolve against", () => {
   assert.throws(() => resolveSniperModel({ plan: planWith([]), severities: [] }), /--severities is empty/);
 });

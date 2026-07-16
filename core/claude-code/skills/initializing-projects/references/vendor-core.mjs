@@ -853,13 +853,15 @@ function copyClaudeSharedDeps(coreDir, claudeDir) {
  *
  * Depth-aware over the WHOLE framework tree, not just hooks/: a skill reference (depth 3, e.g.
  * `skills/orchestrating-delivery/references/spawn-hand.mjs`) importing `core/shared` would otherwise
- * keep `../../../../shared/` and resolve OUTSIDE `.claude/` — an ERR_MODULE_NOT_FOUND at import
+ * keep its monorepo-depth prefix and resolve OUTSIDE `.claude/` — an ERR_MODULE_NOT_FOUND at import
  * time, i.e. a dead dispatch in every vendored project. Hooks-only was never a rule, just the only
  * case that existed; the previous hardcoded pair (hooks depth 1, hooks/lib depth 2) is reproduced
  * exactly by the arithmetic below.
  *
  * Code extensions only (.mjs/.js/.ts) — prose in a SKILL.md naming a path is documentation, not an
- * import, and must not be silently rewritten.
+ * import, and must not be silently rewritten. The match is textual (as on the OpenCode side), so a
+ * file must not carry its own depth's `../…/shared/` prefix as non-import text: it would be
+ * rewritten too. Nothing in the tree does, and the vendored-import test would catch a real break.
  *
  * @param {string} claudeDir
  * @returns {number} files rewritten

@@ -180,6 +180,18 @@ export function resolveSniperModel({ plan, severities, gateFailure = false, fail
     );
   }
 
+  // FAIL LOUD: `normalizeSeverity` maps anything unrecognized to `medium` with `invalid: true`. A
+  // typo'd "hgih" would silently resolve a HIGH batch onto the medium hand — the same silent
+  // degradation this issue exists to kill. Garbage in the applied set is a caller bug: name it.
+  const invalid = set.filter((s) => normalizeSeverity(s).invalid);
+  if (invalid.length) {
+    throw new Error(
+      `descriptor-emitter: unrecognized severit${invalid.length > 1 ? 'ies' : 'y'} ` +
+        `${invalid.map((s) => JSON.stringify(s)).join(', ')} in --severities — ` +
+        `expected low|medium|high|critical. Refusing to guess a tier from a typo.`,
+    );
+  }
+
   let tier;
   if (gateFailure) {
     // A gate failure is auto-high regardless of what the findings claim.
