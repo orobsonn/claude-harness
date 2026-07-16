@@ -5,6 +5,18 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.45.0](https://github.com/orobsonn/claude-harness/compare/v0.44.1...v0.45.0) (2026-07-16)
+
+
+### Features
+
+* **opencode:** adiciona planejamento conversacional ([#356](https://github.com/orobsonn/claude-harness/issues/356)) ([20dd052](https://github.com/orobsonn/claude-harness/commit/20dd052b52fb1edc9bcd6bf2dcd8ef32133c7138))
+
+
+### Bug Fixes
+
+* **opencode:** ancora revisão na feature da sessão ([#358](https://github.com/orobsonn/claude-harness/issues/358)) ([475aef4](https://github.com/orobsonn/claude-harness/commit/475aef4bffe047ba5ea3b21368b6b4de060d7b4c))
+
 ## [0.44.1](https://github.com/orobsonn/claude-harness/compare/v0.44.0...v0.44.1) (2026-07-15)
 
 
