@@ -745,8 +745,8 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   // .claude/shared and rewrite monorepo-relative imports so vendored hooks resolve.
   const sharedMirrored = copyClaudeSharedDeps(coreDir, claudeDir);
   ok(`hooks' shared deps → .claude/shared/: ${sharedMirrored}`);
-  const sharedRewrites = rewriteClaudeHookSharedImports(claudeDir);
-  ok(`hooks shared import rewrites: ${sharedRewrites}`);
+  const sharedRewrites = rewriteClaudeSharedImports(claudeDir);
+  ok(`shared import rewrites: ${sharedRewrites}`);
 
   const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir);
   ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps}`);
@@ -846,39 +846,53 @@ function copyClaudeSharedDeps(coreDir, claudeDir) {
 }
 
 /**
- * @description Rewrite monorepo core/claude-code/hooks → core/shared imports to
- * .claude/hooks → .claude/shared. hooks/*.mjs: ../../shared → ../shared;
- * hooks/lib/*.mjs: ../../../shared → ../../shared.
+ * @description Rewrite monorepo `core/claude-code/** → core/shared` imports to vendored
+ * `.claude/** → .claude/shared` relative paths. `core/claude-code` collapses to `.claude`, so every
+ * vendored file sits exactly ONE level closer to `shared/` than its monorepo original — the rewrite
+ * is therefore pure depth arithmetic, identical to the OpenCode side.
+ *
+ * Depth-aware over the WHOLE framework tree, not just hooks/: a skill reference (depth 3, e.g.
+ * `skills/orchestrating-delivery/references/spawn-hand.mjs`) importing `core/shared` would otherwise
+ * keep `../../../../shared/` and resolve OUTSIDE `.claude/` — an ERR_MODULE_NOT_FOUND at import
+ * time, i.e. a dead dispatch in every vendored project. Hooks-only was never a rule, just the only
+ * case that existed; the previous hardcoded pair (hooks depth 1, hooks/lib depth 2) is reproduced
+ * exactly by the arithmetic below.
+ *
+ * Code extensions only (.mjs/.js/.ts) — prose in a SKILL.md naming a path is documentation, not an
+ * import, and must not be silently rewritten.
+ *
  * @param {string} claudeDir
  * @returns {number} files rewritten
  */
-function rewriteClaudeHookSharedImports(claudeDir) {
-  const hooksDir = join(claudeDir, "hooks");
-  if (!existsSync(hooksDir)) return 0;
+function rewriteClaudeSharedImports(claudeDir) {
   let n = 0;
-  const walk = (dir, relFromHooks) => {
+  const walk = (dir, relFromClaudeRoot) => {
+    if (!existsSync(dir)) return;
     for (const name of readdirSync(dir)) {
       const abs = join(dir, name);
-      const rel = relFromHooks ? `${relFromHooks}/${name}` : name;
+      const rel = relFromClaudeRoot ? `${relFromClaudeRoot}/${name}` : name;
       if (statSync(abs).isDirectory()) {
         walk(abs, rel);
         continue;
       }
       if (!name.endsWith(".mjs") && !name.endsWith(".js") && !name.endsWith(".ts")) continue;
+      // depth = how many directories deep this file sits under .claude/
+      const depth = rel.split("/").length - 1;
+      // monorepo: from core/claude-code/<rel>, shared is (depth+1) levels up; vendored: depth levels.
+      const from = `${"../".repeat(depth + 1)}shared/`;
+      const to = depth === 0 ? "shared/" : `${"../".repeat(depth)}shared/`;
       const before = readFileSync(abs, "utf8");
-      let after = before;
-      if (rel.startsWith("lib/") || rel.includes("/lib/")) {
-        after = after.split("../../../shared/").join("../../shared/");
-      } else {
-        after = after.split("../../shared/").join("../shared/");
-      }
+      const after = before.split(from).join(to);
       if (after !== before) {
         writeFileSync(abs, after);
         n += 1;
       }
     }
   };
-  walk(hooksDir, "");
+  // Every framework-owned dir — a shared import may legitimately appear in any of them.
+  for (const dir of FRAMEWORK_OWNED) {
+    walk(join(claudeDir, dir), dir);
+  }
   return n;
 }
 

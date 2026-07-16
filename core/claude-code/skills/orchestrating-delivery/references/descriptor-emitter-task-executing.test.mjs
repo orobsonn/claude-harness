@@ -154,7 +154,15 @@ test("#ac-1.5 no-op without obs", (t) => {
  * @description #ac-1.4 — fail-open: when the plan is missing, the descriptor-emitter CLI still
  * persists the descriptor and exits 0, swallowing the emission failure AFTER the descriptor write.
  */
-test("#ac-1.4 fail-open: plan missing, CLI still writes descriptor, exits 0, no event", (t) => {
+/**
+ * @description CONTRACT CHANGE (#361, supersedes the prior #ac-1.4 fail-open): the CLI used to
+ * write a descriptor and exit 0 when the plan was missing, because the plan was only an
+ * observability input. The hand model now resolves FROM the plan, so a missing plan leaves nothing
+ * to resolve against — and guessing a model is precisely the failure #361 closes. The obs emission
+ * itself still fails open (covered by "#ac-1.5 no-op without obs" and the emitTaskExecuting unit
+ * tests); what changed is that dispatch itself now depends on the plan.
+ */
+test("#361: plan missing → CLI refuses (exit != 0), writes no descriptor, emits no event", (t) => {
   const { root, stateDir } = setupTempDirs();
   const featureId = `no-such-feature-${Date.now()}`;
   const priorEnv = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
@@ -175,7 +183,7 @@ test("#ac-1.4 fail-open: plan missing, CLI still writes descriptor, exits 0, no 
       EMITTER_CLI_RELATIVE,
       "--feature-id", featureId,
       "--task-id", "task-1",
-      "--model", "m",
+      "--role", "executor",
       "--brief-file", briefFile,
       "--scope-paths", "a.mjs",
       "--locked-test", lockedTestFile,
@@ -189,10 +197,9 @@ test("#ac-1.4 fail-open: plan missing, CLI still writes descriptor, exits 0, no 
     },
   );
 
-  assert.equal(result.status, 0);
-  assert.equal(existsSync(outFile), true);
-  const descriptor = JSON.parse(readFileSync(outFile, "utf8"));
-  assert.equal(typeof descriptor, "object");
+  assert.notEqual(result.status, 0, "a dispatch with no resolvable model must not be emitted");
+  assert.match(result.stderr, /execution plan/, "the refusal must name what is missing");
+  assert.equal(existsSync(outFile), false, "no descriptor may be written");
 
   const events = readEvents(meta).filter((e) => e.type === "task-executing");
   assert.equal(events.length, 0);
@@ -260,7 +267,7 @@ test("#ac-1.1 CLI wiring: real subprocess emits task-executing from a real plan"
       EMITTER_CLI_RELATIVE,
       "--feature-id", featureId,
       "--task-id", "task-2",
-      "--model", "m",
+      "--role", "executor",
       "--brief-file", briefFile,
       "--scope-paths", "a.mjs",
       "--locked-test", lockedTestFile,

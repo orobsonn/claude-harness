@@ -26,6 +26,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bareRole, isSafeSessionId, readGateState } from "./lib/gate-lib.mjs";
+import { formatApprovedLadder, isApprovedHandModel } from "../../shared/lib/hand-model-ladder.mjs";
 
 /**
  * @description Hand roles whose subagent writes are constrained to the active dispatch's scope_paths
@@ -239,6 +240,19 @@ export function checkPlanContent(content) {
   }
   if (ms.hand_tiers === undefined) {
     return "[plan-write-gate] Blocked: model_strategy.hand_tiers is required — the executor/sniper resolve their Ollama model from it. Add hand_tiers: { low, medium, high } with real Ollama model ids.";
+  }
+  // #ac-2.1: the VALUES, not just the shape. A tier pinned to an unapproved id (gpt-oss, whose
+  // tool-calling collapses in an agentic loop; a retired id; a Claude alias) is caught HERE, when
+  // the planner writes the plan — not after a whole run has burned on it. Same constant spawn-hand
+  // enforces at dispatch, so the two rails can never disagree.
+  const ht = ms.hand_tiers;
+  if (!ht || typeof ht !== "object" || Array.isArray(ht)) {
+    return `[plan-write-gate] Blocked: model_strategy.hand_tiers must be an object mapping low/medium/high to an approved hand model (${formatApprovedLadder()}).`;
+  }
+  for (const [tier, model] of Object.entries(ht)) {
+    if (!isApprovedHandModel(model)) {
+      return `[plan-write-gate] Blocked: model_strategy.hand_tiers.${tier} = ${JSON.stringify(model)} is not an approved hand model. Only these may run as a cheap hand: ${formatApprovedLadder()}.`;
+    }
   }
   return null;
 }

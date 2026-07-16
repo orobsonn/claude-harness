@@ -37,7 +37,7 @@ function makeDescriptor(overrides = {}) {
   const descriptor = {
     feature_id: "cheap-hands-wiring",
     task_id: "task-1",
-    model: "qwen3-coder:480b",
+    model: "glm-5.2",
     brief_file: briefFile,
     scope_paths: ["core/"],
     locked_test: REAL_LOCKED_TEST,

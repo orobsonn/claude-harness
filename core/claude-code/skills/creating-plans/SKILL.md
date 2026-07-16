@@ -142,7 +142,7 @@ When in doubt between medium and high, pick high — a wrong downgrade of scruti
 |---|---|---|
 | **low** | `hand_tiers.low` (cheap Ollama) | Trivial mechanical work — DDL/migration with no logic, constants/config/enums, a pure function fully covered by `locked_tests` |
 | **medium** | `hand_tiers.medium` (cheap Ollama) | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
-| **high** | `hand_tiers.high` (Claude hand in v1) | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
+| **high** | `hand_tiers.high` (the strongest cheap Ollama hand) | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
 
 **Decompose before reaching for the high hand.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `hand_tiers[severity]`.
 
@@ -227,11 +227,22 @@ the cravado escalation ladder verbatim — three *different* models, weakest at 
 The `low → medium → high` ladder is a genuine escalation (`gemma4` → `glm-5.2` →
 `kimi-k2.7-code`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
 
-**The hand model ids MUST exist in the Ollama endpoint that runs the cheap hands.** A non-existent id (typo, retired version, or a Claude alias accidentally placed in a hand tier) makes every dispatch 404 at spawn time. List the real ids with `GET https://ollama.com/v1/models` (Bearer = the Ollama token) before pinning. **Avoid `gpt-oss:*` for hand tiers** — its tool-calling breaks after a few steps in a multi-step agentic loop (the executor edits files in a loop, so reliable tool-use matters more than raw benchmark).
+**The ladder above is an ALLOWLIST, and it is the whole list.** These three ids — and only these —
+may run as a hand. `hand_tiers` values are **not** free-form: `plan-write-gate` blocks the Write of a
+plan pinning anything else, and `spawn-hand` refuses to dispatch it. Both read one constant
+(`shared/lib/hand-model-ladder.mjs`), so the two rails can never drift apart. This closes a real
+failure: a run whose plan declared this ladder dispatched all three hands on `gpt-oss:120b` instead
+— the one model this skill already said to avoid — and burned 12 sniper passes, because `gpt-oss`'s
+tool-calling collapses after a few steps in an agentic loop (the executor edits files in a loop, so
+reliable tool-use beats raw benchmark).
 
-**Need a Claude hand?** `hand_tiers` values are free model ids — putting a Claude alias (e.g.
-`"high": "opus"`) in a tier is the explicit escape for a task you don't want on a cheap hand. There
-is no separate legacy shape for this anymore.
+**Changing the ladder is a code change, not a plan change** — edit the constant, with the new id
+verified against `GET https://ollama.com/v1/models` (Bearer = the Ollama token) first.
+
+**No Claude escape hatch.** A Claude alias (`opus`, `sonnet`, `haiku`) in a `hand_tiers` tier is
+**refused** — hands always dispatch to the Ollama endpoint, where a Claude id 404s. (Earlier text
+here called this "the explicit escape"; that was wrong — `spawn-hand` has always thrown on it. The
+Claude path for work a cheap hand cannot do is the K=1 escalation, not a hand tier.)
 
 The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, or opus).
 

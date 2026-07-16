@@ -31,13 +31,37 @@ function makeWritePayload(toolName, filePath, extra = {}) {
 const PLAN_PATH = ".claude/plans/x/execution-plan.json";
 
 // --- content cancela (model_strategy furo) ---
-const VALID_MS = '{"model_strategy":{"hand_tiers":{"low":"qwen3-coder-next","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
+const VALID_MS = '{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
 const LEGACY_MS = '{"model_strategy":{"tiers":{"low":"haiku","medium":"sonnet","high":"opus"}}}';
+// #ac-1.2: an id that EXISTS in the API but is outside the approved ladder — the fixture that
+// proves this rail is an allowlist, not a pointed veto of gpt-oss.
+const OFF_LADDER_MS = '{"model_strategy":{"hand_tiers":{"low":"deepseek-v4-pro","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
+const GPT_OSS_MS = '{"model_strategy":{"hand_tiers":{"low":"gpt-oss:20b","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
 
 test("checkPlanContent: legacy Claude `tiers` shape → deny reason", () => {
   assert.match(checkPlanContent(LEGACY_MS), /legacy Claude `tiers`/);
 });
 test("checkPlanContent: valid hand_tiers → null (accept)", () => {
+  assert.equal(checkPlanContent(VALID_MS), null);
+});
+test("checkPlanContent: #ac-2.1 hand_tiers.low = gpt-oss → deny naming the tier and the refused id", () => {
+  const reason = checkPlanContent(GPT_OSS_MS);
+  assert.match(reason, /hand_tiers\.low/, "the deny must name the offending tier");
+  assert.match(reason, /gpt-oss:20b/, "the deny must name the refused id");
+  assert.match(reason, /gemma4/, "the deny must name the approved ladder");
+});
+test("checkPlanContent: #ac-1.2 an off-ladder id that EXISTS is refused too (allowlist, not a gpt-oss veto)", () => {
+  const reason = checkPlanContent(OFF_LADDER_MS);
+  assert.match(reason, /hand_tiers\.low/);
+  assert.match(reason, /deepseek-v4-pro/);
+});
+test("checkPlanContent: a Claude alias in a hand tier is refused (the doc's 'escape hatch' never existed)", () => {
+  assert.match(
+    checkPlanContent('{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"opus"},"planner":"opus"}}'),
+    /hand_tiers\.high/,
+  );
+});
+test("checkPlanContent: #ac-2.2 the approved ladder → null (accept)", () => {
   assert.equal(checkPlanContent(VALID_MS), null);
 });
 test("checkPlanContent: hand_tiers missing → deny reason", () => {
