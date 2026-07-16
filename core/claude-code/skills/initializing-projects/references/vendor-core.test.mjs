@@ -169,6 +169,53 @@ test("vendor-core: all required hook files are copied to target", async (t) => {
   }
 });
 
+/**
+ * @description #361/#ac-5.1 regression — the shared-import rewrite must cover the WHOLE framework
+ * tree, not just hooks/. `core/claude-code` collapses to `.claude`, so a vendored file sits one
+ * level closer to shared/ than its monorepo original. When the rewrite skipped skills/, the
+ * vendored spawn-hand.mjs kept `../../../../shared/` — resolving OUTSIDE .claude/ — and died with
+ * ERR_MODULE_NOT_FOUND on import: every hand dispatch in every vendored project, dead. Importing
+ * the real vendored module is the only assertion that proves the path resolves; a string check on
+ * the import line would pass against a subtly wrong depth.
+ */
+test("vendor-core: vendored skill references importing core/shared actually resolve (#361)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor-core failed: ${result.stderr || result.stdout}`);
+
+    // The ladder constant travels with the vendor — the lock is a factory default (#ac-5.1).
+    assert.ok(
+      existsSync(join(tempDir, ".claude/shared/lib/hand-model-ladder.mjs")),
+      "the approved-ladder constant must be vendored into .claude/shared/lib/",
+    );
+
+    const spawnHand = join(tempDir, ".claude/skills/orchestrating-delivery/references/spawn-hand.mjs");
+    assert.ok(existsSync(spawnHand), "vendored spawn-hand.mjs must exist");
+    await import(pathToFileURL(spawnHand).href);
+
+    // And the gate — a hook, deeper in the tree — enforces the ladder with no project config.
+    const gate = await import(pathToFileURL(join(tempDir, ".claude/hooks/plan-write-gate.mjs")).href);
+    const refused = gate.checkPlanContent(
+      '{"model_strategy":{"hand_tiers":{"low":"gpt-oss:20b","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}',
+    );
+    assert.match(refused ?? "", /gpt-oss:20b/, "a fresh vendored project must refuse an off-ladder tier");
+    assert.equal(
+      gate.checkPlanContent(
+        '{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}',
+      ),
+      null,
+      "the approved ladder must pass",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("vendor-core: mirrors the vps modules the hooks import so vendored hooks resolve (P1 regression)", async (t) => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
   try {

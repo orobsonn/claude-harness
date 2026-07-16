@@ -37,7 +37,7 @@ function makeDescriptor(overrides = {}) {
   const descriptor = {
     feature_id: "cheap-hands-wiring",
     task_id: "task-1",
-    model: "qwen3-coder:480b",
+    model: "glm-5.2",
     brief_file: briefFile,
     scope_paths: ["core/"],
     locked_test: REAL_LOCKED_TEST,
@@ -227,6 +227,65 @@ describe("runLiveDispatch fail-closed on token in descriptor", () => {
         "must reject when the token literal is in the descriptor"
       );
       assert.notEqual(sink.cmd, "claude", "must NOT spawn when fail-closed on a leaked descriptor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #361 — an off-ladder model is a CONFIG error, not a run failure.
+// This distinction is load-bearing: the CLI maps a THROW to exit 2 (configError,
+// no run-record) and a RETURN to exit 0/1. Only a run-record with outcome FAILED
+// — a genuine run-and-fail — authorizes a Claude hand fallback at the entry-gate.
+// If a refused model ever produced a record instead of throwing, a plan pinning
+// gpt-oss would silently buy itself an expensive Claude hand on every task.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch fail-closed on an unapproved hand model (#361)", () => {
+  it("throws, spawns nothing, and writes NO run-record for an off-ladder model", async () => {
+    for (const refused of ["gpt-oss:120b", "deepseek-v4-pro", "qwen3-coder:480b"]) {
+      const { descriptor, dir } = makeDescriptor({ model: refused });
+      const sink = {};
+      let recordWritten = false;
+      try {
+        await assert.rejects(
+          () =>
+            runLiveDispatch(descriptor, {
+              spawn: makeFakeSpawn(sink),
+              gitStatus: () => "",
+              headSha: () => FREEZE_SHA,
+              capture: () => { throw new Error("capture must not run"); },
+              env: { ANTHROPIC_AUTH_TOKEN: "tok-abc" },
+              writeRecord: () => { recordWritten = true; },
+              stateDir: dir,
+            }),
+          new RegExp(refused.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+          `must reject the off-ladder model ${refused}, naming it`,
+        );
+        assert.notEqual(sink.cmd, "claude", `must NOT spawn a hand on ${refused}`);
+        assert.equal(recordWritten, false, "a config error must write NO run-record (it would authorize a Claude fallback)");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("stamps modelFallbackUsed on the record when the descriptor carries no model (#ac-1.3)", async () => {
+    const { descriptor, dir } = makeDescriptor();
+    delete descriptor.model;
+    let record = null;
+    try {
+      await runLiveDispatch(descriptor, {
+        spawn: makeFakeSpawn({}),
+        gitStatus: () => "",
+        headSha: () => FREEZE_SHA,
+        capture: ({ child }) => ({ child: { ...child, touchedPaths: [], lockedTestExitCode: 0 } }),
+        env: { ANTHROPIC_AUTH_TOKEN: "tok-abc" },
+        // The seam is writeRecord(path, content) — the record is the serialized second arg.
+        writeRecord: (_path, content) => { record = JSON.parse(content); },
+      });
+      assert.equal(record.model, "glm-5.2", "absence falls back to the medium rung");
+      assert.equal(record.modelFallbackUsed, true, "the fallback must never be silent on the record");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

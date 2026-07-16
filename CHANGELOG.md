@@ -424,6 +424,32 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A mão barata só roda nos modelos aprovados, e o orquestrador não escolhe mais o modelo no olho.**
+  Numa run real o plano declarava a escada `{low: gemma4, medium: glm-5.2, high: kimi-k2.7-code}` e as
+  três mãos saíram despachadas em `gpt-oss:120b` — justamente o modelo que a própria documentação
+  mandava evitar, porque o tool-calling dele desmonta em loop agêntico. Custou 12 passes de sniper numa
+  única run. Agora existe uma allowlist dos três modelos verificados, numa constante única
+  (`shared/lib/hand-model-ladder.mjs`) lida pelos dois trilhos: o `plan-write-gate` bloqueia o plano que
+  crave qualquer outro id — nomeando o tier e o id recusado — e o `spawn-hand` recusa o despacho sem
+  spawnar processo nenhum. A trava é allowlist, não veto ao `gpt-oss`: um id que existe na API mas está
+  fora da escada (`deepseek-v4-pro`) é recusado igual. O modelo saiu da mão do LLM: a flag `--model` do
+  `descriptor-emitter` foi removida (um caller antigo recebe erro, nunca é ignorado em silêncio) e o
+  modelo passa a ser derivado do plano — executor pelo `complexity ?? severity` da task, sniper pela
+  aritmética sobre as findings aplicadas, com os inputs gravados no descriptor pra auditoria distinguir
+  "resolvido a partir destas severidades" de "alguém disse high". Quando o modelo não resolve, o
+  fallback é `glm-5.2` e ele se anuncia (`modelFallbackUsed`) no descriptor e no run-record — um
+  fallback silencioso foi exatamente como o `qwen3-coder:480b` morto (410 Gone) sobreviveu no código;
+  ele agora foi removido. Um id explicitamente fora da escada nunca vira fallback: é recusa dura.
+
+- **A trava vale de fábrica em qualquer projeto, sem configuração.** O vendor só reescrevia os imports
+  de `shared/` dentro de `.claude/hooks/`, nunca em `.claude/skills/`. Como `core/claude-code/` vira
+  `.claude/`, todo arquivo vendorizado fica um nível mais perto de `shared/` — então a primeira skill a
+  importar `core/shared` teria morrido com `ERR_MODULE_NOT_FOUND` no import, deixando **toda mão inerte
+  em todo projeto vendorizado**. O rewrite agora é aritmético e cobre a árvore inteira, com um teste que
+  importa o módulo vendorizado de verdade (uma checagem de string passaria com a profundidade errada).
+
 ### Added
 
 - **A frota VPS agora suporta múltiplos repositórios.** Antes o reaper e os crons resolviam owner/repo

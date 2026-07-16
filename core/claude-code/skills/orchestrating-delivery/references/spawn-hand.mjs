@@ -33,6 +33,7 @@ import { captureResult, realGit, realTestRunner } from "./capture-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
 import { isSafeFeatureId } from "../../../hooks/lib/gate-lib.mjs";
 import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
+import { resolveHandModel, formatApprovedLadder } from "../../../../shared/lib/hand-model-ladder.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -222,20 +223,25 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
   ].join("");
   const scrubbedBrief = redact(rawBrief, token);
 
-  // Resolve model from dispatch (fall back to a sensible default)
-  const model = dispatch.model ?? "qwen3-coder:480b";
-
   // FAIL CLOSED: a hand ALWAYS dispatches to Ollama (ANTHROPIC_BASE_URL=ollama.com). A bare Claude
   // alias (haiku/sonnet/opus) as the resolved hand model means a legacy `tiers` plan (Claude models)
-  // or a mis-set hand_tier — it would 404 against Ollama with a cryptic error. Refuse here with an
-  // actionable reason (the config-error path) instead of letting the 404 surface downstream.
-  if (CLAUDE_HAND_ALIASES.has(model)) {
+  // or a mis-set hand_tier. The allowlist below would refuse it anyway; this branch runs FIRST only
+  // to keep the more actionable diagnosis (legacy shape) instead of a generic not-in-the-ladder.
+  if (CLAUDE_HAND_ALIASES.has(dispatch.model)) {
     throw new Error(
-      `dispatchHand: hand model "${model}" is a Claude alias dispatched to Ollama — this is a legacy ` +
-      `model_strategy (Claude tiers) or a mis-set hand_tier. Set hand_tiers to a model id that exists ` +
-      `in the Ollama endpoint (list with GET /v1/models).`
+      `dispatchHand: hand model "${dispatch.model}" is a Claude alias dispatched to Ollama — this is a legacy ` +
+      `model_strategy (Claude tiers) or a mis-set hand_tier. Set hand_tiers to one of the approved ` +
+      `hand models (${formatApprovedLadder()}).`
     );
   }
+
+  // FAIL CLOSED (#361): only the approved ladder may run as a hand. An id outside it is a hard
+  // refusal (never laundered into the fallback) and NO child is spawned — the throw routes to the
+  // CLI's exit-2 configError path, which by design writes no run-record and therefore cannot
+  // authorize a Claude escalation. Absence falls back to glm-5.2. Idempotent when runLiveDispatch
+  // already resolved (an approved id resolves to itself); the record's fallback signal is stamped
+  // there, on the dispatch, not here — this call only decides WHICH model the child gets.
+  const { model } = resolveHandModel(dispatch.model);
 
   // Resolve locked_test path for the Stop hook
   const lockedTest = dispatch.locked_test ?? "";
@@ -403,7 +409,11 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
  * non-empty; scope_paths/allowed_writes must be arrays (may be empty). frozen_paths is NOT a
  * descriptor field — it is derived from locked_test so the hand can never touch the frozen test.
  */
-const REQUIRED_STRING_FIELDS = ["feature_id", "task_id", "model", "brief_file", "locked_test", "freeze_commit_sha"];
+// `model` is deliberately NOT required (#ac-1.3): an absent model is the one case that legitimately
+// falls back (to the medium rung, stamping modelFallbackUsed on the record). Requiring it here would
+// refuse the descriptor before resolveHandModel could ever apply that fallback. An absent model is
+// still never a free pass — resolveHandModel only ever yields an approved id.
+const REQUIRED_STRING_FIELDS = ["feature_id", "task_id", "brief_file", "locked_test", "freeze_commit_sha"];
 const REQUIRED_ARRAY_FIELDS = ["scope_paths", "allowed_writes"];
 
 /** @description Default full-tree (UNSCOPED) porcelain probe for the git-universe reconciliation guard. */
@@ -628,8 +638,13 @@ export async function runLiveDispatch(descriptor, {
   // Build the dispatch dispatchHand consumes. frozen_paths is derived from locked_test so a hand
   // mutating the frozen test is an automatic gate failure. shared_context is already folded into
   // the brief by the orchestrator (context parity at the boundary).
+  // #361: resolve the hand model against the approved ladder HERE, so the run-record carries the
+  // model that actually ran (never an unresolved `undefined`) plus the fallback signal. An
+  // out-of-ladder id throws → the CLI's exit-2 configError path → no record → no Claude escape.
+  const resolvedHand = resolveHandModel(descriptor.model);
   const dispatch = {
-    model: descriptor.model,
+    model: resolvedHand.model,
+    modelFallbackUsed: resolvedHand.modelFallbackUsed,
     brief: briefContent,
     shared_context: "",
     scope_paths: descriptor.scope_paths,

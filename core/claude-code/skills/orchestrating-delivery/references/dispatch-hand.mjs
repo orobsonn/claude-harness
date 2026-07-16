@@ -364,6 +364,9 @@ export function buildRunRecord({ dispatch, child, token, logs = [] }) {
 
   const record = {
     model: dispatch.model,
+    // #361: a fallback that does not announce itself is how the dead qwen3-coder:480b default
+    // survived unnoticed. Always a boolean, so the record never leaves it ambiguous.
+    modelFallbackUsed: dispatch.modelFallbackUsed === true,
     brief: redact(dispatch.brief ?? "", token),
     shared_context: redact(dispatch.shared_context ?? "", token),
     scope_paths: dispatch.scope_paths ?? [],

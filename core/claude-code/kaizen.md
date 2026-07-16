@@ -420,7 +420,9 @@ manual-merge the queue.
 ### 2026-07-06 — spawn-hand: seed workspace trust in the ephemeral CLAUDE_CONFIG_DIR (headless `claude -p` stalls into the 9-min timeout)
 
 - **Observed:** During `hand-429-escalation-shortcut`, the Ollama executor dispatch (deepseek-v4-pro
-  via `spawn-hand.mjs`) hit the 9-min wall-clock ceiling and returned `timedOut: true` → outcome
+  — an id that is no longer dispatchable: since #361 only the approved ladder in
+  `shared/lib/hand-model-ladder.mjs` may run as a hand — via `spawn-hand.mjs`) hit the 9-min
+  wall-clock ceiling and returned `timedOut: true` → outcome
   FAILED — even though the independent capture confirmed the work was COMPLETE, in-scope, and the
   frozen test GREEN (37/37). The child's stderr revealed the cause: `"Ignoring 57 permissions.allow
   entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code

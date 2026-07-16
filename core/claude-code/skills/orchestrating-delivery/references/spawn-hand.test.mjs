@@ -59,7 +59,7 @@ describe("hand timeout ceiling constants (#ac-2.1)", () => {
 describe("buildSpawnArgs", () => {
   it("contains -p, --allowedTools Read,Write,Edit, --output-format json, resolved model, and does NOT contain the token", () => {
     const token = "secret-ollama-token-abc123";
-    const model = "qwen3-coder:480b";
+    const model = "glm-5.2";
     const briefFile = "/tmp/brief.txt";
 
     const argv = buildSpawnArgs({ model, briefFile });
@@ -96,7 +96,7 @@ describe("buildSpawnArgs", () => {
 // ---------------------------------------------------------------------------
 describe("buildSpawnArgs no-bare no-bash", () => {
   it("argv contains NO --bare AND allowedTools value contains no 'Bash'", () => {
-    const argv = buildSpawnArgs({ model: "glm-5.1", briefFile: "/tmp/brief.txt" });
+    const argv = buildSpawnArgs({ model: "glm-5.2", briefFile: "/tmp/brief.txt" });
     const fullString = argv.join(" ");
 
     // No --bare flag
@@ -135,7 +135,7 @@ describe("dispatchHand ephemeral dir + child env", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets here",
       scope_paths: ["core/"],
@@ -224,7 +224,7 @@ describe("dispatchHand ephemeral .claude.json trust keyed by process.cwd()", () 
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets here",
       scope_paths: ["core/"],
@@ -274,7 +274,7 @@ describe("dispatchHand ephemeral .claude.json trust is scoped to a single projec
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets here",
       scope_paths: ["core/"],
@@ -353,7 +353,7 @@ describe("dispatchHand brief scrubbing", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: `This is the brief. Token should not appear: ${secretToken}`,
       shared_context: `Shared context also contains: ${secretToken}`,
       scope_paths: ["core/"],
@@ -407,7 +407,7 @@ describe("dispatchHand delivers the brief via child stdin", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: briefText,
       shared_context: "no secrets here",
       scope_paths: ["core/"],
@@ -448,7 +448,7 @@ describe("dispatchHand fail-closed without locked_test", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -491,7 +491,7 @@ describe("dispatchHand arms the Stop-hook gate", () => {
 
     const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -529,7 +529,7 @@ describe("dispatchHand fail-closed when locked_test file does not exist", () => 
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -566,7 +566,7 @@ describe("dispatchHand fail-closed when locked_test is a directory", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -605,7 +605,7 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -639,7 +639,7 @@ describe("dispatchHand fail-closed when locked_test registers zero tests", () =>
       return { status: 0, stdout: "", stderr: "", output: [] };
     };
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -679,7 +679,7 @@ describe("dispatchHand dry-run honors dispatch.test_runner", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -705,7 +705,7 @@ describe("dispatchHand dry-run honors dispatch.test_runner", () => {
       return { status: 0, stdout: "", stderr: "", output: [] };
     };
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -731,7 +731,7 @@ describe("dispatchHand enforces a clean baseline before spawn", () => {
   const lockedTest = "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs";
   const scopedPaths = ["core/x/foo.ts"];
   const baseDispatch = {
-    model: "glm-5.1",
+    model: "glm-5.2",
     brief: "do the thing",
     shared_context: "no secrets",
     scope_paths: scopedPaths,
@@ -840,7 +840,7 @@ describe("dispatchHand fail-closed on undefined auth token", () => {
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -882,7 +882,7 @@ describe("dispatchHand wall-clock timeout — returns not throws (#ac-1.1)", () 
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -923,7 +923,7 @@ describe("dispatchHand wall-clock timeout — live spawn opts carry timeout+kill
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -960,7 +960,7 @@ describe("dispatchHand wall-clock timeout — dry-run probe has NO timeout (#ac-
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -1002,7 +1002,7 @@ describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac
     };
 
     const dispatchWithOverride = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -1037,7 +1037,7 @@ describe("dispatchHand wall-clock timeout — timeout_ms override + default (#ac
     };
 
     const dispatchNoOverride = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -1079,7 +1079,7 @@ describe("dispatchHand wall-clock timeout — timeout_ms is clamped to the 54000
     };
 
     const dispatch = {
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief: "do the thing",
       shared_context: "no secrets",
       scope_paths: ["core/"],
@@ -1153,7 +1153,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
       freeze_commit_sha: freezeCommitSha,
@@ -1204,7 +1204,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
       freeze_commit_sha: freezeCommitSha,
@@ -1256,7 +1256,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
       freeze_commit_sha: freezeCommitSha,
@@ -1317,7 +1317,7 @@ describe("runLiveDispatch inline capture-verified stamp (#89)", () => {
     return {
       feature_id: featureId,
       task_id: taskId,
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
       freeze_commit_sha: freezeCommitSha,
@@ -1556,7 +1556,7 @@ describe("runLiveDispatch wall-clock timeout — token never leaks + exact reaso
     const descriptor = {
       feature_id: "hand-wallclock-timeout",
       task_id: "task-1",
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
       freeze_commit_sha: freezeCommitSha,
@@ -1641,7 +1641,7 @@ describe("runLiveDispatch wall-clock timeout — normal-exit regression guard (#
     const descriptor = {
       feature_id: "hand-wallclock-timeout",
       task_id: "task-1",
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
       freeze_commit_sha: freezeCommitSha,
@@ -1727,7 +1727,7 @@ describe("runLiveDispatch consecutive-429 streak tracking (#ac-2.1)", () => {
     return {
       feature_id: "hand-rate-limit-streak",
       task_id: "task-1",
-      model: "glm-5.1",
+      model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
       freeze_commit_sha: freezeCommitSha,
