@@ -90,7 +90,17 @@ export function excludeNodeModules(paths = []) {
 }
 
 /**
- * @description Real git adapter (NOT exercised by `node --test`). Each method shells out with
+ * @description Snapshot marker for a path git cannot hash (a collapsed nested-repo directory entry,
+ * a file that vanished mid-sweep, a sandbox char-device stub). Deliberately NOT a 40-hex string, so
+ * it can never collide with a real blob sha: a path that was unhashable pre-spawn and is unhashable
+ * now compares EQUAL (pre-existing → dropped), while one the hand replaced with real content hashes
+ * to a sha that differs → kept and accused.
+ */
+export const UNHASHABLE = "unhashable";
+
+/**
+ * @description Real git adapter (only the `hashObject` seam is exercised by `node --test`, via
+ * `capture-hand-git.test.mjs` against a real repo — the rest is not). Each method shells out with
  * an argument array (never string concat) so user/baseline input cannot inject shell.
  * @param {string} cwd
  * @returns {{ headSha: () => string, statusPorcelain: () => string, diffNameOnly: (sha: string) => string[], lsFilesOthers: () => string[], lsFilesAllOthers: () => string[] }}
@@ -110,22 +120,32 @@ export function realGit(cwd = process.cwd()) {
     // node_modules/ is excluded (see excludeNodeModules) — it is never a meaningful scope-
     // violation surface, only tooling churn (see docstring above).
     lsFilesAllOthers: () => excludeNodeModules(lines(run(["ls-files", "--others"]))),
-    // Content hash (git blob sha) for each path, in input order → path→hash map. Used to subtract
-    // pre-existing-unchanged untracked files at capture. A missing/removed path is skipped (the
-    // whole batch fails closed to an empty map → no subtraction → conservative legacy behavior).
+    // Content hash for each path → path→hash map. Used to subtract pre-existing-unchanged untracked
+    // files at capture. ONE `git hash-object` PER PATH, deliberately: a single batch call aborts
+    // ENTIRELY (exit 128) on the first path it cannot open, and an all-or-nothing batch turned one
+    // unreadable path into an EMPTY map — which subtractUnchanged reads as "subtract nothing",
+    // misattributing every pre-existing untracked file in the tree to the hand (issue #362).
+    // Unreadable is routine, not exotic: `ls-files --others` emits a nested repo/worktree as a
+    // DIRECTORY entry (the harness's own `.claude/worktrees/<name>` — every fleet run), tooling
+    // churns files that vanish mid-sweep (`.wrangler/tmp`), and a sandbox may stub paths as
+    // unopenable char devices (`.bashrc` → /dev/null). Per-path also removes the batch's index
+    // arithmetic (`shas[i]`), which chunking would silently misalign — pairing a path with ANOTHER
+    // path's hash is a false NEGATIVE, the one error class this control must never make.
     hashObject: (paths) => {
       const map = new Map();
       if (!paths || paths.length === 0) return map;
-      let out;
-      try {
-        out = run(["hash-object", ...paths]);
-      } catch {
-        return map; // fail safe: no hashes → nothing subtracted → no false-clean
+      for (const p of paths) {
+        try {
+          // `--` so a path starting with `-` is never read as a flag.
+          map.set(p, lines(run(["hash-object", "--", p]))[0] ?? UNHASHABLE);
+        } catch {
+          // Unhashable is RECORDED, not skipped: an omitted path looks "new since the snapshot" to
+          // subtractUnchanged and gets accused. Recording it lets an unhashable path that stayed
+          // unhashable compare EQUAL (pre-existing → dropped), while one the hand REPLACED with
+          // real content hashes to a sha ≠ UNHASHABLE → kept. Fails toward accusing, never clean.
+          map.set(p, UNHASHABLE);
+        }
       }
-      const shas = lines(out);
-      paths.forEach((p, i) => {
-        if (shas[i]) map.set(p, shas[i]);
-      });
       return map;
     },
   };
