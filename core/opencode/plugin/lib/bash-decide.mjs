@@ -767,11 +767,7 @@ export function isHarnessPrescribedPackageCommand(command) {
   if (/^npx\s+tsc\s+--noEmit\s*$/.test(raw)) return true;
   if (/^npm\s+test\s*$/.test(raw)) return true;
   if (/^npm\s+run\s+typecheck\s*$/.test(raw)) return true;
-  if (
-    /^npx(?:\s+-y)?\s+(?:"github:orobsonn\/claude-harness#|github:orobsonn\/claude-harness#|'github:orobsonn\/claude-harness#)[A-Za-z0-9._/-]+(?:['"])?\s+init(?:\s|$)/.test(
-      raw,
-    )
-  ) {
+  if (/^npx(?:\s+-y)?\s+(?:"github:orobsonn\/claude-harness#v\d+\.\d+\.\d+"|'github:orobsonn\/claude-harness#v\d+\.\d+\.\d+'|github:orobsonn\/claude-harness#v\d+\.\d+\.\d+)\s+init\s+--target\s+(?:opencode|claude|both)\s*$/.test(raw)) {
     return true;
   }
   return false;

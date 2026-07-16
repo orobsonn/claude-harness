@@ -1099,25 +1099,25 @@ test("decideBashForge + isStateForgeCommand: npx tsc --noEmit → allow", () => 
   assert.equal(isStateForgeCommand(cmd), false);
 });
 
-/** @description decideBashForge + isStateForgeCommand: npx github:...#v init → allow */
-test("decideBashForge + isStateForgeCommand: npx github:orobsonn/claude-harness#v0.43.1 init → allow", () => {
+/** @description Harness updater without an explicit runtime target is denied. */
+test("decideBashForge + isStateForgeCommand: harness updater without target is denied", () => {
   const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init";
+  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
+  assert.equal(isStateForgeCommand(cmd), true);
+});
+
+/** @description Exact stable release updater command is allowed. */
+test("decideBashForge + isStateForgeCommand: exact stable release updater is allowed", () => {
+  const cmd = 'npx -y "github:orobsonn/claude-harness#v0.43.1" init --target both';
   assert.equal(decideBashForge({ command: cmd }).decision, "allow");
   assert.equal(isStateForgeCommand(cmd), false);
 });
 
-/** @description decideBashForge + isStateForgeCommand: npx -y github:... init → allow */
-test("decideBashForge + isStateForgeCommand: npx -y github:orobsonn/claude-harness#v0.43.1 init → allow", () => {
-  const cmd = "npx -y github:orobsonn/claude-harness#v0.43.1 init";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npx -y "github:...#feature/x" init → allow */
-test("decideBashForge + isStateForgeCommand: npx -y \"github:orobsonn/claude-harness#feature/x\" init → allow", () => {
-  const cmd = 'npx -y "github:orobsonn/claude-harness#feature/x" init';
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
+/** @description Branch refs cannot replace the harness through the updater lane. */
+test("decideBashForge + isStateForgeCommand: harness updater branch ref is denied", () => {
+  const cmd = 'npx -y "github:orobsonn/claude-harness#feature/x" init --target both';
+  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
+  assert.equal(isStateForgeCommand(cmd), true);
 });
 
 /** @description decideBashForge + isStateForgeCommand: npx github:... init --target opencode → allow */
@@ -1593,9 +1593,9 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   // package allow keys present (the 6)
   const pkgKeys = [
     "npx tsc --noEmit",
-    "npx github:orobsonn/claude-harness#* init*",
-    "npx -y github:orobsonn/claude-harness#* init*",
-    'npx -y "github:orobsonn/claude-harness#*" init*',
+    'npx -y "github:orobsonn/claude-harness#v*" init --target opencode',
+    'npx -y "github:orobsonn/claude-harness#v*" init --target claude',
+    'npx -y "github:orobsonn/claude-harness#v*" init --target both',
     "npm test",
     "npm run typecheck",
   ];
