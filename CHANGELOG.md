@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.45.1](https://github.com/orobsonn/claude-harness/compare/v0.45.0...v0.45.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **harness:** trava a mão barata na escada aprovada ([#363](https://github.com/orobsonn/claude-harness/issues/363)) ([8599f05](https://github.com/orobsonn/claude-harness/commit/8599f05d47aa74b537a2af3535be5246498d5a8d)), closes [#361](https://github.com/orobsonn/claude-harness/issues/361)
+* **opencode:** separa atualização da cerimônia ([#359](https://github.com/orobsonn/claude-harness/issues/359)) ([1e03d38](https://github.com/orobsonn/claude-harness/commit/1e03d38a068a95a689d6e949dc1371671d2bbc01))
+
 ## [0.45.0](https://github.com/orobsonn/claude-harness/compare/v0.44.1...v0.45.0) (2026-07-16)
 
 
