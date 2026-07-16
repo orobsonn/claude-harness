@@ -37,7 +37,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { OUTCOME } from "./dispatch-hand.mjs";
-import { captureResult, realGit } from "./capture-hand.mjs";
+import { captureResult, realGit, UNHASHABLE } from "./capture-hand.mjs";
 
 /** @description Runs git in `cwd`, throwing on failure (test-only helper). */
 function git(cwd, args) {
@@ -200,6 +200,27 @@ test("#ac-1.2: a NEW out-of-scope write is still accused (subtraction never blin
   const result = captureResult(args159(dir, head, preUntracked));
 
   assert.deepEqual(result.outcome.scopeViolations, ["src/evil.ts"]);
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+});
+
+test("#ac-1.2: the hand REPLACING an unhashable path with real content is accused", (t) => {
+  const { dir, head } = makeRepo(t);
+  symlinkSync("/nowhere/does/not/exist", join(dir, ".wrangler/tmp/sock.link"));
+  const preUntracked = realGit(dir).hashObject(realGit(dir).lsFilesAllOthers());
+  assert.equal(preUntracked.get(".wrangler/tmp/sock.link"), UNHASHABLE, "precondition: unhashable");
+
+  write(dir, "migrations/0030_soundtracks.sql", "CREATE TABLE soundtracks (id INTEGER);");
+  // The branch that keeps the sentinel honest: an unhashable path the hand REPLACES with real
+  // content hashes to a sha ≠ UNHASHABLE → kept → accused. Without this rail, "simplifying"
+  // hashObject's catch to skip the path instead of recording it still passes every other test
+  // here, while silently turning this into a false NEGATIVE (an omitted path reads as pre-existing
+  // only if something else drops it — and the drop is what a scope control must never do quietly).
+  rmSync(join(dir, ".wrangler/tmp/sock.link"));
+  write(dir, ".wrangler/tmp/sock.link", "// hand replaced an unhashable path with real content");
+
+  const result = captureResult(args159(dir, head, preUntracked));
+
+  assert.deepEqual(result.outcome.scopeViolations, [".wrangler/tmp/sock.link"]);
   assert.equal(result.outcome.status, OUTCOME.FAILED);
 });
 
