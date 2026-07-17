@@ -514,6 +514,69 @@ function defaultWriteStreak(descriptor, stateDir) {
 }
 
 /**
+ * @description Parses `git status --porcelain` into the paths it reports. The rename form
+ * (`R  old -> new`) yields the DESTINATION — the path that now holds the content. PURE.
+ * @param {string} porcelain
+ * @returns {string[]}
+ */
+function porcelainPaths(porcelain) {
+  return (porcelain ?? "")
+    .split(/\r?\n/)
+    .filter((line) => line.length > 3)
+    .map((line) => {
+      // Porcelain v1 is `XY<space>PATH`; the status letters are positional, so slice — never trim
+      // the line first (a leading space is a real status column, e.g. " M path").
+      const path = line.slice(3).trim();
+      const arrow = path.indexOf(" -> ");
+      return arrow === -1 ? path : path.slice(arrow + 4);
+    })
+    .filter(Boolean);
+}
+
+/**
+ * @description Builds the dirty-tree refusal message for the pre-spawn guard, choosing between two
+ * diagnoses. BOTH branches refuse — this only decides which text to print, so an imperfect porcelain
+ * parse (git quotes exotic paths) can never weaken the guard; worst case the operator reads the
+ * generic diagnosis. PURE.
+ *
+ * The split exists because the generic "commit/stash orchestrator files first" advice is actively
+ * DANGEROUS for the sniper case: when the dirt is the executor's own uncommitted implementation,
+ * `git stash` DISCARDS the very work the sniper was dispatched to fix, and the guard then passes —
+ * turning a loud exit 2 into a silent green-on-nothing. In-scope dirt has exactly one correct
+ * recovery: the impl-commit (SKILL.md step 4-commit) the orchestrator skipped.
+ *
+ * @param {string} porcelain - raw `git status --porcelain` output.
+ * @param {string[]} [scopePaths] - the dispatch's own scope_paths (file or dir entries).
+ * @returns {string} the refusal message.
+ */
+export function dirtyTreeRefusal(porcelain, scopePaths = []) {
+  const scopes = (scopePaths ?? []).map((s) => String(s).replace(/\/+$/, "")).filter(Boolean);
+  const inScope = porcelainPaths(porcelain).filter((p) =>
+    // Exact hit, or under a scope DIRECTORY — never a bare prefix ("coreless/" is not in "core").
+    scopes.some((s) => p === s || p.startsWith(`${s}/`))
+  );
+
+  if (inScope.length === 0) {
+    return (
+      "runLiveDispatch: working tree is dirty relative to the freeze baseline — refusing to spawn " +
+      "(uncommitted changes would be misattributed to the hand; commit/stash orchestrator files first)"
+    );
+  }
+
+  const shown = inScope.slice(0, 5).join(", ");
+  const more = inScope.length > 5 ? `, +${inScope.length - 5} more` : "";
+  return (
+    `runLiveDispatch: working tree is dirty INSIDE this dispatch's own scope_paths (${shown}${more}) — ` +
+    "refusing to spawn (uncommitted changes would be misattributed to the hand). This is almost always " +
+    "a SKIPPED IMPL-COMMIT, not orchestrator paperwork: the executor's implementation is still uncommitted. " +
+    "Recovery: commit the executor's production diff first (SKILL.md step 4-commit, `feat(<scope>): …`), " +
+    "THEN re-emit this descriptor (descriptor-emitter re-derives freeze_commit_sha from the new HEAD) and " +
+    "re-dispatch. Do NOT `git stash` this dirt to satisfy the guard — that DISCARDS the implementation " +
+    "the sniper was dispatched to fix, and the spawn would then run against an empty tree."
+  );
+}
+
+/**
  * @description The live dispatch driver — the missing seam that makes the cheap Ollama hand
  * actually FIRE. Validates the descriptor, fail-closes on a token leaked into the descriptor,
  * reconciles the two git universes (full tree clean + HEAD anchored to the freeze baseline so
@@ -608,10 +671,9 @@ export async function runLiveDispatch(descriptor, {
   // runs) is closed in practice by the synchronous spawn: dispatchHand uses spawnSync, so THIS
   // orchestrator process is blocked for the spawn's duration and cannot write concurrently; a
   // separate writer touching the tree mid-spawn is outside the one-delivery-per-session model.
-  if (gitStatus().trim() !== "") {
-    throw new Error(
-      "runLiveDispatch: working tree is dirty relative to the freeze baseline — refusing to spawn (uncommitted changes would be misattributed to the hand; commit/stash orchestrator files first)"
-    );
+  const status = gitStatus();
+  if (status.trim() !== "") {
+    throw new Error(dirtyTreeRefusal(status, descriptor.scope_paths));
   }
 
   // Pre-spawn untracked snapshot (path→hash). Taken right after the full-tree clean-check so the

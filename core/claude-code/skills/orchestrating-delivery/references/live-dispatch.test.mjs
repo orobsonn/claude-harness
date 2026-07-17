@@ -20,7 +20,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { runLiveDispatch, HAND_BASH_TIMEOUT_MS } from "./spawn-hand.mjs";
+import { runLiveDispatch, HAND_BASH_TIMEOUT_MS, dirtyTreeRefusal } from "./spawn-hand.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SPAWN_CLI = join(__dirname, "spawn-hand.mjs");
@@ -331,7 +331,9 @@ describe("runLiveDispatch fail-closed on token in brief_file", () => {
 // ---------------------------------------------------------------------------
 describe("runLiveDispatch fail-closed on a dirty full tree", () => {
   it("throws and does NOT spawn when the full tree is dirty relative to the freeze baseline", async () => {
-    const { descriptor, dir } = makeDescriptor();
+    // scope_paths is narrowed to src/ so the dirt below is GENUINELY out-of-scope — otherwise the
+    // fixture's default ["core/"] would contain it and this would exercise the in-scope branch.
+    const { descriptor, dir } = makeDescriptor({ scope_paths: ["src/"], allowed_writes: ["src/"] });
     const sink = {};
     try {
       await assert.rejects(
@@ -351,6 +353,92 @@ describe("runLiveDispatch fail-closed on a dirty full tree", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locked test 3b — the SNIPER diagnosis. A sniper dispatched at SKILL.md's step 5
+// with the executor's impl still uncommitted trips the same dirty guard, but the
+// generic "commit/stash orchestrator files first" text misdiagnoses it: the dirt
+// IS the implementation, and stashing it DESTROYS the work the sniper exists to
+// fix. When the dirt lands inside the dispatch's OWN scope_paths, the refusal must
+// name the skipped impl-commit and warn off the stash. Both branches still REFUSE —
+// this only chooses the diagnosis, so it can never weaken the guard.
+// ---------------------------------------------------------------------------
+describe("runLiveDispatch diagnoses a skipped impl-commit (dirt inside scope_paths)", () => {
+  it("names the impl-commit and warns against stashing when the dirt is in scope", async () => {
+    const { descriptor, dir } = makeDescriptor({
+      scope_paths: ["src/orders/"],
+      allowed_writes: ["src/orders/"],
+    });
+    const sink = {};
+    try {
+      await assert.rejects(
+        () =>
+          runLiveDispatch(descriptor, {
+            spawn: makeFakeSpawn(sink),
+            // The executor's own uncommitted implementation — NOT orchestrator paperwork.
+            gitStatus: () => " M src/orders/total.ts\n?? src/orders/tax.ts\n",
+            headSha: () => FREEZE_SHA,
+            capture: () => { throw new Error("capture must not run"); },
+            env: { ANTHROPIC_AUTH_TOKEN: "tok" },
+            writeRecord: () => {},
+          }),
+        (err) => {
+          assert.match(err.message, /impl-commit/i, "must name the impl-commit as the missing step");
+          assert.match(err.message, /src\/orders\/total\.ts/, "must name the in-scope dirty path");
+          assert.match(err.message, /do not.*stash|never.*stash/i, "must warn off the stash that would destroy the impl");
+          return true;
+        },
+        "must diagnose in-scope dirt as a skipped impl-commit"
+      );
+      assert.notEqual(sink.cmd, "claude", "must NOT spawn onto a dirty baseline");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the generic orchestrator-paperwork diagnosis when NO dirt is in scope", async () => {
+    const { descriptor, dir } = makeDescriptor({ scope_paths: ["src/orders/"] });
+    try {
+      await assert.rejects(
+        () =>
+          runLiveDispatch(descriptor, {
+            spawn: makeFakeSpawn({}),
+            gitStatus: () => " M findings.md\n",
+            headSha: () => FREEZE_SHA,
+            capture: () => { throw new Error("capture must not run"); },
+            env: { ANTHROPIC_AUTH_TOKEN: "tok" },
+            writeRecord: () => {},
+          }),
+        (err) => {
+          assert.match(err.message, /commit\/stash orchestrator files/i, "out-of-scope dirt keeps the stash advice");
+          assert.doesNotMatch(err.message, /impl-commit/i, "must NOT misdiagnose paperwork as a skipped impl-commit");
+          return true;
+        },
+        "must reject out-of-scope dirt with the generic diagnosis"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dirtyTreeRefusal (pure)", () => {
+  it("reads the porcelain rename form (R old -> new) as the destination path", () => {
+    const msg = dirtyTreeRefusal("R  src/a.ts -> src/orders/b.ts\n", ["src/orders/"]);
+    assert.match(msg, /impl-commit/i, "the rename DESTINATION is what lands in scope");
+    assert.match(msg, /src\/orders\/b\.ts/, "must name the destination, not the source");
+  });
+
+  it("matches a scope entry with or without its trailing slash, and never by bare prefix", () => {
+    assert.match(dirtyTreeRefusal("?? core/x.ts\n", ["core"]), /impl-commit/i, "scope without trailing slash");
+    assert.match(dirtyTreeRefusal("?? core/x.ts\n", ["core/"]), /impl-commit/i, "scope with trailing slash");
+    assert.doesNotMatch(
+      dirtyTreeRefusal("?? coreless/x.ts\n", ["core"]),
+      /impl-commit/i,
+      "'coreless/' must NOT count as inside 'core' — a bare prefix match would misdiagnose"
+    );
   });
 });
 
