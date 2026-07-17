@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.45.3](https://github.com/orobsonn/claude-harness/compare/v0.45.2...v0.45.3) (2026-07-17)
+
+
+### Bug Fixes
+
+* **orchestrating-delivery:** torna a posicao do sniper alcancavel ([#369](https://github.com/orobsonn/claude-harness/issues/369)) ([3e10c13](https://github.com/orobsonn/claude-harness/commit/3e10c13a15bce036b244ac16f47e640c7c1ed1a8)), closes [#362](https://github.com/orobsonn/claude-harness/issues/362)
+
 ## [0.45.2](https://github.com/orobsonn/claude-harness/compare/v0.45.1...v0.45.2) (2026-07-16)
 
 
