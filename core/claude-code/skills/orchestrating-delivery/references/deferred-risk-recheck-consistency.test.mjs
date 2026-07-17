@@ -93,7 +93,7 @@ function extractSection(content, headingText) {
  */
 test("orchestrating-delivery Phase 2 record + curate (step 6): DEFERRED-RISK block format documents falsify/guards fields with the state-entity-not-file-path and no-prior-verdict constraints", () => {
   const start = skillMd.indexOf("**6. record + curate**");
-  const end = skillMd.indexOf("**6-commit. impl-commit**", start);
+  const end = skillMd.indexOf("**7. escalation**", start);
   assert(start !== -1, "record + curate (step 6) marker not found in orchestrating-delivery SKILL.md");
   const section = skillMd.slice(start, end === -1 ? undefined : end);
 
@@ -157,7 +157,7 @@ test("orchestrating-delivery Phase 2 record + curate (step 6): DEFERRED-RISK blo
  */
 test("orchestrating-delivery Phase 2 record + curate (step 6): DEFERRED-RISK note write semantics are an idempotent rewrite keyed by task-id and inherit the no-secrets/no-PII scrub", () => {
   const start = skillMd.indexOf("**6. record + curate**");
-  const end = skillMd.indexOf("**6-commit. impl-commit**", start);
+  const end = skillMd.indexOf("**7. escalation**", start);
   assert(start !== -1, "record + curate (step 6) marker not found in orchestrating-delivery SKILL.md");
   const section = skillMd.slice(start, end === -1 ? undefined : end);
 
@@ -385,7 +385,7 @@ test("orchestrating-delivery Phase 2 per-task adversary (step 3): a stale matche
  */
 test("orchestrating-delivery Phase 2 record + curate (step 6): DEFERRED-RISK notes are exempt from the shared_context relevance ceiling and are removed only when a later diff guards the entity AND a frozen locked_test pins that guard", () => {
   const start = skillMd.indexOf("**6. record + curate**");
-  const end = skillMd.indexOf("**6-commit. impl-commit**", start);
+  const end = skillMd.indexOf("**7. escalation**", start);
   assert(start !== -1, "record + curate (step 6) marker not found in orchestrating-delivery SKILL.md");
   const section = skillMd.slice(start, end === -1 ? undefined : end);
 
