@@ -154,18 +154,26 @@ test("task identity aliases conflict before dispatch, while trusted task identit
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task"] }))
     const before = hooks["tool.execute.before"]
+    // Harness-only aliases (taskId/task) still conflict; official Task.task_id is ignored.
     await assert.rejects(
       () => before(
         { tool: "task", sessionID: SID },
-        { args: { subagent_type: "executor-low", task_id: "task-a", taskId: "task-b" } },
+        { args: {
+          subagent_type: "executor-low",
+          task: "task-a",
+          taskId: "task-b",
+          prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-a"}[/HARNESS_TASK_CONTEXT]',
+        } },
       ),
       /taskId.*conflict/,
     )
+    // Official resume fields (command/task_id) must not fight HARNESS_TASK_CONTEXT / envelope.
     await assert.doesNotReject(() => before(
       { tool: "task", sessionID: SID, task_id: "trusted-task" },
       { args: {
         subagent_type: "executor-low",
-        task_id: "model-task",
+        command: "resume-or-skill-command",
+        task_id: "official-host-resume-id",
         prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"model-task"}[/HARNESS_TASK_CONTEXT]',
       } },
     ))

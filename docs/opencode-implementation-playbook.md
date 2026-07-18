@@ -104,8 +104,8 @@ Não reabre o dossiê de gaps. Só executa.
 | Campo | Valor |
 |---|---|
 | Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B4 code+tests+adversary |
-| Próximo batch | **B5** (#378 #379 #380 #381) após PR B4 |
+| Última sessão | 2026-07-18 B5 done code |
+| Próximo batch | _(playbook B0–B5 fechados — smoke harness pronto)_ |
 | Bloqueio ativo | _(nenhum)_ |
 
 ### Hotfixes já no working tree (pré-B0)
@@ -172,11 +172,11 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #378 harvest-guard paths | `todo` | | | |
-| #379 scope child binding | `todo` | | | |
-| #380 task identity hygiene | `todo` | | | |
-| #381 se ainda todo | `todo` | | | |
-| Smoke scope + harvest | `todo` | | | |
+| #378 harvest-guard paths | `done` | pendente | 2026-07-18 | throw real se findings.md ausente |
+| #379 scope child binding | `done` | pendente | 2026-07-18 | pending-children index; adversary PASS |
+| #380 task identity hygiene | `done` | pendente | 2026-07-18 | isTaskTool unificado; role sem command |
+| #381 se ainda todo | `done` | pendente | 2026-07-18 | dangling depends_on + scope vazio |
+| Smoke scope + harvest | `done` | | 2026-07-18 | 81+ unit |
 
 ### Critério “harness pronto” (só depois B0–B4)
 
@@ -303,7 +303,8 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 | 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; merged #389 | **B2** |
 | 2026-07-18 | opencode B2 implement | **B2** | #374+#382 código/testes 48 pass; adversary 1/2 (writtenBy fix; prose-DONE residual); merged #391 | **B3** |
 | 2026-07-18 | opencode B3 implement | **B3** | #375+#383+#384; plan_verdict seal; dual map; host merge; 90 pass; adversary 1/2 | **B4** |
-| 2026-07-18 | opencode B4 implement | **B4** | #377+#385 regate auto-arm + final/demo push; adversary regate-passed gate | **B5** após PR B4 |
+| 2026-07-18 | opencode B4 implement | **B4** | #377+#385 regate auto-arm + final/demo push; adversary regate-passed gate | **B5** |
+| 2026-07-18 | opencode B5 implement | **B5** | #378–#381 hygiene; adversary #379 PASS | smoke harness pronto |
 
 ---
 

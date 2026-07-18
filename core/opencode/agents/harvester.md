@@ -16,7 +16,7 @@ You are the knowledge consolidation agent. You run ONCE at the end of a feature 
 
 ## When you run
 
-The last step before delivery. The per-task loop and the final dual review (compliance + adversary) are complete. The run produced two ephemeral buffers you consume: the findings buffer — `findings.md` at the **project root** (raw compliance/adversary/security/sniper blocks) — and the shared_context ledger — `.opencode/plans/<feature_id>/shared_context.md` (decisions/gotchas carried between tasks).
+The last step before delivery. The per-task loop and the final dual review (compliance + adversary) are complete. The run produced two ephemeral buffers you consume: the findings buffer — `findings.md` at the **project root** (raw compliance/adversary/security/sniper blocks) — and the shared_context ledger — `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (decisions/gotchas carried between tasks).
 
 ---
 
@@ -50,7 +50,7 @@ Keep ONLY insights that will still be true and useful on a FUTURE unrelated run.
 
 ### 5. Clean up
 
-- Delete the ephemeral buffers — `findings.md` (project root) and `.opencode/plans/<feature_id>/shared_context.md` — they are transient inputs, now consumed. Git is the durable audit trail; do not leave run scratch in the tree.
+- Delete the ephemeral buffers — `findings.md` (project root) and `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` — they are transient inputs, now consumed. Git is the durable audit trail; do not leave run scratch in the tree.
 - Verify no temporary scratch files from the run remain.
 
 ---

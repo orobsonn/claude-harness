@@ -11,6 +11,7 @@ import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 export const DISPATCH_LEASE_MS = 30 * 60 * 1000;
 const liveClaims = new Map();
 const childBindings = new Map();
+const pendingChildParents = new Map();
 
 function childBindingKey(projectRoot, childSessionId) {
   let root = projectRoot;
@@ -27,14 +28,18 @@ function childIndexPath(projectRoot, childSessionId) {
   return path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children", `${name}.json`);
 }
 
-function persistChildBinding(projectRoot, binding) {
-  const target = childIndexPath(projectRoot, binding.childSessionId);
+function pendingChildIndexPath(projectRoot, childSessionId) {
+  const name = crypto.createHash("sha256").update(childSessionId).digest("hex");
+  return path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-pending-children", `${name}.json`);
+}
+
+function writeJsonAtomic(target, body) {
   const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const fd = fs.openSync(temp, "wx", 0o600);
     try {
-      fs.writeFileSync(fd, JSON.stringify(binding, null, 2), "utf8");
+      fs.writeFileSync(fd, JSON.stringify(body, null, 2), "utf8");
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     fs.renameSync(temp, target);
@@ -45,6 +50,10 @@ function persistChildBinding(projectRoot, binding) {
   }
 }
 
+function persistChildBinding(projectRoot, binding) {
+  return writeJsonAtomic(childIndexPath(projectRoot, binding.childSessionId), binding);
+}
+
 function readChildBinding(projectRoot, childSessionId) {
   try {
     const binding = JSON.parse(fs.readFileSync(childIndexPath(projectRoot, childSessionId), "utf8"));
@@ -52,6 +61,34 @@ function readChildBinding(projectRoot, childSessionId) {
       ? binding
       : null;
   } catch { return null; }
+}
+
+function persistPendingChildParent(projectRoot, pending) {
+  const key = childBindingKey(projectRoot, pending.childSessionId);
+  pendingChildParents.set(key, pending);
+  return writeJsonAtomic(pendingChildIndexPath(projectRoot, pending.childSessionId), pending);
+}
+
+function readPendingChildParent(projectRoot, childSessionId) {
+  const key = childBindingKey(projectRoot, childSessionId);
+  const cached = pendingChildParents.get(key);
+  if (cached?.childSessionId === childSessionId && typeof cached.parentSessionId === "string" && typeof cached.callId === "string") {
+    return cached;
+  }
+  try {
+    const pending = JSON.parse(fs.readFileSync(pendingChildIndexPath(projectRoot, childSessionId), "utf8"));
+    if (pending?.childSessionId === childSessionId && typeof pending.parentSessionId === "string" && typeof pending.callId === "string") {
+      pendingChildParents.set(key, pending);
+      return pending;
+    }
+  } catch { /* absent */ }
+  return null;
+}
+
+function clearPendingChildParent(projectRoot, childSessionId) {
+  if (typeof childSessionId !== "string" || !childSessionId) return;
+  pendingChildParents.delete(childBindingKey(projectRoot, childSessionId));
+  try { fs.rmSync(pendingChildIndexPath(projectRoot, childSessionId), { force: true }); } catch { /* ignore */ }
 }
 
 function inside(root, candidate) {
@@ -208,11 +245,13 @@ export function clearActiveDispatch(projectRoot, { sessionId, callId, token }) {
   if (!resolved.ok) return resolved;
   let cleared = false;
   let clearedChild = "";
+  let clearedPendingChild = "";
   const persisted = withGateStateLock(resolved.path, (previous) => {
     const active = previous.active_dispatch;
     if (!active || typeof active !== "object" || active.call_id !== callId || active.claim_token !== token) return previous;
     const next = { ...previous };
     clearedChild = typeof active.child_session_id === "string" ? active.child_session_id : "";
+    clearedPendingChild = typeof active.binding_pending?.child_session_id === "string" ? active.binding_pending.child_session_id : "";
     delete next.active_dispatch;
     cleared = true;
     return next;
@@ -221,9 +260,16 @@ export function clearActiveDispatch(projectRoot, { sessionId, callId, token }) {
     for (const [childId, binding] of childBindings) {
       if (binding.parentSessionId === sessionId && binding.callId === callId && binding.token === token) childBindings.delete(childId);
     }
+    for (const [childId, pending] of pendingChildParents) {
+      if (pending.parentSessionId === sessionId && pending.callId === callId) pendingChildParents.delete(childId);
+    }
     if (clearedChild) {
       childBindings.delete(childBindingKey(projectRoot, clearedChild));
       try { fs.rmSync(childIndexPath(projectRoot, clearedChild), { force: true }); } catch { /* ignore */ }
+      clearPendingChildParent(projectRoot, clearedChild);
+    }
+    if (clearedPendingChild && clearedPendingChild !== clearedChild) {
+      clearPendingChildParent(projectRoot, clearedPendingChild);
     }
   }
   return persisted.ok ? { ok: true, cleared } : persisted;
@@ -254,7 +300,18 @@ export function markDispatchBindingPending(projectRoot, { sessionId, callId, tok
     };
     return { ...previous, active_dispatch: { ...active, status: "binding_pending", binding_pending: pending } };
   });
-  return persisted.ok ? { ok: true, pending } : persisted;
+  if (!persisted.ok) return persisted;
+  const knownChild = sanitizedHostId(pending?.child_session_id);
+  if (knownChild) {
+    const indexed = persistPendingChildParent(projectRoot, {
+      childSessionId: knownChild,
+      parentSessionId: sessionId,
+      callId,
+      recorded_at: pending.recorded_at,
+    });
+    if (!indexed) return { ok: false, reason: "durable pending child index failed" };
+  }
+  return { ok: true, pending };
 }
 
 /** @description Bind an official child-session event to the sole live parent dispatch claim. */
@@ -279,10 +336,11 @@ export function bindChildSession(projectRoot, { parentSessionId, childSessionId,
   if (!persisted.ok) return persisted;
   if (!persistChildBinding(projectRoot, binding)) return { ok: false, reason: "durable child dispatch binding failed" };
   childBindings.set(childBindingKey(projectRoot, childSessionId), binding);
+  clearPendingChildParent(projectRoot, childSessionId);
   return { ok: true, binding };
 }
 
-/** @description Bind a pending child only after the SDK has proven its parent session. */
+/** @description Bind a pending child when parent identity is already known (SDK or durable pending index). */
 export function reconcilePendingChildBinding(projectRoot, { parentSessionId, childSessionId }) {
   if (![parentSessionId, childSessionId].every((value) => typeof value === "string" && value.length > 0)) {
     return { ok: false, reason: "pending child reconciliation identity missing" };
@@ -298,6 +356,25 @@ export function reconcilePendingChildBinding(projectRoot, { parentSessionId, chi
     return { ok: false, reason: "pending child session identity mismatch" };
   }
   return bindChildSession(projectRoot, { parentSessionId, childSessionId, role: active.role });
+}
+
+/**
+ * @description When child id was recorded on binding_pending, verify and bind without SDK parent lookup.
+ * Fail-closed unless durable pending index + live claim + gate-state child id all agree.
+ */
+export function reconcilePendingChildBindingByChild(projectRoot, childSessionId) {
+  if (typeof childSessionId !== "string" || !childSessionId) {
+    return { ok: false, reason: "pending child identity missing" };
+  }
+  const pending = readPendingChildParent(projectRoot, childSessionId);
+  if (!pending) return { ok: false, reason: "no durable pending child index" };
+  if (pending.childSessionId !== childSessionId) {
+    return { ok: false, reason: "pending child index identity mismatch" };
+  }
+  return reconcilePendingChildBinding(projectRoot, {
+    parentSessionId: pending.parentSessionId,
+    childSessionId,
+  });
 }
 
 /** @description Return only a process-bound child mapping that still matches parent authority. */
@@ -503,4 +580,4 @@ export function appendScopeEvent(projectRoot, active, { tool, paths, mode, reaso
   } catch { return { ok: false, reason: "scope event persistence failed" }; }
 }
 
-export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileCleanupPending, reconcileExpiredDispatch, reconcilePendingChildBinding };
+export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileCleanupPending, reconcileExpiredDispatch, reconcilePendingChildBinding, reconcilePendingChildBindingByChild };

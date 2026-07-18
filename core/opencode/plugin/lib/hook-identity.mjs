@@ -31,8 +31,15 @@ function oneIdentity(label, values) {
 }
 
 /** @description Resolve one identity dimension; conflicts inside either trust tier fail closed. */
-export function resolveIdentityAliases({ label, trusted, untrusted, aliases, extraUntrusted = [] }) {
-  const trustedResult = oneIdentity(label, aliasValues(trusted, aliases));
+export function resolveIdentityAliases({
+  label,
+  trusted,
+  untrusted,
+  aliases,
+  extraTrusted = [],
+  extraUntrusted = [],
+}) {
+  const trustedResult = oneIdentity(label, [...aliasValues(trusted, aliases), ...extraTrusted]);
   if (!trustedResult.ok) return trustedResult;
   const untrustedResult = oneIdentity(label, [...aliasValues(untrusted, aliases), ...extraUntrusted]);
   if (!untrustedResult.ok) return untrustedResult;
@@ -43,21 +50,32 @@ export function resolveIdentityAliases({ label, trusted, untrusted, aliases, ext
   };
 }
 
-/** @description Resolve all hook identities before a gate can progress or mutate arguments. */
+/**
+ * @description Resolve all hook identities before a gate can progress or mutate arguments.
+ * Official Task `command` / `task_id` are host resume fields — never harness role/plan-task.
+ * Role: subagent_type + agent* aliases only. Plan task: runtime envelope + HARNESS_TASK_CONTEXT
+ * (+ harness-only taskId/task aliases on tool args).
+ */
 export function resolveHookIdentity({ input, toolArgs, promptTaskId = "" } = {}) {
   const dimensions = {
     sessionId: ["sessionID", "sessionId", "session_id"],
     featureId: ["feature_id", "featureId", "feature"],
-    taskId: ["task_id", "taskId", "task"],
-    role: ["agent", "agentType", "agent_type", "subagent_type", "subagentType", "subagent", "command"],
+    // Do not read official Task.task_id from tool args (resume). Envelope may still stamp task_id.
+    taskId: ["taskId", "task"],
+    role: ["agent", "agentType", "agent_type", "subagent_type", "subagentType", "subagent"],
   };
   const result = {};
   for (const [label, aliases] of Object.entries(dimensions)) {
+    const trustedTaskId =
+      label === "taskId"
+        ? aliasValues(input, ["task_id"]).filter((v) => TASK_ID.test(v))
+        : [];
     const resolved = resolveIdentityAliases({
       label,
       trusted: input,
       untrusted: toolArgs,
       aliases,
+      extraTrusted: trustedTaskId,
       extraUntrusted: label === "taskId" && TASK_ID.test(promptTaskId) ? [promptTaskId] : [],
     });
     if (!resolved.ok) return resolved;

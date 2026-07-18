@@ -200,6 +200,116 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
   }
 });
 
+test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fail-closed)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-pending-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_pending1";
+    const fid = "feat-pending";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: "t-p",
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({
+      session_id: sid,
+      feature_id: fid,
+      planner_status: "usable",
+      delivery_status: "ready",
+      planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+    }));
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const client = {
+      session: {
+        get: async () => {
+          throw new Error("SDK unavailable");
+        },
+      },
+    };
+    const hooks = await createObsHandHooks(dir, { client });
+    const args = {
+      description: "implement t-p",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t-p"}[/HARNESS_TASK_CONTEXT]\nImplement.`,
+      subagent_type: "executor-medium",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-bg" }, { args });
+    // message.updated cannot bind while SDK is down
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { info: { id: "u1", sessionID: "child-bg", role: "user", agent: "executor-medium" } },
+      },
+    });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-bg" },
+      {
+        args,
+        metadata: { parentSessionId: sid, sessionId: "child-bg", jobId: "job-bg", background: true },
+        output: '<task id="child-bg" state="running"><task_result>running</task_result></task>',
+      },
+    );
+    const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
+    assert.equal(active.status, "binding_pending");
+    assert.equal(active.binding_pending.child_session_id, "child-bg");
+
+    // Child ends while SDK still unavailable — must clean via pending index, not fail-closed
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-bg" } } });
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch,
+      undefined,
+    );
+    const eventsPath = join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl");
+    assert.equal(existsSync(eventsPath), false, "happy path must not emit hand-scope-terminal-unbound");
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.2 obs-hand: truly unbound child with SDK down still fail-closed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-unbound-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const client = {
+      session: {
+        get: async () => {
+          throw new Error("SDK unavailable");
+        },
+      },
+    };
+    const hooks = await createObsHandHooks(dir, { client });
+    await assert.rejects(
+      () => hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-ghost" } } }),
+      /terminal session identity unavailable/,
+    );
+    const raw = readFileSync(join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl"), "utf8");
+    assert.match(raw, /hand-scope-terminal-unbound/);
+    assert.match(raw, /"decision":"fail-closed"/);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("obs-hand: without task_id does not emit hand-ran unknown", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-skip-"));
   try {
