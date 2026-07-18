@@ -817,3 +817,36 @@ test("cronReview: a feat/x-branch PR's emitted lifecycle event carries root===42
     "the emitted event must carry root===42 — resolved via the prLinksIssue('Closes #42') body-link fallback, since headRefName 'feat/x' is not harness/<N> and extractRoot alone would yield null"
   );
 });
+
+test("cronReview: spawns AT MOST ONE review session per invocation even with multiple eligible PRs (per-cycle cap so the grace-bounded review lock is never reclaimed mid-cycle into a concurrent second review)", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(10, { number: 10, headRefName: "harness/42", author: { login: "bot-user" }, labels: [], headSha: "sha-a" });
+  setPr(11, { number: 11, headRefName: "harness/43", author: { login: "bot-user" }, labels: [], headSha: "sha-b" });
+  setDiff(10, ["src/a.ts"]);
+  setDiff(11, ["src/b.ts"]);
+
+  const spawnReviewSession = makeSpy();
+  await cronReview(baseOpts({ gh, spawnReviewSession, mergeAndFinalize: makeSpy(() => ({ merged: true })) }));
+
+  assert.equal(
+    spawnReviewSession.calls.length,
+    1,
+    "a single cronReview invocation must spawn EXACTLY ONE review session; the other eligible PR is left for the next tick so the review lock never overruns its grace"
+  );
+});
+
+test("cronReview: an already-reviewed PR does NOT consume the per-cycle review budget — the next fresh PR is still reviewed", async () => {
+  const { gh, setPr, setDiff } = makeFakeGh();
+  setPr(10, { number: 10, headRefName: "harness/42", author: { login: "bot-user" }, labels: [], headSha: "sha-a" });
+  setPr(11, { number: 11, headRefName: "harness/43", author: { login: "bot-user" }, labels: [], headSha: "sha-b" });
+  setDiff(10, ["src/a.ts"]);
+  setDiff(11, ["src/b.ts"]);
+
+  const spawnReviewSession = makeSpy();
+  // #10 is already reviewed at its current sha -> skipped early (no spawn); #11 is fresh.
+  const alreadyReviewed = (prNumber, sha) => prNumber === 10 && sha === "sha-a";
+  await cronReview(baseOpts({ gh, spawnReviewSession, alreadyReviewed, mergeAndFinalize: makeSpy(() => ({ merged: true })) }));
+
+  assert.equal(spawnReviewSession.calls.length, 1, "exactly one spawn — for the fresh PR #11");
+  assert.equal(spawnReviewSession.calls[0][0].number, 11, "the spawned review must be PR #11, not the already-reviewed #10");
+});

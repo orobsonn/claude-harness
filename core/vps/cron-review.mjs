@@ -162,7 +162,18 @@ export async function cronReview(opts) {
     notify({ type: notifyType, pr: pr.number, url: pr.url, root: rootIssue });
   }
 
+  // Per-cycle review cap (#lock-grace): a cronReview invocation runs each review as a BLOCKING
+  // spawn while holding the project's review lock, whose liveness grace is budgeted for ONE review
+  // (spawn-review-session's `claude -p` timeout + the cross-family spawns + buffer). Reviewing a
+  // second PR in the same invocation would push the invocation past that grace, so the NEXT cron
+  // tick would judge the still-held lock stale and reclaim it into a concurrent second review of
+  // the same PR. Cap at one spawned review per cycle; the remaining eligible PRs are picked up by
+  // subsequent ticks (a reviewed sha is recorded, so no PR is starved). Early-skipped PRs
+  // (ineligible / already-reviewed / no-diff / breaker-tripped) never spend this budget.
+  let reviewedThisCycle = false;
+
   for (const pr of prs) {
+   if (reviewedThisCycle) break;
    try {
     // Origin gate — single self-contained eligibility source (review-origin-gate.mjs).
     if (!isReviewEligible(pr, { authenticatedUser, engineKnows })) {
@@ -231,6 +242,8 @@ export async function cronReview(opts) {
     // Spawn the review session, then record it for the breaker cap.
     spawnReviewSession(pr, { stateDir, changedFiles });
     recordReviewSession({ stateDir });
+    // One blocking review per invocation is the lock-grace budget — every later PR breaks out.
+    reviewedThisCycle = true;
 
     // Fresh verdict from the engine-controlled artifact (HR-5 / #ac-2.1).
     const verdict = getFreshVerdict(pr, sha, stateDir);
