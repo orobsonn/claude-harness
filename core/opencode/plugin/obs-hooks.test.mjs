@@ -424,6 +424,76 @@ test("obs-hand: writing-hand terminal Task writes hand-record once with DONE", a
   }
 });
 
+
+test("obs-hand: terminal after writes hand-record even when child binding fails", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-bind-fail-rec-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_bindfail";
+    const fid = "feat-bindfail";
+    const tid = "t-bindfail";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        planner_plan_binding: {
+          session_id: sid,
+          feature_id: fid,
+          snapshot_path: snapshotRel,
+          snapshot_hash: hash,
+        },
+      }),
+    );
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      description: "implement",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
+      subagent_type: "executor-medium",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-bf" }, { args });
+    // Terminal after with orphan child id (no binding) — must still write hand-record.
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-bf" },
+      {
+        args,
+        output: `Status: DONE\n<task id="ses_orphan_child" state="completed"></task>`,
+        metadata: { sessionId: "ses_orphan_child", parentSessionId: sid },
+      },
+    );
+    const recordPath = join(dir, ".opencode", "plans", ".state", "hand-records", fid, sid, `${tid}.json`);
+    assert.ok(existsSync(recordPath), `expected hand-record at ${recordPath}`);
+    const disk = JSON.parse(readFileSync(recordPath, "utf8"));
+    assert.equal(disk.outcome, "DONE");
+    assert.equal(disk.writtenBy, "obs-hand-task");
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("obs-hand: non-hand role does not write hand-record", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-planner-"));
   try {

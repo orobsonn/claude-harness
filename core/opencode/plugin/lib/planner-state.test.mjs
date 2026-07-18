@@ -31,6 +31,18 @@ test("one active atomic claim excludes concurrent/replayed primary claims", () =
   assert.equal(first.state.planner_primary_attempts, 1);
 });
 
+test("same callID re-claim is idempotent (double tool.execute.before / dual plugin load)", () => {
+  const first = claim(BASE);
+  assert.equal(first.ok, true);
+  const again = claim(first.state, { callId: "call-1", token: "token-DIFFERENT" });
+  assert.equal(again.ok, true);
+  assert.equal(again.idempotent, true);
+  assert.equal(again.state.planner_primary_attempts, 1);
+  assert.equal(again.state.planner_active_attempt.call_id, "call-1");
+  assert.equal(again.state.planner_active_attempt.token, "token-1");
+  assert.equal(claim(first.state, { callId: "call-other", token: "token-x" }).ok, false);
+});
+
 test("late output and rejection cannot overwrite a newer active attempt", () => {
   const first = claim(BASE);
   const failed = failPlannerAttempt(first.state, { callId: "call-1", token: "token-1", failureClass: "timeout", providerUnavailable: true, hasFallback: true, now: 2_000 });

@@ -250,6 +250,20 @@ test("concurrent primary claims consume one attempt and delayed result cannot ov
   });
 });
 
+test("double before on same callID is idempotent and does not deny the planner Task", async () => {
+  await tempRun(false, async ({ root, state }) => {
+    let sequence = 0;
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => `token-${++sequence}` });
+    await before(hooks, "planner", "call-same");
+    await before(hooks, "planner", "call-same");
+    assert.equal(state().planner_primary_attempts, 1);
+    assert.equal(state().planner_active_attempt.call_id, "call-same");
+    assert.equal(state().planner_active_attempt.token, "token-1");
+    await after(hooks, "planner", "call-same", JSON.stringify(FULL_PLAN));
+    assert.equal(state().planner_status, "plan_pending_write");
+  });
+});
+
 test("stub/malformed output containing provider prose is plan_invalid and never activates fallback", async () => {
   await tempRun(true, async ({ root, state }) => {
     const hooks = await createPlannerRecoveryHooks(root);

@@ -271,6 +271,41 @@ test("REVISE + dual_status both → dual does NOT unlock hand (money-preflight)"
   assert.match(d.reason, /REVISE/);
 });
 
+test("dual pair both APPROVE after either-REVISE → plan_verdict APPROVE unlocks hand", () => {
+  // Simulate a fixed plan re-reviewed by both families APPROVE on the same scope.
+  const f1Rev = complete(state(), {
+    callId: "pair-r1",
+    response: report("REVISE", [finding]),
+  }).state;
+  assert.equal(f1Rev.plan_verdict, "REVISE");
+  // Fresh primary APPROVE (new call) + secondary APPROVE on same scope → either-REVISE-wins
+  // uses current pair reports, not forever-sticky prior REVISE alone.
+  const f1Ok = complete(f1Rev, {
+    callId: "pair-a1",
+    response: report("APPROVE"),
+  }).state;
+  const bothOk = complete(f1Ok, {
+    subagentType: "plan-reviewer-family-2",
+    callId: "pair-a2",
+    response: JSON.stringify({
+      verdict: "APPROVE",
+      family: "family-2",
+      findings: [],
+    }),
+  }).state;
+  assert.equal(bothOk.dual_status?.plan_review, "both");
+  assert.equal(bothOk.plan_verdict, "APPROVE");
+  assert.equal(
+    decideDualBeforeDelivery({
+      subagentType: "executor-high",
+      gateState: bothOk,
+      routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
+      toolName: "task",
+    }).decision,
+    "allow",
+  );
+});
+
 test("#383 applyReviewOutcome plan-reviewer writes dual_status.plan_review not adversary", () => {
   const result = complete(state(), { callId: "pr-axis", response: report("APPROVE") });
   assert.equal(result.state.dual_status?.plan_review, "primary_only");
