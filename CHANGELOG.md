@@ -5,6 +5,24 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.46.0](https://github.com/orobsonn/claude-harness/compare/v0.45.4...v0.46.0) (2026-07-18)
+
+
+### Features
+
+* **opencode:** skill configuring-model-routing com apply determinístico ([#396](https://github.com/orobsonn/claude-harness/issues/396)) ([32ea9cb](https://github.com/orobsonn/claude-harness/commit/32ea9cb5cb236668e2ae009fd4134132b24a142c))
+
+
+### Bug Fixes
+
+* **opencode:** dual REVISE bloqueia executor e dual por fase ([#375](https://github.com/orobsonn/claude-harness/issues/375) [#383](https://github.com/orobsonn/claude-harness/issues/383) [#384](https://github.com/orobsonn/claude-harness/issues/384)) ([#393](https://github.com/orobsonn/claude-harness/issues/393)) ([55a49f7](https://github.com/orobsonn/claude-harness/commit/55a49f7bb49dddcbbad3b5b93238c9e1d7b86df6))
+* **opencode:** hand-record no Task e path capture-verified ([#374](https://github.com/orobsonn/claude-harness/issues/374) [#382](https://github.com/orobsonn/claude-harness/issues/382)) ([#391](https://github.com/orobsonn/claude-harness/issues/391)) ([05d6a1e](https://github.com/orobsonn/claude-harness/commit/05d6a1edfcbb7cad1743128808021dc2c88f77d8))
+* **opencode:** hardening do apply de model routing ([#397](https://github.com/orobsonn/claude-harness/issues/397)) ([71922e0](https://github.com/orobsonn/claude-harness/commit/71922e001f406fe8a94004290b1aa192996edeee))
+* **opencode:** hygiene harvest scope identity e validate-plan ([#378](https://github.com/orobsonn/claude-harness/issues/378)-[#381](https://github.com/orobsonn/claude-harness/issues/381)) ([#395](https://github.com/orobsonn/claude-harness/issues/395)) ([cd095d5](https://github.com/orobsonn/claude-harness/commit/cd095d597ca64f5d2a9027587c7161bd29ad2546))
+* **opencode:** regate auto-arm e preconditions de ship ([#377](https://github.com/orobsonn/claude-harness/issues/377) [#385](https://github.com/orobsonn/claude-harness/issues/385)) ([#394](https://github.com/orobsonn/claude-harness/issues/394)) ([9db9c06](https://github.com/orobsonn/claude-harness/commit/9db9c0602f2ed23b819df83a7546c28e4ebed2ba))
+* **opencode:** unifica schema de plan e tool validate-plan ([#373](https://github.com/orobsonn/claude-harness/issues/373)) ([#389](https://github.com/orobsonn/claude-harness/issues/389)) ([1deea70](https://github.com/orobsonn/claude-harness/commit/1deea705668db0c273dc75dfbfa416a345963f31))
+* **vps:** helper de teste de dispatch acha o comando pelo último arg do tmux ([#392](https://github.com/orobsonn/claude-harness/issues/392)) ([89400ff](https://github.com/orobsonn/claude-harness/commit/89400ff297a54799fe74e22a6068bc2c69bae4f7))
+
 ## [0.45.4](https://github.com/orobsonn/claude-harness/compare/v0.45.3...v0.45.4) (2026-07-18)
 
 
