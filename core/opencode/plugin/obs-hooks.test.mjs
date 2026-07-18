@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createObsPlanWriteHooks } from "./obs-plan-write.ts";
@@ -218,6 +218,128 @@ test("obs-hand: without task_id does not emit hand-ran unknown", async () => {
     }
     assert.equal(raw.includes("unknown"), false, raw);
     assert.equal(raw.includes("hand-ran"), false, raw);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("obs-hand: writing-hand terminal Task writes hand-record once with DONE", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-rec-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_rec1";
+    const fid = "feat-rec";
+    const tid = "t-rec";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: {
+          session_id: sid,
+          feature_id: fid,
+          snapshot_path: snapshotRel,
+          snapshot_hash: hash,
+        },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      description: "implement t-rec",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nImplement the task.`,
+      subagent_type: "executor-medium",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-rec" }, { args });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-rec" },
+      { args, output: "Work complete.\nStatus: DONE\n" },
+    );
+
+    const recordPath = join(
+      dir,
+      ".opencode",
+      "plans",
+      ".state",
+      "hand-records",
+      fid,
+      sid,
+      `${tid}.json`,
+    );
+    assert.ok(existsSync(recordPath), `expected hand-record at ${recordPath}`);
+    const disk = JSON.parse(readFileSync(recordPath, "utf8"));
+    assert.equal(disk.outcome, "DONE");
+    assert.equal(disk.writtenBy, "obs-hand-task");
+    assert.equal(disk.featureId, fid);
+    assert.equal(disk.taskId, tid);
+    assert.equal(disk.sessionId, sid);
+    assert.ok(Array.isArray(disk.touchedPaths));
+
+    const mtime1 = readFileSync(recordPath, "utf8");
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-rec" },
+      { args, output: "Status: BLOCKED\n" },
+    );
+    assert.equal(readFileSync(recordPath, "utf8"), mtime1, "double after must not rewrite");
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("obs-hand: non-hand role does not write hand-record", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-planner-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_plan1";
+    const fid = "feat-plan";
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({ session_id: sid, feature_id: fid }),
+    );
+    const hooks = await createObsHandHooks(dir);
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-plan" },
+      {
+        args: {
+          subagent_type: "planner",
+          task_id: "t-plan",
+          feature_id: fid,
+          prompt: "plan it",
+        },
+        output: "Status: DONE\n",
+      },
+    );
+    const recordsRoot = join(dir, ".opencode", "plans", ".state", "hand-records");
+    assert.equal(existsSync(recordsRoot), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });

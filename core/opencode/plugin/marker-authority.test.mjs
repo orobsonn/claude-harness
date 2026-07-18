@@ -25,9 +25,39 @@ registerHooks({
 });
 
 const { default: MarkerAuthority } = await import("./marker-authority.ts");
+const { writeHandRecord, buildTaskHandRecord } = await import("./lib/hand-records.mjs");
+const { fidelityPassEntry } = await import("./lib/mark-gate.mjs");
+const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
 
 function statePath(root, sessionID = "ses-authority") {
   return path.join(root, ".opencode", "plans", ".state", sessionID, "gate-state.json");
+}
+
+const SESSION = "ses-authority";
+const FEATURE = "feature-authority";
+const TASK = "task-one";
+
+async function markOnce(before, execute, action, extra = {}, callID = `call-${action}`) {
+  const args = { action, ...extra };
+  await before({ tool: "mark", sessionID: SESSION, callID }, { args });
+  return execute(args, context(SESSION, callID));
+}
+
+function seedDoneHandRecord(root, outcome = "DONE") {
+  const record = buildTaskHandRecord({
+    featureId: FEATURE,
+    taskId: TASK,
+    sessionId: SESSION,
+    outcome,
+    agent: "executor-medium",
+  });
+  const written = writeHandRecord({
+    roots: { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
+    taskId: TASK,
+    record,
+  });
+  assert.equal(written.ok, true, written.reason);
+  return written.path;
 }
 
 function seed(root) {
@@ -232,6 +262,128 @@ test("concurrent duplicate before and execute attempts have one winner with no s
     assert.equal([a.metadata.ok, b.metadata.ok].filter(Boolean).length, 1);
     const after = fs.readFileSync(file, "utf8");
     assert.match(after, /brainstormed_binding/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified happy path: DONE hand-record + hand-finished stamps capture_verified and capturedVerifiedAt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-ok-"));
+  try {
+    const { file } = seed(root);
+    const recordPath = seedDoneHandRecord(root, "DONE");
+    const { before, execute } = await harness(root);
+    const sha = "abc123deadbeef";
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
+    assert.equal(finished.metadata.ok, true, finished.output);
+    const captured = await markOnce(
+      before,
+      execute,
+      "capture-verified",
+      { task_id: TASK, sha },
+      "call-capture-verified",
+    );
+    assert.equal(captured.metadata.ok, true, captured.output);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    const expected = fidelityPassEntry(FEATURE, TASK, sha);
+    assert.ok(Array.isArray(state.capture_verified), "capture_verified must be array");
+    assert.ok(state.capture_verified.includes(expected), `expected ${expected} in ${JSON.stringify(state.capture_verified)}`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    assert.equal(typeof record.capturedVerifiedAt, "string");
+    assert.ok(record.capturedVerifiedAt.length > 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified without hand-record → ok:false hand-record missing, no capture stamp", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-missing-"));
+  try {
+    const { file } = seed(root);
+    const { before, execute } = await harness(root);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
+    assert.equal(finished.metadata.ok, true, finished.output);
+    const captured = await markOnce(
+      before,
+      execute,
+      "capture-verified",
+      { task_id: TASK, sha: "abc123deadbeef" },
+      "call-capture-verified",
+    );
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? ""), /hand-record missing/i);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
+    assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
+    const resolved = handRecordPath(
+      { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
+      TASK,
+    );
+    assert.equal(resolved.ok, true);
+    assert.equal(fs.existsSync(resolved.path), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified with BLOCKED hand-record → ok:false not DONE", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-blocked-"));
+  try {
+    const { file } = seed(root);
+    seedDoneHandRecord(root, "BLOCKED");
+    const { before, execute } = await harness(root);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
+    assert.equal(finished.metadata.ok, true, finished.output);
+    const captured = await markOnce(
+      before,
+      execute,
+      "capture-verified",
+      { task_id: TASK, sha: "abc123deadbeef" },
+      "call-capture-verified",
+    );
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? ""), /hand-record is not DONE/i);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
+    assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified rejects forged writtenBy (not host adapter)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-forge-"));
+  try {
+    const { file } = seed(root);
+    const forged = {
+      ...buildTaskHandRecord({
+        featureId: FEATURE,
+        taskId: TASK,
+        sessionId: SESSION,
+        outcome: "DONE",
+        agent: "executor-medium",
+      }),
+      writtenBy: "model-bash",
+    };
+    const written = writeHandRecord({
+      roots: { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
+      taskId: TASK,
+      record: forged,
+    });
+    assert.equal(written.ok, true);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished")).metadata.ok, true);
+    const captured = await markOnce(
+      before,
+      execute,
+      "capture-verified",
+      { task_id: TASK, sha: "abc123deadbeef" },
+      "call-capture-verified",
+    );
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? ""), /writtenBy is not a host adapter/i);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.length : 0, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

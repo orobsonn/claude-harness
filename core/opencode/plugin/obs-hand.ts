@@ -37,15 +37,78 @@ export async function createObsHandHooks(
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("./lib/roles.mjs");
   const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBinding } = await import("./lib/dispatch-scope.mjs");
   const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
+  const {
+    writeHandRecord,
+    parseHandStatusFromOutput,
+    buildTaskHandRecord,
+  } = await import("./lib/hand-records.mjs");
+  const { defaultHeadSha } = await import("./lib/mark-gate.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
   registerScopeComponent(cwd, "obs-hand");
   const claims = new Map<string, string>();
+  /** Dedupe terminal hand-record writes per parent call. */
+  const writtenRecords = new Set<string>();
   const reader = sdkIdentityReader(deps.client, cwd);
 
   const writingHand = (role: unknown) =>
     isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role);
   const claimKey = (sessionId: string, callId: string) => `${sessionId}\u0000${callId}`;
+
+  function resolveFeatureId(sessionId: string | null, ids: ReturnType<typeof extractTaskIds>): string {
+    if (ids.featureId) return ids.featureId;
+    if (!sessionId) return "";
+    try {
+      const state = JSON.parse(
+        readFileSync(join(cwd, ".opencode", "plans", ".state", sessionId, "gate-state.json"), "utf8"),
+      );
+      return typeof state?.feature_id === "string" ? state.feature_id : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * @description Persist Task-path hand-record once per call. Fail-open on write errors.
+   */
+  function maybeWriteTaskHandRecord(input: any, output: any, ids: ReturnType<typeof extractTaskIds>) {
+    try {
+      if (!writingHand(ids.role)) return;
+      const sessionId = typeof input?.sessionID === "string" ? input.sessionID : "";
+      const callId = typeof input?.callID === "string" ? input.callID : "";
+      const taskId = ids.taskId;
+      if (!sessionId || !taskId) return;
+      const featureId = resolveFeatureId(sessionId, ids);
+      if (!featureId) return;
+      const writeKey = `${sessionId}\u0000${callId}\u0000${taskId}`;
+      if (writtenRecords.has(writeKey)) return;
+      writtenRecords.add(writeKey);
+      const outputText = String(output?.output ?? output?.content ?? output?.result ?? "");
+      const parsed = parseHandStatusFromOutput(outputText);
+      const outcome = parsed ?? "BLOCKED";
+      const record = buildTaskHandRecord({
+        featureId,
+        taskId,
+        sessionId,
+        freezeCommitSha: defaultHeadSha(cwd),
+        outcome,
+        touchedPaths: [],
+        agent: ids.role,
+      });
+      writeHandRecord({
+        roots: {
+          projectRoot: cwd,
+          runtime: "opencode",
+          sessionId,
+          featureId,
+        },
+        taskId,
+        record,
+      });
+    } catch {
+      /* fail-open: never break cleanup */
+    }
+  }
 
   function cleanup(sessionId: unknown, callId: unknown) {
     if (typeof sessionId !== "string" || typeof callId !== "string") return { ok: true };
@@ -191,6 +254,7 @@ export async function createObsHandHooks(
           model: ids.model || ids.role,
         });
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
+        if (terminal) maybeWriteTaskHandRecord(input, output, ids);
       } catch (error) {
         if (backgroundRunning) {
           const pending = preservePendingBinding(input?.sessionID, input?.callID, childSessionId, jobId);

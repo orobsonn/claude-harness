@@ -23,10 +23,13 @@ import {
   parseTestsCount,
   subtractUnchanged,
 } from "../../shared/lib/capture-oracle.mjs";
-import { handRecordPath, gateStatePath } from "../../shared/lib/path-helpers.mjs";
+import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { mergeGateState } from "../plugin/lib/gate-state.mjs";
 import { hasFidelityPass } from "../plugin/lib/entry-decide.mjs";
 import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../plugin/lib/dispatch-scope.mjs";
+import { writeHandRecord } from "../plugin/lib/hand-records.mjs";
+
+export { writeHandRecord };
 
 /** Forced non-zero locked-test exit for vacuous-green guard. */
 export const VACUOUS_GREEN_EXIT = 1;
@@ -702,38 +705,6 @@ export function buildHandRunRecord({
     writtenBy: "run-hand-adapter",
     // capturedVerifiedAt is set only by the host-bound native mark tool, never here
   };
-}
-
-/**
- * @description Write run-record at session-scoped handRecordPath. Never throws.
- * @param {{
- *   roots: { projectRoot: string, runtime: "opencode", sessionId: string, featureId: string },
- *   taskId: string,
- *   record: object,
- *   mkdir?: (p: string) => void,
- *   writeFile?: (p: string, data: string) => void,
- * }} args
- * @returns {{ ok: true, path: string } | { ok: false, reason: string }}
- */
-export function writeHandRecord({
-  roots,
-  taskId,
-  record,
-  mkdir = (p) => mkdirSync(p, { recursive: true }),
-  writeFile = (p, data) => writeFileSync(p, data, "utf8"),
-}) {
-  try {
-    const resolved = handRecordPath(roots, taskId);
-    if (!resolved.ok) return { ok: false, reason: resolved.reason };
-    mkdir(dirname(resolved.path));
-    writeFile(resolved.path, JSON.stringify(record, null, 2));
-    return { ok: true, path: resolved.path };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : "writeHandRecord failed",
-    };
-  }
 }
 
 /**
