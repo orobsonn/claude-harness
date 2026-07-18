@@ -103,10 +103,10 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Campo | Valor |
 |---|---|
-| Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B5 done code |
-| Próximo batch | _(playbook B0–B5 fechados — smoke harness pronto)_ |
-| Bloqueio ativo | _(nenhum)_ |
+| Branch de trabalho | `main` (batches B0–B5 + routing + OPERATOR-GUIDE em main) |
+| Última sessão | 2026-07-18 playbook code closed; unit smoke verde |
+| Próximo batch | **Smoke harness pronto — headless em projeto de teste** (ver §3.1) |
+| Bloqueio ativo | OpenAI assinatura travada → routing dual **xai-ollama** (ou Grok+Ollama) no projeto de teste antes do run |
 
 ### Hotfixes já no working tree (pré-B0)
 
@@ -178,15 +178,55 @@ Não reabre o dossiê de gaps. Só executa.
 | #381 se ainda todo | `done` | pendente | 2026-07-18 | dangling depends_on + scope vazio |
 | Smoke scope + harvest | `done` | | 2026-07-18 | 81+ unit |
 
-### Critério “harness pronto” (só depois B0–B4)
+### Critério “harness pronto” (só depois B0–B5)
 
 | Check | Status | Evidência |
 |---|---|---|
-| FULL mínimo: ceremony → plan válido → dual APPROVE → Task hands + hand-record → capture → regate se sniper → push sem deny falso | `todo` | |
-| Malformed streak ≥3 aborta com mensagem acionável | `todo` | |
-| 0 residual SHIP/BLOCK em prompts adversary | `todo` | |
-| example-plan + tool validate-plan verdes | `todo` | |
-| Re-vendor + reinício OC em projeto de teste | `todo` | |
+| FULL mínimo: ceremony → plan válido → dual APPROVE → Task hands + hand-record → capture → regate se sniper → push sem deny falso | `todo` | **próxima sessão: projeto de teste + headless** |
+| Malformed streak ≥3 aborta com mensagem acionável | `todo` | unit cap já existe; smoke em run real |
+| 0 residual SHIP/BLOCK em prompts adversary | `todo` | unit greps ok 2026-07-18; revalidar no vendor |
+| example-plan + tool validate-plan verdes | `todo` | unit ok 2026-07-18; revalidar no projeto de teste |
+| Re-vendor + reinício OC em projeto de teste | `todo` | **próxima sessão** |
+
+### §3.1 Próxima sessão (agendada) — projeto de teste + headless
+
+**Objetivo:** validar no runtime real o que os batches B0–B5 implementaram (não mais feature nova do playbook).
+
+**Quando:** 2026-07-19 (amanhã) — operador + sessão de implementação.
+
+**Plano de trabalho:**
+
+1. **Escolher / criar projeto de teste** (repo descartável ou sandbox real com git).
+2. **Vendor OpenCode** na última release/tag que contenha B0–B5 + routing skill + OPERATOR-GUIDE:
+   ```bash
+   gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
+   npx -y "github:orobsonn/claude-harness#<tag>" init --target opencode
+   ```
+   Commitar `.opencode/` no projeto de teste.
+3. **Routing sem OpenAI** (assinatura travada):
+   - Skill `configuring-model-routing` **no projeto** (não no source do harness).
+   - Preset dual-safe **`xai-ollama-dual`** (olhos Grok + family-2/hands Ollama) **ou** slots custom equivalentes.
+   - Confirmar auth xAI + Ollama Cloud no OpenCode.
+   - **Reiniciar sessão** após apply.
+4. **Guia humano:** `.opencode/docs/OPERATOR-GUIDE.md` no projeto de teste.
+5. **Disparo headless** (simular cron-A / run autônomo — manual se cron não estiver no ar):
+   - Prompt FULL mínimo e observável (1–2 tasks, path não sensível ou aceitar FULL).
+   - Flags/env headless do projeto (ex. observabilidade se VPS; senão `opencode run` com agent `build` + prompt “rode autônomo / headless”).
+6. **Avaliar checklist “harness pronto”** acima com evidência de disco:
+   - gate-state: dual / `plan_verdict` / hand_finished / capture_verified / regate se sniper
+   - hand-records sob `.opencode/plans/.state/hand-records/`
+   - deny de push se faltar capture/final (esperado) vs allow indevido (bug)
+7. **Registrar no §6** desta playbook: o que passou, o que falhou, issue follow-up se precisar.
+
+**Não fazer nessa sessão (a menos que o smoke prove necessidade):**
+- Reabrir batches B0–B5 “por precaução”
+- #367 / #368 (captura untracked) — unit/fixture, não dependem de headless FULL
+- Afrouxar dual / capture / regate pra “passar o smoke”
+
+**Referências:**
+- Guia operador: `core/opencode/docs/OPERATOR-GUIDE.md` → vendored `.opencode/docs/OPERATOR-GUIDE.md`
+- Routing apply: `core/opencode/skills/configuring-model-routing/`
+- Gaps / smoke critério: §8 mental model em `docs/opencode-runtime-gaps-2026-07-17-final.md`
 
 ---
 
@@ -305,6 +345,8 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 | 2026-07-18 | opencode B3 implement | **B3** | #375+#383+#384; plan_verdict seal; dual map; host merge; 90 pass; adversary 1/2 | **B4** |
 | 2026-07-18 | opencode B4 implement | **B4** | #377+#385 regate auto-arm + final/demo push; adversary regate-passed gate | **B5** |
 | 2026-07-18 | opencode B5 implement | **B5** | #378–#381 hygiene; adversary #379 PASS | smoke harness pronto |
+| 2026-07-18 | routing skill + hardening + OPERATOR-GUIDE | — | #396 #397 #398; unit smoke B0–B5 verde | **amanhã: projeto teste + headless** (§3.1) |
+| 2026-07-18 | playbook next-step | — | §3.1 agendado headless; OpenAI travada → xai-ollama no projeto | **2026-07-19 smoke** |
 
 ---
 
@@ -314,7 +356,9 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 |---|---|
 | Gaps finais | `docs/opencode-runtime-gaps-2026-07-17-final.md` |
 | Dossiê anterior | `docs/opencode-runtime-gaps-2026-07-17.md` |
-| Issues | https://github.com/orobsonn/claude-harness/issues/372 … /385 |
+| Guia operador OC (vendored) | `core/opencode/docs/OPERATOR-GUIDE.md` |
+| Issues batches | https://github.com/orobsonn/claude-harness/issues/372 … /385 |
 | Submit issues (não recriar) | `core/opencode/skills/creating-issues/` |
 | Core OC | `core/opencode/` |
 | Shared validate | `core/shared/lib/validate-plan.mjs` |
+| Routing skill | `core/opencode/skills/configuring-model-routing/` |
