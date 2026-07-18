@@ -143,8 +143,22 @@ test("registered runtime consumes real denial, captures adversary after-hook, ma
     assert.equal(consumed.metadata.ok, true, consumed.output);
     const descriptor = consumed.metadata.descriptor;
     assert.equal(descriptor.coordinator_step.kind, "task");
+    assert.equal(typeof descriptor.coordinator_step.description, "string");
+    assert.match(descriptor.coordinator_step.description, /\S/);
+    assert.match(descriptor.coordinator_step.description, new RegExp(FEATURE));
+    assert.match(descriptor.coordinator_step.prompt, new RegExp(`\\.opencode/plans/${SESSION}-${FEATURE}/spec\\.md`));
+    assert.match(descriptor.coordinator_step.prompt, /single top-level key issues/);
+    assert.match(descriptor.coordinator_step.prompt, /Do not add verdict/);
+    assert.match(descriptor.coordinator_step.prompt, /sweep/);
+    assert.match(descriptor.coordinator_step.prompt, /mechanism/);
+    assert.doesNotMatch(descriptor.coordinator_step.prompt, /\bSHIP\b/);
+    assert.doesNotMatch(descriptor.coordinator_step.prompt, /\bBLOCK\b/);
 
-    const adversaryArgs = { subagent_type: descriptor.coordinator_step.subagent_type, prompt: "Attack spec." };
+    const adversaryArgs = {
+      description: descriptor.coordinator_step.description,
+      subagent_type: descriptor.coordinator_step.subagent_type,
+      prompt: descriptor.coordinator_step.prompt,
+    };
     const adversaryInput = { tool: "task", sessionID: SESSION, callID: "adversary-call" };
     const adversaryOutput = { args: adversaryArgs, output: '{"issues":[]}', metadata: {} };
     await assert.doesNotReject(() => runtime.before(adversaryInput, adversaryOutput));
@@ -160,7 +174,7 @@ test("registered runtime consumes real denial, captures adversary after-hook, ma
 });
 
 test("malformed, unknown, arbitrary-role, and state-inconsistent denials fail closed", () => {
-  const validState = { brainstormedCurrent: true, adversaryCurrent: false };
+  const validState = { brainstormedCurrent: true, adversaryCurrent: false, sessionId: SESSION, featureId: FEATURE };
   for (const denial of [
     null,
     { code: "OTHER", missing_proof: "spec_adversary_completion_evidence", next_transition: { phase: "spec-adversary", action: "resume", marker: "adversary_fired" } },

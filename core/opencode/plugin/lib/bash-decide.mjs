@@ -621,10 +621,34 @@ export function isFrozenPathBashWrite(command) {
  */
 export function isShellSourceOrStdin(command) {
   if (typeof command !== "string" || command.length === 0) return false;
-  const c = stripCommandWrappers(command);
+  const c = stripQuotedHeredocBodies(stripCommandWrappers(command));
   if (/(?:^|\s)(?:source|\.)\s+/.test(c)) return true;
   if (/\b(?:bash|sh|zsh|dash|ash)\s+</.test(c)) return true;
   return false;
+}
+
+function stripQuotedHeredocBodies(command) {
+  const lines = command.split("\n");
+  const executable = [];
+  let delimiter = "";
+  let stripTabs = false;
+  for (const line of lines) {
+    if (delimiter) {
+      const candidate = stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate === delimiter) {
+        delimiter = "";
+        stripTabs = false;
+      }
+      continue;
+    }
+    executable.push(line);
+    const match = line.match(/<<(\-?)\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")/);
+    if (match) {
+      delimiter = match[2] || match[3];
+      stripTabs = match[1] === "-";
+    }
+  }
+  return executable.join("\n");
 }
 
 /** Lifecycle subcommands that execute package.json scripts (not install/ci). */

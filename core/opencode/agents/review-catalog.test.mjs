@@ -100,3 +100,12 @@ test("internal review dispatch emits canonical names without provider identity",
   assert.doesNotMatch(dispatchDocs, /dispatch `(?:plan-reviewer|adversary)(?:-openai)?`/i);
   assert.doesNotMatch(dispatchDocs, /"(?:plan_reviewer|adversary)": "(?:plan-reviewer|adversary)"/i);
 });
+
+test("adversary prompts preserve the executable report schema without verdict fields", () => {
+  for (const name of ["adversary-family-1", "adversary-family-2", "adversary", "adversary-openai"]) {
+    const body = agentContract(readFileSync(join(AGENTS_DIR, `${name}.md`), "utf8"));
+    assert.match(body, /JSON contract is exact/);
+    assert.match(body, /Never add `verdict`/);
+    assert.doesNotMatch(body, /emit `BLOCKED`/);
+  }
+});

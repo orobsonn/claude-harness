@@ -591,6 +591,29 @@ test("non-oracle path → allow forge check", () => {
   assert.equal(d.decision, "allow");
 });
 
+test("quoted spec heredoc treats punctuation and source-like prose as literal content", () => {
+  const command = [
+    "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
+    "Existing contracts. Auth and upstream errors stay sanitized.",
+    "source evil.sh is documentation here, not a shell command.",
+    ". another sentence fragment is also literal Markdown.",
+    "EOF",
+  ].join("\n");
+  assert.equal(decideBashForge({ command }).decision, "allow");
+  assert.equal(isStateForgeCommand(command), false);
+});
+
+test("source command after a quoted heredoc terminator remains denied", () => {
+  const command = [
+    "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
+    "source evil.sh is literal payload.",
+    "EOF",
+    "source evil.sh",
+  ].join("\n");
+  assert.equal(decideBashForge({ command }).decision, "deny");
+  assert.equal(isStateForgeCommand(command), true);
+});
+
 // ── U2 rails locked tests ─────────────────────────────────────────────────
 
 test("B1: FULL ceremony + unmatched regate_pending → deny names feat/t1", () => {

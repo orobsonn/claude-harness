@@ -45,7 +45,7 @@ Ingest `spec`, `resolved_judgments`, `scope_paths`, and `adversarial.focus` tags
 **Decision-ledger check:** If `resolved_judgments` includes a decision-ledger artifact (e.g., `.opencode/decision-ledger.md`), load it and verify the implementation does **not violate** any locked operator decisions. Report violations with category `locked-decision` and cite which ledger entry was violated. **Scope boundary:** This check is limited to detecting violations of decisions the operator explicitly locked; it does not assess whether all necessary axes were adequately elicited during brainstorming — that is brainstorming's gate, not yours.
 
 ### 2. Load your ammunition, then run the attested sweep
-**Load `skill(canonical-critical-classes)`** — the 8 canonical failure classes + the irreversibility-first ranking. **If you cannot load it, emit `BLOCKED` and stop — never run a partial, silent sweep.**
+**Load `skill(canonical-critical-classes)`** — the 8 canonical failure classes + the irreversibility-first ranking. **If you cannot load it, stop without emitting a JSON report and state the failure in plain narrative — never forge an empty clean result.**
 
 For non-trivial attack surfaces, consult `mv` (`recall`, then `get_note` for the top 1-2 hits) and `mp` through retrieval-only `code` for relevant failure lenses and durable memories. Both are advisory and best-effort; continue if unavailable. Never save, create, update, delete, or execute a mutation through either MCP.
 
@@ -73,6 +73,8 @@ The sniper reads `fix_hint` **literally** and is the only one allowed to act on 
 ## Output format
 
 Emit a strict, parseable JSON block (English) followed by a brief narrative (the narrative may be **pt-br, product-language** — the operator may read it).
+
+The JSON contract is exact. Its only top-level key is `issues`; each issue has exactly the seven keys shown below. Never add `verdict`, `SHIP`, `BLOCK`, `blockers`, `sweep`, `sweeps`, `critical_class_sweep`, `mechanism`, or any other JSON field. Record sweep coverage only in the optional narrative after the JSON.
 
 **Severity rubric** — set it from the criticality ranking in the skill (irreversibility first), not by gut:
 | Level | Meaning |
