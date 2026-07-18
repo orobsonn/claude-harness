@@ -59,7 +59,8 @@ function writeFixFindings(stateDir, root, obj) {
 
 function tmuxCommand(calls) {
   const tmux = calls.find((c) => c.command === "tmux");
-  return tmux ? tmux.args.find((a) => typeof a === "string" && a.includes("claude")) : undefined;
+  // Last arg of `tmux new-session` is the composed session command (runtime- and path-agnostic).
+  return tmux ? tmux.args.at(-1) : undefined;
 }
 
 function readEnvFile(stateDir, issue) {

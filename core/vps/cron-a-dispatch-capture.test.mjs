@@ -159,7 +159,10 @@ function findTmuxCall(calls) {
 
 /** @description The composed session-command string is the one string arg mentioning claude. */
 function sessionCommandOf(tmuxCall) {
-  return tmuxCall.args.find((a) => typeof a === "string" && a.includes("claude"));
+  // The composed session command is ALWAYS the last arg of `tmux new-session ... <sessionCommand>`;
+  // matching a bare "claude" substring is unreliable (it hits a tmpdir path containing "claude", and
+  // never matches the opencode `opencode run` runner). The last arg is runtime- and path-agnostic.
+  return tmuxCall.args.at(-1);
 }
 
 /**
