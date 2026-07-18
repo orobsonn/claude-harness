@@ -213,7 +213,12 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
     if (!canonical.ok) return canonical;
     const current = previous.active_dispatch;
     if (current && typeof current === "object") {
-      if (current.call_id === callId && current.claim_token === token) {
+      // Same Task callID already owns the lease.
+      // OC-native: `.opencode/plugin/*.{ts,js}` is auto-globbed AND may also appear in
+      // opencode.json plugin[] → two Plugin factories → two before-hooks → two tokens.
+      // (Claude Code has one process-level hook registration; this path is OC-only.)
+      // Idempotent on call_id, not claim_token.
+      if (current.call_id === callId && current.status !== "stale") {
         claim = current;
         return previous;
       }

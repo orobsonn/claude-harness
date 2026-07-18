@@ -40,13 +40,15 @@ const CANONICAL_STUBS = [
   "agent-idle-nudge.ts",
 ];
 
-test("canonical OpenCode plugin registry is byte-identical across root, example, default vendor, and VPS", () => {
+test("OpenCode plugin[] is empty for harness; CANONICAL files stay on disk (auto-load)", () => {
   const root = JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")).plugin;
   const example = JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")).plugin;
-  assert.deepEqual(root, defaultOcPluginPaths());
-  assert.deepEqual(example, defaultOcPluginPaths());
-  assert.deepEqual([...CANONICAL_OC_PLUGINS], defaultOcPluginPaths());
+  // Config must not list harness autoload paths (OC globs .opencode/plugin/*).
+  assert.deepEqual(root ?? [], []);
+  assert.deepEqual(example ?? [], []);
+  assert.deepEqual(defaultOcPluginPaths(), []);
   assert.ok(CANONICAL_OC_PLUGINS.includes("./.opencode/plugin/command-resolver.ts"));
+  assert.ok(CANONICAL_OC_PLUGINS.length >= 10);
 });
 
 const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
@@ -445,18 +447,17 @@ test("seedOpencodeRootConfig: [security] force-enforces deny entries for the add
   }
 });
 
-test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source still seeds permissions + canonical .opencode plugin paths after materialize", () => {
+test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source still seeds permissions + disk plugins (not plugin[])", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-double-fault-plugin-");
   try {
     writeFileSync(join(projectRoot, "opencode.json"), "{ this is not json");
     assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot), "malformed source must not throw when runtime source exists");
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
-    assert.ok(Array.isArray(cfg.plugin) && cfg.plugin.length > 0, "plugin[] must be non-empty");
-    assert.ok(
-      cfg.plugin.every((p) => String(p).startsWith("./.opencode/plugin/")),
-      `plugin[] must be canonical .opencode/plugin after materialize, got ${JSON.stringify(cfg.plugin)}`,
-    );
-    assert.ok(cfg.plugin.some((p) => String(p).includes("obs-eye.ts")), "includes obs-eye");
+    // OC auto-loads .opencode/plugin/* — plugin[] must not re-list harness paths
+    assert.ok(Array.isArray(cfg.plugin));
+    assert.equal(cfg.plugin.length, 0, `plugin[] must be empty for harness, got ${JSON.stringify(cfg.plugin)}`);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/obs-eye.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(cfg.permission.question, "deny");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -493,12 +494,9 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
 
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
-    assert.ok(Array.isArray(cfg.plugin) && cfg.plugin.length > 0, "plugin[] non-empty");
-    assert.ok(
-      cfg.plugin.every((p) => String(p).startsWith("./.opencode/plugin/")),
-      `expected canonical .opencode/plugin paths, got ${JSON.stringify(cfg.plugin)}`,
-    );
-    assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
+    assert.ok(Array.isArray(cfg.plugin));
+    assert.equal(cfg.plugin.length, 0, "harness paths stripped from plugin[] (OC auto-load)");
+    assert.equal(ocPluginFilesExist(worktree, [...CANONICAL_OC_PLUGINS]), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -536,7 +534,7 @@ test("seedOpencodeRootConfig: no runtime source anywhere → throws fail-closed 
   }
 });
 
-test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned + canonical plugin[] (#ac-1.5)", () => {
+test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned; strips harness from plugin[] (#ac-1.5)", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-", { bare: true });
   try {
     writeVendoredOcRuntime(projectRoot);
@@ -549,19 +547,21 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned 
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
-        plugin: ["./.opencode/plugin/entry-gate.ts", "./.opencode/plugin/plan-gate.ts", "./.opencode/plugin/local-extra.ts"],
+        plugin: [
+          "./.opencode/plugin/entry-gate.ts",
+          "./.opencode/plugin/plan-gate.ts",
+          "./.opencode/plugin/local-extra.ts",
+          "my-external-package",
+        ],
         permission: { bash: { "*": "allow" } },
       }),
     );
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
-    assert.equal(cfg.plugin[0], "./.opencode/plugin/entry-gate.ts");
-    assert.equal(cfg.plugin[1], "./.opencode/plugin/plan-gate.ts");
-    assert.equal(cfg.plugin[2], "./.opencode/plugin/local-extra.ts");
-    assert.equal(cfg.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 1);
-    assert.equal(cfg.plugin.filter((entry) => entry.includes("command-resolver.ts")).length, 1, "old config gains command resolver exactly once");
-    assert.equal(new Set(cfg.plugin).size, cfg.plugin.length);
-    assert.equal(ocPluginFilesExist(worktree, cfg.plugin), true);
+    // Harness autoload paths stripped; external package plugins preserved
+    assert.deepEqual(cfg.plugin, ["my-external-package"]);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
     assertCriticalRuntime(worktree);
     assert.equal(
       readFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "utf8"),
@@ -608,16 +608,20 @@ test("materializeOpencodeRuntime: monorepo critical without core/shared → thro
   }
 });
 
-test("ensureOcPluginPathsExist: monorepo core plugins → rewritten paths (fallback)", () => {
+test("ensureOcPluginPathsExist: verifies harness on disk; returns external plugins only", () => {
   const root = mkdtempSync(join(tmpdir(), "oc-seed-ensure-"));
   const worktree = join(root, "wt");
   mkdirSync(worktree, { recursive: true });
   try {
     writeMonorepoPluginStubs(worktree);
+    // Harness paths verified via monorepo rewrite fallback; stripped from return value
     const out = ensureOcPluginPathsExist(worktree, ["./.opencode/plugin/entry-gate.ts"]);
-    assert.deepEqual(out, ["./core/opencode/plugin/entry-gate.ts"]);
-    const withProjectPackage = ensureOcPluginPathsExist(worktree, ["project-plugin", "./.opencode/plugin/entry-gate.ts"]);
-    assert.deepEqual(withProjectPackage, ["project-plugin", "./core/opencode/plugin/entry-gate.ts"]);
+    assert.deepEqual(out, []);
+    const withProjectPackage = ensureOcPluginPathsExist(worktree, [
+      "project-plugin",
+      "./.opencode/plugin/entry-gate.ts",
+    ]);
+    assert.deepEqual(withProjectPackage, ["project-plugin"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

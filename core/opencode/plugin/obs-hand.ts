@@ -256,7 +256,13 @@ export async function createObsHandHooks(
           token,
         });
         if (!claimed.ok) throw new Error(`[obs-hand] writing-hand dispatch blocked: ${claimed.reason}`);
-        claims.set(key, token);
+        // Authoritative token is whatever the disk claim holds (idempotent re-entry
+        // from a second plugin instance may return a different instance's token).
+        const authoritative =
+          typeof claimed.claim?.claim_token === "string" && claimed.claim.claim_token
+            ? claimed.claim.claim_token
+            : token;
+        claims.set(key, authoritative);
       }
       try {
         emitTaskExecuting(sessionId, ids);

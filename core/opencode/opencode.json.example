@@ -34,23 +34,7 @@
       }
     }
   },
-  "plugin": [
-    "./.opencode/plugin/entry-gate.ts",
-    "./.opencode/plugin/marker-authority.ts",
-    "./.opencode/plugin/ceremony-coordinator.ts",
-    "./.opencode/plugin/command-resolver.ts",
-    "./.opencode/plugin/plan-gate.ts",
-    "./.opencode/plugin/planner-recovery.ts",
-    "./.opencode/plugin/plan-write-gate.ts",
-    "./.opencode/plugin/loop-guard.ts",
-    "./.opencode/plugin/reinject-state.ts",
-    "./.opencode/plugin/version-check.ts",
-    "./.opencode/plugin/harvest-guard.ts",
-    "./.opencode/plugin/obs-plan-write.ts",
-    "./.opencode/plugin/obs-eye.ts",
-    "./.opencode/plugin/obs-hand.ts",
-    "./.opencode/plugin/agent-idle-nudge.ts"
-  ],
+  "plugin": [],
   "permission": {
     "edit": "allow",
     "read": "allow",
