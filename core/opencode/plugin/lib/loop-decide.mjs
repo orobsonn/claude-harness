@@ -4,6 +4,11 @@ import crypto from "node:crypto";
 import { bareRole, isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
+import {
+  dualStatusPhaseFromRole,
+  normalizeDualStatusMap,
+  stableDualStatusMap,
+} from "../../../shared/lib/gate-state-shape.mjs";
 import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { deriveCanonicalReviewRestart } from "./review-restart.mjs";
 import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
@@ -84,19 +89,85 @@ function currentInflight(state) {
   return Array.isArray(state.review_inflight) ? state.review_inflight : [];
 }
 
-function dualState(state, status) {
+/**
+ * @description Write dual_status for one phase axis (map form). Legacy scalar is
+ * normalized to { plan_review } first so adversary writes never clobber plan dual.
+ * Seal payload is the full stable dual_status map.
+ * @param {Record<string, unknown>} state
+ * @param {string} status
+ * @param {"plan_review" | "adversary"} phase
+ */
+function dualState(state, status, phase) {
   const sessionId = typeof state.session_id === "string" ? state.session_id : "";
   const featureId = typeof state.feature_id === "string" ? state.feature_id : "";
   if (!sessionId || !featureId) return { ok: false, reason: "dual transition requires classified identity" };
-  const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: status });
+  if (phase !== "plan_review" && phase !== "adversary") {
+    return { ok: false, reason: `invalid dual_status phase: ${String(phase)}` };
+  }
+  const nextMap = stableDualStatusMap({
+    ...normalizeDualStatusMap(state.dual_status),
+    [phase]: status,
+  });
+  const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: nextMap });
   const prior = Array.isArray(state.marker_seals) ? state.marker_seals : [];
   return {
     ok: true,
     state: {
       ...state,
-      dual_status: status,
+      dual_status: nextMap,
       marker_seals: [...prior.filter((candidate) => candidate?.operation !== "dual"), seal],
     },
+  };
+}
+
+/** @description dual_status phase for a review reservation; unknown role → null (fail-closed). */
+function dualPhaseForReservation(reservation) {
+  return dualStatusPhaseFromRole(reservation?.logical_role) ?? null;
+}
+
+/** @description Normalize plan-review verdict; only APPROVE stays APPROVE (else REVISE). */
+function normPlanVerdict(v) {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "APPROVE" ? "APPROVE" : "REVISE";
+}
+
+/**
+ * @description Persist + seal plan_verdict from useful plan-reviewer only.
+ * REVISE is sticky until review-epoch reopen; either-REVISE-wins across families same scope.
+ */
+function withPlanVerdict(next, state, classified, reservation, scope) {
+  if (reservation.logical_role !== "plan-reviewer" || classified.kind !== "useful") {
+    return next;
+  }
+  const v = normPlanVerdict(object(classified.report).verdict);
+  let verdict = v;
+  if (state.plan_verdict === "REVISE") {
+    verdict = "REVISE";
+  } else {
+    const otherSameScope =
+      reservation.family === 1
+        ? state.secondary_review_last_scope_hash === scope
+        : state.primary_review_last_scope_hash === scope;
+    if (otherSameScope && (state.plan_verdict === "REVISE" || v === "REVISE")) {
+      verdict = "REVISE";
+    }
+  }
+  const sessionId = typeof next.session_id === "string" ? next.session_id : typeof state.session_id === "string" ? state.session_id : "";
+  const featureId = typeof next.feature_id === "string" ? next.feature_id : typeof state.feature_id === "string" ? state.feature_id : "";
+  if (!sessionId || !featureId) {
+    return { ...next, plan_verdict: verdict };
+  }
+  const seal = sealedMarkerRecord({
+    sessionId,
+    featureId,
+    operation: "plan_verdict",
+    payload: verdict,
+  });
+  const prior = Array.isArray(next.marker_seals) ? next.marker_seals : Array.isArray(state.marker_seals) ? state.marker_seals : [];
+  return {
+    ...next,
+    plan_verdict: verdict,
+    marker_seals: [...prior.filter((c) => c?.operation !== "plan_verdict"), seal],
   };
 }
 
@@ -160,8 +231,13 @@ export function reopenReviewEpoch(stateValue, options = {}) {
       secondary_review_last_scope_hash: null,
       primary_review_last_report_hash: null,
       secondary_review_last_report_hash: null,
+      primary_review_last_report: null,
+      secondary_review_last_report: null,
       dual_status: undefined,
-      marker_seals: (Array.isArray(state.marker_seals) ? state.marker_seals : []).filter((candidate) => candidate?.operation !== "dual"),
+      plan_verdict: undefined,
+      marker_seals: (Array.isArray(state.marker_seals) ? state.marker_seals : []).filter(
+        (candidate) => candidate?.operation !== "dual" && candidate?.operation !== "plan_verdict",
+      ),
     },
   };
 }
@@ -314,7 +390,9 @@ export function applyReviewOutcome(stateValue, input = {}) {
       }
     }
     if (reservation.family === 2 && state.primary_review_last_scope_hash === scopeHash(reservation)) {
-      const signed = dualState(next, "primary_only");
+      const failPhase = dualPhaseForReservation(reservation);
+      if (!failPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
+      const signed = dualState(next, "primary_only", failPhase);
       if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
       next = {
         ...signed.state,
@@ -328,14 +406,26 @@ export function applyReviewOutcome(stateValue, input = {}) {
 
   next[`${prefix}_review_failure_streak`] = 0;
   const scope = scopeHash(reservation);
+  const dualPhase = dualPhaseForReservation(reservation);
   if (reservation.family === 2) {
     next.secondary_review_last_report_hash = classified.reportHash;
     next.secondary_review_last_scope_hash = scope;
+    next.secondary_review_last_report = classified.report;
+    next = withPlanVerdict(next, state, classified, reservation, scope);
+    // Secondary useful without matching primary scope → pending (never false both / merge).
     const status = state.primary_review_last_scope_hash === scope ? "both" : "pending";
-    const signed = dualState(next, status);
+    if (!dualPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
+    const signed = dualState(next, status, dualPhase);
     if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
     next = { ...signed.state, dual_secondary_status: "useful" };
-    return { state: next, accepted: true, classified };
+    return {
+      state: next,
+      accepted: true,
+      classified,
+      dualPhase,
+      scopeHash: scope,
+      dualBecameBoth: status === "both",
+    };
   }
 
   const key = loopCounterKey(reservation.canonical_identity);
@@ -343,9 +433,12 @@ export function applyReviewOutcome(stateValue, input = {}) {
   next[key] = count;
   next.primary_review_last_report_hash = classified.reportHash;
   next.primary_review_last_scope_hash = scope;
+  next.primary_review_last_report = classified.report;
   next.primary_review_last_material_unresolved = classified.materialUnresolved;
+  next = withPlanVerdict(next, state, classified, reservation, scope);
   const status = state.secondary_review_last_scope_hash === scope ? "both" : "primary_only";
-  const signed = dualState(next, status);
+  if (!dualPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
+  const signed = dualState(next, status, dualPhase);
   if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
   next = signed.state;
   const { deny } = thresholdsFor(key, input);
@@ -361,7 +454,14 @@ export function applyReviewOutcome(stateValue, input = {}) {
       cap_snapshot_hash: snapshotHash(state),
     };
   }
-  return { state: next, accepted: true, classified };
+  return {
+    state: next,
+    accepted: true,
+    classified,
+    dualPhase,
+    scopeHash: scope,
+    dualBecameBoth: status === "both",
+  };
 }
 
 function scopeHash(reservation) {

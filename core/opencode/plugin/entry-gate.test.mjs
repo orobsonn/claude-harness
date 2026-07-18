@@ -54,6 +54,7 @@ function fullCeremony(extra = {}, sessionId = SID) {
     brainstormed: true,
     adversary_fired: true,
     dual_status: "both",
+    plan_verdict: "APPROVE",
     feature_id: "feat",
     regate_pending: [],
     regate_passed: [],
@@ -63,7 +64,7 @@ function fullCeremony(extra = {}, sessionId = SID) {
   }
   const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
   const markerSeals = []
-  for (const [key, action] of [["brainstormed", "brainstormed"], ["adversary_fired", "adversary_fired"], ["dual_status", "dual"]]) {
+  for (const [key, action] of [["brainstormed", "brainstormed"], ["adversary_fired", "adversary_fired"], ["dual_status", "dual"], ["plan_verdict", "plan_verdict"]]) {
     if (state[key] === true || typeof state[key] === "string") {
       markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: state[key] }))
     }
@@ -128,6 +129,7 @@ test("direct unsigned marker mutation cannot release a delivery role", async () 
       brainstormed: true,
       adversary_fired: true,
       dual_status: "both",
+      plan_verdict: "APPROVE",
     })
     await assert.rejects(
       () => hooks["tool.execute.before"](

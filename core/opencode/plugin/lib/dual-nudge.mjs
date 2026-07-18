@@ -5,13 +5,20 @@
  * to record dual_status + dual_nudge_attempts for the (featureId, taskId, phase) tuple —
  * never a separate readGateState guard followed by a separate write (TOCTOU). Mutating
  * `output` is the caller's responsibility (obs-eye.ts), strictly after a successful persist.
- * Never throws — any internal failure (seam throws OR seam denies) collapses to
- * { ok: false, reason }, mirroring the Result shape used across gate-state.mjs /
- * path-helpers.mjs.
+ * dual_status is namespaced by review phase (plan_review | adversary): plan-reviewer*
+ * writes plan_review axis; adversary* writes adversary axis. Legacy scalar dual_status
+ * is treated as plan_review only. Never throws — any internal failure (seam throws OR
+ * seam denies) collapses to { ok: false, reason }, mirroring the Result shape used across
+ * gate-state.mjs / path-helpers.mjs.
  */
 import { withGateStateLock as defaultWithGateStateLock } from "./gate-state.mjs";
 import { gateStatePath as defaultGateStatePath } from "../../../shared/lib/path-helpers.mjs";
-import { DUAL_STATUS } from "../../../shared/lib/gate-state-shape.mjs";
+import {
+  DUAL_STATUS,
+  dualStatusPhaseFromRole,
+  normalizeDualStatusMap,
+  stableDualStatusMap,
+} from "../../../shared/lib/gate-state-shape.mjs";
 import { sealedMarkerRecord } from "./marker-seal.mjs";
 
 /** Terminal dual_status values — never regressed back to pending (set membership, not `==='both'`). */
@@ -52,11 +59,11 @@ export function buildDualNudgeMessage(role, tuple) {
  * dual_status/dual_nudge_attempts under a single withGateStateLock call. The read of the
  * current dual_status/dual_nudge_attempts and the conditional write happen INSIDE the same
  * lock callback (never a stale outer readGateState used as a guard). `pending` is only
- * writable when the current dual_status is absent or already `pending`; a disabled
- * secondary remains pending/skipped until primary accounting. Any terminal value
- * (both | primary_only | legacy fail-open statuses, checked via set membership) is
- * preserved as-is. The tuple is appended to dual_nudge_attempts only if not already present
- * (union-idempotent).
+ * writable for the role's phase axis when that axis is absent or already `pending`; a
+ * disabled secondary remains pending/skipped until primary accounting. Any terminal value
+ * on that axis (both | primary_only | legacy fail-open statuses) is preserved as-is.
+ * Other phase axes are left untouched. The tuple is appended to dual_nudge_attempts only
+ * if not already present (union-idempotent).
  * @param {{
  *   role: string,
  *   featureId: string,
@@ -85,6 +92,7 @@ export function applyDualNudge({
   try {
     const tuple = dualNudgeTuple(featureId, taskId, phase);
     const message = buildDualNudgeMessage(role, tuple);
+    const dualPhase = dualStatusPhaseFromRole(role) ?? "plan_review";
 
     const gp = gateStatePath();
     if (!gp || gp.ok !== true || typeof gp.path !== "string") {
@@ -94,9 +102,9 @@ export function applyDualNudge({
     const lockResult = withGateStateLock(gp.path, (prev) => {
       const base =
         prev != null && typeof prev === "object" && !Array.isArray(prev) ? prev : {};
-      const rawStatus = base.dual_status;
-      const isAbsent = rawStatus === undefined || rawStatus === null;
-      const currentStatus = typeof rawStatus === "string" ? rawStatus : undefined;
+      const map = normalizeDualStatusMap(base.dual_status);
+      const currentStatus = map[dualPhase];
+      const isAbsent = currentStatus === undefined;
       const currentAttempts = Array.isArray(base.dual_nudge_attempts)
         ? base.dual_nudge_attempts
         : [];
@@ -106,24 +114,30 @@ export function applyDualNudge({
       if (isAbsent || currentStatus === DUAL_STATUS.PENDING) {
         nextStatus = DUAL_STATUS.PENDING;
         secondaryStatus = crossFamilyEnabled ? "pending" : "skipped_disabled";
-      } else if (currentStatus !== undefined && TERMINAL_DUAL_STATUSES.has(currentStatus)) {
+      } else if (TERMINAL_DUAL_STATUSES.has(currentStatus)) {
         nextStatus = currentStatus;
       } else {
-        return { ok: false, reason: `invalid dual_status: ${String(rawStatus)}` };
+        return { ok: false, reason: `invalid dual_status.${dualPhase}: ${String(currentStatus)}` };
       }
 
       const nextAttempts = currentAttempts.includes(tuple)
         ? currentAttempts
         : [...currentAttempts, tuple];
 
-      const next = { ...base, dual_status: nextStatus, dual_secondary_status: secondaryStatus, dual_nudge_attempts: nextAttempts };
-      if (nextStatus === DUAL_STATUS.PENDING) {
-        if (typeof sessionId !== "string" || !sessionId || typeof featureId !== "string" || !featureId) {
-          return { ok: false, reason: "dual nudge requires session and feature identity" };
-        }
-        const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: nextStatus });
+      const nextMap = stableDualStatusMap({ ...map, [dualPhase]: nextStatus });
+      const next = {
+        ...base,
+        dual_status: nextMap,
+        dual_secondary_status: secondaryStatus,
+        dual_nudge_attempts: nextAttempts,
+      };
+      // Always re-seal dual_status map (covers scalar→map migration + phase writes).
+      if (typeof sessionId === "string" && sessionId && typeof featureId === "string" && featureId) {
+        const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: nextMap });
         const prior = Array.isArray(base.marker_seals) ? base.marker_seals : [];
         next.marker_seals = [...prior.filter((candidate) => candidate?.operation !== "dual"), seal];
+      } else if (nextStatus === DUAL_STATUS.PENDING) {
+        return { ok: false, reason: "dual nudge requires session and feature identity" };
       }
       return next;
     });

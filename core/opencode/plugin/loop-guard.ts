@@ -26,6 +26,11 @@ export async function createLoopGuardHooks(
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
+  // Host dual-merge path (#384): finalizeHostDualMerge → driveDualEye (dual-runtime) — not skill-only.
+  const {
+    dualMergeIntentFromOutcome,
+    finalizeHostDualMerge,
+  } = await import("./lib/dual-merge.mjs")
 
   function argsOf(input: any, output: any): Record<string, unknown> {
     const value = output?.args ?? input?.args ?? input?.toolArgs ?? input?.tool_input ?? {}
@@ -60,17 +65,37 @@ export async function createLoopGuardHooks(
     if (!sessionID || !callID) return
     const sp = statePathFor(sessionID)
     if (!sp) return
-    const result = withGateStateLock(sp, (prev) => applyReviewOutcome(prev, {
-      subagentType: sub,
-      sessionId: sessionID,
-      featureId: featureOf(args),
-      taskId: stringArg(args, "task_id", "taskId"),
-      phase: stringArg(args, "phase", "phase"),
-      callId: callID,
-      response: responseOf(input, output),
-      failureClass,
-    }).state)
+    /** @type {ReturnType<typeof dualMergeIntentFromOutcome>} */
+    let mergeIntent: ReturnType<typeof dualMergeIntentFromOutcome> = null
+    const result = withGateStateLock(sp, (prev) => {
+      const outcome = applyReviewOutcome(prev, {
+        subagentType: sub,
+        sessionId: sessionID,
+        featureId: featureOf(args),
+        taskId: stringArg(args, "task_id", "taskId"),
+        phase: stringArg(args, "phase", "phase"),
+        callId: callID,
+        response: responseOf(input, output),
+        failureClass,
+      })
+      if (outcome.dualBecameBoth === true) {
+        mergeIntent = dualMergeIntentFromOutcome(outcome)
+      }
+      return outcome.state
+    })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
+    // Fail-open: merge artifact is audit trail; gate dual_status / plan_verdict already sealed.
+    if (mergeIntent) {
+      try {
+        finalizeHostDualMerge({
+          projectRoot: dirSafe,
+          sessionId: sessionID,
+          ...mergeIntent,
+        })
+      } catch {
+        /* never block review accounting on merge write */
+      }
+    }
   }
 
   function statePathFor(sessionID: string): string | null {

@@ -67,7 +67,20 @@ export function validatePrivilegedMarkerSeals(state, { sessionId, featureId }) {
   const checks = [];
   if (value.brainstormed === true) checks.push(["brainstormed", true]);
   if (value.adversary_fired === true) checks.push(["adversary_fired", true]);
-  if (typeof value.dual_status === "string") checks.push(["dual", value.dual_status]);
+  if (typeof value.dual_status === "string") {
+    checks.push(["dual", value.dual_status]);
+  } else if (value.dual_status && typeof value.dual_status === "object" && !Array.isArray(value.dual_status)) {
+    // Map form: seal payload is the stable phase map written by dualState / dual-nudge.
+    const stable = {};
+    for (const phase of ["plan_review", "adversary"]) {
+      const st = value.dual_status[phase];
+      if (typeof st === "string") stable[phase] = st;
+    }
+    if (Object.keys(stable).length > 0) checks.push(["dual", stable]);
+  }
+  if (typeof value.plan_verdict === "string" && value.plan_verdict.length > 0) {
+    checks.push(["plan_verdict", value.plan_verdict]);
+  }
   for (const [key, operation] of [
     ["fidelity_pass", "fidelity"],
     ["regate_pending", "regate-pending"],

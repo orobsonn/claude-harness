@@ -1,16 +1,19 @@
 /**
  * @description Deterministic ADR-003 dual enforcement for OC entry-gate / plan-gate.
  * requireDualOn from harness.routing.json; dual_status enum on gate-state.
- * Before executor/delivery hands: dual_status must be a recorded attempt
- * (both | primary_only | legacy primary_only_failopen/error) — never pending/missing.
+ * dual_status is per-phase ({ plan_review, adversary } map, or legacy scalar =
+ * plan_review only). Before executor/delivery hands: plan_review dual must be a
+ * recorded attempt (both | primary_only | legacy primary_only_failopen/error) —
+ * never pending/missing — AND plan_verdict must be APPROVE (REVISE/missing
+ * fail-closed; dual alone never unlocks). Adversary dual does not unlock executor.
  * primary_only_failopen allows continue; isFullDualCoverage is false for it.
  * Never invents secondary findings; never leaks secondary verdicts.
  * Pure Decision returns — shells throw. Disk loaders return Result (never throw).
  * Role matching is case-insensitive. Task tool with empty subagent_type fails closed.
  * Production shells load gate-state from .opencode/plans/.state and routing from disk.
  * Fail-closed when gate-state is unreadable for delivery hands.
- * dualStatusGatePatch is the only allowed dual_status writer shape (enum only).
- * No Map-only state.
+ * dualStatusGatePatch / dualStatusGatePatchForPhase are the only allowed dual_status
+ * writer shapes (enum only). No Map-only state.
  */
 
 import fs from "node:fs";
@@ -21,6 +24,10 @@ import {
   isRecordedDualAttempt,
   isDualStatusEnum,
   dualStatusGatePatch,
+  dualStatusGatePatchForPhase,
+  dualStatusPhaseFromRole,
+  normalizeDualStatusMap,
+  readDualStatus as readDualStatusFromShape,
   validateGateStateDualFields,
 } from "../../../shared/lib/gate-state-shape.mjs";
 import { adaptRoutingV1 } from "../../../shared/lib/routing-adapter.mjs";
@@ -136,11 +143,25 @@ export function routingRequiresDual(routing) {
 }
 
 /**
- * @description Extract dual_status from gate-state. Never throws.
+ * @description Extract dual_status for a phase from gate-state. Never throws.
+ * Default phase is plan_review (executor / delivery path).
+ * Legacy scalar dual_status string counts as plan_review only — adversary phase
+ * returns undefined (fail-closed for task-adversary precondition).
  * @param {unknown} gateState
+ * @param {"plan_review" | "adversary"} [phase="plan_review"]
  * @returns {string | undefined}
  */
-export function readDualStatus(gateState) {
+export function readDualStatus(gateState, phase = "plan_review") {
+  return readDualStatusFromShape(gateState, phase);
+}
+
+/**
+ * @description Extract plan_verdict from gate-state (APPROVE | REVISE). Never throws.
+ * dual_status alone must not unlock delivery hands after a REVISE plan-review.
+ * @param {unknown} gateState
+ * @returns {"APPROVE" | "REVISE" | undefined}
+ */
+export function readPlanVerdict(gateState) {
   try {
     if (
       gateState == null ||
@@ -149,8 +170,12 @@ export function readDualStatus(gateState) {
     ) {
       return undefined;
     }
-    const v = /** @type {Record<string, unknown>} */ (gateState).dual_status;
-    return typeof v === "string" ? v : undefined;
+    const v = /** @type {Record<string, unknown>} */ (gateState).plan_verdict;
+    if (typeof v !== "string") return undefined;
+    const s = v.trim().toUpperCase();
+    if (s === "APPROVE") return "APPROVE";
+    if (s === "REVISE") return "REVISE";
+    return undefined;
   } catch {
     return undefined;
   }
@@ -180,6 +205,7 @@ export function readDualStatus(gateState) {
  *   reason: string,
  *   details?: {
  *     dual_status?: string | null,
+ *     plan_verdict?: string | null,
  *     isFullDualCoverage?: boolean,
  *     requireDualOn?: string[],
  *   }
@@ -281,7 +307,8 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    const dualStatus = readDualStatus(gateState);
+    // Executor path reads plan_review axis only (adversary dual never unlocks hands).
+    const dualStatus = readDualStatus(gateState, "plan_review");
 
     // Missing dual_status → deny (pending_blocks_executor / dual_status_required_before_executor).
     if (dualStatus === undefined || dualStatus === null || dualStatus === "") {
@@ -289,7 +316,7 @@ export function decideDualBeforeDelivery(input = {}) {
         ok: false,
         decision: "deny",
         reason:
-            "dual_status missing — requireDualOn post must record a primary result before executor (both | primary_only)",
+            "dual_status.plan_review missing — requireDualOn plan-review post must record a primary result before executor (both | primary_only)",
         details: {
           dual_status: null,
           isFullDualCoverage: false,
@@ -327,9 +354,27 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // Recorded results: both | primary_only | legacy fail-open statuses → allow.
+    // Recorded dual is necessary but not sufficient: plan-review must APPROVE.
+    // dual_status both + REVISE (or missing plan_verdict) must not unlock executors.
     if (isRecordedDualAttempt(dualStatus)) {
       const full = isFullDualCoverage(dualStatus);
+      const planVerdict = readPlanVerdict(gateState);
+      if (planVerdict !== "APPROVE") {
+        return {
+          ok: false,
+          decision: "deny",
+          reason:
+            planVerdict === "REVISE"
+              ? "plan_verdict REVISE — executor blocked until plan-review APPROVE"
+              : "plan_verdict missing — executor requires plan-review APPROVE (not only dual_status)",
+          details: {
+            dual_status: dualStatus,
+            plan_verdict: planVerdict ?? null,
+            isFullDualCoverage: full,
+            requireDualOn: readRequireDualOn(routing),
+          },
+        };
+      }
       return {
         ok: true,
         decision: "allow",
@@ -343,6 +388,7 @@ export function decideDualBeforeDelivery(input = {}) {
               : "dual_status both — full dual coverage",
         details: {
           dual_status: dualStatus,
+          plan_verdict: planVerdict,
           isFullDualCoverage: full,
           requireDualOn: readRequireDualOn(routing),
         },
@@ -673,5 +719,8 @@ export {
   isRecordedDualAttempt,
   isDualStatusEnum,
   dualStatusGatePatch,
+  dualStatusGatePatchForPhase,
+  dualStatusPhaseFromRole,
+  normalizeDualStatusMap,
   validateGateStateDualFields,
 };

@@ -9,7 +9,7 @@ import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
 import { withGateStateLock } from "./lib/gate-state.mjs"
-import { mergeGateStatePatch, dualStatusGatePatch } from "../../shared/lib/gate-state-shape.mjs"
+import { mergeGateStatePatch, dualStatusGatePatchForPhase } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
 import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
@@ -83,10 +83,11 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         if (args.status !== "both" && args.status !== "primary_only" && args.status !== "pending") {
           return { ok: false, reason: "active dual transition requires both | primary_only | pending" }
         }
-        const dual = dualStatusGatePatch(args.status)
+        // Manual mark dual defaults to plan_review axis (#383); adversary dual is host-accounted.
+        const dual = dualStatusGatePatchForPhase("plan_review", args.status)
         if ("ok" in dual && dual.ok === false) return dual
         patch = dual as Record<string, unknown>
-        payload = args.status
+        payload = null
       } else {
         const taskId = typeof args.task_id === "string" ? args.task_id : ""
         if (!taskId) return { ok: false, reason: `${action} requires task_id` }
@@ -136,6 +137,8 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       }
       const applied = mergeGateStatePatch(previous, patch)
       if (!applied.ok) return applied
+      // dual seal payload = final dual_status map (merged axes), not the patch fragment alone.
+      if (action === "dual") payload = applied.state.dual_status
       const record = sealedMarkerRecord({
         sessionId: authorization.sessionID,
         featureId: authorization.featureID,

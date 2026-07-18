@@ -15,6 +15,7 @@ import { createLoopGuardHooks } from "../loop-guard.ts";
 import { createEntryGateHooks } from "../entry-gate.ts";
 import { sealedMarkerRecord, validatePrivilegedMarkerSeals } from "./marker-seal.mjs";
 import { decideDualBeforeDelivery } from "./dual-enforcement.mjs";
+import { isRecordedDualAttempt } from "../../../shared/lib/gate-state-shape.mjs";
 import { captureSpecAdversaryResult, completionEvidence } from "./ceremony-transition.mjs";
 import { semanticPlanHash, writeBoundPlanSnapshot } from "./planner-artifact.mjs";
 
@@ -121,7 +122,8 @@ function complete(previous, values = {}) {
 test("usable family-1 terminal increments exactly once; failures are separate and replay is inert", () => {
   const first = complete(state());
   assert.equal(first.state.plan_review_count, 1);
-  assert.equal(first.state.dual_status, "primary_only");
+  assert.equal(first.state.dual_status?.plan_review, "primary_only");
+  assert.equal(first.state.dual_status?.adversary, undefined);
   assert.equal(validatePrivilegedMarkerSeals(first.state, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 
   const replay = applyReviewOutcome(first.state, input());
@@ -194,6 +196,7 @@ test("primary failure cap counts family-1 inflight so concurrent fan-out cannot 
 test("valid primary review signs primary_only and permits hand progression; useful secondary signs both", () => {
   const primary = complete(state()).state;
   assert.equal(validatePrivilegedMarkerSeals(primary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
+  assert.equal(primary.plan_verdict, "APPROVE");
   assert.equal(decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: primary,
@@ -202,7 +205,9 @@ test("valid primary review signs primary_only and permits hand progression; usef
   }).decision, "allow");
 
   const secondary = complete(primary, { subagentType: "plan-reviewer-family-2", callId: "secondary" }).state;
-  assert.equal(secondary.dual_status, "both");
+  assert.equal(secondary.dual_status?.plan_review, "both");
+  assert.equal(secondary.dual_status?.adversary, undefined);
+  assert.equal(secondary.plan_verdict, "APPROVE");
   assert.equal(validatePrivilegedMarkerSeals(secondary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 
   const failedSecondary = complete(primary, {
@@ -210,10 +215,91 @@ test("valid primary review signs primary_only and permits hand progression; usef
     callId: "secondary-failed",
     failureClass: "provider_error",
   }).state;
-  assert.equal(failedSecondary.dual_status, "primary_only");
+  assert.equal(failedSecondary.dual_status?.plan_review, "primary_only");
   assert.equal(failedSecondary.dual_secondary_status, "failed");
   assert.equal(failedSecondary.dual_secondary_failure_class, "provider_error");
   assert.equal(validatePrivilegedMarkerSeals(failedSecondary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
+});
+
+test("applyReviewOutcome plan-reviewer useful REVISE → plan_verdict REVISE on state", () => {
+  const result = complete(state(), {
+    callId: "revise-1",
+    response: report("REVISE", [finding]),
+  });
+  assert.equal(result.accepted, true);
+  assert.equal(result.classified.kind, "useful");
+  assert.equal(result.state.plan_verdict, "REVISE");
+  assert.equal(result.state.dual_status?.plan_review, "primary_only");
+  assert.equal(decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: result.state,
+    routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
+    toolName: "task",
+  }).decision, "deny");
+});
+
+test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE", () => {
+  const result = complete(state(), { callId: "approve-1", response: report("APPROVE") });
+  assert.equal(result.accepted, true);
+  assert.equal(result.classified.kind, "useful");
+  assert.equal(result.state.plan_verdict, "APPROVE");
+});
+
+test("REVISE + dual_status both → dual does NOT unlock hand (money-preflight)", () => {
+  const revised = complete(state(), {
+    callId: "r1",
+    response: report("REVISE", [finding]),
+  }).state;
+  const both = complete(revised, {
+    subagentType: "plan-reviewer-family-2",
+    callId: "r1-f2",
+    response: JSON.stringify({
+      verdict: "APPROVE",
+      family: "family-2",
+      findings: [],
+    }),
+  }).state;
+  assert.equal(both.dual_status?.plan_review, "both");
+  assert.equal(both.plan_verdict, "REVISE");
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: both,
+    routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
+    toolName: "task",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /REVISE/);
+});
+
+test("#383 applyReviewOutcome plan-reviewer writes dual_status.plan_review not adversary", () => {
+  const result = complete(state(), { callId: "pr-axis", response: report("APPROVE") });
+  assert.equal(result.state.dual_status?.plan_review, "primary_only");
+  assert.equal(result.state.dual_status?.adversary, undefined);
+  assert.equal(isRecordedDualAttempt(result.state.dual_status?.adversary), false);
+});
+
+test("#383 applyReviewOutcome adversary writes dual_status.adversary not plan_review", () => {
+  const result = complete(state(), {
+    callId: "adv-axis",
+    subagentType: "adversary-family-1",
+    phase: "task-adversary",
+    response: JSON.stringify({ issues: [] }),
+  });
+  assert.equal(result.accepted, true, result.classified?.reason ?? result.classified?.kind);
+  assert.equal(result.state.dual_status?.adversary, "primary_only");
+  assert.equal(result.state.dual_status?.plan_review, undefined);
+  assert.equal(result.state.plan_verdict, undefined);
+});
+
+test("#383 plan_review dual both does not record adversary axis", () => {
+  const primary = complete(state()).state;
+  const both = complete(primary, {
+    subagentType: "plan-reviewer-family-2",
+    callId: "pr-f2",
+  }).state;
+  assert.equal(both.dual_status?.plan_review, "both");
+  assert.equal(both.dual_status?.adversary, undefined);
+  assert.equal(isRecordedDualAttempt(both.dual_status?.adversary), false);
 });
 
 test("integrated primary completion produces a host-valid primary_only accepted by entry-gate", async () => {

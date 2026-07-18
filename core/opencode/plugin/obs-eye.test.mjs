@@ -133,7 +133,7 @@ test("eligible primary eye + cross-family enabled + no prior attempt → dual_st
     const { input, output } = makeTaskCall({ role: "plan-reviewer", featureId: FEATURE_ID, taskId: TASK_ID, phase: PHASE });
     await hooks["tool.execute.after"](input, output);
     const state = readGateStateFile(projectRoot, SID);
-    assert.equal(state.dual_status, "pending", "an eligible primary eye with cross-family enabled and no prior attempt must set dual_status to pending");
+    assert.equal(state.dual_status?.plan_review, "pending", "an eligible primary eye with cross-family enabled and no prior attempt must set dual_status.plan_review to pending");
     assert.ok(Array.isArray(state.dual_nudge_attempts), "dual_nudge_attempts must be an array");
     assert.ok(
       state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`),
@@ -154,7 +154,7 @@ test("eligible primary eye + cross-family disabled stays pending/skipped until p
     await assert.doesNotReject(() => hooks["tool.execute.after"](input, output));
     const state = readGateStateFile(projectRoot, SID);
     assert.equal(
-      state.dual_status,
+      state.dual_status?.plan_review,
       "pending",
       "the nudge cannot claim a terminal primary result before report accounting",
     );
@@ -219,7 +219,7 @@ test("re-firing an already-recorded tuple with dual_status already 'both' → du
       [tuple],
       "re-firing an already-recorded tuple must not append a duplicate entry",
     );
-    assert.equal(state.dual_status, "both", "dual_status must not be regressed back to pending for an already-recorded tuple");
+    assert.equal(state.dual_status?.plan_review, "both", "dual_status.plan_review must not be regressed back to pending for an already-recorded tuple");
   } finally {
     restoreCrossFamily(prevEnv);
     rmSync(projectRoot, { recursive: true, force: true });
@@ -237,7 +237,7 @@ test("global dual_status already 'both' + a brand-new unattempted tuple → dual
     const { input, output } = makeTaskCall({ role: "plan-reviewer", featureId: FEATURE_ID, taskId: TASK_ID, phase: PHASE });
     await hooks["tool.execute.after"](input, output);
     const state = readGateStateFile(projectRoot, SID);
-    assert.equal(state.dual_status, "both", "dual_status must remain 'both' after a new tuple's nudge attempt");
+    assert.equal(state.dual_status?.plan_review, "both", "dual_status.plan_review must remain 'both' after a new tuple's nudge attempt");
     assert.ok(
       state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`),
       "the new tuple must be appended alongside the pre-existing one",
@@ -258,7 +258,7 @@ test("global dual_status already 'primary_only_error' + a brand-new unattempted 
     const { input, output } = makeTaskCall({ role: "plan-reviewer", featureId: FEATURE_ID, taskId: TASK_ID, phase: PHASE });
     await hooks["tool.execute.after"](input, output);
     const state = readGateStateFile(projectRoot, SID);
-    assert.equal(state.dual_status, "primary_only_error", "dual_status must remain 'primary_only_error' after a new tuple's nudge attempt");
+    assert.equal(state.dual_status?.plan_review, "primary_only_error", "dual_status.plan_review must remain 'primary_only_error' after a new tuple's nudge attempt");
     assert.ok(
       state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`),
       "the new tuple must be appended alongside the pre-existing one",
@@ -280,9 +280,9 @@ test("global dual_status already 'primary_only_failopen' + a brand-new unattempt
     await hooks["tool.execute.after"](input, output);
     const state = readGateStateFile(projectRoot, SID);
     assert.equal(
-      state.dual_status,
+      state.dual_status?.plan_review,
       "primary_only_failopen",
-      "dual_status must remain 'primary_only_failopen' after a new tuple's nudge attempt",
+      "dual_status.plan_review must remain 'primary_only_failopen' after a new tuple's nudge attempt",
     );
     assert.ok(
       state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`),
@@ -339,9 +339,9 @@ test("[dual-nudge pure] applyDualNudge honors a terminal 'both' state that only 
     assert.equal(lockCalls, 1, "withGateStateLock must be invoked exactly once");
     assert.ok(result && result.ok === true, "applyDualNudge must report success");
     assert.equal(
-      result.state.dual_status,
+      result.state.dual_status?.plan_review,
       "both",
-      "the final persisted dual_status must remain 'both' — never clobbered back to 'pending' by a stale outer read",
+      "the final persisted dual_status.plan_review must remain 'both' — never clobbered back to 'pending' by a stale outer read",
     );
     assert.ok(
       result.state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`),
@@ -386,7 +386,8 @@ test("canonical family-1 eyes reach the hook and family-2 eyes never trigger the
         });
         await hooks["tool.execute.after"](input, output);
         const state = readGateStateFile(projectRoot, SID);
-        assert.equal(state.dual_status, "pending", role);
+        const axis = role.startsWith("adversary") ? "adversary" : "plan_review";
+        assert.equal(state.dual_status?.[axis], "pending", role);
         assert.ok(state.dual_nudge_attempts.includes(`${FEATURE_ID}/${TASK_ID}/${PHASE}`), role);
       } finally {
         rmSync(projectRoot, { recursive: true, force: true });
