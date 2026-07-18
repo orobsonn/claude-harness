@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.45.4](https://github.com/orobsonn/claude-harness/compare/v0.45.3...v0.45.4) (2026-07-18)
+
+
+### Bug Fixes
+
+* **opencode:** baseline B0 adversary prompt e cap malformed ([#386](https://github.com/orobsonn/claude-harness/issues/386)) ([117b4b7](https://github.com/orobsonn/claude-harness/commit/117b4b78fb619a282b79ddc5747e70c5e502bced))
+* **vps:** revisão de PR não entra em loop nem revisa PR concorrente ([#387](https://github.com/orobsonn/claude-harness/issues/387)) ([dfecb6e](https://github.com/orobsonn/claude-harness/commit/dfecb6efaf4f4544cf4e85ec9ce1c62245c3e84a))
+
 ## [0.45.3](https://github.com/orobsonn/claude-harness/compare/v0.45.2...v0.45.3) (2026-07-17)
 
 
