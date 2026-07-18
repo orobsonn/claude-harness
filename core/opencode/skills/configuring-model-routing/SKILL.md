@@ -1,6 +1,6 @@
 ---
 name: configuring-model-routing
-description: "Interactive skill to reconfigure harness.routing.json (model family presets or per-role edits). Validates with shared routing validator, rewrites routing + agent frontmatter models. Never disables dual on requireDualOn without explicit operator override warning. Never invents roles or commits secrets."
+description: "Interactive skill to reconfigure harness.routing.json via dual-safe presets or custom slots. Deterministic apply rewrites routing + all agent frontmatter models + AGENTS.md §8 + opencode.json model/small_model. Validates before any write. Never disables dual without explicit operator override. Never invents roles or commits secrets."
 license: MIT
 compatibility: opencode
 metadata:
@@ -12,25 +12,62 @@ metadata:
 
 **This skill reconfigures model routing. It does not implement features.**
 
-Runs interactively inside `build` (primary) — asks the operator in **pt-br product-language**, applies changes in English file content.
+Runs interactively inside `build` (primary) — operator messages in **pt-br product-language**; file content in English.
 
 Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness usa."
+
+**Apply engine (do not reimplement by hand):**  
+`skills/configuring-model-routing/references/apply-routing.mjs`  
+— `listPresets`, `buildRoutingFromSlots`, `routingFromPreset`, `applyRoutingToDisk`, `listRoutingTouchpoints`.
+
+---
+
+## Mapa canônico de touchpoints (tudo que precisa atualizar)
+
+| # | Touchpoint | O que muda |
+|---|---|---|
+| 1 | `harness.routing.json` | `roles.*`, `constraints`, `modelCapabilities` |
+| 2 | `agents/*.md` frontmatter `model:` | **Todos** os agents com `model:` — catálogo em `AGENT_MODEL_RESOLVERS` |
+| 3 | `AGENTS.md` §8 | Tabela "Model routing (operator default)" |
+| 4 | `opencode.json` / `opencode.json.example` | `model` (= build) + `small_model` (= compliance/security) quando presentes |
+| 5 | `planner-fallback.md` | Só se `roles.planner.fallback` existir |
+
+### Agents ↔ papel de routing
+
+| Agent file(s) | Routing path |
+|---|---|
+| `build.md`, `plan.md` | `roles.build.model` |
+| `planner.md` | `roles.planner.model` |
+| `planner-fallback.md` | `roles.planner.fallback.model` (opcional) |
+| `plan-reviewer.md`, `plan-reviewer-family-1.md` | `plan-reviewer.families.family-1` |
+| `plan-reviewer-family-2.md`, `plan-reviewer-openai.md` | `plan-reviewer.families.family-2` |
+| `adversary.md`, `adversary-family-1.md` | `adversary.families.family-1` |
+| `adversary-family-2.md`, `adversary-openai.md` | `adversary.families.family-2` |
+| `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*.model` |
+| `executor-{low,medium,high}.md` + `*-spawn` | `executor.tiers.*` |
+| `sniper-{low,medium,high}.md` + `*-spawn` | `sniper.tiers.*` |
+| `test-author.md` + `test-author-spawn.md` | `roles.test-author.model` |
+| `discussion-adversary.md` | sem `model:` (herda host) — **não** reescrever |
+
+`listRoutingTouchpoints()` no módulo devolve a lista estável pra o operador.
 
 ---
 
 ## Does
 
-1. Load current `harness.routing.json` (project `.opencode/` or `core/opencode/` source).
-2. Offer family presets or per-role edits (product language — "quem revisa o plano", not model slugs first).
-3. Run shared validate (`core/shared/lib/routing-validate.mjs` or project copy).
-4. On valid config: rewrite routing file + regenerate agent frontmatter `model:` fields to match, including `planner-fallback.md` when `roles.planner.fallback` is configured.
-5. Never auto-commit secrets. Never invent new roles.
+1. Load current routing (`core/opencode/` source **or** project `.opencode/` vendored).
+2. Elicit: preset dual-safe **or** custom slots (product language first).
+3. Build config via `buildRoutingFromSlots` / `routingFromPreset` — **must** `validateRouting` ok.
+4. Apply **only** via `applyRoutingToDisk` (atomic validate-then-write).
+5. Report changed files; demand **session restart**.
 
 ## Does not
 
-- Disable dual on `requireDualOn` roles without an **explicit operator override warning** (pt-br: dual cross-family is the safety net on plan review and attack review).
-- Change plugin/gate behavior.
-- Touch hand auth tokens.
+- Offer single-provider “all Grok / all Ollama” presets — **invalid** under dual cross-family constraint (`family-1` provider ≠ `family-2` provider).
+- Confuse runtime `primary_only` with a config toggle.
+- Disable `requireDualOn` without explicit operator override + warning.
+- Invent roles, touch hand auth tokens, or auto-commit.
+- Write invalid config (zero partial write on validate fail).
 
 ---
 
@@ -38,36 +75,101 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 
 ### 1. Show current map
 
-Summarize roles → models in a short table (pt-br labels). Highlight dual posts.
+Load `harness.routing.json`. Short table in pt-br:
 
-### 2. Elicit change
+| Papel (produto) | Modelo atual |
+|---|---|
+| Orquestrador / build | … |
+| Planejador | … |
+| Revisor de plano (família 1 + 2) | … |
+| Adversário (família 1 + 2) | … |
+| Compliance / security | … |
+| Mãos low/medium/high | … |
+| Test-author / harvester / shipper | … |
 
-Ask one question at a time:
+Highlight: dual exige **dois providers**.
 
-- Preset (e.g. keep the configured default) vs per-role edit?
-- Which role?
-- New model slug (must be a real OC provider/model the operator can auth)?
+### 2. Elicit (one question at a time)
 
-### 3. Validate
+**Q1 — Onde aplicar?**
+- Projeto vendored (`.opencode/`) — recomendado pra teste
+- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em surfaces committed)
 
-Run shared `validateRouting` on the proposed JSON. On failure, explain in product language and re-ask — do not write invalid config.
+**Q2 — Preset ou custom?**
+
+Presets válidos (`listPresets()`):
+
+| id | Label pt-br |
+|---|---|
+| `openai-ollama-default` | Olhos OpenAI + hands Ollama (default shippado) |
+| `xai-ollama-dual` | Olhos Grok (xAI) + family-2/hands Ollama |
+
+Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não no core sem atualizar testes CI).
+
+**Custom slots** (se não preset):
+1. `primaryEye` — build, planner, plan-reviewer-f1, adversary-f1  
+2. `secondaryEye` — plan-reviewer-f2, adversary-f2 (**outro provider**)  
+3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
+4. Hands low/medium/high (default Ollama ladder)  
+5. Auth: “você já autenticou provider X no OpenCode?”
+
+**Aviso de produto (sempre se eye forte → modelo fraco):**  
+olhos de plan-review / adversary / security em modelo barato enfraquecem o safety net — confirmar override explícito.
+
+### 3. Validate (before write)
+
+```js
+import {
+  routingFromPreset,
+  buildRoutingFromSlots,
+  applyRoutingToDisk,
+  listRoutingTouchpoints,
+} from "./references/apply-routing.mjs";
+
+// preset:
+const built = routingFromPreset("xai-ollama-dual");
+// ou custom:
+// const built = buildRoutingFromSlots({ primaryEye, secondaryEye, supportEye, hands });
+
+if (!built.ok) { /* explain pt-br, re-ask — do not write */ }
+```
 
 ### 4. Apply
 
-- Write `harness.routing.json`.
-- Update matching agent frontmatter `model:` (including `*-openai` dual eyes and `*-spawn` twins).
-- A planner fallback is optional. When configured, write `roles.planner.fallback.model`, update `planner-fallback.md`, and require a session restart; removing it disables fallback dispatch.
-- Confirm dual still present on plan-reviewer + adversary unless operator overrode with warning.
+```js
+const result = applyRoutingToDisk({
+  targetRoot: "<project root or core/opencode path>",
+  routing: built.routing,
+  updateOpencodeJson: true,
+});
+```
+
+On `ok:false` → zero write. On `ok:true` → list `changed` + `warnings`.
 
 ### 5. Close
 
-Report what changed (pt-br). Suggest the operator re-open the session so agents reload.
+- Resumo pt-br do que mudou (papéis, não slugs só).
+- **Obrigatório:** reiniciar a sessão OpenCode (agents carregam no boot).
+- Se aplicou em source do harness: lembrar CI `model-routing.test.mjs` banne xAI/Grok em surfaces committed.
+- Não commitar secrets. Commit só se o operador pedir.
 
 ---
 
-## Constraints (from 02-routing)
+## Constraints (schema / 02-routing)
 
-- Every fixed role has a model.
-- `requireDualOn` roles have non-empty `dual` (unless explicit override).
-- `crossFamilyRoles`: primary provider ≠ dual provider.
-- `supportsReasoningEffort: false` models must not receive reasoningEffort from plugins.
+- `version: 2`; every required role present.
+- Dual posts: `family-1` required + `family-2` optional fail-open; **providers must differ**.
+- `requireDualOn` / `crossFamilyRoles` = plan-reviewer + adversary.
+- Every model needs `modelCapabilities[model].supportsReasoningEffort` boolean.
+- Models with `supportsReasoningEffort: false` must not receive reasoningEffort from plugins.
+
+---
+
+## Smoke after apply
+
+```bash
+node --test core/opencode/skills/configuring-model-routing/references/apply-routing.test.mjs
+node --test core/shared/lib/routing-validate.test.mjs
+# if core source changed defaults without grok:
+node --test core/opencode/model-routing.test.mjs
+```
