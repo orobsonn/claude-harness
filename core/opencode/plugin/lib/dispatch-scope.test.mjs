@@ -37,7 +37,7 @@ function fixture(scopePaths = ["src/a.ts"]) {
       complexity: "medium",
       scope_paths: scopePaths,
       criterion_refs: ["#ac-1"],
-      locked_tests: [{ id: "lt-1", path: "tests/foo.test.mjs" }],
+      locked_tests: [{ id: "lt-1", path: "tests/foo.test.mjs", assertion: "Given foo, When run, Then ok" }],
     }],
   };
   const hash = semanticPlanHash(plan);

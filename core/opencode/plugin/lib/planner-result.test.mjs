@@ -14,7 +14,7 @@ const FULL_PLAN = {
     scope_paths: ["src/planner.ts"],
     criterion_refs: ["#ac-1"],
     depends_on: [],
-    locked_tests: [{ id: "lt-1", path: "src/planner.test.ts" }],
+    locked_tests: [{ id: "lt-1", path: "src/planner.test.ts", assertion: "Given plan, When classified, Then usable" }],
   }],
 };
 

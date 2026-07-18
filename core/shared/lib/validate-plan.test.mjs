@@ -1,4 +1,4 @@
-/** @description Locked tests for validate-plan (T3). Never-throw ValidationResult; expect stub|full|any. */
+/** @description Locked tests for validate-plan (T3 + #373 B1). Never-throw ValidationResult; expect stub|full|any; locked_tests {id,path,assertion}; complexity max. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validatePlan } from "./validate-plan.mjs";
@@ -15,7 +15,11 @@ const goldenFull = {
       scope_paths: ["core/shared/"],
       criterion_refs: ["#ac-1.1"],
       locked_tests: [
-        { id: "t0-1", path: "core/__tests__/foo.test.mjs" },
+        {
+          id: "t0-1",
+          path: "core/__tests__/foo.test.mjs",
+          assertion: "Given fixture, When validatePlan runs, Then ok is true",
+        },
       ],
     },
   ],
@@ -33,8 +37,22 @@ test("t3-cycle: cycle in depends_on returns ok false", () => {
     kind: "full",
     mode: "full",
     tasks: [
-      { id: "a", severity: "low", scope_paths: [], criterion_refs: [], locked_tests: [{id:"t",path:"t.test.mjs"}], depends_on: ["b"] },
-      { id: "b", severity: "low", scope_paths: [], criterion_refs: [], locked_tests: [{id:"t",path:"t.test.mjs"}], depends_on: ["a"] },
+      {
+        id: "a",
+        severity: "low",
+        scope_paths: [],
+        criterion_refs: [],
+        locked_tests: [{ id: "t", path: "t.test.mjs", assertion: "a" }],
+        depends_on: ["b"],
+      },
+      {
+        id: "b",
+        severity: "low",
+        scope_paths: [],
+        criterion_refs: [],
+        locked_tests: [{ id: "t", path: "t.test.mjs", assertion: "b" }],
+        depends_on: ["a"],
+      },
     ],
   };
   const res = validatePlan(cyclic);
@@ -81,4 +99,153 @@ test("t3-tiers: legacy Claude tier names yield validation error without throw", 
   };
   const r2 = validatePlan(badLegacyTiers);
   assert.equal(r2.ok, false);
+});
+
+test("b1-assertion-required: locked_tests without assertion fail", () => {
+  const plan = {
+    feature_id: "no-assert",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-1", path: "src/foo.test.ts" }],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("assertion required")));
+});
+
+test("b1-test-path-legacy: test_path without path fails with actionable message", () => {
+  const plan = {
+    feature_id: "legacy-lt",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [
+          {
+            id: "lt-1",
+            test_path: "src/foo.test.ts",
+            assertion: "Given X When Y Then Z",
+          },
+        ],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes('use "path"') && e.includes("test_path")));
+});
+
+test("b1-fixture-paths-optional: valid fixture_paths accepted", () => {
+  const plan = {
+    feature_id: "with-fixtures",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [
+          {
+            id: "lt-1",
+            path: "test/import.test.ts",
+            assertion: "Given sample CSV, When POST /import, Then imported: 3",
+            fixture_paths: ["test/fixtures/sample.csv"],
+          },
+        ],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, true, res.errors?.join("; "));
+});
+
+test("b1-fixture-paths-hygiene: absolute fixture path rejected", () => {
+  const plan = {
+    feature_id: "bad-fixture",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [
+          {
+            id: "lt-1",
+            path: "test/import.test.ts",
+            assertion: "x",
+            fixture_paths: ["/etc/passwd"],
+          },
+        ],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("fixture_paths") && e.includes("repo-relative")));
+});
+
+test("b1-complexity-max: task and plan complexity max accepted", () => {
+  const plan = {
+    feature_id: "max-band",
+    kind: "full",
+    mode: "full",
+    complexity: "max",
+    tasks: [
+      {
+        id: "t1",
+        severity: "high",
+        complexity: "max",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [
+          {
+            id: "lt-1",
+            path: "src/hard.test.ts",
+            assertion: "Given hard case, When run, Then observable holds",
+          },
+        ],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, true, res.errors?.join("; "));
+});
+
+test("b1-complexity-invalid: unknown complexity rejected", () => {
+  const plan = {
+    feature_id: "bad-cx",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        complexity: "x-high",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [
+          { id: "lt-1", path: "src/a.test.ts", assertion: "x" },
+        ],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("complexity must be low|medium|high|max")));
 });

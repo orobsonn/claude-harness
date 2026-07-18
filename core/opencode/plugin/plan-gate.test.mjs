@@ -36,7 +36,7 @@ const GOLDEN_FULL = {
       complexity: "high",
       scope_paths: ["core/opencode/plugin/"],
       criterion_refs: ["#ac-1.5"],
-      locked_tests: [{ id: "lt-1", path: "core/opencode/plugin/plan-gate.test.mjs" }],
+      locked_tests: [{ id: "lt-1", path: "core/opencode/plugin/plan-gate.test.mjs", assertion: "Given plan, When gated, Then ok" }],
     },
   ],
 }

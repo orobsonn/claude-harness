@@ -1,8 +1,35 @@
-/** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. */
+/** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. Canonical locked_tests shape: {id, path, assertion, fixture_paths?}. Complexity allowlist: low|medium|high|max. */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { isSafeFeatureId } from "./feature-id.mjs";
 
 /** Shell metacharacters / control chars — free-form shell text is never a locked_tests.command. */
 const SHELL_META = /[;&|`$(){}<>\n\r\0]/;
+
+/** Task + plan complexity bands (max maps to executor-high at dispatch). */
+const COMPLEXITY_BANDS = ["low", "medium", "high", "max"];
+
+/**
+ * @description Repo-relative path hygiene: no absolute, no drive letter, no `..`.
+ * @param {string} p
+ * @returns {boolean}
+ */
+function isRepoRelativePath(p) {
+  return typeof p === "string" && p.length > 0 && !p.startsWith("/") && !p.includes("..") && !/^[A-Za-z]:/.test(p);
+}
+
+/**
+ * @description Test-file path allowlist (extension or tests/__tests__ dir segment).
+ * @param {string} p
+ * @returns {boolean}
+ */
+function isAllowedTestPath(p) {
+  return (
+    /\.(test|spec)\.(ts|js|mjs|cjs)$/.test(p) ||
+    p.includes("/tests/") ||
+    p.includes("/__tests__/")
+  );
+}
 
 /**
  * @description Tokenize a command string into argv-like tokens (whitespace split).
@@ -153,12 +180,14 @@ export function validatePlan(plan, opts = {}) {
       else taskIds.add(t.id);
 
       if (!["low", "medium", "high"].includes(t.severity)) errors.push(`task[${idx}].severity must be low|medium|high`);
-      if (t.complexity && !["low", "medium", "high"].includes(t.complexity)) errors.push(`task[${idx}].complexity must be low|medium|high`);
+      if (t.complexity && !COMPLEXITY_BANDS.includes(t.complexity)) {
+        errors.push(`task[${idx}].complexity must be low|medium|high|max`);
+      }
 
       if (!Array.isArray(t.scope_paths)) errors.push(`task[${idx}].scope_paths must be array`);
       if (!Array.isArray(t.criterion_refs)) errors.push(`task[${idx}].criterion_refs must be array`);
 
-      // locked_tests
+      // locked_tests — canonical shape {id, path, assertion, fixture_paths?}
       if (!("locked_tests" in t)) {
         errors.push(`task[${idx}].locked_tests key required (even if empty)`);
       } else if (t.locked_tests === null || !Array.isArray(t.locked_tests)) {
@@ -177,23 +206,47 @@ export function validatePlan(plan, opts = {}) {
             errors.push(`task[${idx}].locked_tests[${ltIdx}] must be object`);
             continue;
           }
-          if (typeof lt.id !== "string") errors.push(`task[${idx}].locked_tests[${ltIdx}].id required`);
+          const ltBase = `task[${idx}].locked_tests[${ltIdx}]`;
+          if (typeof lt.id !== "string" || !lt.id) errors.push(`${ltBase}.id required`);
+
+          // Legacy alias: test_path without path fails loudly (do not silent-accept)
           if (typeof lt.path !== "string") {
-            errors.push(`task[${idx}].locked_tests[${ltIdx}].path required`);
-          } else {
-            if (lt.path.startsWith("/") || lt.path.includes("..") || /^[A-Za-z]:/.test(lt.path)) {
-              errors.push(`task[${idx}].locked_tests[${ltIdx}].path must be repo-relative, no .. or absolute`);
+            if (typeof lt.test_path === "string") {
+              errors.push(
+                `${ltBase}.path required — use "path" (not legacy "test_path"); canonical shape is {id, path, assertion, fixture_paths?}`
+              );
+            } else {
+              errors.push(`${ltBase}.path required`);
             }
-            // extension check (basic allowlist)
-            if (!/\.(test|spec)\.(ts|js|mjs|cjs)$/.test(lt.path) && !lt.path.includes("/tests/") && !lt.path.includes("/__tests__/")) {
-              errors.push(`task[${idx}].locked_tests[${ltIdx}].path must be allowed test file or tests directory`);
+          } else if (!isRepoRelativePath(lt.path)) {
+            errors.push(`${ltBase}.path must be repo-relative, no .. or absolute`);
+          } else if (!isAllowedTestPath(lt.path)) {
+            errors.push(`${ltBase}.path must be allowed test file or tests directory`);
+          }
+
+          if (typeof lt.assertion !== "string" || lt.assertion.trim().length === 0) {
+            errors.push(`${ltBase}.assertion required (non-empty Given/When/Then string)`);
+          }
+
+          if (lt.fixture_paths !== undefined) {
+            if (!Array.isArray(lt.fixture_paths)) {
+              errors.push(`${ltBase}.fixture_paths must be an array of repo-relative strings when present`);
+            } else {
+              for (const [fpIdx, fp] of lt.fixture_paths.entries()) {
+                if (typeof fp !== "string" || !fp) {
+                  errors.push(`${ltBase}.fixture_paths[${fpIdx}] must be a non-empty string`);
+                } else if (!isRepoRelativePath(fp)) {
+                  errors.push(`${ltBase}.fixture_paths[${fpIdx}] must be repo-relative, no .. or absolute`);
+                }
+              }
             }
           }
+
           if (typeof lt.command === "string") {
             // allowlisted runner argv only — metachar denylist alone lets `rm -rf …` through
             if (!isAllowlistedLockedTestCommand(lt.command)) {
               errors.push(
-                `task[${idx}].locked_tests[${ltIdx}].command must be an allowlisted runner argv form (node --test, vitest/jest/mocha, npm/pnpm/yarn/bun test, npx vitest|jest|mocha)`
+                `${ltBase}.command must be an allowlisted runner argv form (node --test, vitest/jest/mocha, npm/pnpm/yarn/bun test, npx vitest|jest|mocha)`
               );
             }
           }
@@ -239,8 +292,8 @@ export function validatePlan(plan, opts = {}) {
   if (p.severity && !["low", "medium", "high", "critical"].includes(p.severity)) {
     errors.push("severity must be low|medium|high|critical");
   }
-  if (p.complexity && !["low", "medium", "high"].includes(p.complexity)) {
-    errors.push("complexity must be low|medium|high");
+  if (p.complexity && !COMPLEXITY_BANDS.includes(p.complexity)) {
+    errors.push("complexity must be low|medium|high|max");
   }
 
   // model_strategy
@@ -257,4 +310,47 @@ export function validatePlan(plan, opts = {}) {
   if (p.demo && typeof p.demo !== "object") errors.push("demo must be object if present");
 
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * @description Minimal CLI when run as main: `node core/shared/lib/validate-plan.mjs <path-to-plan.json>`.
+ * Exit 0 = OK; exit 1 = usage / read / JSON / validation errors.
+ */
+const isMain =
+  typeof process !== "undefined" &&
+  process.argv[1] &&
+  (process.argv[1].endsWith("validate-plan.mjs") || process.argv[1].endsWith("validate-plan"));
+
+if (isMain) {
+  const planPath = process.argv[2];
+  if (!planPath) {
+    process.stderr.write("Usage: node validate-plan.mjs <path-to-plan.json>\n");
+    process.exit(1);
+  }
+  let raw;
+  try {
+    raw = readFileSync(resolve(planPath), "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `[validate-plan] Cannot read file: ${planPath}\n${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      `[validate-plan] Invalid JSON: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
+  const result = validatePlan(data, { expect: "full" });
+  if (result.ok) {
+    process.stdout.write("OK\n");
+    process.exit(0);
+  }
+  process.stderr.write("[validate-plan] INVALID — errors:\n");
+  for (const e of result.errors) process.stderr.write(`  - ${e}\n`);
+  process.exit(1);
 }

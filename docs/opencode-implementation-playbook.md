@@ -104,9 +104,9 @@ Não reabre o dossiê de gaps. Só executa.
 | Campo | Valor |
 |---|---|
 | Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B0 implementado (working tree; commit/PR pendente autorização) |
-| Próximo batch | **B1** (após commit/PR B0 verde) |
-| Bloqueio ativo | _(nenhum)_ — B0 código+testes verdes; falta commit seletivo + PR |
+| Última sessão | 2026-07-18 B1 implementado (#373; commit/PR pendente) |
+| Próximo batch | **B2** (após commit/PR B1 verde) |
+| Bloqueio ativo | _(nenhum)_ — B1 código+testes verdes; falta commit seletivo + PR |
 
 ### Hotfixes já no working tree (pré-B0)
 
@@ -121,22 +121,22 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| Commit H1–H4 (sem misturar lixo) | `todo` | | 2026-07-18 | código pronto; aguarda auth commit |
-| #372 residual SHIP + recovery description | `done` | | 2026-07-18 | SKILL mark-gate sem SHIP; recovery Task com description+prompt+subagent_type |
-| #376 cap malformed (default 3) | `done` | | 2026-07-18 | streak+inflight cap; status primary_failure_cap_reached + reopen path |
-| Testes ceremony / loop-decide | `done` | | 2026-07-18 | 171 pass (ceremony + review-accounting + bash-decide + review-catalog) |
-| Smoke: 0 SHIP residual + cap no 4º | `done` | | 2026-07-18 | recovery keys ok; mark-gate --findings 0; 4º deny coberto por teste |
-| Adversary passes usados (0–2) | 2 | | 2026-07-18 | pass1 BLOCK (inflight/recovery) → fix; pass2 SHIP residual recovery morta → fix cap_* |
+| Commit H1–H4 (sem misturar lixo) | `done` | #386 | 2026-07-18 | em main |
+| #372 residual SHIP + recovery description | `done` | #386 | 2026-07-18 | SKILL mark-gate sem SHIP; recovery Task com description+prompt+subagent_type |
+| #376 cap malformed (default 3) | `done` | #386 | 2026-07-18 | streak+inflight cap; status primary_failure_cap_reached + reopen path |
+| Testes ceremony / loop-decide | `done` | #386 | 2026-07-18 | 171 pass |
+| Smoke: 0 SHIP residual + cap no 4º | `done` | #386 | 2026-07-18 | |
+| Adversary passes usados (0–2) | 2 | #386 | 2026-07-18 | |
 
 ### B1 — schema (#373 [+#381])
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #373 schema + tool validate-plan | `todo` | | | |
-| example-plan ok:true | `todo` | | | |
-| complexity max resolvido (aceitar ou map→high) | `todo` | | | |
-| #381 validator strict (opcional neste batch) | `todo` | | | |
-| Smoke validate-plan tool registrada | `todo` | | | |
+| #373 schema + tool validate-plan | `done` | | 2026-07-18 | locked_tests {id,path,assertion,fixture_paths?}; tool + CLI |
+| example-plan ok:true | `done` | | 2026-07-18 | validatePlan(example,{expect:full}) → ok:true |
+| complexity max resolvido (aceitar ou map→high) | `done` | | 2026-07-18 | max aceito; dispatch continua executor-high |
+| #381 validator strict (opcional neste batch) | `todo` | | | adiado p/ B5 (schema estável; escopo separado) |
+| Smoke validate-plan tool registrada | `done` | | 2026-07-18 | tools/validate-plan.ts + CLI exit 0 |
 
 ### B2 — hand path (#374 → #382)
 
@@ -300,6 +300,7 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 |---|---|---|---|---|
 | 2026-07-17 | varredura + issues + playbook | — | mapa + #372–#385 + este doc | **B0** |
 | 2026-07-18 | opencode B0 implement | **B0** | #372+#376+H* código/testes verdes; adversary 2/2 SHIP; commit/PR pendente | **B1** após PR B0 |
+| 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; commit/PR pendente | **B2** após PR B1 |
 
 ---
 

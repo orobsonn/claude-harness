@@ -86,8 +86,8 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       feature_id: fid,
       kind: "full",
       mode: "full",
-      tasks: [{ id: "t-a", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-a", path: "src/a.test.mjs" }] },
-        { id: "t-b", severity: "medium", complexity: "medium", scope_paths: ["src/b.ts"], criterion_refs: ["#ac-2"], locked_tests: [{ id: "lt-b", path: "src/b.test.mjs" }] }],
+      tasks: [{ id: "t-a", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }] },
+        { id: "t-b", severity: "medium", complexity: "medium", scope_paths: ["src/b.ts"], criterion_refs: ["#ac-2"], locked_tests: [{ id: "lt-b", path: "src/b.test.mjs", assertion: "b" }] }],
     };
     const hash = semanticPlanHash(plan);
     const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
