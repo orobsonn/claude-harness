@@ -379,17 +379,99 @@ export function resolveOcRoot(targetRoot) {
   return { ok: false, reason: "harness.routing.json + agents/ not found under targetRoot" };
 }
 
+/** @description Eye providers treated as strong (security/compliance floors). */
+export function isStrongEyeModel(model) {
+  const p = providerOf(model);
+  return p === "openai" || p === "xai";
+}
+
+/** @description True when slug looks like xAI/Grok (CI-banned on committed core). */
+export function isXaiOrGrokModel(model) {
+  return typeof model === "string" && /(?:^xai\/|grok)/i.test(model);
+}
+
 /**
- * @description Apply routing to disk. Validate first; on failure write nothing.
+ * @description Opencode.json paths allowed for rewrite — never walk above targetRoot.
+ * @param {string} targetRootAbs
+ * @param {string} ocRoot
+ * @param {string | undefined} explicit
+ * @returns {string[]}
+ */
+export function collectOpencodeJsonCandidates(targetRootAbs, ocRoot, explicit) {
+  const root = path.resolve(targetRootAbs);
+  const oc = path.resolve(ocRoot);
+  /** @type {string[]} */
+  const raw = [];
+  if (typeof explicit === "string" && explicit.length > 0) raw.push(path.resolve(explicit));
+  raw.push(path.join(oc, "opencode.json.example"));
+  raw.push(path.join(oc, "opencode.json"));
+  // Project root when ocRoot is project/.opencode
+  if (path.basename(oc) === ".opencode") {
+    raw.push(path.join(path.dirname(oc), "opencode.json"));
+  }
+  // When targetRoot itself is the project (vendored resolve uses project as targetRoot)
+  raw.push(path.join(root, "opencode.json"));
+
+  const out = [];
+  for (const p of raw) {
+    const abs = path.resolve(p);
+    const underRoot = abs === root || abs.startsWith(root + path.sep);
+    const underOc = abs === oc || abs.startsWith(oc + path.sep);
+    if (!underRoot && !underOc) continue;
+    if (!out.includes(abs)) out.push(abs);
+  }
+  return out;
+}
+
+/**
+ * @description Write file via temp + rename. Returns previous content (null if new).
+ * @param {string} filePath
+ * @param {string} content
+ * @returns {string | null}
+ */
+function writeFileStaged(filePath, content) {
+  const prev = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, content, "utf8");
+  fs.renameSync(tmp, filePath);
+  return prev;
+}
+
+/**
+ * @description Restore snapshot map path → previous content|null (null = delete if we created).
+ * @param {Map<string, string | null>} snapshot
+ */
+function restoreSnapshot(snapshot) {
+  for (const [filePath, prev] of snapshot.entries()) {
+    try {
+      if (prev === null) {
+        fs.rmSync(filePath, { force: true });
+      } else {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, prev, "utf8");
+      }
+    } catch {
+      /* best-effort restore */
+    }
+  }
+}
+
+/**
+ * @description Apply routing to disk. Validates first; stages all contents then writes with rollback on error.
  * @param {{
  *   targetRoot: string,
  *   routing: object,
  *   updateOpencodeJson?: boolean,
  *   opencodeJsonPath?: string,
+ *   forceCoreGrok?: boolean,
+ *   confirmWeakEyes?: boolean,
  * }} args
  * @returns {{ ok: true, changed: string[], warnings: string[] } | { ok: false, reason: string }}
  */
 export function applyRoutingToDisk(args) {
+  /** @type {Map<string, string | null>} */
+  const writtenSnapshot = new Map();
   try {
     const routingIn = args?.routing;
     const v = validateRouting(routingIn);
@@ -397,25 +479,71 @@ export function applyRoutingToDisk(args) {
 
     const resolved = resolveOcRoot(args.targetRoot);
     if (!resolved.ok) return resolved;
-    const { ocRoot } = resolved;
-    const routing = withCapabilitiesForModels(routingIn, {
+    const { ocRoot, mode } = resolved;
+    const targetRootAbs = path.resolve(args.targetRoot);
+
+    let routing = withCapabilitiesForModels(routingIn, {
       supportsReasoningEffort: false,
-      perProvider: { openai: true },
+      perProvider: { openai: true, xai: true },
     });
+
+    // Preserve $schema and unknown top-level keys from existing routing file
+    const routingPath = path.join(ocRoot, "harness.routing.json");
+    if (fs.existsSync(routingPath)) {
+      try {
+        const prevObj = JSON.parse(fs.readFileSync(routingPath, "utf8"));
+        if (prevObj && typeof prevObj === "object" && !Array.isArray(prevObj) && prevObj.$schema) {
+          routing = { $schema: prevObj.$schema, ...routing };
+        }
+      } catch {
+        /* ignore malformed previous */
+      }
+    }
+
     const v2 = validateRouting(routing);
     if (!v2.ok) return { ok: false, reason: `validateRouting after caps: ${v2.reason}` };
 
-    /** @type {string[]} */
-    const changed = [];
+    const models = collectRoutingModels(routing);
+    if (mode === "source" && models.some(isXaiOrGrokModel) && args.forceCoreGrok !== true) {
+      return {
+        ok: false,
+        reason:
+          "xAI/Grok models blocked on harness source (CI model-routing.test). Apply to project .opencode/ or pass forceCoreGrok:true.",
+      };
+    }
+
+    const supportModels = [
+      routing.roles?.compliance?.model,
+      routing.roles?.security?.model,
+      routing.roles?.harvester?.model,
+      routing.roles?.shipper?.model,
+    ].filter((m) => typeof m === "string");
+    const weakSupport = supportModels.filter((m) => !isStrongEyeModel(m));
+    if (weakSupport.length > 0 && args.confirmWeakEyes !== true) {
+      return {
+        ok: false,
+        reason:
+          `support eyes fracos (${weakSupport.join(", ")}) em compliance/security/harvester/shipper — confirme com confirmWeakEyes:true (enfraquece o safety net).`,
+      };
+    }
+
     /** @type {string[]} */
     const warnings = [];
+    if (models.some(isXaiOrGrokModel) && mode === "vendored") {
+      warnings.push("routing uses xAI/Grok on vendored project — ok for local; do not promote to core source without forceCoreGrok + CI update.");
+    }
+    if (weakSupport.length > 0) {
+      warnings.push(`weak support eyes confirmed: ${weakSupport.join(", ")}`);
+    }
 
-    const routingPath = path.join(ocRoot, "harness.routing.json");
-    const prevRouting = fs.existsSync(routingPath) ? fs.readFileSync(routingPath, "utf8") : "";
+    // Stage all intended writes in memory first
+    /** @type {Array<{ path: string, content: string }>} */
+    const planned = [];
+
     const nextRouting = `${JSON.stringify(routing, null, 2)}\n`;
+    const prevRouting = fs.existsSync(routingPath) ? fs.readFileSync(routingPath, "utf8") : null;
     if (prevRouting !== nextRouting) {
-      fs.writeFileSync(routingPath, nextRouting, "utf8");
-      changed.push(routingPath);
+      planned.push({ path: routingPath, content: nextRouting });
     }
 
     const agentsDir = path.join(ocRoot, "agents");
@@ -425,18 +553,15 @@ export function applyRoutingToDisk(args) {
       const model = resolveModel(routing.roles);
       if (typeof model !== "string" || !model.includes("/")) {
         if (basename === "planner-fallback" && !routing.roles.planner?.fallback) continue;
-        warnings.push(`skip ${basename}.md: no model resolved`);
-        continue;
+        return { ok: false, reason: `no model resolved for agent ${basename}.md` };
       }
       const body = fs.readFileSync(file, "utf8");
       const replaced = replaceFrontmatterModel(body, model);
       if (!replaced.ok) {
-        warnings.push(`${basename}.md: ${replaced.reason}`);
-        continue;
+        return { ok: false, reason: `${basename}.md: ${replaced.reason}` };
       }
       if (replaced.changed) {
-        fs.writeFileSync(file, replaced.body, "utf8");
-        changed.push(file);
+        planned.push({ path: file, content: replaced.body });
       }
     }
 
@@ -445,58 +570,62 @@ export function applyRoutingToDisk(args) {
       const md = fs.readFileSync(agentsMdPath, "utf8");
       const rewritten = rewriteAgentsModelTable(md, routing);
       if (!rewritten.ok) {
-        warnings.push(rewritten.reason);
-      } else if (rewritten.changed) {
-        fs.writeFileSync(agentsMdPath, rewritten.body, "utf8");
-        changed.push(agentsMdPath);
+        return { ok: false, reason: rewritten.reason };
+      }
+      if (rewritten.changed) {
+        planned.push({ path: agentsMdPath, content: rewritten.body });
       }
     } else {
       warnings.push("AGENTS.md not found under ocRoot");
     }
 
     if (args.updateOpencodeJson !== false) {
-      const candidates = [
-        args.opencodeJsonPath,
-        path.join(ocRoot, "opencode.json.example"),
-        path.join(ocRoot, "opencode.json"),
-        path.join(path.dirname(ocRoot), "opencode.json"),
-        path.join(path.dirname(ocRoot), "..", "opencode.json"),
-      ].filter((p) => typeof p === "string" && p.length > 0);
+      const candidates = collectOpencodeJsonCandidates(targetRootAbs, ocRoot, args.opencodeJsonPath);
       const primary = routing.roles.build?.model;
       const small = routing.roles.compliance?.model ?? routing.roles.security?.model;
       for (const p of candidates) {
         if (!fs.existsSync(p)) continue;
+        let json;
         try {
-          const raw = fs.readFileSync(p, "utf8");
-          const json = JSON.parse(raw);
-          let dirty = false;
-          if (typeof primary === "string" && json.model !== primary) {
-            json.model = primary;
-            dirty = true;
-          }
-          if (typeof small === "string" && json.small_model !== small) {
-            json.small_model = small;
-            dirty = true;
-          }
-          if (dirty) {
-            fs.writeFileSync(p, `${JSON.stringify(json, null, 2)}\n`, "utf8");
-            changed.push(p);
-          }
+          json = JSON.parse(fs.readFileSync(p, "utf8"));
         } catch {
-          warnings.push(`could not update ${p}`);
+          return { ok: false, reason: `could not parse ${p}` };
+        }
+        let dirty = false;
+        if (typeof primary === "string" && json.model !== primary) {
+          json.model = primary;
+          dirty = true;
+        }
+        if (typeof small === "string" && json.small_model !== small) {
+          json.small_model = small;
+          dirty = true;
+        }
+        if (dirty) {
+          planned.push({ path: p, content: `${JSON.stringify(json, null, 2)}\n` });
         }
       }
     }
 
-    const models = collectRoutingModels(routing);
-    if (models.some((m) => /(?:^xai\/|grok)/i.test(m))) {
-      warnings.push(
-        "routing uses xAI/Grok models — committed harness CI (model-routing.test) bans these on core surfaces; prefer project .opencode/ only, or update that test if intentional for source.",
-      );
+    // Commit planned writes with rollback
+    /** @type {string[]} */
+    const changed = [];
+    for (const item of planned) {
+      try {
+        const prev = writeFileStaged(item.path, item.content);
+        writtenSnapshot.set(item.path, prev);
+        changed.push(item.path);
+      } catch (err) {
+        restoreSnapshot(writtenSnapshot);
+        return {
+          ok: false,
+          reason: `write failed on ${item.path}: ${err instanceof Error ? err.message : String(err)}; rolled back`,
+        };
+      }
     }
 
     return { ok: true, changed, warnings };
   } catch (err) {
+    if (writtenSnapshot.size > 0) restoreSnapshot(writtenSnapshot);
     return { ok: false, reason: err instanceof Error ? err.message : "applyRoutingToDisk failed" };
   }
 }
