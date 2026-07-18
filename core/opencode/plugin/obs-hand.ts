@@ -273,27 +273,38 @@ export async function createObsHandHooks(
       const terminal = !backgroundRunning;
       try {
         if (!isTaskTool(input?.tool)) return;
+        const args = resolveHookArgs(input, output);
+        const ids = extractTaskIds(args);
+        // Hand-record is parent-call attestation — write BEFORE child-binding checks.
+        // Headless often lacks SDK child binding (scope-terminal unbound); that must not
+        // skip the DONE record or capture-verified becomes impossible.
+        if (terminal && isHandRole(ids.role) && writingHand(ids.role)) {
+          maybeWriteTaskHandRecord(input, output, ids);
+        }
         const parentSessionId = typeof metadata?.parentSessionId === "string" ? metadata.parentSessionId : "";
         if (childSessionId) {
           const bound = getChildSessionBinding(cwd, childSessionId, parentSessionId);
           if (!bound.ok || bound.binding.callId !== input?.callID || parentSessionId !== input?.sessionID) {
-            throw new Error("[obs-hand] Task result child binding does not match parent call");
+            const reason = bound.ok
+              ? "Task result child binding does not match parent call"
+              : bound.reason || "child binding unavailable";
+            // Background still needs binding_pending via catch. Terminal: hand-record already
+            // written — do not throw (headless often lacks SDK child binding).
+            if (backgroundRunning) {
+              throw new Error(`[obs-hand] ${reason}`);
+            }
           }
         } else if (backgroundRunning) {
           throw new Error("[obs-hand] running background Task result has no child identity");
         }
-        const args = resolveHookArgs(input, output);
-        const ids = extractTaskIds(args);
         if (!isHandRole(ids.role)) return;
-        // No structured task_id → skip (avoid hand-ran task:"unknown" spam).
-        // Trustworthy hand-ran comes from the host-bound native mark tool with real ids.
+        // No structured task_id → skip hand-ran (avoid task:"unknown" spam).
         if (!ids.taskId) return;
         const ev = eventForHandRan({
           task: ids.taskId,
           model: ids.model || ids.role,
         });
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
-        if (terminal) maybeWriteTaskHandRecord(input, output, ids);
       } catch (error) {
         if (backgroundRunning) {
           const pending = preservePendingBinding(input?.sessionID, input?.callID, childSessionId, jobId);

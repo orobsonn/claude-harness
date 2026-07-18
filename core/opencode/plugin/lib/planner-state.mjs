@@ -56,7 +56,22 @@ export function claimPlannerAttempt(previous, input = {}) {
   const reconciled = reconcilePlannerLease(previous, input);
   const state = reconciled.state;
   const role = input.role;
-  if (state.planner_active_attempt) return { ok: false, reason: "planner attempt already active", state };
+  if (state.planner_active_attempt) {
+    const active = objectState(state.planner_active_attempt);
+    // Idempotent re-entry: OC 1.18 can invoke tool.execute.before twice for the same Task
+    // (plugin listed in opencode.json plugin[] AND auto-loaded from .opencode/plugin/). Same
+    // callID already owns the lease — allow without consuming another primary/fallback attempt.
+    if (
+      typeof input.callId === "string" &&
+      input.callId &&
+      active.call_id === input.callId &&
+      (input.sessionId == null || active.session_id === input.sessionId) &&
+      (role == null || active.role === role)
+    ) {
+      return { ok: true, state, reconciled: reconciled.reconciled, idempotent: true };
+    }
+    return { ok: false, reason: "planner attempt already active", state };
+  }
   if (
     state.planner_retry_outcome === "fallback_failed" ||
     state.planner_status === "planner_failed" ||

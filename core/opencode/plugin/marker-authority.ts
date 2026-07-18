@@ -107,6 +107,23 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           payload = bare
           patch = { regate_pending: [bare] }
         } else if (action === "hand-finished") {
+          // Require host-written DONE hand-record — prose mark alone must not unlock ship rails.
+          const hfPath = handRecordPath(
+            { projectRoot, runtime: "opencode", sessionId: authorization.sessionID, featureId: authorization.featureID },
+            taskId,
+          )
+          if (!hfPath.ok) return { ok: false, reason: hfPath.reason }
+          let hfRecord: Record<string, unknown>
+          try {
+            hfRecord = JSON.parse(fs.readFileSync(hfPath.path, "utf8"))
+          } catch {
+            return { ok: false, reason: "hand-record missing or unreadable" }
+          }
+          if (!isDoneHandRecord(hfRecord)) return { ok: false, reason: "hand-record is not DONE" }
+          const hfBy = hfRecord.writtenBy
+          if (hfBy !== "obs-hand-task" && hfBy !== "run-hand-adapter") {
+            return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
+          }
           payload = bare
           patch = { hand_finished: [bare] }
         }

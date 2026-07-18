@@ -15,7 +15,7 @@ import {
   isTaskTool,
   resolveProjectRoot,
   bareRole,
-} from "./harvest-guard.ts"
+} from "./lib/harvest-findings.mjs"
 
 /**
  * @param {(root: string) => void | Promise<void>} fn

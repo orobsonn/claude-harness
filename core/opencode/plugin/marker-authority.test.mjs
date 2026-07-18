@@ -296,13 +296,14 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
   }
 });
 
-test("capture-verified without hand-record → ok:false hand-record missing, no capture stamp", async () => {
+test("hand-finished without hand-record → ok:false (blocks capture path)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-missing-"));
   try {
     const { file } = seed(root);
     const { before, execute } = await harness(root);
     const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
-    assert.equal(finished.metadata.ok, true, finished.output);
+    assert.equal(finished.metadata.ok, false);
+    assert.match(String(finished.metadata.reason ?? ""), /hand-record missing/i);
     const captured = await markOnce(
       before,
       execute,
@@ -311,7 +312,7 @@ test("capture-verified without hand-record → ok:false hand-record missing, no 
       "call-capture-verified",
     );
     assert.equal(captured.metadata.ok, false);
-    assert.match(String(captured.metadata.reason ?? ""), /hand-record missing/i);
+    assert.match(String(captured.metadata.reason ?? ""), /hand_finished does not contain|hand-record missing/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
     assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
@@ -326,26 +327,17 @@ test("capture-verified without hand-record → ok:false hand-record missing, no 
   }
 });
 
-test("capture-verified with BLOCKED hand-record → ok:false not DONE", async () => {
+test("hand-finished with BLOCKED hand-record → ok:false not DONE", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-blocked-"));
   try {
     const { file } = seed(root);
     seedDoneHandRecord(root, "BLOCKED");
     const { before, execute } = await harness(root);
     const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
-    assert.equal(finished.metadata.ok, true, finished.output);
-    const captured = await markOnce(
-      before,
-      execute,
-      "capture-verified",
-      { task_id: TASK, sha: "abc123deadbeef" },
-      "call-capture-verified",
-    );
-    assert.equal(captured.metadata.ok, false);
-    assert.match(String(captured.metadata.reason ?? ""), /hand-record is not DONE/i);
+    assert.equal(finished.metadata.ok, false);
+    assert.match(String(finished.metadata.reason ?? ""), /hand-record is not DONE/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
-    assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
+    assert.equal(Array.isArray(state.hand_finished) ? state.hand_finished.length : 0, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -391,7 +383,7 @@ test("regate-passed after regate-pending → ok:true", async () => {
   }
 });
 
-test("capture-verified rejects forged writtenBy (not host adapter)", async () => {
+test("hand-finished rejects forged writtenBy (not host adapter)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-forge-"));
   try {
     const { file } = seed(root);
@@ -412,17 +404,11 @@ test("capture-verified rejects forged writtenBy (not host adapter)", async () =>
     });
     assert.equal(written.ok, true);
     const { before, execute } = await harness(root);
-    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished")).metadata.ok, true);
-    const captured = await markOnce(
-      before,
-      execute,
-      "capture-verified",
-      { task_id: TASK, sha: "abc123deadbeef" },
-      "call-capture-verified",
-    );
-    assert.equal(captured.metadata.ok, false);
-    assert.match(String(captured.metadata.reason ?? ""), /writtenBy is not a host adapter/i);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
+    assert.equal(finished.metadata.ok, false);
+    assert.match(String(finished.metadata.reason ?? ""), /writtenBy is not a host adapter/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(Array.isArray(state.hand_finished) ? state.hand_finished.length : 0, 0);
     assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.length : 0, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

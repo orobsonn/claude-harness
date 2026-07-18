@@ -133,7 +133,10 @@ function normPlanVerdict(v) {
 
 /**
  * @description Persist + seal plan_verdict from useful plan-reviewer only.
- * REVISE is sticky until review-epoch reopen; either-REVISE-wins across families same scope.
+ * either-REVISE-wins across families on the same scope (dual pair).
+ * No unconditional sticky REVISE: a later dual pair of APPROVE+APPROVE on the same
+ * scope must be able to unlock delivery after the plan was fixed (money-preflight
+ * still blocks while either peer on this scope is REVISE).
  */
 function withPlanVerdict(next, state, classified, reservation, scope) {
   if (reservation.logical_role !== "plan-reviewer" || classified.kind !== "useful") {
@@ -141,16 +144,18 @@ function withPlanVerdict(next, state, classified, reservation, scope) {
   }
   const v = normPlanVerdict(object(classified.report).verdict);
   let verdict = v;
-  if (state.plan_verdict === "REVISE") {
-    verdict = "REVISE";
-  } else {
-    const otherSameScope =
+  const otherSameScope =
+    reservation.family === 1
+      ? state.secondary_review_last_scope_hash === scope
+      : state.primary_review_last_scope_hash === scope;
+  if (otherSameScope) {
+    const otherReport =
       reservation.family === 1
-        ? state.secondary_review_last_scope_hash === scope
-        : state.primary_review_last_scope_hash === scope;
-    if (otherSameScope && (state.plan_verdict === "REVISE" || v === "REVISE")) {
-      verdict = "REVISE";
-    }
+        ? state.secondary_review_last_report
+        : state.primary_review_last_report;
+    const otherV = normPlanVerdict(object(otherReport).verdict);
+    // either-REVISE-wins for the dual pair currently on this scope
+    verdict = v === "REVISE" || otherV === "REVISE" ? "REVISE" : "APPROVE";
   }
   const sessionId = typeof next.session_id === "string" ? next.session_id : typeof state.session_id === "string" ? state.session_id : "";
   const featureId = typeof next.feature_id === "string" ? next.feature_id : typeof state.feature_id === "string" ? state.feature_id : "";
