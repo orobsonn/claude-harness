@@ -232,6 +232,33 @@ test("official SDK session/message shape binds child and resolves role without i
   } finally { f.close(); }
 });
 
+test("same callID re-claim is idempotent across different claim tokens (OC double plugin factory)", () => {
+  const f = fixture();
+  try {
+    const a = claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-same",
+      role: "executor-medium",
+      taskId: "task-1",
+      token: "token-instance-A",
+    });
+    assert.equal(a.ok, true, a.reason);
+    const b = claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-same",
+      role: "executor-medium",
+      taskId: "task-1",
+      token: "token-instance-B",
+    });
+    assert.equal(b.ok, true, b.reason);
+    assert.equal(b.claim.claim_token, "token-instance-A");
+    assert.equal(f.read().active_dispatch.call_id, "call-same");
+    assert.equal(f.read().active_dispatch.claim_token, "token-instance-A");
+  } finally {
+    f.close();
+  }
+});
+
 test("official client smoke gates child writes through parent active_dispatch", async () => {
   const f = fixture();
   try {

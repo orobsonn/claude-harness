@@ -35,6 +35,8 @@ import {
   rewriteSharedImportsForVendor,
   pluginsAreRelative,
   defaultOcPluginPaths,
+  harnessOcPluginFiles,
+  isHarnessAutoloadPluginPath,
   normalizeRuntimeTarget,
   resolveProjectTarget,
   writeOpencodeConfig,
@@ -906,41 +908,25 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
   );
 });
 
-// --- OC plugin-registry parity (guard/regression) ------------------------------
-//
-// These four pin an existing, already-green parity contract across the three surfaces that
-// must agree on the OpenCode plugin registry: defaultOcPluginPaths(), the
-// core/opencode/opencode.json.example fixture, and the repo-root opencode.json — plus the
-// permission.question / permission.external_directory contract those surfaces carry, including
-// through writeOpencodeConfig's fresh-project write path.
+// --- OC plugin registration (auto-load, not plugin[]) ------------------------------
+// OpenCode globs `.opencode/plugin/*.{ts,js}` — harness files must NOT also appear in
+// opencode.json plugin[] (double factory registration). plugin[] is for external packages only.
 
-test("defaultOcPluginPaths() matches the plugin[] parsed from the example and the repo-root opencode.json", () => {
+test("defaultOcPluginPaths() / example / root opencode.json plugin[] are empty (OC auto-load)", () => {
   const fromFn = defaultOcPluginPaths();
-  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
-  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
+  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin ?? [];
+  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin ?? [];
 
-  assert.deepStrictEqual(fromExample, fromFn);
-  assert.deepStrictEqual(fromRoot, fromFn);
+  assert.deepStrictEqual(fromFn, []);
+  assert.deepStrictEqual(fromExample, []);
+  assert.deepStrictEqual(fromRoot, []);
 });
 
-test("all three plugin registration surfaces include the obs-eye dual-nudge carrier", () => {
-  const fromFn = defaultOcPluginPaths();
-  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
-  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
-
-  assert.ok(fromFn.includes("./.opencode/plugin/obs-eye.ts"));
-  assert.ok(fromExample.includes("./.opencode/plugin/obs-eye.ts"));
-  assert.ok(fromRoot.includes("./.opencode/plugin/obs-eye.ts"));
-});
-
-test("lt-idle-four-surface-registration: defaultOcPluginPaths(), example plugin[], root opencode.json plugin[] ALL include `./.opencode/plugin/agent-idle-nudge.ts`", () => {
-  const fromFn = defaultOcPluginPaths();
-  const fromExample = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8")).plugin;
-  const fromRoot = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8")).plugin;
-
-  assert.ok(fromFn.includes("./.opencode/plugin/agent-idle-nudge.ts"));
-  assert.ok(fromExample.includes("./.opencode/plugin/agent-idle-nudge.ts"));
-  assert.ok(fromRoot.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+test("harnessOcPluginFiles lists obs-eye and agent-idle-nudge on disk (auto-load carriers)", () => {
+  const files = harnessOcPluginFiles();
+  assert.ok(files.includes("./.opencode/plugin/obs-eye.ts"));
+  assert.ok(files.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+  assert.ok(files.every((p) => isHarnessAutoloadPluginPath(p)));
 });
 
 test("core/opencode/opencode.json.example sets permission.question deny and permission.external_directory allow", () => {
@@ -970,18 +956,28 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
   }
 });
 
-test("writeOpencodeConfig idempotently activates canonical plugins in existing project config", () => {
+test("writeOpencodeConfig strips harness autoload paths; keeps external plugins", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-sidecar-"));
   try {
-    writeFileSync(join(tempDir, "opencode.json"), JSON.stringify({ model: "project/model", plugin: ["project-plugin", "./local/plugin.ts"] }));
+    writeFileSync(
+      join(tempDir, "opencode.json"),
+      JSON.stringify({
+        model: "project/model",
+        plugin: [
+          "project-plugin",
+          "./local/plugin.ts",
+          "./.opencode/plugin/entry-gate.ts",
+          "./.opencode/plugin/planner-recovery.ts",
+        ],
+      }),
+    );
     const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
     assert.match(status, /updated existing/);
     writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir);
     const config = JSON.parse(readFileSync(join(tempDir, "opencode.json"), "utf8"));
     assert.equal(config.model, "project/model");
-    assert.deepEqual(config.plugin.slice(0, 2), ["project-plugin", "./local/plugin.ts"]);
-    assert.equal(config.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 1);
-    assert.equal(new Set(config.plugin).size, config.plugin.length);
+    assert.deepEqual(config.plugin, ["project-plugin", "./local/plugin.ts"]);
+    assert.equal(config.plugin.filter((entry) => entry.includes("planner-recovery.ts")).length, 0);
     assert.equal(existsSync(join(tempDir, "opencode.harness.json")), false);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -997,7 +993,8 @@ test("writeOpencodeConfig preserves malformed project config and emits repair si
     assert.match(status, /manual repair/);
     assert.equal(readFileSync(join(tempDir, "opencode.json"), "utf8"), original);
     const sidecar = JSON.parse(readFileSync(join(tempDir, "opencode.harness.json"), "utf8"));
-    assert.ok(sidecar.plugin.includes("./.opencode/plugin/planner-recovery.ts"));
+    assert.ok(Array.isArray(sidecar.plugin));
+    assert.equal(sidecar.plugin.filter((p) => String(p).includes(".opencode/plugin/")).length, 0);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

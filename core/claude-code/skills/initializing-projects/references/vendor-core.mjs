@@ -399,10 +399,13 @@ function copyOcTree(srcDir, destDir, relPrefix = "") {
 }
 
 /**
- * @description Relative plugin paths only — never absolute or home paths.
- * @returns {string[]}
+ * @description Harness governance plugins that live under `.opencode/plugin/`.
+ * OpenCode auto-loads `{plugin,plugins}/*.{ts,js}` from the project — do NOT also list
+ * these in opencode.json `plugin[]` or every hook factory registers twice (double claim /
+ * double before). Config `plugin[]` is for external package plugins only.
+ * @returns {string[]} relative paths with ./ prefix (integrity / docs)
  */
-export function defaultOcPluginPaths() {
+export function harnessOcPluginFiles() {
   return [
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
@@ -420,6 +423,30 @@ export function defaultOcPluginPaths() {
     "./.opencode/plugin/obs-hand.ts",
     "./.opencode/plugin/agent-idle-nudge.ts",
   ];
+}
+
+/**
+ * @description Paths that belong in opencode.json plugin[] — empty for harness.
+ * @returns {string[]}
+ */
+export function defaultOcPluginPaths() {
+  return [];
+}
+
+/**
+ * @description True when path is under OC auto-load glob `.opencode/plugin|plugins/*`.
+ * @param {unknown} p
+ * @returns {boolean}
+ */
+export function isHarnessAutoloadPluginPath(p) {
+  if (typeof p !== "string" || !p) return false;
+  const n = p.replace(/^\.\//, "").replace(/\\/g, "/");
+  return (
+    n.startsWith(".opencode/plugin/") ||
+    n.startsWith(".opencode/plugins/") ||
+    n.startsWith("plugin/") ||
+    n.startsWith("plugins/")
+  );
 }
 
 /**
@@ -456,10 +483,11 @@ export function writeOpencodeConfig(openCodeDir, targetDir) {
   } else {
     cfg = {};
   }
-  cfg.plugin = defaultOcPluginPaths();
-  // Force relative paths even if example was corrupted
-  if (!pluginsAreRelative(cfg.plugin)) {
-    cfg.plugin = defaultOcPluginPaths();
+  // Strip harness autoload paths from example; keep only external package plugins if any.
+  if (Array.isArray(cfg.plugin)) {
+    cfg.plugin = cfg.plugin.filter((entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry));
+  } else {
+    cfg.plugin = [];
   }
   const dest = join(targetDir, "opencode.json");
   const body = `${JSON.stringify(cfg, null, 2)}\n`;
@@ -471,16 +499,14 @@ export function writeOpencodeConfig(openCodeDir, targetDir) {
     const existing = JSON.parse(readFileSync(dest, "utf8"));
     if (!existing || typeof existing !== "object" || Array.isArray(existing)) throw new Error("not object");
     const projectPlugins = Array.isArray(existing.plugin)
-      ? existing.plugin.filter((entry) => typeof entry === "string")
+      ? existing.plugin.filter((entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry))
       : [];
-    existing.plugin = [
-      ...projectPlugins,
-      ...defaultOcPluginPaths().filter((entry) => !projectPlugins.includes(entry)),
-    ];
+    // Never re-inject harness paths into plugin[] — OC auto-loads .opencode/plugin/*.ts
+    existing.plugin = projectPlugins;
     const temp = `${dest}.${process.pid}.tmp`;
     writeFileSync(temp, `${JSON.stringify(existing, null, 2)}\n`);
     renameSync(temp, dest);
-    return "updated existing opencode.json plugins";
+    return "updated existing opencode.json plugins (stripped harness autoload paths)";
   } catch {
     writeFileSync(join(targetDir, "opencode.harness.json"), body);
     return "invalid existing config → wrote opencode.harness.json for manual repair";
@@ -705,11 +731,21 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   const cfgPath = cfg.includes("manual repair")
     ? join(targetDir, "opencode.harness.json")
     : join(targetDir, "opencode.json");
+  // Harness plugins are auto-loaded from disk (.opencode/plugin/*) — not listed in plugin[].
+  const missingHarness = harnessOcPluginFiles().filter((entry) => {
+    const rel = entry.replace(/^\.\//, "");
+    return !existsSync(join(targetDir, rel));
+  });
+  if (missingHarness.length > 0) {
+    fail(`FATAL — harness plugin files missing on disk (OC auto-load): ${missingHarness[0]}`);
+  }
   const writtenPlugins = JSON.parse(readFileSync(cfgPath, "utf8")).plugin;
-  const canonicalPlugins = defaultOcPluginPaths();
-  const installedHarnessPlugins = canonicalPlugins.filter((entry) => writtenPlugins.includes(entry));
-  if (installedHarnessPlugins.length !== canonicalPlugins.length || !pluginsAreRelative(installedHarnessPlugins)) {
-    fail("FATAL — harness plugin paths must all be installed and project-relative");
+  if (!Array.isArray(writtenPlugins)) {
+    fail("FATAL — opencode.json plugin must be an array");
+  }
+  const leaked = writtenPlugins.filter((entry) => isHarnessAutoloadPluginPath(entry));
+  if (leaked.length > 0) {
+    fail(`FATAL — harness autoload paths must not appear in plugin[] (double-load): ${leaked[0]}`);
   }
 
   const acc = seedOcAccumulated(targetDir);

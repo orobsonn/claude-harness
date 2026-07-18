@@ -481,13 +481,11 @@ const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
 });
 
 /**
- * @description Canonical, FROZEN in-code list of the harness's OpenCode governance plugin paths.
- * Mirrors `defaultOcPluginPaths()` in
- * `core/claude-code/skills/initializing-projects/references/vendor-core.mjs` EXACTLY (kept in sync
- * manually) — this is the double-fault safety net for `seedOpencodeRootConfig`'s `plugin` key, the
- * same role `DANGEROUS_BASH_DENYLIST` plays for `permission.bash`. Without a non-empty `plugin[]` in
- * the seeded worktree config, a headless double-fault run loads OpenCode with NONE of the pipeline's
- * governance plugins (entry-gate, plan-gate, loop-guard, etc.) — no security gate at all.
+ * @description Canonical harness governance plugin files (on disk under `.opencode/plugin/`).
+ * OpenCode auto-loads `{plugin,plugins}/*.{ts,js}` — these must NOT also be listed in
+ * opencode.json `plugin[]` or every hook factory registers twice (double claim / double before).
+ * Integrity: materializeOpencodeRuntime + isOpencodeRuntimeComplete check files on disk.
+ * Config `plugin[]` is only for external package plugins the project adds.
  */
 export const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/entry-gate.ts",
@@ -508,18 +506,31 @@ export const CANONICAL_OC_PLUGINS = Object.freeze([
 ]);
 
 /**
- * @description Guarantees the config being written always carries a non-empty `plugin` array. A
- * Project plugins keep their order and every missing canonical governance plugin is appended once.
+ * @description True when path is under OC auto-load glob (must not appear in plugin[]).
+ * @param {unknown} p
+ * @returns {boolean}
+ */
+export function isHarnessAutoloadPluginPath(p) {
+  if (typeof p !== "string" || !p) return false;
+  const n = p.replace(/^\.\//, "").replace(/\\/g, "/");
+  return (
+    n.startsWith(".opencode/plugin/") ||
+    n.startsWith(".opencode/plugins/") ||
+    n.startsWith("plugin/") ||
+    n.startsWith("plugins/")
+  );
+}
+
+/**
+ * @description plugin[] for seeded opencode.json: strip harness autoload paths; keep external only.
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @returns {string[]}
  */
 function resolveOcPlugins(baseConfig) {
   const basePlugins = baseConfig && Array.isArray(baseConfig.plugin) ? baseConfig.plugin : [];
-  const projectPlugins = basePlugins.filter((entry) => typeof entry === "string");
-  return [
-    ...projectPlugins,
-    ...CANONICAL_OC_PLUGINS.filter((entry) => !projectPlugins.includes(entry)),
-  ];
+  return basePlugins.filter(
+    (entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry),
+  );
 }
 
 /**
@@ -867,24 +878,27 @@ export function ensureOcPluginPathsExist(worktreePath, plugins) {
   if (typeof worktreePath !== "string" || !worktreePath) {
     throw new Error("ensureOcPluginPathsExist: worktreePath required");
   }
-  const list =
-    Array.isArray(plugins) && plugins.length > 0 ? plugins.filter((p) => typeof p === "string") : [...CANONICAL_OC_PLUGINS];
-  if (list.length === 0) {
-    throw new Error("ensureOcPluginPathsExist: empty plugin list");
+  // Always verify harness governance files on disk — OC auto-loads them from
+  // `.opencode/plugin/*.{ts,js}`. Config plugin[] must NOT list them (double factory).
+  const harnessList = [...CANONICAL_OC_PLUGINS];
+  if (!ocPluginFilesExist(worktreePath, harnessList)) {
+    const rewritten = rewriteOcPluginsToMonorepoCore(harnessList);
+    if (!ocPluginFilesExist(worktreePath, rewritten)) {
+      const firstMissing =
+        harnessList.find((p) => !existsSync(join(worktreePath, p.replace(/^\.\//, "")))) ||
+        harnessList[0];
+      throw new Error(
+        `OC plugins missing under worktree after seed (gates would be dead). ` +
+          `Neither .opencode/plugin nor core/opencode/plugin has the harness files. ` +
+          `First missing: ${firstMissing}`,
+      );
+    }
   }
-  if (ocPluginFilesExist(worktreePath, list)) {
-    return list;
-  }
-  const rewritten = rewriteOcPluginsToMonorepoCore(list);
-  if (ocPluginFilesExist(worktreePath, rewritten)) {
-    return rewritten;
-  }
-  const firstMissing = list.find((p) => !existsSync(join(worktreePath, p.replace(/^\.\//, "")))) || list[0];
-  throw new Error(
-    `OC plugins missing under worktree after seed (gates would be dead). ` +
-      `Neither .opencode/plugin nor core/opencode/plugin has the configured files. ` +
-      `First missing: ${firstMissing}`,
-  );
+  // Return only external package plugins for opencode.json plugin[] (may be empty).
+  const external = Array.isArray(plugins)
+    ? plugins.filter((p) => typeof p === "string" && !isHarnessAutoloadPluginPath(p))
+    : [];
+  return external;
 }
 
 export function seedOpencodeRootConfig(worktreePath, projectRoot) {
