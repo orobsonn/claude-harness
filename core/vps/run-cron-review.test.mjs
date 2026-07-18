@@ -55,7 +55,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCronReview, mainCronReview, makeIssueOpen } from "./run-cron-review.mjs";
+import { runCronReview, mainCronReview, makeIssueOpen, resolveReviewTimeoutMs, resolveReviewLockGraceSeconds, buildReviewSpawnDeps } from "./run-cron-review.mjs";
 import { acquire, release } from "./run-lock.mjs";
 import { recordReviewSession, breakerTripped } from "./cron-state.mjs";
 import { createRun, updateMeta, readMeta } from "./obs-outbox.mjs";
@@ -1703,4 +1703,74 @@ test("#235/final-review run-cron-review: close-on-merge stamps closedAt from the
   } finally {
     cleanup();
   }
+});
+
+test("resolveReviewTimeoutMs: defaults to 30 minutes when config carries no reviewTimeoutMinutes", () => {
+  assert.equal(resolveReviewTimeoutMs({}), 30 * 60_000);
+  assert.equal(resolveReviewTimeoutMs({ reviewTimeoutMinutes: undefined }), 30 * 60_000);
+});
+
+test("resolveReviewTimeoutMs: honors a positive config.reviewTimeoutMinutes and ignores invalid values", () => {
+  assert.equal(resolveReviewTimeoutMs({ reviewTimeoutMinutes: 40 }), 40 * 60_000);
+  assert.equal(resolveReviewTimeoutMs({ reviewTimeoutMinutes: 0 }), 30 * 60_000, "0 is invalid -> default");
+  assert.equal(resolveReviewTimeoutMs({ reviewTimeoutMinutes: -5 }), 30 * 60_000, "negative -> default");
+  assert.equal(resolveReviewTimeoutMs({ reviewTimeoutMinutes: "x" }), 30 * 60_000, "NaN -> default");
+});
+
+test("resolveReviewLockGraceSeconds: budgets the review lock for one full review (timeout + cross-family + gh + buffer) and ALWAYS exceeds the review's own timeout", () => {
+  const ms = 30 * 60_000;
+  const grace = resolveReviewLockGraceSeconds(ms);
+  assert.equal(grace, 1800 + 240 + 60 + 300, "1800s timeout + 240s codex + 60s gh + 300s buffer");
+  assert.ok(grace > ms / 1000, "grace MUST exceed the per-review timeout, else the next tick reclaims the lock mid-review into a concurrent second review");
+});
+
+test("run-cron-review: acquires the review lock with a registration grace budgeted for a full review (so a live single-review holder is never reclaimed mid-review)", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-grace-");
+  try {
+    const now = () => 1_000_000;
+    let acquiredWith = null;
+    const runLock = {
+      acquire: (o) => { acquiredWith = o; return { acquired: true, acquireTs: 1 }; },
+      release: () => {},
+    };
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir },
+      { cronReview: makeSpy(() => ({})), runLock, notify: () => {}, breakerTripped: () => false, recordReviewSession: () => {}, now, kill: () => {}, tmuxHasSession: () => false, pid: 222 }
+    );
+    assert.ok(acquiredWith, "acquire must have been called");
+    const expected = resolveReviewLockGraceSeconds(resolveReviewTimeoutMs({ ...BASE_CONFIG, stateDir }));
+    assert.equal(
+      acquiredWith.registration_grace_seconds,
+      expected,
+      "the review acquire must pass a registration_grace_seconds covering one full review — else the default 120s judges the live holder stale mid-review"
+    );
+    assert.ok(acquiredWith.registration_grace_seconds > 120, "must exceed the run-lock DEFAULT of 120s");
+  } finally {
+    cleanup();
+  }
+});
+
+test("run-cron-review: a larger config.reviewTimeoutMinutes widens the review lock grace in lockstep", async () => {
+  const { stateDir, cleanup } = withTempStateDir("harness-review-grace-cfg-");
+  try {
+    let acquiredWith = null;
+    const runLock = { acquire: (o) => { acquiredWith = o; return { acquired: true, acquireTs: 1 }; }, release: () => {} };
+    await runCronReview(
+      { ...BASE_CONFIG, stateDir, reviewTimeoutMinutes: 45 },
+      { cronReview: makeSpy(() => ({})), runLock, notify: () => {}, breakerTripped: () => false, recordReviewSession: () => {}, now: () => 1, kill: () => {}, tmuxHasSession: () => false, pid: 222 }
+    );
+    assert.equal(acquiredWith.registration_grace_seconds, resolveReviewLockGraceSeconds(45 * 60_000));
+  } finally {
+    cleanup();
+  }
+});
+
+test("buildReviewSpawnDeps: threads the config-resolved reviewTimeoutMs into the spawn deps (default 30min, config override honored)", () => {
+  const seams = { gh: () => {}, spawn: () => {}, notify: () => {} };
+  const dflt = buildReviewSpawnDeps({ projectRoot: "/p" }, seams);
+  assert.equal(dflt.reviewTimeoutMs, 30 * 60_000, "no config -> 30min");
+  assert.equal(dflt.projectRoot, "/p");
+  assert.equal(dflt.spawn, seams.spawn, "the injected spawn seam must be threaded through");
+  const custom = buildReviewSpawnDeps({ projectRoot: "/p", reviewTimeoutMinutes: 45 }, seams);
+  assert.equal(custom.reviewTimeoutMs, 45 * 60_000, "config override -> 45min");
 });

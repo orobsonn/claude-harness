@@ -134,6 +134,67 @@ async function defaultLoadCodexDriver() {
   }
 }
 
+/** @description Default per-review `claude -p` wall-clock budget (minutes). The prior 15-min value
+ * coincided with the review cron's own interval, so any review of a large diff was SIGKILLed before
+ * it could finish and re-reviewed from scratch every tick (an unbounded churn). 30 min gives a full
+ * three-eye + cross-family review comfortable headroom while staying a FINITE anti-hang ceiling. */
+export const DEFAULT_REVIEW_TIMEOUT_MINUTES = 30;
+
+// Wall-clock the review lock must survive BEYOND the `claude -p` timeout, because the cross-family
+// (codex) spawns and the gh calls also run inside the same held lock. Folded into the lock's
+// registration grace so a live single-review holder is never judged stale mid-review.
+const REVIEW_LOCK_CODEX_BUDGET_SEC = 240; // 2 codex eye spawns × 120s (run-cron-review's boundSpawn)
+const REVIEW_LOCK_GH_BUDGET_SEC = 60; // gh view/diff/label calls around one review
+const REVIEW_LOCK_BUFFER_SEC = 300; // safety margin
+
+/**
+ * @description Resolves the per-review spawn timeout (ms) from config. `config.reviewTimeoutMinutes`
+ * wins when it is a positive finite number; anything else (absent, zero, negative, non-numeric)
+ * falls back to DEFAULT_REVIEW_TIMEOUT_MINUTES.
+ * @param {{reviewTimeoutMinutes?: unknown}} config
+ * @returns {number} timeout in milliseconds
+ */
+export function resolveReviewTimeoutMs(config) {
+  const minutes = Number(config?.reviewTimeoutMinutes);
+  const effective = Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_REVIEW_TIMEOUT_MINUTES;
+  return effective * 60_000;
+}
+
+/**
+ * @description Registration-grace (seconds) for the review lock: how long an unregistered, still-live
+ * holder keeps the lock before a peer may reclaim it. cron-review never `register()`s a tmux session
+ * (its review is a blocking spawn inside the cron process), so this grace — NOT tmux liveness — is
+ * what holds the lock for the whole review. It MUST exceed one review's total in-lock wall-clock
+ * (spawn timeout + codex spawns + gh + buffer); otherwise the next 15-min tick judges the live holder
+ * stale and reclaims it into a concurrent second review of the same PR. Paired with the per-cycle
+ * one-review cap in cron-review.mjs, which keeps an invocation's in-lock time to a single review.
+ * @param {number} reviewTimeoutMs
+ * @returns {number} grace in seconds
+ */
+export function resolveReviewLockGraceSeconds(reviewTimeoutMs) {
+  return (
+    Math.ceil(reviewTimeoutMs / 1000) + REVIEW_LOCK_CODEX_BUDGET_SEC + REVIEW_LOCK_GH_BUDGET_SEC + REVIEW_LOCK_BUFFER_SEC
+  );
+}
+
+/**
+ * @description Builds the deps object handed to spawnReviewSession, threading the config-resolved
+ * per-review timeout and the injected spawn seam. Extracted so the timeout wiring is unit-testable
+ * without driving a full review through the composition root.
+ * @param {{projectRoot?: string, reviewTimeoutMinutes?: unknown}} config
+ * @param {{gh: Function, spawn: Function, notify: Function}} seams
+ * @returns {{projectRoot: string|undefined, gh: Function, spawn: Function, notify: Function, reviewTimeoutMs: number}}
+ */
+export function buildReviewSpawnDeps(config, { gh, spawn, notify }) {
+  return {
+    projectRoot: config.projectRoot,
+    gh,
+    spawn,
+    notify,
+    reviewTimeoutMs: resolveReviewTimeoutMs(config),
+  };
+}
+
 export async function runCronReview(config, deps = {}) {
   // Kill switch — checked FIRST, before touching any other seam (no lock, no breaker, no spawn).
   if (config.reviewEnabled === false) {
@@ -213,7 +274,18 @@ export async function runCronReview(config, deps = {}) {
   const kill = deps.kill ?? process.kill;
   const tmuxHasSession = deps.tmuxHasSession ?? defaultTmuxHasSession;
 
-  const lock = runLock.acquire({ stateDir: reviewStateDir, pid, now, kill, tmuxHasSession });
+  // The review holder never register()s a tmux session (its review is a blocking spawn inside this
+  // process), so the lock's registration grace — not tmux liveness — is what keeps a live single-
+  // review holder from being reclaimed by the next tick. Budget it for one full review.
+  const reviewLockGraceSeconds = resolveReviewLockGraceSeconds(resolveReviewTimeoutMs(config));
+  const lock = runLock.acquire({
+    stateDir: reviewStateDir,
+    pid,
+    now,
+    kill,
+    tmuxHasSession,
+    registration_grace_seconds: reviewLockGraceSeconds,
+  });
   if (!lock.acquired) {
     return;
   }
@@ -478,12 +550,7 @@ export async function runCronReview(config, deps = {}) {
       spawnReviewSession:
         deps.spawnReviewSession ??
         ((pr, meta) =>
-          spawnReviewSession(pr, meta, {
-            projectRoot: config.projectRoot,
-            gh,
-            spawn: spawnSync,
-            notify: safeNotify,
-          })),
+          spawnReviewSession(pr, meta, buildReviewSpawnDeps(config, { gh, spawn: deps.spawn ?? spawnSync, notify: safeNotify }))),
       notify: safeNotify,
       stateDir: reviewStateDir,
       authenticatedUser,
