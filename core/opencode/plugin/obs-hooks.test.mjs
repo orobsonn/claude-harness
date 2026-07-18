@@ -11,6 +11,8 @@ import { createObsEyeHooks } from "./obs-eye.ts";
 import { createObsHandHooks } from "./obs-hand.ts";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
 import { semanticPlanHash } from "./lib/planner-artifact.mjs";
+import { fidelityPassEntry } from "./lib/mark-gate.mjs";
+import { validatePrivilegedMarkerSeals } from "./lib/marker-seal.mjs";
 
 test("obs-plan-write: output.args → plan-created with tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-pw-"));
@@ -340,6 +342,208 @@ test("obs-hand: non-hand role does not write hand-record", async () => {
     );
     const recordsRoot = join(dir, ".opencode", "plans", ".state", "hand-records");
     assert.equal(existsSync(recordsRoot), false);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-1.1 obs-hand: sniper-high DONE → sealed regate_pending for feature/task", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_reg1";
+    const fid = "feat-reg";
+    const tid = "t-reg";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "high",
+        complexity: "high",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
+    writeFileSync(
+      gatePath,
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: {
+          session_id: sid,
+          feature_id: fid,
+          snapshot_path: snapshotRel,
+          snapshot_hash: hash,
+        },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      description: "fix t-reg high",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nSurgical fix.`,
+      subagent_type: "sniper-high",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-reg" }, { args });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-reg" },
+      { args, output: "Fixed race.\nStatus: DONE\n" },
+    );
+
+    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
+    const expected = fidelityPassEntry(fid, tid, null);
+    assert.ok(Array.isArray(disk.regate_pending), "regate_pending array");
+    assert.ok(disk.regate_pending.includes(expected), `expected ${expected} in ${JSON.stringify(disk.regate_pending)}`);
+    const seals = validatePrivilegedMarkerSeals(disk, { sessionId: sid, featureId: fid });
+    assert.equal(seals.ok, true, seals.reason);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("obs-hand: sniper-low DONE does not arm regate_pending", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-low-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_low1";
+    const fid = "feat-low";
+    const tid = "t-low";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "low",
+        complexity: "low",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
+    writeFileSync(
+      gatePath,
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: {
+          session_id: sid,
+          feature_id: fid,
+          snapshot_path: snapshotRel,
+          snapshot_hash: hash,
+        },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      description: "fix t-low",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nTiny fix.`,
+      subagent_type: "sniper-low",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-low" }, { args });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-low" },
+      { args, output: "Status: DONE\n" },
+    );
+
+    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
+    assert.equal(disk.regate_pending == null || disk.regate_pending.length === 0, true);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("obs-hand: sniper-high BLOCKED does not arm regate_pending", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-blocked-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_blk1";
+    const fid = "feat-blk";
+    const tid = "t-blk";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "high",
+        complexity: "high",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
+    writeFileSync(
+      gatePath,
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: {
+          session_id: sid,
+          feature_id: fid,
+          snapshot_path: snapshotRel,
+          snapshot_hash: hash,
+        },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      description: "fix t-blk",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nBlocked fix.`,
+      subagent_type: "sniper-high",
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-blk" }, { args });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sid, callID: "call-blk" },
+      { args, output: "Status: BLOCKED\n" },
+    );
+
+    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
+    assert.equal(disk.regate_pending == null || disk.regate_pending.length === 0, true);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });

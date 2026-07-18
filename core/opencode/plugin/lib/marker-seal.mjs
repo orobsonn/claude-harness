@@ -67,6 +67,8 @@ export function validatePrivilegedMarkerSeals(state, { sessionId, featureId }) {
   const checks = [];
   if (value.brainstormed === true) checks.push(["brainstormed", true]);
   if (value.adversary_fired === true) checks.push(["adversary_fired", true]);
+  if (value.final_review_done === true) checks.push(["final-review", true]);
+  if (value.demo_done === true) checks.push(["demo-done", true]);
   if (typeof value.dual_status === "string") {
     checks.push(["dual", value.dual_status]);
   } else if (value.dual_status && typeof value.dual_status === "object" && !Array.isArray(value.dual_status)) {

@@ -104,8 +104,8 @@ Não reabre o dossiê de gaps. Só executa.
 | Campo | Valor |
 |---|---|
 | Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B3 code+tests+adversary |
-| Próximo batch | **B4** (#377 → #385) após PR B3 |
+| Última sessão | 2026-07-18 B4 code+tests+adversary |
+| Próximo batch | **B5** (#378 #379 #380 #381) após PR B4 |
 | Bloqueio ativo | _(nenhum)_ |
 
 ### Hotfixes já no working tree (pré-B0)
@@ -163,10 +163,10 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #377 regate auto-arm | `todo` | | | |
-| #385 ship preconditions final/demo | `todo` | | | |
-| Matrix bash-decide deny | `todo` | | | |
-| Adversary passes (0–2) | — | | | |
+| #377 regate auto-arm | `done` | pendente | 2026-07-18 | host arm sniper-high/medium DONE |
+| #385 ship preconditions final/demo | `done` | pendente | 2026-07-18 | FULL final_review_done + demo interactive |
+| Matrix bash-decide deny | `done` | | 2026-07-18 | |
+| Adversary passes (0–2) | 1 | | 2026-07-18 | regate-passed exige pending |
 
 ### B5 — hygiene (#378 #379 #380 #381)
 
@@ -302,7 +302,8 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 | 2026-07-18 | opencode B0 implement | **B0** | #372+#376+H* código/testes verdes; adversary 2/2 SHIP; commit/PR pendente | **B1** após PR B0 |
 | 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; merged #389 | **B2** |
 | 2026-07-18 | opencode B2 implement | **B2** | #374+#382 código/testes 48 pass; adversary 1/2 (writtenBy fix; prose-DONE residual); merged #391 | **B3** |
-| 2026-07-18 | opencode B3 implement | **B3** | #375+#383+#384; plan_verdict seal; dual map; host merge; 90 pass; adversary 1/2 | **B4** após PR B3 |
+| 2026-07-18 | opencode B3 implement | **B3** | #375+#383+#384; plan_verdict seal; dual map; host merge; 90 pass; adversary 1/2 | **B4** |
+| 2026-07-18 | opencode B4 implement | **B4** | #377+#385 regate auto-arm + final/demo push; adversary regate-passed gate | **B5** após PR B4 |
 
 ---
 

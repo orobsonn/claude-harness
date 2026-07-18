@@ -43,12 +43,19 @@ export async function createObsHandHooks(
     buildTaskHandRecord,
   } = await import("./lib/hand-records.mjs");
   const { defaultHeadSha } = await import("./lib/mark-gate.mjs");
+  const {
+    isRegateArmingSniperRole,
+    isRegateArmingOutcome,
+    armRegatePending,
+  } = await import("./lib/regate-arm.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
   registerScopeComponent(cwd, "obs-hand");
   const claims = new Map<string, string>();
   /** Dedupe terminal hand-record writes per parent call. */
   const writtenRecords = new Set<string>();
+  /** Dedupe host regate-pending auto-arm per parent call. */
+  const armedRegate = new Set<string>();
   const reader = sdkIdentityReader(deps.client, cwd);
 
   const writingHand = (role: unknown) =>
@@ -70,6 +77,7 @@ export async function createObsHandHooks(
 
   /**
    * @description Persist Task-path hand-record once per call. Fail-open on write errors.
+   * After sniper-high/medium DONE, host-arms sealed regate_pending (belt under skill mark).
    */
   function maybeWriteTaskHandRecord(input: any, output: any, ids: ReturnType<typeof extractTaskIds>) {
     try {
@@ -105,8 +113,37 @@ export async function createObsHandHooks(
         taskId,
         record,
       });
+      maybeArmRegatePending({ sessionId, callId, featureId, taskId, role: ids.role, outcome });
     } catch {
       /* fail-open: never break cleanup */
+    }
+  }
+
+  /**
+   * @description Host auto-arm regate_pending after sniper-high/medium hand DONE.
+   * Fail-open: never throws into after-hook cleanup path.
+   */
+  function maybeArmRegatePending(args: {
+    sessionId: string;
+    callId: string;
+    featureId: string;
+    taskId: string;
+    role: string;
+    outcome: string;
+  }) {
+    try {
+      if (!isRegateArmingSniperRole(args.role) || !isRegateArmingOutcome(args.outcome)) return;
+      const armKey = `${args.sessionId}\u0000${args.callId}\u0000${args.taskId}`;
+      if (armedRegate.has(armKey)) return;
+      armedRegate.add(armKey);
+      armRegatePending({
+        projectRoot: cwd,
+        sessionId: args.sessionId,
+        featureId: args.featureId,
+        taskId: args.taskId,
+      });
+    } catch {
+      /* fail-open */
     }
   }
 

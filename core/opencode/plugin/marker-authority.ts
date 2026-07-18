@@ -40,6 +40,8 @@ const ACTIONS = new Set([
   "regate-passed",
   "hand-finished",
   "capture-verified",
+  "final-review",
+  "demo-done",
 ])
 
 function response(ok: boolean, reason = "", metadata: Record<string, unknown> = {}) {
@@ -88,6 +90,11 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         if ("ok" in dual && dual.ok === false) return dual
         patch = dual as Record<string, unknown>
         payload = null
+      } else if (action === "final-review" || action === "demo-done") {
+        // Feature-scoped ship preconditions (#385) — no task_id; sealed boolean on gate-state.
+        const field = action === "final-review" ? "final_review_done" : "demo_done"
+        patch = { [field]: true }
+        payload = true
       } else {
         const taskId = typeof args.task_id === "string" ? args.task_id : ""
         if (!taskId) return { ok: false, reason: `${action} requires task_id` }
@@ -106,6 +113,9 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         else if (action === "regate-passed") {
           const sha = typeof args.sha === "string" && args.sha ? args.sha : defaultHeadSha(projectRoot)
           if (!sha) return { ok: false, reason: "regate-passed requires a resolved commit SHA" }
+          if (!Array.isArray(previous.regate_pending) || !previous.regate_pending.includes(bare)) {
+            return { ok: false, reason: "regate_pending does not contain feature/task" }
+          }
           payload = fidelityPassEntry(authorization.featureID, taskId, sha)
           patch = { regate_passed: [payload] }
         } else if (action === "capture-verified") {
@@ -162,7 +172,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   const mark = tool({
     description: "Persist a runtime-bound privileged harness marker. Bash is observability-only.",
     args: {
-      action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | dual | regate-pending | regate-passed | hand-finished | capture-verified"),
+      action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | dual | regate-pending | regate-passed | hand-finished | capture-verified | final-review | demo-done"),
       task_id: tool.schema.string().optional().describe("Task id for task-scoped markers"),
       status: tool.schema.string().optional().describe("dual_status value for the dual marker"),
       sha: tool.schema.string().optional().describe("Commit SHA for SHA-qualified markers"),

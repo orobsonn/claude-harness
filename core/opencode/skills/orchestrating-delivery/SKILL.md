@@ -218,7 +218,7 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary-family-1` **VIRGIN**, then attempt `adversary-family-2` — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Require each agent's exact JSON schema; never ask for verdict/sweep/mechanism fields. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero findings is a **VALID result** — never re-dispatch to hit a count. A missing or malformed primary report is **NOT a pass** — halt and escalate. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
 | f | Gates (deterministic, no LLM) | For a targeted Vitest file, call native `verify` with the task id and exact named path; do not use a package launcher. Run other prescribed gates through their existing channel. Failure → issue list. |
-| g | Fix | Map ALL issues (compliance + adversary + security + gates) to `sniper-<tiers[issue.severity]>`. Sniper is the ONLY fixer (`edit` allow, `bash` deny, no new files). **HIGH fix — or a `medium` in an irreversible class (orphan-state/race/idempotency) — re-dispatch `adversary-family-1` fresh-virgin after, to attack the NEW surface the fix created.** Re-run the affected gate after every sniper pass. |
+| g | Fix | Map ALL issues (compliance + adversary + security + gates) to `sniper-<tiers[issue.severity]>`. Sniper is the ONLY fixer (`edit` allow, `bash` deny, no new files). **HIGH fix — or a `medium` in an irreversible class (orphan-state/race/idempotency):** after the sniper returns DONE, call native `mark` with `action: regate-pending` + that task's `task_id` (host `obs-hand` also auto-arms sealed `regate_pending` — belt + suspenders). Then re-dispatch `adversary-family-1` fresh-virgin against the NEW surface the fix created. On zero blocking findings, call native `mark` with `action: regate-passed` + `task_id` + `sha` = HEAD. Unmatched `regate_pending` is **delivery-blocking** (bash-decide denies `git push` / `gh pr`). Re-run the affected gate after every sniper pass. |
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. Append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
@@ -234,9 +234,13 @@ node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --findings 0
 # At the top of each task loop (1-based n / total from plan.tasks):
 node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
 
-# After final dual review join (Phase 3):
+# After final dual review join (Phase 3) — observability only (does NOT stamp gate-state):
 node .opencode/plugin/lib/mark-gate.mjs final-review-done
 ```
+
+**Privileged ship markers (native `mark` only — never Bash / mark-gate CLI):**
+- After Phase 3 join (FULL): `action: final-review` → sealed `final_review_done` (push-blocking).
+- After operator demo (FULL interactive): `action: demo-done` → sealed `demo_done` (push-blocking when not headless).
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
@@ -285,6 +289,14 @@ Scope = the **whole feature**, not one task.
 
 Findings → tiered sniper (same rules as Phase 2, step g). Re-run gates after fixes. Proceed only when feature-wide gates are green.
 
+**Ship rail (FULL — privileged):** after the final dual-review join completes (every dispatched eye verdict collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This stamps sealed `final_review_done: true` on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). Bash and `mark-gate` CLI cannot stamp this — host-issued native mark only.
+
+Also emit the observability-only checkpoint (fail-open, does not gate delivery):
+
+```bash
+node .opencode/plugin/lib/mark-gate.mjs final-review-done
+```
+
 ---
 
 ## Phase 4 — Demo
@@ -294,12 +306,15 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 
 **HARD-GATE 3 — test demo (pt-br, product-language):** the operator validates the product by using the output. The human is insubstitutable here.
 
+**Ship rail (FULL interactive — privileged):** after the operator validates the demo, call the native `mark` tool with `action: demo-done`. This stamps sealed `demo_done: true` on gate-state. **Interactive FULL push is denied without it** (`denied_class=demo-missing`). Headless sessions (`gate-state.headless`, `CLAUDE_CODE_REMOTE`, or `OPENCODE_HEADLESS`) auto-validate the demo artifact against ACs and **do not** require `demo_done` for push.
+
 ---
 
 ## Phase 5 — Harvest + ship
 
 - Dispatch `harvester` once: consolidates `findings.md`, routes durable learnings by blast-radius (project pattern → native MEMORY.md + index · law of one folder → that folder's nested `AGENTS.md` + root router row · global convention → kaizen proposal), then **deletes the ephemeral run buffers** — `findings.md` (project root) + `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (git is the durable audit). It owns `recording-findings` / `distilling-learnings` / `proposing-improvements`. It never auto-writes to memory.
 - Delivery (branch/commit/push/PR via `shipper`) happens **only on explicit operator authorization** — merge/deploy is irreversible (human checkpoint). `shipper` never edits code.
+- **FULL ship preconditions (bash-decide):** ceremony + dual + regate + capture + **final-review** + **demo when interactive**. Missing final/demo → deny with explicit `denied_class`.
 
 ---
 

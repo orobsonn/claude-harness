@@ -1044,11 +1044,35 @@ function corruptArrayMarkerReason(key, raw) {
 }
 
 /**
+ * @description Headless delivery context: explicit input/gate flag, or cloud env signals.
+ * Interactive (default) requires demo for FULL; headless auto-validates demo off-gate.
+ * @param {{ headless?: unknown }} input
+ * @param {Record<string, unknown>} gs
+ * @returns {boolean}
+ */
+export function isHeadlessDeliveryContext(input = {}, gs = {}) {
+  if (input.headless === true) return true;
+  if (gs && gs.headless === true) return true;
+  try {
+    if (typeof process !== "undefined" && process.env) {
+      const remote = process.env.CLAUDE_CODE_REMOTE;
+      if (remote === "true" || remote === "1") return true;
+      const oc = process.env.OPENCODE_HEADLESS;
+      if (oc === "true" || oc === "1") return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/**
  * @param {{
  *   command?: unknown,
  *   gateState?: unknown,
  *   sessionId?: unknown,
  *   gateStateLoadOk?: boolean,
+ *   headless?: boolean,
  *   gitState?: { branch?: string|null, commitsAhead?: number|null, defaultBranch?: string|null }|null,
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   listHandRecordsForFeatureFn?: (featureId: string) => unknown[],
@@ -1294,6 +1318,31 @@ export function decideBashDelivery(input = {}) {
       );
       if (realFileDeny !== null) {
         return realFileDeny;
+      }
+    }
+
+    // 9b. FULL ship preconditions: final review (+ demo when interactive)
+    if (mode === "FULL") {
+      if (gs.final_review_done !== true) {
+        return {
+          ok: false,
+          decision: "deny",
+          details: { denied_class: "final-review-missing" },
+          reason:
+            "[entry-gate] Blocked: denied_class=final-review-missing; FULL delivery requires " +
+            "final dual review recorded (native mark action final-review) before git push / gh pr.",
+        };
+      }
+      if (!isHeadlessDeliveryContext(input, gs) && gs.demo_done !== true) {
+        return {
+          ok: false,
+          decision: "deny",
+          details: { denied_class: "demo-missing" },
+          reason:
+            "[entry-gate] Blocked: denied_class=demo-missing; interactive FULL delivery requires " +
+            "demo marker (native mark action demo-done) after operator validates the demo before " +
+            "git push / gh pr. Headless sessions skip this rail (auto-validated against ACs).",
+        };
       }
     }
 
