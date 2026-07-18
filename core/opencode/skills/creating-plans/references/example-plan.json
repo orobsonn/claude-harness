@@ -2,17 +2,18 @@
   "version": "1.0",
   "feature_id": "url-shortener-cf-worker",
   "created_at": "2026-06-01T10:00:00.000Z",
+  "kind": "full",
   "mode": "full",
 
   "model_strategy": {
-    "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
-    "planner": "opus",
-    "plan-reviewer": "opus",
-    "compliance": "sonnet",
-    "adversary": "opus",
-    "security": "opus",
-    "shipper": "sonnet",
-    "harvester": "sonnet"
+    "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
+    "planner": "planner",
+    "plan_reviewer": "plan-reviewer-family-1",
+    "compliance": "compliance",
+    "adversary": "adversary-family-1",
+    "security": "security",
+    "shipper": "shipper",
+    "harvester": "harvester"
   },
 
   "tasks": [
@@ -36,11 +37,13 @@
       "criterion_refs": ["#ac-1.1", "#ac-1.2"],
       "locked_tests": [
         {
-          "test_path": "test/config.test.ts",
+          "id": "lt-config-wrangler",
+          "path": "test/config.test.ts",
           "assertion": "Given wrangler.jsonc, When parsed, Then it parses without error and the LINKS binding is present in kv_namespaces"
         },
         {
-          "test_path": "test/config.test.ts",
+          "id": "lt-config-slug-entry-type",
+          "path": "test/config.test.ts",
           "assertion": "Given the SlugEntry type, When a value is constructed, Then it requires slug, url, and created_at fields"
         }
       ],
@@ -71,27 +74,33 @@
       "criterion_refs": ["#ac-2.1", "#ac-2.2", "#ac-2.3"],
       "locked_tests": [
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-shorten-201",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given a valid URL, When POST /shorten, Then status 201 and body {slug, short_url} where short_url ends with slug"
         },
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-redirect-301",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given a stored slug, When GET /:slug, Then status 301 with Location header equal to the original URL"
         },
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-redirect-404",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given an unknown slug, When GET /:slug, Then status 404 with body {error} (not 500, not empty 200)"
         },
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-shorten-invalid-url",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given an invalid URL, When POST /shorten, Then status 400 with body {error}"
         },
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-shorten-non-http",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given a non-http/https URL, When POST /shorten, Then status 400"
         },
         {
-          "test_path": "test/shorten-redirect.test.ts",
+          "id": "lt-shorten-url-too-long",
+          "path": "test/shorten-redirect.test.ts",
           "assertion": "Given a URL longer than 2048 chars, When POST /shorten, Then status 400"
         }
       ],
@@ -124,27 +133,33 @@
       "criterion_refs": ["#ac-3.1", "#ac-3.2", "#ac-3.3"],
       "locked_tests": [
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-rate-limit-429",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given 10 prior POST /shorten from one IP within 60s, When an 11th arrives, Then status 429 with header Retry-After: 60"
         },
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-admin-delete-204",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given a valid Bearer token, When DELETE /:slug, Then status 204 and the slug is no longer readable via GET /:slug"
         },
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-admin-delete-no-auth",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given no Authorization header, When DELETE /:slug, Then status 401"
         },
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-admin-delete-wrong-token",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given a wrong token, When DELETE /:slug, Then status 401"
         },
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-admin-delete-unknown",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given an unknown slug with a valid token, When DELETE /:slug, Then status 404"
         },
         {
-          "test_path": "test/rate-limit-admin.test.ts",
+          "id": "lt-admin-timing-safe",
+          "path": "test/rate-limit-admin.test.ts",
           "assertion": "Given the admin token check, When compared, Then a timing-safe comparison is used (crypto.subtle.timingSafeEqual)"
         }
       ],

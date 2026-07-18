@@ -16,7 +16,7 @@ const FULL_PLAN = {
   feature_id: FEATURE,
   kind: "full",
   mode: "full",
-  tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/x.ts"], criterion_refs: ["#ac-1"], depends_on: [], locked_tests: [{ id: "lt-1", path: "src/x.test.ts" }] }],
+  tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/x.ts"], criterion_refs: ["#ac-1"], depends_on: [], locked_tests: [{ id: "lt-1", path: "src/x.test.ts", assertion: "Given x, When run, Then ok" }] }],
 };
 
 async function tempRun(configureFallback, fn, initialPlan = { feature_id: FEATURE, kind: "stub", mode: "FULL", tasks: [] }) {

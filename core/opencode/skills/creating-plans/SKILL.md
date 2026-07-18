@@ -64,16 +64,16 @@ For every AC in the spec, derive at least one entry in `locked_tests` for the ta
 
 **A locked_test pins observable behavior — not that code ran.** The harness already proves the code *executes* (`tsc` + the test passing). The locked_test's job is to prove it does the *right thing*. So every locked_test must assert an **observable effect**: the response body or returned value, the persisted state, the emitted event, the error actually surfaced. A test that only asserts a status code, that a value `isDefined`/`toBeTruthy`, or that a call "does not throw" is **theatre** — it goes green while proving nothing, and a cheap executor will write exactly that to pass the gate. Reject it.
 
-**Shape:** each `locked_test` is an **object** `{ "test_path": "...", "assertion": "..." }`:
+**Shape:** each `locked_test` is an **object** `{ "id", "path", "assertion", "fixture_paths?" }` (shared `validatePlan` is the source of truth — do **not** use legacy `test_path`):
+- `id` — stable kebab id (e.g. `lt-shorten-201`) unique within the task.
+- `path` — the **test file the TEST-AUTHOR transcribes** (a cheap hand transcribes the pinned assertions; the file is then frozen). After freeze, the **executor receives it READ-ONLY** — it never authors or edits the test. The path must live **within `scope_paths`** or the project's test directory (if a separate test dir, add it to the task's `scope_paths`). Multiple assertions may share one `path` — the test-author is dispatched ONCE per distinct `path` and transcribes ALL of that path's assertions into the single file.
 - `assertion` — Given/When/Then reducible to one assertion on an observable: Given `<precondition>`, When `<action>`, Then `<observable outcome with a concrete value>`.
-- `test_path` — the **test file the TEST-AUTHOR transcribes** (a cheap Ollama hand transcribes the pinned assertions; the file is then frozen). After freeze, the **executor receives it READ-ONLY** — it never authors or edits the test. The path must live **within `scope_paths`** or the project's test directory (if a separate test dir, add it to the task's `scope_paths`). Multiple assertions may share one `test_path` — the test-author is dispatched ONCE per `test_path` and transcribes ALL of that path's assertions into the single file.
-
-- `fixture_paths` (**optional** array of exact paths) — when an assertion needs support data (an input data file, a snapshot, a sample the assertion references by name), **enumerate the fixture files here**. The test-author is then permitted to write exactly these files, and they are captured in the freeze manifest's dependency closure. Omit when the test needs no support data. Do NOT leave a fixture the test reads unenumerated — an unfrozen dependency breaks the deterministic gate.
+- `fixture_paths` (**optional** array of exact repo-relative paths) — when an assertion needs support data (an input data file, a snapshot, a sample the assertion references by name), **enumerate the fixture files here**. The test-author is then permitted to write exactly these files, and they are captured in the freeze manifest's dependency closure. Omit when the test needs no support data. Do NOT leave a fixture the test reads unenumerated — an unfrozen dependency breaks the deterministic gate.
 
 ```json
 "locked_tests": [
-  { "test_path": "test/shorten.test.ts", "assertion": "Given a valid URL, When POST /shorten, Then 201 with body {slug, short_url} where short_url ends with slug" },
-  { "test_path": "test/import.test.ts", "assertion": "Given the sample CSV, When POST /import, Then 200 with body {imported: 3}", "fixture_paths": ["test/fixtures/sample.csv"] }
+  { "id": "lt-shorten-201", "path": "test/shorten.test.ts", "assertion": "Given a valid URL, When POST /shorten, Then 201 with body {slug, short_url} where short_url ends with slug" },
+  { "id": "lt-import-csv", "path": "test/import.test.ts", "assertion": "Given the sample CSV, When POST /import, Then 200 with body {imported: 3}", "fixture_paths": ["test/fixtures/sample.csv"] }
 ]
 ```
 
@@ -93,7 +93,7 @@ Rules:
 - Every AC must map to at least one locked_test in some task.
 - Each locked_test asserts an **observable** (body / returned value / persisted state / surfaced error) — never status-or-existence alone.
 - A locked_test must be traceable to a `criterion_refs` entry on the same task.
-- Every locked_test carries a `test_path` the executor can write (within `scope_paths` or the project test dir).
+- Every locked_test carries a `path` the test-author can write (within `scope_paths` or the project test dir).
 - The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
 - A targeted Vitest gate names exactly one normalized repo-relative `locked_tests[].path`. Do not put `npx`, `npm exec`, `bunx`, `pnpm dlx`, globs, or forwarded runner options in the plan/brief. Emit `verify({ feature_id, task_id, denied_class: "targeted_vitest", test_path })`: top-level coordination receives only a descriptor; the runtime-bound active hand may execute the FD-pinned local Vitest entrypoint without Bash.
 - An invariant with multiple branches/roles/states needs a locked_test per branch (one observable assertion each) — its locked_tests must cover ALL branches; a happy-path-only freeze is a gap.
@@ -106,7 +106,7 @@ Rules:
 
 ## Step 3.1 — Migration and SQL locked_tests (cheap-hand rule)
 
-When a task's `scope_paths` include `**/*.sql` or `**/migrations/**` **and** the task is routed to a cheap-hand executor (resolved from `hand_tiers` in the model_strategy), a locked_test is mandatory and must be executable against a real database.
+When a task's `scope_paths` include `**/*.sql` or `**/migrations/**` **and** the task is routed to a cheap-hand executor (resolved from `tiers` in the model_strategy), a locked_test is mandatory and must be executable against a real database.
 
 **Requirement:** each migration locked_test must:
 1. **Spin up an ephemeral database** (in-memory SQLite, Docker container, or cloud sandbox) at a known baseline schema state.
@@ -135,17 +135,18 @@ When in doubt between medium and high, pick high — a wrong downgrade of scruti
 
 ## Step 4b — Classify complexity (executor model)
 
-`complexity` (low/medium/high) sets **only the executor model**, resolved from `model_strategy.hand_tiers[complexity]` at dispatch (absent → falls back to `severity`) — the executor is a HAND (cheap Ollama in v1), never a Claude eye. It measures **residual reasoning**: how much thinking is left for the executor *after* the plan has already resolved every decision (`resolved_judgments`), pinned behavior (`locked_tests`), named scope (`scope_paths`), and stated acceptance (`criterion_refs`). A well-specified task has **low residual complexity even in a hard domain** — the planner (planner-tier model) front-loaded the thinking, so the executor just implements. This is independent of `severity`. Bias DOWN: a rich plan + the planner-tier model review net (adversary + compliance + security) mean a cheap executor suffices; paying planner-tier model to *generate* as well is double-paying. The expensive reasoning belongs at the ends — **plan** and **review** — not the middle.
+`complexity` (`low` | `medium` | `high` | `max`) sets **only the executor model**, resolved from `model_strategy.tiers[complexity]` at dispatch (absent → falls back to `severity`) — the executor is a HAND, never an eye. It measures **residual reasoning**: how much thinking is left for the executor *after* the plan has already resolved every decision (`resolved_judgments`), pinned behavior (`locked_tests`), named scope (`scope_paths`), and stated acceptance (`criterion_refs`). A well-specified task has **low residual complexity even in a hard domain** — the planner front-loaded the thinking, so the executor just implements. This is independent of `severity`. Bias DOWN: a rich plan + the review net (adversary + compliance + security) mean a cheaper executor usually suffices. **`max` (scorer 46–60) still dispatches `executor-high`** — there is no separate `executor-max` agent.
 
-**Optional deterministic cross-check:** for a band you're unsure of, run `OC tool complexity-scorer (or shared complexity-scorer) <file>` — a dependency-free heuristic returning a `low/medium/high/x-high` band. It is **advisory** (your residual-reasoning judgment is primary, and it scores the whole file, not the delta — a large file barely touched over-scores); use a surprising score as a prompt to re-judge, and treat an `x-high` as a real signal to split.
+**Optional deterministic cross-check:** for a band you're unsure of, run the OC tool `complexity-scorer` (or shared complexity-scorer) — a dependency-free heuristic returning a `low/medium/high/max/split` band. It is **advisory** (your residual-reasoning judgment is primary, and it scores the whole file, not the delta — a large file barely touched over-scores); use a surprising score as a prompt to re-judge, and treat `split`/`x-high` as a real signal to split.
 
-| Complexity | Executor hand (`hand_tiers`) | When |
+| Complexity | Executor hand | When |
 |---|---|---|
-| **low** | `hand_tiers.low` (cheap Ollama) | Trivial mechanical work — DDL/migration with no logic, constants/config/enums, a pure function fully covered by `locked_tests` |
-| **medium** | `hand_tiers.medium` (cheap Ollama) | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
-| **high** | `hand_tiers.high` (Claude hand in v1) | **Reserved.** Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
+| **low** | `executor-low` | Trivial mechanical work — DDL/migration with no logic, constants/config/enums, a pure function fully covered by `locked_tests` |
+| **medium** | `executor-medium` | **The default.** Most tasks: standalone logic, CRUD, transforms, wiring |
+| **high** | `executor-high` | Genuinely complex AND not decomposable — atomic multi-pass logic, crash-safe state machines |
+| **max** | `executor-high` (same model as high) | Scorer band 46–60; still not decomposable — do **not** invent `executor-max` |
 
-**Decompose before reaching for the high hand.** If tempted to mark `complexity: high`, first try to split the task into smaller `medium` subtasks; keep `high` only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `hand_tiers[severity]`.
+**Decompose before reaching for the high hand.** If tempted to mark `complexity: high` or `max`, first try to split the task into smaller `medium` subtasks; keep high/max only when splitting is genuinely impossible. A high-`severity` task usually still runs a `medium`-`complexity` executor — severity raises *review*, not the executor model. `complexity` is **optional**: set it only where the residual reasoning diverges from `severity`; when absent, executor dispatch falls back to `tiers[severity]`.
 
 ---
 
@@ -209,40 +210,29 @@ If a decision is genuinely open (the product has not resolved it), **stop and as
 
 ## Step 7 — Assemble model_strategy
 
-Read the harness settings (project or global config). Freeze the resolved tier aliases into the plan. This snapshot is deterministic — orchestrating-delivery uses exactly this, ignoring later config changes.
+Read the harness routing (`harness.routing.json` / AGENTS.md). Freeze **abstract role/tier keys** into the plan — never Claude tier names (`haiku`/`sonnet`/`opus`) and never model provider slugs inside `tiers` values. This snapshot is deterministic — orchestrating-delivery uses exactly this, ignoring later config changes.
 
-**The only shape — `hand_tiers` (hands/eyes split).** This is the single valid shape; the legacy
-Claude-only `tiers` map is removed and rejected by validation. `hand_tiers` decouples the hand
-execution models (cheap, escalating weak→strong) from the eye judgment roles (always Claude). Pin
-the cravado escalation ladder verbatim — three *different* models, weakest at `low`, strongest at
-`high`, never three identical aliases:
+**OC shape — `tiers` + fixed eye roles (abstract names):**
 
 ```json
 "model_strategy": {
-  "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
-  "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
-  "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
+  "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
+  "planner": "planner",
+  "plan_reviewer": "plan-reviewer-family-1",
+  "compliance": "compliance",
+  "adversary": "adversary-family-1",
+  "security": "security",
+  "shipper": "shipper",
+  "harvester": "harvester"
 }
 ```
 
-The `low → medium → high` ladder is a genuine escalation (`gemma4` → `glm-5.2` →
-`kimi-k2.7-code`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
-
-**The hand model ids MUST exist in the Ollama endpoint that runs the cheap hands.** A non-existent id (typo, retired version, or a Claude alias accidentally placed in a hand tier) makes every dispatch 404 at spawn time. List the real ids with `GET https://ollama.com/v1/models` (Bearer = the Ollama token) before pinning. **Avoid `gpt-oss:*` for hand tiers** — its tool-calling breaks after a few steps in a multi-step agentic loop (the executor edits files in a loop, so reliable tool-use matters more than raw benchmark).
-
-**Need a Claude hand?** `hand_tiers` values are free model ids — putting a Claude alias (e.g.
-`"high": "opus"`) in a tier is the explicit escape for a task you don't want on a cheap hand. There
-is no separate legacy shape for this anymore.
-
-The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, compliance, adversary, security, shipper, harvester), each as a Claude alias (haiku, sonnet, or opus).
-
-**Critical rule:** No eye role may ever resolve to a non-Claude model (e.g., Ollama). Eyes are the judging roles and must always run on Claude for security and reasoning fidelity.
+`tiers` VALUES are bare keys (`low`/`medium`/`high`/`max`), **never** prefixed (`"executor-low"` would dispatch `executor-executor-low`). The shared `validate-plan` rejects `haiku`/`sonnet`/`opus` inside `tiers`/`hand_tiers`, rejects legacy top-level `low`/`medium`/`high` keys, and rejects fixed `executor`/`sniper` keys.
 
 **Hand roles (executor and sniper):**
-- `executor` resolves from `hand_tiers[task.complexity ?? task.severity]` at dispatch (reasoning depth)
-- `sniper` resolves from `hand_tiers[issue.severity]` at dispatch (defect gravity)
-- Both hand roles are **never** listed explicitly in model_strategy — they resolve from the `hand_tiers` map at dispatch
-- The split shape decouples hand execution models (cheap, e.g., Ollama) from eye judgment (always Claude), enabling the "strong eyes, cheap hands" delivery pattern
+- `executor` resolves from `tiers[task.complexity ?? task.severity]` at dispatch (`max` → `executor-high`)
+- `sniper` resolves from `tiers[issue.severity]` at dispatch
+- Both hand roles are **never** listed explicitly in model_strategy — they resolve from the `tiers` map at dispatch
 
 ---
 
@@ -265,11 +255,11 @@ Before writing the file, verify:
 
 1. **Root envelope present:** `version: "1.0"`, kebab-case `feature_id`, ISO-8601 `created_at`, and `mode` (from triage). The validator requires all four.
 2. **AC coverage:** every `#ac-N.M` in the spec appears in at least one task's `criterion_refs`. List any gap — if found, add the missing task.
-3. **locked_tests coverage:** every `criterion_ref` on a task has at least one locked_test (object `{test_path, assertion}`) derived from it.
+3. **locked_tests coverage:** every `criterion_ref` on a task has at least one locked_test (object `{id, path, assertion, fixture_paths?}`) derived from it.
 4. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
 5. **resolved_judgments completeness:** no open decisions left as prose or empty values.
 6. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
-7. **model_strategy complete:** all 7 fixed roles present (incl. `plan-reviewer`); `hand_tiers` populated.
+7. **model_strategy complete:** all 7 fixed roles present; `tiers` populated with bare keys (no Claude slugs).
 
 ---
 
@@ -277,12 +267,14 @@ Before writing the file, verify:
 
 Run the validator against the generated JSON. **Do not finalize the plan if validation fails.**
 
+**Prefer the OC native tool** `validate-plan` (args: `path` and/or inline `plan`, optional `expect`). CLI fallback:
+
 ```bash
-validate-plan tool / node core/shared/lib/validate-plan.mjs <path-to-plan.json>
+node core/shared/lib/validate-plan.mjs <path-to-plan.json>
 # Exit 0 = OK. Exit 1 = schema errors — fix and re-run.
 ```
 
-The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (`hand_tiers` map + 7 fixed roles incl. `plan-reviewer`, no executor/sniper; legacy `tiers` rejected), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, and cycle detection.
+The shared validator (`core/shared/lib/validate-plan.mjs`) is dependency-free and the contract source of truth. It checks: required fields, type and enum constraints, `model_strategy` (no haiku/sonnet/opus in tier maps, no executor/sniper fixed keys, no legacy top-level tiers), complexity `low|medium|high|max`, `locked_tests` as objects `{id, path, assertion, fixture_paths?}`, cycle detection on `depends_on`.
 
 ---
 
@@ -305,7 +297,7 @@ Bounded by the orchestrator at 2 revision loops; if a finding cannot be satisfie
 - **Task scope too broad** — "implement the auth module" covers 4 concerns. Split by domain boundary.
 - **locked_tests that assert nothing observable** — "error handling works" or "returns 201" (status only) are theatre. Assert the body / returned value / persisted state, not just a status code or that a value exists.
 - **adversarial on trivial tasks** — config, types, schema wiring do not need adversarial review. Reserve it for high-risk tasks.
-- **Incomplete model_strategy** — all 7 fixed roles must be present with tier aliases (incl. `plan-reviewer`). Partial snapshots break dispatch.
+- **Incomplete model_strategy** — all 7 fixed roles must be present; `tiers` uses bare keys (no Claude slugs). Partial snapshots break dispatch.
 - **ACs without criterion_refs** — every AC must be owned by exactly one task. Unowned ACs mean unimplemented features.
 - **resolved_judgments left open** — if you write `"algorithm": "TBD"`, stop and resolve it with the user before continuing.
 
@@ -314,9 +306,9 @@ Bounded by the orchestrator at 2 revision loops; if a finding cannot be satisfie
 ## HARD-GATE — exit condition
 
 The planner finalizes **only** when:
-1. `validate-plan.mjs` exits 0 (schema valid)
+1. OC tool `validate-plan` (or CLI `node core/shared/lib/validate-plan.mjs`) returns ok (schema valid)
 2. Every AC has at least one `criterion_ref` in a task
-3. Every task has at least one locked_test
+3. Every task has at least one locked_test (`{id, path, assertion}`)
 4. No open `resolved_judgments` values
 
 After the plan is valid, show a short summary to the user (in pt-br):

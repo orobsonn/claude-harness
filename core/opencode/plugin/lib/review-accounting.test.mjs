@@ -87,7 +87,7 @@ function canonicalRestartState(root, capped) {
       complexity: "medium",
       scope_paths: ["core/opencode/plugin/"],
       criterion_refs: ["#ac-1.1"],
-      locked_tests: [{ id: "lt-1", path: "core/opencode/plugin/lib/review-accounting.test.mjs" }],
+      locked_tests: [{ id: "lt-1", path: "core/opencode/plugin/lib/review-accounting.test.mjs", assertion: "Given review, When accounted, Then ok" }],
     }],
   };
   const hash = semanticPlanHash(plan);

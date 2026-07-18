@@ -121,13 +121,21 @@ Use THIS harness's tier and agent names. NEVER use haiku/sonnet/opus or model sl
 
 ### LockedTest
 
-A **string** naming one OBSERVABLE assertion with a concrete expected value — a returned value, response body, persisted row, or surfaced error message. Derived from a `criterion_ref`. No status-only checks, `toBeDefined`, `toBeTruthy`, or "does not throw" theatre.
+Canonical object shape (shared `validatePlan` source of truth) — **not** a bare string, **not** legacy `{test_path, assertion}`:
 
 ```json
-"asserts createUser returns { id } and persists a users row with email = the input"
+{
+  "id": "lt-create-user",
+  "path": "src/users.test.ts",
+  "assertion": "Given valid email, When createUser, Then returns { id } and persists a users row with email = the input",
+  "fixture_paths": ["test/fixtures/user.json"]
+}
 ```
 
-(The richer `{ criterion_ref, given, when, then }` object form is also accepted by the validator, but the observable string is the canonical OC form.)
+- `id` — stable kebab id within the task.
+- `path` — repo-relative test file the test-author transcribes (frozen; executor read-only). Multiple assertions may share one `path`.
+- `assertion` — non-empty Given/When/Then on an OBSERVABLE (returned value, response body, persisted row, surfaced error). No status-only / `toBeDefined` / `toBeTruthy` / "does not throw" theatre.
+- `fixture_paths` — optional array of repo-relative support files.
 
 ### ModelStrategy (frozen snapshot at plan time — tier keys, not slugs)
 

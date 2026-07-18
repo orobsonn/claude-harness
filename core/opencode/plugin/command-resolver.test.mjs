@@ -21,7 +21,7 @@ function fixture(overrides = {}) {
   fs.mkdirSync(path.join(root, "tests"), { recursive: true });
   fs.writeFileSync(path.join(root, "tests", "a.test.ts"), "test");
   fs.writeFileSync(path.join(root, "tests", "b.test.ts"), "test");
-  const plan = { feature_id: FEATURE, kind: "full", mode: "full", tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.ts" }, { id: "lt-2", path: "tests/b.test.ts" }] }] };
+  const plan = { feature_id: FEATURE, kind: "full", mode: "full", tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.ts", assertion: "a" }, { id: "lt-2", path: "tests/b.test.ts", assertion: "b" }] }] };
   const hash = semanticPlanHash(plan);
   const stateDir = path.join(root, ".opencode", "plans", ".state", PARENT);
   const snapshot = path.join(stateDir, "bound-plans", `${hash}.json`);
