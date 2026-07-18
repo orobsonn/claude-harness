@@ -48,6 +48,8 @@ export const CeremonyCoordinator: Plugin = async ({ directory, worktree }: any) 
       return response(consumeNextTransition(args.denial, {
         brainstormedCurrent: current("brainstormed"),
         adversaryCurrent: current("adversary_fired"),
+        sessionId: sessionID,
+        featureId,
       }))
     },
   })

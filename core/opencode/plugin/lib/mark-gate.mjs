@@ -53,11 +53,14 @@ if (isMain) {
       result = { ok: true };
     }
   } else if (action === "spec-adversaried") {
-    const verdict = String(args.verdict || "").toUpperCase();
-    if (verdict !== "SHIP" && verdict !== "BLOCK") result = { ok: false, reason: "spec-adversaried requires --verdict SHIP|BLOCK" };
-    else {
-      const findings = Number(args.findings ?? 0);
-      obsAppend({ type: "spec-adversaried", verdict, findings: Number.isFinite(findings) ? findings : 0 });
+    const findings = Number(args.findings ?? 0);
+    if (!Number.isFinite(findings) || findings < 0) {
+      result = { ok: false, reason: "spec-adversaried requires --findings <int>=0" };
+    } else {
+      // Obs wire only. Prefer findings count; optional legacy --verdict is accepted but never taught to eyes.
+      const raw = String(args.verdict || "").toUpperCase();
+      const verdict = raw === "BLOCK" || raw === "DIRTY" || findings > 0 ? "BLOCK" : "SHIP";
+      obsAppend({ type: "spec-adversaried", verdict, findings });
       result = { ok: true };
     }
   } else if (action === "final-review-done") {

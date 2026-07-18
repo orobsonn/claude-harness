@@ -11,6 +11,8 @@ import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 export const LOOP_THRESHOLDS = Object.freeze({
   plan_review: Object.freeze({ warn: 2, deny: 4 }),
   adversary: Object.freeze({ warn: 2, deny: 4 }),
+  /** Consecutive primary (family-1) failure/malformed streak before hard halt. */
+  primary_failure_streak: Object.freeze({ deny: 3 }),
 });
 
 const MAX_EPOCH_RECEIPTS = 4096;
@@ -112,10 +114,18 @@ export function thresholdsFor(key, overrides = {}) {
     : { warn: overrides.adversaryWarn ?? LOOP_THRESHOLDS.adversary.warn, deny: overrides.adversaryDeny ?? LOOP_THRESHOLDS.adversary.deny };
 }
 
+/** @description Cap for consecutive primary review failures (malformed/empty/denied/…); default 3. */
+export function primaryFailureStreakCap(overrides = {}) {
+  const deny = overrides.primaryFailureStreakDeny ?? LOOP_THRESHOLDS.primary_failure_streak.deny;
+  return Number.isInteger(deny) && deny > 0 ? deny : LOOP_THRESHOLDS.primary_failure_streak.deny;
+}
+
+const REVIEW_CAP_STATUSES = new Set(["review_cap_reached", "primary_failure_cap_reached"]);
+
 /** @description Archive the capped epoch only when both canonical generation and bound snapshot advanced. */
 export function reopenReviewEpoch(stateValue, options = {}) {
   const state = object(stateValue);
-  if (state.review_status !== "review_cap_reached") return { ok: false, reason: "review cap is not active", state };
+  if (!REVIEW_CAP_STATUSES.has(state.review_status)) return { ok: false, reason: "review cap is not active", state };
   const capGeneration = state.cap_generation;
   const capSnapshotHash = state.cap_snapshot_hash;
   const canonical = deriveCanonicalReviewRestart(options.projectRoot, state);
@@ -156,12 +166,23 @@ export function reopenReviewEpoch(stateValue, options = {}) {
   };
 }
 
+function primaryFailureStreakOf(state) {
+  const raw = state.primary_review_failure_streak;
+  if (Number.isInteger(raw) && raw >= 0) return raw;
+  // Corrupt / non-integer streak must not reopen budget (fail closed as exhausted).
+  if (raw == null) return 0;
+  return Number.MAX_SAFE_INTEGER;
+}
+
 /** @description Reserve one exact review call without incrementing useful accounting. */
 export function reserveReviewAttempt(stateValue, input = {}) {
   let state = object(stateValue);
-  if (state.review_status === "review_cap_reached") {
+  if (REVIEW_CAP_STATUSES.has(state.review_status)) {
     const reopened = reopenReviewEpoch(state, { projectRoot: input.projectRoot });
-    if (!reopened.ok) return { ok: false, reason: `review_cap_reached: ${reopened.reason}`, state };
+    if (!reopened.ok) {
+      const label = state.review_status;
+      return { ok: false, reason: `${label}: ${reopened.reason}`, state };
+    }
     state = reopened.state;
   }
   const identity = reviewAgentIdentity(input.subagentType);
@@ -204,6 +225,16 @@ export function reserveReviewAttempt(stateValue, input = {}) {
     return { ok: true, accepted: false, reservation, state };
   }
   if (identity.family === 1) {
+    const failureCap = primaryFailureStreakCap(input);
+    const failureStreak = primaryFailureStreakOf(state);
+    const inflightFamily1 = inflight.filter((item) => item?.family === 1 && item?.epoch === epoch).length;
+    if (failureStreak + inflightFamily1 >= failureCap) {
+      return {
+        ok: false,
+        reason: `[loop-guard] primary failure-cap: ${identity.canonicalName} streak=${Math.min(failureStreak, failureCap)}/${failureCap} inflight_family1=${inflightFamily1}. Halt. Fix review prompt/schema, then verified ceremony restart (new generation+plan binding) before re-dispatch.`,
+        state,
+      };
+    }
     const key = loopCounterKey(identity.canonicalName);
     const { deny } = thresholdsFor(key, input);
     const count = Number.isInteger(state[key]) ? state[key] : 0;
@@ -266,6 +297,22 @@ export function applyReviewOutcome(stateValue, input = {}) {
     counts[classified.failureClass] = bounded(counts[classified.failureClass], 1);
     next[`${prefix}_review_failure_count`] = bounded(state[`${prefix}_review_failure_count`], 1);
     next[`${prefix}_review_failure_streak`] = bounded(state[`${prefix}_review_failure_streak`], 1);
+    if (reservation.family === 1) {
+      const failureCap = primaryFailureStreakCap(input);
+      if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached") {
+        next.review_status = "primary_failure_cap_reached";
+        next.cap_generation = state.ceremony_generation;
+        next.cap_snapshot_hash = snapshotHash(state);
+        next.review_cap_receipt = {
+          epoch: epochOf(state),
+          identity_hash: reservation.identity_hash,
+          failure_class: classified.failureClass,
+          cap_generation: state.ceremony_generation,
+          cap_snapshot_hash: snapshotHash(state),
+          kind: "primary_failure_cap",
+        };
+      }
+    }
     if (reservation.family === 2 && state.primary_review_last_scope_hash === scopeHash(reservation)) {
       const signed = dualState(next, "primary_only");
       if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };

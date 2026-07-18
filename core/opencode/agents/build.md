@@ -56,6 +56,7 @@ CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: fal
 6. Auth/unavailable secondary → keep `primary_only` and record `secondary_status` + `secondary_failure_class` separately (no retry storm). Infra error → retry secondary once; if still failing keep `primary_only` with the failure fields. Continue unless primary itself failed.
 7. **`primary_only` must NOT count as full dual coverage** for metrics (`isFullDualCoverage` is true only for `both`).
 8. Surface operator warning in **pt-br product language** when fail-open (do not fake dual).
+9. Every review Task prompt must defer to the selected agent's exact output schema. Never request extra fields such as `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, or `blockers`; schema-invalid prose cannot become canonical evidence.
 
 Compliance and security are **single-eye** by default (OpenAI evaluator family) unless routing enables dual later.
 

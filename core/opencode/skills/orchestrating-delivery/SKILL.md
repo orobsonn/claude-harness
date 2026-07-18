@@ -126,7 +126,7 @@ Never use the edit tool.
 2. **Load and follow the `brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
 3. Write the spec file **via bash** (`cat >`) — `edit` is denied.
    - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This session+feature-bound artifact is the durable brainstorming completion evidence source; a docs copy alone is not restart evidence.
-4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary-family-1` (+ optional `adversary-family-2`). Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
+4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary-family-1` (+ optional `adversary-family-2`). The Task prompt MUST say to follow the agent's exact JSON schema and MUST NOT request `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, `blockers`, or any extra field. Family 1 returns only `{ "issues": [...] }`; an empty array is clean. Blocking issues that cannot self-resolve → stop (headless: PR/issue comment).
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
 **HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the PR body.
@@ -215,7 +215,7 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **fidelity mode** (pre-freeze: full-observable fidelity only, no green required). On fidelity **PASS**, stamp disk marker **before** any executor spawn (see Fidelity-rail stamp below). Freeze the locked test, then proceed to implement. |
 | b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → supply the missing `resolved_judgment` or escalate. (route to critical exception — do not retry) |
 | c | Compliance | Dispatch `compliance` (read-only, bash allow) with **diff + ACs + locked_tests only** — NOT shared_context, NOT adversary findings. Reads back `pass \| partial \| fail`. |
-| d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary-family-1` **VIRGIN**, then attempt `adversary-family-2` — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero attested findings is a **VALID result** — never re-dispatch to hit a count. A `BLOCKED` return is **NOT a pass** — halt and escalate. |
+| d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary-family-1` **VIRGIN**, then attempt `adversary-family-2` — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Require each agent's exact JSON schema; never ask for verdict/sweep/mechanism fields. Returns issues ranked by irreversibility (`category` + `severity` + `fix_hint`). Zero findings is a **VALID result** — never re-dispatch to hit a count. A missing or malformed primary report is **NOT a pass** — halt and escalate. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
 | f | Gates (deterministic, no LLM) | For a targeted Vitest file, call native `verify` with the task id and exact named path; do not use a package launcher. Run other prescribed gates through their existing channel. Failure → issue list. |
 | g | Fix | Map ALL issues (compliance + adversary + security + gates) to `sniper-<tiers[issue.severity]>`. Sniper is the ONLY fixer (`edit` allow, `bash` deny, no new files). **HIGH fix — or a `medium` in an irreversible class (orphan-state/race/idempotency) — re-dispatch `adversary-family-1` fresh-virgin after, to attack the NEW surface the fix created.** Re-run the affected gate after every sniper pass. |
@@ -228,8 +228,8 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 # After dual plan-reviewer merge (APPROVE|REVISE):
 node .opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
 
-# After upfront / final spec adversary (SHIP|BLOCK, findings count):
-node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --verdict SHIP --findings 0
+# After upfront / final spec adversary (obs only — map issues[] length; never ask the eye for a verdict string):
+node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --findings 0
 
 # At the top of each task loop (1-based n / total from plan.tasks):
 node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>

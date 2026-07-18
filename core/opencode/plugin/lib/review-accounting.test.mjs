@@ -133,15 +133,62 @@ test("usable family-1 terminal increments exactly once; failures are separate an
     ["empty", "", "empty"],
     ["prose", "looks good", "malformed"],
     ["shape", '{"verdict":"APPROVE"}', "malformed"],
-    ["denied", "Permission denied by policy", "denied"],
   ]) {
     const result = complete(current, { callId, response });
     current = result.state;
     assert.equal(result.classified.failureClass, failureClass);
     assert.equal(current.plan_review_count, 1);
   }
-  assert.equal(current.primary_review_failure_count, 4);
-  assert.equal(current.review_outcomes.length, 5);
+  assert.equal(current.primary_review_failure_count, 3);
+  assert.equal(current.primary_review_failure_streak, 3);
+  assert.equal(current.review_outcomes.length, 4);
+
+  const blocked = reserveReviewAttempt(current, input({ callId: "denied", response: "Permission denied by policy" }));
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /primary_failure_cap_reached|primary failure-cap/);
+  assert.equal(current.review_status, "primary_failure_cap_reached");
+});
+
+test("primary failure streak cap default 3 denies the 4th dispatch; useful resets streak", () => {
+  let current = state();
+  for (let index = 0; index < 3; index += 1) {
+    const result = complete(current, { callId: `malformed-${index}`, response: "not-json" });
+    current = result.state;
+    assert.equal(result.classified.failureClass, "malformed");
+    assert.equal(current.primary_review_failure_streak, index + 1);
+    assert.equal(current.plan_review_count, undefined);
+  }
+  assert.equal(current.review_status, "primary_failure_cap_reached");
+
+  const fourth = reserveReviewAttempt(current, input({ callId: "malformed-3", response: "still-bad" }));
+  assert.equal(fourth.ok, false);
+  assert.match(fourth.reason, /primary_failure_cap_reached|primary failure-cap/);
+
+  const useful = complete(state({ primary_review_failure_streak: 2 }), {
+    callId: "recover",
+    response: report(),
+  });
+  assert.equal(useful.classified.kind, "useful");
+  assert.equal(useful.state.primary_review_failure_streak, 0);
+  assert.equal(useful.state.plan_review_count, 1);
+
+  const afterUseful = complete(useful.state, { callId: "after-useful-malformed", response: "prose" });
+  assert.equal(afterUseful.state.primary_review_failure_streak, 1);
+  assert.equal(afterUseful.state.plan_review_count, 1);
+});
+
+test("primary failure cap counts family-1 inflight so concurrent fan-out cannot exceed budget", () => {
+  let current = state();
+  for (let index = 0; index < 3; index += 1) {
+    const reserved = reserveReviewAttempt(current, input({ callId: `inflight-${index}` }));
+    assert.equal(reserved.ok, true, reserved.reason);
+    current = reserved.state;
+  }
+  assert.equal(current.review_inflight.length, 3);
+  const fourth = reserveReviewAttempt(current, input({ callId: "inflight-3" }));
+  assert.equal(fourth.ok, false);
+  assert.match(fourth.reason, /primary failure-cap/);
+  assert.match(fourth.reason, /inflight_family1=3/);
 });
 
 test("valid primary review signs primary_only and permits hand progression; useful secondary signs both", () => {
