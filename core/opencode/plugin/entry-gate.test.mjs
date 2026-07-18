@@ -56,6 +56,8 @@ function fullCeremony(extra = {}, sessionId = SID) {
     dual_status: "both",
     plan_verdict: "APPROVE",
     feature_id: "feat",
+    final_review_done: true,
+    demo_done: true,
     regate_pending: [],
     regate_passed: [],
     hand_finished: [],
@@ -64,7 +66,14 @@ function fullCeremony(extra = {}, sessionId = SID) {
   }
   const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
   const markerSeals = []
-  for (const [key, action] of [["brainstormed", "brainstormed"], ["adversary_fired", "adversary_fired"], ["dual_status", "dual"], ["plan_verdict", "plan_verdict"]]) {
+  for (const [key, action] of [
+    ["brainstormed", "brainstormed"],
+    ["adversary_fired", "adversary_fired"],
+    ["final_review_done", "final-review"],
+    ["demo_done", "demo-done"],
+    ["dual_status", "dual"],
+    ["plan_verdict", "plan_verdict"],
+  ]) {
     if (state[key] === true || typeof state[key] === "string") {
       markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: state[key] }))
     }

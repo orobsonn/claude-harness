@@ -61,6 +61,9 @@ function fullCeremony(extra = {}) {
     adversary_fired: true,
     dual_status: "both",
     feature_id: "feat",
+    // Ship-ready FULL fixture (#385): final dual review + demo stamped.
+    final_review_done: true,
+    demo_done: true,
     ...extra,
   };
 }
@@ -167,6 +170,76 @@ test("FULL + dual both + clean rails + capture evidence → allow", () => {
   const d = decideBashDelivery({
     command: "git push",
     gateState: fullCeremony(),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ── #385 ship preconditions: final review + interactive demo ──────────────
+
+test("#ac-1.1 FULL without final_review_done → deny final-review-missing", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({ final_review_done: undefined, demo_done: true }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.equal(d.details?.denied_class, "final-review-missing");
+  assert.match(d.reason, /final-review-missing|final dual review/i);
+});
+
+test("#ac-1.2 FULL interactive without demo_done → deny demo-missing", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({ demo_done: undefined, headless: false }),
+    ...cleanDepsWithCapture(),
+    headless: false,
+  });
+  assert.equal(d.decision, "deny");
+  assert.equal(d.details?.denied_class, "demo-missing");
+  assert.match(d.reason, /demo-missing|demo marker/i);
+});
+
+test("#ac-1.2 FULL headless without demo_done → allow (demo not required)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({ demo_done: undefined, headless: true }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "delivery-ok");
+});
+
+test("#ac-1.2 FULL headless via input.headless without demo → allow", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({ demo_done: undefined }),
+    ...cleanDepsWithCapture(),
+    headless: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-1.3 FULL + final + demo + capture + dual → allow push path", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({
+      final_review_done: true,
+      demo_done: true,
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"],
+    }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "delivery-ok");
+  assert.equal(d.details?.denied_class, undefined);
+});
+
+test("LIGHT without final_review_done → allow (final rail is FULL-only)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony(),
     ...cleanDepsWithCapture(),
   });
   assert.equal(d.decision, "allow");

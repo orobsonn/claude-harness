@@ -351,6 +351,46 @@ test("capture-verified with BLOCKED hand-record → ok:false not DONE", async ()
   }
 });
 
+test("regate-passed without regate_pending → ok:false", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-regate-no-pending-"));
+  try {
+    seed(root);
+    const { before, execute } = await harness(root);
+    const passed = await markOnce(
+      before,
+      execute,
+      "regate-passed",
+      { task_id: TASK, sha: "abc123deadbeef" },
+      "call-regate-passed",
+    );
+    assert.equal(passed.metadata.ok, false);
+    assert.match(String(passed.metadata.reason ?? ""), /regate_pending does not contain/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("regate-passed after regate-pending → ok:true", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-regate-ok-"));
+  try {
+    const { file } = seed(root);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "regate-pending", { task_id: TASK }, "call-regate-pending")).metadata.ok, true);
+    const passed = await markOnce(
+      before,
+      execute,
+      "regate-passed",
+      { task_id: TASK, sha: "abc123deadbeef" },
+      "call-regate-passed",
+    );
+    assert.equal(passed.metadata.ok, true, passed.output);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.ok(Array.isArray(state.regate_passed) && state.regate_passed.length > 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("capture-verified rejects forged writtenBy (not host adapter)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-forge-"));
   try {

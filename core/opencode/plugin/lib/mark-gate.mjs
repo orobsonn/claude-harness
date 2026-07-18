@@ -33,7 +33,7 @@ if (isMain) {
   );
   const privileged = new Set([
     "brainstormed", "adversary_fired", "fidelity", "dual", "regate-pending",
-    "regate-passed", "hand-finished", "capture-verified",
+    "regate-passed", "hand-finished", "capture-verified", "final-review", "demo-done",
   ]);
   let result;
   if (privileged.has(action)) {
