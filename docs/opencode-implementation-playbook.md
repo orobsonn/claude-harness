@@ -104,9 +104,9 @@ Não reabre o dossiê de gaps. Só executa.
 | Campo | Valor |
 |---|---|
 | Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B2 code+tests+adversary pass1 |
-| Próximo batch | **B3** (#375 → #383 → #384) após PR B2 |
-| Bloqueio ativo | _(nenhum — residual prose-DONE documentado)_ |
+| Última sessão | 2026-07-18 B3 code+tests+adversary |
+| Próximo batch | **B4** (#377 → #385) após PR B3 |
+| Bloqueio ativo | _(nenhum)_ |
 
 ### Hotfixes já no working tree (pré-B0)
 
@@ -152,12 +152,12 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #375 REVISE blocks executor + plan_verdict | `todo` | | | |
-| #383 dual_status per-phase | `todo` | | | |
-| #384 wire dual merge no host | `todo` | | | |
-| Teste: REVISE + dual both → deny executor | `todo` | | | |
-| Smoke money-preflight repro | `todo` | | | |
-| Adversary passes (0–2) | — | | | |
+| #375 REVISE blocks executor + plan_verdict | `done` | pendente | 2026-07-18 | plan_verdict sealed + sticky REVISE até reopen |
+| #383 dual_status per-phase | `done` | pendente | 2026-07-18 | map plan_review/adversary; legacy scalar=plan_review only |
+| #384 wire dual merge no host | `done` | pendente | 2026-07-18 | loop-guard → dual-merge → driveDualEye |
+| Teste: REVISE + dual both → deny executor | `done` | | 2026-07-18 | money-preflight unit |
+| Smoke money-preflight repro | `done` | | 2026-07-18 | 90 pass |
+| Adversary passes (0–2) | 1 | | 2026-07-18 | seal plan_verdict + sticky REVISE |
 
 ### B4 — ship rails (#377 → #385)
 
@@ -301,7 +301,8 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 | 2026-07-17 | varredura + issues + playbook | — | mapa + #372–#385 + este doc | **B0** |
 | 2026-07-18 | opencode B0 implement | **B0** | #372+#376+H* código/testes verdes; adversary 2/2 SHIP; commit/PR pendente | **B1** após PR B0 |
 | 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; merged #389 | **B2** |
-| 2026-07-18 | opencode B2 implement | **B2** | #374+#382 código/testes 48 pass; adversary 1/2 (writtenBy fix; prose-DONE residual); commit/PR pendente | **B3** após PR B2 |
+| 2026-07-18 | opencode B2 implement | **B2** | #374+#382 código/testes 48 pass; adversary 1/2 (writtenBy fix; prose-DONE residual); merged #391 | **B3** |
+| 2026-07-18 | opencode B3 implement | **B3** | #375+#383+#384; plan_verdict seal; dual map; host merge; 90 pass; adversary 1/2 | **B4** após PR B3 |
 
 ---
 

@@ -95,15 +95,23 @@ export function normalizeMode(mode) {
 }
 
 /**
+ * @description True when a dual_status value (scalar enum or plan_review axis of a map)
+ * is a recorded attempt. Legacy scalar and map forms both accepted.
  * @param {unknown} dualStatus
  * @returns {boolean}
  */
 export function isRecordedDual(dualStatus) {
+  const status =
+    typeof dualStatus === "string"
+      ? dualStatus
+      : dualStatus != null && typeof dualStatus === "object" && !Array.isArray(dualStatus)
+        ? /** @type {Record<string, unknown>} */ (dualStatus).plan_review
+        : undefined;
   return (
-    dualStatus === "both" ||
-    dualStatus === "primary_only" ||
-    dualStatus === "primary_only_failopen" ||
-    dualStatus === "primary_only_error"
+    status === "both" ||
+    status === "primary_only" ||
+    status === "primary_only_failopen" ||
+    status === "primary_only_error"
   );
 }
 

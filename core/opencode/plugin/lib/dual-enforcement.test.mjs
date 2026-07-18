@@ -14,10 +14,13 @@ import {
   enforceDualOrThrow,
   isDeliveryHandRequiringDual,
   isFullDualCoverage,
+  isRecordedDualAttempt,
   isTaskTool,
   extractSubagentType,
   extractHookTaskContext,
   readRequireDualOn,
+  readPlanVerdict,
+  readDualStatus,
   dualStatusGatePatch,
   loadGateStateFromDisk,
   loadRoutingFromDisk,
@@ -145,7 +148,7 @@ test("asserts plan-gate or entry-gate throws deny when dual_status is missing be
 test("asserts dual_status primary_only_failopen is accepted and allows continue while isFullDualCoverage returns false", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
-    gateState: { dual_status: "primary_only_failopen" },
+    gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -158,7 +161,7 @@ test("asserts dual_status primary_only_failopen is accepted and allows continue 
   // enforceDualOrThrow must NOT throw on failopen
   const r = enforceDualOrThrow("[plan-gate]", {
     subagentType: "executor-high",
-    gateState: { dual_status: "primary_only_failopen" },
+    gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -171,7 +174,7 @@ test("asserts dual_status primary_only_failopen is accepted and allows continue 
 test("asserts dual_status both allows executor path and gate-state never stores dual_completed as bare boolean true", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
-    gateState: { dual_status: "both" },
+    gateState: { dual_status: "both", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -232,7 +235,7 @@ test("asserts dualStatusGatePatch or gate shape validation rejects bare boolean 
 test("primary_only_error allows executor continue and is not full dual coverage", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-medium",
-    gateState: { dual_status: "primary_only_error" },
+    gateState: { dual_status: "primary_only_error", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -271,7 +274,7 @@ test("adversarial: primary_only_failopen must not count as full dual coverage", 
   assert.equal(isFullDualCoverage("primary_only_failopen"), false);
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
-    gateState: { dual_status: "primary_only_failopen" },
+    gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -286,7 +289,7 @@ test("adversarial: primary_only_failopen must not count as full dual coverage", 
 test("adversarial: dual enforcement never invents secondary findings or leaks secondary verdicts", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
-    gateState: { dual_status: "primary_only_failopen" },
+    gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -331,7 +334,7 @@ test("isDeliveryHandRequiringDual is case-insensitive — Executor-High requires
   // Mixed-case still allows when dual_status is recorded failopen
   const fo = decideDualBeforeDelivery({
     subagentType: "Executor-High",
-    gateState: { dual_status: "primary_only_failopen" },
+    gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
     routing: ROUTING,
     toolName: "task",
   });
@@ -376,6 +379,105 @@ test("non-delivery hands allow without dual_status", () => {
   assert.equal(d.reason, "not-a-delivery-hand");
 });
 
+// ---- #375 plan_verdict gates executor (money-preflight) ----
+
+test("REVISE + dual_status both → deny executor (money-preflight repro)", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: { dual_status: "both", plan_verdict: "REVISE" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "deny");
+  assert.equal(d.ok, false);
+  assert.match(d.reason, /REVISE/);
+  assert.equal(d.details?.plan_verdict, "REVISE");
+  assert.equal(d.details?.dual_status, "both");
+});
+
+test("APPROVE + dual_status both → allow executor", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: { dual_status: "both", plan_verdict: "APPROVE" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
+  assert.equal(d.details?.plan_verdict, "APPROVE");
+});
+
+// ---- #383 dual_status per-phase ----
+
+test("#383 plan_review dual both + adversary missing → executor ALLOW if plan_verdict APPROVE", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: {
+      dual_status: { plan_review: "both" },
+      plan_verdict: "APPROVE",
+    },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
+  assert.equal(d.details?.dual_status, "both");
+  assert.equal(d.details?.plan_verdict, "APPROVE");
+});
+
+test("#383 plan_review dual both does NOT satisfy adversary axis (fail-closed)", () => {
+  const gs = { dual_status: { plan_review: "both" }, plan_verdict: "APPROVE" };
+  assert.equal(readDualStatus(gs, "plan_review"), "both");
+  assert.equal(readDualStatus(gs, "adversary"), undefined);
+  assert.equal(isRecordedDualAttempt(readDualStatus(gs, "adversary")), false);
+
+  // Legacy scalar also does not invent adversary coverage.
+  const legacy = { dual_status: "both", plan_verdict: "APPROVE" };
+  assert.equal(readDualStatus(legacy, "plan_review"), "both");
+  assert.equal(readDualStatus(legacy, "adversary"), undefined);
+});
+
+test("#383 adversary dual both alone does NOT unlock executor without plan_review dual", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: {
+      dual_status: { adversary: "both" },
+      plan_verdict: "APPROVE",
+    },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /dual_status|missing|plan_review/i);
+});
+
+test("#383 legacy scalar dual_status both + plan_verdict APPROVE still allows executor", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: { dual_status: "both", plan_verdict: "APPROVE" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(readDualStatus({ dual_status: "both" }, "plan_review"), "both");
+});
+
+test("dual both without plan_verdict → deny executor (fail-closed)", () => {
+  const d = decideDualBeforeDelivery({
+    subagentType: "executor-high",
+    gateState: { dual_status: "both" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(d.decision, "deny");
+  assert.equal(d.ok, false);
+  assert.match(d.reason, /plan_verdict missing/i);
+  assert.equal(d.details?.plan_verdict, null);
+  assert.equal(readPlanVerdict({ dual_status: "both" }), undefined);
+  assert.equal(readPlanVerdict({ plan_verdict: "APPROVE" }), "APPROVE");
+  assert.equal(readPlanVerdict({ plan_verdict: "REVISE" }), "REVISE");
+});
+
 test("readRequireDualOn reads harness.routing constraints.requireDualOn", () => {
   const roles = readRequireDualOn(ROUTING);
   assert.deepEqual(roles, ["plan-reviewer", "adversary"]);
@@ -412,6 +514,7 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
         dual_status: "primary_only_failopen",
+        plan_verdict: "APPROVE",
         feature_id: "oc-port-phase-2",
       }),
       "utf8",
@@ -677,7 +780,7 @@ test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow with
     fs.mkdirSync(d2, { recursive: true });
     fs.writeFileSync(
       path.join(d2, "gate-state.json"),
-      JSON.stringify({ dual_status: "both", feature_id: "oc-sid-ceremony" }),
+      JSON.stringify({ dual_status: "both", plan_verdict: "APPROVE", feature_id: "oc-sid-ceremony" }),
       "utf8",
     );
 
