@@ -240,7 +240,12 @@ node .opencode/plugin/lib/mark-gate.mjs final-review-done
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
-Right after each hand returns, call the native `mark` tool with `action: hand-finished` and that task's `task_id`. This privileged state transition is runtime-bound and must never use Bash.
+**Post-hand capture path (mandatory after every writing hand returns):**
+
+1. Call the native `mark` tool with `action: hand-finished` and that task's `task_id`.
+2. Immediately after — **only when the hand outcome is DONE** (host wrote a hand-record with `outcome: "DONE"` via `obs-hand`) — call native `mark` with `action: capture-verified`, that task's `task_id`, and `sha` = current HEAD (`git rev-parse HEAD`). If mark returns `ok:false` (hand-record missing / not DONE / unreadable), do **not** invent Bash workarounds: treat as hand capture failure and escalate (do not advance to the next task; do not ship).
+3. `hand-finished` alone is **not** sufficient for LIGHT/FULL delivery. `capture-verified` is required and is host-enforced against the on-disk hand-record under `.opencode/plans/.state/hand-records/<feature>/<session>/<task>.json`.
+4. Never use Bash or `mark-gate` CLI for privileged markers (`hand-finished`, `capture-verified`). Both transitions are runtime-bound to the native `mark` tool only.
 
 **Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch; Bash and direct module imports are not privileged marker surfaces.
 

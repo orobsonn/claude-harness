@@ -104,9 +104,9 @@ Não reabre o dossiê de gaps. Só executa.
 | Campo | Valor |
 |---|---|
 | Branch de trabalho | `fix/opencode-heredoc-payload-scan` |
-| Última sessão | 2026-07-18 B1 implementado (#373; commit/PR pendente) |
-| Próximo batch | **B2** (após commit/PR B1 verde) |
-| Bloqueio ativo | _(nenhum)_ — B1 código+testes verdes; falta commit seletivo + PR |
+| Última sessão | 2026-07-18 B2 code+tests+adversary pass1 |
+| Próximo batch | **B3** (#375 → #383 → #384) após PR B2 |
+| Bloqueio ativo | _(nenhum — residual prose-DONE documentado)_ |
 
 ### Hotfixes já no working tree (pré-B0)
 
@@ -132,21 +132,21 @@ Não reabre o dossiê de gaps. Só executa.
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #373 schema + tool validate-plan | `done` | | 2026-07-18 | locked_tests {id,path,assertion,fixture_paths?}; tool + CLI |
-| example-plan ok:true | `done` | | 2026-07-18 | validatePlan(example,{expect:full}) → ok:true |
-| complexity max resolvido (aceitar ou map→high) | `done` | | 2026-07-18 | max aceito; dispatch continua executor-high |
+| #373 schema + tool validate-plan | `done` | #389 | 2026-07-18 | locked_tests {id,path,assertion,fixture_paths?}; tool + CLI |
+| example-plan ok:true | `done` | #389 | 2026-07-18 | validatePlan(example,{expect:full}) → ok:true |
+| complexity max resolvido (aceitar ou map→high) | `done` | #389 | 2026-07-18 | max aceito; dispatch continua executor-high |
 | #381 validator strict (opcional neste batch) | `todo` | | | adiado p/ B5 (schema estável; escopo separado) |
-| Smoke validate-plan tool registrada | `done` | | 2026-07-18 | tools/validate-plan.ts + CLI exit 0 |
+| Smoke validate-plan tool registrada | `done` | #389 | 2026-07-18 | tools/validate-plan.ts + CLI exit 0 |
 
 ### B2 — hand path (#374 → #382)
 
 | Item | Status | PR | Data | Notas |
 |---|---|---|---|---|
-| #374 hand-record after Task | `todo` | | | |
-| #382 capture-verified path skill+host | `todo` | | | |
-| Teste: mark sem record → fail | `todo` | | | |
-| Smoke: Task → record file → capture ok | `todo` | | | |
-| Adversary passes (0–2) | — | | | |
+| #374 hand-record after Task | `done` (código) | pendente | 2026-07-18 | writeHandRecord em hand-records; obs-hand after terminal |
+| #382 capture-verified path skill+host | `done` (código) | pendente | 2026-07-18 | SKILL post-hand + tests; writtenBy allowlist |
+| Teste: mark sem record → fail | `done` | | 2026-07-18 | marker-authority |
+| Smoke: Task → record file → capture ok | `done` | | 2026-07-18 | unit/integration 48 pass |
+| Adversary passes (0–2) | 1 | | 2026-07-18 | high prose-DONE residual aceito p/ escopo Task; medium writtenBy fixado |
 
 ### B3 — dual (#375 → #383 → #384)
 
@@ -300,7 +300,8 @@ ISSUES: #378 #379 #380 (#381 se ainda todo)
 |---|---|---|---|---|
 | 2026-07-17 | varredura + issues + playbook | — | mapa + #372–#385 + este doc | **B0** |
 | 2026-07-18 | opencode B0 implement | **B0** | #372+#376+H* código/testes verdes; adversary 2/2 SHIP; commit/PR pendente | **B1** após PR B0 |
-| 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; commit/PR pendente | **B2** após PR B1 |
+| 2026-07-18 | opencode B1 implement | **B1** | #373 schema+tool+example verdes; max aceito; #381 adiado B5; merged #389 | **B2** |
+| 2026-07-18 | opencode B2 implement | **B2** | #374+#382 código/testes 48 pass; adversary 1/2 (writtenBy fix; prose-DONE residual); commit/PR pendente | **B3** após PR B2 |
 
 ---
 

@@ -123,6 +123,10 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
           if (!isDoneHandRecord(record)) return { ok: false, reason: "hand-record is not DONE" }
+          const writtenBy = record.writtenBy
+          if (writtenBy !== "obs-hand-task" && writtenBy !== "run-hand-adapter") {
+            return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
+          }
           if (!atomicJsonWrite(recordPath.path, { ...record, capturedVerifiedAt: new Date().toISOString() })) {
             return { ok: false, reason: "hand-record persistence failed" }
           }
