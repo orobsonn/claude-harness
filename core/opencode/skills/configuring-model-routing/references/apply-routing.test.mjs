@@ -144,3 +144,119 @@ test("applyRoutingToDisk refuses invalid routing without writing", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+function seedMiniOcRoot(root) {
+  const agentsSrc = path.join(ocSource, "agents");
+  const agentsDst = path.join(root, "agents");
+  fs.mkdirSync(agentsDst, { recursive: true });
+  for (const f of ["build.md", "planner.md", "compliance.md", "security.md", "harvester.md", "shipper.md", "test-author.md", "executor-low.md", "executor-medium.md", "executor-high.md", "sniper-low.md", "sniper-medium.md", "sniper-high.md", "plan-reviewer-family-1.md", "plan-reviewer-family-2.md", "adversary-family-1.md", "adversary-family-2.md"]) {
+    fs.copyFileSync(path.join(agentsSrc, f), path.join(agentsDst, f));
+  }
+  // minimal routing + AGENTS for path resolve
+  const built = routingFromPreset("openai-ollama-default");
+  assert.equal(built.ok, true);
+  fs.writeFileSync(path.join(root, "harness.routing.json"), JSON.stringify({ $schema: "../../shared/schemas/harness-routing.schema.json", ...built.routing }, null, 2) + "\n");
+  fs.copyFileSync(path.join(ocSource, "AGENTS.md"), path.join(root, "AGENTS.md"));
+  return built.routing;
+}
+
+test("apply refuses weak support eyes without confirmWeakEyes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-weak-"));
+  try {
+    seedMiniOcRoot(root);
+    const built = buildRoutingFromSlots({
+      primaryEye: "openai/gpt-5.6-sol",
+      secondaryEye: "ollama-cloud/kimi-k2.7-code",
+      supportEye: "ollama-cloud/gemma4:31b",
+    });
+    assert.equal(built.ok, true, built.reason);
+    const denied = applyRoutingToDisk({ targetRoot: root, routing: built.routing, updateOpencodeJson: false });
+    assert.equal(denied.ok, false);
+    assert.match(denied.reason, /confirmWeakEyes/i);
+    const ok = applyRoutingToDisk({
+      targetRoot: root,
+      routing: built.routing,
+      updateOpencodeJson: false,
+      confirmWeakEyes: true,
+    });
+    assert.equal(ok.ok, true, ok.reason);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("apply refuses xAI/Grok on source mode without forceCoreGrok", () => {
+  // ocSource is core/opencode → mode source
+  const built = routingFromPreset("xai-ollama-dual");
+  assert.equal(built.ok, true);
+  const denied = applyRoutingToDisk({
+    targetRoot: ocSource,
+    routing: built.routing,
+    updateOpencodeJson: false,
+  });
+  assert.equal(denied.ok, false);
+  assert.match(denied.reason, /forceCoreGrok|blocked on harness source/i);
+});
+
+test("apply does not rewrite opencode.json above targetRoot", () => {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), "apply-bound-"));
+  try {
+    const parentJson = path.join(outer, "opencode.json");
+    fs.writeFileSync(parentJson, JSON.stringify({ model: "keep/me", small_model: "keep/small" }, null, 2) + "\n");
+    const project = path.join(outer, "app");
+    const oc = path.join(project, ".opencode");
+    fs.mkdirSync(oc, { recursive: true });
+    seedMiniOcRoot(oc);
+    fs.writeFileSync(path.join(project, "opencode.json"), JSON.stringify({ model: "old/x", small_model: "old/y" }, null, 2) + "\n");
+
+    const built = routingFromPreset("openai-ollama-default");
+    const applied = applyRoutingToDisk({
+      targetRoot: project,
+      routing: built.routing,
+      updateOpencodeJson: true,
+    });
+    assert.equal(applied.ok, true, applied.reason);
+    const parent = JSON.parse(fs.readFileSync(parentJson, "utf8"));
+    assert.equal(parent.model, "keep/me", "must not clobber parent opencode.json");
+    const proj = JSON.parse(fs.readFileSync(path.join(project, "opencode.json"), "utf8"));
+    assert.equal(proj.model, "openai/gpt-5.6-sol");
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});
+
+test("apply preserves $schema on harness.routing.json", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-schema-"));
+  try {
+    seedMiniOcRoot(root);
+    const before = JSON.parse(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"));
+    assert.ok(before.$schema);
+    const built = routingFromPreset("openai-ollama-default");
+    built.routing.roles.build.model = "openai/gpt-5.5";
+    built.routing.modelCapabilities["openai/gpt-5.5"] = { supportsReasoningEffort: true };
+    const applied = applyRoutingToDisk({ targetRoot: root, routing: built.routing, updateOpencodeJson: false });
+    assert.equal(applied.ok, true, applied.reason);
+    const after = JSON.parse(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"));
+    assert.equal(after.$schema, before.$schema);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("apply hard-fails when AGENTS.md exists but §8 missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-agents-bad-"));
+  try {
+    seedMiniOcRoot(root);
+    fs.writeFileSync(path.join(root, "AGENTS.md"), "# no section eight\n");
+    const before = fs.readFileSync(path.join(root, "harness.routing.json"), "utf8");
+    const built = routingFromPreset("openai-ollama-default");
+    built.routing.roles.build.model = "openai/gpt-5.5";
+    built.routing.modelCapabilities["openai/gpt-5.5"] = { supportsReasoningEffort: true };
+    const applied = applyRoutingToDisk({ targetRoot: root, routing: built.routing, updateOpencodeJson: false });
+    assert.equal(applied.ok, false);
+    assert.match(applied.reason, /§8|section not found/i);
+    assert.equal(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -58,7 +58,7 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 1. Load current routing (`core/opencode/` source **or** project `.opencode/` vendored).
 2. Elicit: preset dual-safe **or** custom slots (product language first).
 3. Build config via `buildRoutingFromSlots` / `routingFromPreset` — **must** `validateRouting` ok.
-4. Apply **only** via `applyRoutingToDisk` (atomic validate-then-write).
+4. Apply **only** via `applyRoutingToDisk` (validate + stage-in-memory + staged writes with rollback on mid-fail).
 5. Report changed files; demand **session restart**.
 
 ## Does not
@@ -141,10 +141,20 @@ const result = applyRoutingToDisk({
   targetRoot: "<project root or core/opencode path>",
   routing: built.routing,
   updateOpencodeJson: true,
+  // forceCoreGrok: true,   // only if applying xAI/Grok to harness source (CI bans by default)
+  // confirmWeakEyes: true, // required if supportEye is not openai/* or xai/*
 });
 ```
 
-On `ok:false` → zero write. On `ok:true` → list `changed` + `warnings`.
+On `ok:false` → **no net change** (validate fail writes nothing; mid-write failure rolls back files already written in this apply).  
+On `ok:true` → list `changed` + `warnings`.
+
+**Hard gates (not prose-only):**
+- Same-provider dual → reject  
+- `supportEye` fraco (não openai/xai) → reject unless `confirmWeakEyes:true`  
+- xAI/Grok no **source** `core/opencode` → reject unless `forceCoreGrok:true`  
+- `opencode.json` só sob `targetRoot` / ocRoot (nunca `../`)  
+- AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 
 ### 5. Close
 
