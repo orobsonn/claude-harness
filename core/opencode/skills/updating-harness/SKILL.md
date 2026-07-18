@@ -100,6 +100,7 @@ untouched (harness config written beside it as `opencode.harness.json` for manua
   cloud routines see the new version.
 - Stop after the update and tell the operator to restart the session. Plugins already loaded in the
   current process still run the previous version and must not continue as a hybrid runtime.
+- Point the operator to the human guide: `.opencode/docs/OPERATOR-GUIDE.md` (skills, plan vs build, routing).
 - **Do not commit automatically** unless the operator asks.
 
 ---

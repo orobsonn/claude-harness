@@ -7,6 +7,9 @@ operator-facing messages are **pt-br** (see Language convention).
 Models come from `harness.routing.json`.
 Do not invent role models in prose that disagree with that file.
 
+**Human operator guide (pt-br):** `.opencode/docs/OPERATOR-GUIDE.md` (source: `core/opencode/docs/OPERATOR-GUIDE.md`).
+Skills catalog, plan vs build, routing, ship rails, how to update the harness — load when the operator asks how to use OpenCode or is lost on config skills.
+
 ---
 
 ## Entry policy — read this FIRST (every session)
