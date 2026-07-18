@@ -539,6 +539,43 @@ test("hook rejects a gate-state whose embedded session differs from its runtime 
   }
 });
 
+test("dual dispatch with official Task command/task_id does not deny reservation identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-command-hygiene-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state()));
+    const hooks = await createLoopGuardHooks(root);
+    // Official OC Task schema may carry command/task_id for resume — not harness role.
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION, callID: "dual-f1-call" },
+      { args: {
+        description: "Review the plan",
+        prompt: "Review the canonical plan without prior verdicts.",
+        subagent_type: "plan-reviewer-family-1",
+        command: "resume-or-skill-command",
+        task_id: "official-host-resume-id",
+      } },
+    ));
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "agent", sessionID: SESSION, callID: "dual-f2-call" },
+      { args: {
+        description: "Secondary family review",
+        prompt: "Review without prior verdicts.",
+        subagent_type: "plan-reviewer-family-2",
+        command: "another-host-command",
+        task_id: "other-official-resume-id",
+      } },
+    ));
+    const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(persisted.review_inflight.length, 2);
+    assert.equal(persisted.review_inflight[0].canonical_identity, "plan-reviewer-family-1");
+    assert.equal(persisted.review_inflight[1].canonical_identity, "plan-reviewer-family-2");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("concurrent before-hooks compete for the final primary reservation slot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-slot-concurrency-"));
   try {

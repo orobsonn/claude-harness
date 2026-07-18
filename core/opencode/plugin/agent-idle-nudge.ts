@@ -8,16 +8,11 @@
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 
-function isTaskTool(name: unknown): boolean {
-  if (typeof name !== "string") return false;
-  const n = name.toLowerCase();
-  return n === "task" || n === "agent" || n.endsWith(".task") || n.endsWith(".agent");
-}
-
 export async function createAgentIdleNudgeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { decide } = await import("./lib/agent-idle-nudge.mjs");
+  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {

@@ -185,6 +185,9 @@ export function validatePlan(plan, opts = {}) {
       }
 
       if (!Array.isArray(t.scope_paths)) errors.push(`task[${idx}].scope_paths must be array`);
+      else if (expect === "full" && t.scope_paths.length === 0) {
+        errors.push(`task[${idx}].scope_paths must be non-empty under expect full`);
+      }
       if (!Array.isArray(t.criterion_refs)) errors.push(`task[${idx}].criterion_refs must be array`);
 
       // locked_tests — canonical shape {id, path, assertion, fixture_paths?}
@@ -256,6 +259,18 @@ export function validatePlan(plan, opts = {}) {
       if (Array.isArray(t.depends_on)) {
         for (const dep of t.depends_on) {
           if (typeof dep !== "string") errors.push(`task[${idx}].depends_on must be string ids`);
+        }
+      }
+    }
+
+    // dangling depends_on (ghost task ids) — after all ids collected
+    for (const [idx, task] of p.tasks.entries()) {
+      if (!task || typeof task !== "object") continue;
+      const t = /** @type {any} */ (task);
+      if (!Array.isArray(t.depends_on)) continue;
+      for (const dep of t.depends_on) {
+        if (typeof dep === "string" && dep && !taskIds.has(dep)) {
+          errors.push(`task[${idx}].depends_on dangling ref: ${dep}`);
         }
       }
     }

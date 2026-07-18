@@ -7,14 +7,18 @@ import os from "node:os";
 import path from "node:path";
 import {
   appendScopeEvent,
+  appendTerminalScopeDiagnostic,
   bindChildSession,
   claimActiveDispatch,
   clearActiveDispatch,
   finishActiveDispatch,
+  getProcessChildBinding,
   hasCleanupPending,
   heartbeatActiveDispatch,
+  markDispatchBindingPending,
   normalizeProjectPath,
   reconcileExpiredDispatch,
+  reconcilePendingChildBindingByChild,
 } from "./dispatch-scope.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
 import { scopeRuntimeCompositionMode } from "./scope-runtime-composition.mjs";
@@ -319,5 +323,107 @@ test("CLI primary session uses capability binding and canonical test-author-spaw
     assert.equal(identity.ok, true);
     assert.equal(identity.adapter, true);
     assert.equal(identity.role, "test-author-spawn");
+  } finally { f.close(); }
+});
+
+test("#ac-1.1 binding_pending with known child reconciles without SDK parent lookup", () => {
+  const f = fixture();
+  try {
+    assert.equal(claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-pending",
+      role: "executor-high",
+      taskId: "task-1",
+      token: "token-pending",
+    }).ok, true);
+    const pending = markDispatchBindingPending(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-pending",
+      token: "token-pending",
+      childSessionId: "child-known",
+      jobId: "job-1",
+    });
+    assert.equal(pending.ok, true);
+    assert.equal(f.read().active_dispatch.status, "binding_pending");
+    assert.equal(f.read().active_dispatch.binding_pending.child_session_id, "child-known");
+
+    const reconciled = reconcilePendingChildBindingByChild(f.root, "child-known");
+    assert.equal(reconciled.ok, true, reconciled.reason);
+    assert.equal(getProcessChildBinding(f.root, "child-known")?.parentSessionId, f.sessionId);
+    assert.equal(f.read().active_dispatch.status, "active");
+    assert.equal(f.read().active_dispatch.child_session_id, "child-known");
+    assert.equal(f.read().active_dispatch.binding_pending, undefined);
+
+    const finished = finishActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-pending",
+      token: "token-pending",
+    });
+    assert.equal(finished.ok, true);
+    assert.equal(finished.cleared, true);
+    assert.equal(f.read().active_dispatch, undefined);
+  } finally { f.close(); }
+});
+
+test("#ac-1.2 real missing binding stays fail-closed", () => {
+  const f = fixture();
+  try {
+    assert.equal(claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-other",
+      role: "executor-high",
+      taskId: "task-1",
+      token: "token-other",
+    }).ok, true);
+    assert.equal(markDispatchBindingPending(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-other",
+      token: "token-other",
+      childSessionId: "child-other",
+    }).ok, true);
+
+    const missing = reconcilePendingChildBindingByChild(f.root, "child-unbound");
+    assert.equal(missing.ok, false);
+    assert.match(missing.reason, /no durable pending child index|identity/);
+
+    const mismatch = reconcilePendingChildBindingByChild(f.root, "child-wrong");
+    assert.equal(mismatch.ok, false);
+
+    const diag = appendTerminalScopeDiagnostic(f.root, "child-unbound", "SDK unavailable and no verified child binding");
+    assert.equal(diag.ok, true);
+    const raw = fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", "scope-terminal-events.jsonl"), "utf8");
+    const event = JSON.parse(raw.trim().split("\n").at(-1));
+    assert.equal(event.type, "hand-scope-terminal-unbound");
+    assert.equal(event.decision, "fail-closed");
+    assert.equal(f.read().active_dispatch.status, "binding_pending");
+  } finally { f.close(); }
+});
+
+test("#ac-1.3 happy-path reconcile decision is not fail-closed", () => {
+  const f = fixture();
+  try {
+    assert.equal(claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-happy",
+      role: "executor-medium",
+      taskId: "task-1",
+      token: "token-happy",
+    }).ok, true);
+    assert.equal(markDispatchBindingPending(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-happy",
+      token: "token-happy",
+      childSessionId: "child-happy",
+    }).ok, true);
+    const reconciled = reconcilePendingChildBindingByChild(f.root, "child-happy");
+    assert.equal(reconciled.ok, true);
+    assert.notEqual(reconciled.ok === false ? "fail-closed" : "bound", "fail-closed");
+    const eventsPath = path.join(f.root, ".opencode", "plans", ".state", "scope-terminal-events.jsonl");
+    assert.equal(fs.existsSync(eventsPath), false);
+    assert.equal(finishActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "call-happy",
+      token: "token-happy",
+    }).cleared, true);
   } finally { f.close(); }
 });

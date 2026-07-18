@@ -249,3 +249,44 @@ test("b1-complexity-invalid: unknown complexity rejected", () => {
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("complexity must be low|medium|high|max")));
 });
+
+test("#ac-1.1 dangling depends_on: ghost task id → ok false with dangling ref", () => {
+  const plan = {
+    feature_id: "ghost-dep",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "x" }],
+        depends_on: ["ghost-task"],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("dangling ref") && e.includes("ghost-task")));
+});
+
+test("#ac-1.2 empty scope_paths under expect full → ok false", () => {
+  const plan = {
+    feature_id: "empty-scope",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: [],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "x" }],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("scope_paths") && e.includes("expect full")));
+});

@@ -83,7 +83,8 @@ function extractFeatureTaskIds(toolArgs: unknown): {
       : null
   const featureRaw =
     a.feature_id ?? a.featureId ?? a.feature ?? nested?.feature_id ?? nested?.featureId
-  const taskRaw = a.task_id ?? a.taskId ?? a.task ?? nested?.task_id ?? nested?.taskId
+  // Official Task.task_id is host resume — harness plan task uses taskId/task only.
+  const taskRaw = a.taskId ?? a.task ?? nested?.taskId ?? nested?.task
   return {
     featureId: typeof featureRaw === "string" ? featureRaw : undefined,
     taskId: typeof taskRaw === "string" ? taskRaw : undefined,

@@ -218,13 +218,20 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
     await assert.rejects(() => dispatch(valid, { feature_id: "foreign" }), /feature_id/)
     await assert.rejects(() => dispatch(`[HARNESS_TASK_CONTEXT]{"task_id":"missing-task"}[/HARNESS_TASK_CONTEXT]`), /task_id/)
     await assert.rejects(() => dispatch("Implement without marker."), /marker/)
-    await assert.rejects(() => dispatch(valid, { task_id: "missing-task" }), /conflicts/)
+    // Official Task.task_id / command are host resume fields — do not conflict with marker role/task.
+    await assert.doesNotReject(() => dispatch(valid, {
+      task_id: "official-host-resume-id",
+      command: "resume-or-skill-command",
+    }))
+    // Harness-only taskId alias still conflicts with the prompt marker.
+    await assert.rejects(() => dispatch(valid, { taskId: "missing-task" }), /conflict/)
     const review = (args) => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION },
       { args: { description: "review", prompt: "Review plan.", subagent_type: "plan-reviewer-family-1", ...args } },
     )
     await assert.rejects(() => review({ feature_id: "foreign" }), /feature_id/)
-    await assert.rejects(() => review({ feature_id: FEATURE, task_id: "missing-task" }), /task_id/)
+    await assert.rejects(() => review({ feature_id: FEATURE, taskId: "missing-task" }), /task_id/)
+    await assert.doesNotReject(() => review({ command: "resume-or-skill-command", task_id: "official-host-resume-id" }))
     await assert.doesNotReject(() => review({}))
   })
 })

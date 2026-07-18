@@ -439,7 +439,9 @@ export function enforceDualOrThrow(prefix, input = {}) {
 
 /**
  * @description Extract subagent_type from OC task tool args (best-effort).
- * Checks flat keys, nested input, subagent, and command. Never throws.
+ * Role sources only: subagent_type / agent* aliases (flat + nested input).
+ * Never reads official Task `command` or `task_id` — those are host resume fields.
+ * Never throws.
  * @param {unknown} toolArgs
  * @returns {string}
  */
@@ -463,13 +465,11 @@ export function extractSubagentType(toolArgs) {
       a.agent,
       a.agent_type,
       a.subagent,
-      a.command,
       nested?.subagent_type,
       nested?.subagentType,
       nested?.agent,
       nested?.agent_type,
       nested?.subagent,
-      nested?.command,
     ];
     for (const raw of candidates) {
       if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
@@ -481,14 +481,21 @@ export function extractSubagentType(toolArgs) {
 }
 
 /**
- * @description Whether tool name is the OC task dispatch tool.
+ * @description Whether tool name is the OC Task/agent dispatch family.
+ * Canonical rule (shared with loop-guard, obs-hand, obs-eye): task | agent |
+ * endsWith .task | .agent (case-insensitive).
  * @param {unknown} toolName
  * @returns {boolean}
  */
 export function isTaskTool(toolName) {
   if (typeof toolName !== "string") return false;
   const n = toolName.toLowerCase();
-  return n === "task" || n.endsWith("_task") || n.endsWith(".task");
+  return (
+    n === "task" ||
+    n === "agent" ||
+    n.endsWith(".task") ||
+    n.endsWith(".agent")
+  );
 }
 
 /**

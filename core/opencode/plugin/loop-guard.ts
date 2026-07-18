@@ -1,9 +1,6 @@
 /** @description OC loop guard: useful family-1 reports count only after execution. */
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
 
-const subagentOf = (args: any): string =>
-  args?.subagent_type ?? args?.subagentType ?? args?.agent ?? ""
-
 /**
  * @description Builds loop-guard hooks (async load of pure mjs).
  */
@@ -31,6 +28,7 @@ export async function createLoopGuardHooks(
     dualMergeIntentFromOutcome,
     finalizeHostDualMerge,
   } = await import("./lib/dual-merge.mjs")
+  const { extractSubagentType, isTaskTool } = await import("./lib/dual-enforcement.mjs")
 
   function argsOf(input: any, output: any): Record<string, unknown> {
     const value = output?.args ?? input?.args ?? input?.toolArgs ?? input?.tool_input ?? {}
@@ -61,7 +59,7 @@ export async function createLoopGuardHooks(
     const sessionID = input?.sessionID ?? input?.sessionId ?? ""
     const callID = input?.callID ?? input?.callId ?? ""
     const args = argsOf(input, output)
-    const sub = subagentOf(args)
+    const sub = extractSubagentType(args)
     if (!sessionID || !callID) return
     const sp = statePathFor(sessionID)
     if (!sp) return
@@ -109,10 +107,11 @@ export async function createLoopGuardHooks(
 
   return {
     "tool.execute.before": async (input, output) => {
-      if (input?.tool !== "task") return
+      if (!isTaskTool(input?.tool)) return
       const sessionID = input?.sessionID ?? ""
       if (!sessionID) return
-      const sub = subagentOf(output?.args)
+      const args = argsOf(input, output)
+      const sub = extractSubagentType(args)
       const identity = reviewAgentIdentity(sub)
       if (!identity) return
       const key = loopCounterKey(sub)
@@ -120,7 +119,6 @@ export async function createLoopGuardHooks(
       const sp = statePathFor(sessionID)
       if (!sp) return
 
-      const args = argsOf(input, output)
       const reserved = withGateStateLock(sp, (state) => {
         const transition = reserveReviewAttempt(state, {
           subagentType: sub,
@@ -148,16 +146,16 @@ export async function createLoopGuardHooks(
     },
 
     "tool.execute.after": async (input: any, output: any) => {
-      if (input?.tool !== "task") return
+      if (!isTaskTool(input?.tool)) return
       persistOutcome(input, output)
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "message.part.updated") return
       const part = event?.properties?.part
-      if (!part || part.type !== "tool" || part.tool !== "task" || part.state?.status !== "error") return
+      if (!part || part.type !== "tool" || !isTaskTool(part.tool) || part.state?.status !== "error") return
       persistOutcome(
-        { tool: "task", sessionID: part.sessionID, callID: part.callID, args: part.state?.input },
+        { tool: part.tool, sessionID: part.sessionID, callID: part.callID, args: part.state?.input },
         { args: part.state?.input },
         classifyReviewBoundaryError(part.state.error),
       )

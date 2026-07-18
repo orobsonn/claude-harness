@@ -20,12 +20,6 @@ function isCrossFamilyEnabled(raw: string | undefined): boolean {
   return !FALSY_ENV_VALUES.has(raw.toLowerCase());
 }
 
-function isTaskTool(name: unknown): boolean {
-  if (typeof name !== "string") return false;
-  const n = name.toLowerCase();
-  return n === "task" || n === "agent" || n.endsWith(".task") || n.endsWith(".agent");
-}
-
 function extractResponse(input: any, output: any): string {
   try {
     const r =
@@ -47,6 +41,7 @@ function extractResponse(input: any, output: any): string {
 export async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
+  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
   const {
     eventForEyeRole,
     isEyeRole,

@@ -20,7 +20,8 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
   const stringValue = (value: unknown) => typeof value === "string" ? value : ""
   return {
     featureId: stringValue(record.feature_id ?? record.featureId ?? nested.feature_id ?? nested.featureId),
-    taskId: stringValue(record.task_id ?? record.taskId ?? nested.task_id ?? nested.taskId),
+    // Official Task.task_id is host resume — harness plan task uses taskId/task only.
+    taskId: stringValue(record.taskId ?? record.task ?? nested.taskId ?? nested.task),
   }
 }
 

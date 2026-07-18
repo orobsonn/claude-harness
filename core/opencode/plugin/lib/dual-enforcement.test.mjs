@@ -485,7 +485,12 @@ test("readRequireDualOn reads harness.routing constraints.requireDualOn", () => 
 
 test("extractSubagentType and isTaskTool parse OC task args including nested input", () => {
   assert.equal(isTaskTool("task"), true);
+  assert.equal(isTaskTool("agent"), true);
+  assert.equal(isTaskTool("foo.task"), true);
+  assert.equal(isTaskTool("foo.agent"), true);
+  assert.equal(isTaskTool("Task"), true);
   assert.equal(isTaskTool("bash"), false);
+  assert.equal(isTaskTool("my_task"), false);
   assert.equal(
     extractSubagentType({ subagent_type: "executor-high" }),
     "executor-high",
@@ -498,7 +503,16 @@ test("extractSubagentType and isTaskTool parse OC task args including nested inp
     extractSubagentType({ subagent: "executor-medium" }),
     "executor-medium",
   );
-  assert.equal(extractSubagentType({ command: "executor-high" }), "executor-high");
+  // Official Task `command` is resume/host field — never harness role.
+  assert.equal(extractSubagentType({ command: "executor-high" }), "");
+  assert.equal(
+    extractSubagentType({
+      subagent_type: "plan-reviewer-family-1",
+      command: "resume-or-skill-command",
+      task_id: "official-resume-id",
+    }),
+    "plan-reviewer-family-1",
+  );
 });
 
 test("loadGateStateFromDisk and loadRoutingFromDisk read real files under project root", () => {

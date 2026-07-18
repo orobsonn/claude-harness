@@ -9,12 +9,6 @@ import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import crypto from "node:crypto";
 
-function isTaskTool(name: unknown): boolean {
-  if (typeof name !== "string") return false;
-  const n = name.toLowerCase();
-  return n === "task" || n === "agent" || n.endsWith(".task") || n.endsWith(".agent");
-}
-
 /**
  * @description Build before+after hooks for hand observability.
  */
@@ -35,7 +29,7 @@ export async function createObsHandHooks(
   } = await import("./lib/obs-emit.mjs");
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs");
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("./lib/roles.mjs");
-  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBinding } = await import("./lib/dispatch-scope.mjs");
+  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBinding, reconcilePendingChildBindingByChild } = await import("./lib/dispatch-scope.mjs");
   const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
   const {
     writeHandRecord,
@@ -48,6 +42,7 @@ export async function createObsHandHooks(
     isRegateArmingOutcome,
     armRegatePending,
   } = await import("./lib/regate-arm.mjs");
+  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
   registerScopeComponent(cwd, "obs-hand");
@@ -197,23 +192,30 @@ export async function createObsHandHooks(
 
   async function cleanupChild(childSessionId: unknown) {
     if (typeof childSessionId !== "string" || !childSessionId) return { ok: true };
-    const processBinding = getProcessChildBinding(cwd, childSessionId);
+    let processBinding = getProcessChildBinding(cwd, childSessionId);
     if (!processBinding) {
-      let session;
-      try {
-        session = await reader.getSession(childSessionId);
-        if (!session?.parentID) return { ok: true };
-      } catch {
-        const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, "SDK unavailable and no verified child binding");
-        return { ok: false, reason: recorded.ok ? "terminal session identity unavailable" : recorded.reason };
-      }
-      const reconciled = reconcilePendingChildBinding(cwd, { parentSessionId: session.parentID, childSessionId });
-      if (!reconciled.ok) {
-        const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, reconciled.reason);
-        return { ok: false, reason: recorded.ok ? reconciled.reason : recorded.reason };
+      // Happy path: child id was recorded on binding_pending — verify without SDK.
+      const fromPending = reconcilePendingChildBindingByChild(cwd, childSessionId);
+      if (fromPending.ok) {
+        processBinding = getProcessChildBinding(cwd, childSessionId);
+      } else {
+        let session;
+        try {
+          session = await reader.getSession(childSessionId);
+          if (!session?.parentID) return { ok: true };
+        } catch {
+          const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, "SDK unavailable and no verified child binding");
+          return { ok: false, reason: recorded.ok ? "terminal session identity unavailable" : recorded.reason };
+        }
+        const reconciled = reconcilePendingChildBinding(cwd, { parentSessionId: session.parentID, childSessionId });
+        if (!reconciled.ok) {
+          const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, reconciled.reason);
+          return { ok: false, reason: recorded.ok ? reconciled.reason : recorded.reason };
+        }
+        processBinding = getProcessChildBinding(cwd, childSessionId);
       }
     }
-    const verifiedBinding = getProcessChildBinding(cwd, childSessionId);
+    const verifiedBinding = processBinding ?? getProcessChildBinding(cwd, childSessionId);
     const bound = getChildSessionBinding(cwd, childSessionId, verifiedBinding?.parentSessionId);
     if (!bound.ok) {
       const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, bound.reason);
