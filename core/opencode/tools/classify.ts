@@ -21,6 +21,10 @@ function errorResult(error: string, hint: string, received: string) {
 export interface ClassifyContext {
   directory: string
   sessionID: string
+  /** Acting agent when the host surfaces it (build only). */
+  agent?: string
+  /** Parent session id when this is a Task child — classify must deny. */
+  parentSessionId?: string | null
 }
 
 /**
@@ -51,6 +55,27 @@ export async function executeClassify(
       "invalid sessionID",
       "sessionID must pass isSafeSessionId",
       typeof sessionID === "string" ? sessionID : "",
+    )
+  }
+
+  // Belt: top-level build only (entry-gate is the primary rail).
+  const { decideClassifyAuthority } = await import(
+    "../../shared/lib/classify-authority.mjs"
+  )
+  const agent =
+    typeof context.agent === "string"
+      ? context.agent
+      : typeof (context as { agentName?: unknown }).agentName === "string"
+        ? String((context as { agentName?: string }).agentName)
+        : ""
+  const parentSessionId =
+    typeof context.parentSessionId === "string" ? context.parentSessionId : null
+  const auth = decideClassifyAuthority({ agent, parentSessionId, sessionId: sessionID })
+  if (!auth.ok) {
+    return errorResult(
+      auth.reason,
+      "only top-level build may classify; hands/eyes execute their brief only",
+      JSON.stringify({ agent, parentSessionId, sessionID }),
     )
   }
 

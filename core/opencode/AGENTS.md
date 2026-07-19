@@ -12,16 +12,24 @@ Skills catalog, plan vs build, routing, ship rails, how to update the harness �
 
 ---
 
-## Entry policy — read this FIRST (every session)
+## Entry policy — read this FIRST (top-level `build` only)
 
-On the **first request of every session**, the `build` (primary) agent runs this
+**This section governs the top-level `build` session only.** If you were spawned
+as a hand or eye via the `task` tool (executor / sniper / test-author / planner /
+plan-reviewer / adversary / compliance / security / harvester / shipper) — or you
+are any agent other than `build` — **skip this section entirely**. You are one
+step inside a pipeline that already triaged. Follow your brief only. **Never**
+call `classify`, load `triaging-requests`, or start ceremony.
+
+On the **first request of every top-level `build` session**, the primary agent runs this
 order before anything else. These are real **skills it loads and follows**:
 
 1. **`triaging-requests`** — classify into **no-ceremony / QUICK / LIGHT / FULL**.
 2. **`brainstorming`** (LIGHT/FULL only) — elicit operator decisions; HARD-GATE on approved design.
 3. **`planner`** — only after the spec is approved.
 
-Both entry skills run **inside `build` (primary)** — never in a headless subagent.
+Both entry skills run **inside `build` (primary)** — never in a Task child / hand / eye.
+Host rails deny `classify` on child sessions and on any agent other than `build`.
 The full per-task delivery loop lives in the `orchestrating-delivery` skill.
 
 ### Harness lifecycle lane

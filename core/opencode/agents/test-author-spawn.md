@@ -6,6 +6,7 @@ temperature: 0.1
 tools:
   task: false
 permission:
+  classify: deny
   edit: allow
   bash: deny
 ---

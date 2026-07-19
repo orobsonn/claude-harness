@@ -100,7 +100,9 @@ On planner preflight denial, pass the exact structured denial object to native `
 On the **first request of every session**, **load and follow the `triaging-requests` skill** before doing anything else.
 
 <HARD-GATE>
-Your **FIRST action of the session is the tool call `skill({ name: "triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
+**Top-level `build` only.** If this session was created as a Task child, do **not** triage — stop and return; the parent conductor owns ceremony.
+
+Your **FIRST action of the top-level session is the tool call `skill({ name: "triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
 **Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap, provider error, dual failure). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
 

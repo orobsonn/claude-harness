@@ -4,6 +4,7 @@ mode: subagent
 model: openai/gpt-5.5
 temperature: 0.1
 permission:
+  classify: deny
   edit: deny
   bash: allow
 ---

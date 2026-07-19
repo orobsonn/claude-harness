@@ -27,6 +27,10 @@ export type EntryGateDeps = {
   isAncestorFn?: (sha: string) => boolean | null
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
   ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
+  /** Resolve parent session id for classify top-level rail (injectable in tests). */
+  getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
+  /** Acting agent name when known (injectable). */
+  resolveActingAgentFn?: (input: unknown, output: unknown) => string | null
 }
 
 /**
@@ -43,6 +47,13 @@ function isBashOrShellTool(toolName: unknown): boolean {
     n.endsWith("_shell") ||
     n.endsWith(".shell")
   )
+}
+
+/** @description Native classify tool (ceremony stamp) — top-level build only. */
+function isClassifyTool(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false
+  const n = toolName.toLowerCase()
+  return n === "classify" || n.endsWith("_classify") || n.endsWith(".classify")
 }
 
 /**
@@ -187,6 +198,18 @@ export async function createEntryGateHooks(
   const listHandRecordsForFeatureFn =
     deps.listHandRecordsForFeatureFn ??
     ((featureId: string) => listHandRecordsForFeature(root, featureId))
+  const getSessionParentIdFn = deps.getSessionParentIdFn
+  const resolveActingAgentFn =
+    deps.resolveActingAgentFn ??
+    ((input: any) => {
+      const a =
+        input?.agent ??
+        input?.agentName ??
+        input?.agentID ??
+        input?.properties?.agent ??
+        null
+      return typeof a === "string" && a.trim() ? a.trim() : null
+    })
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -205,6 +228,31 @@ export async function createEntryGateHooks(
       if (!identity.ok) throw new Error(`${PREFIX} ${identity.reason}`)
       const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractHookTaskContext(input, output).subagentType
+
+      // classify: top-level build only — hands/eyes/child sessions never start ceremony
+      if (isClassifyTool(toolName)) {
+        const { decideClassifyAuthority } = await import(
+          "../../shared/lib/classify-authority.mjs"
+        )
+        let parentSessionId: string | null = null
+        if (typeof sessionId === "string" && sessionId && typeof getSessionParentIdFn === "function") {
+          try {
+            parentSessionId = await getSessionParentIdFn(sessionId)
+          } catch {
+            parentSessionId = null
+          }
+        }
+        const agent = resolveActingAgentFn(input, output)
+        const auth = decideClassifyAuthority({
+          agent,
+          parentSessionId,
+          sessionId,
+        })
+        if (!auth.ok) {
+          throw new Error(`${PREFIX} ${auth.reason}`)
+        }
+        return
+      }
 
       if (isBashOrShellTool(toolName)) {
         const command = extractBashCommand(toolArgs)
@@ -367,8 +415,29 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
 /**
  * @description OpenCode plugin factory — named const + default (OC load contract).
  */
-export const EntryGate: Plugin = async ({ directory, worktree }: any) => {
-  return createEntryGateHooks(resolveProjectRoot(directory, worktree))
+export const EntryGate: Plugin = async ({ directory, worktree, client }: any) => {
+  const root = resolveProjectRoot(directory, worktree)
+  const getSessionParentIdFn = async (sessionId: string): Promise<string | null> => {
+    if (typeof client?.session?.get !== "function") return null
+    try {
+      const res = await client.session.get({
+        path: { id: sessionId },
+        query: { directory: root },
+      })
+      const session =
+        res && typeof res === "object" && "data" in res
+          ? (res as { data?: unknown }).data
+          : res
+      const parent =
+        session && typeof session === "object"
+          ? (session as { parentID?: unknown }).parentID
+          : null
+      return typeof parent === "string" && parent.trim() ? parent.trim() : null
+    } catch {
+      return null
+    }
+  }
+  return createEntryGateHooks(root, { getSessionParentIdFn })
 }
 
 export default EntryGate

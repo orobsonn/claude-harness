@@ -58,6 +58,8 @@ function fullCeremony(extra = {}, sessionId = SID) {
     feature_id: "feat",
     final_review_done: true,
     demo_done: true,
+    planner_status: "usable",
+    delivery_status: "ready",
     regate_pending: [],
     regate_passed: [],
     hand_finished: [],
@@ -579,4 +581,66 @@ test("lt-reg-toolargs-foreign-hook-missing — hook missing sessionID + toolArgs
       },
     )
   })
+})
+
+test("classify denied on child session (parentID set)", async () => {
+  await withHooks(
+    async (hooks) => {
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "classify", sessionID: SID, agent: "build" },
+            { args: { mode: "LIGHT", feature_id: "feat-x" } },
+          ),
+        (err) => {
+          assert.ok(err instanceof Error)
+          assert.match(err.message, /\[entry-gate\]/)
+          assert.match(err.message, /child session|top-level/)
+          return true
+        },
+      )
+    },
+    {
+      getSessionParentIdFn: async () => "ses_parent",
+    },
+  )
+})
+
+test("classify denied for executor agent even top-level", async () => {
+  await withHooks(
+    async (hooks) => {
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "classify", sessionID: SID, agent: "executor-high" },
+            { args: { mode: "QUICK", feature_id: "feat-x" } },
+          ),
+        (err) => {
+          assert.ok(err instanceof Error)
+          assert.match(err.message, /executor-high|brief only|classify denied/)
+          return true
+        },
+      )
+    },
+    {
+      getSessionParentIdFn: async () => null,
+    },
+  )
+})
+
+test("classify allowed for top-level build", async () => {
+  await withHooks(
+    async (hooks) => {
+      const before = hooks["tool.execute.before"]
+      await before(
+        { tool: "classify", sessionID: SID, agent: "build" },
+        { args: { mode: "LIGHT", feature_id: "feat-x" } },
+      )
+    },
+    {
+      getSessionParentIdFn: async () => null,
+    },
+  )
 })
