@@ -632,3 +632,48 @@ test("concurrent before-hooks compete for the final primary reservation slot", a
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("classifyReviewBoundaryError distinguishes 402/429 from generic provider_error", () => {
+  assert.equal(classifyReviewBoundaryError({ statusCode: 402 }), "credit");
+  assert.equal(classifyReviewBoundaryError({ statusCode: 429 }), "rate_limited");
+  assert.equal(classifyReviewBoundaryError({ message: "rate limit exceeded" }), "rate_limited");
+  assert.equal(classifyReviewBoundaryError({ statusCode: 503 }), "provider_error");
+});
+
+test("primary_failure_cap_reached blocks writing hands", () => {
+  const d = decideReviewCapBeforeWriting({
+    subagentType: "executor-high",
+    gateState: { review_status: "primary_failure_cap_reached" },
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /primary_failure_cap_reached/);
+});
+
+test("applyReviewOutcome stores sanitized provider diagnostic on failure", () => {
+  const reserved = reserveReviewAttempt(state(), {
+    subagentType: "plan-reviewer-family-1",
+    sessionId: SESSION,
+    featureId: FEATURE,
+    taskId: "",
+    phase: "",
+    callId: "diag-1",
+  });
+  assert.equal(reserved.ok, true);
+  const result = applyReviewOutcome(reserved.state, {
+    subagentType: "plan-reviewer-family-1",
+    sessionId: SESSION,
+    featureId: FEATURE,
+    callId: "diag-1",
+    failureClass: "provider_error",
+    error: { statusCode: 503, message: "bad gateway api_key=sk-secret-should-redact" },
+    model: "xai/grok-4.5",
+  });
+  assert.equal(result.accepted, true);
+  const last = result.state.review_outcomes.at(-1);
+  assert.ok(last.diagnostic);
+  assert.equal(last.diagnostic.status, 503);
+  assert.equal(last.diagnostic.model, "xai/grok-4.5");
+  assert.match(String(last.diagnostic.message), /\[redacted\]|bad gateway/);
+  assert.ok(!String(last.diagnostic.message).includes("sk-secret"));
+  assert.equal(result.state.last_provider_diagnostic.status, 503);
+});

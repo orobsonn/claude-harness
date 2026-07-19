@@ -34,7 +34,9 @@ export async function executeClassify(
   output: string
   metadata: Record<string, unknown>
 }> {
-  const { buildClassifyStub } = await import("../../shared/lib/classify-stub.mjs")
+  const { buildClassifyStub, decideClassifyTransition } = await import(
+    "../../shared/lib/classify-stub.mjs"
+  )
   const { isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
   const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { persistClassifyArtifacts } = await import("./lib/classify-persist.mjs")
@@ -52,12 +54,55 @@ export async function executeClassify(
     )
   }
 
-  const built = buildClassifyStub({ mode, featureId, sessionId: sessionID })
+  const gsPath = gateStatePath({
+    projectRoot: context.directory,
+    runtime: "opencode",
+    sessionId: sessionID,
+  })
+  if (!gsPath.ok) return errorResult("invalid gate-state path", gsPath.reason, sessionID)
+
+  let prior: Record<string, unknown> = {}
+  try {
+    if (fs.existsSync(gsPath.path)) {
+      const loaded = JSON.parse(fs.readFileSync(gsPath.path, "utf8")) as unknown
+      if (loaded && typeof loaded === "object" && !Array.isArray(loaded)) {
+        prior = loaded as Record<string, unknown>
+      }
+    }
+  } catch {
+    prior = {}
+  }
+
+  const transition = decideClassifyTransition({
+    requestedMode: mode,
+    requestedFeatureId: featureId,
+    currentMode: prior.mode,
+    currentFeatureId: prior.feature_id,
+    peakMode: prior.peak_mode,
+    classified: prior.classified === true || prior.triaged === true,
+  })
+  if (!transition.ok) {
+    return errorResult(
+      transition.reason,
+      "classify is escalate-only for an active session+feature; never downgrade or switch feature mid-run",
+      JSON.stringify({ mode, feature_id: featureId }),
+    )
+  }
+
+  const finalMode = transition.mode
+  const finalFeatureId = transition.featureId
+  const peakMode = transition.peakMode
+
+  const built = buildClassifyStub({
+    mode: finalMode,
+    featureId: finalFeatureId,
+    sessionId: sessionID,
+  })
   if (!built.ok || !built.stub) {
     return errorResult(
       built.reason === "invalid featureId" ? "invalid feature_id" : built.reason ?? "invalid",
       "mode ∈ { no-ceremony, QUICK, LIGHT, FULL }; feature_id kebab-case",
-      JSON.stringify({ mode, feature_id: featureId }),
+      JSON.stringify({ mode: finalMode, feature_id: finalFeatureId }),
     )
   }
 
@@ -65,10 +110,10 @@ export async function executeClassify(
     projectRoot: context.directory,
     runtime: "opencode",
     sessionId: sessionID,
-    featureId,
+    featureId: finalFeatureId,
   })
   if (!pd.ok) {
-    return errorResult("invalid plan path", pd.reason, featureId)
+    return errorResult("invalid plan path", pd.reason, finalFeatureId)
   }
 
   const planPath = path.join(pd.path, "execution-plan.json")
@@ -77,6 +122,20 @@ export async function executeClassify(
     try {
       const existing = JSON.parse(fs.readFileSync(planPath, "utf8")) as Record<string, unknown>
       if (Array.isArray(existing.tasks) && existing.tasks.length > 0) {
+        if (transition.action === "noop") {
+          const metadata = {
+            plan_path: planPath,
+            mode: finalMode,
+            feature_id: finalFeatureId,
+            action: "noop",
+            peak_mode: peakMode,
+          }
+          return {
+            title: `classify: ${finalFeatureId} → ${finalMode} (noop)`,
+            output: JSON.stringify(metadata, null, 2),
+            metadata,
+          }
+        }
         return errorResult(
           "plan already exists",
           "classify will not overwrite an existing full plan",
@@ -88,22 +147,34 @@ export async function executeClassify(
     }
   }
 
-  const gs = gateStatePath({
-    projectRoot: context.directory,
-    runtime: "opencode",
-    sessionId: sessionID,
-  })
-  if (!gs.ok) return errorResult("invalid gate-state path", gs.reason, sessionID)
-  const persisted = persistClassifyArtifacts({
-    planPath,
-    stub: built.stub,
-    statePath: gs.path,
-    statePatch: {
-      session_id: sessionID,
-      feature_id: featureId,
-      mode,
-      classified: true,
-      triaged: true,
+  // Replay: do not wipe ceremony, planner, or review state; do not re-emit obs.
+  if (transition.action === "noop") {
+    const metadata = {
+      plan_path: planPath,
+      mode: finalMode,
+      feature_id: finalFeatureId,
+      action: "noop",
+      peak_mode: peakMode,
+    }
+    return {
+      title: `classify: ${finalFeatureId} → ${finalMode} (noop)`,
+      output: JSON.stringify(metadata, null, 2),
+      metadata,
+    }
+  }
+
+  /** @type {Record<string, unknown>} */
+  const statePatch: Record<string, unknown> = {
+    session_id: sessionID,
+    feature_id: finalFeatureId,
+    mode: finalMode,
+    peak_mode: peakMode,
+    classified: true,
+    triaged: true,
+  }
+
+  if (transition.action === "fresh") {
+    Object.assign(statePatch, {
       brainstormed: false,
       brainstormed_binding: null,
       adversary_fired: false,
@@ -112,24 +183,41 @@ export async function executeClassify(
       ceremony_evidence: {},
       marker_seals: null,
       ...plannerCycleResetPatch(),
-    },
+    })
+  } else {
+    // escalate: keep ceremony/review/planner; only raise mode + peak
+    statePatch.mode = finalMode
+    statePatch.peak_mode = peakMode
+  }
+
+  const persisted = persistClassifyArtifacts({
+    planPath,
+    stub: built.stub,
+    statePath: gsPath.path,
+    statePatch,
   })
   if (!persisted.ok) {
     return errorResult("persistence failed", persisted.reason.slice(0, 200), planPath)
   }
 
-  // Mid-run observability (#284): pipeline-type → Telegram drain (fail-open).
+  // Mid-run observability (#284): pipeline-type only on real transition.
   try {
     const { eventForPipelineType, obsAppend } = await import("../plugin/lib/obs-emit.mjs")
-    const ev = eventForPipelineType(mode)
+    const ev = eventForPipelineType(finalMode)
     if (ev) obsAppend(ev)
   } catch {
     /* fail-open */
   }
 
-  const metadata = { plan_path: planPath, mode, feature_id: featureId }
+  const metadata = {
+    plan_path: planPath,
+    mode: finalMode,
+    feature_id: finalFeatureId,
+    action: transition.action,
+    peak_mode: peakMode,
+  }
   return {
-    title: `classify: ${featureId} → ${mode}`,
+    title: `classify: ${finalFeatureId} → ${finalMode}`,
     output: JSON.stringify(metadata, null, 2),
     metadata,
   }

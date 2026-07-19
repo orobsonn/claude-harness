@@ -55,7 +55,7 @@ export async function createLoopGuardHooks(
     return output?.output ?? output?.content ?? output?.result ?? output?.tool_output ?? input?.tool_response ?? ""
   }
 
-  function persistOutcome(input: any, output: any, failureClass?: string) {
+  function persistOutcome(input: any, output: any, failureClass?: string, rawError?: unknown) {
     const sessionID = input?.sessionID ?? input?.sessionId ?? ""
     const callID = input?.callID ?? input?.callId ?? ""
     const args = argsOf(input, output)
@@ -65,6 +65,12 @@ export async function createLoopGuardHooks(
     if (!sp) return
     /** @type {ReturnType<typeof dualMergeIntentFromOutcome>} */
     let mergeIntent: ReturnType<typeof dualMergeIntentFromOutcome> = null
+    const model =
+      typeof args?.model === "string"
+        ? args.model
+        : typeof output?.metadata?.model === "string"
+          ? output.metadata.model
+          : undefined
     const result = withGateStateLock(sp, (prev) => {
       const outcome = applyReviewOutcome(prev, {
         subagentType: sub,
@@ -75,6 +81,8 @@ export async function createLoopGuardHooks(
         callId: callID,
         response: responseOf(input, output),
         failureClass,
+        error: rawError,
+        model,
       })
       if (outcome.dualBecameBoth === true) {
         mergeIntent = dualMergeIntentFromOutcome(outcome)
@@ -156,8 +164,9 @@ export async function createLoopGuardHooks(
       if (!part || part.type !== "tool" || !isTaskTool(part.tool) || part.state?.status !== "error") return
       persistOutcome(
         { tool: part.tool, sessionID: part.sessionID, callID: part.callID, args: part.state?.input },
-        { args: part.state?.input },
+        { args: part.state?.input, metadata: part.state?.metadata },
         classifyReviewBoundaryError(part.state.error),
+        part.state.error,
       )
     },
   }

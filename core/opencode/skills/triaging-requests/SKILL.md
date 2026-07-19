@@ -151,6 +151,8 @@ classify({ mode, feature_id })
 
 This writes the plan stub + gate-state stamps that entry-gate / plan-gate consume. **Do not skip.**
 
+**Once per session+feature.** Host `classify` is escalate-only after the first successful stamp: same mode is a no-op; downgrade (e.g. LIGHT→QUICK) and feature-switch are denied. **Never** re-call `classify` mid-delivery to “unstick” a review cap or provider error — that is QUICK laundering and delivery rails will deny the ship.
+
 **HEADLESS note:** call `classify` for **QUICK, LIGHT, and FULL** (all delivery modes) so gate-state always has `mode` + `feature_id`.
 
 ### Step 6 — Route

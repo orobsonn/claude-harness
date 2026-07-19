@@ -162,6 +162,8 @@ Never use the edit tool.
 **HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.**  
 **HEADLESS:** plan-reviewer dual **APPROVE** is the gate; on REVISE past cap, stop and comment — do not ship.
 
+**Primary failure cap (`primary_failure_cap_reached`):** after consecutive family-1 provider/empty/malformed failures hit the streak cap, **stop delivery**. Do **not** reclassify to QUICK, do **not** implement via build bash, do **not** `git push` / `gh pr`. Host rails deny writing hands and delivery until a canonical ceremony restart (new generation + bound plan). Comment the issue/PR in pt-br with the blocked reason (and any `last_provider_diagnostic` on gate-state).
+
 ---
 
 ## Context curation — the ICM layers (applies to every dispatch)

@@ -240,7 +240,12 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
     };
     return { ...previous, active_dispatch: claim };
   });
-  if (persisted.ok) liveClaims.set(liveClaimKey(projectRoot, sessionId, callId), token);
+  if (persisted.ok) {
+    // Always store the authoritative disk token (idempotent re-entry may return a prior claim).
+    const authoritative =
+      typeof claim?.claim_token === "string" && claim.claim_token ? claim.claim_token : token;
+    liveClaims.set(liveClaimKey(projectRoot, sessionId, callId), authoritative);
+  }
   return persisted.ok ? { ok: true, claim } : persisted;
 }
 
