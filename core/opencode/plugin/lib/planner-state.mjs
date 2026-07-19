@@ -1,8 +1,15 @@
-/** @description Pure planner attempt state machine with bounded atomic claims, leases, and stale-result rejection. */
+/** @description Pure planner attempt state machine with atomic claims and stale-result rejection.
+ * Operator model: planner always runs on the primary model. No wall-clock lease kills the attempt
+ * (subscription models rarely "timeout" as product policy — if Task fails, treat as real failure).
+ * No model fallback ladder: provider death → delivery-blocked for operator, not silent model swap.
+ */
 
-export const PLANNER_ATTEMPT_LEASE_MS = 5 * 60_000;
-export const PLAN_WRITE_LEASE_MS = 60_000;
-export const MAX_PRIMARY_ATTEMPTS = 3;
+/** @deprecated Kept for test/compat imports; lease expiry no longer kills attempts. */
+export const PLANNER_ATTEMPT_LEASE_MS = Number.POSITIVE_INFINITY;
+/** @deprecated Kept for test/compat imports; write window is not time-killed. */
+export const PLAN_WRITE_LEASE_MS = Number.POSITIVE_INFINITY;
+/** Soft cap on primary claims per classify cycle (REVISE loops). Not a model fallback trigger. */
+export const MAX_PRIMARY_ATTEMPTS = 8;
 
 /** @description Trusted reset applied only by a successful explicit classify cycle. */
 export function plannerCycleResetPatch() {
@@ -26,29 +33,13 @@ function objectState(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-/** @description Resolve an expired active claim to a bounded terminal/recovery state. */
-export function reconcilePlannerLease(previous, input = {}) {
-  const state = { ...objectState(previous) };
-  const active = objectState(state.planner_active_attempt);
-  const now = Number(input.now);
-  if (!active.call_id || !Number.isFinite(now) || !Number.isFinite(Number(active.expires_at)) || now < Number(active.expires_at)) {
-    return { state, reconciled: false };
-  }
-  state.planner_active_attempt = null;
-  state.planner_failure_class = "timeout";
-  if (active.role === "planner-fallback") {
-    state.planner_status = "planner_unavailable";
-    state.planner_fallback_result = "lease_expired";
-    state.planner_retry_outcome = "fallback_failed";
-    state.delivery_status = "delivery-blocked";
-  } else {
-    const hasFallback = input.hasFallback === true;
-    state.planner_status = "planner_unavailable";
-    state.planner_retry_outcome = hasFallback ? "fallback_pending" : "fallback_unavailable";
-    state.delivery_status = hasFallback ? "planning_recovery" : "delivery-blocked";
-    if (!hasFallback) state.planner_fallback_diagnostic = input.fallbackDiagnostic ?? "planner fallback unavailable";
-  }
-  return { state, reconciled: true };
+/**
+ * @description Lease reconciliation is intentionally a no-op.
+ * Wall-clock expiry must not kill a live planner Task or force model fallback —
+ * the operator runs a subscribed primary model; slow ≠ dead.
+ */
+export function reconcilePlannerLease(previous, _input = {}) {
+  return { state: { ...objectState(previous) }, reconciled: false };
 }
 
 /** @description Atomically claim a primary or one-shot fallback attempt using callID + random token. */
@@ -82,36 +73,31 @@ export function claimPlannerAttempt(previous, input = {}) {
   if (typeof input.callId !== "string" || !input.callId || typeof input.token !== "string" || !input.token) {
     return { ok: false, reason: "planner claim requires callID and token", state };
   }
+  // Planner is primary-only. Fallback agent is disabled as a recovery ladder.
   if (role === "planner-fallback") {
-    if (state.planner_status !== "planner_unavailable" || state.planner_retry_outcome !== "fallback_pending") {
-      return { ok: false, reason: "fallback requires pending primary provider failure", state };
-    }
-    if (Number(state.planner_fallback_attempts ?? 0) >= 1) {
-      return { ok: false, reason: "planner fallback attempt already consumed", state };
-    }
-    state.planner_fallback_attempts = 1;
-    state.planner_fallback_model = input.model;
-  } else {
-    if (state.planner_status === "planner_unavailable" && state.planner_retry_outcome === "fallback_pending") {
-      return { ok: false, reason: "primary unavailable; configured fallback is required", state };
-    }
-    if (Number(state.planner_primary_attempts ?? 0) >= MAX_PRIMARY_ATTEMPTS) {
-      return { ok: false, reason: "planner primary attempt bound reached", state };
-    }
-    state.planner_primary_attempts = Number(state.planner_primary_attempts ?? 0) + 1;
-    state.planner_primary_model = input.model;
+    return {
+      ok: false,
+      reason: "planner fallback disabled — retry primary planner or stop (delivery-blocked on real provider death)",
+      state,
+    };
   }
+  if (Number(state.planner_primary_attempts ?? 0) >= MAX_PRIMARY_ATTEMPTS) {
+    return { ok: false, reason: "planner primary attempt bound reached", state };
+  }
+  state.planner_primary_attempts = Number(state.planner_primary_attempts ?? 0) + 1;
+  state.planner_primary_model = input.model;
   state.planner_status = "running";
   state.delivery_status = "planning";
   state.planner_active_attempt = {
     call_id: input.callId,
     token: input.token,
-    role,
+    role: role === "planner" || !role ? "planner" : role,
     session_id: input.sessionId,
     feature_id: input.featureId,
     model: input.model,
     started_at: input.now,
-    expires_at: Number(input.now) + PLANNER_ATTEMPT_LEASE_MS,
+    // No wall-clock kill — claim stays until complete/fail/bind.
+    expires_at: null,
     baseline_plan: input.baselinePlan ?? null,
   };
   return { ok: true, state, reconciled: reconciled.reconciled };
@@ -133,22 +119,19 @@ export function completePlannerAttempt(previous, input = {}) {
       status: "plan_returned",
       returned_plan_hash: input.planHash,
       completed_at: input.now,
-      expires_at: Number(input.now) + PLAN_WRITE_LEASE_MS,
+      expires_at: null,
     };
     return { ok: true, accepted: true, state };
   }
   state.planner_active_attempt = null;
-  if (active.role === "planner-fallback") {
-    state.planner_status = "planner_unavailable";
-    state.planner_fallback_result = "invalid_plan";
-    state.planner_retry_outcome = "fallback_failed";
-    state.delivery_status = "delivery-blocked";
-  } else {
-    state.planner_status = "plan_invalid";
-    state.planner_invalid_errors = input.errors ?? ["invalid plan"];
-    state.planner_retry_outcome = "not_applicable";
-    state.delivery_status = Number(state.planner_primary_attempts) >= MAX_PRIMARY_ATTEMPTS ? "delivery-blocked" : "planning_revision";
-  }
+  // Invalid plan from primary → revision loop (REVISE), not model fallback.
+  state.planner_status = "plan_invalid";
+  state.planner_invalid_errors = input.errors ?? ["invalid plan"];
+  state.planner_retry_outcome = "not_applicable";
+  state.delivery_status =
+    Number(state.planner_primary_attempts) >= MAX_PRIMARY_ATTEMPTS
+      ? "delivery-blocked"
+      : "planning_revision";
   return { ok: true, accepted: true, state };
 }
 
@@ -162,23 +145,22 @@ export function failPlannerAttempt(previous, input = {}) {
   state.planner_active_attempt = null;
   state.planner_last_attempt = { ...active, failed_at: input.now };
   state.planner_failure_class = input.failureClass;
-  if (input.providerUnavailable !== true) {
-    state.planner_status = "planner_failed";
-    state.planner_retry_outcome = "not_applicable";
-    state.delivery_status = "delivery-blocked";
+  // Primary-only: any Task boundary failure is a product stop, not a model ladder.
+  // Conductor may re-dispatch primary planner while under MAX_PRIMARY_ATTEMPTS and not terminal.
+  if (input.providerUnavailable === true) {
+    state.planner_status = "planner_unavailable";
+    state.planner_retry_outcome = "fallback_unavailable";
+    state.planner_fallback_diagnostic =
+      "planner model fallback disabled — retry primary or stop; treat as product/provider outage";
+    state.delivery_status =
+      Number(state.planner_primary_attempts) >= MAX_PRIMARY_ATTEMPTS
+        ? "delivery-blocked"
+        : "planning_revision";
     return { ok: true, accepted: true, state };
   }
-  state.planner_status = "planner_unavailable";
-  if (active.role === "planner-fallback") {
-    state.planner_fallback_result = input.failureClass;
-    state.planner_retry_outcome = "fallback_failed";
-    state.delivery_status = "delivery-blocked";
-  } else {
-    const hasFallback = input.hasFallback === true;
-    state.planner_retry_outcome = hasFallback ? "fallback_pending" : "fallback_unavailable";
-    state.delivery_status = hasFallback ? "planning_recovery" : "delivery-blocked";
-    if (!hasFallback) state.planner_fallback_diagnostic = input.fallbackDiagnostic ?? "planner fallback unavailable";
-  }
+  state.planner_status = "planner_failed";
+  state.planner_retry_outcome = "not_applicable";
+  state.delivery_status = "delivery-blocked";
   return { ok: true, accepted: true, state };
 }
 
@@ -203,8 +185,7 @@ export function bindPlannerArtifact(previous, input = {}) {
     return { ok: false, reason: "canonical plan was not rewritten by current attempt", state };
   }
   state.planner_status = "usable";
-  state.planner_retry_outcome = active.role === "planner-fallback" ? "fallback_succeeded" : "not_needed";
-  if (active.role === "planner-fallback") state.planner_fallback_result = "succeeded";
+  state.planner_retry_outcome = "not_needed";
   state.delivery_status = "planning";
   state.planner_plan_binding = {
     call_id: active.call_id,
