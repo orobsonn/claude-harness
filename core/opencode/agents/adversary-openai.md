@@ -4,6 +4,7 @@ mode: subagent
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.3
 permission:
+  classify: deny
   edit: deny
   bash: deny
   webfetch: deny
