@@ -31,9 +31,20 @@ const FAILURE_CLASSES = new Set([
   "timeout",
   "unauthenticated",
   "provider_error",
+  "upstream_5xx",
   "rate_limited",
   "credit",
+  "gate_blocked",
 ]);
+
+/**
+ * Harness-internal deny errors are thrown with a bracketed source tag (e.g.
+ * `[plan-gate] …`, `[loop-guard] …`). They are NOT provider failures — labeling
+ * them provider_error pollutes the provider forensics and the primary failure
+ * streak with a self-inflicted cause. Match the tag anywhere (an Error's text is
+ * `Error: [plan-gate] …`, so the tag is not at string start).
+ */
+const HARNESS_DENY_TAG = /\[(?:plan-gate|loop-guard|entry-gate|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
 
 const DIAGNOSTIC_MESSAGE_MAX = 280;
 
@@ -566,6 +577,9 @@ export function sanitizeProviderDiagnostic(error, meta = {}) {
 
 export function classifyReviewBoundaryError(error) {
   const source = text(error);
+  // Harness-internal deny (thrown by our own gates) — must win before any status /
+  // pattern branch, else e.g. "[entry-gate] Blocked: request denied" reads as "denied".
+  if (HARNESS_DENY_TAG.test(source)) return "gate_blocked";
   const statusRaw = object(error).statusCode ?? object(error).status ?? object(object(error).data).statusCode ?? object(object(error).data).status;
   const status = Number(statusRaw ?? source.match(/\b([45]\d\d)\b/)?.[1]);
   if (status === 401) return "unauthenticated";
@@ -573,7 +587,7 @@ export function classifyReviewBoundaryError(error) {
   if (status === 429 || /rate.?limit|too many requests/i.test(source)) return "rate_limited";
   if (status === 403) return /auth|login|token|api key/i.test(source) ? "unauthenticated" : "denied";
   if (status === 408 || status === 504 || /timeout|timed out|deadline exceeded|aborted/i.test(source)) return "timeout";
-  if (Number.isFinite(status) && status >= 500) return "provider_error";
+  if (Number.isFinite(status) && status >= 500) return "upstream_5xx";
   if (/unauthori[sz]ed|not authenticated|login required|invalid api key|providerautherror/i.test(source)) return "unauthenticated";
   if (/permission denied|access denied|request denied/i.test(source)) return "denied";
   return "provider_error";
