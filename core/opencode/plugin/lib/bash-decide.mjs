@@ -577,33 +577,51 @@ export function isShellScriptOrPipeToShell(command) {
 }
 
 /**
- * @description Redirect or write-tool combined with shell expansion — hides oracle in $VAR.
- * Quoted heredoc bodies (`<<'EOF'` / `<<"EOF"`) are literal payload: `$` / backticks inside
- * do NOT count (spec/plan markdown often has `$`, `${}`, code samples). Unquoted `<<EOF`
- * still expands → deny if body has `$`.
+ * @description Redirect/write + shell expansion that can hide a gate-state oracle in $VAR.
+ * Not a blanket ban on `$` near redirects — that false-denied plan/spec writes (#72):
+ * - Quoted heredoc bodies (`<<'EOF'`) are stripped first (literal `$` in markdown OK).
+ * - `$SPEC_DIR/spec.md` style plan-artifact writes (no `.state`) are allowed.
+ * - Still denied: opaque `> $GS`, any expansion touching `.state` / gate-state.json,
+ *   unquoted heredoc with `$`, and other expansion+write outside plan artifacts.
  * @param {unknown} command
  * @returns {boolean}
  */
 export function isExpandingRedirect(command) {
   if (typeof command !== "string" || command.length === 0) return false;
-  // Drop quoted-heredoc payload before scanning — only shell-significant surface remains.
-  const surface = stripQuotedHeredocBodies(command);
-  const hasExpand =
-    surface.includes("$") ||
-    surface.includes("`") ||
-    surface.includes("$(");
+  const { surface, unquotedBodyHasExpand } = analyzeHeredocBodies(command);
+  // Unquoted heredoc body with $ / ` runs at shell time (incl. $(forge)) — deny
+  if (unquotedBodyHasExpand) return true;
+  const hasExpand = /\$|`/.test(surface);
   if (!hasExpand) return false;
-  if (hasShellRedirectOperators(surface)) return true;
-  // cp/mv $GS without redirect operators
+  const writeLike =
+    hasShellRedirectOperators(surface) ||
+    /\b(?:cp|mv|ln|rsync|dd|install|tee|sed)\b/.test(surface);
+  if (!writeLike) return false;
+  // Expansion + state oracle in the same shell surface → forge
+  if (ORACLE_PATH_RE.test(surface)) return true;
+  // Opaque write target is only a variable (echo x > $GS / tee $GS)
+  if (/(?:>>|>>|>)\s*["']?\$[A-Za-z_][A-Za-z0-9_]*["']?(?:\s|$|;|&|\|)/.test(surface)) {
+    return true;
+  }
   if (
-    /\b(?:cp|mv|ln|rsync|dd|install|tee)\b/.test(surface) ||
-    /\bsed\b/.test(surface)
+    /\b(?:cp|mv|tee)\b[^;|&\n]*\s["']?\$[A-Za-z_][A-Za-z0-9_]*["']?\s*(?:$|;|&|\|)/.test(
+      surface,
+    )
   ) {
     return true;
   }
-  return false;
-}
-/**
+  // Plan/ceremony artifacts (not .state) may use $DIR composition — not gate forge
+  if (
+    /(?:^|[\s"'=])(?:\.\/)?\.opencode\/plans\/(?!\.state)/.test(surface) ||
+    /(?:execution-plan\.json|spec\.md|shared_context\.md|decision-ledger\.md)\b/.test(
+      surface,
+    )
+  ) {
+    return false;
+  }
+  // Default: expansion + write outside known plan artifacts stays denied
+  return true;
+}/**
  * @description tar/git apply unpack without path review (payload may land under .state).
  * @param {unknown} command
  * @returns {boolean}
@@ -667,30 +685,63 @@ export function isShellSourceOrStdin(command) {
   return false;
 }
 
+/**
+ * @description Drop quoted-heredoc payload lines (`<<'EOF'` / `<<"EOF"`) so prose is not
+ * mistaken for shell (`source`, `. file`). Unquoted bodies stay (still expand at runtime).
+ * @param {string} command
+ * @returns {string}
+ */
 function stripQuotedHeredocBodies(command) {
-  const lines = command.split("\n");
-  const executable = [];
+  return analyzeHeredocBodies(command).quotedStrippedSurface;
+}
+
+/**
+ * @description Heredoc analysis for expansion checks.
+ * - Bodies (quoted + unquoted) removed from `surface` so path/`$VAR` scan is shell-only.
+ * - `unquotedBodyHasExpand` true when an unquoted body contains `$` / backticks (runtime expand /
+ *   command-substitution risk — must stay denied).
+ * @param {string} command
+ * @returns {{ surface: string, quotedStrippedSurface: string, unquotedBodyHasExpand: boolean }}
+ */
+function analyzeHeredocBodies(command) {
+  const lines = String(command).split("\n");
+  const allStripped = [];
+  const quotedOnlyStripped = [];
   let delimiter = "";
   let stripTabs = false;
+  let quoted = false;
+  let unquotedBodyHasExpand = false;
   for (const line of lines) {
     if (delimiter) {
       const candidate = stripTabs ? line.replace(/^\t+/, "") : line;
       if (candidate === delimiter) {
         delimiter = "";
         stripTabs = false;
+        quoted = false;
+        continue;
       }
+      if (!quoted && /\$|`/.test(line)) unquotedBodyHasExpand = true;
+      // unquoted body lines remain in quotedOnlyStripped (legacy source scanner)
+      if (!quoted) quotedOnlyStripped.push(line);
       continue;
     }
-    executable.push(line);
-    const match = line.match(/<<(\-?)\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")/);
+    allStripped.push(line);
+    quotedOnlyStripped.push(line);
+    const match = line.match(
+      /<<(\-?)\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))/,
+    );
     if (match) {
-      delimiter = match[2] || match[3];
+      delimiter = match[2] || match[3] || match[4];
       stripTabs = match[1] === "-";
+      quoted = !!(match[2] || match[3]);
     }
   }
-  return executable.join("\n");
+  return {
+    surface: allStripped.join("\n"),
+    quotedStrippedSurface: quotedOnlyStripped.join("\n"),
+    unquotedBodyHasExpand,
+  };
 }
-
 /** Lifecycle subcommands that execute package.json scripts (not install/ci). */
 const NPM_LIFECYCLE = new Set([
   "test",
