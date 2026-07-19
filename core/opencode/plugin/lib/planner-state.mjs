@@ -4,12 +4,15 @@
  * No model fallback ladder: provider death → delivery-blocked for operator, not silent model swap.
  */
 
+import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
+
 /** @deprecated Kept for test/compat imports; lease expiry no longer kills attempts. */
 export const PLANNER_ATTEMPT_LEASE_MS = Number.POSITIVE_INFINITY;
 /** @deprecated Kept for test/compat imports; write window is not time-killed. */
 export const PLAN_WRITE_LEASE_MS = Number.POSITIVE_INFINITY;
-/** Soft cap on primary claims per classify cycle (REVISE loops). Not a model fallback trigger. */
-export const MAX_PRIMARY_ATTEMPTS = 8;
+
+/** Same-agent retry budget (K=3): REVISE/provider blip re-dispatch primary, then product error. */
+export const MAX_PRIMARY_ATTEMPTS = AGENT_RETRY_K;
 
 /** @description Trusted reset applied only by a successful explicit classify cycle. */
 export function plannerCycleResetPatch() {
@@ -25,6 +28,8 @@ export function plannerCycleResetPatch() {
     planner_last_attempt: null,
     planner_plan_binding: null,
     planner_binding_error: null,
+    agent_dispatch_failures: {},
+    agent_dispatch_last_failure: null,
     delivery_status: "planning",
   };
 }

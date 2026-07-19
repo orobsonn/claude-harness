@@ -144,7 +144,7 @@ Never use the edit tool.
    **Provider recovery:** `planner-recovery` atomically claims each Task using OpenCode's `callID` plus a persisted attempt token. Successful Task output is not success yet: it becomes `plan_pending_write`. Rewrite the returned plan at the canonical path before any downstream dispatch; `plan-gate` verifies one coherent locked snapshot against the current attempt's session/feature, exact `plan.feature_id`, semantic hash, prior-file fingerprint, final file hash/mtime/size, and structural validity before persisting `usable`. Missing/legacy planner state fails closed. Once bound, the canonical plan is immutable through harness Write/Edit/Bash until a new planner claim moves state back to planning. Never reuse an old plan.
 
    Real Task rejection is observed through OpenCode's `message.part.updated` / `ToolStateError` event (not only `tool.execute.after`). Authentication, credit, timeout, and provider failures set `planner_status: "planner_unavailable"` plus a bounded `planner_retry_outcome`. If `roles.planner.fallback` is configured and its agent model matches, dispatch `planner-fallback` exactly once; otherwise report `delivery-blocked` in pt-br and stop. A malformed, empty, stub, or prose-only output is `plan_invalid` even when its prose says `429`/provider; it never activates fallback. Active claims have a bounded lease: an expired primary converges to the configured fallback policy, while an expired/failed fallback converges to `delivery-blocked`. Until gate-state says `usable`, do not dispatch plan reviewers, test-author, executors, or snipers.
-   Planner is **primary-only**: on REVISE or `plan_invalid` / `planning_revision`, re-dispatch **`planner`** (same model). Do **not** dispatch `planner-fallback` and do not treat wall-clock slowness as death. If the primary provider is truly unreachable after retries → stop and comment (`delivery-blocked`) — never `git push` / `gh pr`, never implement inline.
+   Planner is **primary-only**: on REVISE or `plan_invalid` / `planning_revision`, re-dispatch **`planner`** (same model) within **K=3**. Do **not** dispatch `planner-fallback`. After 3 same-agent failures → stop and comment (`delivery-blocked` / product error) — never `git push` / `gh pr`, never implement inline.
 
 2. **CANONICAL PATH — write/overwrite the full plan at:**
    ```
@@ -262,7 +262,9 @@ Advance to the next task only when its gates are green.
 
 ### Escalation ladder (engineering — never handed to the human)
 
-retry same tier (bounded) → bump tier → still failing → **CRITICAL EXCEPTION**: translate to product impact, surface to operator in pt-br ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa?"), never as a technical problem.
+**Same-agent retry K=3 (all Task roles — planner, eyes, hands):** on provider/transient Task failure, re-dispatch the **same** `subagent_type` (same model) up to **3** times. Host blocks the 4th dispatch (`agent retry exhausted`). After 3 failures → **product error / CRITICAL EXCEPTION** (stop + comment) — never swap models, never ladder. Success resets the counter for that role(/task).
+
+retry same tier within K=3 → still failing after 3 → **CRITICAL EXCEPTION**: translate to product impact, surface to operator in pt-br ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa?"), never as a technical problem.
 
 **Hand CONFIG_ERROR → critical exception (NOT a K=1 escalation):** when a hand dispatch fails precondition / never ran (e.g. missing fidelity_pass stamp, missing/invalid setup, CONFIG_ERROR from spawn), do NOT retry same tier and do NOT bump tier. Route to CRITICAL EXCEPTION: INTERACTIVE surface to operator in pt-br product language; HEADLESS record as open PR risk item.
 
