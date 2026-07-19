@@ -111,6 +111,8 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "tr
 **Retry K=3 (every Task agent — all of them):** planner, plan-reviewer-*, adversary-*, executor-*, sniper-*, test-author, compliance, security, harvester, shipper. On failure, retry the **same** `subagent_type` up to **3** times. After 3 → stop (product error). Host enforces the cap. Never ladder models.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
+
+**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: prefer `printf`/`tee` without `$` or `node -e` (entry-gate anti-forgery).
 </HARD-GATE>
 
 Route on its result:

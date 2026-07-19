@@ -247,12 +247,12 @@ node .opencode/plugin/lib/mark-gate.mjs final-review-done
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
-**Post-hand capture path (mandatory after every writing hand returns):**
+**Post-hand capture path (OC-native — Task hands, not CC spawn-hand):**
 
-1. Call the native `mark` tool with `action: hand-finished` and that task's `task_id`.
-2. Immediately after — **only when the hand outcome is DONE** (host wrote a hand-record with `outcome: "DONE"` via `obs-hand`) — call native `mark` with `action: capture-verified`, that task's `task_id`, and `sha` = current HEAD (`git rev-parse HEAD`). If mark returns `ok:false` (hand-record missing / not DONE / unreadable), do **not** invent Bash workarounds: treat as hand capture failure and escalate (do not advance to the next task; do not ship).
-3. `hand-finished` alone is **not** sufficient for LIGHT/FULL delivery. `capture-verified` is required and is host-enforced against the on-disk hand-record under `.opencode/plans/.state/hand-records/<feature>/<session>/<task>.json`.
-4. Never use Bash or `mark-gate` CLI for privileged markers (`hand-finished`, `capture-verified`). Both transitions are runtime-bound to the native `mark` tool only.
+1. Host `obs-hand` writes the hand-record on Task terminal and, when outcome is DONE (Status line **or** git touched paths), **auto-stamps** sealed `hand_finished` + `capture_verified` + `capturedVerifiedAt`. You do **not** need `capture-hand.mjs` (that is Claude Code only).
+2. Still call native `mark` `hand-finished` / `capture-verified` if the host did not stamp (belt) — if mark returns `ok:false` because record is not DONE, treat as hand failure and re-dispatch the hand (within K=3), do not ship.
+3. Never use Bash or `mark-gate` CLI for privileged markers.
+4. **Ship on the parent `build` session only.** Do **not** rely on `shipper` Task child for `git push` / `gh pr` (child sessions are not writing-hand-bound). `shipper` may draft PR title/body text; conductor runs push/PR bash on the parent after capture is present.
 
 **Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch; Bash and direct module imports are not privileged marker surfaces.
 
