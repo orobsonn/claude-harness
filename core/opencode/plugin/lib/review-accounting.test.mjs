@@ -516,7 +516,7 @@ test("boundary taxonomy is bounded and does not consume useful cap", () => {
   assert.equal(classifyReviewBoundaryError({ statusCode: 401 }), "unauthenticated");
   assert.equal(classifyReviewBoundaryError({ statusCode: 403, message: "policy denied" }), "denied");
   assert.equal(classifyReviewBoundaryError(new Error("deadline exceeded")), "timeout");
-  assert.equal(classifyReviewBoundaryError({ statusCode: 503 }), "provider_error");
+  assert.equal(classifyReviewBoundaryError({ statusCode: 503 }), "upstream_5xx");
   const result = complete(state({ primary_review_failure_count: 1000 }), { failureClass: "timeout" });
   assert.equal(result.state.primary_review_failure_count, 1000);
   assert.equal(result.state.plan_review_count, undefined);
@@ -633,11 +633,32 @@ test("concurrent before-hooks compete for the final primary reservation slot", a
   }
 });
 
-test("classifyReviewBoundaryError distinguishes 402/429 from generic provider_error", () => {
+test("classifyReviewBoundaryError distinguishes 402/429/5xx from generic provider_error", () => {
   assert.equal(classifyReviewBoundaryError({ statusCode: 402 }), "credit");
   assert.equal(classifyReviewBoundaryError({ statusCode: 429 }), "rate_limited");
   assert.equal(classifyReviewBoundaryError({ message: "rate limit exceeded" }), "rate_limited");
-  assert.equal(classifyReviewBoundaryError({ statusCode: 503 }), "provider_error");
+  // Distinct upstream 5xx class (transient) vs generic provider_error (unknown).
+  assert.equal(classifyReviewBoundaryError({ statusCode: 500 }), "upstream_5xx");
+  assert.equal(classifyReviewBoundaryError({ statusCode: 502 }), "upstream_5xx");
+  assert.equal(classifyReviewBoundaryError({ statusCode: 503 }), "upstream_5xx");
+  assert.equal(classifyReviewBoundaryError({ message: "who knows" }), "provider_error");
+});
+
+test("classifyReviewBoundaryError labels harness-internal deny errors as gate_blocked, not provider_error", () => {
+  // Production forensics (ses_084fd366…): a [plan-gate] deny thrown by the harness was
+  // being swallowed into provider_error, polluting review_failure_counts and the
+  // primary failure streak with a non-provider cause.
+  assert.equal(
+    classifyReviewBoundaryError(
+      new Error("[plan-gate] delivery-blocked: planner usable bound artifact required; status=plan_pending_write"),
+    ),
+    "gate_blocked",
+  );
+  assert.equal(classifyReviewBoundaryError("[loop-guard] primary failure-cap: halt"), "gate_blocked");
+  assert.equal(classifyReviewBoundaryError("[entry-gate] Blocked: request denied"), "gate_blocked");
+  assert.equal(classifyReviewBoundaryError({ message: "[money-preflight] quote required" }), "gate_blocked");
+  // A genuine provider error is NOT reclassified.
+  assert.equal(classifyReviewBoundaryError({ statusCode: 429, message: "rate limit" }), "rate_limited");
 });
 
 test("primary_failure_cap_reached blocks writing hands", () => {
