@@ -100,64 +100,49 @@ test("promise-rejection boundary records auth/credit/timeout/provider without to
       assert.equal(state().planner_status, "planner_unavailable");
       assert.equal(state().planner_failure_class, failureClass);
       assert.equal(state().planner_retry_outcome, "fallback_unavailable");
-      assert.equal(state().delivery_status, "delivery-blocked");
+      // Primary-only: provider blip opens revision (retry primary), not model ladder.
+      assert.equal(state().delivery_status, "planning_revision");
       if (failureClass === "timeout") {
         const gate = await createPlanGateHooks(root);
         for (const role of ["plan-reviewer-family-1", "plan-reviewer-family-2", "test-author", "executor-low", "sniper-high"]) {
           await assert.rejects(
             () => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs(role) }),
-            /delivery-blocked/,
+            /planner_unavailable|usable|delivery-blocked|bound artifact/,
           );
         }
+        // May re-dispatch primary planner
+        await before(hooks, "planner", `call-${failureClass}-retry`);
+        assert.equal(state().planner_status, "running");
       }
     });
   }
 });
 
-test("configured fallback is claimed once and only becomes usable after a fresh matching canonical write", async () => {
-  await tempRun(true, async ({ root, state, planPath }) => {
+test("primary-only: planner-fallback dispatch is rejected even when routing lists fallback", async () => {
+  await tempRun(true, async ({ root, state }) => {
     const hooks = await createPlannerRecoveryHooks(root);
     await before(hooks, "planner", "call-primary");
     await rejection(hooks, "call-primary", "deadline exceeded");
-    await before(hooks, "planner-fallback", "call-fallback");
-    assert.equal(state().planner_fallback_attempts, 1);
-    assert.equal(state().planner_fallback_model, FALLBACK_MODEL);
-    await after(hooks, "planner-fallback", "call-fallback", JSON.stringify(FULL_PLAN));
-    assert.equal(state().planner_status, "plan_pending_write");
-
-    const gate = await createPlanGateHooks(root);
-    await assert.rejects(() => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("plan-reviewer-family-1") }), /plan_pending_write/);
-    fs.writeFileSync(planPath, JSON.stringify(FULL_PLAN, null, 2));
-    await gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("plan-reviewer-family-1") });
-    assert.equal(state().planner_status, "usable");
-    assert.equal(state().planner_retry_outcome, "fallback_succeeded");
-    assert.equal(state().planner_plan_binding.call_id, "call-fallback");
-    assert.equal(state().planner_plan_binding.model, FALLBACK_MODEL);
-    await assert.rejects(() => before(hooks, "planner-fallback", "call-fallback-2"), /attempt already consumed|fallback requires/);
+    await assert.rejects(
+      () => before(hooks, "planner-fallback", "call-fallback"),
+      /fallback disabled|delivery-blocked|terminal/,
+    );
+    // Retry primary instead
+    await before(hooks, "planner", "call-primary-2");
+    assert.equal(state().planner_status, "running");
+    assert.equal(state().planner_primary_attempts, 2);
   });
 });
 
-test("invalid or mismatched fallback config persists delivery-blocked instead of leaving fallback_pending", async () => {
-  for (const variant of ["invalid-routing", "agent-mismatch"]) {
-    await tempRun(true, async ({ root, state }) => {
-      const routingPath = path.join(root, ".opencode", "harness.routing.json");
-      const routing = JSON.parse(fs.readFileSync(routingPath, "utf8"));
-      if (variant === "invalid-routing") routing.roles.planner.fallback.model = "provider/";
-      fs.writeFileSync(routingPath, JSON.stringify(routing));
-      if (variant === "agent-mismatch") {
-        fs.writeFileSync(path.join(root, ".opencode", "agents", "planner-fallback.md"), "---\nmodel: other-provider/other-model\n---\n");
-      }
-      const hooks = await createPlannerRecoveryHooks(root);
-      await before(hooks, "planner", `call-${variant}`);
-      await rejection(hooks, `call-${variant}`, "APIError 503: unavailable");
-      assert.equal(state().planner_status, "planner_unavailable", variant);
-      assert.equal(state().planner_retry_outcome, "fallback_unavailable", variant);
-      assert.equal(state().delivery_status, "delivery-blocked", variant);
-      assert.match(state().planner_fallback_diagnostic, /provider\/model|does not match/, variant);
-      await assert.rejects(() => before(hooks, "planner-fallback", `fallback-${variant}`), /delivery-blocked/);
-      assert.equal(state().delivery_status, "delivery-blocked", variant);
-    });
-  }
+test("provider failure never arms fallback_pending (primary-only product stop/retry)", async () => {
+  await tempRun(true, async ({ root, state }) => {
+    const hooks = await createPlannerRecoveryHooks(root);
+    await before(hooks, "planner", "call-p");
+    await rejection(hooks, "call-p", "APIError 503: unavailable");
+    assert.equal(state().planner_status, "planner_unavailable");
+    assert.notEqual(state().planner_retry_outcome, "fallback_pending");
+    assert.match(String(state().planner_fallback_diagnostic ?? ""), /fallback disabled|primary/i);
+  });
 });
 
 test("old matching full plan does not release downstream until current attempt rewrites it", async () => {
@@ -234,8 +219,8 @@ test("feature mismatch and artifact swap during locked gate decision both fail c
   });
 });
 
-test("concurrent primary claims consume one attempt and delayed result cannot overwrite fallback", async () => {
-  await tempRun(true, async ({ root, state }) => {
+test("concurrent primary claims consume one attempt and delayed result cannot overwrite newer primary", async () => {
+  await tempRun(false, async ({ root, state }) => {
     let sequence = 0;
     const hooks = await createPlannerRecoveryHooks(root, { token: () => `token-${++sequence}` });
     const claims = await Promise.allSettled([before(hooks, "planner", "call-a"), before(hooks, "planner", "call-b")]);
@@ -243,9 +228,9 @@ test("concurrent primary claims consume one attempt and delayed result cannot ov
     assert.equal(state().planner_primary_attempts, 1);
     const winner = state().planner_active_attempt.call_id;
     await rejection(hooks, winner, "ProviderAuthError: unauthorized");
-    await before(hooks, "planner-fallback", "call-fallback");
+    await before(hooks, "planner", "call-retry");
     await after(hooks, "planner", winner, JSON.stringify(FULL_PLAN));
-    assert.equal(state().planner_active_attempt.call_id, "call-fallback");
+    assert.equal(state().planner_active_attempt.call_id, "call-retry");
     assert.equal(state().planner_status, "running");
   });
 });
@@ -272,7 +257,10 @@ test("stub/malformed output containing provider prose is plan_invalid and never 
     assert.equal(state().planner_status, "plan_invalid");
     assert.equal(state().planner_retry_outcome, "not_applicable");
     assert.equal(state().planner_fallback_attempts, undefined);
-    await assert.rejects(() => before(hooks, "planner-fallback", "call-no-fallback"), /fallback requires/);
+    await assert.rejects(() => before(hooks, "planner-fallback", "call-no-fallback"), /fallback disabled/);
+    // Primary may retry
+    await before(hooks, "planner", "call-retry");
+    assert.equal(state().planner_status, "running");
   });
 });
 
@@ -302,21 +290,12 @@ test("official error event shape authenticates by part session + callID against 
   });
 });
 
-test("fallback rejection or invalid output consumes the lease and ends delivery-blocked", async () => {
-  for (const [kind, finish] of [
-    ["rejection", (hooks) => rejection(hooks, "call-fallback", "APIError 503: unavailable")],
-    ["invalid", (hooks) => after(hooks, "planner-fallback", "call-fallback", JSON.stringify({ feature_id: FEATURE, kind: "stub", mode: "FULL", tasks: [] }))],
-  ]) {
-    await tempRun(true, async ({ root, state }) => {
-      const hooks = await createPlannerRecoveryHooks(root);
-      await before(hooks, "planner", "call-primary");
-      await rejection(hooks, "call-primary", "ProviderAuthError: unauthorized");
-      await before(hooks, "planner-fallback", "call-fallback");
-      await finish(hooks);
-      assert.equal(state().planner_retry_outcome, "fallback_failed", kind);
-      assert.equal(state().delivery_status, "delivery-blocked", kind);
-      await assert.rejects(() => before(hooks, "planner-fallback", "call-retry"));
-      await assert.rejects(() => before(hooks, "planner", "call-primary-retry"), /terminal/);
-    });
-  }
+test("planner-fallback is never claimable after primary provider death", async () => {
+  await tempRun(true, async ({ root, state }) => {
+    const hooks = await createPlannerRecoveryHooks(root);
+    await before(hooks, "planner", "call-primary");
+    await rejection(hooks, "call-primary", "ProviderAuthError: unauthorized");
+    await assert.rejects(() => before(hooks, "planner-fallback", "call-fallback"), /fallback disabled/);
+    assert.notEqual(state().planner_retry_outcome, "fallback_pending");
+  });
 });

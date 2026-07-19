@@ -106,7 +106,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "tr
 
 **Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap, provider error, dual failure). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
 
-**Planner recovery:** if primary planner fails with provider/timeout and gate says `fallback_pending`, dispatch `planner-fallback` **once**. Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
+**Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models. If the primary provider is truly down, stop and comment (product outage) — do not ladder. Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 </HARD-GATE>
 
 Route on its result:
