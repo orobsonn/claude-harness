@@ -710,7 +710,39 @@ test("unquoted heredoc with $ in body still deny (shell expands)", () => {
   assert.equal(decideBashForge({ command }).decision, "deny");
   assert.equal(isExpandingRedirect(command), true);
 });
-test("source command after a quoted heredoc terminator remains denied", () => {
+
+test("$SPEC_DIR plan/spec write (no .state) allow — #72 headless false deny", () => {
+  const command = [
+    'SPEC_DIR=".opencode/plans/ses_x-feat"',
+    'mkdir -p "$SPEC_DIR"',
+    "cat > \"$SPEC_DIR/spec.md\" <<'SPECEOF'",
+    "CTA/CTD rules with $100 in prose",
+    "SPECEOF",
+    'printf "%s\\n" "| fail_closed | x |" >> .opencode/decision-ledger.md',
+    'ls -la "$SPEC_DIR/"',
+  ].join("\n");
+  assert.equal(isExpandingRedirect(command), false);
+  assert.equal(decideBashForge({ command }).decision, "allow");
+});
+
+test("opaque > $GS still deny; expansion + .state still deny", () => {
+  assert.equal(
+    decideBashForge({ command: "echo forged > $GS" }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashForge({
+      command: 'echo forged > "$GS"; GS=.opencode/plans/.state/s/gate-state.json',
+    }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashForge({
+      command: "cat forged.json > .opencode/plans/.state/$sid/gate-state.json",
+    }).decision,
+    "deny",
+  );
+});test("source command after a quoted heredoc terminator remains denied", () => {
   const command = [
     "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
     "source evil.sh is literal payload.",
