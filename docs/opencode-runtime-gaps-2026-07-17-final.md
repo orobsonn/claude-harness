@@ -1,12 +1,17 @@
 # OpenCode harness — relatório FINAL de gaps (com evidência de run)
 
+> **HISTÓRICO (2026-07-17).** Vários P0 daqui foram fechados em #400–#411; smoke headless #72  
+> aceitou com draft PR #81 (LIGHT + capture). **Backlog vivo:**  
+> `docs/opencode-closure-roadmap.md`. Use este arquivo só para caçar edges (REVISE/dual,  
+> validate-plan, regate) — não como lista de implementação do zero.
+
 **Data:** 2026-07-17  
 **Repo:** `/root/dev/claude-harness`  
 **Branch:** `fix/opencode-heredoc-payload-scan` (diff local NÃO commitado)  
 **Core version:** `0.45.0`  
 **Sucessor de:** `docs/opencode-runtime-gaps-2026-07-17.md`  
 **Escopo:** runtime OpenCode apenas. Claude Code só como contraste.  
-**Status:** mapa fechado com evidência de run + código. Pronto para codar na ordem P0→P1→P2.
+**Status:** mapa histórico; implementação ativa = closure-roadmap pós-#411.
 
 ---
 

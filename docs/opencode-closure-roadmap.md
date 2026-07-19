@@ -1,147 +1,173 @@
-# OpenCode closure roadmap (por severidade)
+# OpenCode closure roadmap (pós-smoke #72 verde)
 
-**Objetivo:** OC LIGHT/FULL fluido e seguro como CC headless — sem QUICK launder, com capture real e forense de provider.  
-**Não fazer:** port wholesale do CC (introduz regressões; OC já é superior em planner/ceremony locks).
+**Atualizado:** 2026-07-19 (após #400–#412 + smoke headless #72 → draft PR #81)  
+**Objetivo residual:** endurecer forense, custo de tool e edges de review — **não** relitigar o path LIGHT que já fecha.
 
-## Critério de pronto
+**Estado pós-#412:** A1 (forense: `gate_blocked` + `upstream_5xx`) e A2 (prosa custo) fechados. A3/A4 já estavam verdes no OpenCode. **Único item vivo: A5** (capture multitask no push) — deferido de propósito até a 1ª run FULL real (armar bloqueio cego num caminho não-testado quebraria a run). Próximo passo natural: **rodar 1 smoke FULL** e então armar A5.
 
-1. CI verde no commit consumido.
-2. Plugins carregam **uma** vez (OC real, HOME/XDG isolado).
-3. `classify` monotônico: replay no-op; só escalate; nunca wipe mid-ceremony.
-4. Cap de review **bloqueia delivery** até recovery canônico (não reclassify QUICK).
-5. Cada writing-hand task: capture oracle (diff + scope + locked test) bound ao plano.
-6. LIGHT E2E real até draft PR **sem** bypass do coordinator.
-7. Erros de eye preservam receipt sanitizado (status/model/call).
+**Não fazer:** port wholesale do CC; reabrir P0s marcados DONE sem evidência nova de run.
 
 ---
 
-## P0 — fecha o buraco do #72 (hoje)
+## Prova de vida (aceite operacional)
 
-### P0.1 Classify monotônico + idempotente
-
-| | |
+| Check | Resultado |
 |---|---|
-| **Problema** | Re-classify wipe + downgrade LIGHT→QUICK |
-| **Fix** | rank `no-ceremony < QUICK < LIGHT < FULL`; same session+feature+mode = no-op byte-neutral; escalate ok preservando ceremony aplicável; downgrade/feature-switch deny; `peak_mode` stamp; obs só em transição real |
-| **Files** | `core/shared/lib/classify-stub.mjs`, `core/opencode/tools/classify.ts`, `classify-persist.mjs`, prosa `build.md` / `triaging-requests` |
-| **Tests** | matriz 4×4; replay; downgrade deny; escalate preserve ceremony |
+| Issue | Syntifai-AI/victor-bot-atendimento **#72** |
+| Runtime | OpenCode headless, routing xai-ollama-dual |
+| Harness | #400–#411 em `main` (auto-bind + heredoc/`$DIR` = #410/#411) |
+| Gate | `mode:LIGHT`, `planner_status:usable`, `plan_verdict:APPROVE` |
+| Hands | hand-record task-1 **DONE** + `capturedVerifiedAt` |
+| Ship | draft PR **#81** · issue **`harness:in-review`** |
+| Deny `$` expansion | **0** na run de aceite |
 
-### P0.2 Anti-QUICK-launder no delivery
-
-| | |
-|---|---|
-| **Problema** | Após cap/ceremony, QUICK ship passa |
-| **Fix** | `decideBashDelivery`: se mode QUICK e residual elevado (`peak_mode` LIGHT/FULL, brainstormed/adversary, planner attempt, review_status cap, dual leftovers) → **deny** com reason product-safe |
-| **Files** | `bash-decide.mjs` + tests |
-| **Tests** | QUICK puro allow; QUICK após cap deny; QUICK após brainstormed deny |
-
-### P0.3 Cap de failure bloqueia delivery + hands
-
-| | |
-|---|---|
-| **Problema** | `primary_failure_cap_reached` só para reviews |
-| **Fix** | `decideReviewCapBeforeWriting` e `decideBashDelivery` negam sob ambos caps; recovery = reopen epoch canônico (não classify QUICK) |
-| **Files** | `loop-decide.mjs`, `bash-decide.mjs` |
-| **Tests** | writing-hand deny; git push deny; reopen path |
-
-### P0.4 Forense de provider
-
-| | |
-|---|---|
-| **Problema** | bucket cego; 402/429 misturados |
-| **Fix** | classes `rate_limited`/`credit`; receipt sanitizado bounded (`status`, `model`, `call_id`, `message` truncado, sem secrets) em `review_outcomes` / `last_provider_diagnostic` |
-| **Files** | `loop-decide.mjs`, `loop-guard.ts` |
-| **Tests** | 401/402/429/503; receipt shape; no secret leak |
-
-### P0.5 Binding: silence eyes + foreground pending
-
-| | |
-|---|---|
-| **Problema** | unbound spam; foreground nunca marca pending |
-| **Fix** | `cleanupChild` no-op se sem process/pending binding (sem diagnostic); terminal after writing-hand com `metadata.sessionId` → `markDispatchBindingPending` + bind; liveClaims usa token autoritativo |
-| **Files** | `obs-hand.ts`, `dispatch-scope.mjs` |
-| **Tests** | eye idle silent; foreground bind; double before token |
-
-### P0.6 Docs/prosa recovery
-
-| | |
-|---|---|
-| **Problema** | “Halt” empurra pro QUICK |
-| **Fix** | OD/build: no cap → stop + comment PR / reopen ceremony; **nunca** reclassify down |
-| **Files** | `orchestrating-delivery/SKILL.md`, `build.md`, `triaging-requests` |
+Isso invalida como “blocker de sessão” a maior parte do inventário antigo (hand-record zero, capture impossível, QUICK launder, plan_pending_write eterno, `$` no spec mata run).
 
 ---
 
-## P1 — paridade de integridade (logo após P0)
+## DONE — não reabrir sem evidência nova
 
-### P1.1 Capture oracle no path Task
+| ID | Tema | Onde fechou |
+|---|---|---|
+| D1 | Double-load plugins | #402 `plugin:[]` + auto-glob |
+| D2 | Classify monotônico / anti-downgrade / peak_mode | #403 + prosa |
+| D3 | Anti-QUICK-launder no delivery | #403 bash-decide residue |
+| D4 | Cap bloqueia delivery (não vira QUICK ship) | #403 |
+| D5 | Classify só top-level build | #405 |
+| D6 | Planner primary-only (sem lease kill / fallback ladder) | #406 |
+| D7 | Retry K=3 + dedupe callId | #407 #408 |
+| D8 | Capture/ship nativo OC (Task hand, não spawn CC) | #409 |
+| D9 | Auto-bind `execution-plan.json` → usable | #410 |
+| D10 | Heredoc quotado + `$DIR` plan/spec (false deny) | #410 #411 |
+| D11 | LIGHT E2E headless até draft PR | smoke #72 → PR #81 |
+| D12 | Forense provider: `gate_blocked` (deny interno ≠ provider) + `upstream_5xx` distinto | #412 (grounded em `ses_084fd366`) |
 
-Portar semântica CC `capture-hand` / OC `run-hand` oracle → `obs-hand` after.  
-`Status: DONE` = info, nunca autoridade.  
-`marker-authority` exige receipt oracle.
-
-### P1.2 Cobertura multitask no push
-
-Snapshot bound → toda writing task com capture corrente da sessão.
-
-### P1.3 Review lease + snapshot hash
-
-Padrão planner-state em `review_inflight` (token, expires, plan binding). Late result não aprova plano novo.
-
-### P1.4 Coordinator bash write wall (LIGHT/FULL)
-
-Product paths deny via bash no build; allow só artefatos plan/spec/state allowlisted.
-
-### P1.5 Final review em LIGHT
-
-bash-decide exige final-review receipt em LIGHT e FULL (hoje só FULL).
+Docs históricos (mapa 2026-07-17, findings #72 pré-fix): **arquivo**, não backlog ativo. Ver § Histórico.
 
 ---
 
-## P2 — higiene / distribuição
+## AINDA FAZ SENTIDO — backlog ativo
 
-- Vendor update convergente (prune plugins aposentados).
-- Probe OC real `plugin:[]` + single factory.
-- Isolar HOME/XDG no headless.
-- validate-plan alinhado ao contrato planner.
-- Marcar docs 2026-07-17 como histórico.
-- E2E LIGHT + FULL em projeto consumidor com falhas injetadas.
+Ordenado por **impacto em custo/$ ou risco de merge sujo**, não por nostalgia da vistoria.
+
+### A1 — Forense de provider (ex-P0.4 / R1–R2) · **✅ DONE #412**
+
+| | |
+|---|---|
+| **Por quê** | Eye `provider_error` genérico → cego; 402/429 misturados; run anterior perdeu HTTP no wipe de log |
+| **Feito** | 401/402/429/503 + receipt sanitizado já existiam (27 testes). #412 fecha o residual: 5xx → classe distinta `upstream_5xx` (`provider_error` fica só como fallback desconhecido) **+ achado de produção**: denies internos do harness (`[plan-gate]`/`[loop-guard]`/`[entry-gate]`/`[money-preflight]`) eram engolidos em `provider_error` — agora classe `gate_blocked`, checada antes de qualquer status/pattern |
+| **Evidência** | `ses_084fd366` gravava 2× `[plan-gate] plan_pending_write` como `provider_error`, poluindo `review_failure_counts` + streak. Nenhum run bateu o cap (inofensivo na prática) |
+| **Files** | `core/opencode/plugin/lib/loop-decide.mjs` + `review-accounting.test.mjs` (3 testes novos) |
+
+### A2 — Custo de tool: denys residuais bobos · **✅ DONE #412 (prosa)**
+
+| | |
+|---|---|
+| **Por quê** | Smoke #72 ainda teve 1× `npx vitest` (`package_launcher`) — contornou, mas queima turno |
+| **Evidência** | Log #72 inteiro: **1 deny real** `npx vitest` (o resto dos matches de `package_launcher`/`429`/`402` é conteúdo de teste/hash logado). Marginal |
+| **Feito** | Prosa no `build` agent: preferir `node --test`/`verify`/binário local a `npx`/`npm run <script> <path>` ad-hoc; recovery de targeted-Vitest só via `verify` |
+| **Deferido** | Carve-out de allowlist + métrica gateDeny por classe no exit-reason — só se o custo reaparecer em run futura (não vale complexidade agora) |
+
+### A3 — Validate-plan + contrato do planner · **✅ já verde no OpenCode (nada a fazer)**
+
+| | |
+|---|---|
+| **Por quê** | Schemas `locked_tests` triplos / example-plan inválido / tool `validate-plan` ausente (vistoria 07-17) |
+| **Estado real** | OpenCode: `core/shared/lib/validate-plan.mjs` = schema canônico único; `tools/validate-plan.ts` importa dele; `core/opencode/skills/creating-plans/references/example-plan.json` valida **0 erros**; 12 testes verdes |
+| **CC (não mexer)** | O harness CC usa `test_path` legado (schema próprio, auto-consistente) e **funciona bem, inclusive headless** (confirmado pelo operador). Forçar convergência arriscaria quebrar um CC saudável — fora de escopo |
+
+### A4 — Edges de review: REVISE / dual / malformed cap · **✅ revalidado verde**
+
+| | |
+|---|---|
+| **Por quê** | Histórico: REVISE útil + dual=both liberava executor; malformed sem consumir cap; dual_status global |
+| **Estado real** | Rails #393/#400 verdes nos testes herméticos (`review-accounting`, `dual-enforcement`, `dual-merge`, `dual-runtime`). REVISE bloqueia writing-hand, malformed consome cap, dual por fase — todos cobertos |
+| **Pendente** | 1 smoke **FULL** real ainda não rodado — revalidar quando houver (não codar sem vermelho) |
+
+### A5 — Capture multitask + push coverage · **⏸️ DEFERIDO — armar após 1ª run FULL real**
+
+| | |
+|---|---|
+| **Por quê** | #72 tinha 1 task. N tasks: push deve exigir capture corrente **de cada** writing task do snapshot bound |
+| **Gap real** | Push casa `hand_finished`↔`capture_verified` (por-task) mas **não cruza contra os writing-tasks do plano bound** — se o orchestrator carimba só `hand_finished:[t1]` num plano de 2, o t2 escapa → feature multi-tarefa sobe pela metade |
+| **Por que deferido** | FULL **nunca rodou**. Adicionar um novo *deny* de push num caminho não-testado arrisca travar a 1ª run FULL por motivo não-provado (viola "não quebrar a run"). Mesma disciplina do A4: armar contra dado real, não cego |
+| **Fix (quando armar)** | bash-decide ship: para cada task writing no bound plan, exigir hand-record DONE+capture da sessão; **fail-open** se o plano bound não for enumerável (nunca bloquear por parsing) |
+| **Aceite** | Fixture 2 tasks: falta capture na t2 → push deny |
+
+### A6 — Final review receipt em LIGHT · **P2**
+
+| | |
+|---|---|
+| **Por quê** | Roadmap antigo: final dual só FULL no bash-decide. Smoke #72 fez dual na prática — confirmar se host **exige** receipt ou só prosa |
+| **Fix** | Se só prosa: gate determinístico em LIGHT também |
+| **Aceite** | LIGHT sem final-review receipt → push deny |
+
+### A7 — Regate / harvest-guard / harvester path · **P2**
+
+| | |
+|---|---|
+| **Por quê** | Vistoria: regate raro; harvest-guard tool nome morto; harvester path sem sessionID |
+| **Fix** | Armar regate na skill+host pós-sniper HIGH; harvest-guard no tool real; path canônico `sessionId-featureId` |
+| **Aceite** | 1 teste host + 1 run com sniper HIGH gera regate_pending→passed |
+
+### A8 — Docs históricos · **P2 chore**
+
+| | |
+|---|---|
+| **Fix** | Banner no topo de `opencode-runtime-gaps-2026-07-17*.md` e `opencode-smoke-72-findings.md`: “histórico pré-#411; backlog vivo = este roadmap” |
 
 ---
 
-## Sequência de merge (mínima e segura)
+## Critério de pronto (atualizado)
+
+Já satisfeito pelo smoke #72 (não re-provar do zero):
+
+1. ~~Plugins single-load~~  
+2. ~~Classify monotônico / anti-QUICK~~  
+3. ~~LIGHT E2E draft PR~~  
+4. ~~Hand + capture no path Task~~  
+
+Fechado pós-#412:
+
+5. ~~Forense provider com receipt no gate-state (A1)~~ → #412 (`gate_blocked` + `upstream_5xx`)  
+6. ~~Validate-plan canônico (A3)~~ → já verde no OpenCode (12 testes)  
+8. ~~Edges REVISE/dual revalidados (A4)~~ → hermético verde  
+9. ~~Custo: denys residuais sob controle (A2)~~ → #412 prosa (1 deny real no #72)
+
+Ainda aberto:
+
+7. Multitask capture no push (A5) — **deferido até 1ª run FULL real**
+
+---
+
+## Sequência de implementação (próxima sessão)
 
 ```
-1. P0.1 classify monotonic          ← impede wipe/downgrade
-2. P0.2 + P0.3 anti-launder + cap   ← impede ship sujo
-3. P0.4 provider forensics          ← enxerga a próxima falha xAI
-4. P0.5 binding noise + foreground  ← limpa N1 falso positivo
-5. P0.6 prosa recovery
-6. vendor victor-bot + smoke #72
-7. P1.1 capture oracle              ← antes de declarar paridade
+1. Rodar 1 smoke FULL real       ← desbloqueia A5 (dado real p/ armar o deny)
+2. A5 multitask capture@push     ← fixture 2 tasks + fail-open; só depois do FULL
+3. A6–A8 polish                  ← quando sobrar ciclo
 ```
 
-**Não bloquear smoke #72 em P1.1** se P0.1–P0.3 estiverem verdes — o escape principal fecha sem oracle.  
-**Não declarar paridade CC** sem P1.1 + E2E.
+**Feito nesta sessão (#412):** A1 forense (`gate_blocked`/`upstream_5xx`, grounded em `ses_084fd366`) · A2 prosa custo · A8 banners históricos.
+
+**Smoke de regressão (barato):** re-dispatch clone do #72 ou issue LIGHT pequena após cada batch; pass = LIGHT + usable + ≥1 capture + draft PR; fail = QUICK mid-run / 0 hands / deny `$` expansion >0.
 
 ---
 
 ## O que portar do CC vs reutilizar do OC
 
-| Portar do CC | Reutilizar do OC | Não portar |
+| Portar ideia do CC | Já no OC (manter) | Não portar |
 |---|---|---|
-| Capture independente (diff/test/scope) | Planner claim/lease/fencing | Contador reviewer por dispatch |
-| Conceito CI feature-wide (receipt endurecido) | Ceremony generation/bindings | Gate-state sem lock |
-| | Dual por fase + REVISE block | Dedupe classify só por tipo no feed |
-| | Dispatch-scope locks | Bash amplo fora do write-gate |
+| Receipt de provider sanitizado | Planner claim/bind/auto-bind | spawn-hand CC wholesale |
+| Capture multitask no ship | Ceremony locks, dual por fase | Gate-state sem lock |
+| | Task nativo + host-hand-capture | Bash amplo / npm run genérico |
 
 ---
 
-## Smoke de aceite (pós-P0)
+## Histórico
 
-1. Re-vendor victor-bot (`plugin:[]`, routing xai-ollama ou openai-ollama se liberado).
-2. Dispatch #72 (ou issue clone).
-3. **Pass:** mode permanece LIGHT/FULL; 0 reclassify down; se cap → delivery-blocked sem PR QUICK.
-4. **Pass:** scope-terminal sem unbound de eyes/parents.
-5. **Pass:** se eye falhar, receipt com status/model no gate-state.
-6. **Fail criteria:** PR draft com `mode:QUICK` após ceremony LIGHT; 0 hand-records em LIGHT ship.
+| Doc | Papel |
+|---|---|
+| `docs/opencode-smoke-72-findings.md` | Forense do **primeiro** #72 (QUICK launder) — contexto, não backlog |
+| `docs/opencode-runtime-gaps-2026-07-17*.md` | Mapa pré-#400 — vários P0 **DONE**; usar só para caçar edges A3/A4/A7 |
+| Este arquivo | **Fonte de verdade** do que falta pós-#411 |
