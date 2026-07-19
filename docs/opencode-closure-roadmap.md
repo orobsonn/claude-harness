@@ -84,15 +84,16 @@ Ordenado por **impacto em custo/$ ou risco de merge sujo**, não por nostalgia d
 | **Estado real** | Rails #393/#400 verdes nos testes herméticos (`review-accounting`, `dual-enforcement`, `dual-merge`, `dual-runtime`). REVISE bloqueia writing-hand, malformed consome cap, dual por fase — todos cobertos |
 | **Pendente** | 1 smoke **FULL** real ainda não rodado — revalidar quando houver (não codar sem vermelho) |
 
-### A5 — Capture multitask + push coverage · **⏸️ DEFERIDO — armar após 1ª run FULL real**
+### A5 — Capture multitask + push coverage · **✅ DONE #413**
 
 | | |
 |---|---|
-| **Por quê** | #72 tinha 1 task. N tasks: push deve exigir capture corrente **de cada** writing task do snapshot bound |
-| **Gap real** | Push casa `hand_finished`↔`capture_verified` (por-task) mas **não cruza contra os writing-tasks do plano bound** — se o orchestrator carimba só `hand_finished:[t1]` num plano de 2, o t2 escapa → feature multi-tarefa sobe pela metade |
-| **Por que deferido** | FULL **nunca rodou**. Adicionar um novo *deny* de push num caminho não-testado arrisca travar a 1ª run FULL por motivo não-provado (viola "não quebrar a run"). Mesma disciplina do A4: armar contra dado real, não cego |
-| **Fix (quando armar)** | bash-decide ship: para cada task writing no bound plan, exigir hand-record DONE+capture da sessão; **fail-open** se o plano bound não for enumerável (nunca bloquear por parsing) |
-| **Aceite** | Fixture 2 tasks: falta capture na t2 → push deny |
+| **Por quê** | #72 tinha 1 task. N tasks: push deve exigir evidência de entrega **de cada** writing task do plano bound |
+| **Gap fechado** | Push casava `hand_finished`↔`capture_verified` mas **não cruzava contra os writing-tasks do plano bound** — orchestrator carimbava só `[t1]` num plano de 2 → t2 escapava → feature multi-tarefa subia pela metade (e em headless auto-mergeava) |
+| **Fix (#413)** | `bound-plan.mjs` (leitor do snapshot selado, path-guarded, fail-open) + step 8b em `decideBashDelivery`: cada writing-task (com `scope_paths`) exige **evidência = hand-record OU capture**. `entry-gate.ts` injeta o `boundPlan` só em delivery. Fail-open se o plano não for enumerável |
+| **Adversarial** | Achado HIGH corrigido: v1 exigia capture de toda writing-task → travaria `DONE_WITH_CONCERNS` (shippable, nunca capture-stampado). v2 usa evidência=record-OU-capture, consistente com steps 7/9 |
+| **Aceite** | 10 testes: silent-skip → deny; both-captured → allow; DONE_WITH_CONCERNS → allow; fail-open; path-traversal guard |
+| **Residual** | MEDIUM (snapshot sem hash-verify / symlink léxico) mitigado pelo seal do `planner_plan_binding`; validar em campo na 1ª run FULL multitask |
 
 ### A6 — Final review receipt em LIGHT · **P2**
 
@@ -127,25 +128,24 @@ Já satisfeito pelo smoke #72 (não re-provar do zero):
 3. ~~LIGHT E2E draft PR~~  
 4. ~~Hand + capture no path Task~~  
 
-Fechado pós-#412:
+Fechado (A1–A5):
 
 5. ~~Forense provider com receipt no gate-state (A1)~~ → #412 (`gate_blocked` + `upstream_5xx`)  
 6. ~~Validate-plan canônico (A3)~~ → já verde no OpenCode (12 testes)  
+7. ~~Multitask capture no push (A5)~~ → #413 (evidência=record-OU-capture, fail-open, adversarial HIGH corrigido)  
 8. ~~Edges REVISE/dual revalidados (A4)~~ → hermético verde  
 9. ~~Custo: denys residuais sob controle (A2)~~ → #412 prosa (1 deny real no #72)
 
-Ainda aberto:
-
-7. Multitask capture no push (A5) — **deferido até 1ª run FULL real**
+Ainda aberto: **nenhum item de código** — só validação de campo.
 
 ---
 
 ## Sequência de implementação (próxima sessão)
 
 ```
-1. Rodar 1 smoke FULL real       ← desbloqueia A5 (dado real p/ armar o deny)
-2. A5 multitask capture@push     ← fixture 2 tasks + fail-open; só depois do FULL
-3. A6–A8 polish                  ← quando sobrar ciclo
+1. Rodar 1 smoke FULL real       ← validar A5 em campo: task pulada → deny; DONE_WITH_CONCERNS → não trava
+2. A6–A8 polish                  ← quando sobrar ciclo
+3. (infra) main já vermelho no CI — 8 falhas ambientais herdadas (#411): limpar num PR próprio
 ```
 
 **Feito nesta sessão (#412):** A1 forense (`gate_blocked`/`upstream_5xx`, grounded em `ses_084fd366`) · A2 prosa custo · A8 banners históricos.
