@@ -6,7 +6,10 @@
       "model": "openai/gpt-5.6-sol"
     },
     "planner": {
-      "model": "openai/gpt-5.6-sol"
+      "model": "openai/gpt-5.6-sol",
+      "fallback": {
+        "model": "ollama-cloud/kimi-k2.7-code"
+      }
     },
     "plan-reviewer": {
       "families": {

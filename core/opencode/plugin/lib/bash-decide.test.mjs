@@ -65,6 +65,8 @@ function fullCeremony(extra = {}) {
     // Ship-ready FULL fixture (#385): final dual review + demo stamped.
     final_review_done: true,
     demo_done: true,
+    planner_status: "usable",
+    delivery_status: "ready",
     ...extra,
   };
 }
@@ -77,6 +79,8 @@ function lightCeremony(extra = {}) {
     brainstormed: true,
     adversary_fired: true,
     feature_id: "feat",
+    planner_status: "usable",
+    delivery_status: "ready",
     ...extra,
   };
 }
@@ -936,6 +940,8 @@ test("LIGHT/FULL without string feature_id → deny", () => {
       classified: true,
       brainstormed: true,
       adversary_fired: true,
+      planner_status: "usable",
+      delivery_status: "ready",
     },
     ...cleanDeps(),
   });
@@ -950,6 +956,10 @@ test("LIGHT/FULL without string feature_id → deny", () => {
       brainstormed: true,
       adversary_fired: true,
       dual_status: "both",
+      final_review_done: true,
+      demo_done: true,
+      planner_status: "usable",
+      delivery_status: "ready",
     },
     ...cleanDeps(),
   });
@@ -1771,4 +1781,36 @@ test("LIGHT ship blocked while primary_failure_cap_reached even with ceremony", 
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /primary_failure_cap_reached/);
+});
+
+test("LIGHT ship denied when planner_status not usable", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({ planner_status: "planner_unavailable" }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /planner_status=usable|planner-not-usable/);
+});
+
+test("LIGHT ship denied when delivery_status delivery-blocked", () => {
+  const d = decideBashDelivery({
+    command: "gh pr create",
+    gateState: lightCeremony({
+      planner_status: "usable",
+      delivery_status: "delivery-blocked",
+    }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /delivery-blocked/);
+});
+
+test("LIGHT ship allow when planner usable + ceremony + capture", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({ planner_status: "usable", delivery_status: "ready" }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
 });

@@ -1250,6 +1250,34 @@ export function decideBashDelivery(input = {}) {
           details: { dual_status: gs.dual_status ?? null },
         };
       }
+      // LIGHT|FULL require a usable bound planner plan — coordinator must not ship after
+      // planner_unavailable / plan_invalid / delivery-blocked (smoke #72 PR without hands).
+      if (gs.delivery_status === "delivery-blocked") {
+        return {
+          ok: false,
+          decision: "deny",
+          reason:
+            "[entry-gate] Blocked: delivery_status=delivery-blocked — fix planner/review recovery before git push / gh pr.",
+          details: {
+            denied_class: "delivery-blocked",
+            planner_status: gs.planner_status ?? null,
+          },
+        };
+      }
+      if (gs.planner_status !== "usable") {
+        return {
+          ok: false,
+          decision: "deny",
+          reason:
+            `[entry-gate] Blocked: LIGHT/FULL delivery requires planner_status=usable ` +
+            `(got ${String(gs.planner_status ?? "missing")}). Dispatch planner or planner-fallback; do not implement inline.`,
+          details: {
+            denied_class: "planner-not-usable",
+            planner_status: gs.planner_status ?? null,
+            planner_retry_outcome: gs.planner_retry_outcome ?? null,
+          },
+        };
+      }
       // ceremony OK — fall through (no ceremony-delivery-ok early allow)
     } else {
       return {
