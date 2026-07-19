@@ -71,6 +71,8 @@ Compliance and security are **single-eye** by default (OpenAI evaluator family) 
 - `verify` — the only coordinator recovery for a registered targeted Vitest denial. Pass exact feature/task ids, `denied_class`, denied command, and the exact snapshot `locked_tests[].path`. Top-level use returns only `{ tool: "verify", registry_id, test_path }`; only the trusted active hand can execute it. Never dispatch `explore`, `general`, or an investigation role. Rejection, `no_equivalent`, `setup_missing`, or `repeated` means stop.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
+**Running one specific test (avoid `package_launcher` denials).** To exercise a single frozen test, prefer the project's local test binary or `node --test <path>` over an ad-hoc `npx vitest`/`npm run <script> <path>` — the latter trip the `package_launcher` deny and burn a recovery turn. For a *registered targeted-Vitest* denial the only sanctioned recovery is the `verify` tool above (never re-issue the raw `npx`).
+
 ## Hermetic rule
 
 Read all rules from project `AGENTS.md` and nested folder law. Prefer project-vendored `.opencode/` over global `~/.config/opencode` after cutover. **Never** read harness orchestration from `~/.claude`.
