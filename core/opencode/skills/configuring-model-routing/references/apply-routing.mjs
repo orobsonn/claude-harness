@@ -155,12 +155,13 @@ export function buildRoutingFromSlots(slots) {
       }
     }
     const testAuthor = String(slots?.testAuthor ?? hands.medium).trim();
+    // Default fallback = secondary eye (different family) unless explicitly null/off.
     const fallback =
       slots?.plannerFallback === null
         ? undefined
         : typeof slots?.plannerFallback === "string" && slots.plannerFallback.includes("/")
           ? { model: slots.plannerFallback }
-          : undefined;
+          : { model: secondaryEye };
 
     /** @type {object} */
     const routing = {
@@ -250,6 +251,7 @@ export function listPresets() {
         primaryEye: "openai/gpt-5.6-sol",
         secondaryEye: "ollama-cloud/kimi-k2.7-code",
         supportEye: "openai/gpt-5.5",
+        plannerFallback: "ollama-cloud/kimi-k2.7-code",
         hands: {
           low: "ollama-cloud/gemma4:31b",
           medium: "ollama-cloud/glm-5.2",
@@ -265,6 +267,7 @@ export function listPresets() {
         primaryEye: "xai/grok-4.5",
         secondaryEye: "ollama-cloud/kimi-k2.7-code",
         supportEye: "xai/grok-4.5",
+        plannerFallback: "ollama-cloud/kimi-k2.7-code",
         hands: {
           low: "ollama-cloud/gemma4:31b",
           medium: "ollama-cloud/glm-5.2",
