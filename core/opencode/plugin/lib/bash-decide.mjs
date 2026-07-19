@@ -6,6 +6,7 @@
 import { isDeliveryCommand } from "./is-delivery-command.mjs";
 import { isSafeSessionIdSegment } from "./dual-enforcement.mjs";
 import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
+import { fidelityPassEntry } from "./mark-gate.mjs";
 import {
   classifyRegatePending,
   corruptRegatePendingReason,
@@ -1150,6 +1151,31 @@ export function isHeadlessDeliveryContext(input = {}, gs = {}) {
 }
 
 /**
+ * @description Writing-task ids from a bound execution-plan: a task counts as a
+ * writing task when it declares a non-empty `scope_paths` (an executor produces a
+ * capture for it). Returns null when the plan is not enumerable — the A5 push rail
+ * is fail-open (never block delivery on a plan we cannot read).
+ * @param {unknown} plan
+ * @returns {string[] | null}
+ */
+export function writingTaskIdsFromPlan(plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return null;
+  const tasks = /** @type {Record<string, unknown>} */ (plan).tasks;
+  if (!Array.isArray(tasks)) return null;
+  const ids = [];
+  for (const task of tasks) {
+    if (!task || typeof task !== "object" || Array.isArray(task)) continue;
+    const t = /** @type {Record<string, unknown>} */ (task);
+    const id = t.id;
+    const scope = t.scope_paths;
+    if (typeof id !== "string" || id.length === 0) continue;
+    if (!Array.isArray(scope) || scope.length === 0) continue;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/**
  * @param {{
  *   command?: unknown,
  *   gateState?: unknown,
@@ -1159,6 +1185,7 @@ export function isHeadlessDeliveryContext(input = {}, gs = {}) {
  *   gitState?: { branch?: string|null, commitsAhead?: number|null, defaultBranch?: string|null }|null,
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   listHandRecordsForFeatureFn?: (featureId: string) => unknown[],
+ *   boundPlan?: { tasks?: unknown[] }|null,
  * }} input
  * @returns {Decision}
  */
@@ -1422,6 +1449,53 @@ export function decideBashDelivery(input = {}) {
         reason:
           "[entry-gate] Blocked: LIGHT/FULL delivery requires string feature_id in gate-state.",
       };
+    }
+
+    // 8b. multitask capture coverage (A5): every writing task in the BOUND plan must
+    // show delivery EVIDENCE — a capture-verified stamp OR a hand record for that task.
+    // This catches the real gap: a LIGHT/FULL feature shipping with a planned writing
+    // task that was never dispatched (no record, no capture = a silent half-build).
+    // A task WITH a hand record (any terminal outcome, incl. the shippable
+    // DONE_WITH_CONCERNS which the system deliberately does NOT capture-stamp) is left
+    // to the existing capture / real-file rails — 8b must not demand a capture the
+    // system never produces. Fail-open: only enforced when the bound plan is enumerable.
+    if ((mode === "LIGHT" || mode === "FULL") && featureId !== null) {
+      const writingTaskIds = writingTaskIdsFromPlan(input.boundPlan);
+      if (Array.isArray(writingTaskIds) && writingTaskIds.length > 0) {
+        const captured = coerceArray(gs.capture_verified);
+        const recordedTaskIds = new Set();
+        if (typeof input.listHandRecordsForFeatureFn === "function") {
+          try {
+            for (const rec of input.listHandRecordsForFeatureFn(featureId) ?? []) {
+              const tid = rec && typeof rec === "object" && !Array.isArray(rec) ? rec.taskId : null;
+              if (typeof tid === "string" && tid.length > 0) recordedTaskIds.add(tid);
+            }
+          } catch {
+            /* fail-open: unreadable records → treat as none, rely on capture match */
+          }
+        }
+        const missing = writingTaskIds.filter(
+          (taskId) =>
+            !recordedTaskIds.has(taskId) &&
+            !matchesAbsolution(
+              fidelityPassEntry(featureId, taskId, null),
+              captured,
+              isAncestorFn,
+            ),
+        );
+        if (missing.length > 0) {
+          return {
+            ok: false,
+            decision: "deny",
+            reason:
+              "[entry-gate] Blocked: delivery command denied — writing task(s) " +
+              `${missing.join(", ")} in the bound execution-plan have no delivery evidence ` +
+              "(no hand record and no capture-verified stamp) — a planned task was never " +
+              "dispatched (half-built delivery). Dispatch the hand for each remaining writing " +
+              "task before running any delivery command (git push / gh pr create / gh pr merge).",
+          };
+        }
+      }
     }
 
     // 9. real-file rail when LIGHT|FULL or feature_id present

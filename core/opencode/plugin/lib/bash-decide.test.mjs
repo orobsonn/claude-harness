@@ -12,6 +12,7 @@ import {
   hasShellChainMetacharacters,
   isHarnessPrescribedPackageCommand,
   hasElevatedCeremonyResidue,
+  writingTaskIdsFromPlan,
 } from "./bash-decide.mjs";
 
 const SID = "ses_test_delivery_1";
@@ -258,6 +259,157 @@ test("missing sessionId + delivery → deny", () => {
     sessionId: null,
   });
   assert.equal(d.decision, "deny");
+});
+
+// ── A5: multitask capture coverage vs bound plan ──────────────────────────
+
+test("writingTaskIdsFromPlan returns ids of tasks with non-empty scope_paths only", () => {
+  const plan = {
+    tasks: [
+      { id: "t1", scope_paths: ["src/a.ts"] },
+      { id: "t2", scope_paths: ["src/b.ts"] },
+      { id: "t3", scope_paths: [] }, // no scope → not a writing task
+      { id: "", scope_paths: ["src/c.ts"] }, // no id → skip
+      { scope_paths: ["src/d.ts"] }, // no id → skip
+    ],
+  };
+  assert.deepEqual(writingTaskIdsFromPlan(plan), ["t1", "t2"]);
+});
+
+test("writingTaskIdsFromPlan is null (fail-open) for non-enumerable plan", () => {
+  assert.equal(writingTaskIdsFromPlan(null), null);
+  assert.equal(writingTaskIdsFromPlan({}), null);
+  assert.equal(writingTaskIdsFromPlan({ tasks: "nope" }), null);
+  assert.equal(writingTaskIdsFromPlan("plan"), null);
+});
+
+test("A5: LIGHT bound plan writing task without capture → deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"],
+    }),
+    ...cleanDepsWithCapture({
+      boundPlan: {
+        tasks: [
+          { id: "t1", scope_paths: ["src/a.ts"] },
+          { id: "t2", scope_paths: ["src/b.ts"] }, // planned, never captured
+        ],
+      },
+    }),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /t2/);
+  assert.match(d.reason, /no delivery evidence|half-built/i);
+});
+
+test("A5: FULL bound plan with every writing task captured → allow", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({
+      final_review_done: true,
+      demo_done: true,
+      hand_finished: ["feat/t1", "feat/t2"],
+      capture_verified: ["feat/t1@abc", "feat/t2@abc"],
+    }),
+    ...cleanDepsWithCapture({
+      boundPlan: {
+        tasks: [
+          { id: "t1", scope_paths: ["src/a.ts"] },
+          { id: "t2", scope_paths: ["src/b.ts"] },
+        ],
+      },
+    }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("A5: DONE_WITH_CONCERNS writing task (hand record, no capture) → allow, no false-block", () => {
+  // DONE_WITH_CONCERNS is shippable but the system never capture-stamps it. A5 must
+  // exempt it (it has a hand record) instead of demanding a capture that never exists.
+  const listWithConcerns = () => [
+    {
+      taskId: "t1",
+      sessionId: SID,
+      record: {
+        outcome: "DONE",
+        freezeCommitSha: "abc",
+        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
+        scopeViolations: [],
+        frozenViolations: [],
+      },
+    },
+    {
+      taskId: "t2",
+      sessionId: SID,
+      record: { outcome: "DONE_WITH_CONCERNS", scopeViolations: [], frozenViolations: [] },
+    },
+  ];
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: fullCeremony({
+      final_review_done: true,
+      demo_done: true,
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"], // t2 intentionally uncaptured
+    }),
+    ...cleanDeps({
+      listHandRecordsForFeatureFn: listWithConcerns,
+      boundPlan: {
+        tasks: [
+          { id: "t1", scope_paths: ["src/a.ts"] },
+          { id: "t2", scope_paths: ["src/b.ts"] },
+        ],
+      },
+    }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("A5: planned writing task with NO record and NO capture → deny (silent skip)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"],
+    }),
+    ...cleanDepsWithCapture({
+      boundPlan: {
+        tasks: [
+          { id: "t1", scope_paths: ["src/a.ts"] },
+          { id: "t2", scope_paths: ["src/b.ts"] }, // never dispatched: no record in stampedDoneList
+        ],
+      },
+    }),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /t2/);
+  assert.match(d.reason, /no delivery evidence|never dispatched/i);
+});
+
+test("A5 fail-open: bound plan absent → does not add a new block", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"],
+    }),
+    ...cleanDepsWithCapture({ boundPlan: null }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("A5 fail-open: non-enumerable bound plan (no tasks array) → allow", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({
+      hand_finished: ["feat/t1"],
+      capture_verified: ["feat/t1@abc"],
+    }),
+    ...cleanDepsWithCapture({ boundPlan: { note: "corrupt" } }),
+  });
+  assert.equal(d.decision, "allow");
 });
 
 // ── forge cases (unchanged) ───────────────────────────────────────────────

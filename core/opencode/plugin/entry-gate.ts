@@ -26,6 +26,8 @@ export type EntryGateDeps = {
   } | null
   isAncestorFn?: (sha: string) => boolean | null
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
+  /** Read the bound execution-plan snapshot for the A5 capture rail (injectable). */
+  readBoundPlanFn?: (gateState: unknown) => unknown
   ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
@@ -191,6 +193,10 @@ export async function createEntryGateHooks(
   const { isDeliveryRole, isPlannerRole } = await import("./lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
+  const { readBoundPlanSnapshot } = await import("./lib/bound-plan.mjs")
+  const readBoundPlanFn =
+    deps.readBoundPlanFn ??
+    ((gateState: unknown) => readBoundPlanSnapshot(root, gateState))
 
   const gitStateFn =
     deps.gitStateFn ?? (() => defaultGitState(computeGitState))
@@ -295,12 +301,15 @@ export async function createEntryGateHooks(
           gitState?: ReturnType<typeof gitStateFn>
           isAncestorFn?: typeof isAncestorFn
           listHandRecordsForFeatureFn?: typeof listHandRecordsForFeatureFn
+          boundPlan?: unknown
         } = {}
         if (isDeliveryCommand(command)) {
           deliveryExtras.gitState = gitStateFn()
           deliveryExtras.isAncestorFn = isAncestorFn
           deliveryExtras.listHandRecordsForFeatureFn =
             listHandRecordsForFeatureFn
+          // A5: bound-plan snapshot for multitask capture coverage (fail-open → null).
+          deliveryExtras.boundPlan = readBoundPlanFn(gateState)
         }
 
         throwIfBashDenied(
