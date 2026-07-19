@@ -577,29 +577,32 @@ export function isShellScriptOrPipeToShell(command) {
 }
 
 /**
- * @description Redirect or write-tool combined with expansion — hides oracle in $VAR.
- * Heredoc plan writes without $ still allowed.
+ * @description Redirect or write-tool combined with shell expansion — hides oracle in $VAR.
+ * Quoted heredoc bodies (`<<'EOF'` / `<<"EOF"`) are literal payload: `$` / backticks inside
+ * do NOT count (spec/plan markdown often has `$`, `${}`, code samples). Unquoted `<<EOF`
+ * still expands → deny if body has `$`.
  * @param {unknown} command
  * @returns {boolean}
  */
 export function isExpandingRedirect(command) {
   if (typeof command !== "string" || command.length === 0) return false;
+  // Drop quoted-heredoc payload before scanning — only shell-significant surface remains.
+  const surface = stripQuotedHeredocBodies(command);
   const hasExpand =
-    command.includes("$") ||
-    command.includes("`") ||
-    command.includes("$(");
+    surface.includes("$") ||
+    surface.includes("`") ||
+    surface.includes("$(");
   if (!hasExpand) return false;
-  if (hasShellRedirectOperators(command)) return true;
+  if (hasShellRedirectOperators(surface)) return true;
   // cp/mv $GS without redirect operators
   if (
-    /\b(?:cp|mv|ln|rsync|dd|install|tee|install|install)\b/.test(command) ||
-    /\bsed\b/.test(command)
+    /\b(?:cp|mv|ln|rsync|dd|install|tee)\b/.test(surface) ||
+    /\bsed\b/.test(surface)
   ) {
     return true;
   }
   return false;
 }
-
 /**
  * @description tar/git apply unpack without path review (payload may land under .state).
  * @param {unknown} command

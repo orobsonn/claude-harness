@@ -17,27 +17,61 @@ function extractPath(args: Record<string, unknown> | null): string {
   return typeof p === "string" ? p : "";
 }
 
+function isBashTool(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const n = name.toLowerCase();
+  return n === "bash" || n === "shell" || n.endsWith(".bash") || n.endsWith("_bash");
+}
+
 /**
- * @description Build after-hooks for plan/spec outbox events.
+ * @description After execution-plan.json lands on disk, bind planner immediately (auto-bind).
+ * Removes race: plan-reviewer before usable.
  */
-export async function createObsPlanWriteHooks(): Promise<
-  Pick<Hooks, "tool.execute.after">
-> {
+async function maybeAutoBindPlan(projectRoot: string, filePath: string) {
+  try {
+    const { sessionFeatureFromPlanPath } = await import("./lib/plan-path-session.mjs");
+    const ids = sessionFeatureFromPlanPath(filePath);
+    if (!ids) return;
+    if (!/execution-plan\.json$/i.test(filePath.replace(/\\/g, "/"))) return;
+    const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs");
+    reconcilePlannerStateFromDisk(projectRoot, ids.sessionId);
+  } catch {
+    /* fail-open */
+  }
+}
+
+/**
+ * @description Build after-hooks for plan/spec outbox events + planner auto-bind.
+ */
+export async function createObsPlanWriteHooks(
+  projectRoot?: string,
+): Promise<Pick<Hooks, "tool.execute.after">> {
   const { eventForPlanPath, obsAppend, dedupeByType, resolveHookArgs } = await import(
     "./lib/obs-emit.mjs"
   );
+  const root =
+    typeof projectRoot === "string" && projectRoot.length > 0 ? projectRoot : process.cwd();
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
-        if (!isWriteTool(input?.tool)) return;
         const args = resolveHookArgs(input, output);
-        const filePath = extractPath(args);
-        const ev = eventForPlanPath(filePath);
+        let filePath = extractPath(args);
+        // bash tee/printf path: scrape command for execution-plan.json
+        if (!filePath && isBashTool(input?.tool)) {
+          const cmd = typeof args?.command === "string" ? args.command : "";
+          const m = cmd.match(/(\S*execution-plan\.json)/);
+          if (m) filePath = m[1];
+        }
+        if (filePath) {
+          await maybeAutoBindPlan(root, filePath);
+        }
+        if (!isWriteTool(input?.tool) && !isBashTool(input?.tool)) return;
+        if (!filePath && isWriteTool(input?.tool)) return;
+        const ev = filePath ? eventForPlanPath(filePath) : null;
         if (!ev) return;
         if (ev.type === "plan-created" && filePath) {
           try {
             const fs = await import("node:fs");
-            // Prefer on-disk file after write; fall back to args content if present.
             let raw = "";
             if (typeof args?.content === "string") raw = args.content;
             else if (fs.existsSync(filePath)) raw = fs.readFileSync(filePath, "utf8");
@@ -57,7 +91,15 @@ export async function createObsPlanWriteHooks(): Promise<
   };
 }
 
-export const obsPlanWrite: Plugin = async () => createObsPlanWriteHooks();
+export const obsPlanWrite: Plugin = async ({ directory, worktree }: any) => {
+  const root =
+    typeof directory === "string" && directory
+      ? directory
+      : typeof worktree === "string" && worktree
+        ? worktree
+        : process.cwd();
+  return createObsPlanWriteHooks(root);
+};
 
 /** @description OC load contract — default export required. */
 export default obsPlanWrite;

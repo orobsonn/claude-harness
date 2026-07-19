@@ -8,6 +8,7 @@ import {
   decideBashForge,
   firstArgvBasename,
   isStateForgeCommand,
+  isExpandingRedirect,
   hasShellChainMetacharacters,
   isHarnessPrescribedPackageCommand,
   hasElevatedCeremonyResidue,
@@ -681,6 +682,34 @@ test("quoted spec heredoc treats punctuation and source-like prose as literal co
   assert.equal(isStateForgeCommand(command), false);
 });
 
+test("quoted heredoc with $ / ${} / backticks in body is allow (literal payload, #72 false deny)", () => {
+  const command = [
+    "cat > .opencode/plans/ses_x-feat/spec.md <<'EOF'",
+    "Price is $100. Template ${var}. Docs show $(date) and `code`.",
+    "const x = process.env.FOO",
+    "EOF",
+  ].join("\n");
+  assert.equal(decideBashForge({ command }).decision, "allow", "quoted body $ must not trip expanding-redirect");
+  assert.equal(isExpandingRedirect(command), false);
+  assert.equal(isStateForgeCommand(command), false);
+
+  const plan = [
+    "cat > .opencode/plans/ses_x-feat/execution-plan.json <<'EOF'",
+    '{"feature_id":"feat","mode":"light","tasks":[{"id":"t1","title":"use $x"}]}',
+    "EOF",
+  ].join("\n");
+  assert.equal(decideBashForge({ command: plan }).decision, "allow");
+});
+
+test("unquoted heredoc with $ in body still deny (shell expands)", () => {
+  const command = [
+    "cat > .opencode/plans/ses_x-feat/spec.md <<EOF",
+    "price $HOME",
+    "EOF",
+  ].join("\n");
+  assert.equal(decideBashForge({ command }).decision, "deny");
+  assert.equal(isExpandingRedirect(command), true);
+});
 test("source command after a quoted heredoc terminator remains denied", () => {
   const command = [
     "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
