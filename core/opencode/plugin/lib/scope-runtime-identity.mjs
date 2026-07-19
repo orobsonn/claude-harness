@@ -115,7 +115,20 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
   } else {
     return { ok: false, reason: "session is a verified top-level session without dispatch binding", notWritingSession: true, ...sessionContext };
   }
-  if (!bound.ok) return { ...bound, ...sessionContext };
+  if (!bound.ok) {
+    // Child Task without writing-hand binding = eye/shipper/harvester/explore.
+    // Do NOT force plan-write-gate identity fail-closed — only writing hands need bind.
+    const sessionAgent = typeof session.agent === "string" ? session.agent : "";
+    if (!writingRole(sessionAgent)) {
+      return {
+        ok: false,
+        reason: bound.reason || "child session is not a writing-hand dispatch",
+        notWritingSession: true,
+        ...sessionContext,
+      };
+    }
+    return { ...bound, ...sessionContext };
+  }
   const role = await roleFromToolCall(reader, runtimeSessionId, runtimeCallId, input?.tool);
   if (!role.ok) return { ...role, ...sessionContext };
   if (!writingRole(bound.binding.role) || !writingRole(role.role)) return { ok: false, reason: "writing role identity missing" };

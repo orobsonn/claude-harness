@@ -38,6 +38,11 @@ export async function createObsHandHooks(
   } = await import("./lib/hand-records.mjs");
   const { defaultHeadSha } = await import("./lib/mark-gate.mjs");
   const {
+    gitTouchedPaths,
+    resolveOcHandOutcome,
+    hostStampOcHandCapture,
+  } = await import("./lib/host-hand-capture.mjs");
+  const {
     isRegateArmingSniperRole,
     isRegateArmingOutcome,
     armRegatePending,
@@ -88,25 +93,20 @@ export async function createObsHandHooks(
       writtenRecords.add(writeKey);
       const outputText = String(output?.output ?? output?.content ?? output?.result ?? "");
       const parsed = parseHandStatusFromOutput(outputText);
-      const outcome = parsed ?? "BLOCKED";
-      const record = buildTaskHandRecord({
+      // OC-native: in-session Task hands (not CC spawn) — git evidence promotes BLOCKED→DONE
+      // and host stamps hand_finished + capture_verified so parent can ship without CC capture-hand.
+      const touched = gitTouchedPaths(cwd);
+      const outcome = resolveOcHandOutcome(parsed, touched);
+      const freeze = defaultHeadSha(cwd);
+      hostStampOcHandCapture({
+        projectRoot: cwd,
+        sessionId,
         featureId,
         taskId,
-        sessionId,
-        freezeCommitSha: defaultHeadSha(cwd),
+        role: typeof ids.role === "string" ? ids.role : "",
         outcome,
-        touchedPaths: [],
-        agent: ids.role,
-      });
-      writeHandRecord({
-        roots: {
-          projectRoot: cwd,
-          runtime: "opencode",
-          sessionId,
-          featureId,
-        },
-        taskId,
-        record,
+        touchedPaths: touched,
+        freezeCommitSha: freeze,
       });
       maybeArmRegatePending({ sessionId, callId, featureId, taskId, role: ids.role, outcome });
     } catch {

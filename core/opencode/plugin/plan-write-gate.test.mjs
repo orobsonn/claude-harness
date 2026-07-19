@@ -884,6 +884,21 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
       { tool: "edit", sessionID: session, agent: "executor-high" },
       { args: { filePath: "outside/b.ts", oldString: "x", newString: "y" } },
     ), /OUTSIDE|safe project path/);
+    // OC allowlist during active hand: plain git status/diff/log + node --test + ls/cat.
+    for (const command of [
+      "git status --short",
+      "git diff --stat",
+      "git log --oneline -3",
+      "git rev-parse HEAD",
+      "node --test test/foo.test.ts",
+      "ls src",
+      "cat src/ok.ts",
+    ]) {
+      await assert.doesNotReject(() => before(
+        { tool: "bash", sessionID: session, agent: "executor-high" },
+        { args: { command } },
+      ), command);
+    }
     for (const command of [
       "touch src/ok.ts outside/evil.ts",
       "node script.mjs",
@@ -895,14 +910,13 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
       "env node script.mjs",
       "bash -c 'touch src/x'",
       "cat input | sponge output",
-      "git status --short",
       "git -c core.pager='sh -c evil' status",
       "rg --pre 'sh -c evil' pattern",
     ]) {
       await assert.rejects(() => before(
         { tool: "bash", sessionID: session, agent: "executor-high" },
         { args: { command } },
-      ), /Bash is disabled.*cleanup.*compliance\/orchestrator/i, command);
+      ), /Bash is disabled during an active writing-hand dispatch/i, command);
     }
     await assert.doesNotReject(() => before(
       { tool: "apply_patch", sessionID: session, agent: "executor-high" },
