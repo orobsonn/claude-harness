@@ -84,6 +84,35 @@ const TEST_ROOT_RE = /^(core|modules|\.opencode)\//;
  * @param {unknown} mode
  * @returns {"QUICK"|"LIGHT"|"FULL"|"NO-CEREMONY"|""}
  */
+/**
+ * @description True when gate-state shows the session already entered LIGHT/FULL ceremony
+ * or planner/review work — used to block QUICK ship laundering after a stuck LIGHT run.
+ * @param {Record<string, unknown>} gs
+ * @returns {boolean}
+ */
+export function hasElevatedCeremonyResidue(gs = {}) {
+  if (!gs || typeof gs !== "object" || Array.isArray(gs)) return false;
+  const peak = normalizeMode(gs.peak_mode);
+  if (peak === "LIGHT" || peak === "FULL") return true;
+  if (gs.brainstormed === true || gs.adversary_fired === true) return true;
+  const plannerStatus = typeof gs.planner_status === "string" ? gs.planner_status : "";
+  if (plannerStatus && plannerStatus !== "not_started") return true;
+  const attempts = Number(gs.planner_primary_attempts);
+  if (Number.isFinite(attempts) && attempts > 0) return true;
+  if (
+    gs.review_status === "primary_failure_cap_reached" ||
+    gs.review_status === "review_cap_reached"
+  ) {
+    return true;
+  }
+  const dual = gs.dual_status;
+  if (dual && typeof dual === "object" && !Array.isArray(dual)) {
+    if (dual.plan_review || dual.adversary) return true;
+  }
+  if (Array.isArray(gs.review_outcomes) && gs.review_outcomes.length > 0) return true;
+  return false;
+}
+
 export function normalizeMode(mode) {
   if (typeof mode !== "string") return "";
   const m = mode.trim().toLowerCase();
@@ -1166,8 +1195,35 @@ export function decideBashDelivery(input = {}) {
       };
     }
 
+    // 4a. review failure/useful caps block ALL delivery (including QUICK launder)
+    if (
+      gs.review_status === "primary_failure_cap_reached" ||
+      gs.review_status === "review_cap_reached"
+    ) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason:
+          `[entry-gate] Blocked: delivery denied while review_status=${String(gs.review_status)}. ` +
+          "Recover via canonical ceremony restart (new generation + bound plan) — never reclassify down to QUICK.",
+        details: { denied_class: "review-cap-active", review_status: gs.review_status },
+      };
+    }
+
     if (mode === "QUICK" && classified) {
-      // ceremony OK for QUICK — fall through to rails 5–9 (no early quick-delivery-ok)
+      // Anti-launder: QUICK ship is only for genuine QUICK runs — not after LIGHT/FULL residue.
+      if (hasElevatedCeremonyResidue(gs)) {
+        return {
+          ok: false,
+          decision: "deny",
+          reason:
+            "[entry-gate] Blocked: QUICK delivery denied after elevated ceremony residue " +
+            "(prior LIGHT/FULL, planner attempt, or dual/review leftovers). " +
+            "Finish the LIGHT/FULL path or open a new session — do not reclassify down.",
+          details: { denied_class: "quick-launder" },
+        };
+      }
+      // genuine QUICK — fall through to rails 5–9
     } else if (mode === "LIGHT" || mode === "FULL" || (!mode && classified)) {
       if (gs.brainstormed !== true) {
         return {

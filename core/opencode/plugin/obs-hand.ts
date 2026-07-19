@@ -29,7 +29,7 @@ export async function createObsHandHooks(
   } = await import("./lib/obs-emit.mjs");
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs");
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("./lib/roles.mjs");
-  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBinding, reconcilePendingChildBindingByChild } = await import("./lib/dispatch-scope.mjs");
+  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBindingByChild } = await import("./lib/dispatch-scope.mjs");
   const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
   const {
     writeHandRecord,
@@ -199,20 +199,9 @@ export async function createObsHandHooks(
       if (fromPending.ok) {
         processBinding = getProcessChildBinding(cwd, childSessionId);
       } else {
-        let session;
-        try {
-          session = await reader.getSession(childSessionId);
-          if (!session?.parentID) return { ok: true };
-        } catch {
-          const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, "SDK unavailable and no verified child binding");
-          return { ok: false, reason: recorded.ok ? "terminal session identity unavailable" : recorded.reason };
-        }
-        const reconciled = reconcilePendingChildBinding(cwd, { parentSessionId: session.parentID, childSessionId });
-        if (!reconciled.ok) {
-          const recorded = appendTerminalScopeDiagnostic(cwd, childSessionId, reconciled.reason);
-          return { ok: false, reason: recorded.ok ? reconciled.reason : recorded.reason };
-        }
-        processBinding = getProcessChildBinding(cwd, childSessionId);
+        // No writing-hand claim/pending for this child → eye/parent/explore idle.
+        // Do NOT call SDK or emit unbound diagnostics (N1 false-positive spam).
+        return { ok: true };
       }
     }
     const verifiedBinding = processBinding ?? getProcessChildBinding(cwd, childSessionId);
@@ -287,7 +276,39 @@ export async function createObsHandHooks(
         if (terminal && isHandRole(ids.role) && writingHand(ids.role)) {
           maybeWriteTaskHandRecord(input, output, ids);
         }
-        const parentSessionId = typeof metadata?.parentSessionId === "string" ? metadata.parentSessionId : "";
+        const parentSessionId =
+          typeof metadata?.parentSessionId === "string" && metadata.parentSessionId
+            ? metadata.parentSessionId
+            : typeof input?.sessionID === "string"
+              ? input.sessionID
+              : "";
+        // Foreground Tasks also expose child id in metadata — mark pending so cleanup
+        // can finish without SDK parent lookup (OC default is sync/foreground).
+        if (
+          writingHand(ids.role) &&
+          childSessionId &&
+          typeof input?.sessionID === "string" &&
+          typeof input?.callID === "string"
+        ) {
+          const key = claimKey(input.sessionID, input.callID);
+          const token = claims.get(key);
+          if (token) {
+            markDispatchBindingPending(cwd, {
+              sessionId: input.sessionID,
+              callId: input.callID,
+              token,
+              childSessionId,
+              jobId: typeof jobId === "string" ? jobId : undefined,
+            });
+            if (parentSessionId) {
+              bindChildSession(cwd, {
+                parentSessionId,
+                childSessionId,
+                role: ids.role,
+              });
+            }
+          }
+        }
         if (childSessionId) {
           const bound = getChildSessionBinding(cwd, childSessionId, parentSessionId);
           if (!bound.ok || bound.binding.callId !== input?.callID || parentSessionId !== input?.sessionID) {

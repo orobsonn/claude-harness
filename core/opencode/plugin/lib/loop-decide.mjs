@@ -22,7 +22,18 @@ export const LOOP_THRESHOLDS = Object.freeze({
 
 const MAX_EPOCH_RECEIPTS = 4096;
 const MAX_FAILURE_COUNT = 1000;
-const FAILURE_CLASSES = new Set(["empty", "denied", "malformed", "timeout", "unauthenticated", "provider_error"]);
+const FAILURE_CLASSES = new Set([
+  "empty",
+  "denied",
+  "malformed",
+  "timeout",
+  "unauthenticated",
+  "provider_error",
+  "rate_limited",
+  "credit",
+]);
+
+const DIAGNOSTIC_MESSAGE_MAX = 280;
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -357,6 +368,11 @@ export function applyReviewOutcome(stateValue, input = {}) {
   if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash)) {
     return { state, accepted: false, classified: { kind: "ignore", reason: "terminal outcome already recorded" } };
   }
+  const diagnostic = input.diagnostic && typeof input.diagnostic === "object" && !Array.isArray(input.diagnostic)
+    ? input.diagnostic
+    : input.error != null
+      ? sanitizeProviderDiagnostic(input.error, { model: input.model, callId: input.callId })
+      : null;
   const classified = input.failureClass
     ? { kind: "failure", failureClass: FAILURE_CLASSES.has(input.failureClass) ? input.failureClass : "provider_error" }
     : reportClassification(input.response, reservation.logical_role, reservation.family);
@@ -366,6 +382,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
     failure_class: classified.kind === "failure" ? classified.failureClass : undefined,
     report_hash: classified.kind === "useful" ? classified.reportHash : undefined,
     material_unresolved: classified.kind === "useful" ? classified.materialUnresolved : undefined,
+    ...(classified.kind === "failure" && diagnostic ? { diagnostic } : {}),
   };
   let next = {
     ...state,
@@ -378,6 +395,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
     counts[classified.failureClass] = bounded(counts[classified.failureClass], 1);
     next[`${prefix}_review_failure_count`] = bounded(state[`${prefix}_review_failure_count`], 1);
     next[`${prefix}_review_failure_streak`] = bounded(state[`${prefix}_review_failure_streak`], 1);
+    if (diagnostic) next.last_provider_diagnostic = diagnostic;
     if (reservation.family === 1) {
       const failureCap = primaryFailureStreakCap(input);
       if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached") {
@@ -391,6 +409,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
           cap_generation: state.ceremony_generation,
           cap_snapshot_hash: snapshotHash(state),
           kind: "primary_failure_cap",
+          ...(diagnostic ? { diagnostic } : {}),
         };
       }
     }
@@ -494,10 +513,53 @@ export function decideReviewCapBeforeWriting(input = {}) {
   if (!isExecutorRole(input.subagentType) && !isSniperRole(input.subagentType) && !isTestAuthorRole(input.subagentType)) {
     return { ok: true, decision: "allow", reason: "not-writing-hand" };
   }
-  if (object(input.gateState).review_status === "review_cap_reached") {
+  const status = object(input.gateState).review_status;
+  if (status === "review_cap_reached") {
     return { ok: false, decision: "deny", reason: "review_cap_reached: verified review restart required" };
   }
+  if (status === "primary_failure_cap_reached") {
+    return {
+      ok: false,
+      decision: "deny",
+      reason: "primary_failure_cap_reached: writing hands blocked until canonical ceremony restart",
+    };
+  }
   return { ok: true, decision: "allow", reason: "review-cap-not-reached" };
+}
+
+/**
+ * @description Sanitize a provider/Task error into a bounded diagnostic (no secrets).
+ * @param {unknown} error
+ * @param {{ model?: unknown, callId?: unknown }} [meta]
+ * @returns {Record<string, unknown> | null}
+ */
+export function sanitizeProviderDiagnostic(error, meta = {}) {
+  try {
+    const obj = object(error);
+    const data = object(obj.data);
+    const statusRaw = obj.statusCode ?? obj.status ?? data.statusCode ?? data.status;
+    const statusNum = Number(statusRaw);
+    const source = text(error).replace(
+      /(api[_-]?key|authorization|bearer|token|password)\s*[:=]\s*\S+/gi,
+      "$1=[redacted]",
+    );
+    const message = source.slice(0, DIAGNOSTIC_MESSAGE_MAX);
+    const model = typeof meta.model === "string" ? meta.model.slice(0, 80) : undefined;
+    const callId = typeof meta.callId === "string" ? meta.callId.slice(0, 128) : undefined;
+    /** @type {Record<string, unknown>} */
+    const out = {
+      at: new Date().toISOString(),
+      message,
+    };
+    if (Number.isFinite(statusNum)) out.status = statusNum;
+    if (model) out.model = model;
+    if (callId) out.call_id = callId;
+    const name = typeof obj.name === "string" ? obj.name.slice(0, 80) : undefined;
+    if (name) out.name = name;
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 export function classifyReviewBoundaryError(error) {
@@ -505,6 +567,8 @@ export function classifyReviewBoundaryError(error) {
   const statusRaw = object(error).statusCode ?? object(error).status ?? object(object(error).data).statusCode ?? object(object(error).data).status;
   const status = Number(statusRaw ?? source.match(/\b([45]\d\d)\b/)?.[1]);
   if (status === 401) return "unauthenticated";
+  if (status === 402 || /insufficient.?credit|payment required|quota exceeded/i.test(source)) return "credit";
+  if (status === 429 || /rate.?limit|too many requests/i.test(source)) return "rate_limited";
   if (status === 403) return /auth|login|token|api key/i.test(source) ? "unauthenticated" : "denied";
   if (status === 408 || status === 504 || /timeout|timed out|deadline exceeded|aborted/i.test(source)) return "timeout";
   if (Number.isFinite(status) && status >= 500) return "provider_error";

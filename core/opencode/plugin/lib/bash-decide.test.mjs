@@ -10,6 +10,7 @@ import {
   isStateForgeCommand,
   hasShellChainMetacharacters,
   isHarnessPrescribedPackageCommand,
+  hasElevatedCeremonyResidue,
 } from "./bash-decide.mjs";
 
 const SID = "ses_test_delivery_1";
@@ -1722,4 +1723,52 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   assert.equal(bash["gh *"], "allow");
   assert.equal(bash["node --test *"], "allow");
   assert.equal(bash["git status*"], "allow");
+});
+
+// ── anti-QUICK-launder + review-cap delivery rails (#72) ──────────────────
+
+test("hasElevatedCeremonyResidue detects peak LIGHT and failure cap", () => {
+  assert.equal(hasElevatedCeremonyResidue({ peak_mode: "LIGHT" }), true);
+  assert.equal(hasElevatedCeremonyResidue({ review_status: "primary_failure_cap_reached" }), true);
+  assert.equal(hasElevatedCeremonyResidue({ brainstormed: true }), true);
+  assert.equal(hasElevatedCeremonyResidue({ mode: "QUICK", classified: true }), false);
+});
+
+test("QUICK ship after primary_failure_cap → deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: quickCeremony({ review_status: "primary_failure_cap_reached" }),
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /review_status=primary_failure_cap_reached|review-cap/);
+});
+
+test("QUICK ship after prior LIGHT peak_mode → deny launder", () => {
+  const d = decideBashDelivery({
+    command: "gh pr create",
+    gateState: quickCeremony({ peak_mode: "LIGHT", dual_status: { adversary: "primary_only" } }),
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /QUICK delivery denied|quick-launder|elevated ceremony/);
+});
+
+test("genuine QUICK without residue still allow", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: quickCeremony(),
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("LIGHT ship blocked while primary_failure_cap_reached even with ceremony", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: lightCeremony({ review_status: "primary_failure_cap_reached" }),
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /primary_failure_cap_reached/);
 });
