@@ -29,6 +29,15 @@ export async function createLoopGuardHooks(
     finalizeHostDualMerge,
   } = await import("./lib/dual-merge.mjs")
   const { extractSubagentType, isTaskTool } = await import("./lib/dual-enforcement.mjs")
+  const { applyAgentDispatchOutcome } = await import("../../shared/lib/agent-retry.mjs")
+  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { isDeliveryRole } = await import("./lib/roles.mjs")
+
+  /** Every harness Task agent: planner, eyes, hands, close roles. */
+  function isHarnessTaskRole(role: string): boolean {
+    if (!role) return false
+    return Boolean(reviewAgentIdentity(role) || isDeliveryRole(role))
+  }
 
   function argsOf(input: any, output: any): Record<string, unknown> {
     const value = output?.args ?? input?.args ?? input?.toolArgs ?? input?.tool_input ?? {}
@@ -55,6 +64,21 @@ export async function createLoopGuardHooks(
     return output?.output ?? output?.content ?? output?.result ?? output?.tool_output ?? input?.tool_response ?? ""
   }
 
+  function taskIdOf(args: Record<string, unknown>): string {
+    const fromArgs = stringArg(args, "task_id", "taskId")
+    if (fromArgs) return fromArgs
+    const prompt = typeof args.prompt === "string" ? args.prompt : ""
+    const marker = parseTaskDispatchIdentity(prompt)
+    return marker.ok ? marker.taskId : ""
+  }
+
+  function recordAgentRetry(sessionID: string, role: string, taskId: string, outcome: "success" | "failure") {
+    if (!sessionID || !role || !isHarnessTaskRole(role)) return
+    const sp = statePathFor(sessionID)
+    if (!sp) return
+    withGateStateLock(sp, (prev) => applyAgentDispatchOutcome(prev, { role, taskId, outcome }).state)
+  }
+
   function persistOutcome(input: any, output: any, failureClass?: string, rawError?: unknown) {
     const sessionID = input?.sessionID ?? input?.sessionId ?? ""
     const callID = input?.callID ?? input?.callId ?? ""
@@ -63,6 +87,13 @@ export async function createLoopGuardHooks(
     if (!sessionID || !callID) return
     const sp = statePathFor(sessionID)
     if (!sp) return
+    const taskId = taskIdOf(args)
+    // Unified K=3: any Task error counts; clean after resets.
+    if (failureClass || rawError) {
+      recordAgentRetry(sessionID, sub, taskId, "failure")
+    } else if (sub) {
+      recordAgentRetry(sessionID, sub, taskId, "success")
+    }
     /** @type {ReturnType<typeof dualMergeIntentFromOutcome>} */
     let mergeIntent: ReturnType<typeof dualMergeIntentFromOutcome> = null
     const model =
@@ -71,12 +102,14 @@ export async function createLoopGuardHooks(
         : typeof output?.metadata?.model === "string"
           ? output.metadata.model
           : undefined
+    const identity = reviewAgentIdentity(sub)
+    if (!identity) return
     const result = withGateStateLock(sp, (prev) => {
       const outcome = applyReviewOutcome(prev, {
         subagentType: sub,
         sessionId: sessionID,
         featureId: featureOf(args),
-        taskId: stringArg(args, "task_id", "taskId"),
+        taskId,
         phase: stringArg(args, "phase", "phase"),
         callId: callID,
         response: responseOf(input, output),

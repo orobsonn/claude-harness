@@ -13,11 +13,13 @@ import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { deriveCanonicalReviewRestart } from "./review-restart.mjs";
 import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 
+import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
+
 export const LOOP_THRESHOLDS = Object.freeze({
   plan_review: Object.freeze({ warn: 2, deny: 4 }),
   adversary: Object.freeze({ warn: 2, deny: 4 }),
-  /** Consecutive primary (family-1) failure/malformed streak before hard halt. */
-  primary_failure_streak: Object.freeze({ deny: 3 }),
+  /** Consecutive primary (family-1) failure streak — same K as all-agent retry. */
+  primary_failure_streak: Object.freeze({ deny: AGENT_RETRY_K }),
 });
 
 const MAX_EPOCH_RECEIPTS = 4096;

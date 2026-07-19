@@ -644,3 +644,40 @@ test("classify allowed for top-level build", async () => {
     },
   )
 })
+
+test("task denied after 3 same-agent failures (K=3)", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({
+      agent_dispatch_failures: { "planner": 3 },
+    }))
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
+        ),
+      /agent retry exhausted|3\/3/,
+    )
+  })
+})
+
+test("task allowed when failures under K=3", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({
+      agent_dispatch_failures: { "planner": 2 },
+      planner_status: "usable",
+    }))
+    const before = hooks["tool.execute.before"]
+    // may still deny on dual/plan for planner dispatch depending on gates — only check retry not exhausted
+    try {
+      await before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
+      )
+    } catch (err) {
+      assert.ok(err instanceof Error)
+      assert.doesNotMatch(err.message, /agent retry exhausted/)
+    }
+  })
+})
