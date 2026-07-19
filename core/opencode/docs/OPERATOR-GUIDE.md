@@ -244,13 +244,16 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 |---|---|---|
 | “Planner negado” / cerimônia | Spec ainda não passou brainstorm + ataque | Completar brainstorm; não pular pro plano |
 | Executor bloqueado após review do plano | **REVISE** no dual de plano (`plan_verdict`) | Corrigir o plano; dual **both** sozinho **não** libera se foi REVISE |
-| Push / PR bloqueado: captura | Falta hand-record DONE + `capture-verified` | A mão precisa terminar de verdade; prosa “pronto” não conta |
+| Push / PR bloqueado: captura | Falta hand-record DONE + `capture-verified` numa task terminada | A mão precisa terminar de verdade; prosa “pronto” não conta |
+| Push bloqueado: task do plano sem evidência | **Uma writing task do plano nunca foi despachada** (nem hand-record, nem captura) — feature ia subir pela metade | Despachar a mão de cada task que falta antes de entregar. Não bloqueia `DONE_WITH_CONCERNS` (shippable) nem se o plano não puder ser lido (fail-open) |
 | Push bloqueado: regate | Correção grave (sniper-high) sem re-auditoria | Rodar adversary de regate + `regate-passed` |
 | Push FULL bloqueado: final / demo | Falta review final (ou demo no interativo) | Completar dual final; no interativo, demo quando pedido |
 | Harvester bloqueado | `findings.md` ausente | Garantir que o loop gravou findings antes do harvest |
 | Comportamento “meio velho” | Update/routing sem restart | Reiniciar sessão OpenCode |
 
 **Dual de olho:** family-1 obrigatória; family-2 opcional e fail-open (se o 2º provider cair, segue com aviso — não inventa dual completo).
+
+**Por que um olho falhou (forense):** quando um review/eye falha, o gate-state registra a causa **classificada** em `last_provider_diagnostic` (e conta em `review_failure_counts`) — `rate_limited`, `credit`, `unauthenticated`, `timeout`, `upstream_5xx` (5xx do provider), `provider_error` (desconhecido) ou `gate_blocked` (um portão **interno** do harness barrou, não é falha de provider). Assim dá pra distinguir “o xAI/Ollama caiu” de “bati num gate meu” sem caçar no log. O diagnóstico é sanitizado (sem segredos).
 
 ---
 
