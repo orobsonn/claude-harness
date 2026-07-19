@@ -30,6 +30,7 @@ export async function createLoopGuardHooks(
   } = await import("./lib/dual-merge.mjs")
   const { extractSubagentType, isTaskTool } = await import("./lib/dual-enforcement.mjs")
   const { applyAgentDispatchOutcome } = await import("../../shared/lib/agent-retry.mjs")
+  const { decideCallOutcomeOnce } = await import("../../shared/lib/agent-retry-call.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
   const { isDeliveryRole } = await import("./lib/roles.mjs")
 
@@ -72,11 +73,37 @@ export async function createLoopGuardHooks(
     return marker.ok ? marker.taskId : ""
   }
 
-  function recordAgentRetry(sessionID: string, role: string, taskId: string, outcome: "success" | "failure") {
-    if (!sessionID || !role || !isHarnessTaskRole(role)) return
+  /**
+   * Per-callId outcome sticky map (process-local).
+   * OC fires both message.part.updated(error) AND tool.execute.after for the same Task —
+   * without dedupe, K=3 becomes inflated (3 real fails → 6 counts).
+   * Failure wins over success for the same callId.
+   */
+  const callOutcomes = new Map<string, "success" | "failure">()
+
+  function recordAgentRetry(
+    sessionID: string,
+    callID: string,
+    role: string,
+    taskId: string,
+    outcome: "success" | "failure",
+  ) {
+    if (!sessionID || !callID || !role || !isHarnessTaskRole(role)) return
+    const dedupeKey = `${sessionID}::${callID}`
+    const decision = decideCallOutcomeOnce(callOutcomes, dedupeKey, outcome)
+    if (!decision.apply || !decision.outcome) return
     const sp = statePathFor(sessionID)
     if (!sp) return
-    withGateStateLock(sp, (prev) => applyAgentDispatchOutcome(prev, { role, taskId, outcome }).state)
+    withGateStateLock(sp, (state) => {
+      let next = state
+      // If after-hook already reset the counter (false success), re-apply failure once.
+      if (decision.undoSuccess) {
+        next = applyAgentDispatchOutcome(next, { role, taskId, outcome: "failure" }).state
+      } else {
+        next = applyAgentDispatchOutcome(next, { role, taskId, outcome: decision.outcome }).state
+      }
+      return next
+    })
   }
 
   function persistOutcome(input: any, output: any, failureClass?: string, rawError?: unknown) {
@@ -88,11 +115,11 @@ export async function createLoopGuardHooks(
     const sp = statePathFor(sessionID)
     if (!sp) return
     const taskId = taskIdOf(args)
-    // Unified K=3: any Task error counts; clean after resets.
+    // Unified K=3: count once per callId (error event and after-hook may both fire).
     if (failureClass || rawError) {
-      recordAgentRetry(sessionID, sub, taskId, "failure")
+      recordAgentRetry(sessionID, callID, sub, taskId, "failure")
     } else if (sub) {
-      recordAgentRetry(sessionID, sub, taskId, "success")
+      recordAgentRetry(sessionID, callID, sub, taskId, "success")
     }
     /** @type {ReturnType<typeof dualMergeIntentFromOutcome>} */
     let mergeIntent: ReturnType<typeof dualMergeIntentFromOutcome> = null
