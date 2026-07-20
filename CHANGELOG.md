@@ -5,6 +5,29 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.47.0](https://github.com/orobsonn/claude-harness/compare/v0.46.0...v0.47.0) (2026-07-20)
+
+
+### Features
+
+* **opencode:** A5 multitask capture coverage — block half-built LIGHT/FULL ship ([#413](https://github.com/orobsonn/claude-harness/issues/413)) ([da3f77a](https://github.com/orobsonn/claude-harness/commit/da3f77a5c0e99ac6d45eae887cba45ad3bfa254a))
+* **opencode:** unified K=3 same-agent retry for every Task role ([#407](https://github.com/orobsonn/claude-harness/issues/407)) ([aae4fea](https://github.com/orobsonn/claude-harness/commit/aae4fea64bfa5e8a6bbd3ba2be974ad6b2034226))
+
+
+### Bug Fixes
+
+* **opencode:** allow $DIR plan writes; keep oracle/$GS deny ([#411](https://github.com/orobsonn/claude-harness/issues/411)) ([fedb778](https://github.com/orobsonn/claude-harness/commit/fedb778b396e07b50b3c6b3be6b6248845d1947c))
+* **opencode:** auto-bind plan + allow $ in quoted heredoc ([#410](https://github.com/orobsonn/claude-harness/issues/410)) ([9ed5dae](https://github.com/orobsonn/claude-harness/commit/9ed5dae7336d863b7bdc549e3fecd06bdbd2da58))
+* **opencode:** classify only on top-level build — hands never triage ([#405](https://github.com/orobsonn/claude-harness/issues/405)) ([e0c0131](https://github.com/orobsonn/claude-harness/commit/e0c01316f98f0e7fcd971a00bf0755e6c0f68e23))
+* **opencode:** close LIGHT→QUICK escape rails ([#72](https://github.com/orobsonn/claude-harness/issues/72) forensics) ([#403](https://github.com/orobsonn/claude-harness/issues/403)) ([cffe42b](https://github.com/orobsonn/claude-harness/commit/cffe42b92b1e22053404b087ed29a9873ef93325))
+* **opencode:** closure loose-ends — provider forensics classes + build prose ([#412](https://github.com/orobsonn/claude-harness/issues/412)) ([25564b6](https://github.com/orobsonn/claude-harness/commit/25564b65524b9e39603aeabe5732d5f298398be9))
+* **opencode:** dedupe agent-retry counts per Task callId ([#408](https://github.com/orobsonn/claude-harness/issues/408)) ([12ebaab](https://github.com/orobsonn/claude-harness/commit/12ebaabe14e4c7ebf53dca151a7a861be790cd74))
+* **opencode:** OC-native ship/capture — Task hands, not CC spawn ([#409](https://github.com/orobsonn/claude-harness/issues/409)) ([b56e389](https://github.com/orobsonn/claude-harness/commit/b56e389621f5c583704325d16175930907b9fed6))
+* **opencode:** planner fallback default + deny LIGHT ship without usable plan ([#404](https://github.com/orobsonn/claude-harness/issues/404)) ([af4dfa5](https://github.com/orobsonn/claude-harness/commit/af4dfa5f1d119b229afa46a0eaffc198231b4f9f))
+* **opencode:** planner primary-only — no lease kill, no model fallback ([#406](https://github.com/orobsonn/claude-harness/issues/406)) ([a7ff665](https://github.com/orobsonn/claude-harness/commit/a7ff665b36dfb24a42380e65d62c18024352608b))
+* **opencode:** rails headless — claim planner, hand-record e REVISE ([#400](https://github.com/orobsonn/claude-harness/issues/400)) ([d853ab3](https://github.com/orobsonn/claude-harness/commit/d853ab37456330c9d544eed153d1f7aee624fb6d))
+* **opencode:** single-load plugins — OC auto-glob, not plugin[] ([#402](https://github.com/orobsonn/claude-harness/issues/402)) ([4407e85](https://github.com/orobsonn/claude-harness/commit/4407e859de90a6cbced5c05b20f436cebc3779f1))
+
 ## [0.46.0](https://github.com/orobsonn/claude-harness/compare/v0.45.4...v0.46.0) (2026-07-18)
 
 
