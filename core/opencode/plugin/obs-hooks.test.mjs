@@ -123,9 +123,9 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
     );
     let active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
     assert.equal(active.call_id, "call-background");
-    // #403 binds straight from the Task result metadata, so the child lands fully bound
-    // (active + child_session_id) instead of merely pending; bindChildSession drops
-    // binding_pending. This is the stronger of the two states.
+    // #403 binds straight from the Task result metadata, so the child lands bound rather than
+    // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee — the
+    // id can come from a regex over model-authored output text (obs-hand.ts:266), see #420.
     assert.equal(active.status, "active");
     assert.equal(active.child_session_id, "child-background");
     sdkOutage = false;
@@ -259,9 +259,9 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
       },
     );
     const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
-    // #403 binds straight from the Task result metadata (same trust origin as the SDK lookup —
-    // runtime, never the model), so the child lands fully bound instead of merely pending.
-    // `active` + child_session_id is the stronger state; bindChildSession drops binding_pending.
+    // #403 binds straight from the Task result metadata, so the child lands bound rather than
+    // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee: the id
+    // can fall back to a regex over model-authored output text (obs-hand.ts:266) — see #420.
     assert.equal(active.status, "active");
     assert.equal(active.child_session_id, "child-bg");
     assert.equal(active.binding_pending, undefined);
@@ -280,18 +280,21 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
   }
 });
 
-// KNOWN GAP — see #417. cffe42b (#403) removed the fail-closed branch this asserts, to
-// silence N1 false positives from eye/parent/explore children that legitimately hold no
-// claim. With the SDK down and no live claim, ghost and hand are indistinguishable, so the
-// scenario below is exactly the case #403 chose to silence — it cannot pass as written.
+// Re-targeted from "truly unbound child ... still fail-closed". cffe42b (#403) removed that
+// fail-closed branch to silence N1 false positives from eye/parent/explore children that
+// legitimately hold no claim; the lost diagnostic is tracked in #417. The original assertion
+// cannot be restored as written — with the SDK down and no live claim, ghost and hand are
+// physically indistinguishable.
 //
-// Deliberately kept (not deleted) as the executable record of the lost guarantee. What was
-// lost is the diagnostic/alarm only: write authority is still fail-closed (asserted above),
-// no lease is wrongly cleared, and the permission delta versus pre-#403 is zero.
-// Un-skip once #417 lands a sound "no live writing hand" discriminator — note that
-// `claims.size === 0` is NOT sound, since claims is per-plugin-instance and OC may
-// instantiate the factory twice (the very bug #402 fixed).
-test.skip("#ac-1.2 obs-hand: truly unbound child with SDK down still fail-closed", async () => {
+// So the test keeps an invariant instead of retiring one: the silence must be INERT. Note the
+// diagnostic that was lost was written to scope-terminal-events.jsonl, which no code reads,
+// and thrown from an `event` handler, which blocks no tool.
+//
+// When #417 is addressed: `claims.size === 0` is NOT a sound discriminator — claims is
+// per-plugin-instance and OC may instantiate the factory twice (the very bug #402 fixed), so
+// a second instance sees an empty map while a real claim is live on disk. Read the durable
+// active_dispatch from gate-state instead.
+test("#ac-1.2 obs-hand: unknown child idle is silent and cannot disturb a live dispatch", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-unbound-"));
   try {
     const meta = join(dir, "obs.json");
@@ -305,13 +308,17 @@ test.skip("#ac-1.2 obs-hand: truly unbound child with SDK down still fail-closed
       },
     };
     const hooks = await createObsHandHooks(dir, { client });
-    await assert.rejects(
+    // No claim at all and the SDK is down: ghost and hand are indistinguishable here, so
+    // #403 chose silence. What must still hold is that the silence is inert.
+    await assert.doesNotReject(
       () => hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-ghost" } } }),
-      /terminal session identity unavailable/,
     );
-    const raw = readFileSync(join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl"), "utf8");
-    assert.match(raw, /hand-scope-terminal-unbound/);
-    assert.match(raw, /"decision":"fail-closed"/);
+    assert.equal(
+      existsSync(join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl")),
+      false,
+      "unknown child must not emit terminal diagnostics (N1 false-positive spam)",
+    );
+    assert.equal(existsSync(join(dir, ".opencode", "plans", ".state")), false, "no dispatch state may be fabricated");
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
