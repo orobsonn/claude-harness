@@ -266,10 +266,14 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
       },
     );
     const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
-    assert.equal(active.status, "binding_pending");
-    assert.equal(active.binding_pending.child_session_id, "child-bg");
+    // #403 binds straight from the Task result metadata (same trust origin as the SDK lookup —
+    // runtime, never the model), so the child lands fully bound instead of merely pending.
+    // `active` + child_session_id is the stronger state; bindChildSession drops binding_pending.
+    assert.equal(active.status, "active");
+    assert.equal(active.child_session_id, "child-bg");
+    assert.equal(active.binding_pending, undefined);
 
-    // Child ends while SDK still unavailable — must clean via pending index, not fail-closed
+    // Child ends while SDK still unavailable — must clean without fail-closed
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-bg" } } });
     assert.equal(
       JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch,

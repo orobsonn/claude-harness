@@ -167,6 +167,9 @@ test("#ac-1.2: armRegatePending then bash-decide git push → deny unmatched", (
   const f = withSeededRoot({
     classified: true,
     mode: "FULL",
+    // #404 made planner_status=usable a precondition for LIGHT/FULL delivery; without it
+    // that guard denies first and this fixture never reaches the re-gate check under test.
+    planner_status: "usable",
     brainstormed: true,
     adversary_fired: true,
     dual_status: "both",

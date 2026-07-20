@@ -55,13 +55,16 @@ function fixture() {
 }
 
 async function loadRegisteredRuntime(root) {
-  const config = JSON.parse(fs.readFileSync(path.resolve("core/opencode/opencode.json.example"), "utf8"));
-  const required = new Set(["entry-gate.ts", "marker-authority.ts", "ceremony-coordinator.ts", "planner-recovery.ts"]);
-  const registered = config.plugin.filter((entry) => required.has(path.basename(entry)));
-  assert.deepEqual(registered.map((entry) => path.basename(entry)), [...required]);
+  // OC auto-globs `.opencode/plugin/*.{ts,js}`; harness paths are deliberately absent from
+  // opencode.json plugin[] (#402 — listing them loaded every hook factory twice). The plugin
+  // directory is therefore the registration source of truth.
+  const required = ["entry-gate.ts", "marker-authority.ts", "ceremony-coordinator.ts", "planner-recovery.ts"];
+  const pluginDir = path.resolve("core/opencode/plugin");
+  const autoGlobbed = new Set(fs.readdirSync(pluginDir).filter((name) => /\.(ts|js)$/.test(name)));
+  assert.deepEqual(required.filter((name) => autoGlobbed.has(name)), required);
   const plugins = [];
-  for (const entry of registered) {
-    const modulePath = path.resolve("core/opencode/plugin", path.basename(entry));
+  for (const name of required) {
+    const modulePath = path.join(pluginDir, name);
     const plugin = (await import(new URL(`file://${modulePath}`).href)).default;
     plugins.push(await plugin({ directory: root, worktree: root }));
   }
