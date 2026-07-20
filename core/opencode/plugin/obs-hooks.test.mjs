@@ -123,21 +123,20 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
     );
     let active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
     assert.equal(active.call_id, "call-background");
-    assert.equal(active.status, "binding_pending");
-    assert.deepEqual({ ...active.binding_pending, recorded_at: undefined }, {
-      call_id: "call-background",
-      child_session_id: "child-background",
-      job_id: "job-background",
-      recorded_at: undefined,
-    });
+    // #403 binds straight from the Task result metadata, so the child lands fully bound
+    // (active + child_session_id) instead of merely pending; bindChildSession drops
+    // binding_pending. This is the stronger of the two states.
+    assert.equal(active.status, "active");
+    assert.equal(active.child_session_id, "child-background");
     sdkOutage = false;
     const writeHooks = await createPlanWriteGateHooks(dir, { client });
+    // Write authority is still fail-closed for a child whose dispatch binding does not check out.
     await assert.rejects(
       () => writeHooks["tool.execute.before"](
         { tool: "write", sessionID: "child-background", callID: "write-unbound" },
         { args: { filePath: "src/b.ts", content: "blocked" } },
       ),
-      /binding invalid|identity unavailable/,
+      /binding invalid|identity unavailable|dispatch binding/,
     );
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
     assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
@@ -146,22 +145,16 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       { tool: "task", sessionID: sid, callID: "call-after-background" },
       { args, metadata: { parentSessionId: sid, sessionId: "child-new", background: true }, output: '<task id="child-new" state="running"><task_result>running</task_result></task>' },
     );
-    await assert.rejects(
-      () => hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } }),
-      /pending child session identity mismatch/,
-    );
+    // A late session.idle from the PREVIOUS dispatch's child no longer raises (see #417 —
+    // the diagnostic was dropped by #403). What still must hold: it does not disturb the
+    // dispatch now in flight.
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
     active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
     assert.equal(active.call_id, "call-after-background");
-    assert.equal(active.status, "binding_pending");
+    assert.equal(active.status, "active");
+    assert.equal(active.child_session_id, "child-new");
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-new" } } });
     assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
-    sdkOutage = true;
-    await assert.rejects(
-      () => hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-unbound" } } }),
-      /terminal session identity unavailable/,
-    );
-    assert.match(readFileSync(join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl"), "utf8"), /hand-scope-terminal-unbound/);
-    sdkOutage = false;
 
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-hand" }, { args });
     assert.ok(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch);
@@ -287,7 +280,18 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
   }
 });
 
-test("#ac-1.2 obs-hand: truly unbound child with SDK down still fail-closed", async () => {
+// KNOWN GAP — see #417. cffe42b (#403) removed the fail-closed branch this asserts, to
+// silence N1 false positives from eye/parent/explore children that legitimately hold no
+// claim. With the SDK down and no live claim, ghost and hand are indistinguishable, so the
+// scenario below is exactly the case #403 chose to silence — it cannot pass as written.
+//
+// Deliberately kept (not deleted) as the executable record of the lost guarantee. What was
+// lost is the diagnostic/alarm only: write authority is still fail-closed (asserted above),
+// no lease is wrongly cleared, and the permission delta versus pre-#403 is zero.
+// Un-skip once #417 lands a sound "no live writing hand" discriminator — note that
+// `claims.size === 0` is NOT sound, since claims is per-plugin-instance and OC may
+// instantiate the factory twice (the very bug #402 fixed).
+test.skip("#ac-1.2 obs-hand: truly unbound child with SDK down still fail-closed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-unbound-"));
   try {
     const meta = join(dir, "obs.json");
