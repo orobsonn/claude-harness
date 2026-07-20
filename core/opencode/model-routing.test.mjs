@@ -74,8 +74,12 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
     }
     assert.deepEqual(active.filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
 
+    // OC auto-globs `.opencode/plugin/*.{ts,js}`, so vendoring strips harness paths from
+    // plugin[] (#402 — listing them too registered every hook factory twice). Delivery is
+    // proven by the file on disk; the empty array pins the no-double-load invariant.
     const merged = JSON.parse(readFileSync(join(vendored, "opencode.json"), "utf8"));
-    assert.ok(merged.plugin.includes("./.opencode/plugin/planner-recovery.ts"));
+    assert.deepEqual(merged.plugin, []);
+    assert.equal(existsSync(join(vendored, ".opencode", "plugin", "planner-recovery.ts")), true);
     for (const routingPath of [jsonPaths[1], jsonPaths[3]]) {
       assert.equal(JSON.parse(readFileSync(routingPath, "utf8")).version, 2);
     }
