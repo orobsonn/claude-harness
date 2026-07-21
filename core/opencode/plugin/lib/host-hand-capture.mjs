@@ -137,11 +137,23 @@ export function hostStampOcHandCapture(input) {
       payload: capEntry,
     });
 
+    // The array and its seals MUST use the same per-(feature,task) policy: this run
+    // supersedes every prior SHA for this task. Prune the task's prior array entries
+    // (any SHA) before appending, mirroring the seal filter — otherwise an old-SHA
+    // entry survives while its seal is pruned, orphaning the array and wedging the gate.
+    const belongsToTask = (payload) => {
+      const s = String(payload ?? "");
+      return s === bare || s.startsWith(`${bare}@`);
+    };
     const locked = withGateStateLock(gs.path, (prev) => {
-      const hand_finished = Array.isArray(prev.hand_finished) ? [...prev.hand_finished] : [];
-      if (!hand_finished.includes(bare)) hand_finished.push(bare);
-      const capture_verified = Array.isArray(prev.capture_verified) ? [...prev.capture_verified] : [];
-      if (!capture_verified.includes(capEntry)) capture_verified.push(capEntry);
+      const hand_finished = (Array.isArray(prev.hand_finished) ? prev.hand_finished : []).filter(
+        (e) => !belongsToTask(e),
+      );
+      hand_finished.push(bare);
+      const capture_verified = (Array.isArray(prev.capture_verified) ? prev.capture_verified : []).filter(
+        (e) => !belongsToTask(e),
+      );
+      capture_verified.push(capEntry);
       const prior = Array.isArray(prev.marker_seals) ? prev.marker_seals : [];
       const seals = [
         ...prior.filter(
@@ -151,7 +163,7 @@ export function hostStampOcHandCapture(input) {
               typeof s === "object" &&
               (s.operation === "hand-finished" || s.operation === "capture-verified") &&
               s.session_id === sessionId &&
-              String(s.payload ?? "").startsWith(`${featureId}/${taskId}`)
+              belongsToTask(s.payload)
             ),
         ),
         hfSeal,
