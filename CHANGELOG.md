@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.47.1](https://github.com/orobsonn/claude-harness/compare/v0.47.0...v0.47.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* **opencode:** host-hand-capture poda entradas por-task e não órfã o gate ([#423](https://github.com/orobsonn/claude-harness/issues/423)) ([1d1fab0](https://github.com/orobsonn/claude-harness/commit/1d1fab0c51fa79147b6f945069456fa3c1a8420f))
+
 ## [0.47.0](https://github.com/orobsonn/claude-harness/compare/v0.46.0...v0.47.0) (2026-07-20)
 
 
