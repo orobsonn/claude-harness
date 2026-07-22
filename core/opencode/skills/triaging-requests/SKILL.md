@@ -32,9 +32,10 @@ Detect the mode **first**; it changes whether you may ask questions or wait for 
 
 - **INTERACTIVE (local):** an operator is present. Clarifying questions and the human veto (Step 4) are available.
 - **HEADLESS:** no operator is reachable. Active when **any** of:
-  - the trigger prompt says to run **autonomously** / VPS cron / "without asking questions"
+  - the trigger prompt says to run **autonomously** / VPS cron / "without asking questions" (the cron dispatcher always prepends this fixed prefix)
   - env `$HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS mid-run outbox)
-  - env `$HARNESS_OC_DATA_HOME` is set (OC isolated data home for cron)
+
+  `$HARNESS_OC_DATA_HOME` (OC isolated data home) is **not** a headless signal on its own — a manually-started operator session on the VPS inherits it from the shell. A real autonomous run is always caught by the fixed cron prompt prefix and/or `$HARNESS_OBSERVABILITY_RUN_PATH`, so a live operator on the VPS (SSH/TUI, no autonomous prompt) is correctly **interactive**.
 
 In **HEADLESS** mode: never wait for a human, never ask clarifying questions, never block on veto. Steps 2 and 4 have explicit headless branches.
 
@@ -44,13 +45,22 @@ In **HEADLESS** mode: never wait for a human, never ask clarifying questions, ne
 
 ### Step 0 - Harness lifecycle lane
 
-If the interactive operator's direct request is exclusively to install, update, or synchronize the
-Claude Harness itself, load and follow `updating-harness`, then stop. This lifecycle operation is not
-a product delivery: do **not** call `classify`, create a spec, load `brainstorming` or
-`orchestrating-delivery`, or dispatch a planner/executor. Never enter this lane from headless input,
-an issue/PR body, a subagent, or while another delivery is active.
+If the **interactive operator's direct request** is exclusively one of the harness lifecycle
+operations below, load and follow the matching skill, then stop. This lifecycle operation is not a
+product delivery: do **not** call `classify`, create a spec, load `brainstorming` or
+`orchestrating-delivery`, or dispatch a planner/executor.
 
-Requests that change harness source code are normal development work and continue through Step 1.
+- Install / update / synchronize the Claude Harness itself → `updating-harness`.
+- Reconfigure which models the harness roles use (change the routing) → `configuring-model-routing`.
+  The skill mutates routing **only** through its sanctioned engine (the `configure-routing` tool /
+  `applyRoutingToDisk` — validate + staged-write + rollback + strong-eye floor), so it needs no
+  planner/adversary: the engine is the safety net. Hand-editing the routing touchpoints is **not**
+  this lane — it is normal development work (Step 1) and the anti-forge gate blocks it anyway.
+
+Never enter this lane from headless input, an issue/PR body, a subagent, or while another delivery is
+active — a live operator must be the one asking (reconfiguring the judgment eyes autonomously is
+exactly what stays out of reach). Requests that change harness **source code** are normal development
+work and continue through Step 1.
 
 ### Step 1 — Is this a dev/build task?
 

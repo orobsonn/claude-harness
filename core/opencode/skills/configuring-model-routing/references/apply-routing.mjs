@@ -465,6 +465,7 @@ function restoreSnapshot(snapshot) {
  *   opencodeJsonPath?: string,
  *   forceCoreGrok?: boolean,
  *   confirmWeakEyes?: boolean,
+ *   confirmWeakJudgmentEyes?: boolean,
  * }} args
  * @returns {{ ok: true, changed: string[], warnings: string[] } | { ok: false, reason: string }}
  */
@@ -526,6 +527,22 @@ export function applyRoutingToDisk(args) {
       };
     }
 
+    // Judgment eyes (required family-1 of plan-reviewer + adversary) are the harness
+    // safety net (strong-eyes-cheap-hands). A cheap model here silently downgrades the
+    // gate to a rubber stamp — floor them behind a dedicated confirm, never confirmWeakEyes.
+    const judgmentModels = [
+      routing.roles?.["plan-reviewer"]?.families?.["family-1"]?.model,
+      routing.roles?.adversary?.families?.["family-1"]?.model,
+    ].filter((m) => typeof m === "string");
+    const weakJudgment = judgmentModels.filter((m) => !isStrongEyeModel(m));
+    if (weakJudgment.length > 0 && args.confirmWeakJudgmentEyes !== true) {
+      return {
+        ok: false,
+        reason:
+          `judgment eyes fracos (family-1 de plan-reviewer/adversary: ${weakJudgment.join(", ")}) — rebaixa o safety net do harness a carimbo; confirme com confirmWeakJudgmentEyes:true.`,
+      };
+    }
+
     /** @type {string[]} */
     const warnings = [];
     if (models.some(isXaiOrGrokModel) && mode === "vendored") {
@@ -533,6 +550,9 @@ export function applyRoutingToDisk(args) {
     }
     if (weakSupport.length > 0) {
       warnings.push(`weak support eyes confirmed: ${weakSupport.join(", ")}`);
+    }
+    if (weakJudgment.length > 0) {
+      warnings.push(`weak JUDGMENT eyes confirmed (safety net degraded): ${weakJudgment.join(", ")}`);
     }
 
     // Stage all intended writes in memory first
