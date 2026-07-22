@@ -1,7 +1,7 @@
 ---
 description: Primary orchestrator — triages the first request of the session (QUICK/LIGHT/FULL/no-ceremony) once, then drives the delivery loop. Dispatches subagents by name via the Task tool; never writes code itself.
 mode: primary
-model: openai/gpt-5.6-sol
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: deny

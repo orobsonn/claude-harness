@@ -1,7 +1,7 @@
 ---
 description: Skeptical security auditor — conditional, invoked when a task touches auth, secrets, external input, new deps, SQL, or service entrypoints. Read-only.
 mode: subagent
-model: openai/gpt-5.5
+model: openai/gpt-5.6-sol
 temperature: 0.1
 permission:
   classify: deny

@@ -1,7 +1,7 @@
 ---
 description: Conversational discovery and specification agent. Researches, brainstorms, challenges non-trivial proposals, and returns a Build Spec without changing the workspace.
 mode: primary
-model: openai/gpt-5.6-sol
+model: openai/gpt-5.6-terra
 temperature: 0.3
 permission:
   "*": deny
