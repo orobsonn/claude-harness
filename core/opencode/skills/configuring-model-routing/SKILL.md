@@ -16,9 +16,15 @@ Runs interactively inside `build` (primary) — operator messages in **pt-br pro
 
 Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness usa."
 
-**Apply engine (do not reimplement by hand):**  
-`skills/configuring-model-routing/references/apply-routing.mjs`  
-— `listPresets`, `buildRoutingFromSlots`, `routingFromPreset`, `applyRoutingToDisk`, `listRoutingTouchpoints`.
+**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — `triaging-requests` Step 0 routes it here directly (no `classify`, no `brainstorming`, no planner/adversary). The engine below is the safety net.
+
+**Apply via the native tool — never `node -e`, never hand-edit the touchpoints.**  
+The `configure-routing` tool wraps the sanctioned engine in-process, so it never hits the bash forge/interpreter gate (hand-editing routing with `sed`/`perl` is exactly what the anti-forgery gate blocks — that path is a dead end, do not attempt it).
+
+- `configure-routing({ action: "inspect" })` → presets + touchpoints + current routing (read-only). Use for step 1.
+- `configure-routing({ action: "apply", preset })` or `({ action: "apply", slots })` → validate + staged-write + rollback across all touchpoints.
+
+Engine internals live in `skills/configuring-model-routing/references/apply-routing.mjs` (`listPresets`, `buildRoutingFromSlots`, `routingFromPreset`, `applyRoutingToDisk`, `listRoutingTouchpoints`) — the tool is the only invocation surface; do not import them from bash.
 
 ---
 
@@ -55,11 +61,10 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 
 ## Does
 
-1. Load current routing (`core/opencode/` source **or** project `.opencode/` vendored).
+1. Load current routing + options via `configure-routing({ action: "inspect" })`.
 2. Elicit: preset dual-safe **or** custom slots (product language first).
-3. Build config via `buildRoutingFromSlots` / `routingFromPreset` — **must** `validateRouting` ok.
-4. Apply **only** via `applyRoutingToDisk` (validate + stage-in-memory + staged writes with rollback on mid-fail).
-5. Report changed files; demand **session restart**.
+3. Apply via `configure-routing({ action: "apply", preset })` (primary) or `({ action: "apply", slots })` (escape hatch). The tool validates, stages, and rolls back on mid-fail; on `ok:false` it wrote nothing — explain the reason in pt-br and re-ask.
+4. Report changed files + warnings; demand **session restart**.
 
 ## Does not
 
@@ -75,7 +80,7 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 
 ### 1. Show current map
 
-Load `harness.routing.json`. Short table in pt-br:
+`configure-routing({ action: "inspect" })` returns the current routing + presets + touchpoints. Short table in pt-br:
 
 | Papel (produto) | Modelo atual |
 |---|---|
@@ -116,47 +121,32 @@ Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não
 **Aviso de produto (sempre se eye forte → modelo fraco):**  
 olhos de plan-review / adversary / security em modelo barato enfraquecem o safety net — confirmar override explícito.
 
-### 3. Validate (before write)
+### 3. Apply (via the tool)
 
-```js
-import {
-  routingFromPreset,
-  buildRoutingFromSlots,
-  applyRoutingToDisk,
-  listRoutingTouchpoints,
-} from "./references/apply-routing.mjs";
+Preset (primary form):
 
-// preset:
-const built = routingFromPreset("xai-ollama-dual");
-// ou custom:
-// const built = buildRoutingFromSlots({ primaryEye, secondaryEye, supportEye, hands });
-
-if (!built.ok) { /* explain pt-br, re-ask — do not write */ }
+```
+configure-routing({ action: "apply", preset: "openai-ollama-default" })
 ```
 
-### 4. Apply
+Custom slots (escape hatch — `slots` is a JSON string):
 
-```js
-const result = applyRoutingToDisk({
-  targetRoot: "<project root or core/opencode path>",
-  routing: built.routing,
-  updateOpencodeJson: true,
-  // forceCoreGrok: true,   // only if applying xAI/Grok to harness source (CI bans by default)
-  // confirmWeakEyes: true, // required if supportEye is not openai/* or xai/*
-});
+```
+configure-routing({ action: "apply", slots: '{"primaryEye":"openai/gpt-5.6-sol","secondaryEye":"ollama-cloud/kimi-k2.7-code","supportEye":"openai/gpt-5.5"}' })
 ```
 
-On `ok:false` → **no net change** (validate fail writes nothing; mid-write failure rolls back files already written in this apply).  
+On `ok:false` → **no net change** (validate fail writes nothing; mid-write failure rolls back). Explain the reason in pt-br and re-ask — do not fall back to `node`/`sed`.  
 On `ok:true` → list `changed` + `warnings`.
 
-**Hard gates (not prose-only):**
+**Hard gates (enforced by the engine, not prose):**
 - Same-provider dual → reject  
-- `supportEye` fraco (não openai/xai) → reject unless `confirmWeakEyes:true`  
-- xAI/Grok no **source** `core/opencode` → reject unless `forceCoreGrok:true`  
-- `opencode.json` só sob `targetRoot` / ocRoot (nunca `../`)  
+- Weak **support** eye (compliance/security/harvester/shipper não openai/xai) → reject unless the operator confirms → pass `confirm_weak_eyes: true`  
+- Weak **judgment** eye (family-1 de plan-reviewer/adversary não openai/xai) → reject unless the operator confirms → pass `confirm_weak_judgment_eyes: true` (degrades the harness safety net; surface the warning first)  
+- xAI/Grok no **source** `core/opencode` → reject unless `force_core_grok: true`  
+- `targetRoot` = cwd sempre; `opencode.json` só sob cwd/ocRoot (nunca `../`)  
 - AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 
-### 5. Close
+### 4. Close
 
 - Resumo pt-br do que mudou (papéis, não slugs só).
 - **Obrigatório:** reiniciar a sessão OpenCode (agents carregam no boot).
@@ -179,6 +169,7 @@ On `ok:true` → list `changed` + `warnings`.
 
 ```bash
 node --test core/opencode/skills/configuring-model-routing/references/apply-routing.test.mjs
+node --test core/opencode/tools/configure-routing-core.test.mjs
 node --test core/shared/lib/routing-validate.test.mjs
 # if core source changed defaults without grok:
 node --test core/opencode/model-routing.test.mjs
