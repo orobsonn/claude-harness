@@ -118,3 +118,86 @@ test("unknown action errors", async () => {
   assert.equal(res.metadata.ok, false);
   assert.match(res.metadata.reason, /unknown action/i);
 });
+
+const CANONICAL_MODELS = [
+  "openai/gpt-5.6-terra",
+  "openai/gpt-5.6-sol",
+  "openai/gpt-5.6-luna",
+  "ollama-cloud/gemma4:31b",
+  "ollama-cloud/glm-5.2",
+  "ollama-cloud/kimi-k2.7-code",
+];
+
+test("apply rejects a model missing from the binary catalog (before writing)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-missing-model-"));
+  try {
+    seedMiniOcRoot(root);
+    const before = fs.readFileSync(path.join(root, "harness.routing.json"), "utf8");
+    // catalog is missing terra → default preset (build=terra) must be rejected
+    const catalogWithoutTerra = CANONICAL_MODELS.filter((m) => m !== "openai/gpt-5.6-terra");
+    const res = await runConfigureRouting(
+      { action: "apply", preset: "openai-ollama-default", update_opencode_json: false },
+      { directory: root },
+      engine,
+      { listModels: async () => catalogWithoutTerra },
+    );
+    assert.equal(res.metadata.ok, false);
+    assert.match(res.metadata.reason, /gpt-5\.6-terra/);
+    assert.match(res.metadata.reason, /catálogo|opencode models/i);
+    assert.equal(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"), before, "must not write on rejection");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("apply proceeds when every model is present in the catalog", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-model-ok-"));
+  try {
+    seedMiniOcRoot(root);
+    const res = await runConfigureRouting(
+      { action: "apply", preset: "openai-ollama-default", update_opencode_json: false },
+      { directory: root },
+      engine,
+      { listModels: async () => CANONICAL_MODELS },
+    );
+    assert.equal(res.metadata.ok, true, res.metadata.reason);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("model validation is FAIL-OPEN: listModels throwing does not block a valid apply", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-model-failopen-"));
+  try {
+    seedMiniOcRoot(root);
+    const res = await runConfigureRouting(
+      { action: "apply", preset: "openai-ollama-default", update_opencode_json: false },
+      { directory: root },
+      engine,
+      {
+        listModels: async () => {
+          throw new Error("opencode binary not found");
+        },
+      },
+    );
+    assert.equal(res.metadata.ok, true, res.metadata.reason);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("model validation FAIL-OPEN: empty catalog is skipped, not treated as all-missing", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-model-empty-"));
+  try {
+    seedMiniOcRoot(root);
+    const res = await runConfigureRouting(
+      { action: "apply", preset: "openai-ollama-default", update_opencode_json: false },
+      { directory: root },
+      engine,
+      { listModels: async () => [] },
+    );
+    assert.equal(res.metadata.ok, true, res.metadata.reason);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

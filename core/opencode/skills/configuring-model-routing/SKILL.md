@@ -63,8 +63,9 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 1. Load current routing + options via `configure-routing({ action: "inspect" })`.
 2. Elicit: preset dual-safe **or** custom slots (product language first).
-3. Apply via `configure-routing({ action: "apply", preset })` (primary) or `({ action: "apply", slots })` (escape hatch). The tool validates, stages, and rolls back on mid-fail; on `ok:false` it wrote nothing — explain the reason in pt-br and re-ask.
-4. Report changed files + warnings; demand **session restart**.
+3. **When the operator brings a custom model slug, confirm it exists first:** run `opencode models` (optionally `opencode models <provider>`) and check the slug is in the list. Catch the typo (`gpt-5.6-tera`) here, in product language, before applying. This is the primary check — the model is capable, use it. (Auth state is the operator's responsibility; do not try to verify logins.)
+4. Apply via `configure-routing({ action: "apply", preset })` (primary) or `({ action: "apply", slots })` (escape hatch). The tool validates, stages, and rolls back on mid-fail; on `ok:false` it wrote nothing — explain the reason in pt-br and re-ask. **Backstop:** the tool independently re-checks every routing model against `opencode models` and rejects an unknown slug before writing — the deterministic net for when this skill isn't loaded (headless/cloud, compaction). Fail-open if the binary can't be listed.
+5. Report changed files + warnings; demand **session restart**.
 
 ## Does not
 
