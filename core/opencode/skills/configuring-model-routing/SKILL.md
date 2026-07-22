@@ -106,17 +106,20 @@ Presets válidos (`listPresets()`):
 
 | id | Label pt-br |
 |---|---|
-| `openai-ollama-default` | Olhos OpenAI + hands Ollama (default shippado) |
-| `xai-ollama-dual` | Olhos Grok (xAI) + family-2/hands Ollama |
+| `openai-ollama-default` | Olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama (default shippado) |
+| `xai-ollama-dual` | Olhos Grok (xAI, camadas colapsadas em grok-4.5) + family-2/hands Ollama |
+
+O preset `openai-ollama-default` **deriva de `CANONICAL_DEFAULT_ROUTING`** (fonte única) — é deep-equal ao `harness.routing.json` shippado por drift-guard test. Aplicá-lo nunca reintroduz layout stale.
 
 Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não no core sem atualizar testes CI).
 
-**Custom slots** (se não preset):
+**Custom slots** (escape hatch de baixo nível — o caminho primário é linguagem natural → preset). Chave desconhecida/typo é **rejeitada** (falha alto, nunca grava routing degradado):
 1. `primaryEye` — build, planner, plan-reviewer-f1, adversary-f1  
 2. `secondaryEye` — plan-reviewer-f2, adversary-f2 (**outro provider**)  
 3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
-4. Hands low/medium/high (default Ollama ladder)  
-5. Auth: “você já autenticou provider X no OpenCode?”
+4. `hands` low/medium/high (default Ollama ladder)  
+5. `testAuthor`, `plannerFallback`, `supportsReasoningEffort` (opcionais)  
+6. Auth: “você já autenticou provider X no OpenCode?”
 
 **Aviso de produto (sempre se eye forte → modelo fraco):**  
 olhos de plan-review / adversary / security em modelo barato enfraquecem o safety net — confirmar override explícito.
@@ -132,7 +135,7 @@ configure-routing({ action: "apply", preset: "openai-ollama-default" })
 Custom slots (escape hatch — `slots` is a JSON string):
 
 ```
-configure-routing({ action: "apply", slots: '{"primaryEye":"openai/gpt-5.6-sol","secondaryEye":"ollama-cloud/kimi-k2.7-code","supportEye":"openai/gpt-5.5"}' })
+configure-routing({ action: "apply", slots: '{"primaryEye":"openai/gpt-5.6-sol","secondaryEye":"ollama-cloud/kimi-k2.7-code","supportEye":"openai/gpt-5.6-luna"}' })
 ```
 
 On `ok:false` → **no net change** (validate fail writes nothing; mid-write failure rolls back). Explain the reason in pt-br and re-ask — do not fall back to `node`/`sed`.  
