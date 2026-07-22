@@ -40,7 +40,7 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   const fm = frontmatter(body);
 
   assert.match(fm, /^mode: primary$/m);
-  assert.match(fm, /^model: openai\/gpt-5\.6-sol$/m);
+  assert.match(fm, /^model: openai\/gpt-5\.6-terra$/m);
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
   for (const permission of ["edit", "bash", "external_directory", "classify", "mark", "verify", "ceremony-next"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
