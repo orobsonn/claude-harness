@@ -5,6 +5,16 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.48.0](https://github.com/orobsonn/claude-harness/compare/v0.47.1...v0.48.0) (2026-07-22)
+
+
+### Features
+
+* **opencode:** lane no-ceremony + native tool p/ configuring-model-routing ([#426](https://github.com/orobsonn/claude-harness/issues/426)) ([a3ec3dd](https://github.com/orobsonn/claude-harness/commit/a3ec3dd15dbfff44baecb0b775a16fe88734ee01))
+* **opencode:** preset default deriva de fonte única + endurece slots ([#429](https://github.com/orobsonn/claude-harness/issues/429)) ([78e70ee](https://github.com/orobsonn/claude-harness/commit/78e70eed3c41c45725dfbe3bc7b53974bcd54fc3))
+* **opencode:** realoca modelos OpenAI por role no template de routing ([#428](https://github.com/orobsonn/claude-harness/issues/428)) ([96c5196](https://github.com/orobsonn/claude-harness/commit/96c519613a705692de7eb5b9c289051ddeb15e03))
+* **opencode:** valida modelos do routing contra o catálogo do binário ([#430](https://github.com/orobsonn/claude-harness/issues/430)) ([faaec2c](https://github.com/orobsonn/claude-harness/commit/faaec2ce3a11015512abd6b6339c6baf8ec48157))
+
 ## [0.47.1](https://github.com/orobsonn/claude-harness/compare/v0.47.0...v0.47.1) (2026-07-21)
 
 
