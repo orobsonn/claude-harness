@@ -185,6 +185,45 @@ test("apply refuses weak support eyes without confirmWeakEyes", () => {
   }
 });
 
+test("apply refuses weak judgment eyes without confirmWeakJudgmentEyes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-weak-judge-"));
+  try {
+    seedMiniOcRoot(root);
+    // primaryEye (→ family-1 of plan-reviewer + adversary) is a cheap hand model;
+    // support kept strong so only the judgment floor can fire.
+    const built = buildRoutingFromSlots({
+      primaryEye: "ollama-cloud/glm-5.2",
+      secondaryEye: "openai/gpt-5.6-sol",
+      supportEye: "openai/gpt-5.5",
+    });
+    assert.equal(built.ok, true, built.reason);
+
+    const denied = applyRoutingToDisk({ targetRoot: root, routing: built.routing, updateOpencodeJson: false });
+    assert.equal(denied.ok, false);
+    assert.match(denied.reason, /confirmWeakJudgmentEyes/i);
+
+    // confirmWeakEyes (support flag) must NOT unlock weak judgment eyes.
+    const stillDenied = applyRoutingToDisk({
+      targetRoot: root,
+      routing: built.routing,
+      updateOpencodeJson: false,
+      confirmWeakEyes: true,
+    });
+    assert.equal(stillDenied.ok, false);
+    assert.match(stillDenied.reason, /confirmWeakJudgmentEyes/i);
+
+    const ok = applyRoutingToDisk({
+      targetRoot: root,
+      routing: built.routing,
+      updateOpencodeJson: false,
+      confirmWeakJudgmentEyes: true,
+    });
+    assert.equal(ok.ok, true, ok.reason);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("apply refuses xAI/Grok on source mode without forceCoreGrok", () => {
   // ocSource is core/opencode → mode source
   const built = routingFromPreset("xai-ollama-dual");
