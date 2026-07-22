@@ -1,7 +1,7 @@
 ---
 description: Validates the executor's output against every criterion_ref and locked_test. OpenAI evaluator family. Read-only re code, runs gates.
 mode: subagent
-model: openai/gpt-5.5
+model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   classify: deny

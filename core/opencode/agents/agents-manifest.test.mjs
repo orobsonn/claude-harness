@@ -92,7 +92,7 @@ function expectedModels(routing) {
   const r = routing.roles;
   return {
     build: r.build.model,
-    plan: r.planner.model,
+    plan: r.build.model,
     planner: r.planner.model,
     "plan-reviewer": r["plan-reviewer"].families["family-1"].model,
     "plan-reviewer-openai": r["plan-reviewer"].families["family-2"].model,
