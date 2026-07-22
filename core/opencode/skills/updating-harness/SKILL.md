@@ -68,11 +68,14 @@ First resolve the latest release tag (the CLI runs from that pinned tag):
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0
 ```
 
-Both first-install and update use the same command — `init` is idempotent. **Run the CLI from the git
-tag, not from npm:**
+Both first-install and update use the same command — `init` is idempotent. Substitute `<latest-tag>`
+with the concrete `vX.Y.Z` from Step 1 and `<resolved-runtime>` with `opencode` or `both`. **Emit a
+single clean command** — no trailing comment, no `&&`, no redirect: that exact form is what the entry-gate
+allowlists, and any extra token re-triggers the anti-forgery block. **Run the CLI from the git tag, not
+from npm:**
 
 ```bash
-npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>   # opencode | both
+npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>
 ```
 
 > **Why the git tag, not `@orobsonn/claude-harness@latest`:** the npm-published version lags the repo
