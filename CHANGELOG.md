@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.48.1](https://github.com/orobsonn/claude-harness/compare/v0.48.0...v0.48.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **harness:** unifica updating-harness no comando npx allowlistado ([#432](https://github.com/orobsonn/claude-harness/issues/432)) ([97da527](https://github.com/orobsonn/claude-harness/commit/97da5276fc4a3ff4caddb904a4c4942d72dd936e))
+
 ## [0.48.0](https://github.com/orobsonn/claude-harness/compare/v0.47.1...v0.48.0) (2026-07-22)
 
 
