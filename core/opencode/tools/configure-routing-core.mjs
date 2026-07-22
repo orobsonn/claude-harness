@@ -39,13 +39,29 @@ function payload(title, body) {
 }
 
 /**
+ * @description Return routing models absent from the binary's model catalog.
+ * Existence check only (a mistyped `gpt-5.6-tera` is caught before write); provider
+ * auth state is deliberately NOT checked — that is the operator's obvious responsibility.
+ * @param {object} routing
+ * @param {string[]} available  model slugs the OpenCode binary reports (`opencode models`)
+ * @param {object} engine  apply-routing.mjs module (for collectRoutingModels)
+ * @returns {string[]} unique missing model slugs (empty when all present)
+ */
+export function findUnavailableModels(routing, available, engine) {
+  const catalog = new Set(available);
+  const used = [...new Set(engine.collectRoutingModels(routing))];
+  return used.filter((m) => !catalog.has(m));
+}
+
+/**
  * @description Run the configure-routing tool logic against an injected engine.
  * @param {object} args
  * @param {{ directory: string }} context
  * @param {object} engine  apply-routing.mjs module (injectable for tests)
+ * @param {{ listModels?: () => Promise<string[]> }} [deps]  side-effect seams (injectable for tests)
  * @returns {Promise<{ title: string, output: string, metadata: object }>}
  */
-export async function runConfigureRouting(args, context, engine) {
+export async function runConfigureRouting(args, context, engine, deps = {}) {
   // targetRoot pinned to cwd — never from args.
   const targetRoot = context.directory;
   const action = typeof args?.action === "string" && args.action.trim() ? args.action.trim() : "apply";
@@ -95,6 +111,27 @@ export async function runConfigureRouting(args, context, engine) {
     built = engine.buildRoutingFromSlots(parsed.slots);
   }
   if (!built.ok) return payload("configure-routing: build rejected", { ok: false, reason: built.reason });
+
+  // Validate every routing model exists in the OpenCode binary catalog before writing.
+  // Fail-OPEN: if the catalog can't be listed (binary absent/offline), skip the check
+  // rather than block a legitimate config — consistent with the harness's fail-open eyes.
+  if (typeof deps.listModels === "function") {
+    let available = null;
+    try {
+      available = await deps.listModels();
+    } catch {
+      available = null;
+    }
+    if (Array.isArray(available) && available.length > 0) {
+      const missing = findUnavailableModels(built.routing, available, engine);
+      if (missing.length > 0) {
+        return payload("configure-routing: unknown model(s)", {
+          ok: false,
+          reason: `modelo(s) fora do catálogo do binário OpenCode: ${missing.join(", ")}. Rode 'opencode models' para ver os slugs válidos.`,
+        });
+      }
+    }
+  }
 
   const applied = engine.applyRoutingToDisk({
     targetRoot,

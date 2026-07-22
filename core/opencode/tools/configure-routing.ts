@@ -8,10 +8,29 @@
  * targetRoot is always context.directory (cwd); confirm flags default false and are only
  * set after the operator confirms — the config lane is operator-turn only.
  */
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { tool } from "@opencode-ai/plugin/tool"
+
+const execFileAsync = promisify(execFile)
 
 export interface ConfigureRoutingContext {
   directory: string
+}
+
+/**
+ * List model slugs the OpenCode binary reports (`opencode models`). Fixed command,
+ * no user input in argv (no injection surface). Callers treat a throw as fail-open.
+ */
+async function listInstalledModels(): Promise<string[]> {
+  const { stdout } = await execFileAsync("opencode", ["models"], {
+    timeout: 15_000,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("/"))
 }
 
 export default tool({
@@ -36,6 +55,8 @@ export default tool({
   async execute(args, context) {
     const { runConfigureRouting } = await import("./configure-routing-core.mjs")
     const engine = await import("../skills/configuring-model-routing/references/apply-routing.mjs")
-    return runConfigureRouting(args, context as ConfigureRoutingContext, engine)
+    return runConfigureRouting(args, context as ConfigureRoutingContext, engine, {
+      listModels: listInstalledModels,
+    })
   },
 })
