@@ -130,8 +130,40 @@ export function withCapabilitiesForModels(routing, defaults = {}) {
  * }} slots
  * @returns {{ ok: true, routing: object } | { ok: false, reason: string }}
  */
+const ALLOWED_SLOT_KEYS = Object.freeze([
+  "primaryEye",
+  "secondaryEye",
+  "supportEye",
+  "hands",
+  "testAuthor",
+  "plannerFallback",
+  "supportsReasoningEffort",
+]);
+const ALLOWED_HAND_TIERS = Object.freeze(["low", "medium", "high"]);
+
 export function buildRoutingFromSlots(slots) {
   try {
+    if (!slots || typeof slots !== "object" || Array.isArray(slots)) {
+      return { ok: false, reason: "slots must be an object" };
+    }
+    // Reject unknown/typo keys instead of silently defaulting them — a mistyped slot
+    // (e.g. `supportEyes`) must fail loud, never produce a degraded-but-valid routing.
+    const unknownKeys = Object.keys(slots).filter((k) => !ALLOWED_SLOT_KEYS.includes(k));
+    if (unknownKeys.length > 0) {
+      return {
+        ok: false,
+        reason: `unknown slot key(s): ${unknownKeys.join(", ")} — valid keys: ${ALLOWED_SLOT_KEYS.join(", ")}`,
+      };
+    }
+    if (slots.hands && typeof slots.hands === "object" && !Array.isArray(slots.hands)) {
+      const unknownTiers = Object.keys(slots.hands).filter((t) => !ALLOWED_HAND_TIERS.includes(t));
+      if (unknownTiers.length > 0) {
+        return {
+          ok: false,
+          reason: `unknown hands tier(s): ${unknownTiers.join(", ")} — valid tiers: ${ALLOWED_HAND_TIERS.join(", ")}`,
+        };
+      }
+    }
     const primaryEye = String(slots?.primaryEye ?? "").trim();
     const secondaryEye = String(slots?.secondaryEye ?? "").trim();
     const supportEye = String(slots?.supportEye ?? primaryEye).trim();
@@ -239,54 +271,124 @@ export function buildRoutingFromSlots(slots) {
   }
 }
 
-/** @description Shipped dual-safe presets (all pass validateRouting). */
+/**
+ * @description Single source of truth for the shipped default routing (the three-layer
+ * OpenAI-eyes architecture: terra produces, sol verifies, luna supports; Ollama hands).
+ * The committed `harness.routing.json` must stay deep-equal to `withCapabilitiesForModels`
+ * of this constant — enforced by a drift-guard test. Presets DERIVE from here so the
+ * default preset can never re-introduce a stale layout that overwrites the template.
+ * No `$schema` / `modelCapabilities` here: those are added at derivation time.
+ */
+export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
+  version: 2,
+  roles: {
+    build: { model: "openai/gpt-5.6-terra" },
+    planner: { model: "openai/gpt-5.6-sol" },
+    "plan-reviewer": {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "ollama-cloud/kimi-k2.7-code", primary: false, optional: true, countsLoop: false },
+      },
+    },
+    adversary: {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "ollama-cloud/kimi-k2.7-code", primary: false, optional: true, countsLoop: false },
+      },
+    },
+    compliance: { model: "openai/gpt-5.6-terra" },
+    security: { model: "openai/gpt-5.6-sol" },
+    executor: {
+      tiers: {
+        low: { model: "ollama-cloud/gemma4:31b" },
+        medium: { model: "ollama-cloud/glm-5.2" },
+        high: { model: "ollama-cloud/kimi-k2.7-code" },
+      },
+    },
+    sniper: {
+      tiers: {
+        low: { model: "ollama-cloud/gemma4:31b" },
+        medium: { model: "ollama-cloud/glm-5.2" },
+        high: { model: "ollama-cloud/kimi-k2.7-code" },
+      },
+    },
+    "test-author": { model: "ollama-cloud/glm-5.2" },
+    harvester: { model: "openai/gpt-5.6-luna" },
+    shipper: { model: "openai/gpt-5.6-luna" },
+  },
+  constraints: {
+    crossFamilyRoles: ["plan-reviewer", "adversary"],
+    requireDualOn: ["plan-reviewer", "adversary"],
+  },
+});
+
+/**
+ * @description Deep-clone a routing object, replacing every `openai/*` eye model with `target`.
+ * Ollama hands / family-2 / test-author are untouched (they are not openai-prefixed). Used to
+ * derive a single-provider eye variant (e.g. Grok) from the canonical layout — a transformation,
+ * not a hand-authored parallel layout that could drift.
+ * @param {object} routing
+ * @param {string} target  provider/model slug to substitute for openai eyes
+ * @returns {object}
+ */
+function remapOpenAIEyesTo(routing, target) {
+  const clone = structuredClone(routing);
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "model" && typeof value === "string" && value.startsWith("openai/")) {
+        node[key] = target;
+      } else if (value && typeof value === "object") {
+        walk(value);
+      }
+    }
+  };
+  walk(clone.roles);
+  return clone;
+}
+
+/** @description Shipped dual-safe presets (all pass validateRouting), derived from the canonical layout. */
 export function listPresets() {
+  const openai = withCapabilitiesForModels(structuredClone(CANONICAL_DEFAULT_ROUTING), {
+    perProvider: { openai: true },
+  });
+  const xai = withCapabilitiesForModels(remapOpenAIEyesTo(CANONICAL_DEFAULT_ROUTING, "xai/grok-4.5"), {
+    perProvider: { xai: true },
+  });
   return Object.freeze([
     {
       id: "openai-ollama-default",
-      label_pt: "Padrão dual (olhos OpenAI + hands Ollama)",
-      slots: {
-        primaryEye: "openai/gpt-5.6-sol",
-        secondaryEye: "ollama-cloud/kimi-k2.7-code",
-        supportEye: "openai/gpt-5.5",
-        hands: {
-          low: "ollama-cloud/gemma4:31b",
-          medium: "ollama-cloud/glm-5.2",
-          high: "ollama-cloud/kimi-k2.7-code",
-        },
-        testAuthor: "ollama-cloud/glm-5.2",
-      },
+      label_pt: "Padrão dual — olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama",
+      routing: openai,
     },
     {
       id: "xai-ollama-dual",
-      label_pt: "Olhos Grok (xAI) + family-2/hands Ollama (dual válido)",
-      slots: {
-        primaryEye: "xai/grok-4.5",
-        secondaryEye: "ollama-cloud/kimi-k2.7-code",
-        supportEye: "xai/grok-4.5",
-        hands: {
-          low: "ollama-cloud/gemma4:31b",
-          medium: "ollama-cloud/glm-5.2",
-          high: "ollama-cloud/kimi-k2.7-code",
-        },
-        testAuthor: "ollama-cloud/glm-5.2",
-        supportsReasoningEffort: { xai: true },
-      },
+      label_pt: "Olhos Grok (xAI, camadas colapsadas em grok-4.5) + family-2/hands Ollama (dual válido)",
+      routing: xai,
     },
   ]);
 }
 
 /**
- * @description Resolve a preset id to validated routing.
+ * @description Resolve a preset id to validated routing. A preset carries either a literal
+ * `routing` (canonical-derived, preferred) or legacy `slots` (built via buildRoutingFromSlots).
  * @param {string} presetId
  * @returns {{ ok: true, routing: object, preset: object } | { ok: false, reason: string }}
  */
 export function routingFromPreset(presetId) {
   const preset = listPresets().find((p) => p.id === presetId);
   if (!preset) return { ok: false, reason: `unknown preset: ${presetId}` };
-  const built = buildRoutingFromSlots(preset.slots);
-  if (!built.ok) return built;
-  return { ok: true, routing: built.routing, preset };
+  if (preset.routing) {
+    const v = validateRouting(preset.routing);
+    if (!v.ok) return { ok: false, reason: `preset ${presetId}: ${v.reason}` };
+    return { ok: true, routing: preset.routing, preset };
+  }
+  if (preset.slots) {
+    const built = buildRoutingFromSlots(preset.slots);
+    if (!built.ok) return built;
+    return { ok: true, routing: built.routing, preset };
+  }
+  return { ok: false, reason: `preset ${presetId} has neither routing nor slots` };
 }
 
 /**

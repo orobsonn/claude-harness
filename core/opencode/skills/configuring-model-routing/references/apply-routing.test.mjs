@@ -9,6 +9,7 @@ import {
   AGENT_MODEL_RESOLVERS,
   applyRoutingToDisk,
   buildRoutingFromSlots,
+  CANONICAL_DEFAULT_ROUTING,
   listPresets,
   listRoutingTouchpoints,
   replaceFrontmatterModel,
@@ -19,6 +20,60 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ocSource = path.resolve(here, "../../..");
+
+test("DRIFT GUARD: openai-ollama-default preset deep-equals the shipped harness.routing.json", () => {
+  // Single source of truth: the default preset must reproduce the committed template exactly.
+  // If this fails, the preset (via CANONICAL_DEFAULT_ROUTING) and harness.routing.json diverged —
+  // applying the preset would overwrite the template. Fix BOTH together, never one.
+  const built = routingFromPreset("openai-ollama-default");
+  assert.equal(built.ok, true, built.reason);
+  const shipped = JSON.parse(fs.readFileSync(path.join(ocSource, "harness.routing.json"), "utf8"));
+  const { $schema, ...shippedNoSchema } = shipped;
+  assert.ok($schema, "shipped harness.routing.json must keep its $schema");
+  assert.deepEqual(built.routing, shippedNoSchema);
+});
+
+test("CANONICAL_DEFAULT_ROUTING is valid once capabilities are derived", () => {
+  const built = routingFromPreset("openai-ollama-default");
+  assert.equal(validateRouting(built.routing).ok, true);
+  // sanity: the three-layer architecture is intact
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.build.model, "openai/gpt-5.6-terra");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.security.model, "openai/gpt-5.6-sol");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.harvester.model, "openai/gpt-5.6-luna");
+});
+
+test("HARDENING: buildRoutingFromSlots rejects unknown slot key (typo) instead of silent default", () => {
+  const typo = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    secondaryEye: "ollama-cloud/kimi-k2.7-code",
+    supportEyes: "openai/gpt-5.6-luna", // note the trailing 's' — a typo
+  });
+  assert.equal(typo.ok, false);
+  assert.match(typo.reason, /unknown slot key/i);
+  assert.match(typo.reason, /supportEyes/);
+});
+
+test("HARDENING: buildRoutingFromSlots rejects unknown hands tier", () => {
+  const bad = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    secondaryEye: "ollama-cloud/kimi-k2.7-code",
+    hands: { low: "ollama-cloud/gemma4:31b", mid: "ollama-cloud/glm-5.2", high: "ollama-cloud/kimi-k2.7-code" },
+  });
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /unknown hands tier/i);
+  assert.match(bad.reason, /mid/);
+});
+
+test("HARDENING: buildRoutingFromSlots still accepts the full valid slot set", () => {
+  const ok = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    secondaryEye: "ollama-cloud/kimi-k2.7-code",
+    supportEye: "openai/gpt-5.6-luna",
+    hands: { low: "ollama-cloud/gemma4:31b", medium: "ollama-cloud/glm-5.2", high: "ollama-cloud/kimi-k2.7-code" },
+    testAuthor: "ollama-cloud/glm-5.2",
+  });
+  assert.equal(ok.ok, true, ok.reason);
+});
 
 test("listRoutingTouchpoints covers routing agents AGENTS opencode", () => {
   const t = listRoutingTouchpoints().join(" ");
@@ -258,7 +313,7 @@ test("apply does not rewrite opencode.json above targetRoot", () => {
     const parent = JSON.parse(fs.readFileSync(parentJson, "utf8"));
     assert.equal(parent.model, "keep/me", "must not clobber parent opencode.json");
     const proj = JSON.parse(fs.readFileSync(path.join(project, "opencode.json"), "utf8"));
-    assert.equal(proj.model, "openai/gpt-5.6-sol");
+    assert.equal(proj.model, "openai/gpt-5.6-terra");
   } finally {
     fs.rmSync(outer, { recursive: true, force: true });
   }
