@@ -2027,3 +2027,41 @@ test("LIGHT ship allow when planner usable + ceremony + capture", () => {
   });
   assert.equal(d.decision, "allow");
 });
+
+// ── updating-harness skill ↔ entry-gate allowlist contract ──
+// Both runtime shells expose a skill named `updating-harness`; OpenCode loads project
+// `.claude/skills` too, so a `both`-vendored project has a name collision and either copy
+// may win non-deterministically. The collision is only inert if BOTH skills emit the exact
+// npx command the entry-gate allowlists (isHarnessPrescribedPackageCommand). A stray trailing
+// comment / `&&` / redirect in either skill re-opens the interpreter block — this test freezes
+// the skill text against the gate so that regression fails loud here.
+
+/** @description Extract the prescribed `npx … claude-harness … init` line from a SKILL.md body. */
+function extractHarnessInitCommand(skillPath) {
+  const body = fs.readFileSync(skillPath, "utf8");
+  const line = body
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("npx") && l.includes("claude-harness#") && l.includes(" init"));
+  if (!line) throw new Error(`no npx init command found in ${skillPath}`);
+  // Resolve the skill's placeholders to concrete values the operator substitutes at runtime.
+  return line
+    .replaceAll("<latest-tag>", "v0.99.0")
+    .replaceAll("<resolved-runtime>", "both");
+}
+
+test("updating-harness skills emit a command the entry-gate allowlists (both shells)", () => {
+  const __dirname = path.dirname(new URL(import.meta.url).pathname);
+  const skills = {
+    opencode: path.join(__dirname, "../../skills/updating-harness/SKILL.md"),
+    claude: path.join(__dirname, "../../../claude-code/skills/updating-harness/SKILL.md"),
+  };
+  for (const [shell, skillPath] of Object.entries(skills)) {
+    const cmd = extractHarnessInitCommand(skillPath);
+    assert.equal(
+      isHarnessPrescribedPackageCommand(cmd),
+      true,
+      `${shell} updating-harness command is not gate-allowlisted (trailing comment / && / redirect?): ${cmd}`,
+    );
+  }
+});
