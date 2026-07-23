@@ -11,6 +11,7 @@ import {
   isExpandingRedirect,
   hasShellChainMetacharacters,
   isHarnessPrescribedPackageCommand,
+  isShellSourceOrStdin,
   hasElevatedCeremonyResidue,
   writingTaskIdsFromPlan,
 } from "./bash-decide.mjs";
@@ -2064,4 +2065,55 @@ test("updating-harness skills emit a command the entry-gate allowlists (both she
       `${shell} updating-harness command is not gate-allowlisted (trailing comment / && / redirect?): ${cmd}`,
     );
   }
+});
+
+// ── isShellSourceOrStdin: command-position anchor (FP fix + prefix-word hardening) ──
+// The source/stdin forge net must deny `source`/`.`/`bash <` at a COMMAND position (incl. after a
+// run of transparent prefix words like eval/time/command/then/do) while NOT denying `.`/`source` in
+// an ARGUMENT slot (`find . -name`, `--target .`) or inside quoted prose (`printf '… source …'`).
+test("isShellSourceOrStdin: denies source/stdin at command position, incl. prefix-word forms", () => {
+  for (const cmd of [
+    "source evil.sh",
+    ". ./env.sh",
+    "foo && source bar",
+    "foo; . bar.sh",
+    "{ source x; }",
+    "eval source evil.sh",
+    "time source evil.sh",
+    "command source evil.sh",
+    "if true; then source evil.sh; fi",
+    "for x in a; do source evil.sh; done",
+    "eval . evil.sh",
+    "! source evil.sh",
+    "coproc source evil.sh",
+    "bash < forged.sh",
+    "sh <payload.sh",
+  ]) {
+    assert.equal(isShellSourceOrStdin(cmd), true, `must deny: ${cmd}`);
+  }
+});
+
+test("isShellSourceOrStdin: allows source/. in argument slots and quoted prose (FP fix)", () => {
+  for (const cmd of [
+    "find . -name x",
+    "cp a . b",
+    "tar -C . -xf a",
+    "node x.mjs --target . --runtime both",
+    "mv source dest",
+    "grep -r source src/",
+    'printf %s "Do not commit product source code." > spec.md',
+    "for f in . ; do echo $f; done",
+    "find ! -name x",
+    "git add .",
+  ]) {
+    assert.equal(isShellSourceOrStdin(cmd), false, `must allow: ${cmd}`);
+  }
+});
+
+// #ac: a delivery spec written via printf whose PROSE contains "source" must not be forge-denied
+// (the OpenCode PR-creation block: `printf '… product source code …' > spec.md`).
+test("decideBashForge: printf spec write with 'source' in prose is allowed", () => {
+  const cmd =
+    "printf '%s\\n' '## Constraints' 'Do not modify product source code.' > .opencode/plans/ses_x-feat/spec.md";
+  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
 });
