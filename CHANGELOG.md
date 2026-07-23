@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.48.2](https://github.com/orobsonn/claude-harness/compare/v0.48.1...v0.48.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **harness:** gate OC não bloqueia source/. fora de posição de comando ([#434](https://github.com/orobsonn/claude-harness/issues/434)) ([468181a](https://github.com/orobsonn/claude-harness/commit/468181ab05f8e3124d0e618fbff9a4c01bbaf537))
+
 ## [0.48.1](https://github.com/orobsonn/claude-harness/compare/v0.48.0...v0.48.1) (2026-07-22)
 
 
