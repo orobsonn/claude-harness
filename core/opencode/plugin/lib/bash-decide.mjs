@@ -680,10 +680,70 @@ export function isFrozenPathBashWrite(command) {
  */
 export function isShellSourceOrStdin(command) {
   if (typeof command !== "string" || command.length === 0) return false;
-  const c = stripQuotedHeredocBodies(stripCommandWrappers(command));
-  if (/(?:^|\s)(?:source|\.)\s+/.test(c)) return true;
-  if (/\b(?:bash|sh|zsh|dash|ash)\s+</.test(c)) return true;
+  const surface = stripQuotedSpans(stripQuotedHeredocBodies(stripCommandWrappers(command)));
+  // `source`/`. ` only execute at a COMMAND position — the command word of a simple command, not an
+  // argument slot. A `.` or `source` as an argument (`find . -name`, `--target . --runtime`, `mv
+  // source dst`, the word "source" in quoted spec prose) is not a builtin invocation and must not be
+  // denied. Command position = start, after a separator (; && || | & ( { newline), or after a run of
+  // transparent prefix words/keywords (`eval`/`time`/`command`/`then`/`do`/… source x) — bash treats
+  // those as prefixing the command word, so they must not be an escape hatch.
+  if (new RegExp(`(?:^|[\\n;&|(){}])\\s*${SHELL_COMMAND_PREFIX}(?:source|\\.)\\s`).test(surface)) {
+    return true;
+  }
+  if (/\b(?:bash|sh|zsh|dash|ash)\s+</.test(surface)) return true;
   return false;
+}
+
+/**
+ * @description Transparent prefix words that keep the following token in command position (bash
+ * reserved words + prefix/dispatch builtins). `eval source x` / `time source x` / `! source x` /
+ * `then source x` all still run `source`, so the anchor must see through them. A few entries
+ * (`nohup`/`nice`/`setsid`/`stdbuf`/`sudo`) exec an EXTERNAL program and cannot actually reach a
+ * builtin — including them is harmless over-inclusion (widens DENY, never adds a false positive).
+ *
+ * KNOWN-ACCEPTED gaps (defense-in-depth, not a sound wall — a determined local actor is never walled
+ * out by a regex): a flag between the prefix and the token (`time -p source x`, `command -p source x`)
+ * breaks the contiguous match, and quoted/escaped/expanded command words (`'source' x`, `\source x`,
+ * `source$IFS x`, `eval -- source x`) run the builtin without matching. These are the same class as
+ * the obfuscations noted on `stripQuotedSpans`; the layered forge checks are the real defense.
+ */
+const SHELL_COMMAND_PREFIX =
+  "(?:(?:!|coproc|time|command|builtin|exec|eval|nohup|nice|setsid|stdbuf|sudo|then|do|else|elif)\\s+)*";
+
+/**
+ * @description Blank single/double-quoted span CONTENT (and delimiters) so quoted prose — e.g. a
+ * spec written via `printf '… product source code …' > spec.md` — is not scanned as shell syntax.
+ * Bash single quotes are fully literal; double quotes honor `\"`.
+ *
+ * This is defense-in-depth, NOT a sound wall: bash still runs the builtin when the command WORD is
+ * quoted/escaped (`'source' x`, `\source x`, `source$IFS x`), and those obfuscations are not caught
+ * here (nor were they before). The goal is only to stop legitimate quoted PROSE from tripping the
+ * command-position scan; genuine indirection defense relies on the layered forge checks together.
+ * @param {string} command
+ * @returns {string}
+ */
+function stripQuotedSpans(command) {
+  let out = "";
+  let quote = "";
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (quote) {
+      if (quote === '"' && ch === "\\" && i + 1 < command.length) {
+        out += "  ";
+        i += 1;
+        continue;
+      }
+      out += ch === quote ? ((quote = ""), " ") : " ";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += " ";
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /**
