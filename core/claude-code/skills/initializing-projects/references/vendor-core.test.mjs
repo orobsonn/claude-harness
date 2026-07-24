@@ -126,12 +126,12 @@ test("findMissingHookVpsDeps: ignores *.test.mjs hook imports (their imports nev
   assert.deepEqual(findMissingHookVpsDeps(claudeDir), [], "a test-only ../vps import is never a vendor defect");
 });
 
-test("vendor-core: hooks are included in FRAMEWORK_OWNED", (t) => {
+test("vendor-core: hooks and docs are included in FRAMEWORK_OWNED", (t) => {
   const scriptContent = readFileSync(vendorCoreScript, "utf8");
   assert.match(
     scriptContent,
-    /const FRAMEWORK_OWNED = \["agents",\s*"skills",\s*"rules",\s*"hooks"\]/,
-    "FRAMEWORK_OWNED should contain 'hooks' alongside agents, skills, and rules"
+    /const FRAMEWORK_OWNED = \["agents",\s*"skills",\s*"rules",\s*"hooks",\s*"docs"\]/,
+    "FRAMEWORK_OWNED should contain 'hooks' and 'docs' alongside agents, skills, and rules"
   );
 });
 
