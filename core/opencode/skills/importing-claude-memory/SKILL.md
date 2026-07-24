@@ -1,5 +1,5 @@
 ---
-name: importing-claude-memory
+name: oc-importing-claude-memory
 description: "One-shot, OPERATOR-INVOKED migration that imports a repo's legacy Claude Code native memory (~/.claude/projects/<slug>/memory/) into this OpenCode harness's project-root MEMORY.md. The SINGLE sanctioned exception to the never-read-~/.claude rule — read-only, scoped to projects/<slug>/memory/ only, NEVER auto-run in the delivery loop, NEVER invoked by surveying-codebase or build. Run it by hand once when onboarding a repo that previously used Claude Code. Run the LLM-aided classification on a STRONG model (e.g. openai/gpt-5.5) — one-shot + security-critical, so the cheap open-source default is the wrong tradeoff here."
 license: MIT
 compatibility: opencode
@@ -15,7 +15,7 @@ A repo that previously used Claude Code accumulated a native per-project memory 
 
 ## Identity & boundary (non-negotiable)
 
-- **Operator-invoked only.** Never auto-run. `surveying-codebase`, `build`, and the delivery loop NEVER invoke this. The hermetic rule ("never read `~/.claude`") stays literally true for everything else — this is the one named exception, and it only fires when the human explicitly runs it.
+- **Operator-invoked only.** Never auto-run. `oc-surveying-codebase`, `build`, and the delivery loop NEVER invoke this. The hermetic rule ("never read `~/.claude`") stays literally true for everything else — this is the one named exception, and it only fires when the human explicitly runs it.
 - **Read-only on `~/.claude`, scoped to `projects/<slug>/memory/` only.** Never read any other `~/.claude` path. **Never write to `~/.claude`** (no "mark as imported" on the CC side — Finding 7). Enforce "once" with an OC-side marker only (below).
 
 ## Model — run the classification on a STRONG model
@@ -65,13 +65,13 @@ A PORT note that makes a **claim about current code** (a bug, a function shape, 
 4. **Human-confirm** the table (HARD-GATE human-confirm).
 5. **Secret-scan** PORT content (HARD-GATE secret-scan); resolve any hit with the operator.
 6. **Staleness-verify** code-claim PORT notes against HEAD; tag or drop.
-7. **Translate** PORT notes into the OC `MEMORY.md` format — the index-line + two-section body shape is owned by `distilling-learnings`; load it (`skill({ name: "distilling-learnings" })`) and follow its "Project pattern → MEMORY.md" section. No Claude frontmatter, no `metadata.type`. Atomize "and" notes into separate entries (one note = one concept).
+7. **Translate** PORT notes into the OC `MEMORY.md` format — the index-line + two-section body shape is owned by `oc-distilling-learnings`; load it (`skill({ name: "oc-distilling-learnings" })`) and follow its "Project pattern → MEMORY.md" section. No Claude frontmatter, no `metadata.type`. Atomize "and" notes into separate entries (one note = one concept).
 8. **Gitignore-gate** then **write** `MEMORY.md` (HARD-GATE gitignore).
 9. **Mark once** — add `<!-- cc-memory imported <date> -->` to the OC `MEMORY.md` (OC-side marker; never write `~/.claude`). On a re-run, if the marker exists, ask the operator before re-importing.
 
 ## Anti-patterns
 
-- **Folding this into `surveying-codebase`** — never. Survey is code-only and forbidden from `~/.claude`; mixing a secret-classifying foreign-memory importer into it merges two opposite trust profiles on the normal-operation code path.
+- **Folding this into `oc-surveying-codebase`** — never. Survey is code-only and forbidden from `~/.claude`; mixing a secret-classifying foreign-memory importer into it merges two opposite trust profiles on the normal-operation code path.
 - **Auto-running on cold-start** — never. The fan-out over many repos with LLM secret-classification is exactly the fail-open leak machine this design avoids.
 - **Routing SENSITIVE to `mv`** — no; `mv` is not a secret sink.
 - **Trusting `pwd` for the slug** — use `git rev-parse --show-toplevel` + realpath.

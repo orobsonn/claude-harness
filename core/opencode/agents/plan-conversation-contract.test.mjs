@@ -77,8 +77,8 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   );
   assert.deepEqual(
     permissionRules(fm, "skill"),
-    ['"*": deny', '"brainstorming": allow', '"grill": allow', '"proposing-deepening": allow'],
-    "skill must deny by default and allow ONLY brainstorming, grill and proposing-deepening",
+    ['"*": deny', '"oc-brainstorming": allow', '"oc-grill": allow', '"oc-proposing-deepening": allow'],
+    "skill must deny by default and allow ONLY oc-brainstorming, oc-grill and oc-proposing-deepening",
   );
   assert.match(fm, /^  "mv_\*": allow$/m);
   assert.match(fm, /^  "mp_\*": allow$/m);
@@ -104,7 +104,7 @@ test("plan lane documents its write carve-outs without weakening read-only ident
 
   assert.match(body, /`docs\/prd\/<slug>\.md`/, "the PRD artifact path must be explicit");
   assert.match(body, /ONLY permitted write/, "the carve-outs must be stated as the sole writes");
-  assert.match(body, /`grill`/, "a carve-out must be bound to the grill skill");
+  assert.match(body, /`oc-grill`/, "a carve-out must be bound to the oc-grill skill");
   assert.match(body, /`bash` stays denied/, "the carve-outs must not imply shell access");
   assert.match(body, /Never run shell commands, mutate git/);
 });
@@ -117,7 +117,7 @@ test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only 
     /`docs\/architecture\/deepening-candidates\.md`/,
     "the deepening candidates path must be documented",
   );
-  assert.match(body, /`proposing-deepening`/, "the second carve-out must be bound to its skill");
+  assert.match(body, /`oc-proposing-deepening`/, "the second carve-out must be bound to its skill");
   assert.match(body, /`bash` stays denied/, "hosting the skill must not unlock a shell");
   assert.match(
     body,
@@ -188,6 +188,6 @@ test("brainstorming has a closed Plan branch without persistence or ceremony", (
   assert.match(branch, /invoke only `discussion-adversary`/);
   assert.match(branch, /Return the `## Build Spec`/);
   assert.match(branch, /Do not write `.opencode\/decision-ledger\.md`/);
-  assert.match(branch, /do not call `classify`, `mark`, `planner`, `orchestrating-delivery`/);
+  assert.match(branch, /do not call `classify`, `mark`, `planner`, `oc-orchestrating-delivery`/);
   assert.match(branch, /switch to `build` with Tab/);
 });

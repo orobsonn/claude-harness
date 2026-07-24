@@ -22,8 +22,15 @@ const VENDOR_CORE = join(
   "vendor-core.mjs",
 );
 
-/** The lane's entire surface: one command file per lifecycle skill, and nothing else. */
+/**
+ * The lane's entire surface: one command file per lifecycle skill, and nothing else.
+ * The command file name and slash-command stay UNPREFIXED (the OC command namespace never
+ * collides with .claude — verified: OpenCode scans only .opencode/command{,s}/). The skill
+ * `name:` frontmatter carries the `oc-` prefix (issue #445), so the permission.skill key and
+ * the in-body skill reference are `oc-<op>`, while the directory that holds the skill is `<op>`.
+ */
 const LIFECYCLE_OPERATIONS = ["configuring-model-routing", "updating-harness"];
+const LIFECYCLE_SKILL_NAMES = LIFECYCLE_OPERATIONS.map((op) => `oc-${op}`);
 
 /** Command heads the lane's shell allowlist may grant — derived from the two skills' own commands. */
 const ALLOWED_BASH_HEADS = [
@@ -78,8 +85,8 @@ test("harness-config reaches exactly the two lifecycle skills", () => {
 
   assert.deepEqual(
     permissionRules(fm, "skill"),
-    ['"*": deny', ...LIFECYCLE_OPERATIONS.map((name) => `"${name}": allow`)],
-    "skill must deny by default and allow ONLY the two lifecycle skills",
+    ['"*": deny', ...LIFECYCLE_SKILL_NAMES.map((name) => `"${name}": allow`)],
+    "skill must deny by default and allow ONLY the two lifecycle skills (oc- prefixed name)",
   );
 });
 
@@ -150,10 +157,10 @@ test("each lifecycle command routes to harness-config in the same session", () =
       /^subtask:\s*true$/m,
       `${name}.md must not spawn a child session — the lane would lose the operator`,
     );
-    assert.match(body, new RegExp(`\`${name}\``), `${name}.md must name the skill it loads`);
+    assert.match(body, new RegExp(`\`oc-${name}\``), `${name}.md must name the oc- prefixed skill it loads`);
     assert.ok(
       existsSync(join(SKILLS_DIR, name, "SKILL.md")),
-      `command ${name} has no skill of the same name`,
+      `command ${name} has no skill directory of the same (unprefixed) name`,
     );
   }
 });

@@ -1,5 +1,5 @@
 ---
-name: authoring-rules
+name: oc-authoring-rules
 description: Meta-skill for authoring and editing folder-scoped rules in the native OpenCode tree — nested AGENTS.md (or an existing folder CLAUDE.md router), root AGENTS.md/CLAUDE.md, never a Claude-style paths-gated rule file. Use when creating a new folder/subsystem rule, adding a Convention/Pattern/Gotcha to an existing one, or deciding whether something is a rule, a router-table row, or a one-off. Routes harness-wide rules to proposing-improvements via kaizen.md.
 license: MIT
 compatibility: opencode
@@ -14,7 +14,7 @@ metadata:
 
 Standardizes how durable, actionable rules are written into this harness's **native** rule mechanism. Each rule organizes knowledge into the same 3 canonical categories used everywhere in the harness.
 
-**There is no `.claude/rules/*.md` here, and there is no `paths:` frontmatter.** Those are Claude-Code-only mechanics with no OpenCode equivalent. In this harness a rule's SCOPE is its **tree location**: a rule that governs one folder lives in that folder's nested `AGENTS.md` (read by up-traversal), a project-wide rule lives in the root `AGENTS.md`/`CLAUDE.md`, and a harness-wide rule is never authored here at all — it is proposed to `kaizen.md`. The blast-radius routing below mirrors `skill({ name: "distilling-learnings" })` exactly, because both write into the same native destinations.
+**There is no `.claude/rules/*.md` here, and there is no `paths:` frontmatter.** Those are Claude-Code-only mechanics with no OpenCode equivalent. In this harness a rule's SCOPE is its **tree location**: a rule that governs one folder lives in that folder's nested `AGENTS.md` (read by up-traversal), a project-wide rule lives in the root `AGENTS.md`/`CLAUDE.md`, and a harness-wide rule is never authored here at all — it is proposed to `kaizen.md`. The blast-radius routing below mirrors `skill({ name: "oc-distilling-learnings" })` exactly, because both write into the same native destinations.
 
 ## When to use
 
@@ -31,7 +31,7 @@ Scope is decided by WHERE the file sits in the tree, not by a glob field. This r
 |---|---|---|
 | **One folder / subsystem** | that folder's nested **`AGENTS.md`** (or the folder's existing **`CLAUDE.md`** router, if that is what the folder already uses) + a one-row pointer in the root router table | stack/domain law for that area: handlers, components, hooks, mcp-tools, libs, schemas, sandbox invariants |
 | **Whole project** | root **`AGENTS.md`** (or root **`CLAUDE.md`** router, whichever the project uses) | project-wide conventions, the router table itself, top-of-tree invariants |
-| **Harness-wide** (all projects) | **NOT authored here** — append a proposal to project-root **`kaizen.md`** via `skill({ name: "proposing-improvements" })` | code-quality / security / git and any rule that would change harness behavior across every project (these already live in `~/.config/opencode/AGENTS.md` §4–6) |
+| **Harness-wide** (all projects) | **NOT authored here** — append a proposal to project-root **`kaizen.md`** via `skill({ name: "oc-proposing-improvements" })` | code-quality / security / git and any rule that would change harness behavior across every project (these already live in `~/.config/opencode/AGENTS.md` §4–6) |
 
 **Do NOT invent a `paths:` field** in the frontmatter of a nested `AGENTS.md` / `CLAUDE.md`. It has no effect in OpenCode — these files are scoped by their position in the directory tree and loaded by up-traversal from the working dir. A folder's `AGENTS.md` already governs exactly that folder and its descendants; no glob is needed or honored.
 
@@ -73,7 +73,7 @@ Other domain-specific sections are allowed, but the 3 above are the base pattern
 | **Project-wide** | root `AGENTS.md` / `CLAUDE.md` router | conventions true across the whole project; the router table |
 | **One folder** | nested `AGENTS.md` / folder `CLAUDE.md` + root router row | stack/domain law: workers, components, hooks, mcp-tools, libs, schemas, sandbox |
 
-Pick the tightest scope that still covers the rule. A folder-specific rule dumped into the root pollutes every task's context; a project-wide rule buried in one folder never surfaces elsewhere — the same blast-radius discipline as `distilling-learnings`.
+Pick the tightest scope that still covers the rule. A folder-specific rule dumped into the root pollutes every task's context; a project-wide rule buried in one folder never surfaces elsewhere — the same blast-radius discipline as `oc-distilling-learnings`.
 
 **Golden rule before creating a folder rule** (decision tree):
 - Is the rule **non-obvious from the code**? (yes → it can be a rule)
@@ -130,4 +130,4 @@ Pick the tightest scope that still covers the rule. A folder-specific rule dumpe
 - It is tooling config (ESLint, Prettier, tsconfig) → enforced by the tool, not a rule.
 - It is a one-off decision for a single feature → it lives in the PR/commit, not a rule.
 - It is a metric/dashboard URL → it goes in `AGENTS.md`/`CLAUDE.md` "Resources", not a rule.
-- It is a **harness-wide** convention (would change behavior across all projects) → do NOT write it here. Propose it to `kaizen.md` via `skill({ name: "proposing-improvements" })`; promotion is human-reviewed, never auto-applied.
+- It is a **harness-wide** convention (would change behavior across all projects) → do NOT write it here. Propose it to `kaizen.md` via `skill({ name: "oc-proposing-improvements" })`; promotion is human-reviewed, never auto-applied.

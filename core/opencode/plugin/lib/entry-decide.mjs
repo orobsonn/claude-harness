@@ -77,7 +77,7 @@ export function decideEntryTask(input = {}) {
         ok: false,
         decision: "deny",
         reason:
-          "[entry-gate] Blocked: ceremony missing — run triaging-requests and classify before dispatching delivery agents.",
+          "[entry-gate] Blocked: ceremony missing — run oc-triaging-requests and classify before dispatching delivery agents.",
       };
     }
 

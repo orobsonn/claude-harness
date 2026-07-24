@@ -1,5 +1,5 @@
 ---
-name: triaging-requests
+name: oc-triaging-requests
 description: "Entry gate of every session — load and follow this FIRST, before any spec, plan, or code. Classifies the operator's request into no-ceremony / QUICK / LIGHT / FULL and routes accordingly. Parity with Claude Code triaging (interactive + headless). The build orchestrator MUST run this on the first request; skipping it lets ceremony be guessed instead of judged."
 license: MIT
 compatibility: opencode
@@ -20,7 +20,7 @@ All identifiers and reasoning stay in English. Every operator-facing message is 
 
 <HARD-GATE>
 Do NOT dispatch the planner, produce a final spec, or implement until this skill has classified the request and called the `classify` tool.
-For LIGHT/FULL, the next step is the `brainstorming` skill (with HEADLESS branch) — never the planner directly.
+For LIGHT/FULL, the next step is the `oc-brainstorming` skill (with HEADLESS branch) — never the planner directly.
 **Do NOT call `classify` until Step 2.0 is complete.** Classifying from issue prose alone (without evaluating/analyzing/investigating the codebase) is a protocol failure — especially in HEADLESS.
 </HARD-GATE>
 
@@ -164,9 +164,9 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 
 | Mode | Action |
 |---|---|
-| **QUICK** | Inline fix or craft (Step 2.1). Cheap rails + commit via `committing-changes`. **No** full `orchestrating-delivery`. Prefer writing the fix via a single `executor-*` only after a **full** plan exists if plan-gate is armed — for true 1-file QUICK, implement without executor hand if build may write; otherwise one executor after a minimal full plan. |
-| **LIGHT** | Load `brainstorming` (HEADLESS branch if headless), then `orchestrating-delivery` LIGHT. |
-| **FULL** | Load `brainstorming` (HEADLESS branch if headless), then `orchestrating-delivery` FULL. |
+| **QUICK** | Inline fix or craft (Step 2.1). Cheap rails + commit via `oc-committing-changes`. **No** full `oc-orchestrating-delivery`. Prefer writing the fix via a single `executor-*` only after a **full** plan exists if plan-gate is armed — for true 1-file QUICK, implement without executor hand if build may write; otherwise one executor after a minimal full plan. |
+| **LIGHT** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` LIGHT. |
+| **FULL** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` FULL. |
 
 ---
 
@@ -189,4 +189,4 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 ## What this skill is NOT
 
 - It does not implement, plan, or review.
-- Sensitive-path override on plan `scope_paths` still happens later in `orchestrating-delivery` — this skill pre-escalates with judgment + Step 2.0 evidence.
+- Sensitive-path override on plan `scope_paths` still happens later in `oc-orchestrating-delivery` — this skill pre-escalates with judgment + Step 2.0 evidence.

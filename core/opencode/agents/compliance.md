@@ -67,7 +67,7 @@ The spec carries a **locked-decisions** section — the non-codifiable choices t
 A **VIOLATED** locked decision is a **fail**, even if every `#ac` passes — the implementation drifted from what the operator decided (e.g. spec says "interval = 14 days fixed", code computes it dynamically). Never rationalize a violation as an acceptable alternative — that is the operator's call, not yours.
 
 ### 6. Critical-class test check (load skill)
-Load **`skill(canonical-critical-classes)`** for the taxonomy. This is a **judgment check, not a deterministic gate** — you verify a required test is present and green; you do NOT hunt (that is the adversary). Scope it to what the diff makes decidable on its own:
+Load **`skill(oc-canonical-critical-classes)`** for the taxonomy. This is a **judgment check, not a deterministic gate** — you verify a required test is present and green; you do NOT hunt (that is the adversary). Scope it to what the diff makes decidable on its own:
 - the diff introduces concurrency / shared mutable state → require a **concurrency-stress test** (parallel ops asserting the invariant);
 - the diff makes a retry-reachable operation non-idempotent → require an **idempotency test** (second execution is a no-op).
 

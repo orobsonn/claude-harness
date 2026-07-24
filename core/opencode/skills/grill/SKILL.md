@@ -1,5 +1,5 @@
 ---
-name: grill
+name: oc-grill
 description: "Pre-implementation interview — turns an idea that is still a shadow into a written PRD at docs/prd/<slug>.md through relentless, one-at-a-time, consequence-framed questioning, then hands off to creating-issues. Runs BEFORE the delivery pipeline (before triage, before any plan) and is LOCAL/interactive only — it refuses in any headless or cron session. Suggest it when the operator arrives with a big or vague idea and there is no written spec yet. It is NOT the session entry gate (triaging-requests owns that) and its output is NOT a source of truth."
 license: MIT
 compatibility: opencode
@@ -26,7 +26,7 @@ artifact.
 
 - **Before the pipeline.** It runs *before* triage, before any spec, before any plan. Its output is
   the input the pipeline later consumes.
-- **NOT the entry gate.** `triaging-requests` owns the first request of every `build` session. This
+- **NOT the entry gate.** `oc-triaging-requests` owns the first request of every `build` session. This
   skill never claims that slot, never says "run me first", never calls `classify`, `mark`, `verify`
   or `ceremony-next`, and gates nothing. It is entered only when the operator asks for it or accepts
   a suggestion to use it.
@@ -34,7 +34,7 @@ artifact.
   produces enters the pipeline later as **ordinary input** — issue text. It is fully attackable and
   re-questionable by the planner, `plan-reviewer-*`, `adversary-*`, and `compliance` downstream.
   **Never record grill output as a "locked decision" that downstream roles are obliged to defend.**
-  That status belongs to `brainstorming`'s in-pipeline elicitation, not to this interview. A PRD
+  That status belongs to `oc-brainstorming`'s in-pipeline elicitation, not to this interview. A PRD
   that downstream cannot contradict would launder an unreviewed conversation into an unfalsifiable
   constraint.
 - **It does not build.** The session ends at issue creation.
@@ -72,9 +72,9 @@ a `plan` session reached through an autonomous/cron prompt is headless and must 
 operator conversation is interactive.
 
 Also refuse when you were invoked from inside a subagent/hand `task` with a work brief — the grill
-only ever runs in a top-level operator session — `plan`, or `build` **after** `triaging-requests`
+only ever runs in a top-level operator session — `plan`, or `build` **after** `oc-triaging-requests`
 has run and returned no-ceremony. Never skip or pre-empt the `build` entry gate to reach this skill:
-`triaging-requests` is still the first tool call of a `build` session.
+`oc-triaging-requests` is still the first tool call of a `build` session.
 
 Refusal (pt-br, then stop — do not fall back to "interviewing yourself"):
 
@@ -211,7 +211,7 @@ Take today's date from the session context; if it is genuinely unavailable (no b
 the operator once. `status: rascunho` while `## Em aberto` is non-empty; `pronto` only when it is
 empty or holds nothing that could still change a requirement.
 
-**`## Requisitos` is the load-bearing section.** `creating-issues` converts each numbered
+**`## Requisitos` is the load-bearing section.** `oc-creating-issues` converts each numbered
 requirement into an `#ac-N.M` acceptance criterion, and those become the pipeline's `locked_tests`.
 So each requirement must assert an **observable effect with a concrete value** — a response body, a
 persisted state, an emitted error, a rendered outcome — never "funciona bem" or "é rápido". Vague
@@ -225,7 +225,7 @@ here means the whole pipeline aims at the wrong target.
 2. Show the operator the `## Requisitos`, `## Suposições do modelo` and `## Em aberto` sections in
    pt-br and ask if anything is wrong. Fix and rewrite the file if so.
 3. Hand off to issue authoring **in the same session**:
-   - **In `build`:** `skill({ name: "creating-issues" })` with the PRD as its input.
+   - **In `build`:** `skill({ name: "oc-creating-issues" })` with the PRD as its input.
    - **In `plan`:** issue authoring is not available here. Point the operator at the file and close
      with one short line: `PRD escrito em docs/prd/<slug>.md — troque para build com Tab e peça as
      issues a partir dele.`
@@ -233,7 +233,7 @@ here means the whole pipeline aims at the wrong target.
 **One feature per session is enforced downstream** (`core/shared/lib/classify-stub.mjs` denies a
 feature switch once a session has classified). So the grill session **stops at issue creation** —
 it does not implement. Building happens in a fresh session, entered normally through
-`triaging-requests`.
+`oc-triaging-requests`.
 
 ---
 
@@ -243,5 +243,5 @@ it does not implement. Building happens in a fresh session, entered normally thr
   `## Suposições do modelo`, and requirements that are observable and verifiable.
 - Every branch that could change a requirement is either closed or explicitly parked under
   `## Em aberto`.
-- The issue(s) are created via `creating-issues` (or the operator is told to switch to `build` to
+- The issue(s) are created via `oc-creating-issues` (or the operator is told to switch to `build` to
   create them).

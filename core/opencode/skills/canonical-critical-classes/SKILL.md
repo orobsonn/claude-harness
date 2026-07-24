@@ -1,5 +1,5 @@
 ---
-name: canonical-critical-classes
+name: oc-canonical-critical-classes
 description: "Reference loaded by the adversary (to HUNT) and compliance (to know which classes, when a diff puts one in play, REQUIRE a test). Carries the canonical taxonomy of critical failure classes — the known killers from the operator's systems-primitives model — and the irreversibility-first criticality ranking. Role-neutral: HOW each role acts lives in that agent's prompt."
 license: MIT
 compatibility: opencode

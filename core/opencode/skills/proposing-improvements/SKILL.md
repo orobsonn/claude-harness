@@ -1,5 +1,5 @@
 ---
-name: proposing-improvements
+name: oc-proposing-improvements
 description: "Scans the transient findings buffer for systemic patterns that indicate a harness agent or skill could be improved, and appends proposals (never auto-applies them) to the project-root kaizen.md. Because the findings buffer is deleted at harvest end, kaizen.md is the durable cross-run signal — check it for precedent. Use when the harvester runs after distilling-learnings completes; never during active implementation."
 license: MIT
 compatibility: opencode
@@ -12,9 +12,9 @@ metadata:
 
 **Announce at the start (in pt-br):** "Usando proposing-improvements para detectar padrões sistêmicos e propor melhorias ao harness em kaizen.md."
 
-**When you run:** at harvest time, AFTER the final dual review passes and AFTER `skill({ name: "distilling-learnings" })` has routed durable learnings. This is the harvester's last knowledge step (`build.md` Phase 5). Never during active implementation.
+**When you run:** at harvest time, AFTER the final dual review passes and AFTER `skill({ name: "oc-distilling-learnings" })` has routed durable learnings. This is the harvester's last knowledge step (`build.md` Phase 5). Never during active implementation.
 
-**Input:** the current transient findings buffer (consolidated by `skill({ name: "recording-findings" })`, deleted by the harvester at the end of the run) plus the durable **`kaizen.md`** at the project root (cross-run memory). Since the findings buffer does not survive the run, `kaizen.md` is where cross-run precedent lives — a second occurrence of a signal is detected by matching against existing `kaizen.md` entries, not against an old findings buffer.
+**Input:** the current transient findings buffer (consolidated by `skill({ name: "oc-recording-findings" })`, deleted by the harvester at the end of the run) plus the durable **`kaizen.md`** at the project root (cross-run memory). Since the findings buffer does not survive the run, `kaizen.md` is where cross-run precedent lives — a second occurrence of a signal is detected by matching against existing `kaizen.md` entries, not against an old findings buffer.
 
 ---
 
@@ -59,13 +59,13 @@ Mark **Status: proposed** always. The human changes it to `accepted`, `rejected`
 
 **Affected agent/skill — allowed values (exact native names only):**
 - Agents: `build`, `planner`, `plan-reviewer`, `executor-high`, `executor-medium`, `executor-low`, `compliance`, `adversary`, `security`, `sniper-high`, `sniper-medium`, `sniper-low`, `harvester`, `shipper`.
-- Skills: `committing-changes`, `releasing-versions`, `recording-findings`, `distilling-learnings`, `proposing-improvements`, `surveying-codebase`, `authoring-rules`, `deploying-workers`, etc.
+- Skills: `oc-committing-changes`, `oc-releasing-versions`, `oc-recording-findings`, `oc-distilling-learnings`, `oc-proposing-improvements`, `oc-surveying-codebase`, `oc-authoring-rules`, `deploying-workers`, etc.
 - Global rule file: `AGENTS.md` (a rule that should change across all projects — proposed here, never edited directly).
 
 **Forbidden as affected-agent values:**
 - Bare `executor` or `sniper` — there is NO untiered executor/sniper; always name the tier (`executor-high`, `sniper-low`, …) or the role family if the proposal is tier-agnostic ("all `executor-*` tiers").
 - Claude model slugs (`haiku`/`sonnet`/`opus`) — the harness has no tiers by those names; reference the agent name.
-- Claude orchestration skill names (`triaging-requests`, `orchestrating-delivery`, `creating-plans`) — they do not exist natively; that logic lives in `build` and `planner`. A proposal about triage/orchestration/planning routes to `build` or `planner`.
+- Claude orchestration skill names (`oc-triaging-requests`, `oc-orchestrating-delivery`, `oc-creating-plans`) — they do not exist natively; that logic lives in `build` and `planner`. A proposal about triage/orchestration/planning routes to `build` or `planner`.
 
 **Check `kaizen.md` for precedent before appending** — if a near-identical proposal already exists, do not duplicate it; a second occurrence is evidence the existing proposal should be promoted in the human's review, not a fresh entry.
 
@@ -75,5 +75,5 @@ Mark **Status: proposed** always. The human changes it to `accepted`, `rejected`
 
 - **One-off proposals** — a single bug in a single task is not a harness problem. It dies with the findings buffer; git holds the audit. Do not propose it unless `kaizen.md` already shows a prior occurrence.
 - **Vague proposals** — "improve adversary" is not actionable. "Add `open-redirect` to `adversary`'s universal attack categories since it was missed in two separate URL-handling tasks (t3, t7)" is.
-- **Self-referential single-run proposals** — do not propose changes to `recording-findings`, `distilling-learnings`, or `proposing-improvements` based on a single run. Wait for a second data point.
+- **Self-referential single-run proposals** — do not propose changes to `oc-recording-findings`, `oc-distilling-learnings`, or `oc-proposing-improvements` based on a single run. Wait for a second data point.
 - **Auto-editing harness files** — never touch `~/.config/opencode/agents/<name>.md`, `~/.config/opencode/skills/<name>/SKILL.md`, or `~/.config/opencode/AGENTS.md` directly, regardless of how clear the fix seems. Append to `kaizen.md` only; the human applies it.

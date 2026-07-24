@@ -1,5 +1,5 @@
 ---
-name: committing-changes
+name: oc-committing-changes
 description: Analyzes changes, creates a semantic commit (Conventional Commits) and pushes. For a standalone commit OUTSIDE the full delivery loop — when you just want to commit a change without PR/review/docs. Conforms to AGENTS.md §4 git rules. For full delivery use the shipper agent.
 license: MIT
 compatibility: opencode

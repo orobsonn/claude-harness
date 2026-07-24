@@ -1,5 +1,5 @@
 ---
-name: brainstorming
+name: oc-brainstorming
 description: "You MUST load and follow this before ANY creative/dev work in LIGHT or FULL mode — before writing a spec, dispatching the planner, or any implementation. It elicits the operator's non-codifiable decisions one question at a time, proposes approaches, and HARD-GATES on an approved design. Skipping it makes the model FABRICATE product decisions the operator never made — the single biggest source of silently-wrong output."
 license: MIT
 compatibility: opencode
@@ -20,7 +20,7 @@ When the invoking primary agent is `plan`, this branch overrides every delivery 
 2. Ask one operator-owned question at a time, compare 2-3 viable approaches, and capture settled choices as locked decisions in the conversation.
 3. For non-trivial technical decisions, invoke only `discussion-adversary`, then incorporate its honest critique.
 4. Return the `## Build Spec` contract defined by the `plan` agent. Use `DRAFT` while blocking questions remain and `READY` only when acceptance criteria are observable and the required adversarial pass is complete.
-5. Stop. Do not write `.opencode/decision-ledger.md`, runtime specs, or design docs; do not call `classify`, `mark`, `planner`, `orchestrating-delivery`, or any delivery role.
+5. Stop. Do not write `.opencode/decision-ledger.md`, runtime specs, or design docs; do not call `classify`, `mark`, `planner`, `oc-orchestrating-delivery`, or any delivery role.
 
 The operator can then switch to `build` with Tab in the same session. `build` consumes the conversational Build Spec and starts its normal entry policy. Never infer that switching agents authorizes implementation while still running as `plan`.
 
@@ -54,7 +54,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 4. **Propose 2–3 approaches** — with trade-offs; lead with your recommendation and why.
 5. **Present design** — in sections scaled to complexity; get approval after each section. Cover architecture, components, data flow, error handling, testing.
 6. **Capture locked decisions** — record each decision the operator settled as an explicit, **non-negotiable constraint** in the spec (its own clearly-marked section). These are the operator's domain judgments; downstream roles (adversary, compliance) must DEFEND them, not optimize them. Persist each locked decision to `.opencode/decision-ledger.md` using entries with id | decision | operator_resolution — this ledger is the authoritative record for downstream roles (adversary, compliance) to check that the implementation does not violate the operator's locked choices.
-7. **Write design doc** — save the canonical runtime spec to `.opencode/plans/<sessionID>-<feature_id>/spec.md`; optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit the docs copy (via `committing-changes`).
+7. **Write design doc** — save the canonical runtime spec to `.opencode/plans/<sessionID>-<feature_id>/spec.md`; optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit the docs copy (via `oc-committing-changes`).
 8. **Spec self-review** — inline check for placeholders, contradictions, ambiguity, scope.
 9. **Operator reviews written spec** — ask the operator to review the spec file before proceeding.
 10. **Transition** — hand the approved spec back to `build` Phase 1 (dispatch `planner`). Do NOT invoke any other skill.
@@ -82,7 +82,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 
 **Documentation:**
 - Write the validated design to the canonical runtime path `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build` (whose `edit` is denied), write via bash** — do not try the edit/write tool.
-- Commit only the durable docs copy (via `committing-changes`); the runtime spec remains session state.
+- Commit only the durable docs copy (via `oc-committing-changes`); the runtime spec remains session state.
 
 **Spec self-review** — look with fresh eyes:
 1. **Placeholder scan** — any "TBD"/"TODO"/incomplete/vague? Fix.

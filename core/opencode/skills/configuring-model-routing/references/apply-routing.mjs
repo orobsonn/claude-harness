@@ -448,7 +448,7 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
     `| harvester / shipper | \`${roles.harvester?.model}\` |`,
     "",
     "**Family 1 is mandatory; family 2 is optional and fail-open** on plan-reviewer and adversary (two `task` dispatches + shared merge when available).",
-    "Default hands use the Ollama Cloud ladder. Reconfigure via skill `configuring-model-routing`.",
+    "Default hands use the Ollama Cloud ladder. Reconfigure via skill `oc-configuring-model-routing`.",
   ].join("\n");
 
   const re =

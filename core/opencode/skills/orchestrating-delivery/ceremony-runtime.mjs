@@ -8,7 +8,7 @@ const TRANSITIONS = Object.freeze({
     action: "resume",
     marker: "brainstormed",
     requires: ({ brainstormedCurrent }) => !brainstormedCurrent,
-    step: Object.freeze({ kind: "skill", name: "brainstorming" }),
+    step: Object.freeze({ kind: "skill", name: "oc-brainstorming" }),
   }),
   spec_adversary_completion_evidence: Object.freeze({
     phase: "spec-adversary",

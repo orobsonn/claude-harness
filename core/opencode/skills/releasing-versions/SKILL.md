@@ -1,5 +1,5 @@
 ---
-name: releasing-versions
+name: oc-releasing-versions
 description: Versioned release pipeline via PR — opens a chore/release-X.Y.Z PR (version bump + CHANGELOG), waits for merge, then creates the tag + GitHub Release. Use when you have changes merged into main ready to become a version. Conforms to AGENTS.md §4 git rules.
 license: MIT
 compatibility: opencode

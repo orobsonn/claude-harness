@@ -13,7 +13,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 ### Release-please (fonte primaria quando configurado)
 - Projeto com `release-please-config.json` na raiz: release-please e a fonte UNICA do CHANGELOG e do PR de release — deriva tudo dos Conventional Commits, sem intervencao manual
 - O harness NAO edita `CHANGELOG.md` nem abre PR `chore: release` manual nesses projetos — o harvester delega essa responsabilidade (ver `core/agents/harvester.md`)
-- O restante desta rule (secoes de CHANGELOG manual, versionamento, fluxo de PR de release, skill `releasing-versions`) e o **fallback** para projetos SEM release-please configurado
+- O restante desta rule (secoes de CHANGELOG manual, versionamento, fluxo de PR de release, skill `oc-releasing-versions`) e o **fallback** para projetos SEM release-please configurado
 - Semver e Conventional Commits continuam obrigatorios em AMBOS os casos — release-please so automatiza a derivacao, nao muda a convencao de commit
 
 ### Versionamento (semver)

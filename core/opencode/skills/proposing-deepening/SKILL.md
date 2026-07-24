@@ -1,5 +1,5 @@
 ---
-name: proposing-deepening
+name: oc-proposing-deepening
 description: "Architectural retrofit analysis for an EXISTING codebase — walks the code, finds DIRECTORIES of shallow modules, and proposes at most 5 ranked deepening candidates to docs/architecture/deepening-candidates.md. Runs in the `plan` primary agent, where bash and source edits are DENIED: read-only on source and propose-only are enforced by permission, not by prose. LOCAL/interactive only — it refuses in any headless or cron session. A candidate is a model deduction, never a locked decision, and the issue derived from it is NEVER created harness:ready: a blind restructure of working code is delivered locally, never auto-merged. Use when a legacy/existing project needs its architecture retrofitted toward deep modules, or when asked to find where the codebase became hard to change."
 license: MIT
 compatibility: opencode
@@ -23,7 +23,7 @@ product-language** — he decides on impact and risk, never on class names.
 
 ## Where it runs (OpenCode) — `plan`, and the boundary is a permission, not a promise
 
-Runs in the **`plan` primary agent**, the same host as `grill`. There, `bash` is **denied**, `task` is
+Runs in the **`plan` primary agent**, the same host as `oc-grill`. There, `bash` is **denied**, `task` is
 limited to `discussion-adversary`, and `edit` denies every path except `docs/prd/*.md` and
 `docs/architecture/deepening-candidates.md`. So "never edits source, never opens an issue, never
 dispatches a delivery agent" is **impossible by construction here** — not a prose commitment. Do not
@@ -36,7 +36,7 @@ What the host implies for the procedure below:
 - **No commit.** You cannot commit the candidates file from here — hand that to the operator (step 8).
 - **No issue creation.** Issue authoring lives in `build`; you never author or label anything.
 - **No date command.** Take today's date from the session context; if genuinely unavailable, ask the
-  operator once (same as `grill`).
+  operator once (same as `oc-grill`).
 
 ---
 
@@ -98,8 +98,8 @@ against.
 
 - **READ-ONLY on source.** Never edit, move, rename, or delete a single line of project code. The
   only file this skill writes is the candidates file — and in `plan` it is the only path `edit`
-  allows besides the `grill` PRD.
-- **PROPOSE-ONLY.** Never create a GitHub issue, never invoke `creating-issues`, never dispatch a
+  allows besides the `oc-grill` PRD.
+- **PROPOSE-ONLY.** Never create a GitHub issue, never invoke `oc-creating-issues`, never dispatch a
   delivery agent. The operator picks; then he authors the work in `build`.
 - **NOT a source of truth.** *(the single most important line in this file)* A candidate is 100%
   model deduction — the code was read by the same model that is now judging it. Everything here
@@ -122,10 +122,10 @@ return) and `## Bloqueados`.
 
 Then read the project memory — the project-root `MEMORY.md`, the nested `AGENTS.md` files, and
 `CONTEXT.md` if it exists. Use `CONTEXT.md`'s vocabulary verbatim in candidate titles; never invent
-parallel terms; never edit any of these files (`surveying-codebase` seeds them, the `harvester`
+parallel terms; never edit any of these files (`oc-surveying-codebase` seeds them, the `harvester`
 maintains them) — and in `plan` you could not anyway.
 
-**The inverse risk, stated plainly.** `surveying-codebase` records what the code *actually does* — so
+**The inverse risk, stated plainly.** `oc-surveying-codebase` records what the code *actually does* — so
 a directory full of shallow forwarders can be written into memory as a **convention**, and the
 executor will then faithfully imitate the exact shape this skill exists to remove. That makes memory
 and this skill capable of contradicting each other silently. So: if a candidate contradicts a

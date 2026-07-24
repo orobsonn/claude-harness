@@ -120,7 +120,7 @@ test("real gate denial is consumed into the only official brainstorming descript
     const denial = await realDenial(runtime);
     const consumed = await invokeTool(runtime, "ceremony-next", { denial }, "consume-brainstorm");
     assert.equal(consumed.metadata.ok, true, consumed.output);
-    assert.deepEqual(consumed.metadata.descriptor.coordinator_step, { kind: "skill", name: "brainstorming" });
+    assert.deepEqual(consumed.metadata.descriptor.coordinator_step, { kind: "skill", name: "oc-brainstorming" });
     assert.deepEqual(consumed.metadata.descriptor.completion_transition, { tool: "mark", action: "brainstormed" });
     assert.doesNotMatch(JSON.stringify(consumed.metadata), /explore|general/);
   } finally { run.cleanup(); }
