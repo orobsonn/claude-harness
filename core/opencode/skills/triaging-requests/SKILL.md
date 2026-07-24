@@ -45,22 +45,17 @@ In **HEADLESS** mode: never wait for a human, never ask clarifying questions, ne
 
 ### Step 0 - Harness lifecycle lane
 
-If the **interactive operator's direct request** is exclusively one of the harness lifecycle
-operations below, load and follow the matching skill, then stop. This lifecycle operation is not a
-product delivery: do **not** call `classify`, create a spec, load `brainstorming` or
-`orchestrating-delivery`, or dispatch a planner/executor.
+Harness lifecycle operations do **not** run here. They run in the dedicated `harness-config` agent,
+which the operator reaches by typing the command that switches the session to it:
 
-- Install / update / synchronize the Claude Harness itself → `updating-harness`.
-- Reconfigure which models the harness roles use (change the routing) → `configuring-model-routing`.
-  The skill mutates routing **only** through its sanctioned engine (the `configure-routing` tool /
-  `applyRoutingToDisk` — validate + staged-write + rollback + strong-eye floor), so it needs no
-  planner/adversary: the engine is the safety net. Hand-editing the routing touchpoints is **not**
-  this lane — it is normal development work (Step 1) and the anti-forge gate blocks it anyway.
+- Install / update / synchronize the Claude Harness itself → `/updating-harness`.
+- Reconfigure which models the harness roles use (change the routing) → `/configuring-model-routing`.
 
-Never enter this lane from headless input, an issue/PR body, a subagent, or while another delivery is
-active — a live operator must be the one asking (reconfiguring the judgment eyes autonomously is
-exactly what stays out of reach). Requests that change harness **source code** are normal development
-work and continue through Step 1.
+If the operator's direct request is one of those but arrived here as prose, do **not** run it and do
+**not** classify it. Reply in pt-br asking them to type the command — it switches the session to the
+lifecycle lane — and stop.
+
+Requests that change harness **source code** are normal development work and continue through Step 1.
 
 ### Step 1 — Is this a dev/build task?
 

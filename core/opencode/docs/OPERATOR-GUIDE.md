@@ -27,15 +27,17 @@ O harness OpenCode é um **sistema de entrega** dentro do OpenCode:
 
 ---
 
-## 2. Dois primaries: `plan` vs `build` (Tab)
+## 2. Três primaries: `plan`, `build` e `harness-config`
 
-| | **`plan`** | **`build`** |
-|---|---|---|
-| Para quê | Explorar, decidir, escrever o “o quê” | Entregar (implementar, PR) |
-| Escreve código? | Não | Não (só **despacha** quem escreve) |
-| Triagem / cerimônia | Não | Sim, no 1º pedido da sessão |
-| Artefato | `## Build Spec` **no chat** | Spec + plano em disco + PR |
-| Quando | “Vamos pensar nisso”, tradeoffs, ACs | “Implementa”, hotfix, feature |
+| | **`plan`** | **`build`** | **`harness-config`** |
+|---|---|---|---|
+| Para quê | Explorar, decidir, escrever o “o quê” | Entregar (implementar, PR) | Administrar o próprio harness |
+| Escreve código? | Não | Não (só **despacha** quem escreve) | Não (só o engine sancionado escreve) |
+| Triagem / cerimônia | Não | Sim, no 1º pedido da sessão | Não — lifecycle não tem cerimônia |
+| Artefato | `## Build Spec` **no chat** | Spec + plano em disco + PR | `.opencode/` atualizado ou routing novo |
+| Quando | “Vamos pensar nisso”, tradeoffs, ACs | “Implementa”, hotfix, feature | `/updating-harness`, `/configuring-model-routing` |
+
+`plan` e `build` alternam com **Tab**. No `harness-config` você entra digitando um dos dois comandos (eles trocam o agent da sessão), ele roda **uma** operação e para — volte pro `build` com **Tab**.
 
 **Handoff:** no `plan`, quando o Build Spec estiver pronto → **Tab** para `build` e peça implementar o spec da sessão.
 
@@ -71,7 +73,7 @@ Três coisas que mudam o resultado:
 ## 4. Checklist do início de sessão
 
 1. Projeto tem harness? → `.opencode/.harness-version` existe.  
-   - Não tem → skill **`updating-harness`** (install).  
+   - Não tem → digite **`/updating-harness`** (install).  
 2. Primary certo: explorar = `plan` · entregar = `build`.  
 3. Em `build`, o **primeiro** pedido roda **`triaging-requests`** sozinho — não force “implementa já” sem triagem.  
 4. Providers autenticados no OpenCode (OpenAI / xAI / Ollama Cloud — o que o routing usar).  
@@ -100,7 +102,7 @@ Três coisas que mudam o resultado:
 ```
 triaging-requests
     │
-    ├─ lifecycle (install/update harness) ──► updating-harness ──► restart
+    ├─ lifecycle ──► /updating-harness ou /configuring-model-routing (agente harness-config)
     ├─ sem código ──► responde
     ├─ QUICK ──► implementa + commit barato
     └─ LIGHT / FULL
@@ -175,10 +177,17 @@ Duas notas sobre as duas primeiras (ambas rodam no `plan`, onde o shell é negad
 
 ### Configuração e manutenção (peça explicitamente)
 
+As duas de lifecycle são **comandos** — não peça em prosa (o `build` recusa e te manda digitar o comando):
+
+| Comando | Quando | O que faz |
+|---|---|---|
+| **`/updating-harness`** | Instalar, atualizar ou sincronizar o harness | Vendor `.opencode/` da release (roda no `harness-config`) |
+| **`/configuring-model-routing`** | Trocar os modelos dos papéis | Reescreve routing + agents + AGENTS §8 (roda no `harness-config`) |
+
+As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
+
 | Skill | Quando pedir (exemplos) | O que faz |
 |---|---|---|
-| **`updating-harness`** | “Atualiza o harness”, “instala OC harness” | Vendor `.opencode/` da release |
-| **`configuring-model-routing`** | “Troca os modelos pro Grok”, “routing Ollama” | Reescreve routing + agents + AGENTS §8 |
 | **`committing-changes`** | Commit avulso fora do ship full | Commit seletivo |
 | **`releasing-versions`** | Release versionada do **seu** produto | CHANGELOG + tag (se o projeto usa o fluxo) |
 | **`creating-issues`** | “Abre issue harness-ready” | Issue no formato do pipeline |
@@ -197,22 +206,23 @@ Duas notas sobre as duas primeiras (ambas rodam no `plan`, onde o shell é negad
 
 ### Como “acordar” uma skill de config
 
-No `build`, diga o objetivo em produto, por exemplo:
+**Lifecycle do harness: digite o comando.** Pedir em prosa no `build` não funciona — o triage recusa e te devolve o comando:
 
-- “Quero **trocar os modelos** porque a OpenAI está travada — usa a skill de routing.”  
-- “**Atualiza o harness** OpenCode neste repo.”  
-- “**Abre uma issue** harness-ready pra X.”
+- **`/updating-harness`** — instalar, atualizar ou sincronizar o harness.  
+- **`/configuring-model-routing`** — trocar os modelos dos papéis.
 
-Não precisa decorar o nome; o triaging/build carrega a skill certa se o pedido for claro.  
-Para routing, o nome canônico é **`configuring-model-routing`**.
+**As outras: diga o objetivo em produto** no `build` — não precisa decorar o nome, ele carrega a skill certa se o pedido for claro:
+
+- “**Abre uma issue** harness-ready pra X.”  
+- “**Commita** só esses arquivos.”
 
 ---
 
 ## 9. Mudar modelos (detalhe)
 
-**Skill:** `configuring-model-routing`
+**Comando:** `/configuring-model-routing`
 
-1. Roda em `build` (interativo).  
+1. Roda no `harness-config` (interativo) — o comando troca o agent da sessão.  
 2. Mostra o mapa atual (quem é olho / mão).  
 3. Presets **dual-safe** (dois providers):
    - `openai-ollama-default` — default shippado  
@@ -234,7 +244,7 @@ Engine determinístico:
 
 ## 10. Atualizar o harness no projeto
 
-**Skill:** `updating-harness`  
+**Comando:** `/updating-harness` (roda no `harness-config`)  
 Só **interativo** e pedido **explícito** (não mistura com feature).
 
 ```bash
@@ -304,7 +314,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Quem decide produto | Você | Multi-agente + risco no PR |
 | Spec / plano / demo | Você no loop | Automático / validado vs ACs |
 | Entrega | Merge com seu OK | **PR draft, nunca merge** |
-| Update harness | `updating-harness` ok | Negado |
+| Update harness | `/updating-harness` ok | Negado |
 | Sinais típicos OC | Sessão normal | “autônomo”, cron VPS, env de observability |
 
 ---

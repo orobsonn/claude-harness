@@ -55,9 +55,10 @@ test("OC updating-harness skill exists, is loader-shaped, and runs the CLI from 
 
 test("OC harness updates use a direct lifecycle lane without delivery ceremony", () => {
   const updating = readFileSync(ocUpdatingPath, "utf8");
-  assert.match(ocTriage, /lifecycle operation is not[\s\S]*do \*\*not\*\* call `classify`/i);
+  assert.match(ocTriage, /Harness lifecycle operations do \*\*not\*\* run here[\s\S]*`harness-config`/i);
+  assert.match(ocTriage, /\/updating-harness/, "triage must route to the command, not run the skill");
   assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
   assert.match(updating, /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist:[^\n]*`both`/);
-  assert.match(ocBuild, /lifecycle exception[\s\S]*never classify/i);
+  assert.match(ocBuild, /lifecycle operations are the exception[\s\S]*never classifies/i);
   assert.match(ocAgents, /Harness lifecycle lane[\s\S]*does not call `classify`/i);
 });

@@ -34,9 +34,12 @@ The full per-task delivery loop lives in the `orchestrating-delivery` skill.
 
 ### Harness lifecycle lane
 
-An interactive operator request exclusively to install/update/synchronize the harness is routed by
-`triaging-requests` directly to `updating-harness`. It does not call `classify`, create a spec, or enter
-the delivery loop. It is denied for headless/relayed input and ends with a mandatory session restart.
+Administering the harness — installing/updating it, or reconfiguring which models the roles use — runs
+in the `harness-config` primary agent, not in `build`. The operator reaches it by typing
+`/updating-harness` or `/configuring-model-routing`; the command switches the session agent, and the
+lane's frontmatter denies `classify`, ceremony markers, `task`, `edit`, and every skill except the two
+lifecycle ones. It does not call `classify`, create a spec, or enter the delivery loop. It is denied for
+headless/relayed input, and an update ends with a mandatory session restart.
 
 ### Conversational Plan lane
 
@@ -138,7 +141,7 @@ Any match in plan `scope_paths` forces FULL mode.
 | harvester / shipper | `openai/gpt-5.6-luna` |
 
 **Family 1 is mandatory; family 2 is optional and fail-open** on plan-reviewer and adversary (two `task` dispatches + shared merge when available).
-Default hands use the Ollama Cloud ladder. Reconfigure via skill `configuring-model-routing`.
+Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuring-model-routing` command.
 
 
 ---

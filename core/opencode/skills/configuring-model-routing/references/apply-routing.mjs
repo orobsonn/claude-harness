@@ -12,6 +12,7 @@ export { validateRouting };
 export const AGENT_MODEL_RESOLVERS = Object.freeze({
   build: (r) => r.build?.model,
   plan: (r) => r.build?.model,
+  "harness-config": (r) => r.build?.model,
   planner: (r) => r.planner?.model,
   "planner-fallback": (r) => r.planner?.fallback?.model,
   compliance: (r) => r.compliance?.model,

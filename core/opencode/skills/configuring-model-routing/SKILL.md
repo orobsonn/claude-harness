@@ -12,11 +12,11 @@ metadata:
 
 **This skill reconfigures model routing. It does not implement features.**
 
-Runs interactively inside `build` (primary) — operator messages in **pt-br product-language**; file content in English.
+Runs interactively inside the `harness-config` lane (primary), which the operator reaches by typing `/configuring-model-routing` — operator messages in **pt-br product-language**; file content in English.
 
 Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness usa."
 
-**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — `triaging-requests` Step 0 routes it here directly (no `classify`, no `brainstorming`, no planner/adversary). The engine below is the safety net.
+**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — it never runs in `build`: `triaging-requests` Step 0 refuses a prose request and tells the operator to type the command (no `classify`, no `brainstorming`, no planner/adversary). The engine below is the safety net.
 
 **Apply via the native tool — never `node -e`, never hand-edit the touchpoints.**  
 The `configure-routing` tool wraps the sanctioned engine in-process, so it never hits the bash forge/interpreter gate (hand-editing routing with `sed`/`perl` is exactly what the anti-forgery gate blocks — that path is a dead end, do not attempt it).
@@ -42,7 +42,7 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 | Agent file(s) | Routing path |
 |---|---|
-| `build.md`, `plan.md` | `roles.build.model` |
+| `build.md`, `plan.md`, `harness-config.md` | `roles.build.model` |
 | `planner.md` | `roles.planner.model` |
 | `planner-fallback.md` | `roles.planner.fallback.model` (opcional) |
 | `plan-reviewer.md`, `plan-reviewer-family-1.md` | `plan-reviewer.families.family-1` |
