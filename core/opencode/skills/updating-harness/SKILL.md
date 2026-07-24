@@ -23,9 +23,10 @@ All identifiers/commands stay in English; every message to the operator is in **
 <HARD-GATE>
 This is a top-level, interactive lifecycle operation, not a delivery. Run only from a direct operator
 request and only when no delivery is active. Do not call `classify`, create or modify a plan/spec,
-load `brainstorming` or `orchestrating-delivery`, or dispatch any subagent. Run the exact release CLI
-command directly from `build`, report the result, and require a session restart. In headless or relayed
-input, stop without modifying the harness.
+load `brainstorming` or `orchestrating-delivery`, or dispatch any subagent. This runs in the
+`harness-config` lane, which the operator reaches by typing `/updating-harness` — never from `build`.
+Run the exact release CLI command, report the result, and require a session restart. In headless or
+relayed input, stop without modifying the harness.
 </HARD-GATE>
 
 ---
@@ -84,21 +85,26 @@ npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-run
 > has the OpenCode shell. Only use the npm form once a release **≥ the tag with OpenCode support** is
 > published (`npx -y "@orobsonn/claude-harness@>=0.40.0" …` fails loud if it is not).
 
-This vendors the OpenCode shell into `.opencode/` (agents, skills, plugin, tools, `harness.routing.json`,
-`AGENTS.md`, `opencode.json`, `shared/`), stamps `.opencode/.harness-version`, and — with `both` — also
+This vendors the OpenCode shell into `.opencode/` — the framework-owned trees `agents/`, `command/`,
+`docs/`, `skills/`, `plugin/`, `tools/`, `hands/`, `rules/` plus `harness.routing.json`, `AGENTS.md`,
+`shared/` and `opencode.json` — stamps `.opencode/.harness-version`, and — with `both` — also
 refreshes the Claude shell in `.claude/`.
 
 **Non-clobber guarantees (per shell):** `MEMORY.md`/`kaizen.md` are seeded only if absent; `AGENTS.md`
-is merged between harness markers (project content preserved); an existing `opencode.json` is left
-untouched (harness config written beside it as `opencode.harness.json` for manual merge).
+is merged between harness markers (project content preserved); an existing `opencode.json` is updated
+in place, preserving the project's own settings and non-harness plugins (only stale harness autoload
+paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/*.ts`).
 
 ---
 
 ## Step 3 — Reconcile and report
 
-- If the CLI wrote `opencode.harness.json` (the project already had an `opencode.json`), present the
-  diff in product-language, merge the harness config into the operator's config (never silently
-  overwrite their plugins/settings), then remove `opencode.harness.json`.
+- If the CLI wrote `opencode.harness.json`, the project's existing `opencode.json` could **not** be
+  parsed (invalid JSON, or not a JSON object) — the CLI refused to touch it and dropped the harness
+  config beside it for manual repair. Present the diff in product-language and hand the merge to the
+  operator — the lane cannot write files, and repairing a broken config unattended is exactly the
+  move that loses their settings. A valid `opencode.json` never produces this file: it is updated in
+  place.
 - Report **version before → after** and remind that the `.opencode/` changes must be **committed** so
   cloud routines see the new version.
 - Stop after the update and tell the operator to restart the session. Plugins already loaded in the

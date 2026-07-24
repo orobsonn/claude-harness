@@ -46,6 +46,7 @@ function fmNestedBool(fm, parent, key) {
 const REQUIRED_AGENTS = [
   "build",
   "plan",
+  "harness-config",
   "discussion-adversary",
   "planner",
   "planner-fallback",
@@ -95,6 +96,7 @@ function expectedModels(routing) {
   return {
     build: r.build.model,
     plan: r.build.model,
+    "harness-config": r.build.model,
     planner: r.planner.model,
     "plan-reviewer": r["plan-reviewer"].families["family-1"].model,
     "plan-reviewer-openai": r["plan-reviewer"].families["family-2"].model,

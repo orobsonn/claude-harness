@@ -531,7 +531,7 @@ test("vendored module resolves canonical sources from .claude/agents (vendored l
 
 // --- T9: OpenCode vendor target ------------------------------------------------
 
-test("t9-creates: --runtime opencode creates .opencode agents docs skills plugin tools and harness.routing.json", () => {
+test("t9-creates: --runtime opencode creates .opencode agents command docs skills plugin tools and harness.routing.json", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-"));
   try {
     const result = spawnSync(
@@ -543,6 +543,9 @@ test("t9-creates: --runtime opencode creates .opencode agents docs skills plugin
 
     const required = [
       ".opencode/agents",
+      ".opencode/agents/harness-config.md",
+      ".opencode/command/configuring-model-routing.md",
+      ".opencode/command/updating-harness.md",
       ".opencode/docs/SPAWN-PATTERN.md",
       ".opencode/skills",
       ".opencode/plugin",
