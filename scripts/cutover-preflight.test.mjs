@@ -28,6 +28,7 @@ export const HARNESS_SKILLS = [
   "canonical-critical-classes",
   "committing-changes",
   "distilling-learnings",
+  "grill",
   "importing-claude-memory",
   "orchestrating-delivery",
   "proposing-improvements",

@@ -35,6 +35,19 @@ function frontmatter(content) {
   return match[1];
 }
 
+/**
+ * @description Every rule line of a nested `permission.<key>:` pattern map, in file order.
+ * Asserts the key is a map (not a flat scalar) so a blanket grant can never satisfy it.
+ */
+function permissionRules(fm, key) {
+  const block = fm.match(new RegExp(`^ {2}${key}:\\r?\\n((?: {4}.+\\r?\\n?)+)`, "m"));
+  assert.ok(block, `permission.${key} must be a scoped pattern map, never a flat scalar`);
+  return block[1]
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony", () => {
   const body = read("plan.md");
   const fm = frontmatter(body);
@@ -42,14 +55,30 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   assert.match(fm, /^mode: primary$/m);
   assert.match(fm, /^model: openai\/gpt-5\.6-terra$/m);
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["edit", "bash", "external_directory", "classify", "mark", "verify", "ceremony-next"]) {
+  for (const permission of ["bash", "external_directory", "classify", "mark", "verify", "ceremony-next"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   for (const permission of ["webfetch", "websearch"]) {
     assert.match(fm, new RegExp(`^  ${permission}: allow$`, "m"), `${permission} must be allowed`);
   }
-  assert.match(fm, /task:\n    "\*": deny\n    "discussion-adversary": allow/);
-  assert.match(fm, /skill:\n    "\*": deny\n    "brainstorming": allow/);
+  // Write carve-out: the ONLY allowed edit target is the grill PRD artifact.
+  // A flat `edit: allow` — or any extra allowed path — must fail these assertions.
+  assert.doesNotMatch(fm, /^ {2}edit: *(allow|ask)$/m, "edit must never be a flat allow/ask");
+  assert.deepEqual(
+    permissionRules(fm, "edit"),
+    ['"*": deny', '"docs/prd/*.md": allow'],
+    "edit must deny by default and allow ONLY docs/prd/*.md (the grill PRD artifact)",
+  );
+  assert.deepEqual(
+    permissionRules(fm, "task"),
+    ['"*": deny', '"discussion-adversary": allow'],
+    "task must deny by default and allow ONLY discussion-adversary",
+  );
+  assert.deepEqual(
+    permissionRules(fm, "skill"),
+    ['"*": deny', '"brainstorming": allow', '"grill": allow'],
+    "skill must deny by default and allow ONLY brainstorming and grill",
+  );
   assert.match(fm, /^  "mv_\*": allow$/m);
   assert.match(fm, /^  "mp_\*": allow$/m);
   assert.match(fm, /read:\n    "\*": allow[\s\S]*"\*\*\/\.env\*": deny/);
@@ -67,6 +96,16 @@ test("plan lane emits an in-conversation Build Spec and hands execution to build
   assert.match(body, /switch preserves this session context/i);
   assert.match(body, /Troque para build com Tab/);
   assert.match(body, /Never write a spec or decision ledger to disk/);
+});
+
+test("plan lane documents its single write carve-out without weakening read-only identity", () => {
+  const body = read("plan.md");
+
+  assert.match(body, /`docs\/prd\/<slug>\.md`/, "the PRD artifact path must be explicit");
+  assert.match(body, /ONLY permitted write/, "the carve-out must be stated as the sole write");
+  assert.match(body, /`grill`/, "the carve-out must be bound to the grill skill");
+  assert.match(body, /`bash` stays denied/, "the carve-out must not imply shell access");
+  assert.match(body, /Never run shell commands, mutate git/);
 });
 
 test("discussion adversary is a hidden read-only subagent with no delegation", () => {

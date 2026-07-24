@@ -36,6 +36,7 @@ This is the exhaustive reference. Implementation contracts live in `../0x-*.md`.
 |---|---|---|---|
 | triaging-requests | BOTH | 1 | |
 | brainstorming | BOTH | 1 | |
+| grill | BOTH | 1 | pre-implementation PRD interview; local-only, refuses headless; writes docs/prd/<slug>.md; OC copy runs inside `plan` |
 | orchestrating-delivery | BOTH | 1 | |
 | creating-plans | CC (+ schema shared) | 1 | OC inline ok |
 | recording-findings | BOTH | 1 | |
