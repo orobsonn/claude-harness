@@ -130,8 +130,8 @@ Any match in plan `scope_paths` forces FULL mode.
 |---|---|
 | build | `openai/gpt-5.6-terra` |
 | planner | `openai/gpt-5.6-sol` |
-| plan-reviewer | required family 1 `openai/gpt-5.6-sol` + optional family 2 `ollama-cloud/kimi-k2.7-code` |
-| adversary | required family 1 `openai/gpt-5.6-sol` + optional family 2 `ollama-cloud/kimi-k2.7-code` |
+| plan-reviewer | required family 1 `openai/gpt-5.6-sol` + optional family 2 `xai/grok-4.5` |
+| adversary | required family 1 `openai/gpt-5.6-sol` + optional family 2 `xai/grok-4.5` |
 | compliance | `openai/gpt-5.6-terra` |
 | security | `openai/gpt-5.6-sol` |
 | executor/sniper low | `ollama-cloud/gemma4:31b` |

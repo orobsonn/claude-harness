@@ -234,7 +234,7 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 **Regras duras (não são “dica”):**
 
 - Dual exige **providers diferentes** (não existe preset “tudo Grok”).  
-- Aplicar Grok no **source** do monorepo do harness exige flag explícita (CI bloqueia).  
+- Aplicar Grok num slot obrigatório do **source** do monorepo do harness exige flag explícita (CI bloqueia). O segundo par de olhos (family-2) já é Grok por default.  
 - Preferir aplicar no **projeto** (`.opencode/`).
 
 Engine determinístico:  

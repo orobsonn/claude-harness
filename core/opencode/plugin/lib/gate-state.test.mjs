@@ -20,7 +20,7 @@ import {
 } from "./gate-state.mjs";
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
 import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
-import { decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
+import { LOOP_THRESHOLDS, decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
 import { bareRole, isDeliveryRole, isExecutorRole, isSniperRole } from "./roles.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
@@ -483,13 +483,19 @@ test("t5-loop-thresh: after configured warn threshold emits warn; after deny thr
   const wAdv = decideLoopGuard({ subagentType: "adversary", count: 2 });
   assert.equal(wAdv.decision, "warn");
 
-  // deny at 4
-  const d = decideLoopGuard({ subagentType: "plan-reviewer", count: 4 });
+  // deny at each role's configured budget (plan-review and adversary are budgeted separately)
+  const d = decideLoopGuard({ subagentType: "plan-reviewer", count: LOOP_THRESHOLDS.plan_review.deny });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /\[loop-guard\].*deny/i);
   assert.throws(() => throwIfLoopDenied(d), /\[loop-guard\]/);
 
-  const dAdv = decideLoopGuard({ subagentType: "adversary", count: 4 });
+  // one round below the budget is still allowed to run
+  assert.notEqual(
+    decideLoopGuard({ subagentType: "plan-reviewer", count: LOOP_THRESHOLDS.plan_review.deny - 1 }).decision,
+    "deny",
+  );
+
+  const dAdv = decideLoopGuard({ subagentType: "adversary", count: LOOP_THRESHOLDS.adversary.deny });
   assert.equal(dAdv.decision, "deny");
 
   // below warn

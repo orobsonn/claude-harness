@@ -17,7 +17,7 @@
           "countsLoop": true
         },
         "family-2": {
-          "model": "ollama-cloud/kimi-k2.7-code",
+          "model": "xai/grok-4.5",
           "primary": false,
           "optional": true,
           "countsLoop": false
@@ -33,7 +33,7 @@
           "countsLoop": true
         },
         "family-2": {
-          "model": "ollama-cloud/kimi-k2.7-code",
+          "model": "xai/grok-4.5",
           "primary": false,
           "optional": true,
           "countsLoop": false
@@ -106,6 +106,9 @@
       "supportsReasoningEffort": true
     },
     "ollama-cloud/gemma4:31b": {
+      "supportsReasoningEffort": false
+    },
+    "xai/grok-4.5": {
       "supportsReasoningEffort": false
     },
     "ollama-cloud/kimi-k2.7-code": {

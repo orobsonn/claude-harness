@@ -11,17 +11,38 @@ import { seedOpencodeRootConfig } from "../vps/cron-a-dispatch.mjs";
 const ocRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(ocRoot, "../..");
 
-function activeJsonModels(value, models = []) {
+/**
+ * The xAI/Grok ban covers every slot the harness REQUIRES: family-1 eyes, support eyes, hands,
+ * build/planner. The optional `family-2` cross-family eye is exempt — it is fail-open (an
+ * unauthenticated provider degrades the checkpoint to primary_only instead of breaking it), and a
+ * second family that shares the first one's provider is worthless as an independent judgment.
+ */
+function activeJsonModels(value, models = [], path = "") {
   if (Array.isArray(value)) {
-    for (const item of value) activeJsonModels(item, models);
+    for (const item of value) activeJsonModels(item, models, path);
     return models;
   }
   if (value == null || typeof value !== "object") return models;
   for (const [key, nested] of Object.entries(value)) {
-    if ((key === "model" || key === "small_model") && typeof nested === "string") models.push(nested);
-    activeJsonModels(nested, models);
+    if ((key === "model" || key === "small_model") && typeof nested === "string") {
+      models.push({ model: nested, path });
+    }
+    activeJsonModels(nested, models, `${path}/${key}`);
   }
   return models;
+}
+
+/** Compatibility aliases that ARE the family-2 eye under a legacy filename. */
+const SECOND_FAMILY_ALIASES = new Set(["adversary-openai.md", "plan-reviewer-openai.md"]);
+
+/** @description Model slugs in slots where xAI/Grok is banned (everything but the optional family-2 eye). */
+function requiredSlotModels(entries) {
+  return entries
+    .filter((entry) => {
+      if (entry.path.includes("family-2")) return false;
+      return !SECOND_FAMILY_ALIASES.has(entry.path.split("/").pop());
+    })
+    .map((entry) => entry.model);
 }
 
 test("active runtime model fields contain no xAI or Grok model", () => {
@@ -34,10 +55,24 @@ test("active runtime model fields contain no xAI or Grok model", () => {
   const active = jsonPaths.flatMap((path) => activeJsonModels(JSON.parse(readFileSync(path, "utf8"))));
   for (const file of readdirSync(join(ocRoot, "agents")).filter((name) => name.endsWith(".md"))) {
     const match = readFileSync(join(ocRoot, "agents", file), "utf8").match(/^model:\s*(\S+)$/m);
-    if (match) active.push(match[1]);
+    if (match) active.push({ model: match[1], path: `agents/${file}` });
   }
   assert.ok(active.length > 0);
-  assert.deepEqual(active.filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
+  assert.deepEqual(requiredSlotModels(active).filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
+});
+
+test("the optional family-2 cross-family eye is the only slot allowed to be xAI/Grok", () => {
+  const routing = JSON.parse(readFileSync(join(ocRoot, "harness.routing.json"), "utf8"));
+  for (const role of routing.constraints.crossFamilyRoles) {
+    const families = routing.roles[role].families;
+    assert.equal(families["family-2"].model, "xai/grok-4.5", `${role} family-2 must be the Grok eye`);
+    assert.equal(families["family-2"].optional, true, `${role} family-2 must stay fail-open`);
+    assert.notEqual(
+      families["family-1"].model.split("/")[0],
+      families["family-2"].model.split("/")[0],
+      `${role} families must stay on different providers`,
+    );
+  }
 });
 
 test("generated sidecar, vendored runtime, and VPS output expose only approved active models", () => {
@@ -69,10 +104,10 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
       assert.equal(existsSync(agentsDir), true, `missing generated agents ${agentsDir}`);
       for (const file of readdirSync(agentsDir).filter((name) => name.endsWith(".md"))) {
         const match = readFileSync(join(agentsDir, file), "utf8").match(/^model:\s*(\S+)$/m);
-        if (match) active.push(match[1]);
+        if (match) active.push({ model: match[1], path: `agents/${file}` });
       }
     }
-    assert.deepEqual(active.filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
+    assert.deepEqual(requiredSlotModels(active).filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
 
     // OC auto-globs `.opencode/plugin/*.{ts,js}`, so vendoring strips harness paths from
     // plugin[] (#402 — listing them too registered every hook factory twice). Delivery is

@@ -16,7 +16,7 @@ import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
 
 export const LOOP_THRESHOLDS = Object.freeze({
-  plan_review: Object.freeze({ warn: 2, deny: 4 }),
+  plan_review: Object.freeze({ warn: 2, deny: 5 }),
   adversary: Object.freeze({ warn: 2, deny: 4 }),
   /** Consecutive primary (family-1) failure streak — same K as all-agent retry. */
   primary_failure_streak: Object.freeze({ deny: AGENT_RETRY_K }),

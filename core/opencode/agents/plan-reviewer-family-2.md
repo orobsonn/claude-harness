@@ -1,7 +1,7 @@
 ---
 description: Optional family-2 plan-reviewer eye for cross-family engineering audit. Read-only.
 mode: subagent
-model: ollama-cloud/kimi-k2.7-code
+model: xai/grok-4.5
 temperature: 0.1
 permission:
   classify: deny

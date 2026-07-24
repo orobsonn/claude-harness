@@ -126,6 +126,7 @@ const CANONICAL_MODELS = [
   "ollama-cloud/gemma4:31b",
   "ollama-cloud/glm-5.2",
   "ollama-cloud/kimi-k2.7-code",
+  "xai/grok-4.5",
 ];
 
 test("apply rejects a model missing from the binary catalog (before writing)", async () => {
