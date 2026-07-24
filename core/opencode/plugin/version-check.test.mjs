@@ -134,3 +134,38 @@ test("resolveProjectRoot prefers a root worktree over a nested directory", () =>
   )
   assert.equal(resolveProjectRoot("/project", undefined), "/project")
 })
+
+test("resolveProjectRoot discards a filesystem-root worktree from a non-git directory", () => {
+  assert.equal(resolveProjectRoot("/project", "/"), "/project")
+  assert.equal(resolveProjectRoot({ directory: "/project/nested" }, "/"), "/project/nested")
+  assert.equal(resolveProjectRoot(undefined, "/"), process.cwd())
+  assert.equal(resolveProjectRoot("/", "/"), process.cwd())
+})
+
+test("version-check never blocks the bootstrap when the TUI never answers", async () => {
+  const warnings = []
+  let settled = false
+  const pending = createVersionCheck(
+    {
+      directory: "/project",
+      client: {
+        tui: {
+          showToast: () => new Promise(() => {}),
+        },
+      },
+    },
+    {
+      checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
+      agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
+      warn: (message) => warnings.push(message),
+      toastTimeoutMs: 20,
+    },
+  ).then((hooks) => {
+    settled = true
+    return hooks
+  })
+
+  assert.deepEqual(await pending, {})
+  assert.equal(settled, true)
+  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
+})

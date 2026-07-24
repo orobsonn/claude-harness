@@ -9,23 +9,54 @@ type VersionCheckDeps = {
   checkAgentCatalogHealth?: (projectRoot: string) => CatalogHealth
   agentCatalogAdvisoryMessage?: (missing: string[]) => string
   warn?: (message: string) => void
+  toastTimeoutMs?: number
+}
+
+/** Bootstrap budget for the advisory toast — the TUI may never answer. */
+const TOAST_TIMEOUT_MS = 2000
+
+/**
+ * @description Usable project root candidate. OpenCode reports worktree "/" outside a git
+ * repository, which would resolve the catalog against the filesystem root.
+ */
+function isUsableRoot(candidate: unknown): candidate is string {
+  return typeof candidate === "string" && candidate.length > 0 && candidate !== "/"
 }
 
 /**
  * @description Resolve project root — never empty.
  */
 export function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
-  if (typeof worktree === "string" && worktree.length > 0) return worktree
-  if (typeof directory === "string" && directory.length > 0) return directory
+  if (isUsableRoot(worktree)) return worktree
+  if (isUsableRoot(directory)) return directory
   if (
     directory != null &&
     typeof directory === "object" &&
     !Array.isArray(directory)
   ) {
     const nested = (directory as { directory?: unknown }).directory
-    if (typeof nested === "string" && nested.length > 0) return nested
+    if (isUsableRoot(nested)) return nested
   }
   return process.cwd()
+}
+
+/**
+ * @description Reject once the budget elapses so a silent TUI cannot stall the bootstrap.
+ * @param value toast delivery result — may be a promise that never settles
+ * @param timeoutMs budget in milliseconds
+ */
+async function withToastTimeout<T>(value: T | Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(value),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("TUI toast timed out")), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 /**
@@ -47,13 +78,16 @@ export async function createVersionCheck(
     message = agentCatalogAdvisoryMessage(result.missing)
     if (!message) return {}
     if (typeof client?.tui?.showToast !== "function") throw new Error("TUI toast unavailable")
-    const toastResult = await client.tui.showToast({
-      body: {
-        title: "Harness",
-        message,
-        variant: "warning",
-      },
-    })
+    const toastResult = await withToastTimeout(
+      client.tui.showToast({
+        body: {
+          title: "Harness",
+          message,
+          variant: "warning",
+        },
+      }),
+      deps.toastTimeoutMs ?? TOAST_TIMEOUT_MS,
+    )
     if (toastResult && typeof toastResult === "object" && (toastResult as { error?: unknown }).error) {
       throw new Error("TUI toast unavailable")
     }
