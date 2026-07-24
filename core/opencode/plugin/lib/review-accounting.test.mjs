@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  LOOP_THRESHOLDS,
   applyReviewOutcome,
   classifyReviewBoundaryError,
   decideReviewCapBeforeWriting,
@@ -412,16 +413,17 @@ test("integrated primary completion produces a host-valid primary_only accepted 
 });
 
 test("primary reservations consume remaining slots atomically without incrementing useful count", () => {
-  const base = state({ plan_review_count: 3 });
+  const lastSlot = LOOP_THRESHOLDS.plan_review.deny - 1;
+  const base = state({ plan_review_count: lastSlot });
   const winner = reserveReviewAttempt(base, input({ callId: "winner" }));
   assert.equal(winner.ok, true);
-  assert.equal(winner.state.plan_review_count, 3);
+  assert.equal(winner.state.plan_review_count, lastSlot);
   const loser = reserveReviewAttempt(winner.state, input({ callId: "loser" }));
   assert.equal(loser.ok, false);
   assert.match(loser.reason, /no remaining.*slot/);
 
   const failed = applyReviewOutcome(winner.state, input({ callId: "winner", failureClass: "timeout" }));
-  assert.equal(failed.state.plan_review_count, 3);
+  assert.equal(failed.state.plan_review_count, lastSlot);
   assert.equal(reserveReviewAttempt(failed.state, input({ callId: "replacement" })).ok, true);
 });
 
@@ -512,7 +514,7 @@ test("NOT_IN_SCHEMA enums and ref fields are malformed for both canonical contra
 
 test("cap cannot reopen from a new report hash; explicit newer generation plus new snapshot opens a new epoch", () => {
   let capped = state();
-  for (let round = 1; round <= 4; round += 1) {
+  for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
     capped = complete(capped, { callId: `cap-${round}`, response: report("REVISE", [finding]) }).state;
   }
   assert.equal(capped.review_status, "review_cap_reached");
@@ -539,8 +541,14 @@ test("cap cannot reopen from a new report hash; explicit newer generation plus n
     assert.equal(reopened.ok, true);
     assert.equal(reopened.state.review_epoch, 2);
     assert.equal(reopened.state.review_outcomes.length, 0);
-    assert.equal(reopened.state.review_epoch_history[0].outcomes.length, 4);
-    assert.equal(applyReviewOutcome(reopened.state, input({ callId: "cap-4", response: report() })).accepted, false);
+    assert.equal(reopened.state.review_epoch_history[0].outcomes.length, LOOP_THRESHOLDS.plan_review.deny);
+    assert.equal(
+      applyReviewOutcome(
+        reopened.state,
+        input({ callId: `cap-${LOOP_THRESHOLDS.plan_review.deny}`, response: report() }),
+      ).accepted,
+      false,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -650,7 +658,7 @@ test("concurrent before-hooks compete for the final primary reservation slot", a
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(state({ plan_review_count: 3 })));
+    fs.writeFileSync(file, JSON.stringify(state({ plan_review_count: LOOP_THRESHOLDS.plan_review.deny - 1 })));
     const hooks = await createLoopGuardHooks(root);
     const dispatch = (callID) => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION, callID },
@@ -660,8 +668,41 @@ test("concurrent before-hooks compete for the final primary reservation slot", a
     assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
     assert.equal(results.filter((result) => result.status === "rejected").length, 1);
     const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.equal(persisted.plan_review_count, 3);
+    assert.equal(persisted.plan_review_count, LOOP_THRESHOLDS.plan_review.deny - 1);
     assert.equal(persisted.review_inflight.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a persisted REVISE verdict carries the continuation nudge back to the orchestrator", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "revise-nudge-wiring-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state()));
+    const hooks = await createLoopGuardHooks(root);
+    const args = {
+      subagent_type: "plan-reviewer-family-1",
+      feature_id: FEATURE,
+      task_id: "task-1",
+      phase: "plan",
+    };
+    const hookInput = { tool: "task", sessionID: SESSION, callID: "nudge-1" };
+    await hooks["tool.execute.before"](hookInput, { args });
+
+    const revise = { args, output: report("REVISE", [finding]), metadata: {} };
+    await hooks["tool.execute.after"](hookInput, revise);
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).plan_verdict, "REVISE");
+    assert.match(revise.metadata.revise_nudge, /re-dispatch the plan-reviewer for round 2/);
+
+    // APPROVE closes the loop — no nudge may survive into execution.
+    const approveInput = { tool: "task", sessionID: SESSION, callID: "nudge-2" };
+    await hooks["tool.execute.before"](approveInput, { args });
+    const approve = { args, output: report("APPROVE"), metadata: {} };
+    await hooks["tool.execute.after"](approveInput, approve);
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).plan_verdict, "APPROVE");
+    assert.equal(approve.metadata.revise_nudge, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

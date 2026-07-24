@@ -99,7 +99,7 @@ Highlight: dual exige **dois providers**.
 
 **Q1 — Onde aplicar?**
 - Projeto vendored (`.opencode/`) — recomendado pra teste
-- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em surfaces committed)
+- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em surfaces committed, **exceto** o olho opcional family-2, que é Grok por default)
 
 **Q2 — Preset ou custom?**
 
@@ -146,7 +146,7 @@ On `ok:true` → list `changed` + `warnings`.
 - Same-provider dual → reject  
 - Weak **support** eye (compliance/security/harvester/shipper não openai/xai) → reject unless the operator confirms → pass `confirm_weak_eyes: true`  
 - Weak **judgment** eye (family-1 de plan-reviewer/adversary não openai/xai) → reject unless the operator confirms → pass `confirm_weak_judgment_eyes: true` (degrades the harness safety net; surface the warning first)  
-- xAI/Grok no **source** `core/opencode` → reject unless `force_core_grok: true`  
+- xAI/Grok num slot **obrigatório** do **source** `core/opencode` (family-1, hands, support, build/planner) → reject unless `force_core_grok: true`. O olho opcional family-2 é exempt — é o default shippado.  
 - `targetRoot` = cwd sempre; `opencode.json` só sob cwd/ocRoot (nunca `../`)  
 - AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 

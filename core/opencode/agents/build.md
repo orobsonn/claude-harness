@@ -38,8 +38,8 @@ CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: fal
 
 | Post | Primary eye | Second-family eye |
 |---|---|---|
-| plan-reviewer | `plan-reviewer-family-1` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` (`ollama-cloud/kimi-k2.7-code`) |
-| adversary | `adversary-family-1` (`openai/gpt-5.6-sol`) | `adversary-family-2` (`ollama-cloud/kimi-k2.7-code`) |
+| plan-reviewer | `plan-reviewer-family-1` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` (`xai/grok-4.5`) |
+| adversary | `adversary-family-1` (`openai/gpt-5.6-sol`) | `adversary-family-2` (`xai/grok-4.5`) |
 
 **Runtime wiring:** pure module `skills/orchestrating-delivery/dual-runtime.mjs` (`driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `isFullDualCoverage`). Shared policy B via `core/shared/lib/merge-findings.mjs` + `merge-verdicts.mjs`.
 
@@ -145,7 +145,7 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
-- [ ] **plan-reviewer dual** — `plan-reviewer-family-1` ran and optional `plan-reviewer-family-2` was attempted; merged verdict is `APPROVE` before execution; blocking `REVISE` escalated in product-language if unresolved after 2 loops.
+- [ ] **plan-reviewer dual** — `plan-reviewer-family-1` ran and optional `plan-reviewer-family-2` was attempted; merged verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final dual review, both modes).
 - [ ] **adversary dual** — `adversary-family-1` and optional `adversary-family-2` entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.

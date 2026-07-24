@@ -20,6 +20,7 @@ export async function createLoopGuardHooks(
     throwIfLoopDenied,
     loopCounterKey,
   } = await import("./lib/loop-decide.mjs")
+  const { decideReviseNudge } = await import("./lib/revise-nudge.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
@@ -163,6 +164,18 @@ export async function createLoopGuardHooks(
       return outcome.state
     })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
+    // Deterministic continuation nudge: a REVISE verdict blocks every writing hand, so the loop
+    // only advances if the orchestrator re-dispatches the plan-reviewer. Injected on the metadata
+    // channel (the one OC actually delivers) strictly AFTER the verdict is persisted.
+    try {
+      const nudge = decideReviseNudge({ state: result.state, subagentType: sub })
+      if (nudge.action === "inject" && output != null && typeof output === "object") {
+        if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
+        output.metadata.revise_nudge = nudge.context
+      }
+    } catch {
+      /* fail-open — a nudge never blocks review accounting */
+    }
     // Fail-open: merge artifact is audit trail; gate dual_status / plan_verdict already sealed.
     if (mergeIntent) {
       try {

@@ -1,7 +1,7 @@
 ---
 description: Compatibility alias for plan-reviewer-family-2. Remove only after the two-release compatibility window.
 mode: subagent
-model: ollama-cloud/kimi-k2.7-code
+model: xai/grok-4.5
 temperature: 0.1
 permission:
   classify: deny

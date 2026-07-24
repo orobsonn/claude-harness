@@ -140,6 +140,9 @@ test("t6-agents: required agent files exist including test-author.md", () => {
   );
 });
 
+/** The second-family eye is read from routing, not restated — the routing file is the single source. */
+const SECOND_FAMILY_EYE = JSON.parse(read(ROUTING_PATH)).roles["plan-reviewer"].families["family-2"].model;
+
 test("t6-dual-files: canonical family files and compatibility aliases exist", () => {
   assert.ok(existsSync(join(AGENTS_DIR, "plan-reviewer-openai.md")));
   assert.ok(existsSync(join(AGENTS_DIR, "adversary-openai.md")));
@@ -148,9 +151,9 @@ test("t6-dual-files: canonical family files and compatibility aliases exist", ()
   const ad = frontmatter(read(join(AGENTS_DIR, "adversary-family-1.md")));
   const ado = frontmatter(read(join(AGENTS_DIR, "adversary-family-2.md")));
   assert.equal(fmField(pr, "model"), "openai/gpt-5.6-sol");
-  assert.equal(fmField(pro, "model"), "ollama-cloud/kimi-k2.7-code");
+  assert.equal(fmField(pro, "model"), SECOND_FAMILY_EYE);
   assert.equal(fmField(ad, "model"), "openai/gpt-5.6-sol");
-  assert.equal(fmField(ado, "model"), "ollama-cloud/kimi-k2.7-code");
+  assert.equal(fmField(ado, "model"), SECOND_FAMILY_EYE);
 });
 
 test("t6-build-prose: build.md contains dual-always protocol text", () => {

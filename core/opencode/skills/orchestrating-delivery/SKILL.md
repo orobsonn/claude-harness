@@ -154,7 +154,7 @@ Never use the edit tool.
 
 3. Run the **`validate-plan` tool** on that file — a deterministic **structural** gate. On FAIL, hand its error list to `planner` and re-plan. **Cap 2 loops**, then escalate to the operator in product-language.
 
-4. Dispatch `plan-reviewer-family-1` (read-only) for **engineering soundness**, then attempt `plan-reviewer-family-2` → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Cap 2 revision loops**; if still REVISE, escalate the blocking finding to the operator in product-language.
+4. Dispatch `plan-reviewer-family-1` (read-only) for **engineering soundness**, then attempt `plan-reviewer-family-2` → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Keep looping until APPROVE** — a REVISE verdict hard-blocks every writing hand, so stopping mid-loop strands the run. The budget is enforced by the gate (`plan_review_count`, 5 useful rounds), not by your judgment: the `revise_nudge` on the review's return tells you the round and what remains. Escalate to the operator **only** when that nudge says the budget is exhausted.
 
 5. **DETERMINISTIC sensitive-path override:** compare the plan's `scope_paths` against the allowlist:
    `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).

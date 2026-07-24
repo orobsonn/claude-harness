@@ -288,13 +288,13 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
     "plan-reviewer": {
       families: {
         "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
-        "family-2": { model: "ollama-cloud/kimi-k2.7-code", primary: false, optional: true, countsLoop: false },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
       },
     },
     adversary: {
       families: {
         "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
-        "family-2": { model: "ollama-cloud/kimi-k2.7-code", primary: false, optional: true, countsLoop: false },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
       },
     },
     compliance: { model: "openai/gpt-5.6-terra" },
@@ -348,14 +348,35 @@ function remapOpenAIEyesTo(routing, target) {
   return clone;
 }
 
+/**
+ * @description Deep-clone a routing object, replacing the family-2 eye of every cross-family role.
+ * Used to keep a derived preset dual-valid when its family-1 remap would otherwise collide with
+ * the canonical family-2 provider.
+ * @param {object} routing
+ * @param {string} model  provider/model slug for the secondary eye
+ * @returns {object}
+ */
+function withSecondaryEye(routing, model) {
+  const clone = structuredClone(routing);
+  for (const role of Object.values(clone.roles ?? {})) {
+    const secondary = role?.families?.["family-2"];
+    if (secondary && typeof secondary === "object") secondary.model = model;
+  }
+  return clone;
+}
+
 /** @description Shipped dual-safe presets (all pass validateRouting), derived from the canonical layout. */
 export function listPresets() {
   const openai = withCapabilitiesForModels(structuredClone(CANONICAL_DEFAULT_ROUTING), {
     perProvider: { openai: true },
   });
-  const xai = withCapabilitiesForModels(remapOpenAIEyesTo(CANONICAL_DEFAULT_ROUTING, "xai/grok-4.5"), {
-    perProvider: { xai: true },
-  });
+  // The canonical family-2 eye is xAI, so remapping the family-1 eyes to xAI would collapse both
+  // families onto one provider (validator: "same provider across families"). Push family-2 back to
+  // the Ollama ladder — which is exactly what this preset's label promises.
+  const xai = withCapabilitiesForModels(
+    withSecondaryEye(remapOpenAIEyesTo(CANONICAL_DEFAULT_ROUTING, "xai/grok-4.5"), "ollama-cloud/kimi-k2.7-code"),
+    { perProvider: { xai: true } },
+  );
   return Object.freeze([
     {
       id: "openai-ollama-default",
@@ -606,12 +627,16 @@ export function applyRoutingToDisk(args) {
     const v2 = validateRouting(routing);
     if (!v2.ok) return { ok: false, reason: `validateRouting after caps: ${v2.reason}` };
 
-    const models = collectRoutingModels(routing);
+    // The optional family-2 eye is exempt — it is the shipped default there, and CI
+    // (model-routing.test) bans xAI/Grok only in the slots the harness requires.
+    const requiredSlotRouting = withSecondaryEye(routing, "");
+    const models = collectRoutingModels(requiredSlotRouting).filter(Boolean);
     if (mode === "source" && models.some(isXaiOrGrokModel) && args.forceCoreGrok !== true) {
       return {
         ok: false,
         reason:
-          "xAI/Grok models blocked on harness source (CI model-routing.test). Apply to project .opencode/ or pass forceCoreGrok:true.",
+          "xAI/Grok models blocked on harness source outside the optional family-2 eye (CI model-routing.test). " +
+          "Apply to project .opencode/ or pass forceCoreGrok:true.",
       };
     }
 
