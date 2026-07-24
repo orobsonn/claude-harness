@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.1](https://github.com/orobsonn/claude-harness/compare/v0.49.0...v0.49.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **oc:** version-check não trava mais o bootstrap da sessão ([#442](https://github.com/orobsonn/claude-harness/issues/442)) ([0e5f7e1](https://github.com/orobsonn/claude-harness/commit/0e5f7e14f10e7a245d51d73330f5ca28d43a6c95))
+
 ## [0.49.0](https://github.com/orobsonn/claude-harness/compare/v0.48.2...v0.49.0) (2026-07-24)
 
 
