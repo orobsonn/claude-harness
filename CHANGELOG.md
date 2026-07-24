@@ -5,6 +5,15 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.2](https://github.com/orobsonn/claude-harness/compare/v0.49.1...v0.49.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* **oc:** lane de lifecycle vira agente travado, não prosa ([#447](https://github.com/orobsonn/claude-harness/issues/447)) ([90baa26](https://github.com/orobsonn/claude-harness/commit/90baa2648a6555baefc90076eeaff73c3527e774)), closes [#444](https://github.com/orobsonn/claude-harness/issues/444)
+* **oc:** plugin passa a ser o autor do plano canônico ([#449](https://github.com/orobsonn/claude-harness/issues/449)) ([d8d7f07](https://github.com/orobsonn/claude-harness/commit/d8d7f076c1d182623aa006a92f8ed5da8cf68b45))
+* **oc:** prefixo oc- no name das skills resolve colisão de catálogo com .claude ([#445](https://github.com/orobsonn/claude-harness/issues/445)) ([#450](https://github.com/orobsonn/claude-harness/issues/450)) ([7ab096a](https://github.com/orobsonn/claude-harness/commit/7ab096a8914ee62e1a9e49fc4bad9f632bd5b531))
+
 ## [0.49.1](https://github.com/orobsonn/claude-harness/compare/v0.49.0...v0.49.1) (2026-07-24)
 
 
