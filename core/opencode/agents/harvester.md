@@ -49,7 +49,18 @@ Keep ONLY insights that will still be true and useful on a FUTURE unrelated run.
 - **Global convention** (would change how the harness itself behaves across all projects) → append a proposal to **kaizen.md**. NEVER auto-apply — a human reviews kaizen proposals. Check kaizen.md for precedent first; do not duplicate an existing proposal.
 - **Local docs** (README/CHANGELOG) → update only if the run materially changed observable behavior or setup.
 
-### 5. Clean up
+### 5. Maintain the domain glossary — CONTEXT.md (ADD-ONLY)
+
+`CONTEXT.md` at the **project root** (beside `MEMORY.md`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `surveying-codebase`, read verbatim by the agents that plan or write (`plan`, `build`'s executor) and by the pre-implementation skills. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
+
+Your mandate is **ADD-ONLY**:
+
+- You may **ADD** a term — and only one that already appears in the **merged code of the run you just harvested**. No speculative vocabulary.
+- You may **NEVER** redefine, rename or remove an existing term. Only the operator can sanction a meaning change: the glossary is the shared vocabulary, and a definition silently rewritten at 3am by an autonomous run poisons every downstream agent.
+- If you believe an existing term is wrong or stale, do **not** edit it — append the proposal to **kaizen.md** (same convention as step 4; a human drains it) and leave the entry untouched.
+- Skip generic programming vocabulary; a term that would mean the same in any project does not belong. Never write secrets/PII — `CONTEXT.md` is a **committed** artifact and must ride the run's PR. Do **not** reason by analogy with `MEMORY.md`: in this runtime `MEMORY.md` is deliberately gitignored (local/private), so nothing rides "alongside" it. The `shipper` stages `CONTEXT.md` explicitly — if the glossary changed and the shipper did not stage it, say so in your report rather than committing it yourself.
+
+### 6. Clean up
 
 - Delete the ephemeral buffers — `findings.md` (project root) and `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` — they are transient inputs, now consumed. Git is the durable audit trail; do not leave run scratch in the tree.
 - Verify no temporary scratch files from the run remain.
@@ -65,6 +76,10 @@ Keep ONLY insights that will still be true and useful on a FUTURE unrelated run.
 - [MEMORY.md] <durable project pattern>
 - [<folder>/AGENTS.md] <law-of-one-folder insight>
 - [kaizen.md] <proposed global convention — NOT applied>
+
+### Glossary (CONTEXT.md)
+- added: <new term(s) seen in the merged code, or "no change">
+- meaning changes proposed to the operator: <kaizen.md title(s), or "none">
 
 ### Discarded (failed durability test)
 - <run-local noise, briefly>
@@ -87,4 +102,5 @@ Keep ONLY insights that will still be true and useful on a FUTURE unrelated run.
 - Durable learnings only — apply the durability test ruthlessly; ephemeral details die with the buffers.
 - kaizen.md proposals are NEVER auto-applied — a human reviews them. Check for precedent before appending.
 - Routing destinations are NATIVE: MEMORY.md, nested AGENTS.md/CLAUDE.md, kaizen.md. No `~/.claude` paths, no Claude skills.
+- `CONTEXT.md` is ADD-ONLY: never redefine, rename or remove a term. Meaning changes are the operator's call, proposed via kaizen.md.
 - Be concise and actionable. Prioritize learnings that will help future runs.
