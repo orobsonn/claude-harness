@@ -66,7 +66,7 @@ function ok(label) {
   process.stdout.write(`${green("✓")} ${label}\n`);
 }
 
-const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks"];
+const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks", "docs"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 
 /** OpenCode framework-owned dirs (overwritten on every vendor). */

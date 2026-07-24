@@ -43,7 +43,32 @@ Trocar de agent **não** libera implementação sozinha.
 
 ---
 
-## 3. Checklist do início de sessão
+## 3. A fase pré-implementação — da ideia à issue
+
+Antes de qualquer entrega existe uma fase que é **sua**: transformar ideia em pedido escrito.
+
+```
+ideia → grill (entrevista, no plan) → PRD em docs/prd/<slug>.md → creating-issues → motor
+```
+
+| Passo | O que acontece |
+|---|---|
+| **`grill`** | Te entrevista **uma pergunta por vez**, sempre em consequência de produto, até a ideia virar um **PRD** escrito. Só **local** (recusa em sessão automática) |
+| **PRD** | `docs/prd/<slug>.md`. Separa o que **você decidiu** do que o **modelo deduziu** (`## Suposições do modelo`) — dedução continua atacável, não vira lei |
+| **`creating-issues`** | Cada **requisito** do PRD vira **critério de aceite** (`#ac-N.M`) da issue — e critério de aceite vira o teste travado do motor |
+| **motor** | Só entra aqui o que já está escrito e verificável |
+
+Três coisas que mudam o resultado:
+
+- **Requisito vago = motor mirando errado.** O requisito tem que afirmar um efeito observável (“retorna X”, “grava Y”, “mostra Z”), nunca “funciona bem”.
+- **`## Em aberto` segura a fatia dependente.** Pergunta sem resposta é decisão que o motor autônomo inventaria às 3h da manhã — a fatia que depende dela **fica fora do lote** de issues e volta no próximo `grill`.
+- **O PRD não é decisão travada.** Ele entra no pipeline como texto de issue: planner, `plan-reviewer-*` e `adversary-*` podem contestar tudo.
+
+**`proposing-deepening`** é a variante para projeto legado: em vez de ideia nova, varre o código e propõe reforma (ver §8).
+
+---
+
+## 4. Checklist do início de sessão
 
 1. Projeto tem harness? → `.opencode/.harness-version` existe.  
    - Não tem → skill **`updating-harness`** (install).  
@@ -55,7 +80,7 @@ Trocar de agent **não** libera implementação sozinha.
 
 ---
 
-## 4. Como o trabalho é classificado
+## 5. Como o trabalho é classificado
 
 | Modo | Quando (produto) | O que roda |
 |---|---|---|
@@ -70,7 +95,7 @@ Trocar de agent **não** libera implementação sozinha.
 
 ---
 
-## 5. Fluxo de entrega (LIGHT / FULL)
+## 6. Fluxo de entrega (LIGHT / FULL)
 
 ```
 triaging-requests
@@ -98,9 +123,13 @@ triaging-requests
 **Interativo:** você aprova spec/plano/demo.  
 **Headless** (cron / “rode sozinho”): multi-agente no lugar das perguntas; **PR draft only**.
 
+**No harvest, o vocabulário do projeto é atualizado.** O `harvester` mantém o `CONTEXT.md` da raiz — o glossário do domínio compartilhado entre você, o código e os agentes. É **durável e committado** (vai no PR da entrega), e a manutenção é **só-adição**: ele acrescenta termo que já apareceu no código merjado e **nunca** redefine nem remove um termo existente — mudança de significado vira proposta no `kaizen.md` pra você decidir. Quem semeia o arquivo pela primeira vez é o `surveying-codebase`; planner, executor e as skills de pré-implementação leem os termos **literalmente**.
+
+**Como o motor escreve o código.** O harness carrega regras de **profundidade de módulo** (“módulo fundo, interface pequena”) e de **superfície de teste** (“teste na porta, não na mobília”). O efeito prático pra você: o código sai com pouca coisa exposta e a complexidade escondida atrás disso, e os testes se prendem a essa porta — que é o que permite você revisar a interface e delegar o miolo.
+
 ---
 
-## 6. Papéis (agents) — mapa mental
+## 7. Papéis (agents) — mapa mental
 
 | Em português | Agent no disco | Tipo |
 |---|---|---|
@@ -123,7 +152,7 @@ triaging-requests
 
 ---
 
-## 7. Skills — o que existe e quando chamar
+## 8. Skills — o que existe e quando chamar
 
 O harness **não** carrega todas as skills o tempo todo. O `build` carrega sob demanda.  
 Se você **não pedir**, algumas nunca aparecem (ex.: mudar modelo).
@@ -132,12 +161,17 @@ Se você **não pedir**, algumas nunca aparecem (ex.: mudar modelo).
 
 | Skill | Quando | O que faz |
 |---|---|---|
-| **`grill`** | Ideia grande ainda sem forma, **antes** de qualquer entrega (peça no `plan`) | Te entrevista até virar um PRD em `docs/prd/<slug>.md` e depois vira issue |
-| **`proposing-deepening`** | Projeto que já existe e ficou difícil de mexer (peça no `build`) | Varre o código e traz no máximo 5 candidatos a reforma — não mexe em nada, você escolhe |
+| **`grill`** | Ideia grande ainda sem forma, **antes** de qualquer entrega (peça no `plan`; só local) | Te entrevista até virar um PRD em `docs/prd/<slug>.md` e depois vira issue |
+| **`proposing-deepening`** | Projeto que já existe e ficou difícil de mexer (peça no `plan`; só local) | Varre o código e traz no máximo 5 candidatos a reforma em `docs/architecture/deepening-candidates.md` — não mexe em nada, você escolhe |
 | **`triaging-requests`** | Automática no 1º pedido `build` | Classifica QUICK/LIGHT/FULL |
 | **`brainstorming`** | LIGHT/FULL (e no `plan`) | Spec de produto + hard-gate |
 | **`creating-plans`** | Só dentro do `planner` | Plano JSON |
 | **`orchestrating-delivery`** | LIGHT/FULL após spec | Orquestra o loop inteiro |
+
+Duas notas sobre as duas primeiras (ambas rodam no `plan`, onde o shell é negado — por construção elas **não editam código nem abrem issue**):
+
+- **Reforma é entrega local.** A issue que sai de um candidato do `proposing-deepening` **nunca é `harness:ready`** — reestruturar código que já funciona não merja sozinho às 3h da manhã; você entrega localmente, olhando o resultado.
+- **Nem PRD nem candidato é decisão travada** — os dois entram no motor como texto atacável.
 
 ### Configuração e manutenção (peça explicitamente)
 
@@ -156,7 +190,7 @@ Se você **não pedir**, algumas nunca aparecem (ex.: mudar modelo).
 | **`recording-findings`** | Harvest | Consolida achados em `findings.md` |
 | **`distilling-learnings`** | Harvest | Leva o que é durável pra `MEMORY.md` / AGENTS nested |
 | **`proposing-improvements`** | Harvest | Só **propõe** em `kaizen.md` (nunca aplica sozinho) |
-| **`surveying-codebase`** | Projeto legado sem memória | Cold-start de MEMORY |
+| **`surveying-codebase`** | Projeto legado sem memória | Cold-start de MEMORY **e semeia o `CONTEXT.md`** (glossário do domínio) |
 | **`importing-claude-memory`** | Migrou de Claude Code | One-shot `~/.claude/.../memory` → `MEMORY.md` |
 | **`authoring-rules`** | Nova lei de pasta | Nested AGENTS / regras |
 | **`canonical-critical-classes`** | Interno (adversary/compliance) | Taxonomia de falhas — ammunition, não ação |
@@ -174,7 +208,7 @@ Para routing, o nome canônico é **`configuring-model-routing`**.
 
 ---
 
-## 8. Mudar modelos (detalhe)
+## 9. Mudar modelos (detalhe)
 
 **Skill:** `configuring-model-routing`
 
@@ -198,7 +232,7 @@ Engine determinístico:
 
 ---
 
-## 9. Atualizar o harness no projeto
+## 10. Atualizar o harness no projeto
 
 **Skill:** `updating-harness`  
 Só **interativo** e pedido **explícito** (não mistura com feature).
@@ -218,7 +252,7 @@ npx -y "github:orobsonn/claude-harness#<tag>" init --target opencode
 
 ---
 
-## 10. Paths de runtime (o que é efêmero)
+## 11. Paths de runtime (o que é efêmero)
 
 | Conceito | Path |
 |---|---|
@@ -229,16 +263,20 @@ npx -y "github:orobsonn/claude-harness#<tag>" init --target opencode
 | Prova da mão (hand-record) | `.opencode/plans/.state/hand-records/<feature>/<session>/<task>.json` |
 | Achados da run | `findings.md` na raiz (some no harvest) |
 | Memória durável | `MEMORY.md` |
+| Glossário do domínio (durável, **committado**) | `CONTEXT.md` na raiz |
+| PRD da fase pré-implementação | `docs/prd/<slug>.md` |
+| Candidatos a reforma | `docs/architecture/deepening-candidates.md` |
 | Melhorias do harness (outbox) | `kaizen.md` |
 | Versão vendored | `.opencode/.harness-version` |
 | Routing | `.opencode/harness.routing.json` |
 
 Plans / hand-records / findings são **efêmeros** (apagados no harvest).  
+`CONTEXT.md` **não** é efêmero: é committado e sobe no PR da entrega.  
 Auditoria que fica = **git**.
 
 ---
 
-## 11. Portões (plugins) — o que o operador sente
+## 12. Portões (plugins) — o que o operador sente
 
 Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 
@@ -259,7 +297,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 
 ---
 
-## 12. Interativo vs headless
+## 13. Interativo vs headless
 
 | | Interativo | Headless |
 |---|---|---|
@@ -271,7 +309,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 
 ---
 
-## 13. Ferramentas nativas que o maestro usa
+## 14. Ferramentas nativas que o maestro usa
 
 | Tool | Função |
 |---|---|
@@ -284,7 +322,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 
 ---
 
-## 14. Boas práticas (operador)
+## 15. Boas práticas (operador)
 
 1. **Uma intenção por sessão** quando possível (feature vs “só atualizar harness”).  
 2. **Decisões de produto** no brainstorm — não deixe o modelo escolher sozinho o “o quê”.  
@@ -296,7 +334,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 
 ---
 
-## 15. Onde aprofundar (no projeto vendored)
+## 16. Onde aprofundar (no projeto vendored)
 
 | Arquivo | Conteúdo |
 |---|---|
@@ -312,7 +350,7 @@ No monorepo do harness (desenvolvedores do framework):
 
 ---
 
-## 16. Glossário rápido
+## 17. Glossário rápido
 
 | Termo | Significado |
 |---|---|
@@ -321,6 +359,8 @@ No monorepo do harness (desenvolvedores do framework):
 | **Hand-record** | Arquivo-prova de que a mão terminou (não é prosa) |
 | **Capture-verified** | Carimbo de que a captura real foi conferida pro ship |
 | **Regate** | Re-auditoria obrigatória após correção grave |
+| **CONTEXT.md** | Glossário do domínio na raiz — vocabulário comum entre você, o código e os agentes. Committado; `surveying-codebase` semeia, o `harvester` só **acrescenta** termo (nunca redefine nem remove) |
+| **PRD** | O que sai do `grill`: problema, requisitos verificáveis e o que ficou em aberto |
 | **Harvest** | Colheita de aprendizado + limpeza de buffers da run |
 | **Kaizen** | Outbox de melhoria do **harness** (humano decide) |
 | **Vendor** | Cópia versionada do harness em `.opencode/` |
