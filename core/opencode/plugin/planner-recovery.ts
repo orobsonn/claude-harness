@@ -45,8 +45,19 @@ export async function createPlannerRecoveryHooks(
   const now = deps.now ?? Date.now
   const token = deps.token ?? (() => crypto.randomUUID())
   const { classifyPlannerBoundaryError, classifyPlannerResult } = await import("./lib/planner-result.mjs")
-  const { readPlannerArtifact, semanticPlanHash } = await import("./lib/planner-artifact.mjs")
-  const { claimPlannerAttempt, completePlannerAttempt, failPlannerAttempt } = await import("./lib/planner-state.mjs")
+  const {
+    readPlannerArtifact,
+    reconcilePlannerStateFromDisk,
+    semanticPlanHash,
+    writeCanonicalPlan,
+  } = await import("./lib/planner-artifact.mjs")
+  const {
+    claimPlannerAttempt,
+    completePlannerAttempt,
+    failPlannerAttempt,
+    MAX_PRIMARY_ATTEMPTS,
+  } = await import("./lib/planner-state.mjs")
+  const { dedupeByType, eventForPlanPath, obsAppend } = await import("./lib/obs-emit.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { resolvePlannerFallbackConfig, validProviderModel } = await import("./lib/planner-fallback-config.mjs")
@@ -167,25 +178,86 @@ export async function createPlannerRecoveryHooks(
       }
       const response = output?.output ?? output?.content ?? output?.result ?? output?.tool_output ?? ""
       const classified = classifyPlannerResult(response)
+      const planHash = classified.kind === "usable_plan" ? semanticPlanHash(classified.plan) : undefined
       let accepted = false
+      let unchanged = false
+      let writeError = ""
+      let canonicalPath = ""
       const persisted = withGateStateLock(sp, (previous: Record<string, unknown>) => {
         const active = previous.planner_active_attempt as Record<string, unknown> | undefined
+        const baseline = (active?.baseline_plan ?? {}) as Record<string, unknown>
+        // With the plugin authoring the file, a fresh mtime no longer proves the attempt did work.
+        // What must still hold: a re-dispatch that returns the plan it was asked to revise, verbatim,
+        // has addressed nothing — reject it into the revision loop instead of binding a no-op.
+        unchanged =
+          classified.kind === "usable_plan" &&
+          typeof baseline.semanticHash === "string" &&
+          baseline.semanticHash === planHash
         const transition = completePlannerAttempt(previous, {
           callId,
           token: active?.call_id === callId ? active.token : undefined,
-          resultKind: classified.kind,
-          planHash: classified.kind === "usable_plan" ? semanticPlanHash(classified.plan) : undefined,
-          errors: classified.kind === "invalid_plan" ? classified.errors : undefined,
+          resultKind: unchanged ? "invalid_plan" : classified.kind,
+          planHash: unchanged ? undefined : planHash,
+          errors: unchanged
+            ? ["planner returned the plan unchanged; the requested revision was not applied"]
+            : classified.kind === "invalid_plan"
+              ? classified.errors
+              : undefined,
           now: now(),
         })
         accepted = transition.accepted
-        return transition.state
+        if (!accepted || unchanged || classified.kind !== "usable_plan") return transition.state
+        // The plugin owns the canonical artifact. The returned plan never round-trips through the
+        // orchestrator's output tokens, so it cannot be paraphrased, truncated, or silently dropped
+        // — the failure mode that stranded a run at plan_pending_write with every dispatch gated.
+        const state = transition.state as Record<string, unknown>
+        const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
+        const binding = state.planner_plan_binding as Record<string, unknown> | null | undefined
+        // OC 1.18 can fire this hook twice for one Task — never rewrite an already-bound identical plan.
+        if (state.planner_status === "usable" && binding?.semantic_hash === planHash) return state
+        const written = writeCanonicalPlan(root, sessionId, featureId, classified.plan)
+        if (written.ok) {
+          canonicalPath = written.path
+          return state
+        }
+        writeError = written.reason
+        return {
+          ...state,
+          planner_status: "plan_invalid",
+          planner_retry_outcome: "not_applicable",
+          planner_active_attempt: null,
+          planner_binding_error: written.reason,
+          delivery_status:
+            Number(state.planner_primary_attempts) >= MAX_PRIMARY_ATTEMPTS ? "delivery-blocked" : "planning_revision",
+        }
       })
       if (!persisted.ok) throw new Error(`[planner-recovery] delivery-blocked: ${persisted.reason}`)
       if (!accepted) return
+      if (canonicalPath) {
+        // Author and binder in one hook: no dispatch can observe a transient plan_pending_write.
+        try {
+          reconcilePlannerStateFromDisk(root, sessionId)
+        } catch {
+          /* plan-gate reconciles again before any downstream dispatch */
+        }
+        try {
+          const event = eventForPlanPath(canonicalPath)
+          if (event) {
+            const tasks = (classified as { plan?: { tasks?: unknown } }).plan?.tasks
+            if (Array.isArray(tasks)) (event as { tasks?: number }).tasks = tasks.length
+            obsAppend(event, { dedupe: dedupeByType })
+          }
+        } catch {
+          /* observability is fail-open */
+        }
+      }
       if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
       output.metadata.planner_recovery = classified.kind === "usable_plan"
-        ? "Plano retornado. Reescreva o artefato canônico; o plan-gate vinculará conteúdo e tentativa antes de liberar downstream."
+        ? unchanged
+          ? "Plano recusado: veio idêntico ao que se pediu para revisar. Redespache o planner com os achados explícitos."
+          : writeError
+            ? `Plano recusado: não pôde ser gravado como artefato canônico (${writeError}). Corrija com o planner; não escreva o arquivo à mão.`
+            : "Plano gravado e vinculado pelo harness no caminho canônico. NÃO reescreva o artefato — siga para validate-plan e plan-reviewer."
         : role === "planner-fallback"
           ? "Entrega bloqueada: o fallback retornou plano inválido e sua única tentativa foi consumida."
           : "Plano inválido: corrija com o planner dentro do limite; fallback não se aplica."

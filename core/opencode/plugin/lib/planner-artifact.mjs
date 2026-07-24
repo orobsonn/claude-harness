@@ -6,21 +6,11 @@ import path from "node:path";
 import { gateStatePath, planDir } from "../../../shared/lib/path-helpers.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
+import { semanticPlanHash } from "./plan-hash.mjs";
 import { bindPlannerArtifact, reconcilePlannerLease } from "./planner-state.mjs";
 import { resolvePlannerFallbackConfig } from "./planner-fallback-config.mjs";
 
-function stable(value) {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
-  }
-  return value;
-}
-
-/** @description Deterministic semantic hash independent of JSON whitespace/key order. */
-export function semanticPlanHash(plan) {
-  return crypto.createHash("sha256").update(JSON.stringify(stable(plan))).digest("hex");
-}
+export { semanticPlanHash };
 
 /** @description Read and fingerprint the one canonical plan artifact for a session/feature. */
 export function readPlannerArtifact(projectRoot, sessionId, featureId) {
@@ -48,6 +38,50 @@ export function readPlannerArtifact(projectRoot, sessionId, featureId) {
     };
   } catch {
     return { exists: fs.existsSync(planPath), valid: false, fingerprint: "unreadable" };
+  }
+}
+
+/**
+ * @description Persist the planner's returned plan as the canonical artifact.
+ * The plugin is the sole author: the plan never round-trips through the orchestrator's
+ * output tokens, so it cannot be paraphrased, truncated, or silently dropped.
+ * Refuses (without touching the existing file) on any precondition failure — a stale
+ * or wrong-feature result must never destroy a good canonical plan.
+ * @param {string} projectRoot
+ * @param {string} sessionId
+ * @param {string} featureId
+ * @param {unknown} plan
+ * @returns {{ ok: true, path: string } | { ok: false, reason: string }}
+ */
+export function writeCanonicalPlan(projectRoot, sessionId, featureId, plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    return { ok: false, reason: "returned plan is not an object" };
+  }
+  if (!featureId) return { ok: false, reason: "session has no feature_id to bind the plan to" };
+  if (plan.feature_id !== featureId) {
+    return { ok: false, reason: "returned plan feature_id does not match the session feature" };
+  }
+  const validation = validatePlan(plan, { expect: "full" });
+  if (!validation.ok || !Array.isArray(plan.tasks) || plan.tasks.length < 1) {
+    const detail = Array.isArray(validation.errors) ? validation.errors.slice(0, 3).join("; ") : "";
+    return { ok: false, reason: `returned plan failed structural validation${detail ? `: ${detail}` : ""}` };
+  }
+  const pd = planDir({ projectRoot, runtime: "opencode", sessionId, featureId });
+  if (!pd.ok) return { ok: false, reason: pd.reason ?? "canonical plan directory unresolved" };
+  const planPath = path.join(pd.path, "execution-plan.json");
+  const temp = `${planPath}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(pd.path, { recursive: true });
+    fs.writeFileSync(temp, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    fs.renameSync(temp, planPath);
+    return { ok: true, path: planPath };
+  } catch {
+    try {
+      fs.rmSync(temp, { force: true });
+    } catch {
+      /* temp cleanup is best-effort; the canonical file was never replaced */
+    }
+    return { ok: false, reason: "canonical plan write failed" };
   }
 }
 
@@ -196,4 +230,11 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
   return persisted.ok ? { ...persisted, artifact: snapshot } : persisted;
 }
 
-export default { readBoundPlanSnapshot, readPlannerArtifact, reconcilePlannerStateFromDisk, semanticPlanHash, writeBoundPlanSnapshot };
+export default {
+  readBoundPlanSnapshot,
+  readPlannerArtifact,
+  reconcilePlannerStateFromDisk,
+  semanticPlanHash,
+  writeBoundPlanSnapshot,
+  writeCanonicalPlan,
+};
