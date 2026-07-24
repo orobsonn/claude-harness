@@ -52,11 +52,17 @@ Per-task commits already exist on the branch. Check only for uncommitted residue
 ```bash
 git status --short
 ```
-- If `.claude/memory/` or `.claude/kaizen.md` are modified or untracked, commit them with selective stage:
+- If `.claude/memory/`, `.claude/kaizen.md` or `CONTEXT.md` are modified or untracked, commit them with selective stage:
   ```bash
   git add .claude/memory/ .claude/kaizen.md
-  git commit -m "chore: update memory and kaizen artifacts"
+  [ -f CONTEXT.md ] && git add CONTEXT.md || true
+  git commit -m "chore: update memory, kaizen and glossary artifacts"
   ```
+  Stage `CONTEXT.md` **conditionally** — `git add` aborts atomically on an unmatched pathspec, so a
+  bare `git add ... CONTEXT.md` in a repo with no glossary fails the whole command and memory/kaizen
+  never ride the PR.
+  `CONTEXT.md` (the project-root domain glossary, maintained add-only by the harvester) is durable
+  committed state like the other two — without staging it, a term the run learned never rides the PR.
 - If no such residue exists, skip this step.
 - **Never stage:** `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, credential or token files.
 - **NEVER include `Co-Authored-By: Claude ...`** — the environment rejects the push with "fabricated authorship attribution".

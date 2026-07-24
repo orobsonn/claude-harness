@@ -38,6 +38,7 @@ Pairs with `initializing-projects`: init creates the STRUCTURE (nested `CLAUDE.m
    - **Anti-patterns / gotchas** baked into the code — a workaround, a footgun, a load-bearing quirk.
 5. **Apply the durability test** (reused) — "Would this help a future executor avoid a mistake or make a better decision?" NO → drop it; it lives in the code/git only.
 6. **Classify blast-radius and route to the native destination** (reused — table below).
+7. **Seed the domain glossary** — `CONTEXT.md` at the **project root** (not under `.claude/`); see below.
 
 ---
 
@@ -56,6 +57,20 @@ Pick the **tightest scope that still covers the insight**.
 
 ---
 
+## Domain glossary (`CONTEXT.md`)
+
+A separate output from the routing above: the project's **shared vocabulary** between the operator, the codebase and every agent. Committed, human-readable, at the **project root** — one table of `| termo | significado |`, plus a short disambiguation note only for terms genuinely easy to confuse. Read verbatim by the planner, the executor and the pre-implementation skills; maintained afterwards by the `harvester` (add-only).
+
+While surveying, harvest the recurring domain terms — names that repeat across modules, types, routes, tables and operator-facing text.
+
+- **Implementation-free** — what the term MEANS in the business, never which file implements it. No paths, no function names.
+- **Only terms that carry meaning** — skip generic programming vocabulary. If it would mean the same in any project, it does not belong.
+- **Disambiguate collisions** — two words for the same thing, or one word for two things, is exactly what the glossary must settle: record the chosen term and state explicitly what the rejected synonym maps to.
+- **If `CONTEXT.md` already exists, MERGE** — add the missing terms only; never rewrite, redefine or reorder what is there.
+- Never write secrets/PII — it is committed.
+
+---
+
 ## Anti-patterns
 
 - **Code dump / file inventory** — surveying outputs durable, reusable, non-obvious KNOWLEDGE, not "here are the files". A list of folders is not memory.
@@ -64,6 +79,8 @@ Pick the **tightest scope that still covers the insight**.
 - **Obvious / framework knowledge** — "uses React", "has a `package.json`" helps no one. Only what a careful reader would otherwise miss.
 - **Wrong blast-radius** — a folder rule in project-wide memory pollutes recall; a project pattern buried in one folder's `CLAUDE.md` never surfaces for other tasks.
 - **Inventing law** — record only conventions the code actually follows. Do not prescribe what you wish were true.
+- **Glossary that describes the code** — "`Pedido` — the `Order` type in `src/types/order.ts`" is not a glossary entry. Say what a Pedido IS to the business.
+- **Rewriting an existing `CONTEXT.md`** — merge, never replace. A definition already there was sanctioned by the operator.
 
 ---
 
@@ -71,6 +88,7 @@ Pick the **tightest scope that still covers the insight**.
 
 - Every entry passes the durability test (helps a future executor decide/avoid).
 - Each routed to exactly one repo-committed destination by blast-radius; no `learnings.md` written.
+- `CONTEXT.md` at the project root holds only meaningful, implementation-free terms; collisions disambiguated; pre-existing entries untouched.
 - No file inventory or framework-obvious noise emitted.
 - `MEMORY.md` index lines and root router rows added for what was written.
 - Report to the operator (pt-br, product-language) what was populated — never code-language.

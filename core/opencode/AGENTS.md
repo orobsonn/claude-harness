@@ -40,10 +40,14 @@ the delivery loop. It is denied for headless/relayed input and ends with a manda
 
 ### Conversational Plan lane
 
-The `plan` primary agent is a separate read-only discovery lane. It is exempt from
+The `plan` primary agent is a separate discovery lane, read-only except for one narrow
+write carve-out. It is exempt from
 the `build` entry policy: no triage, classify, ceremony markers, implementation, or
 delivery. It may inspect the project, research the web, load only the conversational
-branch of `brainstorming`, and invoke only the read-only `discussion-adversary`.
+branch of `brainstorming` or the `grill` interview skill, and invoke only the read-only
+`discussion-adversary`. Its single permitted write is the `grill` PRD artifact under
+`docs/prd/` (frontmatter `permission.edit` denies `*` and allows only `docs/prd/*.md`);
+`bash` stays denied.
 Its terminal artifact is a `## Build Spec` in the shared session conversation. The
 operator switches to `build` with Tab when they want that approved spec implemented;
 `build` then applies its normal entry policy.

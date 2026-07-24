@@ -57,6 +57,11 @@ git checkout -b <type>/<short-description>
 - Run `git diff` and `git diff --cached` to understand what changed.
 - **Stage specific files only** — never `git add .` blindly.
 - **Never stage:** `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `node_modules/`, `dist/`, `coverage/`, `.DS_Store`, `*.log`, credential or token files.
+- **Durable glossary:** if `CONTEXT.md` (project-root domain glossary, maintained add-only by the `harvester`) changed, stage it — conditionally, since `git add` aborts atomically on an unmatched pathspec:
+  ```bash
+  [ -f CONTEXT.md ] && git add CONTEXT.md || true
+  ```
+  Without this, a term the run learned never rides the PR.
 - Commit message follows **Conventional Commits**: `<type>: <short description>` (max 72 chars header).
 - Body optional: context / why (1-3 lines). Include `Closes #N` if issue provided.
 

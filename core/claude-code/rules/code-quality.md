@@ -63,6 +63,11 @@ Universal — sem `paths:`, carrega em toda conversa.
 - When a skill / SKILL.md / CI comment documents a module as `node <module>.mjs [args]`, the author must ensure the module has a real CLI **entry block** (canonical form `if (process.argv[1] === fileURLToPath(import.meta.url))`, or an equivalent entry guard).
 - If the module is **import-only**, document it as **import-and-call** (an `import` plus a call to `fn()`) — **never** present a `node <module>.mjs` bash invocation as a valid usage example.
 
+### Superficie de teste (teste na porta, nao na mobilia)
+- Teste se prende a interface PUBLICA do modulo — nunca a funcao interna nao exportada
+- Reorganizar o miolo (renomear, dividir, inlinar) nao pode quebrar teste nenhum; se quebrou, o teste estava ancorado errado
+- Onde colocar a costura (o que vira interface publica) e decisao de arquitetura — ver profundidade de modulo em `architecture`
+
 ## Patterns
 
 - **Util puro testavel**:
@@ -111,4 +116,5 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **`as` casting cego**: `value as Foo` mente pro compilador. Usar narrowing ou validar com Zod
 - **Default export**: dificulta refactor (renomes silenciosos) e grep. Preferir named export
 - **Numero magico**: `if (count > 5)` — extrair pra constante nomeada (`const MAX_RETRIES = 5`)
+- **Teste preso em interno**: teste que importa funcao nao exportada quebra em toda reorganizacao legitima do miolo e trava refactor. E no nosso pipeline o teste e CONGELADO (imutavel pro executor) — teste mal ancorado nao gera friccao, emperra a entrega inteira. Ancorar na interface publica
 - **Reinventar stdlib/nativo** (alvo de deteccao, nao corte por cota): parser/format/dedupe escrito a mao que a stdlib ja entrega, dep que duplica feature nativa da plataforma (`Intl`, `URL`, `crypto`, `fetch`), ou flag/config/branch morto — preferir o nativo/stdlib e remover o morto. Sinalizar pra simplificar; nunca deletar so pra baixar contagem de linha

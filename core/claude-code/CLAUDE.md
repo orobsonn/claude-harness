@@ -129,6 +129,10 @@ See the vendored `.claude/modules/codex-adversary/`.
 - Agents: role-noun (`planner`, `executor`, `adversary`, `sniper`, `harvester`).
 - **Carrier exception:** a skill that only *carries knowledge* (a taxonomy/reference loaded by other
   roles, not an action) may use a noun phrase — e.g. `canonical-critical-classes`. Action skills stay gerund.
+- **Operator-invoked exception:** the gerund exists so a *model* can discover the skill by name. A
+  skill the **operator** invokes by typing it (never auto-pulled) may use a short imperative — e.g.
+  `grill`. Its discoverability comes from the operator, so the naming pressure does not apply; the
+  `description` still has to be precise. Model-discovered action skills stay gerund.
 
 ## Operator profile
 

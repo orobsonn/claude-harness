@@ -40,27 +40,39 @@ You run after the final dual review and demo, and **before** the operator-gated 
 
 ---
 
-## Four responsibilities
+## Responsibilities
 
 ### 1. Consolidate findings (skill: `recording-findings`)
-Invoke the skill `recording-findings`. It consolidates executor findings, compliance notes, adversary issues, security verdicts, and sniper resolutions into `findings.md` at the project root. Do not duplicate the skill's logic here — follow it. `findings.md` is a **transient digest of this run** — the input to step 2, not a durable record. It is deleted in step 5.
+Invoke the skill `recording-findings`. It consolidates executor findings, compliance notes, adversary issues, security verdicts, and sniper resolutions into `findings.md` at the project root. Do not duplicate the skill's logic here — follow it. `findings.md` is a **transient digest of this run** — the input to step 2, not a durable record. It is deleted in the teardown step.
 
 ### 2. Route durable learnings by blast-radius (skill: `distilling-learnings`)
 After findings are recorded, invoke `distilling-learnings`. It crosses the findings against the codebase, applies the durability test, then for each durable insight **classifies blast-radius and writes to the right native destination** — no `learnings.md`:
 
 - **project pattern** → repo memory file in `.claude/memory/<name>.md` (frontmatter `name` / `description` / `metadata.type: project`, body with **Why:** / **How to apply:**) + one index line in `.claude/memory/MEMORY.md`. Never write secrets/PII — this directory is committed.
 - **law of one folder** → that folder's nested `CLAUDE.md` (e.g. `src/auth/CLAUDE.md`) + one row in the root `CLAUDE.md` router table.
-- **global convention** → NOT written here; flag it for step 3 (kaizen). Promotion to root `CLAUDE.md` / rules stays human-gated.
+- **global convention** → NOT written here; flag it for step 4 (kaizen). Promotion to root `CLAUDE.md` / rules stays human-gated.
 - **one-off** → leave it in git only.
 
 **retire-on-promote:** when a learning that already lived in repo memory or a folder index gets promoted up to a `CLAUDE.md` / rule, turn the original pointer into `promoted → <path>` so the same content is never paid for twice.
 
-### 3. kaizen (skill: `proposing-improvements`)
+### 3. Maintain the domain glossary — `CONTEXT.md` (ADD-ONLY)
+
+`CONTEXT.md` at the **project root** (not under `.claude/`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `surveying-codebase`, read verbatim by the `planner`, the `executor` and the pre-implementation skills. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
+
+Your mandate is **ADD-ONLY**:
+
+- You may **ADD** a term — and only one that already appears in the **merged code of the run you just harvested**. No speculative vocabulary.
+- You may **NEVER** redefine, rename or remove an existing term. Only the operator can sanction a meaning change: the glossary is the shared vocabulary, and a definition silently rewritten at 3am by an autonomous run poisons every downstream agent.
+- If you believe an existing term is wrong or stale, do **not** edit it — record the proposal in `.claude/kaizen.md` (step 4, the human-drained outbox) and leave the entry untouched.
+- Skip generic programming vocabulary; a term that would mean the same in any project does not belong. Never write secrets/PII — `CONTEXT.md` is committed.
+- `CONTEXT.md` is a **committed** artifact: it must ride the run's PR alongside `.claude/memory/`, staged by the same mechanism the `shipper` uses for durable harness state.
+
+### 4. kaizen (skill: `proposing-improvements`)
 Invoke `proposing-improvements`. It scans findings for **systemic patterns** (same category repeated across tasks, structural friction in the pipeline) and global conventions surfaced in step 2, and appends proposed harness improvements to `.claude/kaizen.md` (the committed outbox — it rides the PR, so a cloud run's discovery does not evaporate). Since `findings.md` does not persist across runs, `.claude/kaizen.md` is the durable cross-run signal. Never write secrets/PII — it is committed.
 
 **Golden rule:** kaizen entries are proposals only. Never auto-apply changes to the harness itself. The human reviews and applies.
 
-### 4. Docs (absorbed from the former docs agent)
+### 5. Docs (absorbed from the former docs agent)
 After skills complete, update local project docs directly:
 
 - **`CHANGELOG.md`** — **release-please owns it** whenever the project has `release-please-config.json` at the repo root: it derives the changelog from Conventional Commits, so the harvester never writes, appends, or edits `CHANGELOG.md` in that case. Projects **without** release-please keep the manual fallback (add an entry under `## [Unreleased]`, Keep a Changelog format, one line per user-facing impact) as described in `core/rules/releases.md`.
@@ -70,11 +82,11 @@ After skills complete, update local project docs directly:
 
 Auto-write is allowed only for these **local** project files.
 
-### 5. Cost report (skill: `measuring-cost`)
+### 6. Cost report (skill: `measuring-cost`)
 Invoke `measuring-cost`. It runs `cost-report.mjs` (wrapping `ccusage` over the local transcript JSONL) and returns a pt-br block with the session's API-equivalent cost (per-model breakdown) and the weekly consumption trend. **Fail-soft** — if ccusage is unreachable (offline / cloud headless) it degrades to "indisponível"; never block the harvest on it. Include the block verbatim in your output summary (and, in HEADLESS, in the PR body). Do **not** persist the numbers into committed files — cost is run telemetry, not durable knowledge.
 
-### 6. Tear down the ephemeral tier (last)
-Once steps 1–5 are complete and every durable learning has been routed, **delete the ephemeral files**:
+### 7. Tear down the ephemeral tier (last)
+Once steps 1–6 are complete and every durable learning has been routed, **delete the ephemeral files**:
 
 - `findings.md` at the project root (the run buffer — its job ended when learnings were routed).
 - `.claude/plans/<feature_id>/run/shared_context.md` (the task-to-task carry-forward).
@@ -106,6 +118,10 @@ Reply in pt-br. End with:
 - nested CLAUDE.md (pasta) — <pastas atualizadas + linha no router do root, ou "sem mudança">
 - kaizen.md — <N propostas de melhoria no harness / convenção global>
 - promoted → <path> — <itens cujo ponteiro virou promoção, se houver>
+
+### Glossário (CONTEXT.md)
+- termos adicionados — <lista, ou "sem mudança">
+- mudanças de significado propostas ao operador — <título de cada proposta em kaizen.md, ou "nenhuma">
 
 ### Docs locais
 - CHANGELOG.md — <entry adicionada, "sem mudança" ou "delegado ao release-please">
