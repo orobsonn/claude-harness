@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.0](https://github.com/orobsonn/claude-harness/compare/v0.48.2...v0.49.0) (2026-07-24)
+
+
+### Features
+
+* fase pré-implementação — grill, PRD, glossário CONTEXT.md ([#437](https://github.com/orobsonn/claude-harness/issues/437)) ([3d979e7](https://github.com/orobsonn/claude-harness/commit/3d979e74ac75ac4811cf1163d0d7005679c4b4fe))
+* **skills:** proposing-deepening — análise de retrofit arquitetural ([#439](https://github.com/orobsonn/claude-harness/issues/439)) ([3f61a33](https://github.com/orobsonn/claude-harness/commit/3f61a3375ca62df6c501c7c663b5df1630b339b4))
+
 ## [0.48.2](https://github.com/orobsonn/claude-harness/compare/v0.48.1...v0.48.2) (2026-07-23)
 
 
