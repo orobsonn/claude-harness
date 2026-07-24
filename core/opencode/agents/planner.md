@@ -82,7 +82,7 @@ Use THIS harness's tier and agent names. NEVER use haiku/sonnet/opus or model sl
 
 ```json
 {
-  "feature_id": "kebab-case-non-empty",
+  "feature_id": "<the session feature_id, verbatim — see below>",
   "mode": "light | full",
   "tasks": [ /* Task[], ≥1, topologically ordered — each task.depends_on references only earlier task ids */ ],
   "model_strategy": { /* ModelStrategy */ },
@@ -193,4 +193,6 @@ Emit the JSON object, then ONE pt-br summary line:
 
 Do not write code. Do not orchestrate. The only terminal action is handing back the validated plan.
 
-> **Note (informational — does not change the planner's contract):** The orchestrator (`build`) takes the plan returned in this reply and writes it to the canonical path `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json`, overwriting the classify stub that was previously placed there. The stub had UPPERCASE `mode` (e.g. `"LIGHT"`) and an empty `tasks` array; the full plan has lowercase `mode` (`light` or `full`) and non-empty `tasks` — differences the `validate-plan` tool detects and stamps, and that `plan-gate` then reads. A single canonical path is required: if the plan landed elsewhere (diverged path), `plan-gate` would either false-block (reading the stale stub) or miss the plan entirely. The planner itself does NOT write to disk.
+> **`feature_id` is locked, not chosen (this consumes an attempt when you get it wrong).** Your dispatch brief carries `[HARNESS_SESSION_FEATURE_ID]…[/HARNESS_SESSION_FEATURE_ID]`. Copy that string into `feature_id` **verbatim**. It is the session's locked feature identity: the gate compares it for exact equality and **refuses the whole plan** on any difference, leaving the canonical file untouched and the attempt spent for nothing. Do **not** rename it to describe a narrowed scope, a dropped sub-feature, or a better title — express scope in the plan's tasks instead.
+
+> **Note (informational — does not change the planner's contract):** The **plugin** (`planner-recovery`) takes the plan returned in this reply and writes it to the canonical path `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json`, overwriting the classify stub that was previously placed there — the plan never round-trips through the orchestrator's output tokens. The stub had UPPERCASE `mode` (e.g. `"LIGHT"`) and an empty `tasks` array; the full plan has lowercase `mode` (`light` or `full`) and non-empty `tasks` — differences the `validate-plan` tool detects and stamps, and that `plan-gate` then reads. A single canonical path is required: if the plan landed elsewhere (diverged path), `plan-gate` would either false-block (reading the stale stub) or miss the plan entirely. Neither you nor the orchestrator writes it to disk.

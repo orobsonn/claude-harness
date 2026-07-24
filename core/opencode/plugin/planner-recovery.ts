@@ -57,6 +57,7 @@ export async function createPlannerRecoveryHooks(
     failPlannerAttempt,
     MAX_PRIMARY_ATTEMPTS,
   } = await import("./lib/planner-state.mjs")
+  const { buildPlannerBriefAppendix } = await import("./lib/planner-brief.mjs")
   const { dedupeByType, eventForPlanPath, obsAppend } = await import("./lib/obs-emit.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
@@ -164,6 +165,22 @@ export async function createPlannerRecoveryHooks(
         return transition.state
       })
       if (!claimed.ok) throw new Error(`[planner-recovery] delivery-blocked: ${claimed.reason}`)
+
+      // The brief is the ONLY channel into the planner's input. `output.metadata` is an after-hook
+      // channel — it informs the orchestrator once the agent already returned — so a revision round
+      // would otherwise re-plan blind, and the locked feature identity would stay a guess. Same
+      // mechanism plan-gate uses to hand the bound plan to a hand: mutate the dispatch args in place.
+      const claimedState = (claimed as { state?: Record<string, unknown> }).state ?? {}
+      const appendix = buildPlannerBriefAppendix({
+        featureId: typeof claimedState.feature_id === "string" ? claimedState.feature_id : "",
+        state: claimedState,
+        nonce: attemptToken,
+      })
+      if (appendix) {
+        const args = argsOf(input, output)
+        const existing = typeof args.prompt === "string" ? args.prompt : ""
+        args.prompt = `${existing}\n\n${appendix}`.trim()
+      }
     },
 
     "tool.execute.after": async (input: any, output: any) => {

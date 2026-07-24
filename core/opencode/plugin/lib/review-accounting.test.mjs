@@ -732,8 +732,98 @@ test("classifyReviewBoundaryError labels harness-internal deny errors as gate_bl
   assert.equal(classifyReviewBoundaryError("[loop-guard] primary failure-cap: halt"), "gate_blocked");
   assert.equal(classifyReviewBoundaryError("[entry-gate] Blocked: request denied"), "gate_blocked");
   assert.equal(classifyReviewBoundaryError({ message: "[money-preflight] quote required" }), "gate_blocked");
+  // Production forensics (ses_069a8f35…): planner-recovery was missing from the tag list, so its
+  // own "attempt bound reached" deny was charged to the planner's K=3 QUALITY budget
+  // (agent_dispatch_failures.planner). Three of those permanently ban an agent that never ran —
+  // and the planner has no fallback ladder, so the run deadlocks in the planning phase.
+  assert.equal(
+    classifyReviewBoundaryError(new Error("[planner-recovery] delivery-blocked: planner primary attempt bound reached")),
+    "gate_blocked",
+  );
+  assert.equal(classifyReviewBoundaryError("[plan-write-gate] delivery-blocked: canonical plan write denied"), "gate_blocked");
+  assert.equal(classifyReviewBoundaryError("[marker-authority] seal mismatch"), "gate_blocked");
+  assert.equal(classifyReviewBoundaryError("[command-resolver] command not allowed"), "gate_blocked");
   // A genuine provider error is NOT reclassified.
   assert.equal(classifyReviewBoundaryError({ statusCode: 429, message: "rate limit" }), "rate_limited");
+});
+
+test("a persisted REVISE credits a fresh planner round budget, exactly once, and only forward", () => {
+  const revise = JSON.stringify({ verdict: "REVISE", findings: [finding] });
+
+  // Round 1 REVISE with the round budget already spent → the next round starts with a full budget.
+  const round1 = complete(state({ planner_primary_attempts: 3 }), { callId: "r1", response: revise });
+  assert.equal(round1.state.plan_verdict, "REVISE");
+  assert.equal(round1.state.plan_review_count, 1);
+  assert.equal(round1.state.planner_primary_attempts, 0, "REVISE is an instruction to re-plan, not a planner failure");
+  assert.equal(round1.state.planner_attempts_round, 1);
+
+  // A replayed outcome for the same round must not credit again (it would launder the budget).
+  const spentAgain = { ...round1.state, planner_primary_attempts: 2 };
+  const replay = applyReviewOutcome(spentAgain, input({ callId: "r1", response: revise }));
+  assert.equal(replay.accepted, false);
+  assert.equal(replay.state.planner_primary_attempts, 2);
+
+  // APPROVE releases the hands; there is nothing to re-plan, so no credit.
+  const approved = complete(state({ planner_primary_attempts: 3 }), { callId: "ok", response: report("APPROVE") });
+  assert.equal(approved.state.plan_verdict, "APPROVE");
+  assert.equal(approved.state.planner_primary_attempts, 3);
+  assert.equal(approved.state.planner_attempts_round, undefined);
+
+  // An adversary round never touches the planner budget.
+  const adversary = complete(state({ planner_primary_attempts: 3 }), {
+    subagentType: "adversary-family-1",
+    callId: "adv",
+    response: JSON.stringify({ issues: [] }),
+  });
+  assert.equal(adversary.state.planner_primary_attempts, 3);
+});
+
+test("reopening a capped review epoch resets the round stamp with the counter it indexes", () => {
+  // Without this, a verified restart inherits a stamp of N, silently refuses the credit for rounds
+  // 1..N, and the restarted run deadlocks EARLIER than an unfixed one.
+  let capped = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
+    capped = complete(capped, { callId: `stamp-${round}`, response: report("REVISE", [finding]) }).state;
+  }
+  assert.equal(capped.review_status, "review_cap_reached");
+  assert.equal(capped.planner_attempts_round, LOOP_THRESHOLDS.plan_review.deny);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-round-stamp-restart-"));
+  try {
+    const reopened = reopenReviewEpoch(canonicalRestartState(root, capped), { projectRoot: root });
+    assert.equal(reopened.ok, true, reopened.reason);
+    assert.equal(reopened.state.plan_review_count, 0);
+    assert.equal(reopened.state.planner_attempts_round, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-review scope follows the bound plan: a stale peer REVISE from an earlier round cannot pin the verdict", () => {
+  const PLAN_A = "a".repeat(64);
+  const PLAN_B = "b".repeat(64);
+  const revise = JSON.stringify({ verdict: "REVISE", findings: [finding] });
+  const reviseFamily2 = JSON.stringify({ verdict: "REVISE", family: "family-2", findings: [finding] });
+
+  // Round 1 on plan A — both families REVISE.
+  let current = state({ planner_plan_binding: { snapshot_hash: PLAN_A } });
+  current = complete(current, { callId: "r1-f1", response: revise }).state;
+  current = complete(current, { callId: "r1-f2", subagentType: "plan-reviewer-family-2", response: reviseFamily2 }).state;
+  assert.equal(current.plan_verdict, "REVISE");
+  assert.equal(current.dual_status?.plan_review, "both");
+
+  // Same bound plan: either-REVISE-wins must still hold. Nothing was re-planned, so the peer's
+  // REVISE is still live evidence about THIS artifact.
+  const samePlan = complete(current, { callId: "r1-f1-again", response: report("APPROVE") });
+  assert.equal(samePlan.state.plan_verdict, "REVISE", "peer REVISE on the same bound plan still wins");
+
+  // Round 2 after a real re-plan — family-1 APPROVE must NOT be overridden by the plan-A REVISE,
+  // even though family-2 never returned on plan B (it malformed live at a 1-in-2 rate). Without
+  // this, APPROVE is unreachable and every writing hand stays blocked for the rest of the run.
+  const replanned = { ...current, planner_plan_binding: { snapshot_hash: PLAN_B } };
+  const round2 = complete(replanned, { callId: "r2-f1", response: report("APPROVE") });
+  assert.equal(round2.state.plan_verdict, "APPROVE");
+  assert.equal(round2.state.dual_status?.plan_review, "primary_only");
 });
 
 test("primary_failure_cap_reached blocks writing hands", () => {

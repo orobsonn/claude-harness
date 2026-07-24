@@ -44,7 +44,8 @@ const FAILURE_CLASSES = new Set([
  * streak with a self-inflicted cause. Match the tag anywhere (an Error's text is
  * `Error: [plan-gate] …`, so the tag is not at string start).
  */
-const HARNESS_DENY_TAG = /\[(?:plan-gate|loop-guard|entry-gate|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
+const HARNESS_DENY_TAG =
+  /\[(?:plan-gate|plan-write-gate|planner-recovery|loop-guard|entry-gate|marker-authority|command-resolver|obs-hand|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
 
 const DIAGNOSTIC_MESSAGE_MAX = 280;
 
@@ -250,6 +251,10 @@ export function reopenReviewEpoch(stateValue, options = {}) {
       review_outcomes: [],
       plan_review_count: 0,
       adversary_loop_count: 0,
+      // The round stamp must fall with the counter it indexes. Left stale, a stamp of N would
+      // refuse the round credit for rounds 1..N of the reopened epoch and the restarted run would
+      // deadlock EARLIER than an unfixed one. The session dispatch ceiling is not reset here.
+      planner_attempts_round: 0,
       primary_review_failure_streak: 0,
       secondary_review_failure_streak: 0,
       review_status: "active",
@@ -317,6 +322,15 @@ export function reserveReviewAttempt(stateValue, input = {}) {
     task_id: typeof input.taskId === "string" ? input.taskId : "",
     phase: typeof input.phase === "string" ? input.phase : "",
   };
+  // The plan-review scope must move with the artifact under review. Without this, every revision
+  // round shares one scope, so `withPlanVerdict`'s either-REVISE-wins pairs a fresh report with a
+  // peer's REVISE from an EARLIER round — a family-1 APPROVE on a re-planned artifact is overridden
+  // by a stale peer verdict and the run can never reach APPROVE (observed live: round-2 REVISE from
+  // family-2 pinned the verdict while family-2 malformed in the next round, so nothing cleared it).
+  if (identity.logicalRole === "plan-reviewer") {
+    const binding = object(state.planner_plan_binding);
+    reservation.plan_binding_hash = typeof binding.snapshot_hash === "string" ? binding.snapshot_hash : "";
+  }
   reservation.identity_hash = identityKey(reservation);
   const outcomes = currentReceipts(state);
   const inflight = currentInflight(state);
@@ -464,7 +478,9 @@ export function applyReviewOutcome(stateValue, input = {}) {
     if (!dualPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
     const signed = dualState(next, status, dualPhase);
     if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-    next = { ...signed.state, dual_secondary_status: "useful" };
+    // Clear the peer's failure class with its status: a live gate-state carried
+    // dual_secondary_failure_class "malformed" next to dual_secondary_status "useful".
+    next = { ...signed.state, dual_secondary_status: "useful", dual_secondary_failure_class: null };
     return {
       state: next,
       accepted: true,
@@ -488,6 +504,20 @@ export function applyReviewOutcome(stateValue, input = {}) {
   const signed = dualState(next, status, dualPhase);
   if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
   next = signed.state;
+  // A REVISE is an instruction to re-plan — progress, not a planner failure. Credit a fresh
+  // planner failure-retry budget for the new round, so the advertised review budget is actually
+  // reachable instead of being consumed by the planner's K=3. Stamped with the round number: the
+  // credit is idempotent under a replayed outcome and cannot fire twice for one round. The
+  // session-lifetime ceiling in planner-state is what still bounds the total spend, and
+  // `agent_dispatch_failures` is deliberately left alone (clearing it would mask a real
+  // precondition failure and destroy forensics for an agent with no fallback ladder).
+  if (key === "plan_review_count" && next.plan_verdict === "REVISE") {
+    const stampedRound = Number.isInteger(next.planner_attempts_round) ? next.planner_attempts_round : 0;
+    if (count > stampedRound) {
+      next.planner_attempts_round = count;
+      next.planner_primary_attempts = 0;
+    }
+  }
   const { deny } = thresholdsFor(key, input);
   if (count >= deny && classified.materialUnresolved) {
     next.review_status = "review_cap_reached";
@@ -512,7 +542,13 @@ export function applyReviewOutcome(stateValue, input = {}) {
 }
 
 function scopeHash(reservation) {
-  return digest({ logical_role: reservation.logical_role, feature_id: reservation.feature_id, task_id: reservation.task_id, phase: reservation.phase, epoch: reservation.epoch });
+  const scope = { logical_role: reservation.logical_role, feature_id: reservation.feature_id, task_id: reservation.task_id, phase: reservation.phase, epoch: reservation.epoch };
+  // Present only on plan-reviewer reservations, and omitted when empty, so adversary/other scopes
+  // keep their existing hash semantics.
+  if (typeof reservation.plan_binding_hash === "string" && reservation.plan_binding_hash) {
+    scope.plan_binding_hash = reservation.plan_binding_hash;
+  }
+  return digest(scope);
 }
 
 export function decideLoopGuard(input = {}) {
