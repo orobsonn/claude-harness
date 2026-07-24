@@ -73,6 +73,7 @@ OpenCode rejects `mode: subagent` for `opencode run --agent <name>` (falls back 
 | triaging-requests | entry; calls classify tool |
 | brainstorming | elicit; primary only |
 | grill | pre-implementation PRD interview; local-only (refuses headless); runs in `plan`, writes `docs/prd/<slug>.md` |
+| proposing-deepening | retrofit analysis; read-only on source, propose-only, cap 5; runs in `build`, writes `docs/architecture/deepening-candidates.md` |
 | orchestrating-delivery | LIGHT/FULL loop |
 | recording-findings | harvest |
 | distilling-learnings | harvest |
