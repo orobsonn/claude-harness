@@ -29,7 +29,7 @@ export async function createLoopGuardHooks(
     finalizeHostDualMerge,
   } = await import("./lib/dual-merge.mjs")
   const { extractSubagentType, isTaskTool } = await import("./lib/dual-enforcement.mjs")
-  const { applyAgentDispatchOutcome } = await import("../../shared/lib/agent-retry.mjs")
+  const { applyAgentDispatchOutcome, applyGateBlockedDispatch } = await import("../../shared/lib/agent-retry.mjs")
   const { decideCallOutcomeOnce } = await import("../../shared/lib/agent-retry-call.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
   const { isDeliveryRole } = await import("./lib/roles.mjs")
@@ -87,6 +87,8 @@ export async function createLoopGuardHooks(
     role: string,
     taskId: string,
     outcome: "success" | "failure",
+    failureClass?: string,
+    rawError?: unknown,
   ) {
     if (!sessionID || !callID || !role || !isHarnessTaskRole(role)) return
     const dedupeKey = `${sessionID}::${callID}`
@@ -94,8 +96,19 @@ export async function createLoopGuardHooks(
     if (!decision.apply || !decision.outcome) return
     const sp = statePathFor(sessionID)
     if (!sp) return
+    // A harness-internal deny means the agent never ran: it is the dispatcher's precondition
+    // that failed, not the agent. Charging it to the agent's K=3 quality budget bans an
+    // innocent agent for the rest of the feature. Bounded separately instead.
+    const gateBlocked = failureClass === "gate_blocked"
     withGateStateLock(sp, (state) => {
       let next = state
+      if (gateBlocked) {
+        return applyGateBlockedDispatch(next, {
+          role,
+          taskId,
+          reason: typeof rawError === "string" ? rawError : (rawError as { message?: string })?.message,
+        }).state
+      }
       // If after-hook already reset the counter (false success), re-apply failure once.
       if (decision.undoSuccess) {
         next = applyAgentDispatchOutcome(next, { role, taskId, outcome: "failure" }).state
@@ -117,7 +130,7 @@ export async function createLoopGuardHooks(
     const taskId = taskIdOf(args)
     // Unified K=3: count once per callId (error event and after-hook may both fire).
     if (failureClass || rawError) {
-      recordAgentRetry(sessionID, callID, sub, taskId, "failure")
+      recordAgentRetry(sessionID, callID, sub, taskId, "failure", failureClass, rawError)
     } else if (sub) {
       recordAgentRetry(sessionID, callID, sub, taskId, "success")
     }

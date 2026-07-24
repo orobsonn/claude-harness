@@ -1,6 +1,7 @@
 /** @description Pure classification of planner task results into usable plans, provider failures, or invalid plans. */
 
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
+import { semanticPlanHash } from "./plan-hash.mjs";
 
 function responseText(value) {
   try {
@@ -58,6 +59,9 @@ function jsonObjects(text) {
 
 /**
  * @description A planner succeeds only with a structurally valid full plan containing at least one task.
+ * Ambiguity is fail-closed: a response carrying two or more DISTINCT full plans (e.g. a revision that
+ * quotes the superseded plan before the new one) is invalid, never "the first one wins". Document order
+ * is not authorship, and the caller persists whatever comes back here as the canonical artifact.
  * @param {unknown} response
  * @returns {{ kind: "usable_plan", plan: Record<string, unknown> } | { kind: "invalid_plan", errors: string[] }}
  */
@@ -66,12 +70,26 @@ export function classifyPlannerResult(response) {
     const text = responseText(response);
     const objects = jsonObjects(text);
     let validationErrors = [];
+    // Same plan may be extracted twice (fenced block + whole-text brace scan) — dedupe by semantic hash.
+    const candidates = new Map();
     for (const value of objects) {
       const validated = validatePlan(value, { expect: "full" });
       if (validated.ok && Array.isArray(value.tasks) && value.tasks.length >= 1) {
-        return { kind: "usable_plan", plan: value };
+        candidates.set(semanticPlanHash(value), value);
+        continue;
       }
       validationErrors = validated.errors;
+    }
+    if (candidates.size > 1) {
+      return {
+        kind: "invalid_plan",
+        errors: [
+          `planner returned ${candidates.size} distinct full plans in one response; emit exactly one plan and quote no others`,
+        ],
+      };
+    }
+    if (candidates.size === 1) {
+      return { kind: "usable_plan", plan: [...candidates.values()][0] };
     }
 
     return {

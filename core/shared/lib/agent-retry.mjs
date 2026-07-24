@@ -4,6 +4,15 @@
 export const AGENT_RETRY_K = 3;
 
 /**
+ * Max dispatches of the same agent key that the harness's OWN gates may deny before the
+ * host stops the loop. Kept in a separate namespace from AGENT_RETRY_K on purpose: a gate
+ * deny says the dispatcher did not satisfy a precondition, never that the agent failed.
+ * Charging it to the agent's budget permanently bans an agent that never ran — which is how
+ * a cross-family review silently degraded to a single family.
+ */
+export const GATE_BLOCKED_DISPATCH_K = 3;
+
+/**
  * @description Stable key for retry accounting.
  * @param {unknown} role
  * @param {unknown} [taskId]
@@ -79,6 +88,11 @@ export function applyAgentDispatchOutcome(previous, input = {}) {
   if (input.outcome === "success") {
     delete prevMap[key];
     base.agent_dispatch_failures = prevMap;
+    // Stale last_failure outlived its counter and made forensics point at the wrong agent.
+    const last = base.agent_dispatch_last_failure;
+    if (last && typeof last === "object" && !Array.isArray(last) && last.key === key) {
+      base.agent_dispatch_last_failure = null;
+    }
     return { state: base, key, failures: 0, exhausted: false };
   }
 
@@ -94,10 +108,87 @@ export function applyAgentDispatchOutcome(previous, input = {}) {
   return { state: base, key, failures: next, exhausted: next >= k };
 }
 
+/**
+ * @description Read how many times the harness's own gates denied this dispatch key.
+ * @param {unknown} state
+ * @param {string} key
+ * @returns {number}
+ */
+export function getGateBlockedCount(state, key) {
+  if (!key) return 0;
+  const map =
+    state && typeof state === "object" && !Array.isArray(state)
+      ? /** @type {Record<string, unknown>} */ (state).gate_blocked_dispatches
+      : null;
+  if (!map || typeof map !== "object" || Array.isArray(map)) return 0;
+  const n = Number(/** @type {Record<string, unknown>} */ (map)[key]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * @description Whether another dispatch is allowed given prior harness-gate denials.
+ * Bounded like the agent budget, but in its own namespace and with a dispatcher-facing reason.
+ * @param {unknown} state
+ * @param {{ role?: unknown, taskId?: unknown, k?: number }} input
+ * @returns {{ ok: true, remaining: number, blocked: number } | { ok: false, reason: string, blocked: number }}
+ */
+export function decideGateBlockedDispatchAllowed(state, input = {}) {
+  const key = agentRetryKey(input.role, input.taskId);
+  if (!key) return { ok: true, remaining: GATE_BLOCKED_DISPATCH_K, blocked: 0 };
+  const k = Number.isFinite(input.k) && input.k > 0 ? Math.floor(input.k) : GATE_BLOCKED_DISPATCH_K;
+  const blocked = getGateBlockedCount(state, key);
+  if (blocked >= k) {
+    return {
+      ok: false,
+      blocked,
+      reason: `harness gate denied ${key} ${blocked}/${k} times — the dispatch precondition was never satisfied; fix the precondition, do not re-dispatch`,
+    };
+  }
+  return { ok: true, remaining: k - blocked, blocked };
+}
+
+/**
+ * @description Record one harness-gate denial for a dispatch key, outside the agent's retry budget.
+ * @param {unknown} previous
+ * @param {{ role?: unknown, taskId?: unknown, reason?: unknown, k?: number }} input
+ * @returns {{ state: Record<string, unknown>, key: string, blocked: number, exhausted: boolean }}
+ */
+export function applyGateBlockedDispatch(previous, input = {}) {
+  const base =
+    previous && typeof previous === "object" && !Array.isArray(previous)
+      ? { .../** @type {Record<string, unknown>} */ (previous) }
+      : {};
+  const key = agentRetryKey(input.role, input.taskId);
+  if (!key) return { state: base, key: "", blocked: 0, exhausted: false };
+
+  const prevMap =
+    base.gate_blocked_dispatches &&
+    typeof base.gate_blocked_dispatches === "object" &&
+    !Array.isArray(base.gate_blocked_dispatches)
+      ? { .../** @type {Record<string, unknown>} */ (base.gate_blocked_dispatches) }
+      : {};
+  const k = Number.isFinite(input.k) && input.k > 0 ? Math.floor(input.k) : GATE_BLOCKED_DISPATCH_K;
+  const next = getGateBlockedCount(base, key) + 1;
+  prevMap[key] = next;
+  base.gate_blocked_dispatches = prevMap;
+  base.gate_blocked_last = {
+    key,
+    at: new Date().toISOString(),
+    blocked: next,
+    k,
+    ...(typeof input.reason === "string" && input.reason ? { reason: input.reason.slice(0, 280) } : {}),
+  };
+  return { state: base, key, blocked: next, exhausted: next >= k };
+}
+
 export default {
   AGENT_RETRY_K,
+  GATE_BLOCKED_DISPATCH_K,
   agentRetryKey,
   applyAgentDispatchOutcome,
+  applyGateBlockedDispatch,
   decideAgentRetryAllowed,
+  decideGateBlockedDispatchAllowed,
   getAgentFailureCount,
+  getGateBlockedCount,
 };

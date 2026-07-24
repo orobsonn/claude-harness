@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createPlannerRecoveryHooks } from "./planner-recovery.ts";
 import { createPlanGateHooks } from "./plan-gate.ts";
-import { reconcilePlannerStateFromDisk } from "./lib/planner-artifact.mjs";
+import { reconcilePlannerStateFromDisk, semanticPlanHash } from "./lib/planner-artifact.mjs";
 import { sealedMarkerRecord } from "./lib/marker-seal.mjs";
 
 const SESSION = "ses_plannerRecovery01";
@@ -46,8 +46,9 @@ async function tempRun(configureFallback, fn, initialPlan = { feature_id: FEATUR
     const agents = path.join(root, ".opencode", "agents");
     fs.mkdirSync(agents, { recursive: true });
     fs.writeFileSync(path.join(agents, "planner-fallback.md"), `---\nmodel: ${FALLBACK_MODEL}\n---\n`);
-    const state = () => JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
-    await fn({ root, state, planPath: path.join(planDir, "execution-plan.json") });
+    const stateFile = path.join(stateDir, "gate-state.json");
+    const state = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    await fn({ root, state, stateFile, planPath: path.join(planDir, "execution-plan.json") });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -145,18 +146,53 @@ test("provider failure never arms fallback_pending (primary-only product stop/re
   });
 });
 
-test("old matching full plan does not release downstream until current attempt rewrites it", async () => {
-  await tempRun(false, async ({ root, state, planPath }) => {
+test("returning the plan it was asked to revise does not release downstream", async () => {
+  // The attempt started from FULL_PLAN on disk and returned it verbatim: nothing was addressed.
+  await tempRun(false, async ({ root, state }) => {
     const hooks = await createPlannerRecoveryHooks(root);
     await before(hooks, "planner", "call-current");
-    await after(hooks, "planner", "call-current", JSON.stringify(FULL_PLAN));
-    const gate = await createPlanGateHooks(root);
-    await assert.rejects(() => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }), /plan_pending_write/);
+    const output = await after(hooks, "planner", "call-current", JSON.stringify(FULL_PLAN));
+    assert.equal(state().planner_status, "plan_invalid");
     assert.equal(state().planner_plan_binding, undefined);
-    fs.writeFileSync(planPath, `${JSON.stringify(FULL_PLAN)}\n`);
-    await gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") });
-    assert.equal(state().planner_plan_binding.call_id, "call-current");
+    assert.match(output.metadata.planner_recovery, /idêntico/);
+    const gate = await createPlanGateHooks(root);
+    await assert.rejects(
+      () => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }),
+      /bound artifact/,
+    );
   }, FULL_PLAN);
+});
+
+test("a genuinely revised plan is authored by the plugin and releases downstream with no transcription", async () => {
+  const revised = { ...FULL_PLAN, tasks: [{ ...FULL_PLAN.tasks[0], complexity: "high" }] };
+  await tempRun(false, async ({ root, state, planPath }) => {
+    const hooks = await createPlannerRecoveryHooks(root);
+    await before(hooks, "planner", "call-revised");
+    await after(hooks, "planner", "call-revised", JSON.stringify(revised));
+    // No orchestrator write happened between the Task returning and the plan being usable.
+    assert.equal(state().planner_status, "usable");
+    assert.equal(state().planner_plan_binding.call_id, "call-revised");
+    assert.equal(JSON.parse(fs.readFileSync(planPath, "utf8")).tasks[0].complexity, "high");
+    const gate = await createPlanGateHooks(root);
+    await gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") });
+  }, FULL_PLAN);
+});
+
+test("a response carrying two distinct plans is refused and the canonical plan is untouched", async () => {
+  const decoy = { ...FULL_PLAN, tasks: [{ ...FULL_PLAN.tasks[0], id: "task-decoy" }] };
+  await tempRun(false, async ({ root, state, planPath }) => {
+    const original = fs.readFileSync(planPath, "utf8");
+    const hooks = await createPlannerRecoveryHooks(root);
+    await before(hooks, "planner", "call-ambiguous");
+    await after(
+      hooks,
+      "planner",
+      "call-ambiguous",
+      `\`\`\`json\n${JSON.stringify(decoy)}\n\`\`\`\n\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\``,
+    );
+    assert.equal(state().planner_status, "plan_invalid");
+    assert.equal(fs.readFileSync(planPath, "utf8"), original);
+  });
 });
 
 test("content-addressed prompt snapshot survives dd/sponge overwrite, ln replacement, and background write semantics", async () => {
@@ -198,17 +234,34 @@ test("feature mismatch and artifact swap during locked gate decision both fail c
     const hooks = await createPlannerRecoveryHooks(root);
     await before(hooks, "planner", "call-feature");
     await after(hooks, "planner", "call-feature", JSON.stringify(wrongFeaturePlan));
-    fs.writeFileSync(planPath, JSON.stringify(wrongFeaturePlan));
+    // The wrong-feature plan is refused at authorship: the canonical stub is never replaced.
+    const onDisk = JSON.parse(fs.readFileSync(planPath, "utf8"));
+    assert.equal(onDisk.feature_id, FEATURE);
+    assert.match(state().planner_binding_error, /feature_id/);
     const gate = await createPlanGateHooks(root);
-    await assert.rejects(() => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }), /plan_pending_write|bound artifact/);
+    await assert.rejects(() => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }), /plan_pending_write|plan_invalid|bound artifact/);
     assert.notEqual(state().planner_status, "usable");
   });
 
-  await tempRun(false, async ({ root, state, planPath }) => {
-    const hooks = await createPlannerRecoveryHooks(root);
-    await before(hooks, "planner", "call-swap");
-    await after(hooks, "planner", "call-swap", JSON.stringify(FULL_PLAN));
+  await tempRun(false, async ({ root, state, planPath, stateFile }) => {
+    // Swap during the locked bind decision: craft the pending state the plugin produces, then race it.
     fs.writeFileSync(planPath, JSON.stringify(FULL_PLAN, null, 2));
+    const pending = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    fs.writeFileSync(stateFile, JSON.stringify({
+      ...pending,
+      planner_status: "plan_pending_write",
+      planner_primary_attempts: 1,
+      planner_active_attempt: {
+        call_id: "call-swap",
+        token: "token-swap",
+        role: "planner",
+        session_id: SESSION,
+        feature_id: FEATURE,
+        status: "plan_returned",
+        returned_plan_hash: semanticPlanHash(FULL_PLAN),
+        baseline_plan: { exists: false, fingerprint: "missing" },
+      },
+    }));
     const swapped = { ...FULL_PLAN, tasks: [{ ...FULL_PLAN.tasks[0], id: "task-swapped" }] };
     const result = reconcilePlannerStateFromDisk(root, SESSION, Date.now(), {
       beforeConfirm: () => fs.writeFileSync(planPath, JSON.stringify(swapped)),
@@ -245,7 +298,11 @@ test("double before on same callID is idempotent and does not deny the planner T
     assert.equal(state().planner_active_attempt.call_id, "call-same");
     assert.equal(state().planner_active_attempt.token, "token-1");
     await after(hooks, "planner", "call-same", JSON.stringify(FULL_PLAN));
-    assert.equal(state().planner_status, "plan_pending_write");
+    assert.equal(state().planner_status, "usable");
+    // Re-entrant after-hook (OC 1.18 fires it twice) must not rewrite or rebind.
+    const binding = state().planner_plan_binding;
+    await after(hooks, "planner", "call-same", JSON.stringify(FULL_PLAN));
+    assert.deepEqual(state().planner_plan_binding, binding);
   });
 });
 

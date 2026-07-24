@@ -55,6 +55,27 @@ test("accepts a fenced structurally valid full plan with summary", () => {
   assert.equal(result.plan.tasks.length, 1);
 });
 
+test("same plan extracted from both the fence and the raw text is one candidate, not two", () => {
+  // jsonObjects() scans the fenced block AND the whole text — the duplicate must not read as ambiguity.
+  const result = classifyPlannerResult(`\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\``);
+  assert.equal(result.kind, "usable_plan");
+  assert.equal(result.plan.feature_id, FULL_PLAN.feature_id);
+});
+
+test("a revision quoting the superseded plan is invalid, never first-one-wins", () => {
+  // The exact shape a re-dispatched planner emits after REVISE. Picking by document order would
+  // persist the OLD plan under a hash that matches it — the reviewed findings silently dropped.
+  const revised = {
+    ...FULL_PLAN,
+    tasks: [{ ...FULL_PLAN.tasks[0], complexity: "high" }],
+  };
+  const result = classifyPlannerResult(
+    `Plano anterior:\n\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\`\nPlano revisado:\n\`\`\`json\n${JSON.stringify(revised)}\n\`\`\``,
+  );
+  assert.equal(result.kind, "invalid_plan");
+  assert.match(result.errors[0], /2 distinct full plans/);
+});
+
 test("unknown structured task rejection is execution failure, not provider unavailability", () => {
   assert.deepEqual(classifyPlannerBoundaryError("invalid subagent type"), {
     kind: "execution_failure",
