@@ -1,6 +1,6 @@
 ---
 name: creating-issues
-description: "Authors well-formed harness issue(s) — a single issue or a dependency-ordered roadmap — that feed the autonomous pipeline. Applies the small-delivery-unit sizing rule, coaches VERIFIABLE acceptance criteria (the locked_tests derive from them), wires harness-deps for order, creates every issue harness:ready, and runs the DAG lint. Use when the operator wants to create an issue or organize a roadmap."
+description: "Authors well-formed harness issue(s) — a single issue or a dependency-ordered roadmap — from the operator's conversation or from a PRD written by grill (docs/prd/<slug>.md). Applies the small-delivery-unit sizing rule, coaches VERIFIABLE acceptance criteria (the locked_tests derive from them), keeps the PRD's model assumptions attackable and blocks on its open questions, wires harness-deps for order, creates every issue harness:ready, and runs the DAG lint. Use when the operator wants to create an issue or organize a roadmap."
 ---
 
 # Creating-Issues — author the pipeline's highest-leverage input
@@ -22,7 +22,8 @@ All identifiers/reasoning in English. Every message to the operator is **pt-br, 
 ## When to use
 
 - The operator wants to create an issue, or organize a **roadmap** (several ordered/related issues).
-- Invoked directly (`/creating-issues`) or when the entry-gate advisory nudges toward the form.
+- Invoked directly (`/creating-issues`), by `grill` at the end of a PRD interview, or when the
+  entry-gate advisory nudges toward the form.
 - NOT for triaging an already-existing request into a delivery mode — that is `triaging-requests`.
 
 ## Interactive vs headless
@@ -30,6 +31,67 @@ All identifiers/reasoning in English. Every message to the operator is **pt-br, 
 - **INTERACTIVE (local):** ask the clarifying questions below before creating anything.
 - **HEADLESS (cloud):** never `AskUserQuestion`; derive from the trigger prompt, proceed, and record
   any unresolved question inside the issue body rather than blocking.
+
+## Input: a conversation, or a PRD from `grill`
+
+The source is either the operator's conversation or a **PRD at `docs/prd/<slug>.md`** written by the
+`grill` skill. With a PRD, do not re-interview and do not re-derive its content — map it:
+
+| PRD section | Where it lands |
+|---|---|
+| `## Requisitos` | the `#ac-N.M` acceptance criteria |
+| `## Quem se beneficia` | the `#uj-N` user journeys |
+| `## Problema` | the issue summary — the context and why it matters |
+| `## Fora de escopo` | the explicit non-goals in `scope` ("must NOT touch / must NOT do") |
+| `## Riscos conhecidos` | informs `sensitive` and `priority` |
+| `## Decisões travadas` | issue body — constraints the implementation must respect |
+| `## Suposições do modelo` | issue body — labelled as **assumptions**, never as decisions |
+| `## Em aberto` | **blocks** the dependent slice — see below |
+
+**Requirement → AC traceability.** PRD requirement `N` becomes `#ac-N.M`. Keep the PRD's numbering so
+every criterion traces back to one requirement, and name the source PRD (`docs/prd/<slug>.md`) in the
+issue body. The requirements were already authored to be observable and verifiable — carry them across
+in substance, do not re-invent or re-word them into something vaguer. Split one requirement into
+several `#ac-N.M` only when it asserts more than one observable effect.
+
+**Decisions and assumptions are TWO blocks, never one.** `## Decisões travadas` are the operator's
+rulings: downstream the `adversary` DEFENDS them. `## Suposições do modelo` are the model's own
+deductions: the adversary must stay FREE TO ATTACK them. Write both into the issue body, each under
+its own explicit label:
+
+```
+Decisões travadas (do operador — respeitar):
+- ...
+
+Suposições do modelo (deduzidas pelo modelo, NÃO decididas pelo operador — atacáveis):
+- ...
+```
+
+Collapsing them into one list is the specific failure this handoff exists to prevent — it launders a
+guess into a constraint nobody downstream is allowed to challenge.
+
+**`## Em aberto` blocks issue creation for whatever depends on it.** An unresolved open question is a
+decision the autonomous engine would otherwise invent at 3am and merge unsupervised. For every
+requirement that depends on an open item:
+
+1. **Default — leave that slice out of this batch.** It stays parked in the PRD's `## Em aberto`,
+   which is exactly where a later `grill` session resumes.
+2. **Only with the operator's explicit authorization** — a tracking-only record with **no `harness:*`
+   label at all**. `cron-a-select` picks only open `harness:ready`, so an unlabelled issue is inert.
+   This means bypassing the issue form, which always stamps `harness:ready`; do it deliberately or not
+   at all. Never hand-apply `harness:queued` or `harness:blocked` — both are engine-owned.
+
+Then tell the operator, in pt-br, which slices were held back and which open question holds each.
+
+**A PRD does not authorize a bigger issue.** A PRD that produces N slices maps to N issues under the
+sizing rule below, unchanged. "It is all one PRD, all one theme" is theme-cohesion, not
+delivery-cohesion — the exact rationalization `rules/creating-issues.md` already warns about.
+
+## Project glossary
+
+If `CONTEXT.md` exists at the project root, use its terms **verbatim** in issue titles and bodies. Do
+not invent parallel vocabulary; do not create or edit the file (`surveying-codebase` seeds it, the
+`harvester` maintains it).
 
 ## Procedure
 
@@ -85,3 +147,5 @@ Produce the form fields for each unit:
 
 - Each intended outcome is exactly one small, revertible issue with verifiable ACs, correct scope and
   sensitivity, and (for a roadmap) valid `harness-deps` — and `chain-validate` is clean.
+- From a PRD: every criterion traces back to a numbered requirement, decisions and model assumptions
+  are two separately labelled blocks, and nothing depending on `## Em aberto` went out `harness:ready`.
