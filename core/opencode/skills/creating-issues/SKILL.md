@@ -1,5 +1,5 @@
 ---
-name: creating-issues
+name: oc-creating-issues
 description: "Cria uma issue harness-ready ou um roadmap de issues pequenas — a partir da conversa, de um PRD escrito pelo grill (docs/prd/<slug>.md) ou de um candidato do proposing-deepening (docs/architecture/deepening-candidates.md) — com campos verificáveis e submissão segura pelo GitHub CLI. Issue vinda de candidato a aprofundamento é entrega local: nunca harness:ready, nunca submetida pelo submit-issue.mjs. Use quando o operador pedir para criar issue ou organizar roadmap."
 ---
 
@@ -9,9 +9,9 @@ Ao iniciar, diga: "Vou montar a(s) issue(s) no padrão do harness."
 
 Leia primeiro `.opencode/rules/creating-issues.md`. Esta skill aplica esse padrão sem duplicar regras de scheduling.
 
-## Entrada: conversa, PRD do `grill` ou candidato do `proposing-deepening`
+## Entrada: conversa, PRD do `oc-grill` ou candidato do `oc-proposing-deepening`
 
-A origem é a conversa do operador, um **PRD em `docs/prd/<slug>.md`** escrito pela skill `grill`, ou um **candidato a aprofundamento** em `docs/architecture/deepening-candidates.md` escrito pela skill `proposing-deepening`. Com origem escrita, não reentreviste e não rededuza o conteúdo — mapeie:
+A origem é a conversa do operador, um **PRD em `docs/prd/<slug>.md`** escrito pela skill `oc-grill`, ou um **candidato a aprofundamento** em `docs/architecture/deepening-candidates.md` escrito pela skill `oc-proposing-deepening`. Com origem escrita, não reentreviste e não rededuza o conteúdo — mapeie:
 
 | Seção do PRD | Campo do draft |
 |---|---|
@@ -46,7 +46,7 @@ Suposições do modelo (deduzidas pelo modelo, NÃO decididas pelo operador — 
 
 Juntar as duas categorias num campo só é exatamente a falha que este handoff existe para evitar — lava um palpite virando restrição que ninguém a jusante pode contestar.
 
-**`## Em aberto` bloqueia a criação de tudo que depende dele.** Pergunta em aberto é uma decisão que o motor autônomo inventaria às 3h da manhã e merjaria sem supervisão. Toda fatia que depende de um item em aberto **fica de fora deste lote** e continua estacionada no `## Em aberto` do PRD, que é de onde uma próxima sessão de `grill` retoma. Não há caminho "criar inerte" aqui: o `submit-issue.mjs` aplica `harness:ready` sempre, e `harness:queued` / `harness:blocked` são do motor — nunca aplicados à mão. Diga ao operador quais fatias ficaram de fora e qual pergunta segura cada uma.
+**`## Em aberto` bloqueia a criação de tudo que depende dele.** Pergunta em aberto é uma decisão que o motor autônomo inventaria às 3h da manhã e merjaria sem supervisão. Toda fatia que depende de um item em aberto **fica de fora deste lote** e continua estacionada no `## Em aberto` do PRD, que é de onde uma próxima sessão de `oc-grill` retoma. Não há caminho "criar inerte" aqui: o `submit-issue.mjs` aplica `harness:ready` sempre, e `harness:queued` / `harness:blocked` são do motor — nunca aplicados à mão. Diga ao operador quais fatias ficaram de fora e qual pergunta segura cada uma.
 
 ## Reforma é entrega local — nunca `harness:ready`
 
@@ -60,7 +60,7 @@ Por que isso e não "é só ter cuidado": o eixo de risco de uma reforma é **ra
 
 ## Glossário do projeto
 
-Se existir `CONTEXT.md` na raiz do projeto, use os termos dele **literalmente** no título e no corpo da issue. Não invente vocabulário paralelo e não crie nem edite o arquivo (`surveying-codebase` semeia, o `harvester` mantém).
+Se existir `CONTEXT.md` na raiz do projeto, use os termos dele **literalmente** no título e no corpo da issue. Não invente vocabulário paralelo e não crie nem edite o arquivo (`oc-surveying-codebase` semeia, o `harvester` mantém).
 
 ## Fluxo
 

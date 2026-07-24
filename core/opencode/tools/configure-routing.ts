@@ -1,5 +1,5 @@
 /** @description
- * Native OC tool for the `configuring-model-routing` skill. Binds the pure core
+ * Native OC tool for the `oc-configuring-model-routing` skill. Binds the pure core
  * (configure-routing-core.mjs) to the OC tool runtime. Running in-process means routing
  * reconfiguration never touches the bash forge/interpreter gate — hand-editing the
  * touchpoints with sed/perl is what the anti-forgery gate (correctly) blocks, so this

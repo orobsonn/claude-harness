@@ -19,18 +19,18 @@ as a hand or eye via the `task` tool (executor / sniper / test-author / planner 
 plan-reviewer / adversary / compliance / security / harvester / shipper) — or you
 are any agent other than `build` — **skip this section entirely**. You are one
 step inside a pipeline that already triaged. Follow your brief only. **Never**
-call `classify`, load `triaging-requests`, or start ceremony.
+call `classify`, load `oc-triaging-requests`, or start ceremony.
 
 On the **first request of every top-level `build` session**, the primary agent runs this
 order before anything else. These are real **skills it loads and follows**:
 
-1. **`triaging-requests`** — classify into **no-ceremony / QUICK / LIGHT / FULL**.
-2. **`brainstorming`** (LIGHT/FULL only) — elicit operator decisions; HARD-GATE on approved design.
+1. **`oc-triaging-requests`** — classify into **no-ceremony / QUICK / LIGHT / FULL**.
+2. **`oc-brainstorming`** (LIGHT/FULL only) — elicit operator decisions; HARD-GATE on approved design.
 3. **`planner`** — only after the spec is approved.
 
 Both entry skills run **inside `build` (primary)** — never in a Task child / hand / eye.
 Host rails deny `classify` on child sessions and on any agent other than `build`.
-The full per-task delivery loop lives in the `orchestrating-delivery` skill.
+The full per-task delivery loop lives in the `oc-orchestrating-delivery` skill.
 
 ### Harness lifecycle lane
 
@@ -47,8 +47,8 @@ The `plan` primary agent is a separate discovery lane, read-only except for one 
 write carve-out. It is exempt from
 the `build` entry policy: no triage, classify, ceremony markers, implementation, or
 delivery. It may inspect the project, research the web, load only the conversational
-branch of `brainstorming` or the `grill` interview skill, and invoke only the read-only
-`discussion-adversary`. Its single permitted write is the `grill` PRD artifact under
+branch of `oc-brainstorming` or the `oc-grill` interview skill, and invoke only the read-only
+`discussion-adversary`. Its single permitted write is the `oc-grill` PRD artifact under
 `docs/prd/` (frontmatter `permission.edit` denies `*` and allows only `docs/prd/*.md`);
 `bash` stays denied.
 Its terminal artifact is a `## Build Spec` in the shared session conversation. The

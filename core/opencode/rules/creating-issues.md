@@ -3,7 +3,7 @@
 Universal — sem `paths:`, carrega em toda conversa.
 
 > Esta rule é o **padrão** (o quê/porquê). Para criar issue(s) **ativamente** — passo a passo,
-> aplicando sizing, critério de aceite verificável e roadmap — use a skill **`creating-issues`**, o
+> aplicando sizing, critério de aceite verificável e roadmap — use a skill **`oc-creating-issues`**, o
 > procedimento que aplica este padrão. Fonte única: a skill lê esta rule, não a duplica.
 
 ## Conventions
@@ -36,8 +36,8 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **Sempre separar** quando: cruza área sensível (auth/pagamento/segredo/SQL — isola pra só ela pegar o modo FULL), passa de ~400 linhas, mistura assuntos sem relação, ou uma parte tem valor próprio
 - O pipeline já pica a issue em micro-tarefas verificadas por dentro (o planner decompõe em tarefas atômicas) — isso cobre a QUALIDADE da construção, **não** o retry/entrega/raio-de-explosão. Não junte contando com isso
 
-### PRD como fonte (handoff da skill `grill`)
-- A issue pode nascer da conversa OU de um **PRD em `docs/prd/<slug>.md`** escrito pela skill `grill`. Com PRD, o mapeamento é fixo:
+### PRD como fonte (handoff da skill `oc-grill`)
+- A issue pode nascer da conversa OU de um **PRD em `docs/prd/<slug>.md`** escrito pela skill `oc-grill`. Com PRD, o mapeamento é fixo:
   - `## Requisitos` → `acceptance_criteria` (`#ac-N.M`) — já foram escritos para serem observáveis e verificáveis; carregue-os em substância, não reinvente nem afrouxe. Preserve a numeração (requisito `N` → `#ac-N.M`) para cada critério voltar a um requisito, e cite o PRD de origem no `summary`
   - `## Quem se beneficia` → `user_journeys` (`#uj-N`)
   - `## Problema` → `summary`; `## Fora de escopo` → os não-objetivos explícitos, no `scope`
@@ -45,11 +45,11 @@ Universal — sem `paths:`, carrega em toda conversa.
   - `## Decisões travadas` → `resolved_decisions`, como restrições que a implementação deve respeitar
   - `## Suposições do modelo` → `summary`, em bloco **rotulado como suposição** — nunca em `resolved_decisions`
 - **Decisão e suposição são dois blocos separados, nunca um.** Decisão travada é do operador e o `adversary-*` a DEFENDE; suposição é dedução do modelo e o `adversary-*` precisa continuar LIVRE PARA ATACÁ-LA. Fundir as duas categorias lava um palpite em restrição inquestionável — é a falha que este handoff existe para evitar
-- **`## Em aberto` bloqueia a criação de qualquer fatia que dependa dele** — pergunta não resolvida é uma decisão que o motor autônomo inventaria sozinho e merjaria. A fatia dependente fica FORA do lote e continua estacionada no `## Em aberto` do PRD, de onde a próxima sessão de `grill` retoma. Não há caminho "criar inerte": o `submit-issue.mjs` estampa `harness:ready` sempre, e `harness:queued` / `harness:blocked` são do motor — nunca aplicados à mão
+- **`## Em aberto` bloqueia a criação de qualquer fatia que dependa dele** — pergunta não resolvida é uma decisão que o motor autônomo inventaria sozinho e merjaria. A fatia dependente fica FORA do lote e continua estacionada no `## Em aberto` do PRD, de onde a próxima sessão de `oc-grill` retoma. Não há caminho "criar inerte": o `submit-issue.mjs` estampa `harness:ready` sempre, e `harness:queued` / `harness:blocked` são do motor — nunca aplicados à mão
 - **PRD não autoriza issue maior**: um PRD que gera N fatias vira N issues sob a mesma regra de tamanho acima
 
-### Candidato a aprofundamento como fonte (handoff da skill `proposing-deepening`)
-- A issue também pode nascer de um **candidato a aprofundamento** em `docs/architecture/deepening-candidates.md`, escrito pela skill `proposing-deepening` (que roda no agente `plan`, sem bash e sem edit em source). O mapeamento é fixo:
+### Candidato a aprofundamento como fonte (handoff da skill `oc-proposing-deepening`)
+- A issue também pode nascer de um **candidato a aprofundamento** em `docs/architecture/deepening-candidates.md`, escrito pela skill `oc-proposing-deepening` (que roda no agente `plan`, sem bash e sem edit em source). O mapeamento é fixo:
   - `o que fica mais fácil e pra quem` → `user_journeys` (`#uj-N`)
   - `sintoma` + `não fazer nada` → `summary`
   - `fatias` → **uma issue por fatia** (cada uma ≤ ~400 linhas, merjável sozinha), ordenadas com `dependencies`
@@ -60,7 +60,7 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **Por que a rota escala**: o eixo de risco de uma reforma é **raio de explosão**, não sensibilidade de domínio — a allowlist de path sensível não enxerga uma reestruturação grande de código comum que funciona. Sem essa escalada, o caso de maior raio de explosão cairia na cerimônia mais barata
 
 ### Glossário do projeto (`CONTEXT.md`)
-- Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que os agentes de plano e de escrita leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`surveying-codebase` semeia, o `harvester` mantém)
+- Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que os agentes de plano e de escrita leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`oc-surveying-codebase` semeia, o `harvester` mantém)
 
 ### Roadmap encadeado (issues com dependência/ordem)
 - Um **roadmap** é um conjunto de issues criadas TODAS com `harness:ready` (o form já aplica) — a ordem NÃO vem da ordem de criação, vem das **dependências declaradas**

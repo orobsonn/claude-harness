@@ -1,5 +1,5 @@
 ---
-name: updating-harness
+name: oc-updating-harness
 description: "Install or update the Claude Harness in the CURRENT project from within an OpenCode session. Runs the CLI from the pinned git release tag (npx github:orobsonn/claude-harness#<tag> init) so no engine needs to be vendored into .opencode/ and it never depends on the lagging npm release. Detects install-vs-update, resolves which runtime shell(s) to vendor, and re-vendors without clobbering project memory/kaizen/config. Run it in any repo to onboard or sync the OpenCode harness after a new release."
 license: MIT
 compatibility: opencode
@@ -11,7 +11,7 @@ metadata:
 # Updating-Harness (OpenCode) — install or update the harness from within OpenCode
 
 This is the **loader-visible lifecycle entry for an OpenCode-native session**. A Claude Code session
-has its own `updating-harness` skill that runs the vendored engine directly; an OpenCode session cannot
+has its own `oc-updating-harness` skill that runs the vendored engine directly; an OpenCode session cannot
 see that engine, so here we drive the CLI **from the pinned git release tag**, which fetches the engine
 from that release. This keeps an OpenCode project self-maintaining — it never depends on a Claude Code
 session to administer it, nor on the npm release being current.
@@ -23,7 +23,7 @@ All identifiers/commands stay in English; every message to the operator is in **
 <HARD-GATE>
 This is a top-level, interactive lifecycle operation, not a delivery. Run only from a direct operator
 request and only when no delivery is active. Do not call `classify`, create or modify a plan/spec,
-load `brainstorming` or `orchestrating-delivery`, or dispatch any subagent. This runs in the
+load `oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. This runs in the
 `harness-config` lane, which the operator reaches by typing `/updating-harness` — never from `build`.
 Run the exact release CLI command, report the result, and require a session restart. In headless or
 relayed input, stop without modifying the harness.

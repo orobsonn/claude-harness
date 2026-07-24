@@ -1,5 +1,5 @@
 ---
-name: distilling-learnings
+name: oc-distilling-learnings
 description: Reads the transient findings buffer, applies the durability test, then routes each durable insight by blast-radius to the right NATIVE destination — project pattern → native project-root MEMORY.md (durable index, one note = one concept), law of one folder → that folder's nested AGENTS.md (or its existing CLAUDE.md router) + root router row, global convention → kaizen.md proposal. No learnings store is written. Use when the harvester runs after recording-findings completes; never during active implementation.
 license: MIT
 compatibility: opencode
@@ -12,11 +12,11 @@ metadata:
 
 **Announce at the start (in pt-br):** "Usando distilling-learnings para rotear os aprendizados duráveis dos findings pro mecanismo nativo certo."
 
-**Input:** the current transient findings buffer (just consolidated by `recording-findings`).
+**Input:** the current transient findings buffer (just consolidated by `oc-recording-findings`).
 
 **There is no separate learnings store.** This skill does not create or append to any custom learnings file. Durable knowledge goes to the **native mechanism chosen by blast-radius** — the exact destinations `agents/harvester.md` step 4 routes to. A custom store would just duplicate the native `MEMORY.md` index + nested `AGENTS.md` law, so it is dropped.
 
-This skill **owns** the classify-and-route machine below; `skill({ name: "surveying-codebase" })` reuses it unchanged, sourcing insights from the code itself instead of a run's findings buffer.
+This skill **owns** the classify-and-route machine below; `skill({ name: "oc-surveying-codebase" })` reuses it unchanged, sourcing insights from the code itself instead of a run's findings buffer.
 
 ---
 
@@ -57,7 +57,7 @@ The insight is a reusable pattern/decision/anti-pattern that applies **across th
   **Why:** <the constraint / decision / failure mode that makes this durable>
   **How to apply:** <the concrete action a future executor takes — file/util/pattern to use or avoid>
   ```
-- If `MEMORY.md` does not exist yet at the project root, create it with a `# MEMORY.md` heading and the first entry. (On a cold codebase, prefer `skill({ name: "surveying-codebase" })` to populate it in bulk.) For this project, the legacy Claude memory still lives outside the tree — do **not** reach into it; the first harvest/survey seeds a fresh project-root `MEMORY.md`.
+- If `MEMORY.md` does not exist yet at the project root, create it with a `# MEMORY.md` heading and the first entry. (On a cold codebase, prefer `skill({ name: "oc-surveying-codebase" })` to populate it in bulk.) For this project, the legacy Claude memory still lives outside the tree — do **not** reach into it; the first harvest/survey seeds a fresh project-root `MEMORY.md`.
 
 ### B. Law of one folder → nested AGENTS.md (or existing CLAUDE.md router)
 The insight is a rule that applies **only inside one folder/subsystem** (e.g. "all handlers under `src/auth/` must re-validate the JWT signature, not just presence"). Write it to that folder's nested **`AGENTS.md`** — or to the folder's existing **`CLAUDE.md`** if that file is already the folder's router (OpenCode reads project `CLAUDE.md`, root and nested, by up-traversal). Match the existing file's style.
@@ -69,7 +69,7 @@ The insight is a rule that applies **only inside one folder/subsystem** (e.g. "a
 ### C. Global convention → kaizen.md proposal (human-gated)
 The insight is a **harness-wide-or-broader** convention that would change how the harness itself behaves across all projects (an agent, a skill, a global git/release rule). **Do not write it to any root rules file here** — hand it off so the proposal is logged, not applied:
 
-- Invoke `skill({ name: "proposing-improvements" })`, which owns the `kaizen.md` format and runs the precedent check before appending. The proposal lands as `Status: proposed` in the project-root `kaizen.md` and is **NEVER auto-applied** — a human reviews it.
+- Invoke `skill({ name: "oc-proposing-improvements" })`, which owns the `kaizen.md` format and runs the precedent check before appending. The proposal lands as `Status: proposed` in the project-root `kaizen.md` and is **NEVER auto-applied** — a human reviews it.
 - Do **not** edit root `AGENTS.md`, `~/.config/opencode/AGENTS.md`, or any rules file directly, and do **not** reach into `~/.claude`. There is no `paths:`-scoped rules mechanism in OpenCode — harness-wide changes are *proposed* to `kaizen.md`, never promoted into the global rules from this skill.
 
 ### D. One-off → git only
@@ -90,7 +90,7 @@ If an insight you would route to MEMORY.md (A) or a nested AGENTS.md (B) is actu
 - **Wrong blast-radius** — a folder-specific rule dumped into project-wide MEMORY.md pollutes recall; a project pattern buried in one folder's AGENTS.md never surfaces for other tasks. Pick the tightest scope that still covers the insight.
 - **Mirroring the findings buffer** — MEMORY.md is for durable extractions, not a run report. If an entry reads like "what happened this run", it is wrong.
 - **One-off bugs as patterns** — a bug fixed by a `sniper-<tier>` in a single task is not durable unless the same class appears in 2+ tasks.
-- **Editing root/global rules directly for a global convention** — never write a harness-wide rule into root `AGENTS.md` or `~/.config/opencode/AGENTS.md`; that is `proposing-improvements`' job via a human-reviewed `kaizen.md` proposal.
+- **Editing root/global rules directly for a global convention** — never write a harness-wide rule into root `AGENTS.md` or `~/.config/opencode/AGENTS.md`; that is `oc-proposing-improvements`' job via a human-reviewed `kaizen.md` proposal.
 - **Duplicating AGENTS.md/CLAUDE.md** — if the pattern is already documented, skip it (or, if promoting, leave a `promoted → <path>` pointer). Never restate it in MEMORY.md.
 - **Vague entries** — "handle errors properly" is not durable. "Upstream bodies truncated to 500 chars before logging to prevent JWT leak — see `src/utils/errors.ts`" is.
 
@@ -98,4 +98,4 @@ If an insight you would route to MEMORY.md (A) or a nested AGENTS.md (B) is actu
 
 ## Cold codebase
 
-If the project enters the harness with empty memory (no `MEMORY.md`, unfilled nested `AGENTS.md`) and there is no findings buffer to distill — i.e. durable knowledge must be mined from the **code itself**, not a run — that is not this skill's job. Hand off to `skill({ name: "surveying-codebase" })`, which sources insights from the codebase and routes them through this exact same classify-and-route machine.
+If the project enters the harness with empty memory (no `MEMORY.md`, unfilled nested `AGENTS.md`) and there is no findings buffer to distill — i.e. durable knowledge must be mined from the **code itself**, not a run — that is not this skill's job. Hand off to `skill({ name: "oc-surveying-codebase" })`, which sources insights from the codebase and routes them through this exact same classify-and-route machine.

@@ -71,7 +71,9 @@ const REQUIRED_AGENTS = [
   "shipper",
 ];
 
-const REQUIRED_SKILLS = [
+// Directory names (never prefixed — renaming a skill directory is forbidden). The `name:`
+// frontmatter carries the `oc-` prefix; the dir↔name invariant is locked in skill-catalog.test.mjs.
+export const REQUIRED_SKILLS = [
   "triaging-requests",
   "brainstorming",
   "orchestrating-delivery",
@@ -88,6 +90,8 @@ const REQUIRED_SKILLS = [
   "creating-issues",
   "grill",
   "proposing-deepening",
+  "creating-plans",
+  "updating-harness",
 ];
 
 /** Expected model per agent file from harness.routing.json contract */

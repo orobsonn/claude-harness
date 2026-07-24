@@ -1,5 +1,5 @@
 ---
-name: creating-plans
+name: oc-creating-plans
 description: "INTERNAL to the planner agent — NOT a main-loop skill. Do NOT invoke this directly from the orchestrator or main loop; instead dispatch the `planner` agent (always the planner model from routing), which runs this skill in isolation. Describes how the planner decomposes an approved spec/PRD into a validated execution-plan.json (atomic tasks, locked tests, severity tiers, adversarial flags, scope_paths) consumed by orchestrating-delivery."
 source: adapted from pi-agent/skills/plan-make/SKILL.md
 adaptation_date: 2026-06-01
@@ -313,6 +313,6 @@ The planner finalizes **only** when:
 
 After the plan is valid, show a short summary to the user (in pt-br):
 
-> "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs]. Próximo passo: aprovar e entregar ao orquestrador `orchestrating-delivery`."
+> "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs]. Próximo passo: aprovar e entregar ao orquestrador `oc-orchestrating-delivery`."
 
 **DO NOT write code. DO NOT invoke orchestrating-delivery directly. The only terminal action is handing the validated plan to the orchestrating-delivery skill.**

@@ -43,7 +43,7 @@ test("CC initializing-projects is runtime-aware (--runtime + .opencode destinati
 test("OC updating-harness skill exists, is loader-shaped, and runs the CLI from the pinned git tag", () => {
   assert.ok(existsSync(ocUpdatingPath), "the OpenCode-side updating-harness skill must exist (finding 6)");
   const ocUpdating = readFileSync(ocUpdatingPath, "utf8");
-  assert.match(ocUpdating, /^name: updating-harness$/m, "must have the loader frontmatter name");
+  assert.match(ocUpdating, /^name: oc-updating-harness$/m, "must have the loader frontmatter name");
   assert.match(ocUpdating, /compatibility: opencode/, "must declare OpenCode compatibility");
   assert.match(
     ocUpdating,

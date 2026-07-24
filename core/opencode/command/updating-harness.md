@@ -3,10 +3,10 @@ description: Instalar, atualizar ou sincronizar o Claude Harness neste projeto (
 agent: harness-config
 ---
 
-Load the `updating-harness` skill and follow only it.
+Load the `oc-updating-harness` skill and follow only it.
 
-This is a harness lifecycle operation, not a delivery: do not classify, do not load `brainstorming`
-or `orchestrating-delivery`, and do not dispatch a subagent. Run it once, report the result in
+This is a harness lifecycle operation, not a delivery: do not classify, do not load `oc-brainstorming`
+or `oc-orchestrating-delivery`, and do not dispatch a subagent. Run it once, report the result in
 pt-br, and stop.
 
 Operator request (may be empty): $ARGUMENTS

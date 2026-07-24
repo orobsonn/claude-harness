@@ -1,5 +1,5 @@
 ---
-name: configuring-model-routing
+name: oc-configuring-model-routing
 description: "Interactive skill to reconfigure harness.routing.json via dual-safe presets or custom slots. Deterministic apply rewrites routing + all agent frontmatter models + AGENTS.md §8 + opencode.json model/small_model. Validates before any write. Never disables dual without explicit operator override. Never invents roles or commits secrets."
 license: MIT
 compatibility: opencode
@@ -16,7 +16,7 @@ Runs interactively inside the `harness-config` lane (primary), which the operato
 
 Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness usa."
 
-**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — it never runs in `build`: `triaging-requests` Step 0 refuses a prose request and tells the operator to type the command (no `classify`, no `brainstorming`, no planner/adversary). The engine below is the safety net.
+**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — it never runs in `build`: `oc-triaging-requests` Step 0 refuses a prose request and tells the operator to type the command (no `classify`, no `oc-brainstorming`, no planner/adversary). The engine below is the safety net.
 
 **Apply via the native tool — never `node -e`, never hand-edit the touchpoints.**  
 The `configure-routing` tool wraps the sanctioned engine in-process, so it never hits the bash forge/interpreter gate (hand-editing routing with `sed`/`perl` is exactly what the anti-forgery gate blocks — that path is a dead end, do not attempt it).

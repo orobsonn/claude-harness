@@ -51,7 +51,7 @@ Keep ONLY insights that will still be true and useful on a FUTURE unrelated run.
 
 ### 5. Maintain the domain glossary — CONTEXT.md (ADD-ONLY)
 
-`CONTEXT.md` at the **project root** (beside `MEMORY.md`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `surveying-codebase`, read verbatim by the agents that plan or write (`plan`, `build`'s executor) and by the pre-implementation skills. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
+`CONTEXT.md` at the **project root** (beside `MEMORY.md`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `oc-surveying-codebase`, read verbatim by the agents that plan or write (`plan`, `build`'s executor) and by the pre-implementation skills. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
 
 Your mandate is **ADD-ONLY**:
 

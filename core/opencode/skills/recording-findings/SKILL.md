@@ -1,5 +1,5 @@
 ---
-name: recording-findings
+name: oc-recording-findings
 description: Consolidates executor, compliance, adversary, and sniper finding blocks from a completed feature run into the transient findings buffer at the project root. The findings buffer is ephemeral — the input to distilling-learnings, deleted by the harvester at the end of the run; durable audit lives in git. Use when the harvester runs after final dual review — never during active implementation.
 license: MIT
 compatibility: opencode
@@ -14,7 +14,7 @@ metadata:
 
 **Input:** the raw output blocks emitted by `executor-<tier>`, `compliance`, `adversary`, and `sniper-<tier>` agents during the completed feature run (the run's findings buffer that `build` accumulated in Phase 2 step h).
 
-**The findings buffer is TRANSIENT** — a single-run digest. It is the input to `distilling-learnings` (which routes durable insights to native MEMORY.md / nested AGENTS.md / kaizen.md) and is then **deleted by the harvester** at the end of the run (per `agents/harvester.md` step 5). It is not a durable archive — the run's commit/PR in git is the durable audit. Do not treat it as a cross-run log.
+**The findings buffer is TRANSIENT** — a single-run digest. It is the input to `oc-distilling-learnings` (which routes durable insights to native MEMORY.md / nested AGENTS.md / kaizen.md) and is then **deleted by the harvester** at the end of the run (per `agents/harvester.md` step 5). It is not a durable archive — the run's commit/PR in git is the durable audit. Do not treat it as a cross-run log.
 
 ---
 
@@ -88,4 +88,4 @@ If a task produced no notable findings in a category, omit that subsection entir
 - **Copying full agent output verbatim** — the findings buffer is a digest, not a log. Distill.
 - **Mixing unresolved and resolved bugs without tagging** — always mark RESOLVED or OPEN.
 - **Skipping tasks with DONE status** — even clean tasks may have assumptions worth recording.
-- **Reaching into `~/.claude`** — this harness is self-contained; the buffer lives at the project root, consumed by `distilling-learnings` and deleted by `harvester`.
+- **Reaching into `~/.claude`** — this harness is self-contained; the buffer lives at the project root, consumed by `oc-distilling-learnings` and deleted by `harvester`.
