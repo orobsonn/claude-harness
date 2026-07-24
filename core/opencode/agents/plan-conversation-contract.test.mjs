@@ -61,13 +61,14 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   for (const permission of ["webfetch", "websearch"]) {
     assert.match(fm, new RegExp(`^  ${permission}: allow$`, "m"), `${permission} must be allowed`);
   }
-  // Write carve-out: the ONLY allowed edit target is the grill PRD artifact.
+  // Write carve-out: the ONLY allowed edit targets are the two read-only-analysis artifacts —
+  // the grill PRD and the proposing-deepening candidates file.
   // A flat `edit: allow` — or any extra allowed path — must fail these assertions.
   assert.doesNotMatch(fm, /^ {2}edit: *(allow|ask)$/m, "edit must never be a flat allow/ask");
   assert.deepEqual(
     permissionRules(fm, "edit"),
-    ['"*": deny', '"docs/prd/*.md": allow'],
-    "edit must deny by default and allow ONLY docs/prd/*.md (the grill PRD artifact)",
+    ['"*": deny', '"docs/prd/*.md": allow', '"docs/architecture/deepening-candidates.md": allow'],
+    "edit must deny by default and allow ONLY the grill PRD and the deepening candidates file",
   );
   assert.deepEqual(
     permissionRules(fm, "task"),
@@ -76,8 +77,8 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   );
   assert.deepEqual(
     permissionRules(fm, "skill"),
-    ['"*": deny', '"brainstorming": allow', '"grill": allow'],
-    "skill must deny by default and allow ONLY brainstorming and grill",
+    ['"*": deny', '"brainstorming": allow', '"grill": allow', '"proposing-deepening": allow'],
+    "skill must deny by default and allow ONLY brainstorming, grill and proposing-deepening",
   );
   assert.match(fm, /^  "mv_\*": allow$/m);
   assert.match(fm, /^  "mp_\*": allow$/m);
@@ -98,14 +99,36 @@ test("plan lane emits an in-conversation Build Spec and hands execution to build
   assert.match(body, /Never write a spec or decision ledger to disk/);
 });
 
-test("plan lane documents its single write carve-out without weakening read-only identity", () => {
+test("plan lane documents its write carve-outs without weakening read-only identity", () => {
   const body = read("plan.md");
 
   assert.match(body, /`docs\/prd\/<slug>\.md`/, "the PRD artifact path must be explicit");
-  assert.match(body, /ONLY permitted write/, "the carve-out must be stated as the sole write");
-  assert.match(body, /`grill`/, "the carve-out must be bound to the grill skill");
-  assert.match(body, /`bash` stays denied/, "the carve-out must not imply shell access");
+  assert.match(body, /ONLY permitted write/, "the carve-outs must be stated as the sole writes");
+  assert.match(body, /`grill`/, "a carve-out must be bound to the grill skill");
+  assert.match(body, /`bash` stays denied/, "the carve-outs must not imply shell access");
   assert.match(body, /Never run shell commands, mutate git/);
+});
+
+test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only lane", () => {
+  const body = read("plan.md");
+
+  assert.match(
+    body,
+    /`docs\/architecture\/deepening-candidates\.md`/,
+    "the deepening candidates path must be documented",
+  );
+  assert.match(body, /`proposing-deepening`/, "the second carve-out must be bound to its skill");
+  assert.match(body, /`bash` stays denied/, "hosting the skill must not unlock a shell");
+  assert.match(
+    body,
+    /never `harness:ready`/,
+    "a deepening candidate must never become an autonomous issue",
+  );
+  assert.match(
+    body,
+    /read-only on source, propose-only/i,
+    "the skill's propose-only identity must be stated in its host",
+  );
 });
 
 test("discussion adversary is a hidden read-only subagent with no delegation", () => {

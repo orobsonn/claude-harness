@@ -31,6 +31,7 @@ export const HARNESS_SKILLS = [
   "grill",
   "importing-claude-memory",
   "orchestrating-delivery",
+  "proposing-deepening",
   "proposing-improvements",
   "recording-findings",
   "releasing-versions",

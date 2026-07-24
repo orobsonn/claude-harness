@@ -37,6 +37,7 @@ This is the exhaustive reference. Implementation contracts live in `../0x-*.md`.
 | triaging-requests | BOTH | 1 | |
 | brainstorming | BOTH | 1 | |
 | grill | BOTH | 1 | pre-implementation PRD interview; local-only, refuses headless; writes docs/prd/<slug>.md; OC copy runs inside `plan` |
+| proposing-deepening | BOTH | 1 | retrofit analysis of an existing codebase; read-only on source, propose-only; cap 5; writes docs/architecture/deepening-candidates.md; OC copy runs in `build` |
 | orchestrating-delivery | BOTH | 1 | |
 | creating-plans | CC (+ schema shared) | 1 | OC inline ok |
 | recording-findings | BOTH | 1 | |

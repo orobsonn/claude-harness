@@ -48,6 +48,17 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **`## Em aberto` bloqueia a criação de qualquer fatia que dependa dele** — pergunta não resolvida é uma decisão que o motor autônomo inventaria sozinho e merjaria. A fatia dependente fica FORA do lote e continua estacionada no `## Em aberto` do PRD, de onde a próxima sessão de `grill` retoma. Não há caminho "criar inerte": o `submit-issue.mjs` estampa `harness:ready` sempre, e `harness:queued` / `harness:blocked` são do motor — nunca aplicados à mão
 - **PRD não autoriza issue maior**: um PRD que gera N fatias vira N issues sob a mesma regra de tamanho acima
 
+### Candidato a aprofundamento como fonte (handoff da skill `proposing-deepening`)
+- A issue também pode nascer de um **candidato a aprofundamento** em `docs/architecture/deepening-candidates.md`, escrito pela skill `proposing-deepening` (que roda no agente `plan`, sem bash e sem edit em source). O mapeamento é fixo:
+  - `o que fica mais fácil e pra quem` → `user_journeys` (`#uj-N`)
+  - `sintoma` + `não fazer nada` → `summary`
+  - `fatias` → **uma issue por fatia** (cada uma ≤ ~400 linhas, merjável sozinha), ordenadas com `dependencies`
+  - `oráculo independente` → `acceptance_criteria` (`#ac-N.M`) — o oráculo É a verificação
+  - `rota: FULL-equivalente` → `size` + nota de revisão cuidadosa/segurança, mesmo com `sensível: não`
+- **Todo campo do candidato entra em `summary` como SUPOSIÇÃO do modelo, nunca em `resolved_decisions`.** Um candidato é 100% dedução do modelo — o mesmo modelo leu o código e julgou o código. A única decisão travada disponível é o "sim, vale reformar isso" do operador, que é decisão de FAZER, não de COMO
+- **Issue derivada de candidato é criada SEM `harness:ready` — é entrega LOCAL, com o operador olhando o resultado.** Reestruturar código que já funciona no escuro não pode merjar sozinho às 3h da manhã. O seletor só pega `harness:ready` aberta, então issue sem label é inerte. Como o `submit-issue.mjs` estampa a label sempre, **candidato a aprofundamento não passa pelo submitter**: se o operador quiser registro de acompanhamento, cria à mão, sem label. Não invente label nova; `harness:queued` e `harness:blocked` continuam sendo do motor
+- **Por que a rota escala**: o eixo de risco de uma reforma é **raio de explosão**, não sensibilidade de domínio — a allowlist de path sensível não enxerga uma reestruturação grande de código comum que funciona. Sem essa escalada, o caso de maior raio de explosão cairia na cerimônia mais barata
+
 ### Glossário do projeto (`CONTEXT.md`)
 - Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que os agentes de plano e de escrita leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`surveying-codebase` semeia, o `harvester` mantém)
 
@@ -68,7 +79,9 @@ Universal — sem `paths:`, carrega em toda conversa.
 
 - **`gh issue create` direto**: contorna a validação nativa e pode criar issue sem `[harness]`, `harness:ready` ou estrutura
 - **Corpo escrito à mão**: pode divergir do form; use o JSON validado e o submitter da skill
-- **Label `harness:ready` ausente**: issue visível no GitHub mas invisível para a routine autônoma — entregável perdido
+- **Label `harness:ready` ausente**: issue visível no GitHub mas invisível para a routine autônoma — entregável perdido. Exceção deliberada: issue vinda de candidato a aprofundamento, que é entrega local por definição
+- **Candidato a aprofundamento virando issue `harness:ready`**: a reforma entra na fila autônoma, o motor reestrutura código que funcionava e o PR merjа sozinho — com o eixo de risco (raio de explosão) invisível pra allowlist de path sensível. Reforma é entrega local, sem label, sempre
+- **Candidato a aprofundamento entrando em `resolved_decisions`**: o candidato é dedução do modelo de ponta a ponta; se ele vira decisão, o `adversary-*` passa a DEFENDER a proposta de reforma em vez de atacá-la. Tudo dele é suposição
 - **Slug vago no título**: `[harness] fix` ou `[harness] melhoria` não identificam o escopo; usar `[harness] <feature-id>` curto e descritivo (kebab-case, max ~40 chars)
 - **Bloco `harness-deps` quebrado**: se o operador apagar/corromper a cerca ` ```harness-deps `, o parser não vê dependência e a issue roda IMEDIATAMENTE (sem gate) — possível race de ordem. Manter a cerca intacta; editar só os `#N` dentro dela
 - **Ciclo de dependência** (`#A` depende de `#B` e `#B` de `#A`): ambas ficam `harness:queued` pra sempre, sem nó morto pra notificar. Só o `chain-validate.mjs` pega — rode-o após montar o roadmap

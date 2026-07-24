@@ -133,6 +133,7 @@ Se você **não pedir**, algumas nunca aparecem (ex.: mudar modelo).
 | Skill | Quando | O que faz |
 |---|---|---|
 | **`grill`** | Ideia grande ainda sem forma, **antes** de qualquer entrega (peça no `plan`) | Te entrevista até virar um PRD em `docs/prd/<slug>.md` e depois vira issue |
+| **`proposing-deepening`** | Projeto que já existe e ficou difícil de mexer (peça no `build`) | Varre o código e traz no máximo 5 candidatos a reforma — não mexe em nada, você escolhe |
 | **`triaging-requests`** | Automática no 1º pedido `build` | Classifica QUICK/LIGHT/FULL |
 | **`brainstorming`** | LIGHT/FULL (e no `plan`) | Spec de produto + hard-gate |
 | **`creating-plans`** | Só dentro do `planner` | Plano JSON |

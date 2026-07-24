@@ -1,6 +1,6 @@
 ---
 name: creating-issues
-description: "Authors well-formed harness issue(s) — a single issue or a dependency-ordered roadmap — from the operator's conversation or from a PRD written by grill (docs/prd/<slug>.md). Applies the small-delivery-unit sizing rule, coaches VERIFIABLE acceptance criteria (the locked_tests derive from them), keeps the PRD's model assumptions attackable and blocks on its open questions, wires harness-deps for order, creates every issue harness:ready, and runs the DAG lint. Use when the operator wants to create an issue or organize a roadmap."
+description: "Authors well-formed harness issue(s) — a single issue or a dependency-ordered roadmap — from the operator's conversation, from a PRD written by grill (docs/prd/<slug>.md), or from a deepening candidate written by proposing-deepening (docs/architecture/deepening-candidates.md). Applies the small-delivery-unit sizing rule, coaches VERIFIABLE acceptance criteria (the locked_tests derive from them), keeps model assumptions attackable and blocks on open questions, wires harness-deps for order, creates issues harness:ready EXCEPT retrofit issues (local-only, unlabelled, never auto-merged), and runs the DAG lint. Use when the operator wants to create an issue or organize a roadmap."
 ---
 
 # Creating-Issues — author the pipeline's highest-leverage input
@@ -32,10 +32,12 @@ All identifiers/reasoning in English. Every message to the operator is **pt-br, 
 - **HEADLESS (cloud):** never `AskUserQuestion`; derive from the trigger prompt, proceed, and record
   any unresolved question inside the issue body rather than blocking.
 
-## Input: a conversation, or a PRD from `grill`
+## Input: a conversation, a PRD from `grill`, or a deepening candidate
 
-The source is either the operator's conversation or a **PRD at `docs/prd/<slug>.md`** written by the
-`grill` skill. With a PRD, do not re-interview and do not re-derive its content — map it:
+The source is the operator's conversation, a **PRD at `docs/prd/<slug>.md`** written by `grill`, or a
+**deepening candidate** at `docs/architecture/deepening-candidates.md` written by
+`proposing-deepening`. With a written source, do not re-interview and do not re-derive its content —
+map it:
 
 | PRD section | Where it lands |
 |---|---|
@@ -47,6 +49,22 @@ The source is either the operator's conversation or a **PRD at `docs/prd/<slug>.
 | `## Decisões travadas` | issue body — constraints the implementation must respect |
 | `## Suposições do modelo` | issue body — labelled as **assumptions**, never as decisions |
 | `## Em aberto` | **blocks** the dependent slice — see below |
+
+The other structured source is a **deepening candidate** at `docs/architecture/deepening-candidates.md`,
+written by `proposing-deepening`. It maps the same way, with two non-negotiable differences:
+
+| Candidate field | Where it lands |
+|---|---|
+| `o que fica mais fácil e pra quem` | the `#uj-N` user journeys |
+| `sintoma` + `não fazer nada` | the issue summary — context and why it matters |
+| `fatias` | **one issue per slice**, ordered with `harness-deps` |
+| `oráculo independente` | the `#ac-N.M` criteria — the oracle IS the verification |
+| `rota: FULL-equivalente` | `size` + a careful-review / security note, even when `sensível: não` |
+| every other candidate field | `Suposições do modelo (atacáveis)` — **never** `Decisões travadas` |
+
+1. **A candidate is 100% model deduction**, so ALL of it is an assumption. The only locked decision is
+   the operator's "sim, vale reformar isso" — a decision to do the work, never a decision about how.
+2. **A retrofit issue is created WITHOUT `harness:ready`** — see § Retrofit issues are local-only.
 
 **Requirement → AC traceability.** PRD requirement `N` becomes `#ac-N.M`. Keep the PRD's numbering so
 every criterion traces back to one requirement, and name the source PRD (`docs/prd/<slug>.md`) in the
@@ -82,6 +100,20 @@ requirement that depends on an open item:
    at all. Never hand-apply `harness:queued` or `harness:blocked` — both are engine-owned.
 
 Then tell the operator, in pt-br, which slices were held back and which open question holds each.
+
+## Retrofit issues are local-only — never `harness:ready`
+
+An issue derived from a **deepening candidate** is created **WITHOUT the `harness:ready` label**. It is
+delivered **locally, with the operator watching the result**, because a blind restructure of working
+code must never auto-merge. This reuses the inert path already documented above: `cron-a-select` picks
+only open `harness:ready`, so an unlabelled issue is invisible to the engine and never dispatched. It
+means bypassing the issue form (which always stamps the label) — do it deliberately. Never invent a
+new label and never hand-apply `harness:queued` or `harness:blocked`; both are engine-owned.
+
+Why this and not "just be careful": a retrofit's risk axis is **blast radius**, not domain
+sensitivity, so the sensitive-path allowlist cannot see it — a large restructure of ordinary,
+non-sensitive, *working* code would otherwise route to the cheapest ceremony and merge unattended.
+Author it for FULL-equivalent scrutiny and tell the operator, in pt-br, that it will not run itself.
 
 **A PRD does not authorize a bigger issue.** A PRD that produces N slices maps to N issues under the
 sizing rule below, unchanged. "It is all one PRD, all one theme" is theme-cohesion, not
@@ -131,6 +163,8 @@ Produce the form fields for each unit:
 
 - Every issue is created **`harness:ready`** — NEVER `harness:queued` by hand. The engine gates order
   itself (a dependent is held until its prerequisites' PRs merge) and serializes (one build at a time).
+  **Two exceptions, both unlabelled and inert:** a slice blocked by the PRD's `## Em aberto`, and any
+  issue derived from a deepening candidate (local delivery — see above).
 - Prefer the vendored issue form (`.github/ISSUE_TEMPLATE/harness-task.yml`). If you must use the CLI,
   replicate the form structure exactly — bare `gh issue create` bypasses the form silently and drops
   the issue off the routine's radar.
@@ -149,3 +183,5 @@ Produce the form fields for each unit:
   sensitivity, and (for a roadmap) valid `harness-deps` — and `chain-validate` is clean.
 - From a PRD: every criterion traces back to a numbered requirement, decisions and model assumptions
   are two separately labelled blocks, and nothing depending on `## Em aberto` went out `harness:ready`.
+- From a deepening candidate: every candidate field landed under `Suposições do modelo (atacáveis)`,
+  one issue per slice, and **nothing** went out `harness:ready`.

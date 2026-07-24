@@ -86,6 +86,7 @@ const REQUIRED_SKILLS = [
   "importing-claude-memory",
   "creating-issues",
   "grill",
+  "proposing-deepening",
 ];
 
 /** Expected model per agent file from harness.routing.json contract */
