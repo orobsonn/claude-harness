@@ -338,15 +338,19 @@ export async function createEntryGateHooks(
 
       // Unified K=3 same-agent retry: block 4th dispatch after 3 failures of this role(/task).
       if (subagentType && loaded.ok) {
-        const { decideAgentRetryAllowed } = await import(
+        const { decideAgentRetryAllowed, decideGateBlockedDispatchAllowed } = await import(
           "../../shared/lib/agent-retry.mjs"
         )
-        const retry = decideAgentRetryAllowed(gateState, {
-          role: subagentType,
-          taskId: promptMarker.ok ? promptMarker.taskId : "",
-        })
+        const taskId = promptMarker.ok ? promptMarker.taskId : ""
+        const retry = decideAgentRetryAllowed(gateState, { role: subagentType, taskId })
         if (!retry.ok) {
           throw new Error(`${PREFIX} ${retry.reason}`)
+        }
+        // Separate bound for harness-gate denials: the agent keeps its budget, but a dispatcher
+        // that cannot satisfy the precondition still stops instead of re-dispatching forever.
+        const gateBlocked = decideGateBlockedDispatchAllowed(gateState, { role: subagentType, taskId })
+        if (!gateBlocked.ok) {
+          throw new Error(`${PREFIX} ${gateBlocked.reason}`)
         }
       }
       if (loaded.ok && isPlannerRole(subagentType) && sid) {

@@ -404,9 +404,19 @@ export function applyReviewOutcome(stateValue, input = {}) {
   };
   const prefix = reservation.family === 1 ? "primary" : "secondary";
   if (classified.kind === "failure") {
+    // A harness-internal deny means this eye never ran. It is evidence about the DISPATCH, not
+    // about the eye or its model family — so it is recorded for forensics but must not consume the
+    // failure streak, trip the primary cap, or degrade the cross-family review to primary_only.
+    // (A real run lost its second-family plan review to two self-inflicted plan-gate denials.)
+    const gateBlocked = classified.failureClass === "gate_blocked";
     const counts = { ...object(state.review_failure_counts) };
     counts[classified.failureClass] = bounded(counts[classified.failureClass], 1);
     next[`${prefix}_review_failure_count`] = bounded(state[`${prefix}_review_failure_count`], 1);
+    if (gateBlocked) {
+      if (diagnostic) next.last_gate_diagnostic = diagnostic;
+      next.review_failure_counts = counts;
+      return { state: next, accepted: true, classified };
+    }
     next[`${prefix}_review_failure_streak`] = bounded(state[`${prefix}_review_failure_streak`], 1);
     if (diagnostic) next.last_provider_diagnostic = diagnostic;
     if (reservation.family === 1) {

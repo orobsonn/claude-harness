@@ -221,6 +221,40 @@ test("valid primary review signs primary_only and permits hand progression; usef
   assert.equal(validatePrivilegedMarkerSeals(failedSecondary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 });
 
+test("a harness-gate deny on the secondary eye does not degrade the dual to primary_only", () => {
+  // The eye never ran — the deny is evidence about the dispatch, not about the second family.
+  // A real run lost its cross-family plan review to two self-inflicted plan-gate denials.
+  const primary = complete(state()).state;
+  assert.equal(primary.dual_status?.plan_review, "primary_only");
+
+  const gateDenied = complete(primary, {
+    subagentType: "plan-reviewer-family-2",
+    callId: "secondary-gate-blocked",
+    failureClass: "gate_blocked",
+    error: "[plan-gate] delivery-blocked: planner usable bound artifact required",
+  }).state;
+
+  assert.equal(gateDenied.dual_secondary_status, undefined);
+  assert.equal(gateDenied.dual_secondary_failure_class, undefined);
+  assert.equal(gateDenied.secondary_review_failure_streak ?? 0, 0);
+  assert.equal(gateDenied.review_failure_counts.gate_blocked, 1);
+  assert.equal(gateDenied.last_provider_diagnostic, undefined);
+  assert.ok(gateDenied.last_gate_diagnostic);
+
+  // The second family stays dispatchable and can still sign both.
+  const secondary = complete(gateDenied, { subagentType: "plan-reviewer-family-2", callId: "secondary-ok" }).state;
+  assert.equal(secondary.dual_status?.plan_review, "both");
+});
+
+test("a harness-gate deny on the primary eye never trips the primary failure cap", () => {
+  let next = state();
+  for (const callId of ["gate-1", "gate-2", "gate-3", "gate-4"]) {
+    next = complete(next, { callId, failureClass: "gate_blocked", error: "[plan-gate] delivery-blocked: x" }).state;
+  }
+  assert.equal(next.primary_review_failure_streak ?? 0, 0);
+  assert.notEqual(next.review_status, "primary_failure_cap_reached");
+});
+
 test("applyReviewOutcome plan-reviewer useful REVISE → plan_verdict REVISE on state", () => {
   const result = complete(state(), {
     callId: "revise-1",
