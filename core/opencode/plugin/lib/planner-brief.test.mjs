@@ -62,6 +62,15 @@ test("both families' instructions are carried when both reported", () => {
   assert.match(brief, /Name the live write path in scope\./);
 });
 
+test("no nonce means no instruction block: the fence fails closed, never to a predictable literal", () => {
+  for (const nonce of [undefined, "", 42]) {
+    const brief = buildPlannerBriefAppendix({ featureId: FEATURE, state: reviseState(), nonce });
+    assert.match(brief, /HARNESS_SESSION_FEATURE_ID/);
+    assert.equal(/UNTRUSTED PLAN-REVIEW INSTRUCTIONS/.test(brief), false);
+    assert.equal(/Normalize the legacy text timestamp/.test(brief), false);
+  }
+});
+
 test("an APPROVE (or absent) verdict carries no revision block", () => {
   for (const verdict of ["APPROVE", undefined]) {
     const brief = buildPlannerBriefAppendix({

@@ -22,6 +22,14 @@ test("REVISE below the budget injects a continue nudge naming the next round", (
 });
 
 test("the nudge tells the orchestrator not to stop and not to hand back to the operator", () => {
+  const nudge = decideReviseNudge({ state: { plan_verdict: "REVISE", plan_review_count: 1 }, subagentType: PRIMARY });
+  // The orchestrator cannot edit the plan (the plugin is its sole author), and re-reviewing the same
+  // bound plan cannot change the verdict — the peer family's REVISE stands until the plan is
+  // re-bound. A nudge that omits the planner burns the whole review budget without re-planning once.
+  assert.match(nudge.context, /re-dispatch `planner`/);
+  assert.match(nudge.context, /Re-reviewing the SAME plan cannot change the verdict/);
+  assert.equal(/apply the plan-reviewer's planner_instruction to the plan/.test(nudge.context), false);
+
   const res = decideReviseNudge({ state: { plan_verdict: "REVISE", plan_review_count: 1 }, subagentType: PRIMARY });
   assert.match(res.context, /Do NOT stop here/);
   assert.match(res.context, /do NOT hand this back to the operator/);

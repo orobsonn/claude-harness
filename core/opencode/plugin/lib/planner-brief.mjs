@@ -80,12 +80,15 @@ export function buildPlannerBriefAppendix(input = {}) {
       "a narrowed scope; record scope changes in the plan's tasks instead.",
   ];
 
+  // Fail closed: the nonce is the ONLY control keeping a reviewer's text from forging the closing
+  // marker and speaking as the harness. A predictable fallback literal would downgrade the fence
+  // silently the first time a refactor drops this argument — so with no nonce there is no block.
+  const nonce = typeof input.nonce === "string" && input.nonce ? input.nonce : "";
   const instructions =
-    state.plan_verdict === "REVISE"
+    state.plan_verdict === "REVISE" && nonce
       ? [...instructionsFrom(state.primary_review_last_report), ...instructionsFrom(state.secondary_review_last_report)]
       : [];
   if (instructions.length > 0) {
-    const nonce = typeof input.nonce === "string" && input.nonce ? input.nonce : "planner-brief";
     const round = Number.isInteger(state.plan_review_count) ? state.plan_review_count : 0;
     blocks.push(
       `This is a REVISION re-plan (plan-review round ${round} returned REVISE). Every instruction below must be ` +

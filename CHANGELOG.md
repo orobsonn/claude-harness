@@ -579,6 +579,17 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   estado deixa de mentir (o erro de vínculo antigo sobrevivia ao lado de um plano válido). Três prosas que
   ainda mandavam parar na 2ª rodada ou renomear a feature foram corrigidas.
 
+  Duas armadilhas fechadas na revisão adversarial da própria correção, cada uma capaz de reproduzir o
+  mesmo deadlock: o contador de negação por precondição **não tinha nenhum caminho de reset** em todo o
+  código — três negações não-consecutivas baniam para sempre um despacho que já voltou a funcionar, então
+  o ban só teria mudado de contador; e a única mensagem que o motor entrega de fato mandava "aplique a
+  instrução no plano e re-despache o revisor", coisa que o orquestrador não pode fazer (o plano é do
+  plugin desde a #449) — sem mandar replanejar, o plano nunca é revinculado, o parecer do par continua
+  valendo e as 5 rodadas queimariam sem um único replanejamento. Também: a rodada que estoura o teto não
+  credita mais orçamento (era plano que ninguém poderia revisar), o brief não é duplicado quando o
+  runtime dispara o hook duas vezes, e a cerca de dado não-confiável falha fechada sem nonce em vez de
+  cair num literal previsível.
+
 - **A mão barata só roda nos modelos aprovados, e o orquestrador não escolhe mais o modelo no olho.**
   Numa run real o plano declarava a escada `{low: gemma4, medium: glm-5.2, high: kimi-k2.7-code}` e as
   três mãos saíram despachadas em `gpt-oss:120b` — justamente o modelo que a própria documentação

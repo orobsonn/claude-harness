@@ -511,14 +511,18 @@ export function applyReviewOutcome(stateValue, input = {}) {
   // session-lifetime ceiling in planner-state is what still bounds the total spend, and
   // `agent_dispatch_failures` is deliberately left alone (clearing it would mask a real
   // precondition failure and destroy forensics for an agent with no fallback ladder).
-  if (key === "plan_review_count" && next.plan_verdict === "REVISE") {
+  const { deny } = thresholdsFor(key, input);
+  // Not at the cap: the round below trips `review_cap_reached`, after which `reserveReviewAttempt`
+  // refuses every reviewer slot until a verified restart. Crediting there would advertise a full
+  // planner budget with no reviewer left to read the result — two Opus-tier re-plans nobody can
+  // approve, on an engine that auto-merges.
+  if (key === "plan_review_count" && next.plan_verdict === "REVISE" && count < deny) {
     const stampedRound = Number.isInteger(next.planner_attempts_round) ? next.planner_attempts_round : 0;
     if (count > stampedRound) {
       next.planner_attempts_round = count;
       next.planner_primary_attempts = 0;
     }
   }
-  const { deny } = thresholdsFor(key, input);
   if (count >= deny && classified.materialUnresolved) {
     next.review_status = "review_cap_reached";
     next.cap_generation = state.ceremony_generation;

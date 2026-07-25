@@ -176,9 +176,14 @@ export async function createPlannerRecoveryHooks(
         state: claimedState,
         nonce: attemptToken,
       })
-      if (appendix) {
-        const args = argsOf(input, output)
-        const existing = typeof args.prompt === "string" ? args.prompt : ""
+      const args = argsOf(input, output)
+      const existing = typeof args.prompt === "string" ? args.prompt : ""
+      // OC 1.18 can fire this hook twice for one Task (plugin listed in opencode.json AND
+      // auto-loaded from .opencode/plugin/) — the same reason claimPlannerAttempt has an idempotent
+      // re-entry path. Appending twice would double an ~8 KB brief on the most expensive agent in
+      // the pipeline and fence the instructions twice under MISMATCHED nonces. Same-reference
+      // mutation is what makes this marker check reliable.
+      if (appendix && !existing.includes("[HARNESS_SESSION_FEATURE_ID]")) {
         args.prompt = `${existing}\n\n${appendix}`.trim()
       }
     },

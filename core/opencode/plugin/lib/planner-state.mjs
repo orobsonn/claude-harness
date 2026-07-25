@@ -26,6 +26,11 @@ export const MAX_PRIMARY_ATTEMPTS = AGENT_RETRY_K;
  * multiplies the worst case (rounds × K) on every reopen, and this engine auto-merges PRs with an
  * Opus-tier planner whose cost driver is context volume. A run that needs more than this is a
  * product problem for the operator, not something to retry into.
+ *
+ * The number is derived, not picked: `LOOP_THRESHOLDS.plan_review.deny` (5) one re-plan per review
+ * round, plus `AGENT_RETRY_K` (3) one round's worth of failure retries. Pinned by a test in
+ * review-accounting.test.mjs — NOT by importing LOOP_THRESHOLDS, which would close the existing
+ * loop-decide → review-restart → planner-artifact → planner-state import cycle.
  */
 export const PLANNER_SESSION_DISPATCH_CEILING = 8;
 
