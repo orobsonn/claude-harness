@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.5](https://github.com/orobsonn/claude-harness/compare/v0.49.4...v0.49.5) (2026-07-25)
+
+
+### Bug Fixes
+
+* **oc:** laço de adversário deixa de congelar a run; quem para é o orquestrador ([#457](https://github.com/orobsonn/claude-harness/issues/457)) ([0d8cafd](https://github.com/orobsonn/claude-harness/commit/0d8cafd683bc199bc710eb0f28478a2ccb1df210)), closes [#456](https://github.com/orobsonn/claude-harness/issues/456)
+
 ## [0.49.4](https://github.com/orobsonn/claude-harness/compare/v0.49.3...v0.49.4) (2026-07-25)
 
 
