@@ -95,11 +95,23 @@ export function validatePlanReviewFinding(value) {
   return finding.task_id === "(plan-wide)" || /^task-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(finding.task_id);
 }
 
+/**
+ * @description The sniper tier is DERIVED from severity, never trusted from the report.
+ * It carries no information the report does not already state, so requiring the model to restate it
+ * correctly only creates a way to lose good work: a live adversary report — canonical JSON, valid
+ * keys, valid enums, two real findings — was thrown away whole because one finding said
+ * `severity: high` with `suggested_sniper_tier: sniper-medium`. The eye is asked to judge; echoing a
+ * derived value is not judgment. The field stays in the shape (the agent contract still emits it) and
+ * its value is normalized here so every downstream consumer reads the tier that matches severity.
+ */
+export function normalizedSniperTier(severity) {
+  return REVIEW_SEVERITIES.has(severity) ? `sniper-${severity}` : null;
+}
+
 export function validateAdversaryFinding(value) {
   const finding = plain(value);
   if (!finding || !exactKeys(finding, ADVERSARY_FINDING_KEYS) || !nonEmptyStrings(finding, ADVERSARY_FINDING_KEYS)) return false;
-  if (!ADVERSARY_CATEGORIES.has(finding.category) || !REVIEW_SEVERITIES.has(finding.severity)) return false;
-  return finding.suggested_sniper_tier === `sniper-${finding.severity}`;
+  return ADVERSARY_CATEGORIES.has(finding.category) && REVIEW_SEVERITIES.has(finding.severity);
 }
 
 /** @description Validate one strict report against its logical role contract. */
@@ -124,9 +136,12 @@ export function validateReviewReport(logicalRole, value, expectedFamily) {
     if (!Array.isArray(report.issues) || !report.issues.every(validateAdversaryFinding)) {
       return { ok: false, reason: "adversary finding is not canonical" };
     }
-    return { ok: true, report, findings: report.issues };
+    // Normalize the derived field so the dispatch tier always matches severity, whatever the eye wrote.
+    const issues = report.issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) }));
+    const normalized = { ...report, issues };
+    return { ok: true, report: normalized, findings: issues };
   }
   return { ok: false, reason: "unknown review role" };
 }
 
-export default { parseReviewReportText, validateReviewReport, validatePlanReviewFinding, validateAdversaryFinding };
+export default { parseReviewReportText, validateReviewReport, validatePlanReviewFinding, validateAdversaryFinding, normalizedSniperTier };

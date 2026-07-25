@@ -435,6 +435,9 @@ export function applyReviewOutcome(stateValue, input = {}) {
     ...reservation,
     outcome: classified.kind,
     failure_class: classified.kind === "failure" ? classified.failureClass : undefined,
+    // The validator says exactly which rule broke; dropping it left "malformed" as the only evidence
+    // and cost a full day of guessing schema-vs-model. Bounded, no secrets — it is a schema reason.
+    failure_reason: classified.kind === "failure" && typeof classified.reason === "string" ? classified.reason.slice(0, 200) : undefined,
     report_hash: classified.kind === "useful" ? classified.reportHash : undefined,
     material_unresolved: classified.kind === "useful" ? classified.materialUnresolved : undefined,
     ...(classified.kind === "failure" && diagnostic ? { diagnostic } : {}),
