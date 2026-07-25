@@ -279,3 +279,39 @@ test("#ac-1.4: a NEW gitignored out-of-scope write (dist/) is still accused", (t
   assert.deepEqual(result.outcome.scopeViolations, ["dist/sneak.js"]);
   assert.equal(result.outcome.status, OUTCOME.FAILED);
 });
+
+// ---- 5. the gitignore-escape sweep must survive a repo with dependencies installed ----
+
+/**
+ * @description Regression for the ENOBUFS that made `captureResult` unusable in any project with
+ * `node_modules/` on disk. `lsFilesAllOthers` omits `--exclude-standard` on purpose, so git streams
+ * every ignored path; node's 1MB default `maxBuffer` kills the call before `excludeNodeModules` —
+ * which filters the RETURNED array — ever runs. The fix belongs in the adapter, not the filter.
+ * The repo below emits ~1.1MB of listing from 3000 long ignored paths, just over that ceiling.
+ */
+test("realGit: lsFilesAllOthers survives a listing larger than node's default maxBuffer", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "capture-hand-maxbuffer-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  git(dir, ["init", "-q"]);
+  write(dir, ".gitignore", "node_modules/\n");
+
+  const longDir = "d".repeat(180);
+  const base = join(dir, "node_modules", longDir);
+  mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 3000; i += 1) {
+    writeFileSync(join(base, `${String(i).padStart(6, "0")}${"f".repeat(180)}.js`), "x", "utf8");
+  }
+
+  // Guard the fixture itself: without this the test would pass on a listing that never reached
+  // the ceiling, and the regression it pins would go unnoticed.
+  const raw = execFileSync("git", ["ls-files", "--others"], {
+    cwd: dir,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  assert.ok(raw.length > 1024 * 1024, `fixture must exceed the 1MB default, got ${raw.length} bytes`);
+
+  // The adapter drops node_modules/ from the RETURNED array — the point is that it gets there at
+  // all instead of dying with ENOBUFS inside execFileSync.
+  assert.deepEqual(realGit(dir).lsFilesAllOthers(), [".gitignore"]);
+});
