@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.7](https://github.com/orobsonn/claude-harness/compare/v0.49.6...v0.49.7) (2026-07-25)
+
+
+### Bug Fixes
+
+* **init:** vendoriza .claude/state/ como ignorado — o estado de run carrega segredo ([#465](https://github.com/orobsonn/claude-harness/issues/465)) ([3ea1dbf](https://github.com/orobsonn/claude-harness/commit/3ea1dbff83c3ee0d8650abb4f13f977bdf878cfe)), closes [#464](https://github.com/orobsonn/claude-harness/issues/464)
+* tier do sniper é derivado da severidade, não ecoado pelo olho ([#462](https://github.com/orobsonn/claude-harness/issues/462)) ([2cbcdcf](https://github.com/orobsonn/claude-harness/commit/2cbcdcf129d6190f26bea9455169358c778698c9)), closes [#461](https://github.com/orobsonn/claude-harness/issues/461)
+
 ## [0.49.6](https://github.com/orobsonn/claude-harness/compare/v0.49.5...v0.49.6) (2026-07-25)
 
 
