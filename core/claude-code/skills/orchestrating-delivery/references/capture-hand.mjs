@@ -106,7 +106,11 @@ export const UNHASHABLE = "unhashable";
  * @returns {{ headSha: () => string, statusPorcelain: () => string, diffNameOnly: (sha: string) => string[], lsFilesOthers: () => string[], lsFilesAllOthers: () => string[] }}
  */
 export function realGit(cwd = process.cwd()) {
-  const run = (args) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  // `maxBuffer` is raised well above node's 1MB default because `lsFilesAllOthers` deliberately
+  // omits `--exclude-standard`: in any repo with dependencies installed, git streams every
+  // `node_modules/` path and the default ceiling kills the call with ENOBUFS BEFORE
+  // `excludeNodeModules` — which filters the RETURNED array — can drop them.
+  const run = (args) => execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   const lines = (out) => out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   return {
     headSha: () => run(["rev-parse", "HEAD"]).trim(),
