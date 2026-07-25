@@ -867,6 +867,16 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
   assert.match(again.reason, /Nothing is frozen/);
   assert.match(again.reason, /report this to the operator/);
 
+  // Crossing the phase boundary: the broken spec eye must NOT bar the next phase's eye. The streak
+  // is global to family 1 and its only resets are a family-1 useful outcome or an epoch reopen that
+  // needs a cap status the spec carve-out never writes — so a stale streak would refuse every later
+  // family-1 eye (plan-reviewer, per-task adversary, final review) before dispatch, permanently, and
+  // the "goes to the plan unattacked" instruction would be unfulfillable.
+  const stamped = { ...current, adversary_fired: true };
+  const planReviewer = reserveReviewAttempt(stamped, input({ callId: "pr-after-broken-spec" }));
+  assert.equal(planReviewer.ok, true, planReviewer.reason);
+  assert.equal(current.primary_review_failure_streak_role, "adversary", "the streak names the eye that produced it");
+
   // A broken PLAN-REVIEWER still freezes: there the code exists and cannot be judged.
   let plan = state();
   for (let round = 1; round <= LOOP_THRESHOLDS.primary_failure_streak.deny; round += 1) {
