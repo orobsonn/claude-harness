@@ -73,9 +73,13 @@ export function decideReviseNudge(input = {}) {
       `[revise-nudge] plan-review round ${count}/${deny} returned ${verdict}` +
       `${unresolved ? " with a material finding still unresolved" : ""}. ` +
       "Every writing hand (executor / sniper / test-author) is HARD-BLOCKED until plan_verdict is APPROVE — " +
-      "dispatching one now will be denied. Do NOT stop here and do NOT hand this back to the operator: " +
-      "apply the plan-reviewer's planner_instruction to the plan, then re-dispatch the plan-reviewer for " +
-      `round ${count + 1}. ${remaining} round(s) remain before the budget is exhausted. ` +
+      "dispatching one now will be denied. Do NOT stop here and do NOT hand this back to the operator. " +
+      "Next action, in this order: (1) re-dispatch `planner` — you do NOT edit the plan yourself, the plugin " +
+      "is its sole author, and the harness injects the reviewer's instructions into the planner's brief " +
+      "automatically; (2) then re-dispatch the plan-reviewer for " +
+      `round ${count + 1}. Re-reviewing the SAME plan cannot change the verdict: the peer family's REVISE ` +
+      "stands until the plan is re-bound, so skipping the planner burns a round for nothing. " +
+      `${remaining} round(s) remain before the budget is exhausted. ` +
       "Continuing past a warning threshold is expected — cross-family rounds past the first have found real defects.",
   };
 }

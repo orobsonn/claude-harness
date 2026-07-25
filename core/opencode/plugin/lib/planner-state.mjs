@@ -11,8 +11,28 @@ export const PLANNER_ATTEMPT_LEASE_MS = Number.POSITIVE_INFINITY;
 /** @deprecated Kept for test/compat imports; write window is not time-killed. */
 export const PLAN_WRITE_LEASE_MS = Number.POSITIVE_INFINITY;
 
-/** Same-agent retry budget (K=3): REVISE/provider blip re-dispatch primary, then product error. */
+/**
+ * Failure-retry budget (K=3) for ONE planning round — an unparseable plan, a rejected envelope, a
+ * provider blip. It is NOT the revision budget: a plan-review REVISE is an instruction to re-plan
+ * (progress), so `applyReviewOutcome` credits a fresh round budget when it persists one. Conflating
+ * the two is what deadlocked a live run at plan_review_count 2 of 5 — the review budget was never
+ * reachable because each round spent one of these three.
+ */
 export const MAX_PRIMARY_ATTEMPTS = AGENT_RETRY_K;
+
+/**
+ * Session-lifetime ceiling on planner dispatches. Deliberately reset by NOTHING — not the round
+ * credit, not `plannerCycleResetPatch`, not a review-epoch reopen. Without it the round credit
+ * multiplies the worst case (rounds × K) on every reopen, and this engine auto-merges PRs with an
+ * Opus-tier planner whose cost driver is context volume. A run that needs more than this is a
+ * product problem for the operator, not something to retry into.
+ *
+ * The number is derived, not picked: `LOOP_THRESHOLDS.plan_review.deny` (5) one re-plan per review
+ * round, plus `AGENT_RETRY_K` (3) one round's worth of failure retries. Pinned by a test in
+ * review-accounting.test.mjs — NOT by importing LOOP_THRESHOLDS, which would close the existing
+ * loop-decide → review-restart → planner-artifact → planner-state import cycle.
+ */
+export const PLANNER_SESSION_DISPATCH_CEILING = 8;
 
 /** @description Trusted reset applied only by a successful explicit classify cycle. */
 export function plannerCycleResetPatch() {
@@ -21,6 +41,10 @@ export function plannerCycleResetPatch() {
     planner_retry_outcome: null,
     planner_failure_class: null,
     planner_primary_attempts: 0,
+    // Cleared so a verified restart cannot inherit a stale round stamp and skip its round credit
+    // (a stamp of 2 would silently refuse the credit for rounds 1 and 2 of the restarted cycle).
+    // `planner_dispatches_total` is intentionally NOT listed: the session ceiling resets nowhere.
+    planner_attempts_round: 0,
     planner_fallback_attempts: 0,
     planner_fallback_result: null,
     planner_fallback_diagnostic: null,
@@ -86,10 +110,29 @@ export function claimPlannerAttempt(previous, input = {}) {
       state,
     };
   }
+  if (Number(state.planner_dispatches_total ?? 0) >= PLANNER_SESSION_DISPATCH_CEILING) {
+    return {
+      ok: false,
+      reason:
+        `planner session ceiling reached (${PLANNER_SESSION_DISPATCH_CEILING} dispatches). Do NOT re-dispatch the planner: ` +
+        "nothing in this session clears this ceiling. Report to the operator, in product language, what the plan-reviewer " +
+        "keeps rejecting and why the plan cannot satisfy it, then stop. A new session is required to plan this feature again.",
+      state,
+    };
+  }
   if (Number(state.planner_primary_attempts ?? 0) >= MAX_PRIMARY_ATTEMPTS) {
-    return { ok: false, reason: "planner primary attempt bound reached", state };
+    return {
+      ok: false,
+      reason:
+        `planner budget for this review round is spent (${MAX_PRIMARY_ATTEMPTS} attempts). Do NOT re-dispatch the planner ` +
+        "now — the next attempt is refused. Every writing hand stays blocked while plan_verdict is REVISE, so this run " +
+        "cannot proceed on its own: report the blocking finding to the operator in product language and stop. A new " +
+        "round budget is credited only when a plan-review round persists a fresh REVISE.",
+      state,
+    };
   }
   state.planner_primary_attempts = Number(state.planner_primary_attempts ?? 0) + 1;
+  state.planner_dispatches_total = Number(state.planner_dispatches_total ?? 0) + 1;
   state.planner_primary_model = input.model;
   state.planner_status = "running";
   state.delivery_status = "planning";
@@ -192,6 +235,10 @@ export function bindPlannerArtifact(previous, input = {}) {
   state.planner_status = "usable";
   state.planner_retry_outcome = "not_needed";
   state.delivery_status = "planning";
+  // A rejection string from an earlier attempt outlived its attempt: a live gate-state showed
+  // planner_status "usable" with a valid binding NEXT TO "returned plan feature_id does not match
+  // the session feature". Anyone reading that concludes there is no plan and re-runs the planner.
+  state.planner_binding_error = null;
   state.planner_plan_binding = {
     call_id: active.call_id,
     token: active.token,

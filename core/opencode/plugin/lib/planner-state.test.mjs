@@ -2,6 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  MAX_PRIMARY_ATTEMPTS,
+  PLANNER_SESSION_DISPATCH_CEILING,
   claimPlannerAttempt,
   completePlannerAttempt,
   failPlannerAttempt,
@@ -112,6 +114,43 @@ test("terminal planner states reject claims until explicit reset", () => {
     ...plannerCycleResetPatch(),
   };
   assert.equal(claim(reset).ok, true);
+});
+
+test("round-budget deny escalates in product language instead of dying on an engineering string", () => {
+  const spent = claim({ ...BASE, planner_primary_attempts: MAX_PRIMARY_ATTEMPTS });
+  assert.equal(spent.ok, false);
+  // The live deadlock ended the turn on "planner primary attempt bound reached" — no instruction,
+  // no product framing, so the orchestrator stopped silently with the operator none the wiser.
+  assert.match(spent.reason, /do NOT re-dispatch/i);
+  assert.match(spent.reason, /report the blocking finding to the operator/i);
+});
+
+test("session dispatch ceiling is absolute: no reset path clears it", () => {
+  const atCeiling = { ...BASE, planner_dispatches_total: PLANNER_SESSION_DISPATCH_CEILING };
+  const denied = claim(atCeiling);
+  assert.equal(denied.ok, false);
+  assert.match(denied.reason, /session ceiling/i);
+  assert.match(denied.reason, /new session/i);
+
+  // The per-round credit clears planner_primary_attempts; it must NOT buy past the ceiling.
+  assert.equal(claim({ ...atCeiling, planner_primary_attempts: 0 }).ok, false);
+  // Neither may the verified cycle reset.
+  const reset = { ...atCeiling, ...plannerCycleResetPatch() };
+  assert.equal(reset.planner_dispatches_total, PLANNER_SESSION_DISPATCH_CEILING);
+  assert.equal(claim(reset).ok, false);
+});
+
+test("cycle reset clears the round stamp so a restarted cycle still earns its round credit", () => {
+  const patch = plannerCycleResetPatch();
+  assert.equal(patch.planner_attempts_round, 0);
+  assert.equal(patch.planner_primary_attempts, 0);
+  assert.equal("planner_dispatches_total" in patch, false);
+});
+
+test("a claim counts against both the round budget and the session ceiling", () => {
+  const first = claim(BASE);
+  assert.equal(first.state.planner_primary_attempts, 1);
+  assert.equal(first.state.planner_dispatches_total, 1);
 });
 
 test("invalid plan from primary opens revision not fallback", () => {

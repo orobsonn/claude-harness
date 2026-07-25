@@ -93,6 +93,26 @@ export function applyAgentDispatchOutcome(previous, input = {}) {
     if (last && typeof last === "object" && !Array.isArray(last) && last.key === key) {
       base.agent_dispatch_last_failure = null;
     }
+    // A precondition that was later satisfied is not a standing failure. Without this the
+    // gate-blocked counter is monotonic for the whole session — nothing anywhere deletes a key —
+    // so K non-consecutive denials permanently ban a dispatch that now works. That is how a
+    // planning-phase deadlock survived being reclassified out of the agent's own budget: the ban
+    // just moved counters. The anti-runaway property is unchanged, because it is CONSECUTIVE
+    // denials (a dispatcher that cannot satisfy the precondition never scores a success).
+    const blockedMap =
+      base.gate_blocked_dispatches &&
+      typeof base.gate_blocked_dispatches === "object" &&
+      !Array.isArray(base.gate_blocked_dispatches)
+        ? { .../** @type {Record<string, unknown>} */ (base.gate_blocked_dispatches) }
+        : null;
+    if (blockedMap && key in blockedMap) {
+      delete blockedMap[key];
+      base.gate_blocked_dispatches = blockedMap;
+      const lastBlocked = base.gate_blocked_last;
+      if (lastBlocked && typeof lastBlocked === "object" && !Array.isArray(lastBlocked) && lastBlocked.key === key) {
+        base.gate_blocked_last = null;
+      }
+    }
     return { state: base, key, failures: 0, exhausted: false };
   }
 

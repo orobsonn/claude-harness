@@ -559,6 +559,37 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **O plano volta a poder ser aprovado depois de corrigido, e o planejamento não trava mais na 2ª rodada.**
+  Numa run ao vivo a entrega morreu em silêncio no planejamento: o revisor pediu ajuste (REVISE), e como
+  um REVISE congela toda mão de escrita, a run ficou sem saída — não revisava e não implementava. Eram
+  três defeitos empilhados, não um teto errado. **(1)** A assinatura que emparelha os dois revisores não
+  incluía o plano, então o parecer antigo de uma família valia para sempre: com o plano já corrigido, um
+  "aprovado" da família principal era sobrescrito pelo "revisar" da rodada anterior da outra — aprovar era
+  inalcançável. Agora a assinatura acompanha o plano vinculado. **(2)** As negações do próprio motor ao
+  planner eram cobradas do orçamento de *qualidade do agente*: três delas baniam pelo resto da sessão um
+  agente que nunca rodou, e o planner não tem plano B. Agora contam no orçamento certo, o de precondição.
+  **(3)** O orçamento de 5 rodadas de revisão era ficção: cada rodada consome um replanejamento, e o
+  planner só tinha 3 tentativas na sessão inteira — uma delas perdida numa recusa de envelope. Agora cada
+  rodada de revisão credita um orçamento novo (o K=3 continua barrando *falha* dentro da rodada), com um
+  teto de sessão que **nenhum** caminho zera para o gasto não multiplicar num motor que faz merge sozinho.
+  Fecham o conserto: as instruções do revisor e o identificador travado da feature passam a chegar ao
+  planner no despacho — antes não havia caminho de código, só prosa, e cada replanejamento era cego
+  (o texto do revisor entra como dado não-confiável, cercado por marcador com nonce); a negação por
+  orçamento agora fala em linguagem de produto e manda escalar, em vez de encerrar o turno calada; e o
+  estado deixa de mentir (o erro de vínculo antigo sobrevivia ao lado de um plano válido). Três prosas que
+  ainda mandavam parar na 2ª rodada ou renomear a feature foram corrigidas.
+
+  Duas armadilhas fechadas na revisão adversarial da própria correção, cada uma capaz de reproduzir o
+  mesmo deadlock: o contador de negação por precondição **não tinha nenhum caminho de reset** em todo o
+  código — três negações não-consecutivas baniam para sempre um despacho que já voltou a funcionar, então
+  o ban só teria mudado de contador; e a única mensagem que o motor entrega de fato mandava "aplique a
+  instrução no plano e re-despache o revisor", coisa que o orquestrador não pode fazer (o plano é do
+  plugin desde a #449) — sem mandar replanejar, o plano nunca é revinculado, o parecer do par continua
+  valendo e as 5 rodadas queimariam sem um único replanejamento. Também: a rodada que estoura o teto não
+  credita mais orçamento (era plano que ninguém poderia revisar), o brief não é duplicado quando o
+  runtime dispara o hook duas vezes, e a cerca de dado não-confiável falha fechada sem nonce em vez de
+  cair num literal previsível.
+
 - **A mão barata só roda nos modelos aprovados, e o orquestrador não escolhe mais o modelo no olho.**
   Numa run real o plano declarava a escada `{low: gemma4, medium: glm-5.2, high: kimi-k2.7-code}` e as
   três mãos saíram despachadas em `gpt-oss:120b` — justamente o modelo que a própria documentação
