@@ -8,6 +8,7 @@ import {
   LOOP_THRESHOLDS,
   applyReviewOutcome,
   classifyReviewBoundaryError,
+  decideLoopGuard,
   decideReviewCapBeforeWriting,
   reopenReviewEpoch,
   reserveReviewAttempt,
@@ -601,6 +602,47 @@ test("hook persists reservations before dispatch and consumes them after complet
   }
 });
 
+test("hook leaves a durable escalation trace when the spec-adversary loop stops converging", async () => {
+  // With no deterministic cap, the nudge is the entire stop mechanism — so an ignored escalation
+  // must still be VISIBLE. Prose nobody records fails exactly like prose nobody obeys.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-escalation-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state({ adversary_loop_count: LOOP_THRESHOLDS.adversary.deny })));
+    const hooks = await createLoopGuardHooks(root);
+    const runtimeInput = { tool: "task", sessionID: SESSION, callID: "escalate-call" };
+    const output = {
+      args: { description: "Attack the spec", prompt: "Attack the spec.", subagent_type: "adversary-family-1" },
+      output: JSON.stringify({ issues: [{
+        description: "The vault boundary accepts ISO text.",
+        category: "boundary",
+        severity: "high",
+        scope: "src/db/vault.ts",
+        evidence: "vault.ts:writeToTable",
+        suggested_sniper_tier: "sniper-high",
+        fix_hint: "src/db/vault.ts:writeToTable:reject",
+      }] }),
+    };
+    await hooks["tool.execute.before"](runtimeInput, output);
+    await hooks["tool.execute.after"](runtimeInput, output);
+
+    const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+    // The dispatch itself was never refused, and no capped status was written.
+    assert.equal(persisted.review_status, undefined);
+    assert.match(output.metadata.adversary_nudge, /STOP re-attacking/);
+    // The trace is what makes an ignored escalation auditable.
+    assert.equal(typeof persisted.spec_adversary_escalation, "object");
+    assert.equal(persisted.spec_adversary_escalation.round, LOOP_THRESHOLDS.adversary.deny + 1);
+    assert.equal(persisted.spec_adversary_escalation.report_hash, persisted.primary_review_last_report_hash);
+    assert.match(persisted.spec_adversary_escalation.at, /^\d{4}-\d{2}-\d{2}T/);
+    // And the residual risk was snapshotted for the planner brief in the same pass.
+    assert.equal(persisted.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("hook rejects a gate-state whose embedded session differs from its runtime path", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-session-mismatch-"));
   try {
@@ -796,6 +838,156 @@ test("a persisted REVISE credits a fresh planner round budget, exactly once, and
     response: JSON.stringify({ issues: [] }),
   });
   assert.equal(adversary.state.planner_primary_attempts, 3);
+});
+
+test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the run", () => {
+  // The live incident's round 1 came back malformed. Two more and `primary_failure_cap_reached`
+  // would have denied every writing hand and the delivery for the rest of the run — in a phase
+  // where nothing had been written and the planner had not run once.
+  const broken = (callId) => input({ subagentType: "adversary-family-1", taskId: "", phase: "", callId, response: "not json at all" });
+  let current = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.primary_failure_streak.deny; round += 1) {
+    const args = broken(`broken-${round}`);
+    const reserved = reserveReviewAttempt(current, args);
+    assert.equal(reserved.ok, true, `round ${round}: ${reserved.reason}`);
+    const result = applyReviewOutcome(reserved.state, args);
+    assert.equal(result.classified.failureClass, "malformed");
+    current = result.state;
+  }
+  assert.equal(current.primary_review_failure_streak, LOOP_THRESHOLDS.primary_failure_streak.deny);
+  // No freezing status, and the hands + delivery stay available.
+  assert.equal(current.review_status, undefined);
+  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
+    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
+  }
+  // The broken eye IS stopped, with an instruction instead of a dead end.
+  const again = reserveReviewAttempt(current, broken("broken-extra"));
+  assert.equal(again.ok, false);
+  assert.match(again.reason, /do NOT re-dispatch it/);
+  assert.match(again.reason, /Nothing is frozen/);
+  assert.match(again.reason, /report this to the operator/);
+
+  // A broken PLAN-REVIEWER still freezes: there the code exists and cannot be judged.
+  let plan = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.primary_failure_streak.deny; round += 1) {
+    plan = complete(plan, { callId: `pr-broken-${round}`, response: "not json" }).state;
+  }
+  assert.equal(plan.review_status, "primary_failure_cap_reached");
+  assert.equal(decideReviewCapBeforeWriting({ subagentType: "executor-high", gateState: plan }).decision, "deny");
+});
+
+test("the spec pass snapshots its material issues so an accepted risk survives the plan-review overwrite", () => {
+  const advInput = (callId) => input({
+    subagentType: "adversary-family-1",
+    taskId: "",
+    phase: "",
+    callId,
+    response: JSON.stringify({ issues: [
+      { description: "The vault boundary accepts ISO text.", category: "boundary", severity: "high", scope: "src/db/vault.ts", evidence: "vault.ts:writeToTable", suggested_sniper_tier: "sniper-high", fix_hint: "src/db/vault.ts:writeToTable:reject" },
+      { description: "A naming nit.", category: "other", severity: "low", scope: "src/db/leads.ts", evidence: "leads.ts:x", suggested_sniper_tier: "sniper-low", fix_hint: "src/db/leads.ts:x:rename" },
+    ] }),
+  });
+  const after = applyReviewOutcome(reserveReviewAttempt(state(), advInput("adv-1")).state, advInput("adv-1")).state;
+  assert.equal(after.spec_adversary_open_risks.length, 1, "only material issues are carried");
+  assert.equal(after.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
+
+  // A later plan-review outcome overwrites primary_review_last_report — the snapshot must not move.
+  const afterPlanReview = complete({ ...after, adversary_fired: true }, { callId: "pr-1", response: report("REVISE", [finding]) }).state;
+  assert.equal(afterPlanReview.spec_adversary_open_risks.length, 1);
+  assert.equal(afterPlanReview.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
+
+  // Once the ceremony marker is stamped the spec pass is over: later adversary rounds (per-task
+  // attacks during implementation) must not overwrite the accepted spec risks.
+  const taskAttack = input({
+    subagentType: "adversary-family-1",
+    taskId: "task-1",
+    phase: "task",
+    callId: "task-adv",
+    response: JSON.stringify({ issues: [
+      { description: "Unrelated implementation defect.", category: "race", severity: "high", scope: "src/x.ts", evidence: "x.ts:y", suggested_sniper_tier: "sniper-high", fix_hint: "src/x.ts:y:lock" },
+    ] }),
+  });
+  const afterTask = applyReviewOutcome(reserveReviewAttempt(afterPlanReview, taskAttack).state, taskAttack).state;
+  assert.equal(afterTask.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
+});
+
+test("the spec-adversary loop is never refused and never freezes the run", () => {
+  // The incident: a spec-REFINEMENT loop hit its cap, wrote review_cap_reached, and froze every
+  // writing hand for the rest of the run — in a phase where the planner had not run once.
+  const advInput = (overrides = {}) => input({
+    subagentType: "adversary-family-1",
+    taskId: "",
+    phase: "",
+    response: JSON.stringify({ issues: [{
+      description: "The vault boundary accepts ISO text for the epoch columns.",
+      category: "boundary",
+      severity: "high",
+      scope: "src/db/vault.ts",
+      evidence: "vault.ts:writeToTable",
+      suggested_sniper_tier: "sniper-high",
+      fix_hint: "src/db/vault.ts:writeToTable:reject non-integer timestamps",
+    }] }),
+    ...overrides,
+  });
+
+  let current = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.adversary.deny; round += 1) {
+    const result = applyReviewOutcome(
+      reserveReviewAttempt(current, advInput({ callId: `adv-${round}` })).state,
+      advInput({ callId: `adv-${round}` }),
+    );
+    assert.equal(result.classified.kind, "useful", `round ${round}`);
+    current = result.state;
+  }
+  assert.equal(current.adversary_loop_count, LOOP_THRESHOLDS.adversary.deny);
+  // No status is written at all: an adversary loop must never put the run into a capped state.
+  assert.equal(current.review_status, undefined);
+  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
+    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
+  }
+  // Past the threshold the dispatch is still ALLOWED — stopping is the orchestrator's call, driven
+  // by the escalation nudge. A deterministic refusal here is exactly what stranded two live runs.
+  const beyond = reserveReviewAttempt(current, advInput({ callId: "adv-beyond" }));
+  assert.equal(beyond.ok, true, beyond.reason);
+  assert.equal(decideLoopGuard({ subagentType: "adversary-family-1", count: LOOP_THRESHOLDS.adversary.deny + 5 }).decision, "warn");
+  // The plan-review loop is untouched by any of this.
+  assert.equal(reserveReviewAttempt(current, input({ callId: "pr-after-spec-rounds" })).ok, true);
+});
+
+test("no adversary loop freezes the run — only the plan-review verdict loop does", () => {
+  const taskAdv = (callId) => input({
+    subagentType: "adversary-family-1",
+    taskId: "task-1",
+    phase: "task",
+    callId,
+    response: JSON.stringify({ issues: [{
+      description: "Concurrent writers can interleave and lose an update.",
+      category: "determinism",
+      severity: "high",
+      scope: "src/db/leads.ts",
+      evidence: "leads.ts:update",
+      suggested_sniper_tier: "sniper-high",
+      fix_hint: "src/db/leads.ts:update:serialize under the existing lock",
+    }] }),
+  });
+  let current = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.adversary.deny; round += 1) {
+    current = applyReviewOutcome(reserveReviewAttempt(current, taskAdv(`t-${round}`)).state, taskAdv(`t-${round}`)).state;
+  }
+  // The Claude Code variant has no adversary cap and never suffers this stall class. Here there is
+  // no deterministic cap either: no status, no refusal, no frozen hand.
+  assert.equal(current.review_status, undefined);
+  assert.equal(reserveReviewAttempt(current, taskAdv("t-beyond")).ok, true);
+  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
+    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
+  }
+  // The plan-review verdict loop is the ONE that still freezes: REVISE means no hand may write yet.
+  let planLoop = state();
+  for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
+    planLoop = complete(planLoop, { callId: `pr-${round}`, response: report("REVISE", [finding]) }).state;
+  }
+  assert.equal(planLoop.review_status, "review_cap_reached");
+  assert.equal(decideReviewCapBeforeWriting({ subagentType: "executor-high", gateState: planLoop }).decision, "deny");
 });
 
 test("no round credit at the cap: a budget nobody can review is never advertised", () => {

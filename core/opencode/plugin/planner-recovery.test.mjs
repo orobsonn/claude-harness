@@ -356,3 +356,44 @@ test("planner-fallback is never claimable after primary provider death", async (
     assert.notEqual(state().planner_retry_outcome, "fallback_pending");
   });
 });
+
+test("chain: a spec-adversary open risk recorded by loop-guard reaches the planner's PROMPT", async () => {
+  // Three links were tested separately (the snapshot write, the brief render, the nonce wiring) but
+  // never composed. This is the mechanism that keeps an ACCEPTED risk alive; if the chain breaks
+  // anywhere, accepting a risk silently means losing it.
+  await tempRun(false, async ({ root, stateFile }) => {
+    const { createLoopGuardHooks } = await import("./loop-guard.ts");
+    const loop = await createLoopGuardHooks(root);
+    // The spec pass runs BEFORE the ceremony marker is stamped.
+    const pre = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    fs.writeFileSync(stateFile, JSON.stringify({ ...pre, adversary_fired: false }));
+    const advInput = { tool: "task", sessionID: SESSION, callID: "chain-adv" };
+    const advOutput = {
+      args: { description: "Attack the spec", prompt: "Attack the spec.", subagent_type: "adversary-family-1" },
+      output: JSON.stringify({ issues: [{
+        description: "The vault boundary accepts ISO text for the epoch columns.",
+        category: "boundary",
+        severity: "high",
+        scope: "src/db/vault.ts",
+        evidence: "vault.ts:writeToTable",
+        suggested_sniper_tier: "sniper-high",
+        fix_hint: "src/db/vault.ts:writeToTable:reject non-integer timestamps",
+      }] }),
+    };
+    await loop["tool.execute.before"](advInput, advOutput);
+    await loop["tool.execute.after"](advInput, advOutput);
+    const persisted = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    assert.equal(persisted.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
+
+    // The operator accepted the pass; the marker is stamped and the planner is dispatched.
+    fs.writeFileSync(stateFile, JSON.stringify({ ...persisted, adversary_fired: true }));
+    const hooks = await createPlannerRecoveryHooks(root);
+    const args = { description: "dispatch planner", prompt: "Produce the plan.", subagent_type: "planner" };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION, callID: "chain-planner" }, { args });
+
+    assert.match(args.prompt, /\[HARNESS_SESSION_FEATURE_ID\]planner-recovery\[\/HARNESS_SESSION_FEATURE_ID\]/);
+    assert.match(args.prompt, /BEGIN UNTRUSTED SPEC-ADVERSARY OPEN RISKS/);
+    assert.match(args.prompt, /- \[high\] scope=src\/db\/vault\.ts The vault boundary accepts ISO text/);
+    assert.match(args.prompt, /never silently dropped/);
+  });
+});

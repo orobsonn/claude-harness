@@ -495,8 +495,9 @@ test("t5-loop-thresh: after configured warn threshold emits warn; after deny thr
     "deny",
   );
 
+  // Adversary: warn only, never deny — see t5-loop-catalog-counts for why.
   const dAdv = decideLoopGuard({ subagentType: "adversary", count: LOOP_THRESHOLDS.adversary.deny });
-  assert.equal(dAdv.decision, "deny");
+  assert.equal(dAdv.decision, "warn");
 
   // below warn
   const a = decideLoopGuard({ subagentType: "plan-reviewer", count: 1 });
@@ -535,9 +536,13 @@ test("t5-loop-catalog-counts: canonical and alias roles follow catalog countsLoo
   assert.equal(loopCounterKey("plan-reviewer-experimental"), null);
   assert.equal(loopCounterKey("@harness/adversary-family-99"), null);
 
-  // primary at/above deny
+  // The adversary loop is deliberately NEVER denied deterministically: a hard refusal stranded two
+  // live runs (a spec-refinement loop before the planner ran, and one run-wide counter away from
+  // doing it mid-implementation). Past the threshold it warns; stopping is the orchestrator's call,
+  // driven by the escalation nudge. Only plan_review — where a REVISE forbids every hand — denies.
   const p = decideLoopGuard({ subagentType: "adversary", count: 4 });
-  assert.equal(p.decision, "deny");
+  assert.equal(p.decision, "warn");
+  assert.equal(decideLoopGuard({ subagentType: "adversary", count: 99 }).decision, "warn");
 
   // secondary uses the !key then-clause and is allowed regardless of passed count
   for (const role of [
