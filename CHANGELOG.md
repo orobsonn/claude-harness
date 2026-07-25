@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.49.8](https://github.com/orobsonn/claude-harness/compare/v0.49.7...v0.49.8) (2026-07-25)
+
+
+### Bug Fixes
+
+* **capture:** captura morre com ENOBUFS em repo com node_modules instalado ([#466](https://github.com/orobsonn/claude-harness/issues/466)) ([37d6cfe](https://github.com/orobsonn/claude-harness/commit/37d6cfe5b1573c5f86a72061c8376be065cebc6e))
+
 ## [0.49.7](https://github.com/orobsonn/claude-harness/compare/v0.49.6...v0.49.7) (2026-07-25)
 
 
