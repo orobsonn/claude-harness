@@ -352,7 +352,13 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   }
   if (identity.family === 1) {
     const failureCap = primaryFailureStreakCap(input);
-    const failureStreak = primaryFailureStreakOf(state);
+    // The streak means "THIS eye keeps returning garbage" — it is evidence about one role, never a
+    // verdict on the next phase's eye. Left global, a broken spec-adversary barred every later
+    // family-1 eye (plan-reviewer, per-task adversary, final review) for the rest of the session,
+    // and since reservations are refused before dispatch no useful outcome could ever clear it.
+    // Absent owner (legacy state) keeps the old global behaviour — conservative, not fail-open.
+    const streakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
+    const failureStreak = streakRole && streakRole !== identity.logicalRole ? 0 : primaryFailureStreakOf(state);
     const inflightFamily1 = inflight.filter((item) => item?.family === 1 && item?.epoch === epoch).length;
     if (failureStreak + inflightFamily1 >= failureCap) {
       const specPhaseEye =
@@ -453,7 +459,11 @@ export function applyReviewOutcome(stateValue, input = {}) {
       next.review_failure_counts = counts;
       return { state: next, accepted: true, classified };
     }
-    next[`${prefix}_review_failure_streak`] = bounded(state[`${prefix}_review_failure_streak`], 1);
+    // A streak belongs to the role that produced it: a different family-1 eye failing starts its own.
+    const priorStreakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
+    const continuesStreak = reservation.family !== 1 || !priorStreakRole || priorStreakRole === reservation.logical_role;
+    next[`${prefix}_review_failure_streak`] = continuesStreak ? bounded(state[`${prefix}_review_failure_streak`], 1) : 1;
+    if (reservation.family === 1) next.primary_review_failure_streak_role = reservation.logical_role;
     if (diagnostic) next.last_provider_diagnostic = diagnostic;
     if (reservation.family === 1) {
       const failureCap = primaryFailureStreakCap(input);
@@ -497,6 +507,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
   }
 
   next[`${prefix}_review_failure_streak`] = 0;
+  if (reservation.family === 1) next.primary_review_failure_streak_role = null;
   const scope = scopeHash(reservation);
   const dualPhase = dualPhaseForReservation(reservation);
   if (reservation.family === 2) {
