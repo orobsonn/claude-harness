@@ -62,6 +62,58 @@ test("both families' instructions are carried when both reported", () => {
   assert.match(brief, /Name the live write path in scope\./);
 });
 
+test("residual spec-adversary risks reach the planner instead of evaporating with the marker", () => {
+  // Accepting a spec-adversary pass WITH open risks is only safe if the risks survive. Nothing else
+  // carries them: without this, the fix for a freeze would launder an unresolved high into the plan.
+  const brief = buildPlannerBriefAppendix({
+    featureId: FEATURE,
+    nonce: NONCE,
+    state: {
+      spec_adversary_open_risks: [
+        {
+          severity: "high",
+          scope: "src/db/vault.ts",
+          description: "The vault boundary accepts ISO text for the epoch columns.",
+          fix_hint: "reject non-integer timestamps at writeToTable",
+        },
+        { severity: "low", description: "naming nit", fix_hint: "rename" },
+        { severity: "high", description: "already handled", resolved: true },
+      ],
+    },
+  });
+  assert.match(brief, /BEGIN UNTRUSTED SPEC-ADVERSARY OPEN RISKS 9f2c4b17-nonce/);
+  assert.match(brief, /- \[high\] scope=src\/db\/vault\.ts The vault boundary accepts ISO text/);
+  assert.match(brief, /carried\s+forward explicitly as an accepted risk/);
+  // Only material, unresolved issues travel.
+  assert.equal(/naming nit/.test(brief), false);
+  assert.equal(/already handled/.test(brief), false);
+  // And it must not masquerade as a plan-review revision.
+  assert.equal(/REVISION re-plan/.test(brief), false);
+});
+
+test("an accepted risk is restated on EVERY re-plan until the plan is approved, alongside the revision block", () => {
+  // The risks used to be read off `primary_review_last_report`, which the first plan-review outcome
+  // overwrites — so a risk the planner dropped on attempt 1 vanished permanently from attempt 2 on.
+  const risks = [{ severity: "high", scope: "src/db/vault.ts", description: "boundary accepts ISO text", fix_hint: "reject non-integer" }];
+  const revision = buildPlannerBriefAppendix({
+    featureId: FEATURE,
+    nonce: NONCE,
+    state: { ...reviseState(), spec_adversary_open_risks: risks },
+  });
+  assert.match(revision, /UNTRUSTED PLAN-REVIEW INSTRUCTIONS/);
+  assert.match(revision, /Normalize the legacy text timestamp/);
+  assert.match(revision, /UNTRUSTED SPEC-ADVERSARY OPEN RISKS/);
+  assert.match(revision, /boundary accepts ISO text/);
+
+  // Once the plan is APPROVED there is nothing left to carry.
+  const approved = buildPlannerBriefAppendix({
+    featureId: FEATURE,
+    nonce: NONCE,
+    state: { plan_verdict: "APPROVE", spec_adversary_open_risks: risks },
+  });
+  assert.equal(/SPEC-ADVERSARY OPEN RISKS/.test(approved), false);
+});
+
 test("no nonce means no instruction block: the fence fails closed, never to a predictable literal", () => {
   for (const nonce of [undefined, "", 42]) {
     const brief = buildPlannerBriefAppendix({ featureId: FEATURE, state: reviseState(), nonce });

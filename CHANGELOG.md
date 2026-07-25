@@ -566,6 +566,40 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **O adversário não trava mais a entrega, e o motor para de moer rodadas que não levam a nada.**
+  Uma run travou na fase de spec sem o planner rodar uma única vez: o ataque à spec voltou com achado
+  em quatro rodadas seguidas, bateu um teto e o estado resultante **congelou toda mão de escrita pelo
+  resto da run**, exigindo reinício de cerimônia. A causa não era a spec. Eram três coisas: **(1)**
+  não existia em código nenhuma definição de "passe aceito" — a decisão ficava na cabeça do modelo, e
+  duas sessões com o mesmo código fizeram coisas opostas (uma aceitou na 1ª rodada e seguiu, a outra
+  reatacou até queimar o pavio); **(2)** a barra escrita era "lista de problemas vazia", inalcançável
+  num codebase real, porque achar problema é literalmente o trabalho do agente e cada reescrita da
+  spec abre superfície nova — esteira, não convergência; **(3)** o contador desse laço era **da run
+  inteira**, compartilhado entre o ataque à spec e o ataque de cada tarefa, então uma entrega grande
+  com quatro tarefas atacadas congelava no meio da implementação por contabilidade, não por defeito.
+  Agora: o teto determinístico do adversário **saiu** (é o que o Claude Code sempre fez, e é por isso
+  que lá isso não acontece) — nenhum laço de adversário nega despacho nem congela a run; a contagem
+  passou a ser por unidade de trabalho (o passe da spec e cada tarefa com a sua); e quem para é o
+  **orquestrador**, avisado a cada rodada: passe limpo → aceita e segue; achado aberto com rodadas
+  pela frente → corrige a spec e reataca; deixou de convergir → **para e escala para o humano** (em
+  autônomo, registra como risco aberto, segue, e leva para o corpo do PR). Os achados residuais agora
+  chegam estruturalmente ao brief do planner, então aceitar um risco não é mais o mesmo que perdê-lo
+  de vista. O ataque à spec também ganhou alvo próprio: contrato de entrega, não toda fraqueza
+  alcançável do codebase — o que a spec exclui de propósito é risco aberto, não bloqueio.
+  O único laço que ainda congela é o de revisão do plano, onde um REVISE de fato proíbe escrever.
+
+  Fechados na revisão da própria correção: **um olho que devolve resposta ilegível três vezes na fase
+  de spec também congelava mãos e entrega pelo resto da run** — nesta run a 1ª rodada veio malformada,
+  faltaram duas para travar antes do planner existir; agora o olho quebrado para de ser despachado
+  (insistir num schema que não passa é inútil) mas nada congela, e a recusa virou instrução em
+  linguagem de produto. A **escalada deixa rastro durável** no estado e no feed de observabilidade —
+  sem limite determinístico, escalada que ninguém registra falha igual a escalada que ninguém obedece.
+  O **risco aceito é fotografado num campo próprio** e repetido em todo replanejamento até o plano ser
+  aprovado (antes ele era lido de um campo que a 1ª revisão de plano sobrescrevia, então um risco que
+  o planner deixasse cair desaparecia para sempre). E a prosa do adversário perdeu a brecha que
+  mandava rebaixar fraqueza em chamador não tocado: escopo limita o que ele PROPÕE, não o que ele
+  REPORTA — defeito que a própria mudança introduz nunca é rebaixado.
+
 - **O plano volta a poder ser aprovado depois de corrigido, e o planejamento não trava mais na 2ª rodada.**
   Numa run ao vivo a entrega morreu em silêncio no planejamento: o revisor pediu ajuste (REVISE), e como
   um REVISE congela toda mão de escrita, a run ficou sem saída — não revisava e não implementava. Eram

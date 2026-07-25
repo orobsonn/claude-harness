@@ -21,6 +21,8 @@ export async function createLoopGuardHooks(
     loopCounterKey,
   } = await import("./lib/loop-decide.mjs")
   const { decideReviseNudge } = await import("./lib/revise-nudge.mjs")
+  const { decideAdversaryNudge } = await import("./lib/adversary-nudge.mjs")
+  const { dedupeByType, obsAppend } = await import("./lib/obs-emit.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
@@ -172,6 +174,35 @@ export async function createLoopGuardHooks(
       if (nudge.action === "inject" && output != null && typeof output === "object") {
         if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
         output.metadata.revise_nudge = nudge.context
+      }
+    } catch {
+      /* fail-open — a nudge never blocks review accounting */
+    }
+    // Same channel, the spec phase's own loop: acceptance of a spec-adversary pass had no
+    // definition in code, so it behaved like a coin flip — one session stamped after round 1, the
+    // next re-attacked to the cap and froze before the planner ever ran.
+    try {
+      const nudge = decideAdversaryNudge({ state: result.state, subagentType: sub, taskId })
+      if (nudge.action === "inject" && output != null && typeof output === "object") {
+        if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
+        output.metadata.adversary_nudge = nudge.context
+      }
+      // With no deterministic cap, prose is the whole stop mechanism — and prose nobody records
+      // fails exactly like prose nobody obeys. Persist the escalation and emit it on the
+      // observability feed so an ignored one is visible to the operator instead of invisible.
+      if (nudge.action === "inject" && nudge.kind === "escalate") {
+        const round = typeof result.state.adversary_loop_count === "number" ? result.state.adversary_loop_count : 0
+        const reportHash = typeof result.state.primary_review_last_report_hash === "string" ? result.state.primary_review_last_report_hash : ""
+        withGateStateLock(sp, (prev) => {
+          const already = prev.spec_adversary_escalation as Record<string, unknown> | undefined
+          if (already && already.report_hash === reportHash && already.round === round) return prev
+          return { ...prev, spec_adversary_escalation: { round, report_hash: reportHash, at: new Date().toISOString() } }
+        })
+        try {
+          obsAppend({ type: "spec-adversary-escalated", round }, { dedupe: dedupeByType })
+        } catch {
+          /* observability is advisory */
+        }
       }
     } catch {
       /* fail-open — a nudge never blocks review accounting */

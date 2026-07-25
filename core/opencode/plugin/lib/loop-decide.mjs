@@ -335,7 +335,14 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   const outcomes = currentReceipts(state);
   const inflight = currentInflight(state);
   if (outcomes.length + inflight.length >= MAX_EPOCH_RECEIPTS) {
-    return { ok: false, reason: "review epoch receipt bound reached; verified restart required", state };
+    // Not "verified restart required": a reopen only runs under a cap status, and an adversary loop
+    // no longer sets one — so this bound has no in-session recovery. Say that instead of sending the
+    // operator after a restart that cannot work.
+    return {
+      ok: false,
+      reason: `review epoch receipt bound reached (${MAX_EPOCH_RECEIPTS}) — no in-session recovery exists for this bound; report it to the operator and start a new session`,
+      state,
+    };
   }
   if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash)) {
     return { ok: false, reason: "review call already has terminal outcome", state };
@@ -348,9 +355,15 @@ export function reserveReviewAttempt(stateValue, input = {}) {
     const failureStreak = primaryFailureStreakOf(state);
     const inflightFamily1 = inflight.filter((item) => item?.family === 1 && item?.epoch === epoch).length;
     if (failureStreak + inflightFamily1 >= failureCap) {
+      const specPhaseEye =
+        identity.logicalRole === "adversary" &&
+        !(typeof input.taskId === "string" && input.taskId.trim()) &&
+        state.adversary_fired !== true;
       return {
         ok: false,
-        reason: `[loop-guard] primary failure-cap: ${identity.canonicalName} streak=${Math.min(failureStreak, failureCap)}/${failureCap} inflight_family1=${inflightFamily1}. Halt. Fix review prompt/schema, then verified ceremony restart (new generation+plan binding) before re-dispatch.`,
+        reason: specPhaseEye
+          ? `[loop-guard] the spec-adversary eye returned an unusable report ${Math.min(failureStreak, failureCap)}/${failureCap} times — do NOT re-dispatch it, the schema or the prompt is the problem, not the spec. Nothing is frozen: report this to the operator in product language (the spec could not be attacked, so it goes to the plan unattacked or the run stops — their call) and STOP looping.`
+          : `[loop-guard] primary failure-cap: ${identity.canonicalName} streak=${Math.min(failureStreak, failureCap)}/${failureCap} inflight_family1=${inflightFamily1}. Halt. Fix review prompt/schema, then verified ceremony restart (new generation+plan binding) before re-dispatch.`,
         state,
       };
     }
@@ -358,7 +371,16 @@ export function reserveReviewAttempt(stateValue, input = {}) {
     const { deny } = thresholdsFor(key, input);
     const count = Number.isInteger(state[key]) ? state[key] : 0;
     const reserved = inflight.filter((item) => item?.family === 1 && item?.logical_role === identity.logicalRole && item?.epoch === epoch).length;
-    if (count + reserved >= deny) return { ok: false, reason: `${key} has no remaining useful-review reservation slot`, state };
+    // The ADVERSARY loop has no deterministic refusal. A hard cap here fired twice on legitimate
+    // work — once on a spec-refinement loop before the planner had run, and it was one run-wide
+    // counter away from doing it mid-implementation — and each time the run had no way out. The
+    // Claude Code variant has no such cap and does not stall this way. Convergence is now driven by
+    // the adversary nudge, which tells the orchestrator to stop and escalate to the operator when
+    // the rounds stop producing progress. The PLAN-REVIEW loop keeps its deterministic cap: a REVISE
+    // verdict genuinely forbids every writing hand, so that budget is load-bearing.
+    if (key === "plan_review_count" && count + reserved >= deny) {
+      return { ok: false, reason: `${key} has no remaining useful-review reservation slot`, state };
+    }
   }
   return { ok: true, accepted: true, reservation, state: { ...state, review_epoch: epoch, review_inflight: [...inflight, reservation] } };
 }
@@ -435,7 +457,16 @@ export function applyReviewOutcome(stateValue, input = {}) {
     if (diagnostic) next.last_provider_diagnostic = diagnostic;
     if (reservation.family === 1) {
       const failureCap = primaryFailureStreakCap(input);
-      if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached") {
+      // A broken SPEC-phase eye stops being dispatched (the streak refusal in reserveReviewAttempt
+      // does that, and retrying an unparseable schema is pointless) — but it must not write the
+      // freezing status. Same category error as the round cap: a spec-phase failure would deny every
+      // writing hand and the delivery for the rest of the run, in a phase where nothing has been
+      // written yet. The live incident's round 1 was malformed; two more and the run would have
+      // bricked before the planner ever ran. A per-task adversary or a plan-reviewer keeps the
+      // freezing status — there the code already exists and a broken eye means it cannot be judged.
+      const specPhaseEye =
+        reservation.logical_role === "adversary" && !reservation.task_id && state.adversary_fired !== true;
+      if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached" && !specPhaseEye) {
         next.review_status = "primary_failure_cap_reached";
         next.cap_generation = state.ceremony_generation;
         next.cap_snapshot_hash = snapshotHash(state);
@@ -494,6 +525,29 @@ export function applyReviewOutcome(stateValue, input = {}) {
   const key = loopCounterKey(reservation.canonical_identity);
   const count = bounded(state[key], 1);
   next[key] = count;
+  // Snapshot the spec pass's material issues into their OWN field. Reading them off
+  // `primary_review_last_report` at planner time only worked for the FIRST plan: the first
+  // plan-reviewer outcome overwrites that field, so a risk the planner dropped could never be
+  // re-stated on a re-plan — it vanished permanently. Accepting a risk must not mean losing it.
+  if (reservation.logical_role === "adversary" && state.adversary_fired !== true) {
+    const issues = Array.isArray(object(classified.report).issues) ? object(classified.report).issues : [];
+    const open = issues
+      .filter((value) => {
+        const issue = object(value);
+        return issue.severity === "medium" || issue.severity === "high";
+      })
+      .slice(0, 20)
+      .map((value) => {
+        const issue = object(value);
+        return {
+          severity: issue.severity,
+          scope: typeof issue.scope === "string" ? issue.scope : "",
+          description: typeof issue.description === "string" ? issue.description.slice(0, 600) : "",
+          fix_hint: typeof issue.fix_hint === "string" ? issue.fix_hint.slice(0, 600) : "",
+        };
+      });
+    next.spec_adversary_open_risks = open;
+  }
   next.primary_review_last_report_hash = classified.reportHash;
   next.primary_review_last_scope_hash = scope;
   next.primary_review_last_report = classified.report;
@@ -524,6 +578,18 @@ export function applyReviewOutcome(stateValue, input = {}) {
     }
   }
   if (count >= deny && classified.materialUnresolved) {
+    // Only the plan-review verdict loop reaches a hard cap. An adversary loop records its rounds
+    // and lets the nudge escalate to the operator; it never writes a status that freezes the run.
+    if (key === "adversary_loop_count") {
+      return {
+        state: next,
+        accepted: true,
+        classified,
+        dualPhase,
+        scopeHash: scope,
+        dualBecameBoth: status === "both",
+      };
+    }
     next.review_status = "review_cap_reached";
     next.cap_generation = state.ceremony_generation;
     next.cap_snapshot_hash = snapshotHash(state);
@@ -560,7 +626,12 @@ export function decideLoopGuard(input = {}) {
   if (!key) return { ok: true, decision: "allow", reason: "not-loop-guarded" };
   const count = Number.isFinite(input.count) ? Math.max(0, Math.floor(input.count)) : 0;
   const { warn, deny } = thresholdsFor(key, input);
-  if (count >= deny) return { ok: false, decision: "deny", reason: `[loop-guard] Blocked: deny ${key}=${count} reached useful-review cap ${deny} for ${bareRole(input.subagentType)}.`, count, counterKey: key };
+  // The adversary loop is never denied deterministically — see reserveReviewAttempt. Past the
+  // threshold it warns; stopping is the orchestrator's call, driven by the adversary nudge, which
+  // tells it to escalate to the operator instead of grinding out rounds that change nothing.
+  if (count >= deny && key === "plan_review_count") {
+    return { ok: false, decision: "deny", reason: `[loop-guard] Blocked: deny ${key}=${count} reached useful-review cap ${deny} for ${bareRole(input.subagentType)}.`, count, counterKey: key };
+  }
   if (count >= warn) return { ok: true, decision: "warn", reason: `[loop-guard] Warning: ${key}=${count} reached warn threshold ${warn} for ${bareRole(input.subagentType)}.`, count, counterKey: key };
   return { ok: true, decision: "allow", reason: "loop-allow", count, counterKey: key };
 }
