@@ -22,6 +22,7 @@ test("#ac-1.2 mergeClaudeGitignore: absent file creates .gitignore containing th
     mergeClaudeGitignore(claudeDir);
     const content = readFileSync(join(claudeDir, ".gitignore"), "utf8");
     assert.ok(content.includes("plans/"), "must include plans/");
+    assert.ok(content.includes("state/"), "must include state/");
     assert.ok(content.includes("settings.local.json"), "must include settings.local.json");
     assert.ok(content.includes("*.local.md"), "must include *.local.md");
     assert.ok(content.includes(".harness-version-check-cache"), "must include .harness-version-check-cache");
@@ -42,6 +43,27 @@ test("#ac-1.2 mergeClaudeGitignore: merges into existing content without clobber
     assert.ok(content.includes("node_modules/"), "existing node_modules/ must be preserved");
     assert.ok(content.includes("dist/"), "existing dist/ must be preserved");
     assert.ok(content.includes("plans/"), "plans/ must be added by the merge");
+    assert.ok(content.includes("state/"), "state/ must be added by the merge");
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("mergeClaudeGitignore: a project vendored before state/ existed gets it appended on re-vendor", () => {
+  const claudeDir = makeClaudeDir();
+  try {
+    const gitignorePath = join(claudeDir, ".gitignore");
+    // Verbatim block shipped before state/ was required — what every already-onboarded project has.
+    writeFileSync(
+      gitignorePath,
+      "# Claude Harness — ephemeral, never committed\nplans/\nsettings.local.json\n*.local.md\n.harness-version-check-cache\n",
+    );
+
+    const result = mergeClaudeGitignore(claudeDir);
+
+    const lines = readFileSync(gitignorePath, "utf8").split(/\r?\n/).map((line) => line.trim());
+    assert.equal(lines.filter((line) => line === "state/").length, 1, "state/ must be appended exactly once");
+    assert.equal(result, "merged (1 line added)", "the merge must report the single added line");
   } finally {
     rmSync(claudeDir, { recursive: true, force: true });
   }

@@ -150,8 +150,13 @@ export const FRESH_NATIVE_PATHS = {
   ],
 };
 
+// `state/` is the fleet engine's per-run stateDir (`<projectRoot>/.claude/state`) — run locks,
+// observability, the issue body, and an `issue-<N>-env-<uuid>.env` holding the hand token. A repo's
+// root `.env`/`.env.*` rules do NOT cover that filename, so without this line the token is merely
+// untracked, one `git add -A` away from being committed.
 const GITIGNORE = `# Claude Harness — ephemeral, never committed
 plans/
+state/
 settings.local.json
 *.local.md
 .harness-version-check-cache
