@@ -906,3 +906,101 @@ test("seedOpencodeRootConfig: [security] the 8 canonical denies are the LAST key
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("seedOpencodeRootConfig: [security] a source rule with an unrecognised value is clamped to deny, never silently dropped (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-unrecognised-value-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "vault/**": "Deny", "secrets/**": ["deny"] },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(
+      map["vault/**"],
+      "deny",
+      "a source rule with the unrecognised value 'Deny' (wrong case) must be clamped to 'deny', never silently dropped and left to fall under the forced '*': 'allow'",
+    );
+    assert.equal(
+      map["secrets/**"],
+      "deny",
+      "a source rule with the unrecognised value ['deny'] (array, not a valid action) must be clamped to 'deny', never silently dropped and left to fall under the forced '*': 'allow'",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] a source map's own wildcard value survives instead of being widened to allow (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-wildcard-survives-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "*": "deny", "src/**": "allow" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(Object.keys(map)[0], "*", "permission.read's \"*\" wildcard must still be the FIRST key (last-match-wins order)");
+    assert.equal(
+      map["*"],
+      "deny",
+      "a source '*' value of 'deny' must be preserved, not silently widened to the forced 'allow' — that would invert a project's default-deny read posture into default-allow",
+    );
+    assert.equal(map["src/**"], "allow", "a project-specific allow rule must survive alongside the preserved wildcard value");
+    assert.deepEqual(
+      Object.keys(map).slice(-8),
+      CANONICAL_SECRET_DENIES,
+      "the 8 canonical denies must still be the LAST 8 serialized keys regardless of the source's own wildcard value",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] an integer-like source key cannot displace the wildcard from the first position (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-integer-key-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "0": "allow", "7": "deny" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(
+      Object.keys(map)[0],
+      "*",
+      "the \"*\" wildcard must be the FIRST key even when the source carries integer-like keys — JavaScript serializes integer-index own keys before string keys regardless of insertion order, which can silently displace the wildcard and break the last-match-wins invariant",
+    );
+    assert.deepEqual(
+      Object.keys(map).slice(-8),
+      CANONICAL_SECRET_DENIES,
+      "the 8 canonical denies must still be the LAST 8 serialized keys even when the source carries integer-like keys",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
