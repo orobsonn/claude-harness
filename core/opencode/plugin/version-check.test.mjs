@@ -1,6 +1,7 @@
 // locked then-clauses test for version-check — advisory only
 import assert from "node:assert"
 import test from "node:test"
+import versionCheck from "./version-check.ts"
 import {
   checkHarnessVersionStale,
   compareSemver,
@@ -9,8 +10,7 @@ import {
   parseSemver,
   resolveProjectRoot,
   resolveRemoteTag,
-  versionCheck,
-} from "./version-check.ts"
+} from "./lib/version-check-core.ts"
 
 test("version-check is advisory only", () => {
   assert.ok(versionCheck) // exercises advisory no-block path
@@ -21,19 +21,31 @@ test("version-check factory remains advisory when the catalog is healthy", async
   assert.deepEqual(hooks, {})
 })
 
-test("version-check sends incomplete catalog advisory through the TUI", async () => {
-  const toasts = []
-  const tui = {
-    toasts,
-    showToast(input) {
-      this.toasts.push(input)
-    },
-  }
+// --- TUI toast permanently retired (bisected live incident, 2026-07-27) --------------------
+//
+// Bisected against a real, headless `opencode serve` process with no attached TUI: merely
+// CALLING `client.tui.showToast(...)` — awaited, fire-and-forget, any shape — crashed the server
+// hard enough to break unrelated endpoints (`/config/providers`). Removing catalog-health or
+// staleness logic never reproduced the crash; removing this one call always fixed it. The failure
+// is inside the vendored OpenCode binary's own toast/session RPC handling, not in anything on our
+// side of the call, so no promise-handling pattern here makes it safe to invoke. `deliverAdvisory`
+// no longer touches `client` at all — these tests pin that the advisory channel is `warn`-only and
+// that `client` is accepted-but-ignored by `createVersionCheck` (a plugin author cannot silently
+// reintroduce the toast without a passing-`client`-does-nothing test going red first).
+
+test("version-check delivers the catalog advisory through warn — client is accepted but never touched", async () => {
+  const warnings = []
   const hooks = await createVersionCheck(
     {
       directory: "/project/nested",
       worktree: "/project",
-      client: { tui },
+      client: {
+        tui: {
+          showToast() {
+            throw new Error("must never be called — the toast RPC is retired")
+          },
+        },
+      },
     },
     {
       checkAgentCatalogHealth: (root) => {
@@ -41,34 +53,20 @@ test("version-check sends incomplete catalog advisory through the TUI", async ()
         return { missing: ["adversary"] }
       },
       agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
+      warn: (message) => warnings.push(message),
     },
   )
   assert.deepEqual(hooks, {})
-  assert.deepEqual(toasts, [{
-    body: {
-      title: "Harness",
-      message: "re-vendorize e reabra a sessão",
-      variant: "warning",
-    },
-  }])
+  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
 })
 
-test("version-check does not fall back when the TUI success result has an undefined error", async () => {
-  const warnings = []
+test("version-check falls back to console.warn when no warn dep is provided, and fails open end to end", async () => {
   const originalWarn = console.warn
-  console.warn = (message) => warnings.push(message)
+  const consoleWarnings = []
+  console.warn = (message) => consoleWarnings.push(message)
   try {
     await assert.doesNotReject(createVersionCheck(
-      {
-        directory: "/project",
-        client: {
-          tui: {
-            async showToast() {
-              return { error: undefined }
-            },
-          },
-        },
-      },
+      { directory: "/project" },
       {
         checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
         agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
@@ -77,55 +75,9 @@ test("version-check does not fall back when the TUI success result has an undefi
   } finally {
     console.warn = originalWarn
   }
-  assert.deepEqual(warnings, [])
-})
+  assert.deepEqual(consoleWarnings, ["re-vendorize e reabra a sessão"])
 
-test("version-check falls back when the TUI returns an error result", async () => {
   const warnings = []
-  await assert.doesNotReject(createVersionCheck(
-    {
-      directory: "/project",
-      client: {
-        tui: {
-          async showToast() {
-            return { error: new Error("TUI unavailable") }
-          },
-        },
-      },
-    },
-    {
-      checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
-      agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
-      warn: (message) => warnings.push(message),
-    },
-  ))
-  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
-})
-
-test("version-check falls back to console and fails open when TUI delivery fails", async () => {
-  const warnings = []
-  const toasts = []
-  await assert.doesNotReject(createVersionCheck(
-    {
-      directory: "/project",
-      client: {
-        tui: {
-          showToast: (input) => {
-            toasts.push(input)
-            throw new Error("TUI unavailable")
-          },
-        },
-      },
-    },
-    {
-      checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
-      agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
-      warn: (message) => warnings.push(message),
-    },
-  ))
-  assert.equal(toasts.length, 1)
-  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
-
   await assert.doesNotReject(createVersionCheck(
     { directory: "/project" },
     {
@@ -133,7 +85,7 @@ test("version-check falls back to console and fails open when TUI delivery fails
       warn: (message) => warnings.push(message),
     },
   ))
-  assert.equal(warnings.length, 2)
+  assert.equal(warnings.length, 1)
 })
 
 test("resolveProjectRoot prefers a root worktree over a nested directory", () => {
@@ -151,33 +103,6 @@ test("resolveProjectRoot discards a filesystem-root worktree from a non-git dire
   assert.equal(resolveProjectRoot("/", "/"), process.cwd())
 })
 
-test("version-check never blocks the bootstrap when the TUI never answers", async () => {
-  const warnings = []
-  let settled = false
-  const pending = createVersionCheck(
-    {
-      directory: "/project",
-      client: {
-        tui: {
-          showToast: () => new Promise(() => {}),
-        },
-      },
-    },
-    {
-      checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
-      agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
-      warn: (message) => warnings.push(message),
-      toastTimeoutMs: 20,
-    },
-  ).then((hooks) => {
-    settled = true
-    return hooks
-  })
-
-  assert.deepEqual(await pending, {})
-  assert.equal(settled, true)
-  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
-})
 
 // --- harness-staleness signal (issue #478 ac-2.*) -------------------------------------------
 
