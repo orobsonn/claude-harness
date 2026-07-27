@@ -27,6 +27,9 @@ import {
 import { PLANNER_SESSION_DISPATCH_CEILING } from "./planner-state.mjs";
 import { captureSpecAdversaryResult, completionEvidence } from "./ceremony-transition.mjs";
 import { semanticPlanHash, writeBoundPlanSnapshot } from "./planner-artifact.mjs";
+import { isolateObservabilityRunPath } from "./obs-test-isolation.mjs";
+
+isolateObservabilityRunPath();
 
 const SESSION = "ses-review-accounting";
 const FEATURE = "review-accounting";

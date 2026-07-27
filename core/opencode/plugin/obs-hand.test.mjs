@@ -12,6 +12,9 @@ import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { createObsHandHooks } from "./obs-hand.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "./lib/planner-artifact.mjs"
+import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs"
+
+isolateObservabilityRunPath()
 
 /**
  * @param {(root: string) => void | Promise<void>} fn

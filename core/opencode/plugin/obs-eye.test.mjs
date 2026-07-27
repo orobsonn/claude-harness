@@ -44,6 +44,9 @@ import { fileURLToPath } from "node:url";
 
 import { createObsEyeHooks } from "./obs-eye.ts";
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
+import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs";
+
+isolateObservabilityRunPath();
 
 const SID = "ses_test1";
 const FEATURE_ID = "obs-eye-nudge";
