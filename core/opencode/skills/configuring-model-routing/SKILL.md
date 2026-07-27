@@ -19,7 +19,7 @@ Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness us
 **No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — it never runs in `build`: `oc-triaging-requests` Step 0 refuses a prose request and tells the operator to type the command (no `classify`, no `oc-brainstorming`, no planner/adversary). The engine below is the safety net.
 
 **Apply via the native tool — never `node -e`, never hand-edit the touchpoints.**  
-The `configure-routing` tool wraps the sanctioned engine in-process, so it never hits the bash forge/interpreter gate (hand-editing routing with `sed`/`perl` is exactly what the anti-forgery gate blocks — that path is a dead end, do not attempt it).
+The `configure-routing` tool wraps the sanctioned engine in-process with validation, staged-write, and rollback across every touchpoint. Hand-editing routing with `sed`/`perl` skips all of that and risks leaving touchpoints out of sync — bash can technically reach the files, but use the tool anyway.
 
 - `configure-routing({ action: "inspect" })` → presets + touchpoints + current routing (read-only). Use for step 1.
 - `configure-routing({ action: "apply", preset })` or `({ action: "apply", slots })` → validate + staged-write + rollback across all touchpoints.
