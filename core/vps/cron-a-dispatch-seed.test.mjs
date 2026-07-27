@@ -639,14 +639,18 @@ test("ensureOcPluginPathsExist: verifies harness on disk; returns external plugi
   }
 });
 
-test("#ac-1.4 decideBashDelivery empty gate still denies gh pr (logic regression)", async () => {
+test("#481-ac-1.1 decideBashDelivery empty gate + no blocking rail evidence now allows gh pr (CC parity — bash gate no longer enforces ceremony)", async () => {
+  // Was: "empty gate still denies gh pr" — that fail-closed ceremony requirement on the bash
+  // gate is exactly what issue #481 removes (mirroring Claude Code's decideBash, which never
+  // enforced mode/classified on the raw bash delivery command). With no gitState/regate/
+  // capture/feature_id evidence to deny on, an empty gate-state now allows.
   const { decideBashDelivery } = await import("../opencode/plugin/lib/bash-decide.mjs");
   const d = decideBashDelivery({
     command: "gh pr create --draft",
     gateState: {},
     sessionId: "ses_x",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
 });
 
 

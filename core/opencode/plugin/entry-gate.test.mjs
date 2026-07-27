@@ -91,24 +91,25 @@ function fullCeremony(extra = {}, sessionId = SID) {
   return state
 }
 
-test("bash gh pr create + empty gate-state → throws [entry-gate]", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, {})
-    const before = hooks["tool.execute.before"]
-    assert.ok(before)
-    await assert.rejects(
-      () =>
+test("#ac-1.1: bash gh pr create + empty gate-state on a feature branch with commits → PERMITIDO (fail-open; was denied by 'delivery requires readable gate-state')", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      assert.ok(before)
+      await assert.doesNotReject(() =>
         before(
           { tool: "bash", sessionID: SID },
           { args: { command: "gh pr create --draft" } },
         ),
-      (err) => {
-        assert.ok(err instanceof Error)
-        assert.match(err.message, /\[entry-gate\]/)
-        return true
-      },
-    )
-  })
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+    },
+  )
 })
 
 test("task executor without ceremony → throws [entry-gate]", async () => {
@@ -227,22 +228,19 @@ test("bound execution plan blocks bash mutation but permits read", async () => {
   })
 })
 
-test("delivery bash missing sessionID → throws", async () => {
-  await withHooks(async (hooks) => {
-    const before = hooks["tool.execute.before"]
-    await assert.rejects(
-      () =>
+test("#ac-1.5: delivery bash missing sessionID → PERMITIDO (fail-open, infra error)", async () => {
+  await withHooks(
+    async (hooks) => {
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
         before(
           { tool: "bash" },
           { args: { command: "gh pr create" } },
         ),
-      (err) => {
-        assert.ok(err instanceof Error)
-        assert.match(err.message, /\[entry-gate\]/)
-        return true
-      },
-    )
-  })
+      )
+    },
+    { gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }) },
+  )
 })
 
 test("bash ls non-delivery → git/list never invoked, no throw", async () => {
@@ -277,22 +275,16 @@ test("bash ls non-delivery → git/list never invoked, no throw", async () => {
   )
 })
 
-test("bash git push empty ceremony → throws [entry-gate] deny", async () => {
+test("#ac-1.1: bash git push empty ceremony on a feature branch with commits → PERMITIDO (fail-open)", async () => {
   await withHooks(
     async (hooks, root) => {
       writeGateState(root, SID, {})
       const before = hooks["tool.execute.before"]
-      await assert.rejects(
-        () =>
-          before(
-            { tool: "bash", sessionID: SID },
-            { args: { command: "git push" } },
-          ),
-        (err) => {
-          assert.ok(err instanceof Error)
-          assert.match(err.message, /\[entry-gate\]/)
-          return true
-        },
+      await assert.doesNotReject(() =>
+        before(
+          { tool: "bash", sessionID: SID },
+          { args: { command: "git push" } },
+        ),
       )
     },
     {
@@ -386,6 +378,183 @@ test("bash git push FULL dual + DONE hand-record capturedVerifiedAt + freeze anc
   )
 })
 
+// ── #ac-1.2 / #ac-1.3 through the real hook (branch/zero-commits rail kept 1:1) ────────
+
+test("#ac-1.2: bash git push from main through the real hook → throws protected branch", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () => before({ tool: "bash", sessionID: SID }, { args: { command: "git push" } }),
+        /protected branch/i,
+      )
+    },
+    { gitStateFn: () => ({ branch: "main", commitsAhead: 3, defaultBranch: "main" }) },
+  )
+})
+
+test("#ac-1.3: bash git push with zero commits ahead through the real hook → throws zero commits", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () => before({ tool: "bash", sessionID: SID }, { args: { command: "git push" } }),
+        /zero commits/i,
+      )
+    },
+    { gitStateFn: () => ({ branch: "feat/x", commitsAhead: 0, defaultBranch: "main" }) },
+  )
+})
+
+// ── #ac-1.4 corrupt-regate parity through the real hook (deliberate fail-closed exception) ──
+
+test("#ac-1.4: bash git push with corrupt regate_pending (non-array) through the real hook → throws gate-state corrupted, naming the raw value", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, { regate_pending: "BROKEN" })
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () => before({ tool: "bash", sessionID: SID }, { args: { command: "git push" } }),
+        (err) => {
+          assert.match(err.message, /gate-state corrupted/)
+          assert.match(err.message, /BROKEN/)
+          return true
+        },
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+    },
+  )
+})
+
+test("#ac-1.4: bash git push with absent regate_pending through the real hook → PERMITIDO (fail-open, distinct from corrupt)", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before({ tool: "bash", sessionID: SID }, { args: { command: "git push" } }),
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+    },
+  )
+})
+
+// ── marker-seal is deliberately NOT enforced on the bash delivery path ─────────────────
+// Locks the reverted decision (see entry-gate.ts and docs/OC-CC-PARITY-REPORT.md item #32):
+// an UNSEALED regate_passed entry (as if written directly to gate-state.json by an ordinary,
+// freely-allowed non-delivery bash command, rather than stamped via mark.mjs) still clears
+// the regate rail on the bash path. This is intentional — validating the per-process-instance
+// seal here would resurrect incident #423 (every marker sealed before an OpenCode restart
+// becomes permanently unverifiable, bricking delivery for any resumed session). The Task
+// dispatch branch (a few lines below in this same hook) still validates seals unchanged.
+
+test("bash git push with an UNSEALED regate_passed entry through the real hook → does not throw (marker-seal intentionally not enforced on bash; see #423)", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, {
+        feature_id: "feat",
+        regate_pending: ["feat/t1"],
+        regate_passed: ["feat/t1@abc"],
+      })
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before({ tool: "bash", sessionID: SID }, { args: { command: "git push" } }),
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+    },
+  )
+})
+
+// ── #ac-2.1 spawn-hand.mjs fidelity rail through the real hook ─────────────────────────
+
+test("#ac-2.1: spawn-hand.mjs dispatch with --descriptor whose task lacks fidelity-pass through the real hook → throws naming the qualified task", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, { feature_id: "feat", fidelity_pass: [] })
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "bash", sessionID: SID },
+          { args: { command: "node spawn-hand.mjs --descriptor /nonexistent-descriptor.json" } },
+        ),
+      /descriptor/,
+    )
+  })
+})
+
+test("#ac-2.1: spawn-hand.mjs dispatch without --descriptor through the real hook → PERMITIDO (fail-open)", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, {})
+    const before = hooks["tool.execute.before"]
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "bash", sessionID: SID },
+        { args: { command: "cat spawn-hand.mjs" } },
+      ),
+    )
+  })
+})
+
+// ── #ac-2.2 freeze-commit early capture trigger through the real hook ──────────────────
+
+test("#ac-2.2: freeze-commit message with an unresolved hand-record for the current feature through the real hook → throws early, naming capturedVerifiedAt", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, { feature_id: "feat" })
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: 'git commit -m "test(cron): freeze locked tests for task-2"' } },
+          ),
+        /capturedVerifiedAt/,
+      )
+    },
+    {
+      listHandRecordsForFeatureFn: () => [
+        { taskId: "t1", sessionId: SID, record: { outcome: "DONE", freezeCommitSha: "abc" } },
+      ],
+      isAncestorFn: () => true,
+    },
+  )
+})
+
+test("#ac-2.2: an ordinary git commit message through the real hook → PERMITIDO even with an unresolved hand-record (trigger is scoped to the freeze-commit convention)", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, { feature_id: "feat" })
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before(
+          { tool: "bash", sessionID: SID },
+          { args: { command: 'git commit -m "chore: update memory notes"' } },
+        ),
+      )
+    },
+    {
+      listHandRecordsForFeatureFn: () => [
+        { taskId: "t1", sessionId: SID, record: { outcome: "DONE", freezeCommitSha: "abc" } },
+      ],
+      isAncestorFn: () => true,
+    },
+  )
+})
+
 test("lt-pure-planner-full-ceremony-allow — decideEntryTask planner + full ceremony → allow (import decideEntryTask from entry-decide.mjs)", async () => {
   const { decideEntryTask } = await import("./lib/entry-decide.mjs")
   const decision = decideEntryTask({
@@ -431,22 +600,19 @@ test("lt-entry-planner-null-sessionid-deny — task planner without sessionID �
   })
 })
 
-test('lt-entry-delivery-bash-null-sessionid-deny — bash "gh pr create" without sessionID → rejects with /sessionId/', async () => {
-  await withHooks(async (hooks) => {
-    const before = hooks["tool.execute.before"]
-    await assert.rejects(
-      () =>
+test('#ac-1.5: lt-entry-delivery-bash-null-sessionid-allow — bash "gh pr create" without sessionID → PERMITIDO (fail-open, was denied naming /sessionId/)', async () => {
+  await withHooks(
+    async (hooks) => {
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
         before(
           { tool: "bash" },
           { args: { command: "gh pr create" } },
         ),
-      (err) => {
-        assert.ok(err instanceof Error)
-        assert.match(err.message, /sessionId/)
-        return true
-      },
-    )
-  })
+      )
+    },
+    { gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }) },
+  )
 })
 
 test("lt-entry-s1-load-reads-classified — fullCeremony with classified under S1 + planner + sessionID S1 → allow", async () => {
