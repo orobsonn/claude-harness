@@ -460,10 +460,11 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
 /**
  * @description Frozen deny map for the 8 canonical secret-path patterns (`.env`/`.dev.vars`/SSH/AWS
  * credential globs) that `permission.read` and `permission.edit` must NEVER allow, no matter what a
- * source `opencode.json` says. Spread LAST after `"*"` in any map built from it so a canonical deny can
- * never be shadowed by an earlier `"*": "allow"` or a source-supplied allow for the same key (OpenCode
- * resolves permissions last-match-wins). Not exported — only `enforceOpencodePermissions` and
- * `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ * source `opencode.json` says. In any map built from it, source-supplied copies of the canonical keys
+ * are REMOVED before the canonical deny map is spread LAST after `"*"` (OpenCode resolves permissions
+ * last-match-wins), so the canonical denies can only exist in the final position and can never be
+ * shadowed by an earlier `"*": "allow"` or a source-supplied allow for the same key. Not exported —
+ * only `enforceOpencodePermissions` and `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
  */
 const OC_SECRET_READ_DENIES = Object.freeze({
   ".env": "deny",
@@ -593,7 +594,15 @@ function tryReadJsonObject(path) {
  */
 function buildDenyPreservingPermission(sourceValue) {
   if (sourceValue && typeof sourceValue === "object" && !Array.isArray(sourceValue)) {
-    return { "*": "allow", ...sourceValue, ...OC_SECRET_READ_DENIES };
+    const sanitized = Object.fromEntries(
+      Object.entries(sourceValue).filter(
+        ([key, value]) =>
+          key !== "*" &&
+          !Object.prototype.hasOwnProperty.call(OC_SECRET_READ_DENIES, key) &&
+          (value === "allow" || value === "ask" || value === "deny"),
+      ),
+    );
+    return { "*": "allow", ...sanitized, ...OC_SECRET_READ_DENIES };
   }
   if (typeof sourceValue === "string") {
     return { "*": sourceValue, ...OC_SECRET_READ_DENIES };
@@ -613,7 +622,10 @@ function buildDenyPreservingPermission(sourceValue) {
  * `buildDenyPreservingPermission` and written as explicit keys AFTER the `...basePermission` spread
  * (never left to `HEADLESS_SAFE_PERMISSION_DEFAULTS` alone) — a source config that carries the scalar
  * `read: "allow"` would otherwise replace the whole map via `...basePermission` and strip every
- * secret-path deny for every project except this repo's own tracked config.
+ * secret-path deny for every project except this repo's own tracked config. This hardening covers
+ * `config.permission` only; `config.agent.<name>.permission` and the `permission:` frontmatter of
+ * `core/opencode/agents/*.md` are separate rule sets evaluated afterwards and are deliberately NOT
+ * covered here (recorded open risk, operator decision pending).
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @param {object|null} exampleConfig - The vendored example, read independently of whether it was
  *   the base, purely so its deny entries also join the union (belt-and-suspenders vs. drift between
@@ -622,7 +634,10 @@ function buildDenyPreservingPermission(sourceValue) {
  */
 function enforceOpencodePermissions(baseConfig, exampleConfig) {
   const config = baseConfig && typeof baseConfig === "object" ? { ...baseConfig } : {};
-  const basePermission = config.permission && typeof config.permission === "object" ? config.permission : {};
+  const basePermission =
+    config.permission && typeof config.permission === "object" && !Array.isArray(config.permission)
+      ? config.permission
+      : {};
   const baseBash = basePermission.bash && typeof basePermission.bash === "object" ? basePermission.bash : {};
   const examplePermission =
     exampleConfig && typeof exampleConfig.permission === "object" ? exampleConfig.permission : {};
