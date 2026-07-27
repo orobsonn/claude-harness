@@ -184,3 +184,23 @@ See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths), 
 | Folder | What lives there | See |
 |--------|------------------|-----|
 | .opencode/ | OC vendored agents/skills/plugins + runtime state (ephemeral plans) | core/opencode/AGENTS.md (source) + this section |
+
+## 12. Plugin dispatch chain order
+
+OpenCode auto-globs `core/opencode/plugin/*.{ts,js}` with no sort (upstream node-glob,
+`nosort`) — there is no explicit loader/index that lists plugins in order. For a Task
+dispatch, the first plugin to `throw` wins, so **discovery order decides which gate the
+operator actually sees deny**. The chain that gates a real Task dispatch runs, in order:
+
+```
+planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate
+```
+
+Note `entry-gate.ts` — the plugin usually thought of as "the gate" — runs **last**. A rename
+that changes any of these 5 files' relative alphabetical position silently reorders the
+chain. `plugin-dispatch-order.test.mjs` locks this sequence as a regression tripwire; update
+this section and that test together, only after confirming a reorder is intentional.
+
+**Decided (2026-07-26):** regression test only for now, no rename/explicit loader. Revisit a
+numeric prefix or a single loader once tracks touching these files land, or a 6th plugin
+joins the chain — whichever comes first.
