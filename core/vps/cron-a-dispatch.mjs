@@ -458,17 +458,41 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
 });
 
 /**
+ * @description Frozen deny map for the 8 canonical secret-path patterns (`.env`/`.dev.vars`/SSH/AWS
+ * credential globs) that `permission.read` and `permission.edit` must NEVER allow, no matter what a
+ * source `opencode.json` says. Spread LAST after `"*"` in any map built from it so a canonical deny can
+ * never be shadowed by an earlier `"*": "allow"` or a source-supplied allow for the same key (OpenCode
+ * resolves permissions last-match-wins). Not exported — only `enforceOpencodePermissions` and
+ * `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ */
+const OC_SECRET_READ_DENIES = Object.freeze({
+  ".env": "deny",
+  ".env.*": "deny",
+  "**/.env": "deny",
+  "**/.env.*": "deny",
+  ".dev.vars": "deny",
+  "**/.dev.vars": "deny",
+  "~/.ssh/**": "deny",
+  "~/.aws/**": "deny",
+});
+
+/**
  * @description Frozen safe defaults for every non-forced `permission` key. `enforceOpencodePermissions`
- * force-overwrites only `question`, `external_directory`, and `bash` — a minimalist but otherwise valid
- * source config (e.g. one that only sets `permission.bash`) leaves the other keys (`edit`, `read`, etc.)
- * undefined, and if OpenCode defaults an undefined key to `"ask"`, a headless run hangs on the first use
- * of that tool with no operator to answer. Spread FIRST in the final `permission` object so a key the
- * source config DOES define still wins (spread order), while an ABSENT key falls back to `"allow"`
- * instead of staying undefined. Mirrors `core/opencode/opencode.json.example`'s non-bash permission keys.
+ * force-overwrites `question`, `external_directory`, `bash`, `read`, and `edit` — a minimalist but
+ * otherwise valid source config (e.g. one that only sets `permission.bash`) leaves the other keys
+ * (`glob`, `grep`, etc.) undefined, and if OpenCode defaults an undefined key to `"ask"`, a headless run
+ * hangs on the first use of that tool with no operator to answer. Spread FIRST in the final `permission`
+ * object so a key the source config DOES define still wins (spread order), while an ABSENT key falls
+ * back to `"allow"` instead of staying undefined. `read`/`edit` are the EXCEPTION to that "source wins"
+ * rule: they are shaped here as deny-preserving maps (`"*": "allow"` first, the 8 canonical secret-path
+ * denies last) purely so this constant matches the shape of a real seeded config, but
+ * `enforceOpencodePermissions` always REPLACES them afterwards with a freshly-built map derived from the
+ * source — never leaving these frozen defaults as the final value. Mirrors
+ * `core/opencode/opencode.json.example`'s non-bash permission keys.
  */
 const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
-  edit: "allow",
-  read: "allow",
+  edit: Object.freeze({ "*": "allow", ...OC_SECRET_READ_DENIES }),
+  read: Object.freeze({ "*": "allow", ...OC_SECRET_READ_DENIES }),
   glob: "allow",
   grep: "allow",
   list: "allow",
@@ -553,6 +577,31 @@ function tryReadJsonObject(path) {
 }
 
 /**
+ * @description Builds a fresh, deny-preserving `read` or `edit` permission map from a source value of
+ * any shape. OpenCode resolves permissions last-match-wins, so `"*"` must always be the FIRST key and
+ * the 8 canonical secret-path denies (`OC_SECRET_READ_DENIES`) must always be spread LAST — a scalar
+ * source can never replace the map wholesale, and a source deny/allow for one of the canonical paths
+ * can never resurrect access to it. Three cases:
+ * - source is a scalar `s` → `{ "*": s, ...OC_SECRET_READ_DENIES }`
+ * - source is a map `m` → `{ "*": "allow", ...m, ...OC_SECRET_READ_DENIES }` (a project-specific extra
+ *   deny in `m` survives the union)
+ * - source is absent → `{ "*": "allow", ...OC_SECRET_READ_DENIES }`
+ * Always returns a brand-new object — never mutates `sourceValue` or `OC_SECRET_READ_DENIES` in place,
+ * so nothing leaks across the several projects `run-cron-a.mjs` seeds in one process.
+ * @param {unknown} sourceValue - `basePermission.read` or `basePermission.edit`, whatever shape it is.
+ * @returns {Record<string, string>}
+ */
+function buildDenyPreservingPermission(sourceValue) {
+  if (sourceValue && typeof sourceValue === "object" && !Array.isArray(sourceValue)) {
+    return { "*": "allow", ...sourceValue, ...OC_SECRET_READ_DENIES };
+  }
+  if (typeof sourceValue === "string") {
+    return { "*": sourceValue, ...OC_SECRET_READ_DENIES };
+  }
+  return { "*": "allow", ...OC_SECRET_READ_DENIES };
+}
+
+/**
  * @description Force-enforces the critical opencode permission keys onto a base config object.
  * `permission.question` and `permission.external_directory` are ALWAYS overwritten to the safe
  * values regardless of what the base config carried. `permission.bash` is a UNION, never a
@@ -560,6 +609,11 @@ function tryReadJsonObject(path) {
  * project-specific extra deny already present in `base.bash` always survives, and no canonical deny
  * is ever dropped just because the source config omitted it. `'*': 'allow'` is spread LAST so no
  * deny entry (from any source) can ever shadow the forced wildcard allow.
+ * `permission.read` and `permission.edit` are a SECOND deny-preserving union, built by
+ * `buildDenyPreservingPermission` and written as explicit keys AFTER the `...basePermission` spread
+ * (never left to `HEADLESS_SAFE_PERMISSION_DEFAULTS` alone) — a source config that carries the scalar
+ * `read: "allow"` would otherwise replace the whole map via `...basePermission` and strip every
+ * secret-path deny for every project except this repo's own tracked config.
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @param {object|null} exampleConfig - The vendored example, read independently of whether it was
  *   the base, purely so its deny entries also join the union (belt-and-suspenders vs. drift between
@@ -595,6 +649,8 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
     question: "deny",
     external_directory: "allow",
     bash,
+    read: buildDenyPreservingPermission(basePermission.read),
+    edit: buildDenyPreservingPermission(basePermission.edit),
   };
   return config;
 }
