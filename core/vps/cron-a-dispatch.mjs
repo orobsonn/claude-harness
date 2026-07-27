@@ -88,6 +88,11 @@ import {
 import { rewriteSharedImportsForVendor } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 import { adaptRoutingV1, migrateLegacyDefaultModel } from "../shared/lib/routing-adapter.mjs";
 import { validateRouting } from "../shared/lib/routing-validate.mjs";
+import {
+  migrateOpencodeConfig,
+  readHarnessVersionStamp,
+  MANIFEST_FILENAME,
+} from "../shared/lib/opencode-config-migration.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -433,6 +438,17 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
  * an adversarial agent requires OS-level isolation — an unprivileged/dedicated account, no ambient
  * credentials, and controlled egress — which this list does not implement and is not a substitute for.
  *
+ * [#486 oc-fleet-seed-migration] Cut to EXACTLY the 6 destructive-git denies Claude Code carries
+ * (`core/claude-code/settings.json` `permissions.deny`) — parity decision recorded in
+ * `docs/OC-CC-PARITY-ROADMAP-INPUT.md` item 6 (`denylist_final: os 6 denies de git destrutivo do
+ * CC`). The broader OpenCode-only class (rm -rf, sudo, chmod 777, pipe-to-shell, netcat, dd,
+ * fork-bomb, git add ./-A/--all, git commit --no-verify) is deliberately NOT mirrored here: Claude
+ * Code never denied them either, and the fleet's real containment is process isolation, not this
+ * string-match list (see the [security] note above). MUST stay disjoint from
+ * `RETIRED_OC_PERMISSION_ENTRIES` (`../shared/lib/opencode-config-migration.mjs`) — a key can never
+ * be simultaneously frozen-forced here and marked droppable by the migration ledger
+ * (cron-a-dispatch-seed.test.mjs asserts the disjunction).
+ *
  * [#473] `git push --force-with-lease*` is deliberately an ALLOW entry placed LAST (after every
  * deny it would otherwise collide with). OpenCode's own permission engine resolves a pattern list
  * with `Array.prototype.findLast` (confirmed by inspecting the installed `opencode` binary's
@@ -442,30 +458,13 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
  * win instead, silently denying the safe lease-guarded push. This ordering is load-bearing — do
  * not move it earlier in this object.
  */
-const DANGEROUS_BASH_DENYLIST = Object.freeze({
+export const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "git push --force*": "deny",
   "git push * --force*": "deny",
   "git push -f*": "deny",
   "git push * -f*": "deny",
   "git reset --hard*": "deny",
   "git clean -f*": "deny",
-  "rm -rf /": "deny",
-  "rm -rf /*": "deny",
-  "rm -fr /": "deny",
-  "rm -fr /*": "deny",
-  "git add .": "deny",
-  "git add -A*": "deny",
-  "git add --all*": "deny",
-  "git commit --no-verify*": "deny",
-  "sudo *": "deny",
-  "* | sh": "deny",
-  "* | bash": "deny",
-  "chmod 777*": "deny",
-  "chmod -R 777*": "deny",
-  "nc *": "deny",
-  "ncat *": "deny",
-  "dd if=*": "deny",
-  ":(){ :|:& };:": "deny",
   "git push --force-with-lease*": "allow",
   "git push * --force-with-lease*": "allow",
 });
@@ -1055,6 +1054,30 @@ export function seedOpencodeRootConfig(worktreePath, projectRoot) {
     wroteExample = true;
     baseConfig = exampleConfig ?? {};
   }
+
+  // #486 oc-fleet-seed-migration: run the same permission-migration ledger vendor-core.mjs uses on
+  // the operator's own tree (`writeOpencodeConfig`, opencode-config-migration.mjs) against the
+  // STALE projectRoot source, BEFORE enforcement. Fleet-only projects never go through the
+  // interactive `oc-updating-harness` path (decision: "projeto só-frota fica stale: aceito" —
+  // docs/OC-CC-PARITY-ROADMAP-INPUT.md item 19), so this is the only place a retired permission
+  // default (RETIRED_OC_PERMISSION_ENTRIES) ever gets dropped from what the fleet seeds into the
+  // ephemeral worktree; the ledger's generation gate is what lets a retired key drop and ONLY that
+  // key — anything the operator actually set (a value that doesn't equal the ledger's
+  // `historicalValue`, or that survived past `shippedThroughGeneration`) is untouched, same
+  // guarantee `writeOpencodeConfig` gives the interactive path. Read-only against projectRoot: this
+  // never writes a manifest or backup back into the operator's tracked tree — that would be the
+  // autonomous-update path already rejected for fleet-only projects.
+  const migrationManifest = tryReadJsonObject(join(projectRoot, ".opencode", MANIFEST_FILENAME));
+  const versionStampPath = join(projectRoot, ".opencode", ".harness-version");
+  const previousHarnessVersionStamp = existsSync(versionStampPath)
+    ? readHarnessVersionStamp(readFileSync(versionStampPath, "utf8"))
+    : null;
+  baseConfig = migrateOpencodeConfig({
+    existingConfig: baseConfig,
+    newConfig: exampleConfig ?? {},
+    manifest: migrationManifest,
+    previousHarnessVersionStamp,
+  }).config;
 
   const finalConfig = enforceOpencodePermissions(migrateLegacyOpencodeModels(baseConfig), exampleConfig);
   // Fail-closed materialization: plugin[] must point at files that EXIST on the worktree.
