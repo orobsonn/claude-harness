@@ -460,11 +460,18 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
 /**
  * @description Frozen deny map for the 8 canonical secret-path patterns (`.env`/`.dev.vars`/SSH/AWS
  * credential globs) that `permission.read` and `permission.edit` must NEVER allow, no matter what a
- * source `opencode.json` says. In any map built from it, source-supplied copies of the canonical keys
- * are REMOVED before the canonical deny map is spread LAST after `"*"` (OpenCode resolves permissions
- * last-match-wins), so the canonical denies can only exist in the final position and can never be
- * shadowed by an earlier `"*": "allow"` or a source-supplied allow for the same key. Not exported —
- * only `enforceOpencodePermissions` and `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ * source `opencode.json` `config.permission` says. In any map built from it, source-supplied copies
+ * of the canonical keys are REMOVED before the canonical deny map is spread LAST after `"*"`
+ * (OpenCode resolves permissions last-match-wins), so the canonical denies can only exist in the
+ * final position and can never be shadowed by an earlier `"*": "allow"` or a source-supplied allow
+ * for the same key. Not exported — only `enforceOpencodePermissions` and
+ * `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ *
+ * CAVEAT — scope of this guarantee: it covers `config.permission` ONLY. It does NOT cover
+ * `config.agent.<name>.permission` (a separate rule set evaluated afterwards), `permission.bash`
+ * (whose `"*"` wildcard is force-set to `"allow"` by `enforceOpencodePermissions`), or
+ * `permission.grep` — all three are recorded open risks pending an operator decision and are
+ * deliberately out of scope for this hardening.
  */
 const OC_SECRET_READ_DENIES = Object.freeze({
   ".env": "deny",
@@ -584,8 +591,16 @@ function tryReadJsonObject(path) {
  * source can never replace the map wholesale, and a source deny/allow for one of the canonical paths
  * can never resurrect access to it. Three cases:
  * - source is a scalar `s` → `{ "*": s, ...OC_SECRET_READ_DENIES }`
- * - source is a map `m` → `{ "*": "allow", ...m, ...OC_SECRET_READ_DENIES }` (a project-specific extra
- *   deny in `m` survives the union)
+ * - source is a map `m` → the source `"*"` key is REMOVED from `m` (it can never be re-emitted later
+ *   and would otherwise be displaced from index 0 by an integer-like key), but its VALUE survives as
+ *   the first key's value when it is a valid action (`allow`/`ask`/`deny`), otherwise `"allow"`;
+ *   integer-like keys (`/^(0|[1-9]\d*)$/`) are rejected (JavaScript serializes integer-index own keys
+ *   before string keys regardless of insertion order, which would displace the wildcard from index 0
+ *   and break last-match-wins); the canonical keys are removed; any remaining value that is not
+ *   exactly `allow`/`ask`/`deny` is CLAMPED to `deny` (unknown input fails CLOSED — never silently
+ *   dropped, which would leave the path to fall under the forced wildcard allow); the result is
+ *   `{ "*": <source-or-allow wildcard>, ...sanitized, ...OC_SECRET_READ_DENIES }` (a project-specific
+ *   extra deny in `m` survives the union, clamped if its value was unrecognised)
  * - source is absent → `{ "*": "allow", ...OC_SECRET_READ_DENIES }`
  * Always returns a brand-new object — never mutates `sourceValue` or `OC_SECRET_READ_DENIES` in place,
  * so nothing leaks across the several projects `run-cron-a.mjs` seeds in one process.
@@ -593,16 +608,21 @@ function tryReadJsonObject(path) {
  * @returns {Record<string, string>}
  */
 function buildDenyPreservingPermission(sourceValue) {
+  const VALID_ACTIONS = ["allow", "ask", "deny"];
+  const clampAction = (v) => (VALID_ACTIONS.includes(v) ? v : "deny");
   if (sourceValue && typeof sourceValue === "object" && !Array.isArray(sourceValue)) {
+    const wildcard = VALID_ACTIONS.includes(sourceValue["*"]) ? sourceValue["*"] : "allow";
     const sanitized = Object.fromEntries(
-      Object.entries(sourceValue).filter(
-        ([key, value]) =>
-          key !== "*" &&
-          !Object.prototype.hasOwnProperty.call(OC_SECRET_READ_DENIES, key) &&
-          (value === "allow" || value === "ask" || value === "deny"),
-      ),
+      Object.entries(sourceValue)
+        .filter(
+          ([key]) =>
+            key !== "*" &&
+            !Object.prototype.hasOwnProperty.call(OC_SECRET_READ_DENIES, key) &&
+            !/^(0|[1-9]\d*)$/.test(key),
+        )
+        .map(([key, value]) => [key, clampAction(value)]),
     );
-    return { "*": "allow", ...sanitized, ...OC_SECRET_READ_DENIES };
+    return { "*": wildcard, ...sanitized, ...OC_SECRET_READ_DENIES };
   }
   if (typeof sourceValue === "string") {
     return { "*": sourceValue, ...OC_SECRET_READ_DENIES };
