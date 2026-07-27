@@ -187,7 +187,7 @@ function plantMonorepoOcPlugins(root) {
   for (const name of [
     "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts", "loop-guard.ts",
     "reinject-state.ts", "version-check.ts", "harvest-guard.ts", "obs-plan-write.ts",
-    "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts", "marker-authority.ts", "ceremony-coordinator.ts", "command-resolver.ts",
+    "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts", "marker-authority.ts", "ceremony-coordinator.ts",
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }

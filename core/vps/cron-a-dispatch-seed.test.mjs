@@ -26,7 +26,6 @@ const CANONICAL_STUBS = [
   "entry-gate.ts",
   "marker-authority.ts",
   "ceremony-coordinator.ts",
-  "command-resolver.ts",
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",
@@ -59,7 +58,7 @@ test("OpenCode plugin[] is empty for harness; CANONICAL files stay on disk (auto
   assert.deepEqual(root ?? [], []);
   assert.deepEqual(example ?? [], []);
   assert.deepEqual(defaultOcPluginPaths(), []);
-  assert.ok(CANONICAL_OC_PLUGINS.includes("./.opencode/plugin/command-resolver.ts"));
+  assert.equal(CANONICAL_OC_PLUGINS.length, CANONICAL_STUBS.length);
   assert.ok(CANONICAL_OC_PLUGINS.length >= 10);
 });
 

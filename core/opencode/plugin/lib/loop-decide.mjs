@@ -45,7 +45,7 @@ const FAILURE_CLASSES = new Set([
  * `Error: [plan-gate] …`, so the tag is not at string start).
  */
 const HARNESS_DENY_TAG =
-  /\[(?:plan-gate|plan-write-gate|planner-recovery|loop-guard|entry-gate|marker-authority|command-resolver|obs-hand|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
+  /\[(?:plan-gate|plan-write-gate|planner-recovery|loop-guard|entry-gate|marker-authority|obs-hand|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
 
 const DIAGNOSTIC_MESSAGE_MAX = 280;
 

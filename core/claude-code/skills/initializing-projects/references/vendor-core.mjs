@@ -415,7 +415,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/ceremony-coordinator.ts",
-    "./.opencode/plugin/command-resolver.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
@@ -700,6 +699,45 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
 }
 
 /**
+ * Harness files retired from `core/opencode/` that must be actively deleted from an
+ * already-vendored `.opencode/` on update. `copyOcTree` only copies what the source still
+ * has — it never diffs against the destination — so a file dropped from source stays behind
+ * as a zombie: OpenCode still auto-globs `.opencode/plugin/*.{ts,js}` and re-registers it.
+ * Exact relative paths ONLY (never a directory or a glob) — this must never risk deleting a
+ * user's own local plugin placed alongside the harness ones in the same auto-load directory.
+ */
+const OC_RETIRED_FILES = [
+  "plugin/command-resolver.ts",
+  "plugin/lib/command-resolver.mjs",
+];
+
+/**
+ * @description True when `dir/name` exists with that EXACT case (case-sensitive directory
+ * listing, not a case-insensitive path lookup). Guards `pruneOcRetiredFiles` against deleting
+ * a user's own same-named-but-different-case local plugin on a case-insensitive filesystem
+ * (default on macOS/Windows) — `rmSync` alone would resolve the wrong file silently.
+ * @param {string} dir
+ * @param {string} name
+ * @returns {boolean}
+ */
+function existsWithExactCase(dir, name) {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).includes(name);
+}
+
+/**
+ * @description Delete each `OC_RETIRED_FILES` entry under `ocDir`, but only on an exact
+ * case-sensitive filename match — never a case-insensitive filesystem coincidence.
+ * @param {string} ocDir
+ */
+function pruneOcRetiredFiles(ocDir) {
+  for (const rel of OC_RETIRED_FILES) {
+    const abs = join(ocDir, rel);
+    if (existsWithExactCase(dirname(abs), rel.split("/").pop())) rmSync(abs, { force: true });
+  }
+}
+
+/**
  * @description Vendor OpenCode harness into project `.opencode/` + root config/memory.
  * @param {{ coreDir: string, targetDir: string, version: string, stampDate: string }} opts
  * @returns {{ ocDir: string }}
@@ -722,6 +760,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
+  pruneOcRetiredFiles(ocDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
   if (existsSync(sharedDir)) {
