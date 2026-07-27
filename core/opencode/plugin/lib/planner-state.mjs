@@ -146,9 +146,10 @@ export function claimPlannerAttempt(previous, input = {}) {
       ok: false,
       reason:
         `planner budget for this review round is spent (${MAX_PRIMARY_ATTEMPTS} attempts). Do NOT re-dispatch the planner ` +
-        "now — the next attempt is refused. Every writing hand stays blocked while plan_verdict is REVISE, so this run " +
-        "cannot proceed on its own: report the blocking finding to the operator in product language and stop. A new " +
-        "round budget is credited only when a plan-review round persists a fresh REVISE.",
+        "now — the next attempt is refused. Every writing hand MUST keep waiting while plan_verdict is REVISE (your " +
+        "obligation, not a runtime gate — #483), so this run cannot proceed on its own: report the blocking finding to " +
+        "the operator in product language and stop. A new round budget is credited only when a plan-review round " +
+        "persists a fresh REVISE.",
       state,
     };
   }

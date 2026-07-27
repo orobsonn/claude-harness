@@ -1,12 +1,16 @@
 /**
  * @description Deterministic "keep reviewing until APPROVE" nudge for the plan-review loop.
  *
- * Why this exists: a REVISE verdict hard-blocks every writing hand (dual-enforcement:
- * "plan_verdict REVISE — executor blocked until plan-review APPROVE"), but nothing told the
- * orchestrator to re-dispatch the plan-reviewer. Observed failure: the orchestrator stopped
- * after round 2 of a 5-round budget with an unresolved HIGH finding, leaving the run unable
- * to review (nobody dispatched) and unable to implement (hands denied) — a silent stall with
- * the gate never denying anything.
+ * Why this exists: a REVISE verdict is supposed to keep every writing hand waiting for
+ * plan-review APPROVE — but as of #483 that discipline is prose + orchestration only
+ * (dual/plan_verdict left the dispatch gate entirely; see dual-enforcement.mjs), so nothing
+ * *runtime-enforced* tells the orchestrator to re-dispatch the plan-reviewer instead of the
+ * writing hands. Observed failure (pre-#483): the orchestrator stopped after round 2 of a
+ * 5-round budget with an unresolved HIGH finding, leaving the run unable to review (nobody
+ * dispatched) and unable to implement (hands denied) — a silent stall with the gate never
+ * denying anything. Post-#483 the failure mode is different but the fix is the same nudge:
+ * without it, nothing stops the orchestrator from dispatching a writing hand anyway while
+ * REVISE stands.
  *
  * Pure and side-effect free: the caller (loop-guard) owns reading the freshly persisted state
  * and mutating `output.metadata`. Mirrors dual-nudge.mjs / agent-idle-nudge.mjs, whose message
@@ -16,7 +20,7 @@
 import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { thresholdsFor, loopCounterKey } from "./loop-decide.mjs";
 
-/** Verdict that releases the writing hands; anything else keeps them blocked. */
+/** Verdict that clears writing hands to dispatch; anything else means they must keep waiting (by orchestration discipline, not a runtime gate — #483). */
 const APPROVED = "APPROVE";
 
 /** Review statuses under which reserveReviewAttempt refuses a new slot until a verified restart. */
@@ -72,8 +76,9 @@ export function decideReviseNudge(input = {}) {
     context:
       `[revise-nudge] plan-review round ${count}/${deny} returned ${verdict}` +
       `${unresolved ? " with a material finding still unresolved" : ""}. ` +
-      "Every writing hand (executor / sniper / test-author) is HARD-BLOCKED until plan_verdict is APPROVE — " +
-      "dispatching one now will be denied. Do NOT stop here and do NOT hand this back to the operator. " +
+      "Every writing hand (executor / sniper / test-author) MUST wait for plan_verdict APPROVE before you " +
+      "dispatch one — nothing in the runtime will refuse the dispatch for you (#483: this is your " +
+      "obligation, not a gate). Do NOT stop here and do NOT hand this back to the operator. " +
       "Next action, in this order: (1) re-dispatch `planner` — you do NOT edit the plan yourself, the plugin " +
       "is its sole author, and the harness injects the reviewer's instructions into the planner's brief " +
       "automatically; (2) then re-dispatch the plan-reviewer for " +

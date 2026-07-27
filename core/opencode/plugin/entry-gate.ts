@@ -3,7 +3,10 @@
  * On tool.execute.before:
  * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
  *   (gate-state from disk)
- * - task: decideEntryTask then enforceDualFromDiskOrThrow for executor/sniper
+ * - task: decideEntryTask for executor/sniper. Dual/plan_verdict classification (ADR-003) is
+ *   record-only as of #483 and lives entirely in plan-gate.ts, which runs earlier in the
+ *   plugin chain (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate) — a
+ *   second call here would be dead code, never reached first.
  * Deny throws [entry-gate]. Bash delivery is fail-OPEN on unreadable/missing gate-state and
  * on a missing/unsafe sessionId (Claude Code parity) — decideBashDelivery's own rails
  * (branch/zero-commits, regate, capture, real-file) still apply against the resulting {}.
@@ -176,7 +179,6 @@ export async function createEntryGateHooks(
       ? projectRoot
       : process.cwd()
   const {
-    enforceDualFromDiskOrThrow,
     extractHookTaskContext,
     isTaskTool,
     loadGateStateFromDisk,
@@ -412,13 +414,6 @@ export async function createEntryGateHooks(
           taskId,
         }),
       )
-
-      enforceDualFromDiskOrThrow(PREFIX, {
-        projectRoot: root,
-        toolName,
-        toolArgs,
-        sessionId: sid ?? null,
-      })
     },
   }
 }

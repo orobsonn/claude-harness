@@ -273,12 +273,13 @@ test("applyReviewOutcome plan-reviewer useful REVISE → plan_verdict REVISE on 
   assert.equal(result.classified.kind, "useful");
   assert.equal(result.state.plan_verdict, "REVISE");
   assert.equal(result.state.dual_status?.plan_review, "primary_only");
+  // #483: dual/plan_verdict is record-only on the dispatch surface — REVISE no longer denies.
   assert.equal(decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: result.state,
     routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
     toolName: "task",
-  }).decision, "deny");
+  }).decision, "allow");
 });
 
 test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE", () => {
@@ -288,7 +289,7 @@ test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE",
   assert.equal(result.state.plan_verdict, "APPROVE");
 });
 
-test("REVISE + dual_status both → dual does NOT unlock hand (money-preflight)", () => {
+test("REVISE + dual_status both → record-only allow, no longer blocks hand (#483 supersedes money-preflight deny)", () => {
   const revised = complete(state(), {
     callId: "r1",
     response: report("REVISE", [finding]),
@@ -310,7 +311,7 @@ test("REVISE + dual_status both → dual does NOT unlock hand (money-preflight)"
     routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
   assert.match(d.reason, /REVISE/);
 });
 
