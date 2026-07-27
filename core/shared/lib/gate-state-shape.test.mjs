@@ -172,6 +172,55 @@ test("#383 normalizeDualStatusMap treats legacy scalar as plan_review only", () 
   assert.equal(dualStatusPhaseFromRole("executor-high"), undefined);
 });
 
+test("#474 mergeGateStatePatch accepts a delta-only patch even when prev carries legacy dual_completed", () => {
+  // ac-1.1: a legacy dual_completed sitting untouched in prior state must not
+  // block an unrelated hand_quarantine write — validation scopes to the patch delta.
+  const prev = { feature_id: "oc-legacy", dual_completed: true };
+  const merged = mergeGateStatePatch(prev, { hand_quarantine: ["feat-x/task-y"] });
+  assert.equal(merged.ok, true);
+  if (merged.ok) {
+    assert.deepEqual(merged.state.hand_quarantine, ["feat-x/task-y"]);
+    // Legacy field is carried over untouched, not re-validated by this patch.
+    assert.equal(merged.state.dual_completed, true);
+  }
+});
+
+test("#474 mergeGateStatePatch still rejects invalid dual fields the patch itself carries, legacy prev or not", () => {
+  // ac-1.2: discipline still holds for what the patch brings, regardless of prev.
+  const prevWithLegacy = { dual_completed: true };
+  const badDualStatus = mergeGateStatePatch(prevWithLegacy, { dual_status: "nope" });
+  assert.equal(badDualStatus.ok, false);
+  assert.match(String(badDualStatus.reason), /invalid dual_status/);
+
+  const badDualCompletedInPatch = mergeGateStatePatch(prevWithLegacy, {
+    dual_completed: true,
+  });
+  assert.equal(badDualCompletedInPatch.ok, false);
+  assert.match(String(badDualCompletedInPatch.reason), /dual_completed/);
+});
+
+test("#474 mergeGateStatePatch validates plan_verdict per-key (patch delta scope)", () => {
+  const ok = mergeGateStatePatch({}, { plan_verdict: "APPROVE" });
+  assert.equal(ok.ok, true);
+  if (ok.ok) assert.equal(ok.state.plan_verdict, "APPROVE");
+
+  const revise = mergeGateStatePatch({}, { plan_verdict: "REVISE" });
+  assert.equal(revise.ok, true);
+
+  const invalid = mergeGateStatePatch({}, { plan_verdict: "MAYBE" });
+  assert.equal(invalid.ok, false);
+  assert.match(String(invalid.reason), /invalid plan_verdict/);
+
+  const wrongType = mergeGateStatePatch({}, { plan_verdict: true });
+  assert.equal(wrongType.ok, false);
+  assert.match(String(wrongType.reason), /plan_verdict/);
+
+  // A stale invalid plan_verdict left over in prev must not block an unrelated patch.
+  const legacyPrev = { plan_verdict: "not-a-real-value" };
+  const unrelated = mergeGateStatePatch(legacyPrev, { hand_quarantine: ["a/b"] });
+  assert.equal(unrelated.ok, true);
+});
+
 test("#383 mergeGateStatePatch merges dual_status phase maps without clobber", () => {
   const first = mergeGateStatePatch(
     {},

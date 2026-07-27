@@ -430,6 +430,17 @@ export function mergeGateStatePatch(prev, patch) {
         next[key] = value;
         continue;
       }
+      if (key === "plan_verdict") {
+        if (typeof value !== "string") {
+          return { ok: false, reason: "plan_verdict must be APPROVE | REVISE" };
+        }
+        const pv = value.trim().toUpperCase();
+        if (pv !== "APPROVE" && pv !== "REVISE") {
+          return { ok: false, reason: `invalid plan_verdict: ${String(value)}` };
+        }
+        next[key] = value;
+        continue;
+      }
       if (Array.isArray(value) && Array.isArray(next[key])) {
         const prevArr = /** @type {unknown[]} */ (next[key]);
         const merged = [...prevArr];
@@ -440,11 +451,6 @@ export function mergeGateStatePatch(prev, patch) {
         continue;
       }
       next[key] = value;
-    }
-
-    const dualCheck = validateGateStateDualFields(next);
-    if (!dualCheck.ok) {
-      return { ok: false, reason: dualCheck.errors.join("; ") };
     }
 
     return { ok: true, state: next };
