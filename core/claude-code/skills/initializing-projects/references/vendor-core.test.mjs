@@ -1064,7 +1064,7 @@ test("writeOpencodeConfig (issue #479): a fresh project gains a manifest and re-
     assert.ok(existsSync(manifestPath), "a fresh project must gain the manifest sidecar (ac-1.3)");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     assert.equal(manifest.harnessVersion, "v0.50.0");
-    assert.equal(manifest.owned.question, "deny");
+    assert.equal(manifest.owned.question, "allow");
 
     const configBefore = readFileSync(join(tempDir, "opencode.json"), "utf8");
     const manifestBefore = readFileSync(manifestPath, "utf8");
