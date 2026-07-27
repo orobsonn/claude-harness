@@ -4,7 +4,17 @@
  * No model fallback ladder: provider death → delivery-blocked for operator, not silent model swap.
  */
 
+import crypto from "node:crypto";
 import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
+
+/**
+ * Per-process instance tag (mirrors marker-seal.mjs's per-process secret). This plugin's
+ * in-memory state does not survive a process restart, so a Task claimed by a PRIOR instance
+ * can never complete it — the claim is dead, not merely slow. Stamped onto every claim and
+ * compared on the next one so a dead claim can be reconciled under lock instead of blocking
+ * every future dispatch forever (no wall-clock kill applies here either).
+ */
+const PROCESS_INSTANCE = crypto.randomUUID();
 
 /** @deprecated Kept for test/compat imports; lease expiry no longer kills attempts. */
 export const PLANNER_ATTEMPT_LEASE_MS = Number.POSITIVE_INFINITY;
@@ -74,7 +84,7 @@ export function reconcilePlannerLease(previous, _input = {}) {
 /** @description Atomically claim a primary or one-shot fallback attempt using callID + random token. */
 export function claimPlannerAttempt(previous, input = {}) {
   const reconciled = reconcilePlannerLease(previous, input);
-  const state = reconciled.state;
+  let state = reconciled.state;
   const role = input.role;
   if (state.planner_active_attempt) {
     const active = objectState(state.planner_active_attempt);
@@ -90,7 +100,18 @@ export function claimPlannerAttempt(previous, input = {}) {
     ) {
       return { ok: true, state, reconciled: reconciled.reconciled, idempotent: true };
     }
-    return { ok: false, reason: "planner attempt already active", state };
+    if (active.process_instance === PROCESS_INSTANCE) {
+      return { ok: false, reason: "planner attempt already active", state };
+    }
+    // Dead claim: it belongs to a process instance that is no longer this one, so the Task it
+    // claimed can never complete or fail it (that boundary died with the prior process too).
+    // Reconcile it under this same lock instead of blocking every future dispatch forever, and
+    // instead of leaving it to silently swallow a late result as "stale" once a fresh claim wins.
+    state = {
+      ...state,
+      planner_active_attempt: null,
+      planner_last_attempt: { ...active, failed_at: input.now, reconciled_reason: "dead claim: prior process instance" },
+    };
   }
   if (
     state.planner_retry_outcome === "fallback_failed" ||
@@ -147,6 +168,7 @@ export function claimPlannerAttempt(previous, input = {}) {
     // No wall-clock kill — claim stays until complete/fail/bind.
     expires_at: null,
     baseline_plan: input.baselinePlan ?? null,
+    process_instance: PROCESS_INSTANCE,
   };
   return { ok: true, state, reconciled: reconciled.reconciled };
 }
