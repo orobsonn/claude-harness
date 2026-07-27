@@ -644,10 +644,13 @@ test("drainTelegramOutbox suppresses a regate-pending between two curated events
 });
 
 /**
- * @description #14 (curated feed) — Given only non-curated events ('eye', 'picked') and cursor 0,
- * When the drain runs, Then NO send is made but the cursor advances past both (suppress-but-ack).
+ * @description #14 (curated feed) — Given only non-curated events ('eye' with role 'plan-reviewer',
+ * 'regate-pending') and cursor 0, When the drain runs, Then NO send is made but the cursor advances
+ * past both (suppress-but-ack). A `plan-reviewer` eye stays suppressed even though `eye` is now
+ * curated for compliance/adversary/security roles — its verdict already has a dedicated
+ * `plan-reviewed` checkpoint, so a raw eye line would duplicate the same fact (#ac-1.3).
  */
-test("drainTelegramOutbox suppresses non-curated types (eye, regate-pending) with zero sends while still ack-advancing the cursor", async () => {
+test("drainTelegramOutbox suppresses non-curated types (eye role plan-reviewer, regate-pending) with zero sends while still ack-advancing the cursor", async () => {
   const stateDir = makeStateDir();
   writeMeta(stateDir, 151, {
     issueNumber: 151,
@@ -658,7 +661,7 @@ test("drainTelegramOutbox suppresses non-curated types (eye, regate-pending) wit
     status: "active",
   });
   writeEvents(stateDir, 151, [
-    { type: "eye", role: "compliance" },
+    { type: "eye", role: "plan-reviewer" },
     { type: "regate-pending", task: "task-1", matched: false },
   ]);
 
@@ -679,10 +682,156 @@ test("drainTelegramOutbox suppresses non-curated types (eye, regate-pending) wit
 });
 
 /**
+ * @description #ac-1.1/#ac-1.2/#ac-1.3 (eye role-conditional curation) — Given `eye` events for
+ * every role (compliance, adversary, security, plan-reviewer, and an unknown role), When the drain
+ * runs, Then ONLY compliance/adversary/security are sent (in order), plan-reviewer and the unknown
+ * role stay suppressed, and the cursor advances past all five regardless.
+ */
+test("drainTelegramOutbox curates 'eye' conditionally on role: compliance/adversary/security sent, plan-reviewer and unknown roles suppressed", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 154, {
+    issueNumber: 154,
+    project: "demo",
+    worktreePath: "/tmp/wt-154-a",
+    threadId: 714,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 154, [
+    { type: "eye", role: "compliance" },
+    { type: "eye", role: "adversary" },
+    { type: "eye", role: "plan-reviewer" },
+    { type: "eye", role: "security" },
+    { type: "eye", role: "some-unknown-role" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.deepStrictEqual(
+    calls.map((call) => call.event?.role),
+    ["compliance", "adversary", "security"],
+    "only compliance/adversary/security eye events reach the feed, in outbox order",
+  );
+  assert.strictEqual(
+    readMetaRaw(stateDir, 154).cursor,
+    5,
+    "the cursor must advance past every eye event, curated or suppressed",
+  );
+});
+
+/**
+ * @description #ac-1.1/#ac-1.2 (eye role labels) — Given one `eye` event per curated role, When
+ * rendered, Then each title carries the operator-facing pt-br label: compliance → 'Conformidade',
+ * adversary → 'Adversarial da tarefa', security → 'Segurança'.
+ */
+test("drainTelegramOutbox renders eye role labels: Conformidade / Adversarial da tarefa / Segurança", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 155, {
+    issueNumber: 155,
+    project: "demo",
+    worktreePath: "/tmp/wt-155-a",
+    threadId: 715,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 155, [
+    { type: "eye", role: "compliance" },
+    { type: "eye", role: "adversary" },
+    { type: "eye", role: "security" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.strictEqual(calls.length, 3);
+  const [compliance, adversary, security] = calls.map((call) => String(call.text ?? ""));
+  assert.match(compliance, /Conformidade/, "compliance must render the 'Conformidade' label");
+  assert.match(adversary, /Adversarial da tarefa/, "adversary must render the 'Adversarial da tarefa' label");
+  assert.match(security, /Segurança/, "security must render the 'Segurança' label");
+});
+
+/**
+ * @description #ac-2.1 (sniper-ran) — Given a {type:'sniper-ran', task, severity} event, When
+ * rendered, Then the title carries the 'Correção cirúrgica' label and the body names the task and
+ * the severity.
+ */
+test("drainTelegramOutbox renders sniper-ran as 'Correção cirúrgica' naming the task and severity", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 156, {
+    issueNumber: 156,
+    project: "demo",
+    worktreePath: "/tmp/wt-156-a",
+    threadId: 716,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 156, [{ type: "sniper-ran", task: "task-4", severity: "high" }]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.strictEqual(calls.length, 1);
+  const text = String(calls[0].text ?? "");
+  assert.match(text, /Correção cirúrgica/, "the title must carry the 'Correção cirúrgica' label");
+  assert.match(text, /task-4/, "the body must name the task");
+  assert.match(text, /high/, "the body must name the severity");
+});
+
+/**
+ * @description #ac-3.1 (gates-ran) — Given a {type:'gates-ran', task, result} event, When
+ * rendered, Then the title reads 'Portões: OK' for result:'pass' and 'Portões: FALHOU' for
+ * result:'fail'.
+ */
+test("drainTelegramOutbox renders gates-ran as 'Portões: OK' / 'Portões: FALHOU' by result", async () => {
+  const stateDir = makeStateDir();
+  writeMeta(stateDir, 157, {
+    issueNumber: 157,
+    project: "demo",
+    worktreePath: "/tmp/wt-157-a",
+    threadId: 717,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 157, [
+    { type: "gates-ran", task: "task-1", result: "pass" },
+    { type: "gates-ran", task: "task-2", result: "fail" },
+  ]);
+
+  const calls = [];
+  const send = async (message) => {
+    calls.push(message);
+    return { sent: true };
+  };
+
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, { ...seams, send });
+
+  assert.strictEqual(calls.length, 2);
+  const [pass, fail] = calls.map((call) => String(call.text ?? ""));
+  assert.match(pass, /Portões: OK/, "a passing gate must render 'Portões: OK'");
+  assert.match(fail, /Portões: FALHOU/, "a failing gate must render 'Portões: FALHOU'");
+});
+
+/**
  * @description #15 (curated feed) — Given one event of EVERY curated type, When the drain runs,
  * Then all of them are sent, in order, and the cursor advances past all of them.
  */
-test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created, spec-adversary, plan-created, plan-reviewed, task-executing, hand-ran, final-review-done, pr)", async () => {
+test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created, spec-adversary, plan-created, plan-reviewed, task-executing, eye x3, hand-ran, sniper-ran, gates-ran, final-review-done, pr)", async () => {
   const stateDir = makeStateDir();
   const curatedEvents = [
     { type: "pipeline-type", mode: "FULL" },
@@ -691,7 +840,12 @@ test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created,
     { type: "plan-created", tasks: 4 },
     { type: "plan-reviewed", verdict: "APPROVE" },
     { type: "task-executing", n: 1, total: 4 },
+    { type: "eye", role: "compliance" },
+    { type: "eye", role: "adversary" },
+    { type: "eye", role: "security" },
     { type: "hand-ran", task: "task-1", model: "glm-5.2" },
+    { type: "sniper-ran", task: "task-1", severity: "high" },
+    { type: "gates-ran", task: "task-1", result: "pass" },
     { type: "final-review-done" },
     { type: "pr", pr: 88 },
   ];
