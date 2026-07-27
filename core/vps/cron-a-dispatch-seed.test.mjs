@@ -18,8 +18,10 @@ import {
   rewriteOcPluginsToMonorepoCore,
   ensureOcPluginPathsExist,
   CANONICAL_OC_PLUGINS,
+  DANGEROUS_BASH_DENYLIST,
 } from "./cron-a-dispatch.mjs";
 import { defaultOcPluginPaths } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
+import { RETIRED_OC_PERMISSION_ENTRIES, MANIFEST_FILENAME } from "../shared/lib/opencode-config-migration.mjs";
 
 
 const CANONICAL_STUBS = [
@@ -634,49 +636,274 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
   }
 });
 
-test("seedOpencodeRootConfig: [security] force-enforces deny entries for the additional dangerous-command classes (sudo, pipe-to-shell, chmod 777, netcat, dd, fork-bomb) alongside the pre-existing git/rm-rf denies", () => {
-  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-extra-dangerous-classes-");
+// --- #486 oc-fleet-seed-migration ---------------------------------------------------------
+
+test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-git classes from settings.json — no OpenCode-only extras (sudo/rm-rf/chmod/nc/dd/fork-bomb/git-add/no-verify) (#ac-1.3, denylist_final)", () => {
+  const denyKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
+    .filter(([, value]) => value === "deny")
+    .map(([key]) => key);
+  assert.equal(
+    denyKeys.length,
+    6,
+    `DANGEROUS_BASH_DENYLIST must carry exactly 6 deny keys — no extras, got ${JSON.stringify(denyKeys)}`,
+  );
+  for (const key of [
+    "git push --force*",
+    "git push * --force*",
+    "git push -f*",
+    "git push * -f*",
+    "git reset --hard*",
+    "git clean -f*",
+  ]) {
+    assert.equal(DANGEROUS_BASH_DENYLIST[key], "deny", `DANGEROUS_BASH_DENYLIST must deny ${JSON.stringify(key)}`);
+  }
+  for (const retiredClass of [
+    "sudo *",
+    "* | sh",
+    "* | bash",
+    "chmod 777*",
+    "chmod -R 777*",
+    "nc *",
+    "ncat *",
+    "dd if=*",
+    ":(){ :|:& };:",
+    "rm -rf /",
+    "rm -rf /*",
+    "rm -fr /",
+    "rm -fr /*",
+    "git add .",
+    "git add -A*",
+    "git add --all*",
+    "git commit --no-verify*",
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(DANGEROUS_BASH_DENYLIST, retiredClass),
+      false,
+      `DANGEROUS_BASH_DENYLIST must no longer carry the OpenCode-only class ${JSON.stringify(retiredClass)} — Claude Code never denied it (parity)`,
+    );
+  }
+});
+
+test("DANGEROUS_BASH_DENYLIST and RETIRED_OC_PERMISSION_ENTRIES are disjoint — no bash key can be simultaneously frozen-forced and marked droppable by the migration ledger (#ac-1.3)", () => {
+  const denylistKeys = new Set(Object.keys(DANGEROUS_BASH_DENYLIST));
+  const retiredBashKeys = RETIRED_OC_PERMISSION_ENTRIES.filter((entry) => entry.path[0] === "bash").map(
+    (entry) => entry.path[1],
+  );
+  assert.ok(retiredBashKeys.length > 0, "sanity: the retirement ledger must carry at least one bash entry");
+  for (const key of retiredBashKeys) {
+    assert.equal(
+      denylistKeys.has(key),
+      false,
+      `retired ledger key ${JSON.stringify(key)} must not also be frozen in DANGEROUS_BASH_DENYLIST`,
+    );
+  }
+});
+
+/**
+ * @description Writes a minimal `core/opencode/opencode.json.example` with `permission.bash` as a
+ * real (possibly empty) object. `migrateOpencodeConfig`'s merge only recurses INTO a nested key
+ * (e.g. `bash`) when the new-generation side also has that key as a plain object — without this,
+ * the whole `bash` map is compared as one atomic leaf against the ledger (which is keyed at
+ * `["bash", "<command>"]`, never `["bash"]` alone) and nothing inside it can ever be recognized as
+ * retired. Every real vendored project ships an example with `permission.bash` populated, so this
+ * mirrors production shape while staying minimal for the test.
+ * @param {string} projectRoot
+ */
+function writeMinimalPermissionExample(projectRoot) {
+  writeFileSync(
+    join(projectRoot, "core", "opencode", "opencode.json.example"),
+    JSON.stringify({ permission: { bash: {} } }),
+  );
+}
+
+test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission entry (still equal to its ledger historicalValue, project generation at/before the shipping cutoff) seeds a worktree CLEAN of it (#ac-1.1)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-drop-");
   try {
+    writeMinimalPermissionExample(projectRoot);
     writeFileSync(
       join(projectRoot, "opencode.json"),
       JSON.stringify({
         permission: {
           question: "deny",
           external_directory: "allow",
-          bash: { "*": "allow" },
+          bash: {
+            "*": "allow",
+            "npx github:orobsonn/claude-harness#* init*": "allow",
+            "git pull*": "allow",
+          },
         },
       }),
     );
+    mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+    // Bare SHA stamp — normalizes to generation zero, at/before every ledger entry's cutoff.
+    writeFileSync(join(projectRoot, ".opencode", ".harness-version"), "a1b2c3d4e5f6\n");
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
-    const bash = cfg.permission.bash;
-    const additionalDangerousClasses = [
-      "sudo *",
-      "* | sh",
-      "* | bash",
-      "chmod 777*",
-      "chmod -R 777*",
-      "nc *",
-      "ncat *",
-      "dd if=*",
-      ":(){ :|:& };:",
-    ];
-    for (const key of additionalDangerousClasses) {
-      assert.equal(
-        bash[key],
-        "deny",
-        `permission.bash[${JSON.stringify(key)}] must be forced to 'deny' as an additional dangerous-command class`,
-      );
-    }
     assert.equal(
-      bash["git push --force*"],
-      "deny",
-      "the pre-existing git push --force* deny must still be present alongside the additional classes",
+      Object.prototype.hasOwnProperty.call(cfg.permission.bash, "npx github:orobsonn/claude-harness#* init*"),
+      false,
+      "the retired unpinned npx wildcard key must be dropped from the seeded worktree config",
     );
     assert.equal(
-      bash["rm -rf /"],
+      Object.prototype.hasOwnProperty.call(cfg.permission.bash, "git pull*"),
+      false,
+      "the retired git pull* wildcard key must be dropped from the seeded worktree config",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: an operator custom bash deny that is NOT in the retirement ledger survives seeding untouched (#ac-1.2)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-keep-custom-");
+  try {
+    writeMinimalPermissionExample(projectRoot);
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow", "kubectl delete*": "deny" },
+        },
+      }),
+    );
+    mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+    writeFileSync(join(projectRoot, ".opencode", ".harness-version"), "a1b2c3d4e5f6\n");
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.bash["kubectl delete*"],
       "deny",
-      "the pre-existing rm -rf / deny must still be present alongside the additional classes",
+      "an operator-authored deny outside the retirement ledger must survive the migration + seed untouched",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: a retired-shaped entry whose project generation is PAST the ledger's shipping cutoff is treated as an operator customization and survives (#ac-1.2)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-past-cutoff-");
+  try {
+    writeMinimalPermissionExample(projectRoot);
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow", "npx github:orobsonn/claude-harness#* init*": "allow" },
+        },
+      }),
+    );
+    mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+    // Ledger entry for this exact key ships only through v0.45.0 — a project vendored well after
+    // that could never have received it from the harness, so it must be the operator's own doing.
+    writeFileSync(join(projectRoot, ".opencode", ".harness-version"), "v0.49.0\n");
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.bash["npx github:orobsonn/claude-harness#* init*"],
+      "allow",
+      "a project generation past the ledger's shippedThroughGeneration must keep the entry — it can't have come from the harness default",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: with no readable .harness-version and no manifest, a retired-shaped key is treated as unknown provenance and is kept, never guessed away (#ac-1.2)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-no-stamp-");
+  try {
+    writeMinimalPermissionExample(projectRoot);
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow", "npx github:orobsonn/claude-harness#* init*": "allow" },
+        },
+      }),
+    );
+    // No .opencode/.harness-version and no manifest — projectGeneration cannot be determined.
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.bash["npx github:orobsonn/claude-harness#* init*"],
+      "allow",
+      "without a version stamp the migration must never guess a key is retired — it must survive",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: a tier-1 manifest (harness-owned key still matching what the manifest recorded) also drops the retired entry, without writing anything back to projectRoot (#ac-1.1)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-manifest-");
+  try {
+    writeMinimalPermissionExample(projectRoot);
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow", "npx github:orobsonn/claude-harness#* init*": "allow" },
+        },
+      }),
+    );
+    mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, ".opencode", MANIFEST_FILENAME),
+      JSON.stringify({
+        version: 1,
+        harnessVersion: "v0.45.0",
+        owned: { bash: { "npx github:orobsonn/claude-harness#* init*": "allow" } },
+      }),
+    );
+    const manifestBefore = readFileSync(join(projectRoot, ".opencode", MANIFEST_FILENAME), "utf8");
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(cfg.permission.bash, "npx github:orobsonn/claude-harness#* init*"),
+      false,
+      "a manifest-owned retired key must also be dropped from the seeded worktree",
+    );
+    assert.equal(
+      readFileSync(join(projectRoot, ".opencode", MANIFEST_FILENAME), "utf8"),
+      manifestBefore,
+      "the fleet seed path is read-only against projectRoot — it must never rewrite the operator's own manifest",
+    );
+    assert.equal(
+      existsSync(join(projectRoot, "opencode.json.pre-migration.bak")),
+      false,
+      "the fleet seed path must never write a migration backup into the operator's tracked tree",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: permission.bash['*'] stays 'allow' in the seeded worktree regardless of migration — the fleet residue this forces is ledger-recognized (RETIRED_OC_PERMISSION_ENTRIES ['bash','*']), never leaked as a NEW unrecognized default (#ac-1.4)", () => {
+  const wildcardEntry = RETIRED_OC_PERMISSION_ENTRIES.find(
+    (entry) => entry.path[0] === "bash" && entry.path[1] === "*",
+  );
+  assert.ok(wildcardEntry, "the ledger must already track bash['*']:'allow' as recognized fleet residue");
+  assert.equal(wildcardEntry.historicalValue, "allow");
+
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-wildcard-residue-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({ permission: { bash: { "*": "ask" } } }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.bash["*"],
+      "allow",
+      "worktree bash['*'] must stay 'allow' — scoped to the ephemeral worktree, per the ledger-recognized entry",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -695,6 +922,21 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source stil
     assert.equal(existsSync(join(worktree, ".opencode/plugin/obs-eye.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(cfg.permission.question, "deny");
+    // This fixture has no opencode.json.example anywhere either (writeMinimalOcRuntime doesn't
+    // write one) — same starved-permission-source shape as a real double-fault. Pin the actual
+    // resulting deny set here (not just DANGEROUS_BASH_DENYLIST's own shape, already covered
+    // elsewhere) so a future regression in the [baseBash, exampleBash, DANGEROUS_BASH_DENYLIST]
+    // union — the exact class of bug issue #282 was about — fails THIS executable path, not just
+    // a structural assertion on the constant in isolation.
+    const denyKeys = Object.fromEntries(Object.entries(cfg.permission.bash).filter(([, v]) => v === "deny"));
+    assert.deepEqual(denyKeys, {
+      "git push --force*": "deny",
+      "git push * --force*": "deny",
+      "git push -f*": "deny",
+      "git push * -f*": "deny",
+      "git reset --hard*": "deny",
+      "git clean -f*": "deny",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
