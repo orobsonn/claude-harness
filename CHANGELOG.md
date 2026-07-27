@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.50.1](https://github.com/orobsonn/claude-harness/compare/v0.50.0...v0.50.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* **oc:** version-check.ts derruba a frota inteira — plugin loader do OpenCode 1.18.7 quebra com múltiplos exports ([#523](https://github.com/orobsonn/claude-harness/issues/523)) ([bf9b377](https://github.com/orobsonn/claude-harness/commit/bf9b377b5c6fb4c6f59a948ddcc648abd54241cf))
+
 ## [0.50.0](https://github.com/orobsonn/claude-harness/compare/v0.49.8...v0.50.0) (2026-07-27)
 
 
