@@ -296,3 +296,197 @@ test(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// #491 — structural gates-ran / sniper-ran (derived from the SAME hand-ran detection,
+// no separate marker: outcome.status IS the step-4 gate outcome; a sniper descriptor's
+// model_resolution.tier IS the severity the dispatch resolved).
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Given an executor real-run-record with outcome.status:'DONE', when stamp-triage
+ * handle() runs, then a {type:'gates-ran', task, result:'pass'} event is appended alongside the
+ * existing {type:'hand-ran'} event — the gate outcome is derived from the SAME detection, never
+ * a separate mark.mjs command.
+ */
+test("handle: executor run-record outcome.status:'DONE' → {type:'gates-ran', task:'task-2', result:'pass'} appended alongside hand-ran", () => {
+  withTempDir((tmpDir) => {
+    const metaPath = setupObsMeta(tmpDir, 511);
+    const descriptorPath = writeDescriptor(tmpDir, "descriptor-task-2.json", {
+      feature_id: "vps-run-observability",
+      task_id: "task-2",
+      model: "glm-5.2",
+      model_resolution: { role: "executor", tier: "medium" },
+    });
+    const stdoutRecord = {
+      model: "glm-5.2",
+      scope_paths: ["core/hooks/stamp-triage.mjs"],
+      outcome: { status: "DONE" },
+      exitCode: 0,
+      freezeCommitSha: "abc1234",
+    };
+    const payload = makeSpawnHandPayload("ses_hand11", descriptorPath, stdoutRecord);
+
+    withEnvVar("HARNESS_OBSERVABILITY_RUN_PATH", metaPath, () => {
+      assert.doesNotThrow(() => handle(payload));
+    });
+
+    const events = readEvents(metaPath);
+    assert.ok(events.some((e) => e.type === "hand-ran" && e.task === "task-2"), "hand-ran must still be appended");
+    const gatesRan = events.find((e) => e.type === "gates-ran");
+    assert.ok(gatesRan, "a gates-ran event must be appended");
+    assert.equal(gatesRan.task, "task-2");
+    assert.equal(gatesRan.result, "pass");
+    // An executor dispatch (model_resolution.role !== 'sniper') must never emit sniper-ran.
+    assert.equal(events.some((e) => e.type === "sniper-ran"), false, "an executor run must never emit sniper-ran");
+  });
+});
+
+/**
+ * @description Given a run-record with outcome.status:'FAILED', when stamp-triage handle() runs,
+ * then {type:'gates-ran', result:'fail'} is appended — a real gate failure, not dismissed.
+ */
+test("handle: run-record outcome.status:'FAILED' → {type:'gates-ran', result:'fail'} appended", () => {
+  withTempDir((tmpDir) => {
+    const metaPath = setupObsMeta(tmpDir, 512);
+    const descriptorPath = writeDescriptor(tmpDir, "descriptor-task-3.json", {
+      feature_id: "vps-run-observability",
+      task_id: "task-3",
+      model: "glm-5.2",
+      model_resolution: { role: "executor", tier: "high" },
+    });
+    const stdoutRecord = {
+      model: "glm-5.2",
+      scope_paths: ["core/hooks/stamp-triage.mjs"],
+      outcome: { status: "FAILED" },
+      exitCode: 1,
+      freezeCommitSha: "abc1234",
+    };
+    const payload = makeSpawnHandPayload("ses_hand12", descriptorPath, stdoutRecord);
+
+    withEnvVar("HARNESS_OBSERVABILITY_RUN_PATH", metaPath, () => {
+      assert.doesNotThrow(() => handle(payload));
+    });
+
+    const gatesRan = readEvents(metaPath).find((e) => e.type === "gates-ran");
+    assert.ok(gatesRan, "a gates-ran event must be appended");
+    assert.equal(gatesRan.result, "fail");
+  });
+});
+
+/**
+ * @description Given a run-record with outcome.status:'NOT_DONE' (timed out, never reached a
+ * verdict), when stamp-triage handle() runs, then {type:'gates-ran', result:'fail'} is appended —
+ * NOT_DONE is treated the same as FAILED, never silently dropped.
+ */
+test("handle: run-record outcome.status:'NOT_DONE' → {type:'gates-ran', result:'fail'} appended", () => {
+  withTempDir((tmpDir) => {
+    const metaPath = setupObsMeta(tmpDir, 513);
+    const descriptorPath = writeDescriptor(tmpDir, "descriptor-task-4.json", {
+      feature_id: "vps-run-observability",
+      task_id: "task-4",
+      model: "glm-5.2",
+      model_resolution: { role: "executor", tier: "low" },
+    });
+    const stdoutRecord = {
+      model: "glm-5.2",
+      scope_paths: ["core/hooks/stamp-triage.mjs"],
+      outcome: { status: "NOT_DONE" },
+      exitCode: 1,
+      freezeCommitSha: "abc1234",
+    };
+    const payload = makeSpawnHandPayload("ses_hand13", descriptorPath, stdoutRecord);
+
+    withEnvVar("HARNESS_OBSERVABILITY_RUN_PATH", metaPath, () => {
+      assert.doesNotThrow(() => handle(payload));
+    });
+
+    const gatesRan = readEvents(metaPath).find((e) => e.type === "gates-ran");
+    assert.ok(gatesRan, "a gates-ran event must be appended for NOT_DONE too");
+    assert.equal(gatesRan.result, "fail");
+  });
+});
+
+/**
+ * @description Given a SNIPER descriptor (model_resolution.role:'sniper', tier:'high' — the
+ * resolved severity the dispatch used to pick hand_tiers.high) with outcome.status:'DONE', when
+ * stamp-triage handle() runs, then BOTH {type:'gates-ran', result:'pass'} AND
+ * {type:'sniper-ran', task, severity:'high'} are appended alongside hand-ran — three distinct,
+ * complementary facts from one detection.
+ */
+test("handle: sniper descriptor (model_resolution.role:'sniper', tier:'high') → hand-ran + gates-ran(pass) + sniper-ran(severity:'high') all appended", () => {
+  withTempDir((tmpDir) => {
+    const metaPath = setupObsMeta(tmpDir, 514);
+    const descriptorPath = writeDescriptor(tmpDir, "descriptor-task-5.json", {
+      feature_id: "vps-run-observability",
+      task_id: "task-5",
+      model: "glm-5.2",
+      model_resolution: { role: "sniper", tier: "high", applied_severities: ["high", "low"] },
+    });
+    const stdoutRecord = {
+      model: "glm-5.2",
+      scope_paths: ["core/hooks/stamp-triage.mjs"],
+      outcome: { status: "DONE" },
+      exitCode: 0,
+      freezeCommitSha: "def5678",
+    };
+    const payload = makeSpawnHandPayload("ses_hand14", descriptorPath, stdoutRecord);
+
+    withEnvVar("HARNESS_OBSERVABILITY_RUN_PATH", metaPath, () => {
+      assert.doesNotThrow(() => handle(payload));
+    });
+
+    const events = readEvents(metaPath);
+    assert.ok(events.some((e) => e.type === "hand-ran" && e.task === "task-5"));
+    const gatesRan = events.find((e) => e.type === "gates-ran");
+    assert.ok(gatesRan);
+    assert.equal(gatesRan.result, "pass");
+    const sniperRan = events.find((e) => e.type === "sniper-ran");
+    assert.ok(sniperRan, "a sniper-ran event must be appended for a sniper descriptor");
+    assert.equal(sniperRan.task, "task-5");
+    assert.equal(sniperRan.severity, "high");
+  });
+});
+
+/**
+ * @description Given TWO sniper dispatches for the SAME task (a re-gate→sniper second round —
+ * each its own Bash call, its own hand-ran detection), when stamp-triage handle() runs for both,
+ * then BOTH sniper-ran (and gates-ran) events are appended — no dedupe, since each round is a
+ * genuinely new fix/gate outcome, not a repeat of the same fact.
+ */
+test("handle: two sniper dispatches on the same task both append their own sniper-ran + gates-ran (no dedupe)", () => {
+  withTempDir((tmpDir) => {
+    const metaPath = setupObsMeta(tmpDir, 515);
+    const round = (n, tier, status) => {
+      const descriptorPath = writeDescriptor(tmpDir, `descriptor-round-${n}.json`, {
+        feature_id: "vps-run-observability",
+        task_id: "task-6",
+        model: "glm-5.2",
+        model_resolution: { role: "sniper", tier },
+      });
+      const stdoutRecord = {
+        model: "glm-5.2",
+        scope_paths: ["core/hooks/stamp-triage.mjs"],
+        outcome: { status },
+        exitCode: status === "DONE" ? 0 : 1,
+        freezeCommitSha: `sha-${n}`,
+      };
+      return makeSpawnHandPayload(`ses_hand15_${n}`, descriptorPath, stdoutRecord);
+    };
+
+    withEnvVar("HARNESS_OBSERVABILITY_RUN_PATH", metaPath, () => {
+      assert.doesNotThrow(() => handle(round(1, "high", "FAILED")));
+      assert.doesNotThrow(() => handle(round(2, "high", "DONE")));
+    });
+
+    const events = readEvents(metaPath);
+    const sniperRounds = events.filter((e) => e.type === "sniper-ran" && e.task === "task-6");
+    assert.equal(sniperRounds.length, 2, `both sniper-ran rounds must survive, got ${JSON.stringify(sniperRounds)}`);
+    const gateRounds = events.filter((e) => e.type === "gates-ran" && e.task === "task-6");
+    assert.deepEqual(
+      gateRounds.map((e) => e.result),
+      ["fail", "pass"],
+      "both gate rounds must survive in order, reflecting the real per-round outcome",
+    );
+  });
+});

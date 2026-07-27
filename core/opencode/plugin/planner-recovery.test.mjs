@@ -156,9 +156,12 @@ test("returning the plan it was asked to revise does not release downstream", as
     assert.equal(state().planner_plan_binding, undefined);
     assert.match(output.metadata.planner_recovery, /idêntico/);
     const gate = await createPlanGateHooks(root);
+    // #476: an absent planner_plan_binding is only fail-open when no ceremony ran at all — a
+    // real attempt that ended plan_invalid (as here) still denies, now via the terminal-blocked
+    // check rather than the "bound artifact required" branch.
     await assert.rejects(
       () => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }),
-      /bound artifact/,
+      /non-usable state/,
     );
   }, FULL_PLAN);
 });
@@ -354,6 +357,42 @@ test("planner-fallback is never claimable after primary provider death", async (
     await rejection(hooks, "call-primary", "ProviderAuthError: unauthorized");
     await assert.rejects(() => before(hooks, "planner-fallback", "call-fallback"), /fallback disabled/);
     assert.notEqual(state().planner_retry_outcome, "fallback_pending");
+  });
+});
+
+test("a dead call's claim on disk does not block a fresh dispatch, and its plan binds instead of being discarded", async () => {
+  await tempRun(false, async ({ root, state, stateFile, planPath }) => {
+    // Simulate a claim left behind by a process that restarted before the Task could
+    // complete or fail it (no boundary event ever fires for a truly dead call).
+    const pre = state();
+    fs.writeFileSync(stateFile, JSON.stringify({
+      ...pre,
+      planner_status: "running",
+      planner_primary_attempts: 1,
+      planner_dispatches_total: 1,
+      planner_active_attempt: {
+        call_id: "dead-call",
+        token: "dead-token",
+        role: "planner",
+        session_id: SESSION,
+        feature_id: FEATURE,
+        model: "openai/gpt-5.6-sol",
+        started_at: 1,
+        expires_at: null,
+        baseline_plan: { exists: true, fingerprint: "old" },
+        process_instance: "prior-process-instance",
+      },
+    }));
+    const hooks = await createPlannerRecoveryHooks(root);
+    // A fresh dispatch is not blocked by the dead claim still on disk.
+    await assert.doesNotReject(() => before(hooks, "planner", "call-fresh"));
+    assert.equal(state().planner_active_attempt.call_id, "call-fresh");
+    // The plan for the fresh dispatch binds (accepted:true), instead of being discarded
+    // the way a genuinely stale/late result correctly is.
+    await after(hooks, "planner", "call-fresh", JSON.stringify(FULL_PLAN));
+    assert.equal(state().planner_status, "usable");
+    assert.equal(state().planner_plan_binding.call_id, "call-fresh");
+    assert.equal(JSON.parse(fs.readFileSync(planPath, "utf8")).feature_id, FEATURE);
   });
 });
 

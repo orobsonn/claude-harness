@@ -462,6 +462,35 @@ test("lt-entry-s1-load-reads-classified — fullCeremony with classified under S
   })
 })
 
+test("#ac-1.4 planner dispatch declaring a DIFFERENT feature_id than gate-state's ceremony → denied through the REAL hook (not just the pure decideEntryTask unit)", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({ feature_id: "feat" }))
+    const before = hooks["tool.execute.before"]
+    await assert.rejects(
+      () =>
+        before(
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "planner", feature_id: "other-feature" } },
+        ),
+      (err) => {
+        assert.ok(err instanceof Error)
+        assert.match(err.message, /\[entry-gate\]/)
+        const denial = JSON.parse(err.message.slice(err.message.indexOf("{")))
+        assert.equal(denial.code, "CEREMONY_PROOF_REQUIRED")
+        assert.equal(denial.missing_proof, "brainstorming_completion_evidence")
+        return true
+      },
+    )
+    // Same feature_id as gate-state's ceremony: no mismatch, allowed.
+    await assert.doesNotReject(() =>
+      before(
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "planner", feature_id: "feat" } },
+      ),
+    )
+  })
+})
+
 // #ac-1.5 regression matrix (task-3) — explicit lt-reg-* names per spec; reuse helpers; foreign S2 written to prove no toolArgs bind
 // 1+2 covered by identical lt-entry-* (task-2); thin aliases with comment only (per instruction)
 test("lt-reg-full-ceremony-s1-planner-allow — full ceremony S1 + planner allow (thin alias; identical to lt-entry-planner-s1-full-ceremony-allow which task-2 covers; explicit lt-reg name for AC matrix)", async () => {

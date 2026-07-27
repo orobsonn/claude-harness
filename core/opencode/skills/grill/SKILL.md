@@ -94,8 +94,8 @@ PRD's own `## Em aberto` section** and continuing from there — the file is the
 - **In `plan` (the normal home for this skill):** `plan` is read-only by design and holds a
   **narrow write permission scoped to `docs/prd/*.md` only**. Write the PRD there and **nowhere
   else** — do not attempt any other path, and never use bash (denied in `plan`).
-- **In `build`:** `edit` is denied. Write the PRD through `printf` / `tee` **without `$`
-  expansion** and without `node -e` (entry-gate anti-forgery — see `build.md`).
+- **In `build`:** `edit` is denied. Write the PRD through `printf` / `tee` (or any other bash form) —
+  quote a literal `$` in the content (unescaped, the shell expands it before the file is written).
 
 ---
 

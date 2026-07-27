@@ -1,7 +1,8 @@
 /**
  * @description OC entry-gate plugin — ceremony + bash delivery/forge + ADR-003 dual.
  * On tool.execute.before:
- * - bash/shell: decideBashForge then decideBashDelivery (gate-state from disk)
+ * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
+ *   (gate-state from disk)
  * - task: decideEntryTask then enforceDualFromDiskOrThrow for executor/sniper
  * Deny throws [entry-gate]. Fail-closed on unreadable gate-state for delivery.
  * Delivery bash injects gitState + isAncestorFn + listHandRecordsForFeatureFn;
@@ -177,11 +178,12 @@ export async function createEntryGateHooks(
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
-  const { recoverCeremonyStep } = await import("./lib/ceremony-transition.mjs")
+  const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const {
-    decideBashForge,
+    decideBashAdvisory,
+    applyAdvisory,
     decideBashDelivery,
     isDeliveryCommand,
     throwIfDenied: throwIfBashDenied,
@@ -262,7 +264,7 @@ export async function createEntryGateHooks(
 
       if (isBashOrShellTool(toolName)) {
         const command = extractBashCommand(toolArgs)
-        throwIfBashDenied(decideBashForge({ command }))
+        applyAdvisory(decideBashAdvisory({ command, cwd: root }), output)
 
         const sid =
           typeof sessionId === "string" && sessionId.length > 0
@@ -357,27 +359,22 @@ export async function createEntryGateHooks(
         const stateFile = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId: sid })
         if (!stateFile.ok) throw new Error(`${PREFIX} ${stateFile.reason}`)
         const persist = deps.ceremonyPersistFn ?? ((file, mutate) => withGateStateLock(file, mutate))
-        while (true) {
-          let recoveryError: Record<string, unknown> | null = null
-          let recoveredState: Record<string, unknown> | null = null
-          let complete = false
-          const persisted = persist(stateFile.path, (previous) => {
-            const recovery = recoverCeremonyStep(root, previous)
-            recoveredState = recovery.state
-            if (!recovery.ok) {
-              recoveryError = recovery.error
-              return previous
-            }
-            complete = recovery.complete
-            return recovery.changed ? recovery.state : previous
-          })
-          if (!persisted.ok) {
-            throw new Error(`${PREFIX} ${JSON.stringify({ code: "CEREMONY_PERSIST_FAILED", missing_proof: null, next_transition: null, reason: persisted.reason ?? "gate-state persistence failed" })}`)
-          }
-          if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
-          gateState = recoveredState ?? gateState
-          if (complete) break
+        // One atomic recovery pass (no cross-call retry loop): recoverCeremony already advances
+        // every provable phase in one in-memory pass, so a single lock round-trip persists whatever
+        // recovered before the first missing/invalid proof, then reports that proof — instead of the
+        // old per-phase while(true) that re-acquired the lock once per phase and left the planner's
+        // own gate CEREMONY_PROOF_REQUIRED denial unreachable in decideEntryTask.
+        let recoveryError: Record<string, unknown> | null = null
+        const persisted = persist(stateFile.path, (previous) => {
+          const recovery = recoverCeremony(root, previous)
+          if (!recovery.ok) recoveryError = recovery.error
+          return recovery.changed ? recovery.state : previous
+        })
+        if (!persisted.ok) {
+          throw new Error(`${PREFIX} ${JSON.stringify({ code: "CEREMONY_PERSIST_FAILED", missing_proof: null, next_transition: null, reason: persisted.reason ?? "gate-state persistence failed" })}`)
         }
+        if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
+        gateState = persisted.state ?? gateState
       }
       if (loaded.ok && isDeliveryRole(subagentType)) {
         const seals = validatePrivilegedMarkerSeals(gateState, {
@@ -391,6 +388,15 @@ export async function createEntryGateHooks(
         ? identity.featureId
         : typeof gateState.feature_id === "string" ? gateState.feature_id : optionalIds.featureId
       const taskId = identity.taskId || optionalIds.taskId
+      // What THIS dispatch declares as its planning target, independent of gate-state's own
+      // (possibly stale) feature_id. `featureId` above always collapses to gateState.feature_id
+      // once one exists, which would make decideEntryTask's planner featureMismatch check a
+      // tautology (always comparing gateState.feature_id to itself); this stays independent so a
+      // genuine mismatch — a planner Task declaring a DIFFERENT feature than the one whose
+      // ceremony gate-state already carries — is actually reachable.
+      const dispatchFeatureId = identity.featureIdSource === "runtime-envelope"
+        ? identity.featureId
+        : optionalIds.featureId
       const binding = validateCeremonyBinding(gateState, {
         sessionId: sid,
         featureId,
@@ -408,6 +414,7 @@ export async function createEntryGateHooks(
           subagentType,
           gateState,
           featureId,
+          dispatchFeatureId,
           taskId,
         }),
       )

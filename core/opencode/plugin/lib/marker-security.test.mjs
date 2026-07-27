@@ -84,14 +84,33 @@ test("observability-only CLI leaves privileged state byte and semantically uncha
   }
 });
 
-test("entry-gate rejects subprocess import/instantiation route to marker plugin", async () => {
-  const { decideBashForge } = await import("./bash-decide.mjs");
-  for (const command of [
-    `node ${authorityPath}`,
-    `node --input-type=module -e "import('${authorityPath}')"`,
-  ]) {
-    const decision = decideBashForge({ command });
-    assert.equal(decision.decision, "deny", command);
-    assert.match(decision.reason, /host|authority|marker|anti-forgery/i);
+// #475: the bash-decide.mjs regex layer that used to deny `node <marker-authority.ts>` /
+// import one-liners is gone (decideBashForge removed). The real boundary was always host-side:
+// marker-authority.ts's `mark.execute()` only accepts args that went through the args-identity
+// WeakMap populated by its own `tool.execute.before` closure, which only the OpenCode host can
+// invoke (`tool`/`tool.schema` are ambient globals the host provides — a bare `node`/import
+// subprocess never has them, so it can only load declarations, never run the privileged path).
+// This test asserts that invariant directly: importing marker-authority.ts standalone is inert
+// and never mutates gate-state, independent of any bash-layer pattern-match.
+test("importing marker-authority.ts standalone is inert and never mutates gate-state (#475)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-import-"));
+  try {
+    const statePath = path.join(root, ".opencode", "plans", ".state", "ses-a", "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    const bytes = '{\n  "session_id": "ses-a",\n  "feature_id": "feature-a"\n}\n';
+    fs.writeFileSync(statePath, bytes);
+    for (const script of [
+      `try { await import(${JSON.stringify(pathToFileURL(authorityPath).href)}); } catch { /* .ts import support varies by Node build — either outcome is fine, nothing must be written */ }`,
+    ]) {
+      const attempted = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+      assert.equal(attempted.signal, null, "must not crash the process");
+    }
+    assert.equal(
+      fs.readFileSync(statePath, "utf8"),
+      bytes,
+      "importing marker-authority.ts standalone must never mutate gate-state",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

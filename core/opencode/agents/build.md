@@ -68,10 +68,10 @@ Compliance and security are **single-eye** by default (OpenAI evaluator family) 
 - `validate-plan` — deterministic structural gate for `execution-plan.json`. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
 - `classify` — entry triage stub writer (via oc-triaging-requests skill).
 - `ceremony-next` — consumes the exact structured planner denial and returns one state-valid, allowlisted ceremony descriptor; rejection stops recovery.
-- `verify` — the only coordinator recovery for a registered targeted Vitest denial. Pass exact feature/task ids, `denied_class`, denied command, and the exact snapshot `locked_tests[].path`. Top-level use returns only `{ tool: "verify", registry_id, test_path }`; only the trusted active hand can execute it. Never dispatch `explore`, `general`, or an investigation role. Rejection, `no_equivalent`, `setup_missing`, or `repeated` means stop.
+- `verify` — resolves a registered targeted-test snapshot to a concrete test path (feature/task ids in, `locked_tests[].path` out). Optional: bash runs the targeted test directly just as well (see below); `verify` stays available for the resolver's snapshot lookup when that is more convenient.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
-**Running one specific test (avoid `package_launcher` denials).** To exercise a single frozen test, prefer the project's local test binary or `node --test <path>` over an ad-hoc `npx vitest`/`npm run <script> <path>` — the latter trip the `package_launcher` deny and burn a recovery turn. For a *registered targeted-Vitest* denial the only sanctioned recovery is the `verify` tool above (never re-issue the raw `npx`).
+**Running one specific test.** Bash runs freely — `node --test <path>`, `npx vitest run <path>`, `npm test -- <path>`, whatever the project's test command is. Keep the run scoped to the exact `locked_tests[].path` snapshot only — no globs, no full-suite runs.
 
 ## Hermetic rule
 
@@ -114,7 +114,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
-**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark-gate.mjs`, `mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround for it.
+**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark-gate.mjs`, `mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround (or its `$`-escaping caveat) for it.
 </HARD-GATE>
 
 Route on its result:
