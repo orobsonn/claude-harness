@@ -9,6 +9,14 @@
  *   - anti-stale (NEW-2): fix-mode engages only when the reviewed sha matches the PR head; a mismatch
  *     / gh error / empty scope falls back to normal mode, and any stale findings file is pruned.
  *
+ * #ac-2.1 (issue #488): the OTHER half of fix-mode — whether the sniper TASK DISPATCH composed
+ * above actually survives the real 5-plugin OpenCode gate chain (planner-recovery → plan-gate →
+ * obs-hand → loop-guard → entry-gate, docs/OC-CC-PARITY-REPORT.md §2) when it lands on a cold/empty
+ * gate-state (no `.opencode/plans/.state/<sid>/gate-state.json`, no `harness.routing.json` — the
+ * real fix-mode/repo-frio shape). The tests above never exercised this: they only assert what
+ * cron-a-dispatch.mjs COMPOSES for tmux, never what the OpenCode plugin chain does with it once
+ * dispatched. See the `chain:` test group below.
+ *
  * Run with: node --test core/vps/cron-a-dispatch-fixmode.test.mjs
  */
 import { test } from "node:test";
@@ -18,6 +26,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
+import { createPlannerRecoveryHooks } from "../opencode/plugin/planner-recovery.ts";
+import { createPlanGateHooks } from "../opencode/plugin/plan-gate.ts";
+import { createObsHandHooks } from "../opencode/plugin/obs-hand.ts";
+import { createLoopGuardHooks } from "../opencode/plugin/loop-guard.ts";
+import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
 
 function makeTempDirs() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-dispatch-"));
@@ -191,5 +204,78 @@ test("stale hygiene: a NON-resume (fresh-branch) dispatch prunes any leftover fi
     assert.ok(!fs.existsSync(path.join(stateDir, "fix-findings-13.json")), "the stale findings file must be pruned on a normal dispatch");
   } finally {
     cleanup();
+  }
+});
+
+// #ac-2.1 (issue #488) — real 5-plugin gate chain, not just the tmux trigger composition.
+//
+// Order matches DISPATCH_CHAIN_ORDER, the documented contract asserted by
+// core/opencode/plugin/plugin-dispatch-order.test.mjs (docs/OC-CC-PARITY-REPORT.md §2): the first
+// throw wins, so this drives the SAME `input`/`output` object through all 5 factories in that
+// documented order, letting an earlier plugin's prompt/args mutation (as in production) propagate
+// downstream. Caveat inherited from plugin-dispatch-order.test.mjs's own docstring: the REAL
+// OpenCode plugin loader discovers these via an unsorted filesystem glob, which is not portable
+// across OS/filesystem (observed ascending-alphabetical on this repo's macOS/APFS checkout,
+// descending on the parity report's environment) — DISPATCH_CHAIN_ORDER is the documented/asserted
+// contract, not a live re-measurement of the raw glob order on whatever host runs this test.
+const DISPATCH_CHAIN = [
+  ["planner-recovery", createPlannerRecoveryHooks],
+  ["plan-gate", createPlanGateHooks],
+  ["obs-hand", createObsHandHooks],
+  ["loop-guard", createLoopGuardHooks],
+  ["entry-gate", createEntryGateHooks],
+];
+
+/**
+ * Drives a single Task dispatch through the real 5-plugin chain against a project root, in
+ * documented order. Returns `{ survived: true }` if every plugin's `tool.execute.before` allowed
+ * it, or `{ survived: false, deniedAt, message }` at the first thrown deny.
+ */
+async function runDispatchChain(root, input, output) {
+  for (const [name, factory] of DISPATCH_CHAIN) {
+    const hooks = await factory(root);
+    const before = hooks["tool.execute.before"];
+    if (!before) continue;
+    try {
+      await before(input, output);
+    } catch (err) {
+      return { survived: false, deniedAt: name, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  return { survived: true };
+}
+
+test("chain: sniper Task dispatch with a COLD/EMPTY gate-state (no gate-state.json, no harness.routing.json — the real fix-mode/repo-frio shape) survives the real 5-plugin chain end to end", {
+  // BLOCKED on issue #483 (oc-dual-gate-to-recording) and issue #485 (oc-cc-gate1-gate3-fidelity),
+  // both open at the time this test was written. Reproduced empirically against this branch's HEAD:
+  //   1st deny — plan-gate.ts → dual-enforcement.mjs: with no harness.routing.json on disk,
+  //     readRequireDualOn(null) returns DEFAULT_REQUIRE_DUAL_ON (["plan-reviewer","adversary"]), and
+  //     routingRequiresDual() treats that DEFAULT as "dual IS required" (an empty
+  //     `constraints.requireDualOn: []` is treated the same as "unset" — dual-enforcement.mjs:126-127
+  //     falls back to the default either way) — so a cold project denies with
+  //     "dual_status.plan_review missing" even though no routing.json ever opted in. This is
+  //     exactly what #483 replaces with record-only behavior.
+  //   2nd deny (once #483 is fixed) — entry-gate.ts → entry-decide.mjs:75 ("ceremony missing") and,
+  //     after that, entry-decide.mjs's fidelity block (~:133-149) still gates sniper on
+  //     `fidelity_pass`, which #485's ac-2.1 explicitly carves out as a sniper exemption not yet
+  //     implemented.
+  // Un-skip (remove `todo`) once #483 AND #485 are both merged — at that point this is a genuine
+  // end-to-end regression test for the fix-mode dispatch path.
+  todo: "blocked on #483 (dual-enforcement default denies with no routing.json) and #485 (sniper not yet exempt from ceremony/fidelity in entry-decide.mjs) — see docs/OC-CC-PARITY-ROADMAP-INPUT.md items 13 and 14",
+}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
+  try {
+    // Deliberately nothing on disk: no `.opencode/plans/.state/<sid>/gate-state.json`, no
+    // `.opencode/harness.routing.json` — the cold-repo / fleet-fix-mode shape the roadmap names.
+    const sessionId = "ses_fixmode_chain";
+    const input = { tool: "task", sessionID: sessionId, callID: "fixmode-chain-sniper" };
+    const output = { args: { description: "fix the finding", prompt: "Fix it.", subagent_type: "sniper-medium" } };
+
+    const result = await runDispatchChain(root, input, output);
+    assert.equal(result.survived, true,
+      `expected the sniper dispatch to survive the 5-plugin chain with empty gate-state; ` +
+      `denied at "${result.deniedAt}": ${result.message}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
