@@ -268,6 +268,63 @@ export async function createEntryGateHooks(
 
       if (isBashOrShellTool(toolName)) {
         const command = extractBashCommand(toolArgs)
+
+        // [#516] Belt-and-suspenders choke-point: re-checks the raw command against the
+        // fleet-hardened DANGEROUS_BASH_DENYLIST directly (core/shared/lib/dangerous-bash-denylist.mjs),
+        // independent of whatever config.permission.bash the OC config merge (global ruleset ∪
+        // per-agent frontmatter) actually resolved to. This closes the load-bearing gap the
+        // denylist's own JSDoc documented: OpenCode resolves permission.bash with `findLast`
+        // (last match wins), and every agent the fleet actually dispatches
+        // (`opencode run --agent build`) used to declare its own `bash: allow` in frontmatter,
+        // which is merged AFTER the global ruleset and therefore shadowed every deny in the
+        // denylist for that agent. Part 1 of #516 removed those redundant per-agent overrides;
+        // this check survives even if a future agent is authored with `bash: allow` again, before
+        // the anti-drift test (eyes-permission-lockdown.test.mjs) catches it in CI.
+        // Deliberately scoped to fleet dispatch only, keyed SOLELY on HARNESS_NOTIFY_PROJECT — the
+        // one signal `core/vps/cron-a-dispatch.mjs` sets UNCONDITIONALLY for every VPS dispatch
+        // (never guarded by an `if`). HARNESS_OC_DATA_HOME was deliberately dropped from this check
+        // (#516 adversarial review): `core/opencode/skills/triaging-requests/SKILL.md` already
+        // documents it as NOT a reliable headless/fleet signal — "a manually-started operator
+        // session on the VPS inherits it from the shell" — so keying on it here would have armed
+        // this choke-point (and its npx/node -e/bash -c/tar/source denies) against a live operator's
+        // own interactive SSH session on the VPS, exactly the interactive-path friction this
+        // choke-point must NOT reintroduce (see below). Mirrors the SAME scope DANGEROUS_BASH_DENYLIST's
+        // own JSDoc already documents ("[#499] a DELIBERATE, NARROW exception ... scoped to this
+        // one fleet-seeding function"). An unconditional (interactive-included) enforcement here
+        // would re-impose exactly the over-blocking friction (npx/node -e/bash -c/tar/source on
+        // ordinary local dev commands) that a separate, not-yet-executed roadmap item
+        // (oc-forge-wall-removal) exists to REMOVE from the interactive path — widening this
+        // choke-point to all sessions would silently contradict that already-documented design
+        // intent, so it stays fleet-scoped like its source constant.
+        const fleetDispatch = Boolean(process.env.HARNESS_NOTIFY_PROJECT)
+        if (fleetDispatch) {
+          let decideDangerousBashDenylist: ((command: string) => { allow: boolean; reason?: string }) | null = null
+          try {
+            ;({ decideDangerousBashDenylist } = await import(
+              "../../shared/lib/dangerous-bash-denylist.mjs"
+            ))
+          } catch (err) {
+            // The backstop module itself is unavailable (e.g. missing from an old vendor) — an
+            // infra fault of this backstop, not a security decision: fail open, but LOUDLY, so a
+            // silently-broken choke-point is never mistaken for "nothing to deny" (#516 adversarial
+            // review — the sibling gate-state-unreadable fail-open at :387 already logs this way).
+            console.error(
+              `${PREFIX} denylist choke-point unavailable, allowing dispatch: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
+          if (decideDangerousBashDenylist) {
+            const denylistDecision = decideDangerousBashDenylist(
+              typeof command === "string" ? command : "",
+            )
+            if (!denylistDecision.allow) {
+              throw new Error(
+                `${PREFIX} Blocked: ${denylistDecision.reason} (fleet bash denylist choke-point, ` +
+                  `independent of resolved permission.bash — issue #516).`,
+              )
+            }
+          }
+        }
+
         applyAdvisory(decideBashAdvisory({ command, cwd: root }), output)
 
         const sid =

@@ -8,7 +8,6 @@ tools:
 permission:
   classify: deny
   edit: allow
-  bash: allow
 ---
 
 

@@ -93,6 +93,7 @@ import {
   readHarnessVersionStamp,
   MANIFEST_FILENAME,
 } from "../shared/lib/opencode-config-migration.mjs";
+import { DANGEROUS_BASH_DENYLIST } from "../shared/lib/dangerous-bash-denylist.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -452,171 +453,14 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
 }
 
 /**
- * @description Canonical, FROZEN in-code source of truth for the dangerous-bash-command deny-list
- * force-enforced onto every seeded worktree `opencode.json`, independent of whether the vendored
- * `opencode.json.example` exists or is reachable at seed time. Before this hardening, a project
- * vendored BEFORE this change with a stale root `opencode.json` missing these keys still hung
- * headless `opencode run --auto` on `permission=ask` (issue #282 recurrence) — the fix must not
- * depend on the example file being present, so this list is the double-fault safety net. Mirrors
- * `core/opencode/opencode.json.example`'s `permission.bash` deny entries; kept in sync manually
- * since — on a double-fault (malformed source AND unreadable/absent example) — this constant, not
- * the example file, is the ONLY source of the deny-list actually written to disk.
- *
- * [security] This is defense-in-depth against obvious foot-guns via a STRING-MATCH pattern list —
- * it is NOT a sandbox. It cannot contain a genuinely adversarial or prompt-injected agent (a
- * differently-worded or obfuscated command bypasses a string match trivially). Real containment of
- * an adversarial agent requires OS-level isolation — an unprivileged/dedicated account, no ambient
- * credentials, and controlled egress — which this list does not implement and is not a substitute for.
- * Concretely (verified against the installed `opencode` binary's `Wildcard.match`): the command is
- * normalized with `replaceAll("\\","/")` before matching, so a leading `\` (e.g. `\npx evil`, which
- * a shell treats identically to `npx evil`) fails EVERY pattern in this list — including the 6
- * pre-existing git denies — and falls through to `"*": "allow"`. No pattern rewrite closes this; it
- * is a property of the matcher itself, present before and independent of this hardening.
- *
- * [#486 oc-fleet-seed-migration] The 6 destructive-git denies mirror Claude Code exactly
- * (`core/claude-code/settings.json` `permissions.deny`) — parity decision recorded in
- * `docs/OC-CC-PARITY-ROADMAP-INPUT.md` item 6 (`denylist_final: os 6 denies de git destrutivo do
- * CC`). The broader OpenCode-only class this repo removed in #475 (rm -rf, sudo, chmod 777,
- * pipe-to-shell, netcat, dd, fork-bomb, git add ./-A/--all, git commit --no-verify) stays OUT:
- * Claude Code never denied it either, and reviving it would re-break the routine harness commands
- * #475 fixed. MUST stay disjoint from `RETIRED_OC_PERMISSION_ENTRIES`
- * (`../shared/lib/opencode-config-migration.mjs`) — a key can never be simultaneously
- * frozen-forced here and marked droppable by the migration ledger (cron-a-dispatch-seed.test.mjs
- * asserts the disjunction).
- *
- * [#499 vps-fleet-bash-denylist-hardening] #475's adversarial review (PR #497) flagged that the
- * fleet VPS runs headless, WITHOUT container isolation, with real host credentials (`~/.ssh/**`
- * denied at the read layer only makes sense if a real key lives there) — and that #475 removed the
- * only fail-closed layer that covered `bash -c`, `node -e`/`python -c`, `npx`/`bunx`, `tar`
- * extraction, and `source`. This is a DELIBERATE, NARROW exception to CC parity, scoped to this
- * one fleet-seeding function — it is not part of the OC↔CC parity roadmap (that roadmap's own
- * denylist_final decision, above, stays as documented). The new deny keys below close each of
- * these 5 command shapes AND the sibling spellings a normal (non-obfuscated) agent would reach for
- * — `sh -c`/`zsh -c`/`env bash -c`/a path-qualified `.../bash -c`, `node --eval`/`node -p`/
- * `node --print`, `python3.<minor> -c`, `python* -m` (module execution, e.g. `python -m pip
- * install`), `npm exec`/`npm x`/`pnpm dlx`/`yarn dlx`/`bun x` (the non-`npx` package-runner
- * idioms), `tar --extract`/old-style `tar xf` (no leading `-`), `unzip`, and the `.` POSIX alias
- * for `source` — an adversarial-review round on the first cut of this hardening (#499 PR review)
- * found 21 of 32 such sibling spellings still resolved `allow`; these entries close them. The allow
- * keys after them carve out the harness's own prescribed `npx` invocations that the fleet already
- * runs in production today (#ac-1.2): the typecheck gate (`npx tsc --noEmit`), the self-installer
- * in BOTH its documented forms — the GitHub-ref form, PINNED to the `#v*` tagged-ref shape that
- * `core/opencode/opencode.json.example` (the forward-looking canonical template) vendors, in its
- * 3 `-y`/quoting spellings (`npx [-y] ["]github:orobsonn/claude-harness#v*["] init*`) — and the
- * published npm-scoped package form (`npx @orobsonn/claude-harness init/setup-local/setup-vps`,
- * `README.md:259/267/292`). Deliberately NOT carved out: the UNPINNED `#*` (no `v`) GitHub-ref
- * spelling this repo's own root `opencode.json` still carries — those 3 exact strings are already
- * in `RETIRED_OC_PERMISSION_ENTRIES` (superseded by the pinned form in v0.45.1, disjointness
- * asserted by test), so re-adding them here as a forced allow would directly contradict that
- * migration decision; a project still seeding the unpinned form should run `updating-harness`
- * (which drops it), not receive a permanent carve-out for a form the harness already retired. And
- * the locked-test runner invocation (`npx [--no-install|-y|--yes] vitest|jest|mocha …`) that
- * `core/shared/lib/validate-plan.mjs`'s `isAllowlistedLockedTestCommand` accepts and that
- * `core/opencode/agents/executor-{low,medium,high}.md` and `build.md` instruct the executor to run
- * against the frozen test snapshot — missing this one would BLOCK every headless test-gate run on
- * the fleet, the exact regression #ac-1.2 exists to catch. Every carve-out is anchored at the START
- * of the command (`npx <exact-runner-or-subcommand><wildcard-suffix>`), NOT a substring-anywhere
- * `npx *<name>*` — an earlier draft used substring matching and it was exploitable: `npx
- * evil-package vitest` or `npx some-pkg && cat ~/.ssh/id_rsa # jest` also contain the runner name
- * and would have resolved allow, silently defeating the new `"npx *"` deny for an attacker who
- * simply appends a trailing token; the installer carve-out had the SAME bug in its first draft
- * (`npx *orobsonn/claude-harness#*init*` — a leading `*` before the org name let `npx -y evilpkg
- * orobsonn/claude-harness# init` through, executing `evilpkg`). All are NEW key strings (not the
- * exact strings already declared in `opencode.json`/`opencode.json.example`), which matters because
- * of the ordering rule below.
- * Deliberately NOT covered (accepted, documented tradeoff of a denylist that must stay narrow): a
- * consumer project's OWN pre-existing `npx <tool>` allow for anything outside this prescribed set
- * (e.g. `npx playwright test`, `npx cypress run`) — `DANGEROUS_BASH_DENYLIST` is the LAST-merged,
- * most-authoritative source (see the ordering note below), so only entries added HERE can survive
- * the new `"npx *"` deny; a project cannot locally re-open it. Widening these carve-outs to cover
- * every third-party `npx` tool would recreate the unrestricted `"npx *": "allow"` this issue exists
- * to close — if a specific consumer tool needs an exception, add it here explicitly, reviewed case
- * by case, never widen the pattern itself.
- *
- * [security, CRITICAL LIMITATION — verified against the installed `opencode` binary, out of scope
- * for #499 to fix] This entire constant only ever reaches `config.permission.bash` (the GLOBAL
- * ruleset). OpenCode's own agent-permission merge — `e.permission = merge(e.permission,
- * fromConfig(agentConfig.permission))`, confirmed by reading the compiled `opencode` binary's
- * config-loader — APPENDS an agent's own declared `permission` (e.g. the `permission: bash: allow`
- * YAML frontmatter of `core/opencode/agents/build.md`, and of every `executor-*.md`/`compliance.md`/
- * `harvester.md`/`planner.md`) AFTER the global ruleset this constant feeds. Since resolution is
- * `findLast` (last match wins), an agent that declares its own `bash: allow` makes EVERY deny in
- * this constant — the 6 pre-existing git denies AND all of #499's new entries — unreachable FOR
- * THAT AGENT. The fleet dispatches with exactly such an agent (`opencode run --agent build`,
- * `cron-a-dispatch.mjs`'s own `--agent build` invocation). This is a real, load-bearing gap that
- * this constant alone cannot close — the fix lives in the `.md` agent frontmatter files (outside
- * this function's and this issue's scope) and needs an explicit operator decision on approach
- * (strip the blanket `bash: allow` from agent frontmatter? scope it to a narrower allowlist?).
- * Tracked as a follow-up issue; do not treat this constant as a complete bash sandbox for the
- * agents the fleet actually dispatches.
- *
- * [#473] `git push --force-with-lease*` (and, by the same mechanism, the #499 `npx` carve-outs)
- * are deliberately ALLOW entries placed LAST (after every deny they would otherwise collide with).
- * OpenCode's own permission engine resolves a pattern list with `Array.prototype.findLast`
- * (confirmed by inspecting the installed `opencode` binary's `Permission.evaluate`:
- * `K.flat().findLast((z) => match(...) && match(...))`) — the LAST matching entry wins, not the
- * first or the most specific. Placing an allow before the broader deny it narrows (as a naive
- * "more specific rule should win" instinct would suggest) would have the broader deny win instead.
- * This ordering is load-bearing — do not move these allow entries earlier in this object. Note
- * this only works because each allow key here is a STRING NOT ALREADY PRESENT anywhere in
- * `baseBash`/`exampleBash`: `enforceOpencodePermissions`'s merge loop never moves an EXISTING key
- * to a later position (reassigning `bash[key]` in JS never changes its enumeration order), so
- * re-declaring the identical already-allowed string here would be a silent no-op, not a reorder.
+ * @description Imported (and re-exported) from `../shared/lib/dangerous-bash-denylist.mjs` (moved
+ * there by issue #516) so the frozen deny-list has a single canonical definition shared with the
+ * OpenCode plugin choke-point (`core/opencode/plugin/entry-gate.ts`, via
+ * `decideDangerousBashDenylist`) instead of two copies that could drift. See that module for the
+ * full rationale (#486, #499, #473) and the [security, CLOSED by #516] note on the
+ * agent-frontmatter `findLast` override this issue closed.
  */
-export const DANGEROUS_BASH_DENYLIST = Object.freeze({
-  "git push --force*": "deny",
-  "git push * --force*": "deny",
-  "git push -f*": "deny",
-  "git push * -f*": "deny",
-  "git reset --hard*": "deny",
-  "git clean -f*": "deny",
-  "git push --force-with-lease*": "allow",
-  "git push * --force-with-lease*": "allow",
-  "bash -c*": "deny",
-  "sh -c*": "deny",
-  "zsh -c*": "deny",
-  "*/bash -c*": "deny",
-  "env bash -c*": "deny",
-  "node -e*": "deny",
-  "node --eval*": "deny",
-  "node -p*": "deny",
-  "node --print*": "deny",
-  "python -c*": "deny",
-  "python3 -c*": "deny",
-  "python3.* -c*": "deny",
-  "python* -m*": "deny",
-  "npx *": "deny",
-  "npm exec*": "deny",
-  "npm x *": "deny",
-  "pnpm dlx*": "deny",
-  "yarn dlx*": "deny",
-  "bun x*": "deny",
-  "bunx *": "deny",
-  "tar -x*": "deny",
-  "tar --extract*": "deny",
-  "tar x*": "deny",
-  "unzip *": "deny",
-  "source *": "deny",
-  ". *": "deny",
-  "npx tsc --noEmit*": "allow",
-  "npx github:orobsonn/claude-harness#v* init*": "allow",
-  "npx -y github:orobsonn/claude-harness#v* init*": "allow",
-  'npx -y "github:orobsonn/claude-harness#v*" init*': "allow",
-  "npx @orobsonn/claude-harness init*": "allow",
-  "npx @orobsonn/claude-harness setup-*": "allow",
-  "npx vitest*": "allow",
-  "npx jest*": "allow",
-  "npx mocha*": "allow",
-  "npx --no-install vitest*": "allow",
-  "npx --no-install jest*": "allow",
-  "npx --no-install mocha*": "allow",
-  "npx -y vitest*": "allow",
-  "npx -y jest*": "allow",
-  "npx -y mocha*": "allow",
-  "npx --yes vitest*": "allow",
-  "npx --yes jest*": "allow",
-  "npx --yes mocha*": "allow",
-});
+export { DANGEROUS_BASH_DENYLIST };
 
 /**
  * @description Frozen deny map for the 8 canonical secret-path patterns (`.env`/`.dev.vars`/SSH/AWS
@@ -811,8 +655,12 @@ function buildDenyPreservingPermission(sourceValue) {
  * `read: "allow"` would otherwise replace the whole map via `...basePermission` and strip every
  * secret-path deny for every project except this repo's own tracked config. This hardening covers
  * `config.permission` only; `config.agent.<name>.permission` and the `permission:` frontmatter of
- * `core/opencode/agents/*.md` are separate rule sets evaluated afterwards and are deliberately NOT
- * covered here (recorded open risk, operator decision pending).
+ * `core/opencode/agents/*.md` are separate rule sets evaluated afterwards by OpenCode and are NOT
+ * covered by this function's union logic. The `permission.bash` side of that gap (an agent's own
+ * `bash: allow` frontmatter shadowing this function's denylist union via `findLast`) was closed by
+ * issue #516 — see `core/shared/lib/dangerous-bash-denylist.mjs`'s `[security, CLOSED by #516]` note
+ * for the two-part fix (frontmatter removal + plugin-level choke-point). The `permission.read`/
+ * `permission.edit` secret-path side of the same agent-frontmatter gap remains open.
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @param {object|null} exampleConfig - The vendored example, read independently of whether it was
  *   the base, purely so its deny entries also join the union (belt-and-suspenders vs. drift between
