@@ -311,33 +311,44 @@ async function runDispatchChain(root, input, output) {
   return { survived: true };
 }
 
-test("chain: sniper Task dispatch with a COLD/EMPTY gate-state (no gate-state.json, no harness.routing.json — the real fix-mode/repo-frio shape) survives the real 5-plugin chain end to end", {
-  // BLOCKED on issue #483 (oc-dual-gate-to-recording) — #485 (oc-cc-gate1-gate3-fidelity) merged
-  // and closed its half of this wall (re-verified empirically on this branch, post-#485: the sniper
-  // no longer denies on ceremony/fidelity in entry-decide.mjs — a cold empty gate-state now sails
-  // through planner-recovery, and reaches plan-gate ONLY).
-  //   Remaining deny — plan-gate.ts → dual-enforcement.mjs: with no harness.routing.json on disk,
-  //     readRequireDualOn(null) returns DEFAULT_REQUIRE_DUAL_ON (["plan-reviewer","adversary"]), and
-  //     routingRequiresDual() treats that DEFAULT as "dual IS required" (an empty
-  //     `constraints.requireDualOn: []` is treated the same as "unset" — dual-enforcement.mjs:126-127
-  //     falls back to the default either way) — so a cold project denies with
-  //     "dual_status.plan_review missing" even though no routing.json ever opted in. This is
-  //     exactly what #483 replaces with record-only behavior.
-  // Un-skip (remove `todo`) once #483 merges — at that point this is a genuine end-to-end
-  // regression test for the fix-mode dispatch path.
-  todo: "blocked on #483 (dual-enforcement default denies with no routing.json) — see docs/OC-CC-PARITY-ROADMAP-INPUT.md item 13. #485's half of this wall (sniper ceremony/fidelity) is resolved.",
-}, async () => {
+test("chain: sniper Task dispatch with a COLD gate-state (only the classify/mode stamp core/CLAUDE.md always writes first; no planner binding/ceremony, no dual_status/plan_verdict, no fidelity_pass, no regate, no harness.routing.json) survives the real 5-plugin chain end to end", async () => {
+  // #488/#483/#485/#486 are all closed and merged into this branch — re-verified empirically:
+  //   - planner-recovery: allows (non-planner role).
+  //   - plan-gate: the planner_plan_binding block is now conditional on the binding's EXISTENCE
+  //     (#476/#500) — absent → skip entirely, fail-open like Claude Code (no plan-gate on
+  //     dispatch at all). dual/plan_verdict classification is record-only (#483/#511) — it never
+  //     denies, regardless of harness.routing.json being present on disk.
+  //   - obs-hand: shadow-records only (#488's own T17 half, PR #508/#509) — never denies dispatch.
+  //   - loop-guard: no counters seeded → allow.
+  //   - entry-gate: sniper is fidelity-exempt (#485/#509) and there is no regate_pending (shipper
+  //     is the only role Gate 3 gates) — BUT Gate 1 (entry-gate.mjs:819-842 parity, #485/#509)
+  //     requires EVERY delivery role, sniper included, to dispatch only under a classified
+  //     mode of LIGHT or FULL; Claude Code has no per-role exemption there either. Production
+  //     never actually skips this: core/CLAUDE.md runs `triaging-requests` at the start of every
+  //     session, fix-mode's FIX_MODE_TRIGGER only skips planner/plan-reviewer (see #ac-3.1 above),
+  //     never classify. So "cold" here means no PLANNER/dual/fidelity/regate artifacts on disk —
+  //     the classify/mode stamp itself is never actually absent in a real dispatch, and asserting
+  //     survival against a gate-state with THAT stamp missing would test a shape production never
+  //     produces, not a real regression.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
   try {
-    // Deliberately nothing on disk: no `.opencode/plans/.state/<sid>/gate-state.json`, no
-    // `.opencode/harness.routing.json` — the cold-repo / fleet-fix-mode shape the roadmap names.
+    // Deliberately nothing else on disk: no `harness.routing.json`, no planner_plan_binding, no
+    // dual_status/plan_verdict, no fidelity_pass, no regate_pending — the cold-repo / fleet-fix-mode
+    // shape the roadmap names, minus the classify/mode stamp core/CLAUDE.md always writes first.
     const sessionId = "ses_fixmode_chain";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({ session_id: sessionId, classified: true, mode: "LIGHT" }),
+      "utf8",
+    );
     const input = { tool: "task", sessionID: sessionId, callID: "fixmode-chain-sniper" };
     const output = { args: { description: "fix the finding", prompt: "Fix it.", subagent_type: "sniper-medium" } };
 
     const result = await runDispatchChain(root, input, output);
     assert.equal(result.survived, true,
-      `expected the sniper dispatch to survive the 5-plugin chain with empty gate-state; ` +
+      `expected the sniper dispatch to survive the 5-plugin chain with a cold (classify-only) gate-state; ` +
       `denied at "${result.deniedAt}": ${result.message}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
