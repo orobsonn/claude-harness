@@ -1048,6 +1048,92 @@ test("writeOpencodeConfig preserves malformed project config and emits repair si
     const sidecar = JSON.parse(readFileSync(join(tempDir, "opencode.harness.json"), "utf8"));
     assert.ok(Array.isArray(sidecar.plugin));
     assert.equal(sidecar.plugin.filter((p) => String(p).includes(".opencode/plugin/")).length, 0);
+    assert.equal(existsSync(join(tempDir, ".opencode", ".harness-config-manifest.json")), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig (issue #479): a fresh project gains a manifest and re-running it is byte-identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-manifest-fresh-"));
+  try {
+    const first = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
+    assert.equal(first, "created");
+
+    const manifestPath = join(tempDir, ".opencode", ".harness-config-manifest.json");
+    assert.ok(existsSync(manifestPath), "a fresh project must gain the manifest sidecar (ac-1.3)");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.equal(manifest.harnessVersion, "v0.50.0");
+    assert.equal(manifest.owned.question, "deny");
+
+    const configBefore = readFileSync(join(tempDir, "opencode.json"), "utf8");
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+
+    writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
+
+    assert.equal(readFileSync(join(tempDir, "opencode.json"), "utf8"), configBefore, "ac-1.4: config must be byte-identical on a second pass");
+    assert.equal(readFileSync(manifestPath, "utf8"), manifestBefore, "ac-1.4: manifest must be byte-identical on a second pass");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig (issue #479, ac-1.2/ac-1.7-style): tier 2 drops the retired npx wildcard entries but keeps a diverged custom bash rule", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-ledger-tier2-"));
+  try {
+    mkdirSync(join(tempDir, ".opencode"), { recursive: true });
+    writeFileSync(join(tempDir, ".opencode", ".harness-version"), "v0.14.0\nvendored_at: 2026-01-01T00:00:00.000Z\n");
+    const legacyConfig = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8"));
+    legacyConfig.permission.bash["git pull*"] = "ask"; // operator customization diverging from the historical "allow"
+    writeFileSync(join(tempDir, "opencode.json"), `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
+    assert.match(status, /permission migration/);
+    // ac-1.7: the operator must see WHICH key was kept and why, not just an aggregate count.
+    assert.match(status, /git pull\*/, "a diverged retired key must be named in the report, not just counted");
+    assert.match(status, /removed retired/);
+
+    const migrated = JSON.parse(readFileSync(join(tempDir, "opencode.json"), "utf8"));
+    for (const wildcard of [
+      "npx github:orobsonn/claude-harness#* init*",
+      "npx -y github:orobsonn/claude-harness#* init*",
+      'npx -y "github:orobsonn/claude-harness#*" init*',
+    ]) {
+      assert.ok(!Object.hasOwn(migrated.permission.bash, wildcard), `retired wildcard must be pruned: ${wildcard}`);
+    }
+    assert.equal(migrated.permission.bash["git pull*"], "ask", "a value diverging from the ledger's historical default must survive");
+
+    const manifest = JSON.parse(readFileSync(join(tempDir, ".opencode", ".harness-config-manifest.json"), "utf8"));
+    assert.equal(manifest.harnessVersion, "v0.50.0");
+
+    const backupPath = join(tempDir, "opencode.json.pre-migration.bak");
+    assert.ok(existsSync(backupPath), "a tier-2 removal must preserve the pre-migration bytes once (rollback layer 2)");
+    const backup = JSON.parse(readFileSync(backupPath, "utf8"));
+    assert.equal(backup.permission.bash["npx github:orobsonn/claude-harness#* init*"], "allow", "the backup must hold the ORIGINAL pre-migration content");
+
+    // Re-running must NOT clobber the backup — it is a one-time snapshot of the true pre-migration state.
+    const backupBefore = readFileSync(backupPath, "utf8");
+    writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.51.0");
+    assert.equal(readFileSync(backupPath, "utf8"), backupBefore, "the backup must never be overwritten by a later run");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig (issue #479): a malformed manifest.owned degrades gracefully and never blocks a valid re-migration", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-manifest-corrupt-"));
+  try {
+    writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
+    const originalConfig = readFileSync(join(tempDir, "opencode.json"), "utf8");
+
+    // Corrupt the manifest's `owned` field into a scalar — migrateOpencodeConfig defensively
+    // ignores it (falls back to {}), so this alone must NOT block a normal, valid re-migration.
+    const manifestPath = join(tempDir, ".opencode", ".harness-config-manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({ version: 1, harnessVersion: "v0.50.0", owned: "not-an-object" }));
+
+    const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
+    assert.doesNotMatch(status, /manual repair/, "a malformed manifest must degrade gracefully, not corrupt the project");
+    assert.equal(readFileSync(join(tempDir, "opencode.json"), "utf8"), originalConfig);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
