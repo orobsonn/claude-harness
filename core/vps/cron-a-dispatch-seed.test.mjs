@@ -40,6 +40,18 @@ const CANONICAL_STUBS = [
   "agent-idle-nudge.ts",
 ];
 
+/** @description The 8 canonical secret-path deny patterns permission.read/edit must always carry. */
+const CANONICAL_SECRET_DENIES = [
+  ".env",
+  ".env.*",
+  "**/.env",
+  "**/.env.*",
+  ".dev.vars",
+  "**/.dev.vars",
+  "~/.ssh/**",
+  "~/.aws/**",
+];
+
 test("OpenCode plugin[] is empty for harness; CANONICAL files stay on disk (auto-load)", () => {
   const root = JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")).plugin;
   const example = JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")).plugin;
@@ -635,4 +647,214 @@ test("#ac-1.4 decideBashDelivery empty gate still denies gh pr (logic regression
     sessionId: "ses_x",
   });
   assert.equal(d.decision, "deny");
+});
+
+
+// ── permission.read/edit canonical secret-path deny enforcement (map-union, never scalar-replace) ─────────────────────
+
+test("seedOpencodeRootConfig: [security] a scalar source permission.read/edit is never allowed to replace the canonical deny map (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-scalar-readedit-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: "allow",
+          edit: "allow",
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    for (const key of ["read", "edit"]) {
+      const map = cfg.permission[key];
+      assert.equal(typeof map, "object", `permission.${key} must be an object, not the source scalar 'allow' that would otherwise replace it`);
+      assert.equal(Object.keys(map)[0], "*", `permission.${key}'s "*" wildcard must be the FIRST key (OpenCode resolves permissions last-match-wins)`);
+      assert.equal(map["*"], "allow", `permission.${key}["*"] must remain 'allow'`);
+      for (const pattern of CANONICAL_SECRET_DENIES) {
+        assert.equal(
+          map[pattern],
+          "deny",
+          `permission.${key}[${JSON.stringify(pattern)}] must be forced to 'deny' even when the source was a bare scalar`,
+        );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] absent permission.read/edit keys still yield the full canonical deny map (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-absent-readedit-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    for (const key of ["read", "edit"]) {
+      const map = cfg.permission[key];
+      assert.equal(typeof map, "object", `permission.${key} must be an object even when the source omitted the key entirely`);
+      assert.equal(Object.keys(map)[0], "*", `permission.${key}'s "*" wildcard must be the FIRST key (OpenCode resolves permissions last-match-wins)`);
+      assert.equal(map["*"], "allow", `permission.${key}["*"] must default to 'allow'`);
+      for (const pattern of CANONICAL_SECRET_DENIES) {
+        assert.equal(
+          map[pattern],
+          "deny",
+          `permission.${key}[${JSON.stringify(pattern)}] must be forced to 'deny' when the source omitted the key`,
+        );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] a project-specific extra read deny survives union with the canonical deny map (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-union-readdeny-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "*": "allow", "vault/**": "deny" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(
+      map["vault/**"],
+      "deny",
+      "a project-specific extra deny from the source must survive canonical-deny enforcement (union, never replace)",
+    );
+    for (const pattern of CANONICAL_SECRET_DENIES) {
+      assert.equal(
+        map[pattern],
+        "deny",
+        `permission.read[${JSON.stringify(pattern)}] must be forced to 'deny' alongside the project-specific extra deny`,
+      );
+    }
+    assert.equal(Object.keys(map)[0], "*", "permission.read's \"*\" wildcard must be the FIRST key (last-match-wins order)");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] a permissive source value can never resurrect a canonical secret-path deny (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-resurrect-deny-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "*": "allow", ".env": "allow" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.read[".env"],
+      "deny",
+      "a source value that explicitly allows '.env' must never override the canonical secret-path deny",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] canonical deny defaults are never mutated across successive calls in the same process (#ac-1.4)", () => {
+  const first = makeSeedDirs("oc-seed-leak-a-");
+  const second = makeSeedDirs("oc-seed-leak-b-");
+  try {
+    writeFileSync(
+      join(first.projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: { "*": "allow", "projA/**": "deny" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(first.worktree, first.projectRoot);
+
+    writeFileSync(
+      join(second.projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(second.worktree, second.projectRoot);
+    const cfg = JSON.parse(readFileSync(join(second.worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(map, "projA/**"),
+      false,
+      "a project-specific deny seeded for a DIFFERENT projectRoot must never leak into this worktree's config — the in-code defaults must not be mutated in place",
+    );
+    for (const pattern of CANONICAL_SECRET_DENIES) {
+      assert.equal(
+        map[pattern],
+        "deny",
+        `permission.read[${JSON.stringify(pattern)}] must still be forced to 'deny' for the second, unrelated projectRoot`,
+      );
+    }
+  } finally {
+    rmSync(first.root, { recursive: true, force: true });
+    rmSync(second.root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] the example-fallback path also key-enforces the canonical secret-path deny map (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-fallback-readedit-");
+  try {
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "opencode.json.example"),
+      JSON.stringify({
+        permission: {
+          bash: { "*": "allow" },
+          read: "allow",
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(typeof map, "object", "fallback-sourced permission.read must be an object, not the source scalar 'allow' that would otherwise replace it");
+    assert.equal(Object.keys(map)[0], "*", "fallback-sourced permission.read's \"*\" wildcard must be the FIRST key (last-match-wins order)");
+    assert.equal(map["*"], "allow", "fallback-sourced permission.read[\"*\"] must remain 'allow'");
+    for (const pattern of CANONICAL_SECRET_DENIES) {
+      assert.equal(
+        map[pattern],
+        "deny",
+        `fallback-sourced permission.read[${JSON.stringify(pattern)}] must be forced to 'deny'`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
