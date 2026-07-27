@@ -5,13 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   decideBashDelivery,
-  decideBashForge,
-  firstArgvBasename,
-  isStateForgeCommand,
-  isExpandingRedirect,
-  hasShellChainMetacharacters,
-  isHarnessPrescribedPackageCommand,
-  isShellSourceOrStdin,
+  decideBashAdvisory,
+  applyAdvisory,
+  adviseIssueForm,
   hasElevatedCeremonyResidue,
   writingTaskIdsFromPlan,
 } from "./bash-decide.mjs";
@@ -413,497 +409,170 @@ test("A5 fail-open: non-enumerable bound plan (no tasks array) → allow", () =>
   assert.equal(d.decision, "allow");
 });
 
-// ── forge cases (unchanged) ───────────────────────────────────────────────
+// ── #475: forge wall removed — advisory channel (allow + prose hint, never deny) ──
+// decideBashForge/isStateForgeCommand and the whole detector family (marker-path binding,
+// interpreter/eval/preload/tmp-drop/archive/source/package-runner classifiers) are gone.
+// The bash gate never denies a non-delivery command anymore. decideBashAdvisory only ever
+// allows; its sole job is to optionally attach a non-blocking advisory string, delivered by
+// applyAdvisory on output.metadata (the OC plugin API's only prose channel back to the model).
 
-test("forge cat gate-state → deny", () => {
-  const d = decideBashForge({
-    command: "cat > .opencode/plans/.state/ses_x/gate-state.json <<EOF\n{}\nEOF",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("forge triage.json → deny", () => {
-  const d = decideBashForge({
-    command: "tee .opencode/plans/.state/s/triage.json < /tmp/x",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("execution-plan.json bash write → allow (orchestrator plan channel)", () => {
-  const d = decideBashForge({
-    command: "cat > .opencode/plans/feat/execution-plan.json <<EOF\n{}\nEOF",
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("mark-gate path-bound harness script → allow forge path", () => {
-  assert.equal(firstArgvBasename("node core/opencode/plugin/lib/mark-gate.mjs stamp"), "mark-gate");
-  // pure single command: oracle path as arg, no chain/redirect
-  const d = decideBashForge({
-    command:
-      "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
-  });
-  assert.equal(d.decision, "allow");
-  const vendored = decideBashForge({
-    command:
-      "node .opencode/plugin/lib/mark-gate.mjs dual --session ses_x --status both",
-  });
-  assert.equal(vendored.decision, "allow");
-});
-
-test("CC marker CLI .claude/hooks/classify.mjs → deny with OC redirect (#291)", () => {
-  const d = decideBashForge({
-    command: "node .claude/hooks/classify.mjs --mode LIGHT --feature-id capture-verified",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /Claude-Code marker|classify tool|mark-gate/i);
-});
-
-test("CC marker CLI core/claude-code/hooks/mark.mjs → deny under OC", () => {
-  const d = decideBashForge({
-    command: "node core/claude-code/hooks/mark.mjs brainstorm-done --feature-id f",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /Claude-Code marker|mark-gate/i);
-});
-
-test("impostor /tmp/mark-gate.mjs basename → deny forge", () => {
-  const d = decideBashForge({
-    command:
-      "node /tmp/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /anti-forgery|path-bound|gate-state/i);
-});
-
-test("native mark authority cannot execute or import through ordinary bash", () => {
-  for (const command of [
-    "node core/opencode/plugin/marker-authority.ts",
-    "node .opencode/plugin/marker-authority.ts",
-    "node --input-type=module -e \"import './core/opencode/plugin/lib/marker-capability.mjs'\"",
-    "node --input-type=module -e \"import './.opencode/tools/lib/mark-native.mjs'\"",
-  ]) {
-    const decision = decideBashForge({ command });
-    assert.equal(decision.decision, "deny", command);
-    assert.match(decision.reason, /host|authority|marker/i);
-  }
-});
-
-test("impostor ./evil/mark-gate.mjs → deny forge", () => {
-  const d = decideBashForge({
-    command:
-      "node ./evil/mark-gate.mjs stamp .opencode/plans/.state/s/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("node -e encoded/concat path forge → deny (no literal oracle required)", () => {
-  const joinPath = decideBashForge({
-    command:
-      'node -e \'require("fs").writeFileSync([".opencode","plans",".state","s","gate"+"-state.json"].join("/"),"{}")\'',
-  });
-  assert.equal(joinPath.decision, "deny");
-  assert.match(joinPath.reason, /eval one-liner|anti-forgery/i);
-
-  // Split base64 so secret-scanner does not flag the fixture as a leaked token.
-  const b64 = decideBashForge({
-    command:
-      'node -e \'require("fs").writeFileSync(Buffer.from("Lm9wZW5jb2Rl"+"L3BsYW5zLy5zdGF0ZS9zL2dhdGUtc3RhdGUuanNvbg==","base64").toString(),"{}")\'',
-  });
-  assert.equal(b64.decision, "deny");
-
-  const py = decideBashForge({
-    command: 'python3 -c \'open("/tmp/x","w").write("x")\'',
-  });
-  assert.equal(py.decision, "deny");
-});
-
-test("node /tmp/evil.mjs drop → deny even without oracle substring", () => {
-  const d = decideBashForge({
-    command: "node /tmp/evil.mjs",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /\/tmp|impostor|anti-forgery/i);
-});
-
-test("suffix impostor evil/.opencode/plugin/lib/mark-gate.mjs → deny", () => {
-  const d = decideBashForge({
-    command:
-      "node evil/.opencode/plugin/lib/mark-gate.mjs stamp .opencode/plans/.state/s/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("cwd-drop node w.mjs → deny (two-step forge)", () => {
-  const d = decideBashForge({ command: "node w.mjs" });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /two-step|markers|anti-forgery/i);
-});
-
-test("multi-seg scripts/forge.mjs → deny (two-step forge)", () => {
-  const d = decideBashForge({ command: "node scripts/forge-gate.mjs" });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /two-step|markers|anti-forgery/i);
-});
-
-test("bash -c encoded write → deny", () => {
-  const d = decideBashForge({
-    command: 'bash -c "echo hi > /tmp/x"',
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /nested shells|anti-forgery/i);
-});
-
-test("ash -c also deny", () => {
-  assert.equal(decideBashForge({ command: "ash -c 'echo x'" }).decision, "deny");
-});
-
-test("node --require=./x.js -e eval → deny", () => {
-  const d = decideBashForge({
-    command: 'node --require=./x.js -e "console.log(1)"',
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /eval one-liner|preload|anti-forgery/i);
-});
-
-test("node --require=./forge.js core/x.mjs → deny preload", () => {
-  const d = decideBashForge({
-    command: "node --require=./forge.js core/opencode/plugin/lib/bash-decide.test.mjs",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /preload|anti-forgery/i);
-});
-
-test("node *.test.mjs multi-segment still allow", () => {
-  const d = decideBashForge({
-    command: "node core/opencode/plugin/lib/bash-decide.test.mjs",
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("node --test suite allow", () => {
-  const d = decideBashForge({
-    command: "node --test core/opencode/plugin/lib/bash-decide.test.mjs",
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("allowlisted vendor-core tooling allow", () => {
-  const d = decideBashForge({
-    command:
-      "node core/claude-code/skills/initializing-projects/references/vendor-core.mjs --help",
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("cwd evil.test.mjs → deny (test only under core|modules|.opencode)", () => {
-  assert.equal(decideBashForge({ command: "node evil.test.mjs" }).decision, "deny");
-});
-
-test("node --test evil.mjs → deny", () => {
-  assert.equal(
-    decideBashForge({ command: "node --test evil.mjs" }).decision,
-    "deny",
-  );
-});
-
-test("node --import=./forge.mjs marker → deny preload", () => {
-  assert.equal(
-    decideBashForge({
-      command:
-        "node --import=./forge.mjs core/opencode/plugin/lib/mark-gate.mjs dual --session s --status both",
-    }).decision,
-    "deny",
-  );
-});
-
-test("NODE_OPTIONS=--require=./f.js node marker → deny", () => {
-  assert.equal(
-    decideBashForge({
-      command:
-        "NODE_OPTIONS=--require=./f.js node core/opencode/plugin/lib/mark-gate.mjs dual --session s --status both",
-    }).decision,
-    "deny",
-  );
-});
-
-test("env node evil.mjs → deny", () => {
-  assert.equal(decideBashForge({ command: "env node evil.mjs" }).decision, "deny");
-});
-
-test("./evil.mjs direct exec → deny", () => {
-  assert.equal(decideBashForge({ command: "./evil.mjs" }).decision, "deny");
-});
-
-test("bash scripts/x.sh → deny", () => {
-  assert.equal(
-    decideBashForge({ command: "bash scripts/x.sh" }).decision,
-    "deny",
-  );
-});
-
-test("base64 | bash → deny", () => {
-  assert.equal(
-    decideBashForge({ command: "base64 -d <<< abc | bash" }).decision,
-    "deny",
-  );
-});
-
-test("redirect with $ expansion → deny", () => {
-  assert.equal(
-    decideBashForge({
-      command: "echo x > .opencode/$p/.$s/sess/$g.json",
-    }).decision,
-    "deny",
-  );
-});
-
-test("plan heredoc without $ still allow", () => {
-  assert.equal(
-    decideBashForge({
-      command:
-        "cat > .opencode/plans/feat/execution-plan.json <<EOF\n{}\nEOF",
-    }).decision,
-    "allow",
-  );
-});
-
-test("tar extract → deny", () => {
-  assert.equal(
-    decideBashForge({ command: "tar -xzf drop.tgz" }).decision,
-    "deny",
-  );
-  assert.equal(decideBashForge({ command: "tar xf drop.tgz" }).decision, "deny");
-  assert.equal(decideBashForge({ command: "7z x drop.7z" }).decision, "deny");
-});
-
-test("cp overwrite mark-gate.mjs → deny", () => {
-  assert.equal(
-    decideBashForge({
-      command: "cp /tmp/x core/opencode/plugin/lib/mark-gate.mjs",
-    }).decision,
-    "deny",
-  );
-});
-
-test("source evil.sh → deny", () => {
-  assert.equal(decideBashForge({ command: "source evil.sh" }).decision, "deny");
-  assert.equal(decideBashForge({ command: ". ./evil.sh" }).decision, "deny");
-  assert.equal(decideBashForge({ command: "bash < evil.sh" }).decision, "deny");
-});
-
-test("npm run / make → deny; npm test / npm ci allow (paired oracle)", () => {
-  const runBuild = "npm run build";
-  assert.equal(decideBashForge({ command: runBuild }).decision, "deny");
-  assert.equal(isStateForgeCommand(runBuild), true);
-
-  const makeAll = "make all";
-  assert.equal(decideBashForge({ command: makeAll }).decision, "deny");
-  assert.equal(isStateForgeCommand(makeAll), true);
-
-  const npmTest = "npm test";
-  assert.equal(decideBashForge({ command: npmTest }).decision, "allow");
-  assert.equal(isStateForgeCommand(npmTest), false);
-
-  const npmCi = "npm ci";
-  assert.equal(decideBashForge({ command: npmCi }).decision, "allow");
-  assert.equal(isStateForgeCommand(npmCi), false);
-});
-
-test("known package/interpreter denials expose exact closed resolver class", () => {
-  const launcher = decideBashForge({ command: "npx vitest run core/a.test.mjs" });
-  assert.equal(launcher.decision, "deny");
-  assert.deepEqual(launcher.details, { denied_class: "package_launcher", resolver: "verify" });
-  assert.match(launcher.reason, /call native `verify` once/i);
-
-  const interpreter = decideBashForge({ command: "node node_modules/vitest/vitest.mjs run core/a.test.mjs" });
-  assert.equal(interpreter.decision, "deny");
-  assert.deepEqual(interpreter.details, { denied_class: "interpreter", resolver: "verify" });
-  assert.match(interpreter.reason, /registered targeted-test equivalent/i);
-});
-
-test("cp forged.json $GS expansion → deny", () => {
-  assert.equal(
-    decideBashForge({
-      command: "GS=.opencode/plans/.state/s/gate-state.json cp forged.json $GS",
-    }).decision,
-    "deny",
-  );
-});
-
-test("mark-gate with stdout redirect to .state → deny forge", () => {
-  const d = decideBashForge({
-    command:
-      "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x > .opencode/plans/.state/ses_x/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /anti-forgery|gate-state|plans\/\.state/i);
-});
-
-test("mark-gate + shell chain ; cat forge → deny", () => {
-  const d = decideBashForge({
-    command:
-      "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x ; cat > .opencode/plans/.state/x",
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /anti-forgery|gate-state|plans\/\.state/i);
-});
-
-test("mark-gate + && / || / | / $( / backtick chain → deny", () => {
-  for (const command of [
-    "node mark-gate.mjs stamp && cat > .opencode/plans/.state/x",
-    "node mark-gate.mjs stamp || cat > .opencode/plans/.state/x",
-    "node mark-gate.mjs stamp | tee .opencode/plans/.state/x",
-    "node mark-gate.mjs stamp $(echo .opencode/plans/.state/x)",
-    "node mark-gate.mjs stamp `echo .opencode/plans/.state/x`",
-    "node mark-gate.mjs stamp\ncat > .opencode/plans/.state/x",
-  ]) {
+test("#ac-1.1: previously forge-denied command shapes now allow (all retired classes)", () => {
+  const previouslyDenied = [
+    "npm run build",
+    "make test",
+    'node -e "console.log(1)"',
+    "bash script.sh",
+    "tar -xf x.tgz",
+    "source .venv/bin/activate",
+    "npx some-tool",
+    "bunx some-tool",
+    "yarn dlx some-tool",
+    "pnpm dlx some-tool",
+    "node --require=./x.js core/index.mjs",
+    'bash -c "echo x"',
+    "cat > .opencode/plans/.state/ses_x/gate-state.json <<'EOF'\n{}\nEOF",
+    "./evil.mjs",
+    "node /tmp/evil.mjs",
+    "echo x | bash",
+    "cp forged.json .opencode/plans/.state/ses_x/gate-state.json",
+    "env -i node evil.mjs",
+    'python3 -c "print(1)"',
+  ];
+  for (const command of previouslyDenied) {
     assert.equal(
-      decideBashForge({ command }).decision,
-      "deny",
-      `expected deny for: ${command}`,
+      decideBashAdvisory({ command }).decision,
+      "allow",
+      `decideBashAdvisory must allow: ${command}`,
+    );
+    assert.equal(
+      decideBashDelivery({ command }).decision,
+      "allow",
+      `decideBashDelivery must allow non-delivery command: ${command}`,
     );
   }
 });
 
-test("dual-merge basename NOT allowlisted", () => {
-  assert.equal(firstArgvBasename("node dual-merge.mjs"), "dual-merge");
-  const d = decideBashForge({
-    command: "node dual-merge.mjs > .opencode/plans/.state/s/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
+test("#ac-2.2: decideBashAdvisory is fail-open — never denies, even on malformed input", () => {
+  const malformed = [
+    {},
+    { command: undefined },
+    { command: 123 },
+    { command: null },
+    { command: "gh issue create", cwd: 42 },
+    { command: "gh issue create", cwd: null },
+  ];
+  for (const input of malformed) {
+    const d = decideBashAdvisory(input);
+    assert.equal(d.ok, true);
+    assert.equal(d.decision, "allow");
+  }
 });
 
-test("forge cp into gate-state.json → deny (no > required)", () => {
-  const d = decideBashForge({
-    command: "cp /tmp/x .opencode/plans/.state/s/gate-state.json",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("forge node -e writeFileSync gate-state → deny", () => {
-  const d = decideBashForge({
-    command:
-      "node -e \"fs.writeFileSync('.opencode/plans/.state/s/gate-state.json','{}')\"",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("forge mv/rsync state oracle paths → deny", () => {
-  assert.equal(
-    decideBashForge({
-      command: "mv /tmp/x .opencode/plans/.state/s/triage.json",
-    }).decision,
-    "deny",
-  );
-  assert.equal(
-    decideBashForge({
-      command: "rsync /tmp/x .opencode/plans/.state/s/gate-state.json",
-    }).decision,
-    "deny",
-  );
-  // plan path is not a state oracle
-  assert.equal(
-    decideBashForge({
-      command: "rsync /tmp/x .opencode/plans/feat/execution-plan.json",
-    }).decision,
-    "allow",
-  );
-});
-
-test("oracle path without allowlist basename → deny even ls of .state", () => {
-  const d = decideBashForge({
-    command: "ls .opencode/plans/.state",
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("non-oracle path → allow forge check", () => {
-  const d = decideBashForge({ command: "cp /tmp/a /tmp/b" });
+test("#ac-2.1: decideBashAdvisory attaches an advisory for gh issue create in a vendored repo", () => {
+  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
+  const d = decideBashAdvisory({ command: "gh issue create --title x", cwd: repoRoot });
   assert.equal(d.decision, "allow");
+  assert.equal(typeof d.advisory, "string");
+  assert.match(d.advisory, /harness-task\.yml/);
 });
 
-test("quoted spec heredoc treats punctuation and source-like prose as literal content", () => {
-  const command = [
-    "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
-    "Existing contracts. Auth and upstream errors stay sanitized.",
-    "source evil.sh is documentation here, not a shell command.",
-    ". another sentence fragment is also literal Markdown.",
-    "EOF",
-  ].join("\n");
-  assert.equal(decideBashForge({ command }).decision, "allow");
-  assert.equal(isStateForgeCommand(command), false);
+test("#ac-2.1: decideBashAdvisory omits advisory when convention already followed", () => {
+  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
+  const d = decideBashAdvisory({
+    command: 'gh issue create --title "[harness] foo" --label "harness:ready"',
+    cwd: repoRoot,
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.advisory, undefined);
 });
 
-test("quoted heredoc with $ / ${} / backticks in body is allow (literal payload, #72 false deny)", () => {
-  const command = [
-    "cat > .opencode/plans/ses_x-feat/spec.md <<'EOF'",
-    "Price is $100. Template ${var}. Docs show $(date) and `code`.",
-    "const x = process.env.FOO",
-    "EOF",
-  ].join("\n");
-  assert.equal(decideBashForge({ command }).decision, "allow", "quoted body $ must not trip expanding-redirect");
-  assert.equal(isExpandingRedirect(command), false);
-  assert.equal(isStateForgeCommand(command), false);
-
-  const plan = [
-    "cat > .opencode/plans/ses_x-feat/execution-plan.json <<'EOF'",
-    '{"feature_id":"feat","mode":"light","tasks":[{"id":"t1","title":"use $x"}]}',
-    "EOF",
-  ].join("\n");
-  assert.equal(decideBashForge({ command: plan }).decision, "allow");
+test("#ac-2.1: applyAdvisory writes the advisory to output.metadata.bash_advisory", () => {
+  const output = {};
+  applyAdvisory({ ok: true, decision: "allow", reason: "advisory", advisory: "hint text" }, output);
+  assert.equal(output.metadata.bash_advisory, "hint text");
 });
 
-test("unquoted heredoc with $ in body still deny (shell expands)", () => {
-  const command = [
-    "cat > .opencode/plans/ses_x-feat/spec.md <<EOF",
-    "price $HOME",
-    "EOF",
-  ].join("\n");
-  assert.equal(decideBashForge({ command }).decision, "deny");
-  assert.equal(isExpandingRedirect(command), true);
+test("applyAdvisory preserves existing output.metadata keys", () => {
+  const output = { metadata: { model: "x" } };
+  applyAdvisory({ ok: true, decision: "allow", reason: "advisory", advisory: "hint text" }, output);
+  assert.equal(output.metadata.model, "x");
+  assert.equal(output.metadata.bash_advisory, "hint text");
 });
 
-test("$SPEC_DIR plan/spec write (no .state) allow — #72 headless false deny", () => {
-  const command = [
-    'SPEC_DIR=".opencode/plans/ses_x-feat"',
-    'mkdir -p "$SPEC_DIR"',
-    "cat > \"$SPEC_DIR/spec.md\" <<'SPECEOF'",
-    "CTA/CTD rules with $100 in prose",
-    "SPECEOF",
-    'printf "%s\\n" "| fail_closed | x |" >> .opencode/decision-ledger.md',
-    'ls -la "$SPEC_DIR/"',
-  ].join("\n");
-  assert.equal(isExpandingRedirect(command), false);
-  assert.equal(decideBashForge({ command }).decision, "allow");
+test("applyAdvisory is a no-op when the decision carries no advisory", () => {
+  const output = {};
+  applyAdvisory({ ok: true, decision: "allow", reason: "no-advisory" }, output);
+  assert.equal(output.metadata, undefined);
 });
 
-test("opaque > $GS still deny; expansion + .state still deny", () => {
-  assert.equal(
-    decideBashForge({ command: "echo forged > $GS" }).decision,
-    "deny",
+test("#ac-2.2: applyAdvisory is fail-open on malformed output (never throws)", () => {
+  const decision = { ok: true, decision: "allow", reason: "advisory", advisory: "hint text" };
+  assert.doesNotThrow(() => applyAdvisory(decision, null));
+  assert.doesNotThrow(() => applyAdvisory(decision, undefined));
+  assert.doesNotThrow(() => applyAdvisory(decision, "not-an-object"));
+  assert.doesNotThrow(() => applyAdvisory(null, {}));
+  assert.doesNotThrow(() => applyAdvisory(undefined, {}));
+});
+
+// ── adviseIssueForm pure function contracts (ported 1:1 from Claude Code, entry-gate.mjs) ──
+
+test("adviseIssueForm #1: gh issue create + existsFn=true + abs cwd → returns advisory string (truthy)", () => {
+  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+  assert.ok(result, "advisory must be a truthy string when form exists in abs cwd");
+  assert.equal(typeof result, "string", "advisory must be a string");
+});
+
+test("adviseIssueForm #2: non-gh-issue command → null", () => {
+  const result = adviseIssueForm("ls -la", "/abs/repo", () => true);
+  assert.equal(result, null, "non-gh-issue command must return null");
+});
+
+test("adviseIssueForm #3: command already contains harness:ready → null (no re-nudge)", () => {
+  const result = adviseIssueForm(
+    'gh issue create --title "[harness] foo" --label "harness:ready"',
+    "/abs/repo",
+    () => true,
   );
-  assert.equal(
-    decideBashForge({
-      command: 'echo forged > "$GS"; GS=.opencode/plans/.state/s/gate-state.json',
-    }).decision,
-    "deny",
+  assert.equal(result, null, "command already following convention must return null");
+});
+
+test("adviseIssueForm #4: relative cwd or empty or undefined → null (fail-open, no nudge)", () => {
+  assert.equal(adviseIssueForm("gh issue create --title x", "repo", () => true), null);
+  assert.equal(adviseIssueForm("gh issue create --title x", "", () => true), null);
+  assert.equal(adviseIssueForm("gh issue create --title x", undefined, () => true), null);
+});
+
+test("adviseIssueForm #5: existsFn=()=>false → null (no form vendored → no nudge)", () => {
+  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => false);
+  assert.equal(result, null, "no form vendored must return null");
+});
+
+test("adviseIssueForm #6: non-string command → null", () => {
+  assert.equal(adviseIssueForm(undefined, "/abs/repo", () => true), null);
+  assert.equal(adviseIssueForm(123, "/abs/repo", () => true), null);
+});
+
+test("adviseIssueForm #7: harness:ready loose in --body/--title prose does not suppress the nudge (regression)", () => {
+  const result = adviseIssueForm(
+    'gh issue create --title x --body "não esqueça harness:ready depois"',
+    "/abs/repo",
+    () => true,
   );
-  assert.equal(
-    decideBashForge({
-      command: "cat forged.json > .opencode/plans/.state/$sid/gate-state.json",
-    }).decision,
-    "deny",
+  assert.ok(result, "a harness:ready mention outside --label/-l must not suppress the advisory");
+});
+
+test("adviseIssueForm #8: -l short flag with harness:ready suppresses the nudge", () => {
+  const result = adviseIssueForm('gh issue create --title x -l harness:ready', "/abs/repo", () => true);
+  assert.equal(result, null);
+});
+
+test("adviseIssueForm #9: --label with a comma-separated list containing harness:ready suppresses the nudge", () => {
+  const result = adviseIssueForm(
+    'gh issue create --title x --label "P0,harness:ready"',
+    "/abs/repo",
+    () => true,
   );
-});test("source command after a quoted heredoc terminator remains denied", () => {
-  const command = [
-    "cat > .opencode/plans/ses-1-price/spec.md <<'EOF'",
-    "source evil.sh is literal payload.",
-    "EOF",
-    "source evil.sh",
-  ].join("\n");
-  assert.equal(decideBashForge({ command }).decision, "deny");
-  assert.equal(isStateForgeCommand(command), true);
+  assert.equal(result, null);
 });
 
 // ── U2 rails locked tests ─────────────────────────────────────────────────
@@ -1411,488 +1080,6 @@ test("FULL + other-session DONE without stamp still hard-stop deny", () => {
   assert.match(d.reason, /capturedVerifiedAt/);
 });
 
-// ── harness-prescribed package runner allow/deny (post-fix target) ──────────
-
-/** @description decideBashForge + isStateForgeCommand: npx tsc --noEmit → allow */
-test("decideBashForge + isStateForgeCommand: npx tsc --noEmit → allow", () => {
-  const cmd = "npx tsc --noEmit";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description Harness updater without an explicit runtime target is denied. */
-test("decideBashForge + isStateForgeCommand: harness updater without target is denied", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description Exact stable release updater command is allowed. */
-test("decideBashForge + isStateForgeCommand: exact stable release updater is allowed", () => {
-  const cmd = 'npx -y "github:orobsonn/claude-harness#v0.43.1" init --target both';
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description Branch refs cannot replace the harness through the updater lane. */
-test("decideBashForge + isStateForgeCommand: harness updater branch ref is denied", () => {
-  const cmd = 'npx -y "github:orobsonn/claude-harness#feature/x" init --target both';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npx github:... init --target opencode → allow */
-test("decideBashForge + isStateForgeCommand: npx github:orobsonn/claude-harness#v0.43.1 init --target opencode → allow", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init --target opencode";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test → allow */
-test("decideBashForge + isStateForgeCommand: npm test → allow", () => {
-  const cmd = "npm test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm run typecheck → allow */
-test("decideBashForge + isStateForgeCommand: npm run typecheck → allow", () => {
-  const cmd = "npm run typecheck";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
-  assert.equal(isStateForgeCommand(cmd), false);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm run build-malicious-thing → deny */
-test("decideBashForge + isStateForgeCommand: npm run build-malicious-thing → deny", () => {
-  const cmd = "npm run build-malicious-thing";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npx evil-pkg → deny */
-test("decideBashForge + isStateForgeCommand: npx evil-pkg → deny", () => {
-  const cmd = "npx evil-pkg";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npx github:... (no init) → deny */
-test("decideBashForge + isStateForgeCommand: npx github:orobsonn/claude-harness#v0.43.1 (no init) → deny", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test --prefix /tmp/evil → deny */
-test("decideBashForge + isStateForgeCommand: npm test --prefix /tmp/evil → deny", () => {
-  const cmd = "npm test --prefix /tmp/evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test -C /tmp/evil → deny */
-test("decideBashForge + isStateForgeCommand: npm test -C /tmp/evil → deny", () => {
-  const cmd = "npm test -C /tmp/evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: PATH=/tmp/x npx tsc --noEmit → deny */
-test("decideBashForge + isStateForgeCommand: PATH=/tmp/x npx tsc --noEmit → deny", () => {
-  const cmd = "PATH=/tmp/x npx tsc --noEmit";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm_config_prefix=/tmp/evil npm test → deny */
-test("decideBashForge + isStateForgeCommand: npm_config_prefix=/tmp/evil npm test → deny", () => {
-  const cmd = "npm_config_prefix=/tmp/evil npm test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: env npm test → deny */
-test("decideBashForge + isStateForgeCommand: env npm test → deny", () => {
-  const cmd = "env npm test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: NODE_OPTIONS=--require=x npm test → deny */
-test("decideBashForge + isStateForgeCommand: NODE_OPTIONS=--require=x npm test → deny", () => {
-  const cmd = "NODE_OPTIONS=--require=x npm test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npx tsc --noEmit && true → deny */
-test("decideBashForge + isStateForgeCommand: npx tsc --noEmit && true → deny", () => {
-  const cmd = "npx tsc --noEmit && true";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test ; echo x → deny */
-test("decideBashForge + isStateForgeCommand: npm test ; echo x → deny", () => {
-  const cmd = "npm test ; echo x";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test & true → deny */
-test("decideBashForge + isStateForgeCommand: npm test & true → deny", () => {
-  const cmd = "npm test & true";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test $FOO → deny */
-test("decideBashForge + isStateForgeCommand: npm test $FOO → deny", () => {
-  const cmd = "npm test $FOO";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm test -- --watch → deny */
-test("decideBashForge + isStateForgeCommand: npm test -- --watch → deny", () => {
-  const cmd = "npm test -- --watch";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm run typecheck --strict → deny */
-test("decideBashForge + isStateForgeCommand: npm run typecheck --strict → deny", () => {
-  const cmd = "npm run typecheck --strict";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: npm run lint → deny */
-test("decideBashForge + isStateForgeCommand: npm run lint → deny", () => {
-  const cmd = "npm run lint";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description decideBashForge + isStateForgeCommand: make all → deny */
-test("decideBashForge + isStateForgeCommand: make all → deny", () => {
-  const cmd = "make all";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description hasShellChainMetacharacters detects & (post extension) */
-test("hasShellChainMetacharacters: npx tsc --noEmit & true → true", () => {
-  assert.equal(hasShellChainMetacharacters("npx tsc --noEmit & true"), true);
-});
-
-/** @description isHarnessPrescribedPackageCommand contract */
-test("isHarnessPrescribedPackageCommand: non-string/empty false; prescribed true; run false; wrapper false", () => {
-  assert.equal(isHarnessPrescribedPackageCommand(undefined), false);
-  assert.equal(isHarnessPrescribedPackageCommand(""), false);
-  assert.equal(isHarnessPrescribedPackageCommand("npx tsc --noEmit"), true);
-  assert.equal(isHarnessPrescribedPackageCommand("npm run build"), false);
-  // wrapper-prefixed (env / VAR=) must be false for the prescribed fn itself
-  assert.equal(isHarnessPrescribedPackageCommand("env npx tsc --noEmit"), false);
-  assert.equal(isHarnessPrescribedPackageCommand("PATH=/x npx tsc --noEmit"), false);
-});
-
-// ── wall-hole closes (sniper-high: override flags / env -i / npm flags / bash opts) ──
-
-/** @description github init + --prefix → deny+forge (#ac-2.6 word-boundary hole) */
-test("decideBashForge + isStateForgeCommand: npx github:… init --prefix /tmp/evil → deny", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init --prefix /tmp/evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-  assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-});
-
-/** @description github init + -C → deny+forge */
-test("decideBashForge + isStateForgeCommand: npx github:… init -C /tmp/evil → deny", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init -C /tmp/evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-  assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-});
-
-/** @description github init + --workspace → deny+forge */
-test("decideBashForge + isStateForgeCommand: npx github:… init --workspace evil → deny", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init --workspace evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-  assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-});
-
-/** @description env -i node evil.mjs → deny (complex env residual) */
-test("decideBashForge + isStateForgeCommand: env -i node evil.mjs → deny", () => {
-  const cmd = "env -i node evil.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description npm --prefix /tmp/evil test → deny (lifecycle with intervening flags) */
-test("decideBashForge + isStateForgeCommand: npm --prefix /tmp/evil test → deny", () => {
-  const cmd = "npm --prefix /tmp/evil test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description npm -C x run typecheck → deny (lifecycle with intervening flags) */
-test("decideBashForge + isStateForgeCommand: npm -C /tmp/evil run typecheck → deny", () => {
-  const cmd = "npm -C /tmp/evil run typecheck";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description bash --noprofile -c → deny (shell -c with intervening options) */
-test("decideBashForge + isStateForgeCommand: bash --noprofile -c \"echo x\" → deny", () => {
-  const cmd = 'bash --noprofile -c "echo x"';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description keep green: npx tsc / npm test / npm ci still allow */
-test("wall-hole closes keep green: npx tsc --noEmit / npm test / npm ci allow", () => {
-  assert.equal(decideBashForge({ command: "npx tsc --noEmit" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npx tsc --noEmit"), false);
-  assert.equal(decideBashForge({ command: "npm test" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm test"), false);
-  assert.equal(decideBashForge({ command: "npm ci" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm ci"), false);
-});
-
-// ── wall-hole closes round-2 (sniper-high: aliases / dlx / prefix / attached / shell / node --test) ──
-
-/** @description npm run-script alias → deny */
-test("decideBashForge + isStateForgeCommand: npm run-script build-malicious-thing → deny", () => {
-  const cmd = "npm run-script build-malicious-thing";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description npm x alias → deny */
-test("decideBashForge + isStateForgeCommand: npm x evil-pkg → deny", () => {
-  const cmd = "npm x evil-pkg";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description pnpm dlx / yarn dlx / bunx → deny */
-test("decideBashForge + isStateForgeCommand: pnpm dlx / yarn dlx / bunx evil → deny", () => {
-  for (const cmd of ["pnpm dlx evil", "yarn dlx evil", "bunx evil"]) {
-    assert.equal(decideBashForge({ command: cmd }).decision, "deny", `expected deny for: ${cmd}`);
-    assert.equal(isStateForgeCommand(cmd), true, `expected forge for: ${cmd}`);
-  }
-});
-
-/** @description prefix wrappers around npm lifecycle → deny (not prescribed) */
-test("decideBashForge + isStateForgeCommand: time npm run evil → deny", () => {
-  const cmd = "time npm run evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-  assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-});
-
-/** @description prefix wrappers: command/nice/nohup/corepack npm run → deny */
-test("decideBashForge + isStateForgeCommand: command/nice/nohup/corepack npm run evil → deny", () => {
-  for (const cmd of [
-    "command npm run evil",
-    "nice npm run evil",
-    "nohup npm run evil",
-    "corepack npm run evil",
-  ]) {
-    assert.equal(decideBashForge({ command: cmd }).decision, "deny", `expected deny for: ${cmd}`);
-    assert.equal(isStateForgeCommand(cmd), true, `expected forge for: ${cmd}`);
-    assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-  }
-});
-
-/** @description attached short -C override on github init → deny */
-test("decideBashForge + isStateForgeCommand: npx github:… init -C/tmp/evil → deny", () => {
-  const cmd = "npx github:orobsonn/claude-harness#v0.43.1 init -C/tmp/evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-  assert.equal(isHarnessPrescribedPackageCommand(cmd), false);
-});
-
-/** @description time bash -c → deny (shell basename not only argv0) */
-test("decideBashForge + isStateForgeCommand: time bash -c \"echo x\" → deny", () => {
-  const cmd = 'time bash -c "echo x"';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description command bash --noprofile -c → deny */
-test("decideBashForge + isStateForgeCommand: command bash --noprofile -c \"echo x\" → deny", () => {
-  const cmd = 'command bash --noprofile -c "echo x"';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description bash -o pipefail -c → deny (skip value-taking -o) */
-test("decideBashForge + isStateForgeCommand: bash -o pipefail -c \"echo x\" → deny", () => {
-  const cmd = 'bash -o pipefail -c "echo x"';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description bare node --test (cwd discovery) → deny */
-test("decideBashForge + isStateForgeCommand: node --test → deny", () => {
-  const cmd = "node --test";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description keep green: authorized node --test path still allow */
-test("wall-hole round-2 keep green: node --test authorized path / npx tsc / npm test allow", () => {
-  assert.equal(
-    decideBashForge({
-      command: "node --test core/opencode/plugin/lib/bash-decide.test.mjs",
-    }).decision,
-    "allow",
-  );
-  assert.equal(decideBashForge({ command: "npx tsc --noEmit" }).decision, "allow");
-  assert.equal(decideBashForge({ command: "npm test" }).decision, "allow");
-  assert.equal(decideBashForge({ command: "npm ci" }).decision, "allow");
-});
-
-// ── wall-hole closes round-3 (sniper-high: .. path / quotes / chain / reporter / pnpx) ──
-
-/** @description path traversal core/../evil.test.mjs → deny */
-test("decideBashForge + isStateForgeCommand: node core/../evil.test.mjs → deny", () => {
-  const cmd = "node core/../evil.test.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description node --test with path traversal → deny */
-test("decideBashForge + isStateForgeCommand: node --test core/../evil.test.mjs → deny", () => {
-  const cmd = "node --test core/../evil.test.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description shell-quoted package manager binary → deny lifecycle */
-test('decideBashForge + isStateForgeCommand: "npm" run evil → deny', () => {
-  const cmd = '"npm" run evil';
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description single-quoted package manager binary → deny lifecycle */
-test("decideBashForge + isStateForgeCommand: 'npm' run evil → deny", () => {
-  const cmd = "'npm' run evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description authorized test + shell chain → deny (multi-command forge) */
-test("decideBashForge + isStateForgeCommand: node authorized.test.mjs && python3 evil.py → deny", () => {
-  const cmd =
-    "node core/opencode/plugin/lib/bash-decide.test.mjs && python3 evil.py";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description node --test + custom --test-reporter module → deny */
-test("decideBashForge + isStateForgeCommand: node --test … --test-reporter ./evil.mjs → deny", () => {
-  const cmd =
-    "node --test core/opencode/plugin/lib/bash-decide.test.mjs --test-reporter ./evil.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description pnpx like bunx/npx → deny */
-test("decideBashForge + isStateForgeCommand: pnpx evil → deny", () => {
-  const cmd = "pnpx evil";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description keep green after round-3: prescribed package + authorized test + mark-gate */
-test("wall-hole round-3 keep green: npx tsc / npm test / npm ci / node --test / mark-gate allow", () => {
-  assert.equal(decideBashForge({ command: "npx tsc --noEmit" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npx tsc --noEmit"), false);
-  assert.equal(decideBashForge({ command: "npm test" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm test"), false);
-  assert.equal(decideBashForge({ command: "npm ci" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm ci"), false);
-  assert.equal(
-    decideBashForge({
-      command: "node --test core/opencode/plugin/lib/bash-decide.test.mjs",
-    }).decision,
-    "allow",
-  );
-  assert.equal(
-    decideBashForge({
-      command: "node core/opencode/plugin/lib/bash-decide.test.mjs",
-    }).decision,
-    "allow",
-  );
-  assert.equal(
-    decideBashForge({
-      command:
-        "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
-    }).decision,
-    "allow",
-  );
-});
-
-// ── wall-hole closes round-4 (sniper-high: NODE_OPTIONS reporter / yarn|pnpm node|exec / command node) ──
-
-/** @description NODE_OPTIONS=--test-reporter=./evil.mjs node --test authorized → deny */
-test("decideBashForge + isStateForgeCommand: NODE_OPTIONS=--test-reporter=./evil.mjs node --test authorized → deny", () => {
-  const cmd =
-    "NODE_OPTIONS=--test-reporter=./evil.mjs node --test core/opencode/plugin/lib/bash-decide.test.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description yarn node / pnpm node / yarn exec → deny (package-manager interpreter lifecycle) */
-test("decideBashForge + isStateForgeCommand: yarn node / pnpm node / yarn exec evil → deny", () => {
-  for (const cmd of ["yarn node evil.mjs", "pnpm node evil.mjs", "yarn exec evil"]) {
-    assert.equal(decideBashForge({ command: cmd }).decision, "deny", `expected deny for: ${cmd}`);
-    assert.equal(isStateForgeCommand(cmd), true, `expected forge for: ${cmd}`);
-  }
-});
-
-/** @description command node evil.mjs → deny (interpreter basename not only argv0) */
-test("decideBashForge + isStateForgeCommand: command node evil.mjs → deny", () => {
-  const cmd = "command node evil.mjs";
-  assert.equal(decideBashForge({ command: cmd }).decision, "deny");
-  assert.equal(isStateForgeCommand(cmd), true);
-});
-
-/** @description keep green: authorized node --test / mark-gate / command node mark-gate / prescribed packages */
-test("wall-hole round-4 keep green: node --test / mark-gate / command node mark-gate / npx tsc / npm test / npm ci allow", () => {
-  assert.equal(
-    decideBashForge({
-      command: "node --test core/opencode/plugin/lib/bash-decide.test.mjs",
-    }).decision,
-    "allow",
-  );
-  assert.equal(
-    decideBashForge({
-      command:
-        "node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
-    }).decision,
-    "allow",
-  );
-  assert.equal(
-    decideBashForge({
-      command:
-        "command node core/opencode/plugin/lib/mark-gate.mjs stamp --session ses_x .opencode/plans/.state/ses_x/gate-state.json",
-    }).decision,
-    "allow",
-  );
-  assert.equal(decideBashForge({ command: "npx tsc --noEmit" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npx tsc --noEmit"), false);
-  assert.equal(decideBashForge({ command: "npm test" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm test"), false);
-  assert.equal(decideBashForge({ command: "npm ci" }).decision, "allow");
-  assert.equal(isStateForgeCommand("npm ci"), false);
-});
-
 // ── #ac-2.4 / #ac-2.11: opencode.json.example permission.bash contract (config only) ──
 
 /** @description #ac-2.4 + #ac-2.11: parse example and assert bash permission shape (no * allow, ask default, prescribed allows, ceremony, no broad globs) */
@@ -2027,93 +1214,4 @@ test("LIGHT ship allow when planner usable + ceremony + capture", () => {
     ...cleanDepsWithCapture(),
   });
   assert.equal(d.decision, "allow");
-});
-
-// ── updating-harness skill ↔ entry-gate allowlist contract ──
-// Both runtime shells expose a skill named `updating-harness`; OpenCode loads project
-// `.claude/skills` too, so a `both`-vendored project has a name collision and either copy
-// may win non-deterministically. The collision is only inert if BOTH skills emit the exact
-// npx command the entry-gate allowlists (isHarnessPrescribedPackageCommand). A stray trailing
-// comment / `&&` / redirect in either skill re-opens the interpreter block — this test freezes
-// the skill text against the gate so that regression fails loud here.
-
-/** @description Extract the prescribed `npx … claude-harness … init` line from a SKILL.md body. */
-function extractHarnessInitCommand(skillPath) {
-  const body = fs.readFileSync(skillPath, "utf8");
-  const line = body
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.startsWith("npx") && l.includes("claude-harness#") && l.includes(" init"));
-  if (!line) throw new Error(`no npx init command found in ${skillPath}`);
-  // Resolve the skill's placeholders to concrete values the operator substitutes at runtime.
-  return line
-    .replaceAll("<latest-tag>", "v0.99.0")
-    .replaceAll("<resolved-runtime>", "both");
-}
-
-test("updating-harness skills emit a command the entry-gate allowlists (both shells)", () => {
-  const __dirname = path.dirname(new URL(import.meta.url).pathname);
-  const skills = {
-    opencode: path.join(__dirname, "../../skills/updating-harness/SKILL.md"),
-    claude: path.join(__dirname, "../../../claude-code/skills/updating-harness/SKILL.md"),
-  };
-  for (const [shell, skillPath] of Object.entries(skills)) {
-    const cmd = extractHarnessInitCommand(skillPath);
-    assert.equal(
-      isHarnessPrescribedPackageCommand(cmd),
-      true,
-      `${shell} updating-harness command is not gate-allowlisted (trailing comment / && / redirect?): ${cmd}`,
-    );
-  }
-});
-
-// ── isShellSourceOrStdin: command-position anchor (FP fix + prefix-word hardening) ──
-// The source/stdin forge net must deny `source`/`.`/`bash <` at a COMMAND position (incl. after a
-// run of transparent prefix words like eval/time/command/then/do) while NOT denying `.`/`source` in
-// an ARGUMENT slot (`find . -name`, `--target .`) or inside quoted prose (`printf '… source …'`).
-test("isShellSourceOrStdin: denies source/stdin at command position, incl. prefix-word forms", () => {
-  for (const cmd of [
-    "source evil.sh",
-    ". ./env.sh",
-    "foo && source bar",
-    "foo; . bar.sh",
-    "{ source x; }",
-    "eval source evil.sh",
-    "time source evil.sh",
-    "command source evil.sh",
-    "if true; then source evil.sh; fi",
-    "for x in a; do source evil.sh; done",
-    "eval . evil.sh",
-    "! source evil.sh",
-    "coproc source evil.sh",
-    "bash < forged.sh",
-    "sh <payload.sh",
-  ]) {
-    assert.equal(isShellSourceOrStdin(cmd), true, `must deny: ${cmd}`);
-  }
-});
-
-test("isShellSourceOrStdin: allows source/. in argument slots and quoted prose (FP fix)", () => {
-  for (const cmd of [
-    "find . -name x",
-    "cp a . b",
-    "tar -C . -xf a",
-    "node x.mjs --target . --runtime both",
-    "mv source dest",
-    "grep -r source src/",
-    'printf %s "Do not commit product source code." > spec.md',
-    "for f in . ; do echo $f; done",
-    "find ! -name x",
-    "git add .",
-  ]) {
-    assert.equal(isShellSourceOrStdin(cmd), false, `must allow: ${cmd}`);
-  }
-});
-
-// #ac: a delivery spec written via printf whose PROSE contains "source" must not be forge-denied
-// (the OpenCode PR-creation block: `printf '… product source code …' > spec.md`).
-test("decideBashForge: printf spec write with 'source' in prose is allowed", () => {
-  const cmd =
-    "printf '%s\\n' '## Constraints' 'Do not modify product source code.' > .opencode/plans/ses_x-feat/spec.md";
-  assert.equal(decideBashForge({ command: cmd }).decision, "allow");
 });
