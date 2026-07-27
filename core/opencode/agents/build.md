@@ -5,7 +5,6 @@ model: openai/gpt-5.6-terra
 temperature: 0.1
 permission:
   edit: allow
-  bash: allow
 ---
 
 # build — the maestro

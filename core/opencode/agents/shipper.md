@@ -6,7 +6,6 @@ temperature: 0.1
 permission:
   classify: deny
   edit: deny
-  bash: allow
 ---
 
 # Shipper

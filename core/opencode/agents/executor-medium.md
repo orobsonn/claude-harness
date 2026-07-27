@@ -6,7 +6,6 @@ temperature: 0.1
 permission:
   classify: deny
   edit: allow
-  bash: allow
 ---
 
 # Executor (MEDIUM tier)

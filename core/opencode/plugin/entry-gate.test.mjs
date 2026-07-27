@@ -970,3 +970,134 @@ test("task allowed when failures under K=3", async () => {
     }
   })
 })
+
+// --- #516 fleet bash denylist choke-point ------------------------------------------------
+
+function withEnv(overrides, fn) {
+  const saved = {}
+  for (const key of Object.keys(overrides)) saved[key] = process.env[key]
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  return (async () => {
+    try {
+      return await fn()
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })()
+}
+
+test("#516: fleet dispatch context (HARNESS_NOTIFY_PROJECT set) denies a destructive git force-push via the denylist choke-point, independent of gate-state/advisory", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: "test-project", HARNESS_OC_DATA_HOME: undefined }, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "git push --force origin main" } },
+          ),
+        (err) => {
+          assert.ok(err instanceof Error)
+          assert.match(err.message, /\[entry-gate\]/)
+          assert.match(err.message, /issue #516/)
+          return true
+        },
+      )
+    })
+  })
+})
+
+test("#516: fleet dispatch context still allows git push --force-with-lease (denylist's own findLast carve-out survives the plugin-level re-check)", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: "test-project", HARNESS_OC_DATA_HOME: undefined }, async () => {
+    await withHooks(
+      async (hooks, root) => {
+        writeGateState(root, SID, {})
+        const before = hooks["tool.execute.before"]
+        await assert.doesNotReject(() =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "git push --force-with-lease origin feat/x" } },
+          ),
+        )
+      },
+      {
+        gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+        listHandRecordsForFeatureFn: () => [],
+        isAncestorFn: () => true,
+      },
+    )
+  })
+})
+
+test("#516: fleet dispatch context still allows a prescribed npx carve-out (npx vitest run) even though the broad 'npx *' pattern is a deny", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: "test-project", HARNESS_OC_DATA_HOME: undefined }, async () => {
+    await withHooks(
+      async (hooks, root) => {
+        writeGateState(root, SID, {})
+        const before = hooks["tool.execute.before"]
+        await assert.doesNotReject(() =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "npx vitest run some.test.mjs" } },
+          ),
+        )
+      },
+      {
+        gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+        listHandRecordsForFeatureFn: () => [],
+        isAncestorFn: () => true,
+      },
+    )
+  })
+})
+
+test("#516: same destructive command is NOT blocked by this choke-point outside fleet dispatch (no HARNESS_NOTIFY_PROJECT) — interactive sessions rely on the resolved permission.bash config, scoped deliberately like DANGEROUS_BASH_DENYLIST itself", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: undefined, HARNESS_OC_DATA_HOME: undefined }, async () => {
+    await withHooks(
+      async (hooks, root) => {
+        writeGateState(root, SID, {})
+        const before = hooks["tool.execute.before"]
+        await assert.doesNotReject(() =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "git push --force origin main" } },
+          ),
+        )
+      },
+      {
+        gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+        listHandRecordsForFeatureFn: () => [],
+        isAncestorFn: () => true,
+      },
+    )
+  })
+})
+
+test("#516: HARNESS_OC_DATA_HOME alone does NOT arm the choke-point (adversarial review fix) — core/opencode/skills/triaging-requests/SKILL.md documents it as unreliable: a manually-started operator SSH session on the VPS inherits it from the shell, so keying on it would have armed npx/bash-c/tar denies against a live interactive operator", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: undefined, HARNESS_OC_DATA_HOME: "/tmp/oc-data-test" }, async () => {
+    await withHooks(
+      async (hooks, root) => {
+        writeGateState(root, SID, {})
+        const before = hooks["tool.execute.before"]
+        await assert.doesNotReject(() =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "git reset --hard HEAD~1" } },
+          ),
+        )
+      },
+      {
+        gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+        listHandRecordsForFeatureFn: () => [],
+        isAncestorFn: () => true,
+      },
+    )
+  })
+})
