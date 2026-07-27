@@ -932,10 +932,10 @@ test("harnessOcPluginFiles lists obs-eye and agent-idle-nudge on disk (auto-load
   assert.ok(files.every((p) => isHarnessAutoloadPluginPath(p)));
 });
 
-test("core/opencode/opencode.json.example sets permission.question deny and permission.external_directory allow", () => {
+test("core/opencode/opencode.json.example sets permission.question allow and permission.external_directory allow", () => {
   const cfg = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8"));
 
-  assert.strictEqual(cfg.permission.question, "deny");
+  assert.strictEqual(cfg.permission.question, "allow");
   assert.strictEqual(cfg.permission.external_directory, "allow");
 });
 
@@ -952,7 +952,7 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
     assert.strictEqual(status, "created");
 
     const written = JSON.parse(readFileSync(join(targetDir, "opencode.json"), "utf8"));
-    assert.strictEqual(written.permission.question, "deny");
+    assert.strictEqual(written.permission.question, "allow");
     assert.strictEqual(written.permission.external_directory, "allow");
   } finally {
     rmSync(root, { recursive: true, force: true });

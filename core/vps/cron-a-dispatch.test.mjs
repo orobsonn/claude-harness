@@ -416,6 +416,76 @@ test("seedOpencodeRootConfig: falls back to opencode.json.example when root conf
   }
 });
 
+/**
+ * @description Last-match-wins resolver over an OC `permission.bash` map, mirroring the REAL
+ * OpenCode permission engine (`Permission.evaluate` resolves with `Array.prototype.findLast` —
+ * confirmed by reading the installed `opencode` binary's minified source; see
+ * cron-a-dispatch-seed.test.mjs for the fuller doc comment on the same helper).
+ * @param {Record<string,string>} bashMap
+ * @param {string} command
+ * @returns {string}
+ */
+function resolveBash(bashMap, command) {
+  const entries = Object.entries(bashMap).filter(([pattern]) => pattern !== "*");
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const [pattern, action] = entries[i];
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    if (new RegExp(`^${escaped}$`).test(command)) return action;
+  }
+  return bashMap["*"];
+}
+
+test("seedOpencodeRootConfig: git push --force-with-lease survives the union merge from a realistic project source config while raw --force stays denied (#ac-2.1/#ac-2.2/#ac-2.3)", () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-force-lease-"));
+  try {
+    const projectRoot = join(root, "proj");
+    const worktree = join(root, "wt");
+    mkdirSync(worktree, { recursive: true });
+    plantMonorepoOcPlugins(projectRoot);
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "allow",
+          external_directory: "allow",
+          bash: {
+            "*": "ask",
+            "git push": "allow",
+            // The lease allow MUST be ordered AFTER the broad --force/-f denies it collides
+            // with: OpenCode's engine resolves permission.bash with findLast (last-match-wins),
+            // not "most specific rule wins" — placing it first would have the broader deny win.
+            "git push --force*": "deny",
+            "git push * --force*": "deny",
+            "git push -f*": "deny",
+            "git push * -f*": "deny",
+            "git reset --hard*": "deny",
+            "git clean -f*": "deny",
+            "git push --force-with-lease*": "allow",
+            "git push * --force-with-lease*": "allow",
+          },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    // The worktree seed always forces question back to 'deny' — the local project source's
+    // 'allow' is intentionally NOT propagated here (#ac-1.2, worktree-only override).
+    assert.equal(cfg.permission.question, "deny");
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push --force-with-lease origin minha-branch"),
+      "allow",
+      "git push --force-with-lease must survive the seed's deny-union merge as an allow",
+    );
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push --force origin main"),
+      "deny",
+      "git push --force (raw) must stay denied after the seed's deny-union merge",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("dispatch: runtime=opencode injects XDG_DATA_HOME + HARNESS_OC_DATA_HOME into the env-file", () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
