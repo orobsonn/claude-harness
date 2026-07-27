@@ -49,10 +49,7 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
   return process.cwd();
 }
 
-/**
- * @description Platform input identity candidates (trusted over model-controlled Write args).
- * Order: agent, agentType, agent_type, subagent_type, subagentType.
- */
+/** @description Extract target file paths from an apply_patch-style unified/envelope patch body. */
 function extractPatchPaths(args: Record<string, unknown> | null): string[] {
   const patch = args?.patchText ?? args?.patch ?? args?.diff ?? args?.input;
   if (typeof patch !== "string") return [];
@@ -227,33 +224,9 @@ export async function createPlanWriteGateHooks(
         throw new Error("[plan-write-gate] Blocked: bound execution-plan.json is immutable until a new planner claim.")
       }
 
-      if (bashTool && active) {
-        // OC-native: writing-hand Task may run a small allowlist (git inspect + node --test).
-        // Blanket bash deny was CC spawn-hand shaped and caused BLOCKED hands + rework.
-        const cmd = typeof args?.command === "string" ? args.command.trim() : "";
-        // No pipes/chains/redirects in allowlist (anti-forgery).
-        const simple = cmd.length > 0 && !/[|;&><`$]/.test(cmd);
-        const allowHandBash =
-          simple &&
-          (/^git\s+(status|diff|log|rev-parse|show)(\s|$)/.test(cmd) ||
-            /^node\s+--test(\s|$)/.test(cmd) ||
-            /^npx\s+vitest\s+run(\s|$)/.test(cmd) ||
-            /^(ls|pwd)(\s|$)/.test(cmd) ||
-            /^(cat|head|tail|wc)\s+\S+$/.test(cmd));
-        if (allowHandBash) {
-          if (mode === "shadow") return;
-          return;
-        }
-        const recorded = appendScopeEvent(root, active, {
-          tool: input?.tool,
-          paths: [],
-          mode,
-          reason: "bash-unknown-risk",
-        });
-        if (!recorded.ok) throw new Error(`[plan-write-gate] Blocked: ${recorded.reason}; shadow evidence is mandatory.`);
-        if (mode === "shadow") return;
-        throw new Error("[plan-write-gate] Blocked: Bash is disabled during an active writing-hand dispatch except git status/diff/log and node --test. Complete cleanup first for other commands.");
-      }
+      // Bash is never walled here, active dispatch or not — Claude Code parity (#484): its
+      // plan-write-gate only rails Write/Edit, and the OC-only blanket bash deny was CC
+      // spawn-hand shaped, causing BLOCKED hands + rework on ordinary git/node commands.
       if (bashTool) return;
       if ((writeTool || patchTool) && rawPaths.length === 0) {
         throw new Error("[plan-write-gate] Blocked: official write/patch tool exposed no parseable target paths.");

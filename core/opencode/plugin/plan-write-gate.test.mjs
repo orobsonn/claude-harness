@@ -867,7 +867,7 @@ test("shadow mode records out-of-scope Write without blocking", async () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("composition proof enforces Edit and fail-closed Bash-by-effect policy", async () => {
+test("composition proof enforces Edit scope while Bash is never walled (#484)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-enforce-tools-"));
   try {
     await installComposition(root);
@@ -884,7 +884,9 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
       { tool: "edit", sessionID: session, agent: "executor-high" },
       { args: { filePath: "outside/b.ts", oldString: "x", newString: "y" } },
     ), /OUTSIDE|safe project path/);
-    // OC allowlist during active hand: plain git status/diff/log + node --test + ls/cat.
+    // #484: plan-write-gate never walls Bash, active writing-hand dispatch or not — Claude
+    // Code parity (its plan-write-gate only rails Write/Edit). Every one of these previously
+    // denied under the OC-only blanket bash deny.
     for (const command of [
       "git status --short",
       "git diff --stat",
@@ -893,13 +895,6 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
       "node --test test/foo.test.ts",
       "ls src",
       "cat src/ok.ts",
-    ]) {
-      await assert.doesNotReject(() => before(
-        { tool: "bash", sessionID: session, agent: "executor-high" },
-        { args: { command } },
-      ), command);
-    }
-    for (const command of [
       "touch src/ok.ts outside/evil.ts",
       "node script.mjs",
       "python tool.py",
@@ -913,10 +908,10 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
       "git -c core.pager='sh -c evil' status",
       "rg --pre 'sh -c evil' pattern",
     ]) {
-      await assert.rejects(() => before(
+      await assert.doesNotReject(() => before(
         { tool: "bash", sessionID: session, agent: "executor-high" },
         { args: { command } },
-      ), /Bash is disabled during an active writing-hand dispatch/i, command);
+      ), command);
     }
     await assert.doesNotReject(() => before(
       { tool: "apply_patch", sessionID: session, agent: "executor-high" },
@@ -937,7 +932,7 @@ test("composition proof enforces Edit and fail-closed Bash-by-effect policy", as
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("shadow Bash unknown records evidence, and evidence failure blocks", async () => {
+test("Bash during an active writing-hand dispatch is never shadow-recorded or blocked (#484)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-bash-"));
   try {
     const session = "ses_shadow_bash";
@@ -952,13 +947,12 @@ test("shadow Bash unknown records evidence, and evidence failure blocks", async 
       { tool: "bash", sessionID: session, agent: "executor-high" },
       { args: { command: "node script.mjs" } },
     ));
-    assert.match(fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8"), /bash-unknown-risk/);
-    fs.rmSync(path.join(stateDir, "scope-events.jsonl"));
-    fs.mkdirSync(path.join(stateDir, "scope-events.jsonl"));
-    await assert.rejects(() => before(
+    await assert.doesNotReject(() => before(
       { tool: "bash", sessionID: session, agent: "executor-high" },
       { args: { command: "python tool.py" } },
-    ), /evidence is mandatory/);
+    ));
+    // Bash is out of scope for the anti-forge/scope rail entirely — no shadow event file.
+    assert.equal(fs.existsSync(path.join(stateDir, "scope-events.jsonl")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

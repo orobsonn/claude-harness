@@ -8,7 +8,7 @@ import path from "node:path";
 import { registerHooks } from "node:module";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { validatePrivilegedMarkerSeals } from "./lib/marker-seal.mjs";
+import { validateCeremonyBinding } from "./lib/ceremony-binding.mjs";
 
 const stub = `
   const schemaValue = { describe() { return this }, optional() { return this } };
@@ -93,14 +93,12 @@ test("real before-hook object identity authorizes one bound mutation", async () 
     const result = await execute(args, context());
     assert.equal(result.metadata.ok, true, result.output);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.deepEqual({ ...state.brainstormed_binding, seal: undefined }, {
+    assert.deepEqual(state.brainstormed_binding, {
       session_id: "ses-authority",
       feature_id: "feature-authority",
       operation: "brainstormed",
-      seal: undefined,
     });
-    assert.equal(typeof state.brainstormed_binding.seal, "string");
-    assert.equal(Array.isArray(state.marker_seals), true);
+    assert.equal(state.marker_seals, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -132,7 +130,13 @@ test("runtime adversary result plus accepted official transition persists before
   }
 });
 
-test("another process authority can write bytes but cannot mint host-valid marker semantics", async () => {
+// #423 / #484: a marker minted by one OS process (e.g. before an OpenCode restart) must
+// remain valid when read back in a brand-new process — the old per-process HMAC seal made
+// this permanently unverifiable and bricked delivery for any resumed session. This test
+// proves the opposite of the old behavior: a marker authorized and written entirely inside
+// a child process is structurally valid (ceremony binding intact) when re-read here, in a
+// different process, with no re-signing step required.
+test("a marker minted entirely in another process is honored here without re-signing (#423, #484)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-process-"));
   try {
     const { file } = seed(root);
@@ -166,21 +170,11 @@ test("another process authority can write bytes but cannot mint host-valid marke
     assert.equal(child.status, 0, child.stderr || child.stdout);
     const childState = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(childState.brainstormed, true);
-    assert.equal(validatePrivilegedMarkerSeals(childState, {
+    assert.equal(validateCeremonyBinding(childState, {
       sessionId: "ses-authority",
       featureId: "feature-authority",
-    }).ok, false);
-
-    seed(root);
-    const { before, execute } = await harness(root);
-    const args = { action: "brainstormed" };
-    await before({ tool: "mark", sessionID: "ses-authority", callID: "parent-call" }, { args });
-    await execute(args, context("ses-authority", "parent-call"));
-    const parentState = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.equal(validatePrivilegedMarkerSeals(parentState, {
-      sessionId: "ses-authority",
-      featureId: "feature-authority",
-    }).ok, true);
+      required: ["brainstormed"],
+    }).ok, true, "marker minted in a different process must still be a valid binding here");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

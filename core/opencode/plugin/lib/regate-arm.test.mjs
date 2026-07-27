@@ -11,7 +11,7 @@ import {
   armRegatePending,
 } from "./regate-arm.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";
-import { hasValidMarkerSeal, sealedMarkerRecord, validatePrivilegedMarkerSeals } from "./marker-seal.mjs";
+import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { decideBashDelivery } from "./bash-decide.mjs";
 
 const SESSION = "ses_regate_arm";
@@ -55,7 +55,7 @@ test("isRegateArmingOutcome: DONE only", () => {
   assert.equal(isRegateArmingOutcome(null), false);
 });
 
-test("armRegatePending: writes sealed regate_pending feature/task", () => {
+test("armRegatePending: writes regate_pending feature/task", () => {
   const f = withSeededRoot();
   try {
     const result = armRegatePending({
@@ -72,22 +72,6 @@ test("armRegatePending: writes sealed regate_pending feature/task", () => {
 
     const disk = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
     assert.ok(disk.regate_pending.includes(expected));
-    assert.equal(
-      hasValidMarkerSeal(disk, {
-        sessionId: SESSION,
-        featureId: FEATURE,
-        operation: "regate-pending",
-        payload: expected,
-      }),
-      true,
-    );
-    assert.equal(
-      validatePrivilegedMarkerSeals(disk, {
-        sessionId: SESSION,
-        featureId: FEATURE,
-      }).ok,
-      true,
-    );
   } finally {
     f.close();
   }
@@ -114,15 +98,6 @@ test("armRegatePending: idempotent union + re-seal", () => {
     assert.deepEqual(
       second.state.regate_pending.filter((e) => e === expected),
       [expected],
-    );
-    assert.equal(
-      hasValidMarkerSeal(second.state, {
-        sessionId: SESSION,
-        featureId: FEATURE,
-        operation: "regate-pending",
-        payload: expected,
-      }),
-      true,
     );
   } finally {
     f.close();

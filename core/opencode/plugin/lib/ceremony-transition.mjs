@@ -4,7 +4,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ceremonyMarkerPatch } from "./ceremony-binding.mjs";
-import { hasValidMarkerSeal, sealedMarkerRecord } from "./marker-seal.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 import { gateStateDir, planDir } from "../../../shared/lib/path-helpers.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
@@ -131,10 +130,10 @@ function markerValid(state, marker) {
   const featureId = state.feature_id;
   const binding = plain(state[`${marker}_binding`]);
   return state[marker] === true && binding?.session_id === sessionId && binding?.feature_id === featureId &&
-    binding?.operation === marker && hasValidMarkerSeal(state, { sessionId, featureId, operation: marker, payload: true });
+    binding?.operation === marker;
 }
 
-/** @description Apply one official transition with evidence and current-process seal in one state mutation. */
+/** @description Apply one official transition with evidence in a single state mutation. */
 export function transitionCeremony(root, state, marker, suppliedEvidence = null) {
   const index = PHASES.findIndex((phase) => phase.marker === marker);
   if (index < 0) return { ok: false, reason: "unknown ceremony transition" };
@@ -149,15 +148,12 @@ export function transitionCeremony(root, state, marker, suppliedEvidence = null)
   if (markerValid(state, marker) && JSON.stringify(state.ceremony_evidence?.[marker]) === JSON.stringify(evidence)) {
     return { ok: true, state, changed: false };
   }
-  const record = sealedMarkerRecord({ sessionId: state.session_id, featureId: state.feature_id, operation: marker, payload: true });
   const patch = {
-    ...ceremonyMarkerPatch(marker, state.session_id, state.feature_id, record.seal),
+    ...ceremonyMarkerPatch(marker, state.session_id, state.feature_id),
     ceremony_evidence: { ...(plain(state.ceremony_evidence) ?? {}), [marker]: evidence },
   };
   const applied = mergeGateStatePatch(state, patch);
   if (!applied.ok) return applied;
-  const prior = Array.isArray(state.marker_seals) ? state.marker_seals : [];
-  applied.state.marker_seals = [...prior.filter((candidate) => candidate?.operation !== marker), record];
   return { ok: true, state: applied.state, changed: true };
 }
 

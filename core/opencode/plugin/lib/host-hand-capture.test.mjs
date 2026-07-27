@@ -8,7 +8,6 @@ import {
   resolveOcHandOutcome,
   hostStampOcHandCapture,
 } from "./host-hand-capture.mjs";
-import { validatePrivilegedMarkerSeals } from "./marker-seal.mjs";
 
 test("resolveOcHandOutcome promotes BLOCKED to DONE when git touched", () => {
   assert.equal(resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "DONE");
@@ -109,31 +108,18 @@ test("re-capture at a new HEAD sha leaves no orphan capture_verified entry", () 
 
     const gs = JSON.parse(fs.readFileSync(gsPath, "utf8"));
 
-    // Every present privileged marker must carry a valid seal (no orphan).
-    const verdict = validatePrivilegedMarkerSeals(gs, { sessionId, featureId });
-    assert.equal(verdict.ok, true, verdict.reason);
-
-    // Array must mirror the seal policy: exactly one entry for the task, at the latest sha.
+    // Array must mirror the per-task pruning policy: exactly one entry for the task, at the latest sha.
     const taskEntries = (gs.capture_verified ?? []).filter(
       (e) => e === `${featureId}/${taskId}` || String(e).startsWith(`${featureId}/${taskId}@`),
     );
     assert.deepEqual(taskEntries, [`${featureId}/${taskId}@${shaB}`]);
 
-    // Sibling task-10's entry and seal must survive the task-1 recapture untouched —
-    // the "@" delimiter must not let "task-1" match "task-10".
+    // Sibling task-10's entry must survive the task-1 recapture untouched — the "@"
+    // delimiter must not let "task-1" match "task-10".
     const otherEntries = (gs.capture_verified ?? []).filter(
       (e) => e === `${featureId}/${otherTaskId}` || String(e).startsWith(`${featureId}/${otherTaskId}@`),
     );
     assert.deepEqual(otherEntries, [`${featureId}/${otherTaskId}@${shaA}`]);
-    const otherSealPresent = (gs.marker_seals ?? []).some(
-      (s) =>
-        s &&
-        typeof s === "object" &&
-        s.operation === "capture-verified" &&
-        s.session_id === sessionId &&
-        s.payload === `${featureId}/${otherTaskId}@${shaA}`,
-    );
-    assert.equal(otherSealPresent, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

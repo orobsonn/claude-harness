@@ -12,10 +12,10 @@
  * (branch/zero-commits, regate, capture, real-file) still apply against the resulting {}.
  * The sole deliberate fail-closed exception is a CORRUPT regate_pending (present but not a
  * JSON array); hand_finished/capture_verified/regate_passed coerce to [] on a non-array value,
- * mirroring Claude Code exactly. Marker-seal validation is deliberately NOT applied on this
- * bash path (see docs/OC-CC-PARITY-REPORT.md item #32 — per-process-instance seal secret +
- * incident #423 would brick delivery for any session resumed after an OpenCode restart); it
- * remains unchanged on the Task/Agent dispatch branch below.
+ * mirroring Claude Code exactly. Marker-seal validation is not applied anywhere (bash or
+ * Task/Agent dispatch) — see docs/OC-CC-PARITY-REPORT.md item #32: the seal secret was
+ * per-process-instance, so a fresh OpenCode process could never verify a marker sealed
+ * before it started, bricking delivery for any session resumed after a restart (#423).
  * Delivery bash always injects isAncestorFn + listHandRecordsForFeatureFn (cheap lazy
  * closures; decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
  * dispatches, and the freeze-commit early trigger); gitState (a real git probe) is injected
@@ -186,7 +186,6 @@ export async function createEntryGateHooks(
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
-  const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
   const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
@@ -280,15 +279,10 @@ export async function createEntryGateHooks(
         // unreadable gate-state is not itself grounds to block delivery — decideBashDelivery's
         // own rails (branch/commits, regate, capture, real-file) still apply against {}.
         const gateState = loaded.ok ? loaded.state : {}
-        // Deliberately NOT validating marker seals on the bash delivery path (reverted after
-        // review — see docs/OC-CC-PARITY-REPORT.md item #32 "delivery-marker-seal-process-instance":
-        // the seal secret is per-process-instance (marker-seal.mjs), so validating it here would
-        // resurrect incident #423 — every marker sealed before an OpenCode restart becomes
-        // PERMANENTLY unverifiable, bricking delivery for any resumed session. The parity report's
-        // resolved judgment is to remove seal validation from all 3 read sites (this one, the Task
-        // branch, plan-gate.ts) + the writers — not partially; removing only here (this issue's
-        // scope) while Task/plan-gate keep validating does not reintroduce the brick for THIS path.
-        // Claude Code has no marker-seal concept at all (grep marker-seal core/claude-code = 0).
+        // Marker-seal validation is not applied anywhere on the Task or bash branches (#484):
+        // the seal secret was per-process-instance (marker-seal.mjs), so validating it bricked
+        // every marker sealed before an OpenCode restart, permanently (incident #423). Claude
+        // Code has no marker-seal concept at all (grep marker-seal core/claude-code = 0).
         if (
           gateState != null &&
           typeof gateState === "object" &&
@@ -371,13 +365,6 @@ export async function createEntryGateHooks(
         }
         if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
         gateState = persisted.state ?? gateState
-      }
-      if (loaded.ok && isDeliveryRole(subagentType)) {
-        const seals = validatePrivilegedMarkerSeals(gateState, {
-          sessionId: sid,
-          featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
-        })
-        if (!seals.ok) throw new Error(`${PREFIX} ${seals.reason}`)
       }
       const optionalIds = extractFeatureTaskIds(toolArgs)
       const featureId = identity.featureIdSource === "runtime-envelope"

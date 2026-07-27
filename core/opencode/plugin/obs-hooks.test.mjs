@@ -12,7 +12,6 @@ import { createObsHandHooks } from "./obs-hand.ts";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
 import { semanticPlanHash } from "./lib/planner-artifact.mjs";
 import { fidelityPassEntry } from "./lib/mark-gate.mjs";
-import { validatePrivilegedMarkerSeals } from "./lib/marker-seal.mjs";
 
 test("obs-plan-write: output.args → plan-created with tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-pw-"));
@@ -605,8 +604,6 @@ test("#ac-1.1 obs-hand: sniper-high DONE → sealed regate_pending for feature/t
     const expected = fidelityPassEntry(fid, tid, null);
     assert.ok(Array.isArray(disk.regate_pending), "regate_pending array");
     assert.ok(disk.regate_pending.includes(expected), `expected ${expected} in ${JSON.stringify(disk.regate_pending)}`);
-    const seals = validatePrivilegedMarkerSeals(disk, { sessionId: sid, featureId: fid });
-    assert.equal(seals.ok, true, seals.reason);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });

@@ -14,7 +14,6 @@ import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
 import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
 import { fidelityPassEntry, defaultHeadSha } from "./lib/mark-gate.mjs"
-import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
 
 type MarkerArgs = {
   action?: string
@@ -89,12 +88,10 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         const dual = dualStatusGatePatchForPhase("plan_review", args.status)
         if ("ok" in dual && dual.ok === false) return dual
         patch = dual as Record<string, unknown>
-        payload = null
       } else if (action === "final-review" || action === "demo-done") {
-        // Feature-scoped ship preconditions (#385) — no task_id; sealed boolean on gate-state.
+        // Feature-scoped ship preconditions (#385) — no task_id; boolean on gate-state.
         const field = action === "final-review" ? "final_review_done" : "demo_done"
         patch = { [field]: true }
-        payload = true
       } else {
         const taskId = typeof args.task_id === "string" ? args.task_id : ""
         if (!taskId) return { ok: false, reason: `${action} requires task_id` }
@@ -104,7 +101,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           payload = fidelityPassEntry(authorization.featureID, taskId, sha)
           patch = { fidelity_pass: [payload] }
         } else if (action === "regate-pending") {
-          payload = bare
           patch = { regate_pending: [bare] }
         } else if (action === "hand-finished") {
           // Require host-written DONE hand-record — prose mark alone must not unlock ship rails.
@@ -124,7 +120,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           if (hfBy !== "obs-hand-task" && hfBy !== "run-hand-adapter") {
             return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
           }
-          payload = bare
           patch = { hand_finished: [bare] }
         }
         else if (action === "regate-passed") {
@@ -164,24 +159,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       }
       const applied = mergeGateStatePatch(previous, patch)
       if (!applied.ok) return applied
-      // dual seal payload = final dual_status map (merged axes), not the patch fragment alone.
-      if (action === "dual") payload = applied.state.dual_status
-      const record = sealedMarkerRecord({
-        sessionId: authorization.sessionID,
-        featureId: authorization.featureID,
-        operation: action,
-        payload,
-      })
-      const prior = Array.isArray(previous.marker_seals) ? previous.marker_seals : []
-      applied.state.marker_seals = [
-        ...prior.filter((candidate: any) => !(
-          candidate?.operation === action &&
-          candidate?.session_id === authorization.sessionID &&
-          candidate?.feature_id === authorization.featureID &&
-          JSON.stringify(candidate?.payload) === JSON.stringify(payload)
-        )),
-        record,
-      ]
       return applied.state
     })
   }

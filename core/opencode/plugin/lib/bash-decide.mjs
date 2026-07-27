@@ -20,10 +20,9 @@
  * gate-state content is ever inspected, so a corrupt regate_pending under an unsafe/missing
  * sessionId is not itself observable — that scenario is already fail-open on the sessionId
  * infra error, which is consistent with the rest of the contract, not a bypass of it.
- * Marker seals (validatePrivilegedMarkerSeals) are deliberately NOT checked on this bash path
- * — see entry-gate.ts and docs/OC-CC-PARITY-REPORT.md item #32 (per-process-instance seal
- * secret + incident #423: validating it here would brick delivery for any session resumed
- * after an OpenCode restart).
+ * Marker-seal validation does not exist anywhere in this harness (#484) — see
+ * docs/OC-CC-PARITY-REPORT.md item #32 (the per-process-instance seal secret + incident #423:
+ * validating it bricked delivery for any session resumed after an OpenCode restart).
  */
 
 import fs from "node:fs";

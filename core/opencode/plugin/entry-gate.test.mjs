@@ -153,11 +153,14 @@ test("direct unsigned marker mutation cannot release a delivery role", async () 
   })
 })
 
-test("task identity aliases conflict before dispatch, while trusted task identity overrides model input", async () => {
+test("dispatch args diverging from the brief's HARNESS_TASK_CONTEXT still fail closed (#484 adversary finding)", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task"] }))
+    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task", "feat/task-b"] }))
     const before = hooks["tool.execute.before"]
-    // Harness-only aliases (taskId/task) still conflict; official Task.task_id is ignored.
+    // The brief (prompt marker) says task-a; dispatch args claim task-b. Tolerating alias
+    // disagreement (#484) must NOT extend to laundering which task the fidelity/scope gates
+    // validate against — this decouples "what the hand was told" from "what gets gated",
+    // defeating the frozen-test fidelity guarantee. Must reject.
     await assert.rejects(
       () => before(
         { tool: "task", sessionID: SID },
@@ -168,9 +171,35 @@ test("task identity aliases conflict before dispatch, while trusted task identit
           prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-a"}[/HARNESS_TASK_CONTEXT]',
         } },
       ),
-      /taskId.*conflict/,
+      /taskId dispatch args diverge from the brief/,
     )
-    // Official resume fields (command/task_id) must not fight HARNESS_TASK_CONTEXT / envelope.
+  })
+})
+
+test("task/taskId aliases without a brief marker resolve tolerantly to the first alias in priority order (#484)", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/task-b"] }))
+    const before = hooks["tool.execute.before"]
+    // No prompt marker to cross-check against — nothing but the dispatch args themselves
+    // disagree, so this stays tolerant: the first alias in priority order (taskId) wins.
+    await assert.doesNotReject(
+      () => before(
+        { tool: "task", sessionID: SID },
+        { args: {
+          subagent_type: "executor-low",
+          task: "task-a",
+          taskId: "task-b",
+          prompt: "Implement the task.",
+        } },
+      ),
+    )
+  })
+})
+
+test("official resume fields (command/task_id) do not fight HARNESS_TASK_CONTEXT or the trusted envelope", async () => {
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task"] }))
+    const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() => before(
       { tool: "task", sessionID: SID, task_id: "trusted-task" },
       { args: {
