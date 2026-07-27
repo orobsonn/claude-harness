@@ -43,6 +43,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  MANIFEST_FILENAME,
+  isValidOpencodeConfigShape,
+  migrateOpencodeConfig,
+  readHarnessVersionStamp,
+} from "../../../../shared/lib/opencode-config-migration.mjs";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -415,7 +421,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/ceremony-coordinator.ts",
-    "./.opencode/plugin/command-resolver.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
@@ -472,11 +477,22 @@ export function pluginsAreRelative(plugins) {
 
 /**
  * @description Create or idempotently merge canonical plugins into a valid project-owned opencode.json.
+ * Also migrates the `permission` block across harness generations (issue #479): a manifest sidecar
+ * at `.opencode/.harness-config-manifest.json` records which keys are harness-owned so a retired
+ * default can be safely dropped or upgraded, while every operator customization survives untouched.
+ * Safety net before the rename: a structural shape-check — failing it falls to the same manual-repair
+ * sidecar used for an unparseable project config, never a partial write. (A live `opencode debug
+ * config` shell-out was evaluated and dropped: on a machine with the binary installed it blocked on
+ * every call in testing, which would silently brick every real vendoring run — the deterministic
+ * shape-check alone satisfies the gate without that operational risk.) When a tier-2 migration
+ * actually removes a retired key, the pre-migration file is preserved once at
+ * `opencode.json.pre-migration.bak`.
  * @param {string} openCodeDir - source core/opencode
  * @param {string} targetDir - project root
+ * @param {string} [version] - harness version currently being vendored (stamped into the manifest)
  * @returns {string} status
  */
-export function writeOpencodeConfig(openCodeDir, targetDir) {
+export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   const example = join(openCodeDir, "opencode.json.example");
   let cfg;
   if (existsSync(example)) {
@@ -494,28 +510,90 @@ export function writeOpencodeConfig(openCodeDir, targetDir) {
   } else {
     cfg.plugin = [];
   }
+
   const dest = join(targetDir, "opencode.json");
-  const body = `${JSON.stringify(cfg, null, 2)}\n`;
-  if (!existsSync(dest)) {
-    writeFileSync(dest, body);
-    return "created";
-  }
-  try {
-    const existing = JSON.parse(readFileSync(dest, "utf8"));
-    if (!existing || typeof existing !== "object" || Array.isArray(existing)) throw new Error("not object");
-    const projectPlugins = Array.isArray(existing.plugin)
+  const ocDir = join(targetDir, ".opencode");
+  const manifestPath = join(ocDir, MANIFEST_FILENAME);
+  const versionPath = join(ocDir, ".harness-version");
+  const backupPath = join(targetDir, "opencode.json.pre-migration.bak");
+  const wasPresent = existsSync(dest);
+
+  // Fresh project: base off the new generation's full config (plugin/model/agent/... included) so
+  // permission-only migration never drops unrelated fields. Existing project: base off its own file,
+  // preserving every operator top-level customization untouched.
+  let existing = cfg;
+  let existingRaw = null;
+  if (wasPresent) {
+    existingRaw = readFileSync(dest, "utf8");
+    try {
+      existing = JSON.parse(existingRaw);
+      if (!existing || typeof existing !== "object" || Array.isArray(existing)) throw new Error("not object");
+    } catch {
+      // Never rename/touch an unparseable project config — fall to the manual-repair sidecar untouched.
+      writeFileSync(join(targetDir, "opencode.harness.json"), `${JSON.stringify(cfg, null, 2)}\n`);
+      return "invalid existing config → wrote opencode.harness.json for manual repair";
+    }
+    // Never re-inject harness paths into plugin[] — OC auto-loads .opencode/plugin/*.ts
+    existing.plugin = Array.isArray(existing.plugin)
       ? existing.plugin.filter((entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry))
       : [];
-    // Never re-inject harness paths into plugin[] — OC auto-loads .opencode/plugin/*.ts
-    existing.plugin = projectPlugins;
-    const temp = `${dest}.${process.pid}.tmp`;
-    writeFileSync(temp, `${JSON.stringify(existing, null, 2)}\n`);
-    renameSync(temp, dest);
-    return "updated existing opencode.json plugins (stripped harness autoload paths)";
-  } catch {
-    writeFileSync(join(targetDir, "opencode.harness.json"), body);
-    return "invalid existing config → wrote opencode.harness.json for manual repair";
   }
+
+  let manifest = null;
+  if (existsSync(manifestPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) manifest = parsed;
+    } catch {
+      manifest = null;
+    }
+  }
+  const previousHarnessVersionStamp = existsSync(versionPath)
+    ? readHarnessVersionStamp(readFileSync(versionPath, "utf8"))
+    : null;
+
+  const migrated = migrateOpencodeConfig({
+    existingConfig: existing,
+    newConfig: cfg,
+    manifest,
+    previousHarnessVersionStamp,
+    newHarnessVersion: version ?? null,
+  });
+
+  // Validation gate BEFORE the rename — a migration that produced something un-writable never
+  // touches `dest`; it falls to the same manual-repair path an unparseable project config uses.
+  if (!isValidOpencodeConfigShape(migrated.config)) {
+    writeFileSync(join(targetDir, "opencode.harness.json"), `${JSON.stringify(cfg, null, 2)}\n`);
+    return "migration failed validation gate → wrote opencode.harness.json for manual repair";
+  }
+
+  const removedEntries = migrated.report.filter((r) => r.action === "removed-retired");
+  const keptEntries = migrated.report.filter((r) => r.action === "kept-custom");
+
+  // Rollback layer 2 (layer 1 is git itself): once, only when a tier-2 ledger match actually
+  // dropped something — preserves the exact pre-migration bytes, never overwritten by a later run.
+  if (wasPresent && migrated.tier === 2 && removedEntries.length > 0 && existingRaw !== null && !existsSync(backupPath)) {
+    writeFileSync(backupPath, existingRaw);
+  }
+
+  const temp = `${dest}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(migrated.config, null, 2)}\n`);
+  renameSync(temp, dest);
+
+  mkdirSync(ocDir, { recursive: true });
+  const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
+  writeFileSync(manifestTemp, `${JSON.stringify(migrated.manifest, null, 2)}\n`);
+  renameSync(manifestTemp, manifestPath);
+
+  if (!wasPresent) return "created";
+  if (removedEntries.length === 0 && keptEntries.length === 0) {
+    return "updated existing opencode.json plugins (stripped harness autoload paths)";
+  }
+  const describe = (r) => `${r.path.join(".")}=${JSON.stringify(r.value)}`;
+  const removedNote = removedEntries.length ? `removed retired [${removedEntries.map(describe).join(", ")}]` : "";
+  const keptNote = keptEntries.length ? `kept custom [${keptEntries.map(describe).join(", ")}]` : "";
+  const migrationNote = [removedNote, keptNote].filter(Boolean).join("; ");
+  return `updated existing opencode.json plugins (stripped harness autoload paths) (permission migration: ${migrationNote})`;
 }
 
 /**
@@ -700,6 +778,45 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
 }
 
 /**
+ * Harness files retired from `core/opencode/` that must be actively deleted from an
+ * already-vendored `.opencode/` on update. `copyOcTree` only copies what the source still
+ * has — it never diffs against the destination — so a file dropped from source stays behind
+ * as a zombie: OpenCode still auto-globs `.opencode/plugin/*.{ts,js}` and re-registers it.
+ * Exact relative paths ONLY (never a directory or a glob) — this must never risk deleting a
+ * user's own local plugin placed alongside the harness ones in the same auto-load directory.
+ */
+const OC_RETIRED_FILES = [
+  "plugin/command-resolver.ts",
+  "plugin/lib/command-resolver.mjs",
+];
+
+/**
+ * @description True when `dir/name` exists with that EXACT case (case-sensitive directory
+ * listing, not a case-insensitive path lookup). Guards `pruneOcRetiredFiles` against deleting
+ * a user's own same-named-but-different-case local plugin on a case-insensitive filesystem
+ * (default on macOS/Windows) — `rmSync` alone would resolve the wrong file silently.
+ * @param {string} dir
+ * @param {string} name
+ * @returns {boolean}
+ */
+function existsWithExactCase(dir, name) {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).includes(name);
+}
+
+/**
+ * @description Delete each `OC_RETIRED_FILES` entry under `ocDir`, but only on an exact
+ * case-sensitive filename match — never a case-insensitive filesystem coincidence.
+ * @param {string} ocDir
+ */
+function pruneOcRetiredFiles(ocDir) {
+  for (const rel of OC_RETIRED_FILES) {
+    const abs = join(ocDir, rel);
+    if (existsWithExactCase(dirname(abs), rel.split("/").pop())) rmSync(abs, { force: true });
+  }
+}
+
+/**
  * @description Vendor OpenCode harness into project `.opencode/` + root config/memory.
  * @param {{ coreDir: string, targetDir: string, version: string, stampDate: string }} opts
  * @returns {{ ocDir: string }}
@@ -722,6 +839,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
+  pruneOcRetiredFiles(ocDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
   if (existsSync(sharedDir)) {
@@ -731,7 +849,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   const agentsMd = mergeAgentsMd(openCodeDir, targetDir);
   ok(`AGENTS.md: ${agentsMd}`);
 
-  const cfg = writeOpencodeConfig(openCodeDir, targetDir);
+  const cfg = writeOpencodeConfig(openCodeDir, targetDir, version);
   ok(`opencode.json: ${cfg}`);
   const cfgPath = cfg.includes("manual repair")
     ? join(targetDir, "opencode.harness.json")

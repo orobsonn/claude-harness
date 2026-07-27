@@ -1,14 +1,36 @@
 /**
- * @description Pure OC bash gates: delivery ceremony + rails + a non-blocking advisory
- * channel (allow + prose hint, never deny).
- * Never throws; returns Decision. D1 single fall-through — no early allow after delivery detect.
+ * @description Pure OC bash gates: delivery rails (branch/zero-commits, regate, capture,
+ * real-file) + spawn-hand.mjs fidelity rail + freeze-commit early capture trigger + a
+ * non-blocking advisory channel (allow + prose hint, never deny).
+ * Never throws; returns Decision.
+ *
+ * Parity contract with Claude Code (core/claude-code/hooks/entry-gate.mjs decideBash,
+ * lines 451-521 spawn-hand + 529-696 delivery-command handling): the bash gate does NOT
+ * enforce ceremony (mode/classified/brainstormed/adversary_fired/planner_status/dual_status/
+ * final_review/demo) — that lives on the Agent/Task dispatch gate. The bash gate only
+ * enforces: branch/zero-commits, regate (regate_pending vs regate_passed), capture
+ * (hand_finished vs capture_verified), and real-file (checkRealFileCaptureRail via
+ * feature_id). Fail-open on infra error (unreadable gate-state, missing/unsafe sessionId) —
+ * the sole deliberate exception is a CORRUPT regate_pending (present but not a JSON array),
+ * which denies fail-closed; hand_finished/capture_verified/regate_passed are NOT the exception
+ * — a non-array value there silently coerces to [] (coerceArray), mirroring Claude Code exactly
+ * (entry-gate.mjs never denies on those, only on regate_pending). This exception is reachable
+ * ONLY with a safe sessionId (mirrors Claude Code's own ordering — the sessionId fail-open runs
+ * before the corrupt-marker check in both runtimes): a missing/unsafe sessionId allows before
+ * gate-state content is ever inspected, so a corrupt regate_pending under an unsafe/missing
+ * sessionId is not itself observable — that scenario is already fail-open on the sessionId
+ * infra error, which is consistent with the rest of the contract, not a bypass of it.
+ * Marker seals (validatePrivilegedMarkerSeals) are deliberately NOT checked on this bash path
+ * — see entry-gate.ts and docs/OC-CC-PARITY-REPORT.md item #32 (per-process-instance seal
+ * secret + incident #423: validating it here would brick delivery for any session resumed
+ * after an OpenCode restart).
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { isDeliveryCommand } from "./is-delivery-command.mjs";
 import { isSafeSessionIdSegment } from "./dual-enforcement.mjs";
-import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
+import { matchesAbsolution, absolutionPrefix } from "../../../shared/lib/absolution.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";
 import {
   classifyRegatePending,
@@ -19,70 +41,6 @@ import { checkRealFileCaptureRail } from "../../../shared/lib/real-file-capture-
 /**
  * @typedef {{ ok: boolean, decision: "allow"|"deny", reason: string, details?: unknown, advisory?: string }} Decision
  */
-
-/**
- * @param {unknown} mode
- * @returns {"QUICK"|"LIGHT"|"FULL"|"NO-CEREMONY"|""}
- */
-/**
- * @description True when gate-state shows the session already entered LIGHT/FULL ceremony
- * or planner/review work — used to block QUICK ship laundering after a stuck LIGHT run.
- * @param {Record<string, unknown>} gs
- * @returns {boolean}
- */
-export function hasElevatedCeremonyResidue(gs = {}) {
-  if (!gs || typeof gs !== "object" || Array.isArray(gs)) return false;
-  const peak = normalizeMode(gs.peak_mode);
-  if (peak === "LIGHT" || peak === "FULL") return true;
-  if (gs.brainstormed === true || gs.adversary_fired === true) return true;
-  const plannerStatus = typeof gs.planner_status === "string" ? gs.planner_status : "";
-  if (plannerStatus && plannerStatus !== "not_started") return true;
-  const attempts = Number(gs.planner_primary_attempts);
-  if (Number.isFinite(attempts) && attempts > 0) return true;
-  if (
-    gs.review_status === "primary_failure_cap_reached" ||
-    gs.review_status === "review_cap_reached"
-  ) {
-    return true;
-  }
-  const dual = gs.dual_status;
-  if (dual && typeof dual === "object" && !Array.isArray(dual)) {
-    if (dual.plan_review || dual.adversary) return true;
-  }
-  if (Array.isArray(gs.review_outcomes) && gs.review_outcomes.length > 0) return true;
-  return false;
-}
-
-export function normalizeMode(mode) {
-  if (typeof mode !== "string") return "";
-  const m = mode.trim().toLowerCase();
-  if (m === "quick") return "QUICK";
-  if (m === "light") return "LIGHT";
-  if (m === "full") return "FULL";
-  if (m === "no-ceremony") return "NO-CEREMONY";
-  return "";
-}
-
-/**
- * @description True when a dual_status value (scalar enum or plan_review axis of a map)
- * is a recorded attempt. Legacy scalar and map forms both accepted.
- * @param {unknown} dualStatus
- * @returns {boolean}
- */
-export function isRecordedDual(dualStatus) {
-  const status =
-    typeof dualStatus === "string"
-      ? dualStatus
-      : dualStatus != null && typeof dualStatus === "object" && !Array.isArray(dualStatus)
-        ? /** @type {Record<string, unknown>} */ (dualStatus).plan_review
-        : undefined;
-  return (
-    status === "both" ||
-    status === "primary_only" ||
-    status === "primary_only_failopen" ||
-    status === "primary_only_error"
-  );
-}
 
 /**
  * @description Text nudged when `gh issue create` runs in a repo that vendors the harness
@@ -187,89 +145,121 @@ function coerceArray(v) {
 }
 
 /**
- * @description Fail-closed: key present and not array → corrupt (same family as regate_pending).
- * Absent (undefined) → empty array. Array → as-is.
- * @param {Record<string, unknown>} gs
- * @param {string} key
- * @returns {{ corrupt: false, value: unknown[] } | { corrupt: true, raw: unknown, key: string }}
+ * @description Normalize a possibly-non-object gate-state into a plain object. Never throws.
+ * @param {unknown} gateState
+ * @returns {Record<string, unknown>}
  */
-function classifyArrayMarker(gs, key) {
-  const raw = gs[key];
-  if (raw === undefined) return { corrupt: false, value: [] };
-  if (Array.isArray(raw)) return { corrupt: false, value: raw };
-  return { corrupt: true, raw, key };
+function normalizeGateState(gateState) {
+  return gateState != null && typeof gateState === "object" && !Array.isArray(gateState)
+    ? /** @type {Record<string, unknown>} */ (gateState)
+    : {};
 }
 
 /**
- * @param {string} key
- * @param {unknown} raw
- * @returns {string}
+ * @description Real fs-based descriptor reader for the spawn-hand.mjs fidelity rail — reads
+ * and parses a spawn-hand.mjs descriptor JSON file from disk. Returns the parsed object on
+ * success, or null on ANY error (missing/unparseable). This reader itself never throws; the
+ * caller (decideSpawnHandFidelity) treats a null return as fail-CLOSED (deny) — a legitimate
+ * spawn-hand.mjs dispatch always supplies a readable descriptor, so an unreadable one is a bug
+ * or a bypass attempt, not an infra error to fail open on (mirrors Claude Code's
+ * defaultReadDescriptor / the same fail-closed default).
+ * @param {string} descriptorPath
+ * @returns {object|null}
  */
-function corruptArrayMarkerReason(key, raw) {
-  let text;
+function defaultReadDescriptor(descriptorPath) {
   try {
-    text = JSON.stringify(raw);
-  } catch {
-    try {
-      text = String(raw);
-    } catch {
-      text = `<unserializable ${key}>`;
+    const raw = fs.readFileSync(descriptorPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
     }
+    return parsed;
+  } catch {
+    return null;
   }
-  if (text.length > 200) text = text.slice(0, 200);
-  return (
-    `[entry-gate] Blocked: gate-state corrupted — ${key} is not a JSON array ` +
-    `(raw value: ${text}). Repair or delete gate-state.json (${key} must be a ` +
-    "JSON array), then re-stamp before proceeding."
-  );
 }
 
 /**
- * @description Headless delivery context: explicit input/gate flag, or cloud env signals.
- * Interactive (default) requires demo for FULL; headless auto-validates demo off-gate.
- * @param {{ headless?: unknown }} input
- * @param {Record<string, unknown>} gs
- * @returns {boolean}
+ * @description Narrow trail for spawn-hand.mjs dispatches — evaluated BEFORE delivery-command
+ * classification (spawn-hand.mjs is not itself git push / gh pr). Ported 1:1 from Claude Code
+ * entry-gate.mjs lines 451-521 (#ac-2.1).
+ *   • No --descriptor flag → fail-OPEN (allow). A read-only command such as `cat spawn-hand.mjs`
+ *     carries no --descriptor and must never be denied.
+ *   • --descriptor present but unreadable / not valid JSON / not an object / non-string ids
+ *     → fail-CLOSED (deny). A legitimate executor dispatch always supplies a readable descriptor.
+ *   • --descriptor present and yields a valid <feature_id>/<task_id> → check fidelity_pass on
+ *     the already-loaded gate-state; deny if absent, allow if present.
+ * @param {string} command
+ * @param {{ gateState?: unknown, readDescriptorFn?: (path: string) => object|null }} input
+ * @returns {Decision}
  */
-export function isHeadlessDeliveryContext(input = {}, gs = {}) {
-  if (input.headless === true) return true;
-  if (gs && gs.headless === true) return true;
+function decideSpawnHandFidelity(command, input) {
+  const descriptorMatch = command.match(/--descriptor\s+(\S+)/);
+  if (!descriptorMatch) {
+    return { ok: true, decision: "allow", reason: "spawn-hand-no-descriptor" };
+  }
+  const descriptorPath = descriptorMatch[1];
+  const readDescriptorFn =
+    typeof input.readDescriptorFn === "function" ? input.readDescriptorFn : defaultReadDescriptor;
+  let descriptor = null;
   try {
-    if (typeof process !== "undefined" && process.env) {
-      const remote = process.env.CLAUDE_CODE_REMOTE;
-      if (remote === "true" || remote === "1") return true;
-      const oc = process.env.OPENCODE_HEADLESS;
-      if (oc === "true" || oc === "1") return true;
-    }
+    descriptor = readDescriptorFn(descriptorPath);
   } catch {
-    /* ignore */
+    descriptor = null;
   }
-  return false;
+  if (
+    descriptor === null ||
+    typeof descriptor.feature_id !== "string" ||
+    typeof descriptor.task_id !== "string"
+  ) {
+    return {
+      ok: false,
+      decision: "deny",
+      reason:
+        "[entry-gate] Blocked: spawn-hand.mjs dispatch denied — --descriptor flag was present " +
+        `but the descriptor at '${descriptorPath}' could not be resolved to a qualified ` +
+        "feature_id/task_id (missing file, invalid JSON, or non-string ids). " +
+        "The fidelity check requires a readable descriptor with string feature_id and task_id. " +
+        "Ensure the descriptor JSON exists and is well-formed before dispatching.",
+    };
+  }
+  const qualifiedId = fidelityPassEntry(descriptor.feature_id, descriptor.task_id, null);
+  const gs = normalizeGateState(input.gateState);
+  const fidelityPrefixes = coerceArray(gs.fidelity_pass).map(absolutionPrefix);
+  if (!fidelityPrefixes.includes(qualifiedId)) {
+    return {
+      ok: false,
+      decision: "deny",
+      reason:
+        `[entry-gate] Blocked: spawn-hand.mjs dispatch denied — fidelity-pass for task ` +
+        `${qualifiedId} has not been stamped. Dispatch the test-author first to produce ` +
+        "a failing locked test, then stamp fidelity-pass " +
+        `(mark.mjs fidelity-pass --feature-id ${descriptor.feature_id} --task-id ${descriptor.task_id}) ` +
+        "before dispatching the executor cheap-hand.",
+    };
+  }
+  return { ok: true, decision: "allow", reason: "spawn-hand-fidelity-ok" };
 }
 
 /**
- * @description Writing-task ids from a bound execution-plan: a task counts as a
- * writing task when it declares a non-empty `scope_paths` (an executor produces a
- * capture for it). Returns null when the plan is not enumerable — the A5 push rail
- * is fail-open (never block delivery on a plan we cannot read).
- * @param {unknown} plan
- * @returns {string[] | null}
+ * @description Best-effort early trigger (ac-2.2): a freeze-commit for the NEXT task is a
+ * natural, low-frequency checkpoint to catch an unresolved capture ONE task sooner than the
+ * mandatory delivery gate. Ported 1:1 from Claude Code entry-gate.mjs lines 530-554. Advisory
+ * in the sense that it only ever evaluates within the narrow freeze-commit-message scope and
+ * never denies an ordinary (non-freeze, non-delivery) command — but WITHIN that scope it can
+ * return the same real-file-capture-rail deny the mandatory delivery gate would eventually
+ * produce, catching it earlier. Fail-open when featureId or listFn is unavailable.
+ * @param {{ gateState?: unknown, listHandRecordsForFeatureFn?: (featureId: string) => unknown[], isAncestorFn?: (sha: string) => boolean|null }} input
+ * @returns {Decision | null}
  */
-export function writingTaskIdsFromPlan(plan) {
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return null;
-  const tasks = /** @type {Record<string, unknown>} */ (plan).tasks;
-  if (!Array.isArray(tasks)) return null;
-  const ids = [];
-  for (const task of tasks) {
-    if (!task || typeof task !== "object" || Array.isArray(task)) continue;
-    const t = /** @type {Record<string, unknown>} */ (task);
-    const id = t.id;
-    const scope = t.scope_paths;
-    if (typeof id !== "string" || id.length === 0) continue;
-    if (!Array.isArray(scope) || scope.length === 0) continue;
-    if (!ids.includes(id)) ids.push(id);
-  }
-  return ids;
+function checkFreezeCommitEarlyCapture(input) {
+  const gs = normalizeGateState(input.gateState);
+  const featureId = typeof gs.feature_id === "string" ? gs.feature_id : null;
+  if (featureId === null) return null;
+  const listFn = input.listHandRecordsForFeatureFn;
+  if (typeof listFn !== "function") return null;
+  const isAncestorFn = typeof input.isAncestorFn === "function" ? input.isAncestorFn : () => null;
+  return checkRealFileCaptureRail(featureId, { listHandRecordsForFeatureFn: listFn, isAncestorFn });
 }
 
 /**
@@ -277,24 +267,47 @@ export function writingTaskIdsFromPlan(plan) {
  *   command?: unknown,
  *   gateState?: unknown,
  *   sessionId?: unknown,
- *   gateStateLoadOk?: boolean,
- *   headless?: boolean,
  *   gitState?: { branch?: string|null, commitsAhead?: number|null, defaultBranch?: string|null }|null,
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   listHandRecordsForFeatureFn?: (featureId: string) => unknown[],
- *   boundPlan?: { tasks?: unknown[] }|null,
+ *   readDescriptorFn?: (path: string) => object|null,
  * }} input
  * @returns {Decision}
  */
 export function decideBashDelivery(input = {}) {
   try {
     const command = input.command;
-    // 1. non-delivery → allow
+
+    // 0. spawn-hand.mjs fidelity rail — narrow trail, evaluated before delivery-command
+    // classification (spawn-hand.mjs is not itself git push / gh pr). #ac-2.1.
+    // NOT unconditionally terminal: a composite/incidental command that BOTH mentions
+    // spawn-hand.mjs (e.g. a `gh pr create --body '...dispatched via spawn-hand.mjs...'`,
+    // or literally `... && git push`) AND is itself a delivery command must still cross the
+    // branch/regate/capture/real-file rails below — a fidelity allow is not a delivery
+    // free-pass. Only a fidelity DENY short-circuits unconditionally.
+    if (typeof command === "string" && command.includes("spawn-hand.mjs")) {
+      const fidelity = decideSpawnHandFidelity(command, input);
+      if (fidelity.decision === "deny" || !isDeliveryCommand(command)) {
+        return fidelity;
+      }
+      // fidelity allowed AND this is also a delivery command → fall through to the
+      // delivery rails below instead of returning early.
+    }
+
+    // 1. non-delivery → allow (with the freeze-commit early capture-rail trigger). #ac-2.2.
     if (!isDeliveryCommand(command)) {
+      if (
+        typeof command === "string" &&
+        /\bgit\s+commit\b/.test(command) &&
+        /freeze locked tests for/i.test(command)
+      ) {
+        const early = checkFreezeCommitEarlyCapture(input);
+        if (early !== null) return early;
+      }
       return { ok: true, decision: "allow", reason: "not-delivery-command" };
     }
 
-    // 2. gitState rails (null / unresolvable → skip fail-open)
+    // 2. gitState rails (branch/zero-commits) — kept 1:1 with Claude Code. #ac-1.2, #ac-1.3.
     const gitState = input.gitState;
     if (gitState && typeof gitState === "object" && typeof gitState.branch === "string") {
       const isProtected =
@@ -325,153 +338,19 @@ export function decideBashDelivery(input = {}) {
       }
     }
 
-    // 3. sessionId safe + gateStateLoadOk — OC fail-closed deny
-    if (input.gateStateLoadOk === false) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: delivery requires readable gate-state (fail-closed).",
-      };
-    }
-
+    // 3. sessionId missing/unsafe → allow (infra error, fail-open — CC parity). #ac-1.5.
+    // Without a safe sessionId there is no session-scoped gate-state to evaluate the
+    // regate/capture/real-file rails against; Claude Code's decideBash short-circuits the
+    // same way (allow, never attempting to read gate-state for an unsafe/missing session).
     if (!isSafeSessionIdSegment(input.sessionId)) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: delivery requires a safe sessionId bound to gate-state.",
-      };
+      return { ok: true, decision: "allow", reason: "sessionId-missing-or-unsafe" };
     }
 
-    const gs =
-      input.gateState &&
-      typeof input.gateState === "object" &&
-      !Array.isArray(input.gateState)
-        ? /** @type {Record<string, unknown>} */ (input.gateState)
-        : {};
+    const gs = normalizeGateState(input.gateState);
+    const isAncestorFn = typeof input.isAncestorFn === "function" ? input.isAncestorFn : () => null;
 
-    const mode = normalizeMode(gs.mode);
-    const classified = gs.classified === true || gs.triaged === true;
-
-    // 4. ceremony checks — deny if fail, NEVER return allow
-    if (mode === "NO-CEREMONY") {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: no-ceremony mode cannot public-ship (git push / gh pr).",
-      };
-    }
-
-    if (!classified && !mode) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: delivery (git push / gh pr) requires ceremony — run triaging + classify before shipping.",
-      };
-    }
-
-    // 4a. review failure/useful caps block ALL delivery (including QUICK launder)
-    if (
-      gs.review_status === "primary_failure_cap_reached" ||
-      gs.review_status === "review_cap_reached"
-    ) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          `[entry-gate] Blocked: delivery denied while review_status=${String(gs.review_status)}. ` +
-          "Recover via canonical ceremony restart (new generation + bound plan) — never reclassify down to QUICK.",
-        details: { denied_class: "review-cap-active", review_status: gs.review_status },
-      };
-    }
-
-    if (mode === "QUICK" && classified) {
-      // Anti-launder: QUICK ship is only for genuine QUICK runs — not after LIGHT/FULL residue.
-      if (hasElevatedCeremonyResidue(gs)) {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: QUICK delivery denied after elevated ceremony residue " +
-            "(prior LIGHT/FULL, planner attempt, or dual/review leftovers). " +
-            "Finish the LIGHT/FULL path or open a new session — do not reclassify down.",
-          details: { denied_class: "quick-launder" },
-        };
-      }
-      // genuine QUICK — fall through to rails 5–9
-    } else if (mode === "LIGHT" || mode === "FULL" || (!mode && classified)) {
-      if (gs.brainstormed !== true) {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: delivery requires brainstormed before git push / gh pr.",
-        };
-      }
-      if (gs.adversary_fired !== true) {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: delivery requires adversary_fired before git push / gh pr.",
-        };
-      }
-      if (mode === "FULL" && !isRecordedDual(gs.dual_status)) {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: FULL delivery requires recorded dual_status before git push / gh pr.",
-          details: { dual_status: gs.dual_status ?? null },
-        };
-      }
-      // LIGHT|FULL require a usable bound planner plan — coordinator must not ship after
-      // planner_unavailable / plan_invalid / delivery-blocked (smoke #72 PR without hands).
-      if (gs.delivery_status === "delivery-blocked") {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: delivery_status=delivery-blocked — fix planner/review recovery before git push / gh pr.",
-          details: {
-            denied_class: "delivery-blocked",
-            planner_status: gs.planner_status ?? null,
-          },
-        };
-      }
-      if (gs.planner_status !== "usable") {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            `[entry-gate] Blocked: LIGHT/FULL delivery requires planner_status=usable ` +
-            `(got ${String(gs.planner_status ?? "missing")}). Dispatch planner or planner-fallback; do not implement inline.`,
-          details: {
-            denied_class: "planner-not-usable",
-            planner_status: gs.planner_status ?? null,
-            planner_retry_outcome: gs.planner_retry_outcome ?? null,
-          },
-        };
-      }
-      // ceremony OK — fall through (no ceremony-delivery-ok early allow)
-    } else {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: delivery requires valid mode stamp (QUICK|LIGHT|FULL).",
-      };
-    }
-
-    const isAncestorFn =
-      typeof input.isAncestorFn === "function"
-        ? input.isAncestorFn
-        : () => null;
-
-    // 5. corrupt regate_pending → deny (never "stamp regate-passed")
+    // 4. corrupt regate_pending → deny (never "stamp regate-passed") — the sole deliberate
+    // fail-closed exception (readable-but-malformed content, not an infra error).
     const regate = classifyRegatePending(gs);
     if (regate.corrupt) {
       return {
@@ -481,19 +360,12 @@ export function decideBashDelivery(input = {}) {
       };
     }
 
-    // 5b. corrupt hand_finished / capture_verified / regate_passed (present + non-array) → deny
-    for (const key of ["hand_finished", "capture_verified", "regate_passed"]) {
-      const marker = classifyArrayMarker(gs, key);
-      if (marker.corrupt) {
-        return {
-          ok: false,
-          decision: "deny",
-          reason: corruptArrayMarkerReason(marker.key, marker.raw),
-        };
-      }
-    }
+    // hand_finished / capture_verified / regate_passed are NOT the deliberate fail-closed
+    // exception — only regate_pending is (#ac-1.5: "a única exceção deliberada"). A non-array
+    // value here coerces to [] via coerceArray below, mirroring Claude Code exactly
+    // (entry-gate.mjs:633,655-656 do the same silent coercion, never a corrupt-content deny).
 
-    // 6. unmatched regate via matchesAbsolution
+    // 5. unmatched regate via matchesAbsolution — kept 1:1. #ac-1.4.
     const pending = regate.pending;
     const passed = coerceArray(gs.regate_passed);
     const unmatched = pending.filter(
@@ -512,7 +384,7 @@ export function decideBashDelivery(input = {}) {
       };
     }
 
-    // 7. unmatched hand_finished vs capture_verified (arrays validated above)
+    // 6. unmatched hand_finished vs capture_verified (arrays validated above) — kept 1:1.
     const handFinished = coerceArray(gs.hand_finished);
     const captureVerified = coerceArray(gs.capture_verified);
     const unmatchedCapture = handFinished.filter(
@@ -536,133 +408,31 @@ export function decideBashDelivery(input = {}) {
       };
     }
 
-    // 8. LIGHT/FULL require string feature_id
-    const featureId =
-      typeof gs.feature_id === "string" ? gs.feature_id : null;
-    if ((mode === "LIGHT" || mode === "FULL") && featureId === null) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "[entry-gate] Blocked: LIGHT/FULL delivery requires string feature_id in gate-state.",
-      };
+    // 7. real-file rail whenever feature_id is present — kept 1:1 (no ceremony/mode
+    // dependency; checkRealFileCaptureRail itself denies real-file-list-unavailable when
+    // listFn is missing/throws).
+    const featureId = typeof gs.feature_id === "string" ? gs.feature_id : null;
+    if (featureId !== null) {
+      const realFileDeny = checkRealFileCaptureRail(featureId, {
+        listHandRecordsForFeatureFn: input.listHandRecordsForFeatureFn,
+        isAncestorFn,
+      });
+      if (realFileDeny !== null) return realFileDeny;
     }
 
-    // 8b. multitask capture coverage (A5): every writing task in the BOUND plan must
-    // show delivery EVIDENCE — a capture-verified stamp OR a hand record for that task.
-    // This catches the real gap: a LIGHT/FULL feature shipping with a planned writing
-    // task that was never dispatched (no record, no capture = a silent half-build).
-    // A task WITH a hand record (any terminal outcome, incl. the shippable
-    // DONE_WITH_CONCERNS which the system deliberately does NOT capture-stamp) is left
-    // to the existing capture / real-file rails — 8b must not demand a capture the
-    // system never produces. Fail-open: only enforced when the bound plan is enumerable.
-    if ((mode === "LIGHT" || mode === "FULL") && featureId !== null) {
-      const writingTaskIds = writingTaskIdsFromPlan(input.boundPlan);
-      if (Array.isArray(writingTaskIds) && writingTaskIds.length > 0) {
-        const captured = coerceArray(gs.capture_verified);
-        const recordedTaskIds = new Set();
-        if (typeof input.listHandRecordsForFeatureFn === "function") {
-          try {
-            for (const rec of input.listHandRecordsForFeatureFn(featureId) ?? []) {
-              const tid = rec && typeof rec === "object" && !Array.isArray(rec) ? rec.taskId : null;
-              if (typeof tid === "string" && tid.length > 0) recordedTaskIds.add(tid);
-            }
-          } catch {
-            /* fail-open: unreadable records → treat as none, rely on capture match */
-          }
-        }
-        const missing = writingTaskIds.filter(
-          (taskId) =>
-            !recordedTaskIds.has(taskId) &&
-            !matchesAbsolution(
-              fidelityPassEntry(featureId, taskId, null),
-              captured,
-              isAncestorFn,
-            ),
-        );
-        if (missing.length > 0) {
-          return {
-            ok: false,
-            decision: "deny",
-            reason:
-              "[entry-gate] Blocked: delivery command denied — writing task(s) " +
-              `${missing.join(", ")} in the bound execution-plan have no delivery evidence ` +
-              "(no hand record and no capture-verified stamp) — a planned task was never " +
-              "dispatched (half-built delivery). Dispatch the hand for each remaining writing " +
-              "task before running any delivery command (git push / gh pr create / gh pr merge).",
-          };
-        }
-      }
-    }
-
-    // 9. real-file rail when LIGHT|FULL or feature_id present
-    // LIGHT|FULL: empty list is vacuous ship → deny (requireCaptureEvidence).
-    // QUICK with feature_id: still runs rail on present records; empty list ok.
-    const listFn = input.listHandRecordsForFeatureFn;
-    const isLightOrFull = mode === "LIGHT" || mode === "FULL";
-    const needsRealFile = isLightOrFull || featureId !== null;
-    if (needsRealFile) {
-      if (typeof listFn !== "function") {
-        return {
-          ok: false,
-          decision: "deny",
-          reason:
-            "[entry-gate] Blocked: real-file-list-unavailable — listHandRecordsForFeatureFn required for delivery.",
-        };
-      }
-      const realFileDeny = checkRealFileCaptureRail(
-        /** @type {string} */ (featureId),
-        {
-          listHandRecordsForFeatureFn: listFn,
-          isAncestorFn:
-            typeof input.isAncestorFn === "function"
-              ? input.isAncestorFn
-              : undefined,
-          requireCaptureEvidence: isLightOrFull,
-          // LIGHT|FULL positive evidence must bind to the current delivery session
-          requiredSessionId: isLightOrFull
-            ? /** @type {string} */ (input.sessionId)
-            : undefined,
-        },
-      );
-      if (realFileDeny !== null) {
-        return realFileDeny;
-      }
-    }
-
-    // 9b. FULL ship preconditions: final review (+ demo when interactive)
-    if (mode === "FULL") {
-      if (gs.final_review_done !== true) {
-        return {
-          ok: false,
-          decision: "deny",
-          details: { denied_class: "final-review-missing" },
-          reason:
-            "[entry-gate] Blocked: denied_class=final-review-missing; FULL delivery requires " +
-            "final dual review recorded (native mark action final-review) before git push / gh pr.",
-        };
-      }
-      if (!isHeadlessDeliveryContext(input, gs) && gs.demo_done !== true) {
-        return {
-          ok: false,
-          decision: "deny",
-          details: { denied_class: "demo-missing" },
-          reason:
-            "[entry-gate] Blocked: denied_class=demo-missing; interactive FULL delivery requires " +
-            "demo marker (native mark action demo-done) after operator validates the demo before " +
-            "git push / gh pr. Headless sessions skip this rail (auto-validated against ACs).",
-        };
-      }
-    }
-
-    // 10. single terminal allow only
+    // 8. single terminal allow only.
     return { ok: true, decision: "allow", reason: "delivery-ok" };
-  } catch {
-    return {
-      ok: false,
-      decision: "deny",
-      reason: "[entry-gate] Blocked: delivery decision failed",
-    };
+  } catch (err) {
+    // fail_open (resolved decision, docs/OC-CC-PARITY-REPORT.md item #60): an internal bug in
+    // this decision layer must never opaquely brick delivery — log for diagnosis, allow.
+    try {
+      console.error(
+        `[entry-gate] decideBashDelivery threw — failing open (allow): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } catch {
+      /* logging must never itself throw */
+    }
+    return { ok: true, decision: "allow", reason: "delivery-decision-failed-open" };
   }
 }
 

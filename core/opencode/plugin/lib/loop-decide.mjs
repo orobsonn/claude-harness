@@ -1,7 +1,7 @@
 /** @description Atomic review reservations, terminal accounting, dual authority, and review-cap epochs. */
 
 import crypto from "node:crypto";
-import { bareRole, isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
+import { bareRole } from "./roles.mjs";
 import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
 import {
@@ -45,7 +45,7 @@ const FAILURE_CLASSES = new Set([
  * `Error: [plan-gate] …`, so the tag is not at string start).
  */
 const HARNESS_DENY_TAG =
-  /\[(?:plan-gate|plan-write-gate|planner-recovery|loop-guard|entry-gate|marker-authority|command-resolver|obs-hand|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
+  /\[(?:plan-gate|plan-write-gate|planner-recovery|loop-guard|entry-gate|marker-authority|obs-hand|money-preflight|money|dual[\w-]*|bash-decide|gate)\]/i;
 
 const DIAGNOSTIC_MESSAGE_MAX = 280;
 
@@ -298,15 +298,24 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   const identity = reviewAgentIdentity(input.subagentType);
   const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
   const suppliedFeatureId = typeof input.featureId === "string" ? input.featureId : "";
-  const featureId = typeof state.feature_id === "string" ? state.feature_id : "";
+  const stateSessionId = typeof state.session_id === "string" ? state.session_id : "";
+  const stateFeatureId = typeof state.feature_id === "string" ? state.feature_id : "";
+  // Cold repo (#ac-2.4): a fresh gate-state (e.g. the very first spec-adversary attack, before
+  // classify has stamped session_id/feature_id) carries neither yet. Treat "not yet bound" as
+  // compatible with whatever this reservation supplies — a REAL mismatch (state already carries
+  // a DIFFERENT value) still refuses below. Nothing here weakens that: only the "no prior value
+  // recorded" case is exempted.
+  const sessionMismatch = stateSessionId !== "" && stateSessionId !== sessionId;
+  const featureMismatch = Boolean(stateFeatureId) && Boolean(suppliedFeatureId) && suppliedFeatureId !== stateFeatureId;
+  const featureId = stateFeatureId || suppliedFeatureId;
   const callId = typeof input.callId === "string" ? input.callId : "";
   if (
     !identity ||
     !sessionId ||
     !callId ||
-    state.session_id !== sessionId ||
+    sessionMismatch ||
     !isSafeFeatureId(featureId) ||
-    (suppliedFeatureId && suppliedFeatureId !== featureId)
+    featureMismatch
   ) {
     return { ok: false, reason: "review reservation identity mismatch", state };
   }
@@ -657,22 +666,76 @@ export function nextLoopCount(gateState, subagentType) {
   return { key, next: (Number.isInteger(current) && current >= 0 ? current : 0) + 1 };
 }
 
-export function decideReviewCapBeforeWriting(input = {}) {
-  if (!isExecutorRole(input.subagentType) && !isSniperRole(input.subagentType) && !isTestAuthorRole(input.subagentType)) {
-    return { ok: true, decision: "allow", reason: "not-writing-hand" };
+/**
+ * Headless (cloud fleet) signal — exact mirror of Claude Code entry-gate.mjs `defaultIsHeadless`
+ * (entry-gate.mjs:116-118): `Boolean(env.CLAUDE_CODE_REMOTE)`, never any other variable. A
+ * fleet-look-alike env (e.g. `HARNESS_NOTIFY_PROJECT` set without `CLAUDE_CODE_REMOTE`) must NOT
+ * bypass the interactive round-rail hard-stop below (#ac-2.3).
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+function isHeadlessRemote(env) {
+  const source = env && typeof env === "object" ? env : process.env;
+  return Boolean(source?.CLAUDE_CODE_REMOTE);
+}
+
+/** Documented plan-review revision-loop cap — past this, warn (not deny). */
+const PLAN_REVIEW_ROUND_CAP = 3;
+/** Runaway backstop — past this, the interactive session hard-stops. */
+const PLAN_REVIEW_ROUND_CEILING = 10;
+
+/**
+ * @description Orchestrator-facing plan-review round-rail. Decoupled from the review
+ * reservation budget (`LOOP_THRESHOLDS.plan_review`, which governs `review_cap_reached` /
+ * reservation-slot exhaustion — a separate OC bookkeeping concern, untouched here). Mirrors
+ * Claude Code entry-gate.mjs's Fix C (`PLAN_REVIEW_CAP`=3 / `PLAN_REVIEW_CEILING`=10, count >
+ * ceiling denies at the 11th dispatch): past the documented cap it warns and permits; past the
+ * runaway ceiling it denies — but ONLY in an interactive session. HEADLESS has no operator to
+ * escalate to, so it stays warn-only forever there — the fleet engine cap
+ * (core/vps/cron-a-exit.mjs, cron-review.mjs) is the real ceiling.
+ * @param {{ subagentType?: unknown, count?: number, env?: Record<string, string | undefined> }} [input]
+ * @returns {{ ok: boolean, decision: "allow" | "warn" | "deny", reason: string, count: number }}
+ */
+export function decidePlanReviewRoundRail(input = {}) {
+  const key = loopCounterKey(input.subagentType);
+  const count = Number.isFinite(input.count) ? Math.max(0, Math.floor(input.count)) : 0;
+  if (key !== "plan_review_count") {
+    return { ok: true, decision: "allow", reason: "not-plan-review", count };
   }
-  const status = object(input.gateState).review_status;
-  if (status === "review_cap_reached") {
-    return { ok: false, decision: "deny", reason: "review_cap_reached: verified review restart required" };
-  }
-  if (status === "primary_failure_cap_reached") {
+  const headless = isHeadlessRemote(input.env);
+  if (count > PLAN_REVIEW_ROUND_CEILING) {
+    if (headless) {
+      return {
+        ok: true,
+        decision: "warn",
+        reason:
+          `[loop-guard] plan-review round ${count} exceeds the runaway ceiling of ${PLAN_REVIEW_ROUND_CEILING} — ` +
+          "headless fleet session (CLAUDE_CODE_REMOTE): the engine cap is authoritative, not denied. " +
+          "Confirm this round is genuine new-bug discovery, not churn.",
+        count,
+      };
+    }
     return {
       ok: false,
       decision: "deny",
-      reason: "primary_failure_cap_reached: writing hands blocked until canonical ceremony restart",
+      reason:
+        `[loop-guard] Blocked: plan-review round ${count} exceeds the runaway ceiling of ${PLAN_REVIEW_ROUND_CEILING}. ` +
+        "STOP re-dispatching the plan-reviewer: escalate the blocking finding to the operator in product language.",
+      count,
     };
   }
-  return { ok: true, decision: "allow", reason: "review-cap-not-reached" };
+  if (count > PLAN_REVIEW_ROUND_CAP) {
+    return {
+      ok: true,
+      decision: "warn",
+      reason:
+        `[loop-guard] plan-review round ${count} exceeds the documented cap of ${PLAN_REVIEW_ROUND_CAP} revision loops. ` +
+        "Confirm this round is genuine new-bug discovery, not churn." +
+        (headless ? "" : ` A hard stop applies at round ${PLAN_REVIEW_ROUND_CEILING + 1}.`),
+      count,
+    };
+  }
+  return { ok: true, decision: "allow", reason: "loop-allow", count };
 }
 
 /**

@@ -13,11 +13,10 @@ export async function createLoopGuardHooks(
       : process.cwd()
 
   const {
-    decideLoopGuard,
     applyReviewOutcome,
     classifyReviewBoundaryError,
+    decidePlanReviewRoundRail,
     reserveReviewAttempt,
-    throwIfLoopDenied,
     loopCounterKey,
   } = await import("./lib/loop-decide.mjs")
   const { decideReviseNudge } = await import("./lib/revise-nudge.mjs")
@@ -83,6 +82,20 @@ export async function createLoopGuardHooks(
    * Failure wins over success for the same callId.
    */
   const callOutcomes = new Map<string, "success" | "failure">()
+
+  /**
+   * Raw plan-reviewer dispatch attempts per session (process-local, mirrors callOutcomes above).
+   * Backs the #482 round-rail — deliberately NOT gate-state (no lock, no cross-restart survival):
+   * it counts DISPATCH ATTEMPTS, unlike reserveReviewAttempt's persisted, epoch-scoped
+   * plan_review_count (useful-outcome accounting), so a review-cap epoch reopen must never reset it.
+   */
+  const planReviewDispatchCounts = new Map<string, number>()
+
+  function nextPlanReviewDispatchCount(sessionID: string): number {
+    const next = (planReviewDispatchCounts.get(sessionID) ?? 0) + 1
+    planReviewDispatchCounts.set(sessionID, next)
+    return next
+  }
 
   function recordAgentRetry(
     sessionID: string,
@@ -241,6 +254,24 @@ export async function createLoopGuardHooks(
       if (!identity) return
       const key = loopCounterKey(sub)
 
+      if (key === "plan_review_count") {
+        // Orchestrator-facing round-rail (#482): counts EVERY plan-reviewer dispatch ATTEMPT,
+        // decoupled from reserveReviewAttempt's own reservation-slot accounting below (a separate,
+        // already-enforced review-budget concern this issue does not touch — reclassifying a round
+        // as "focused verification" cannot dodge this count either, mirroring Claude Code
+        // entry-gate.mjs's Fix C). The DENY branch is decided and thrown HERE (the runtime's
+        // "tool.execute.before" output type is `{ args }` — no metadata field exists on it, so a
+        // throw is the only channel this hook can actually surface). The WARN message is decided
+        // from the SAME counter but injected in "tool.execute.after" below, where `output.metadata`
+        // really exists on the wire — writing it here would silently vanish, exactly the "dead
+        // string nobody reads" bug this issue set out to fix.
+        const dispatchCount = nextPlanReviewDispatchCount(sessionID)
+        const roundRail = decidePlanReviewRoundRail({ subagentType: sub, count: dispatchCount })
+        if (roundRail.decision === "deny") {
+          throw new Error(roundRail.reason)
+        }
+      }
+
       const sp = statePathFor(sessionID)
       if (!sp) return
 
@@ -257,21 +288,24 @@ export async function createLoopGuardHooks(
         return transition.ok ? transition.state : { ok: false, reason: transition.reason }
       })
       if (!reserved.ok) throw new Error(`[loop-guard] ${reserved.reason}`)
-
-      if (key) {
-        const count = typeof reserved.state[key] === "number" ? reserved.state[key] as number : 0
-        const decision = decideLoopGuard({ subagentType: sub, count })
-        if (decision.decision === "deny") {
-        // reserveReviewAttempt is the slot authority; count-only deny applies only when no slot was reserved.
-          const callID = input?.callID ?? input?.callId ?? ""
-          const hasReservation = Array.isArray(reserved.state.review_inflight) && reserved.state.review_inflight.some((item: any) => item?.call_id === callID)
-          if (!hasReservation) throwIfLoopDenied(decision)
-        }
-      }
     },
 
     "tool.execute.after": async (input: any, output: any) => {
       if (!isTaskTool(input?.tool)) return
+      const sessionID = input?.sessionID ?? input?.sessionId ?? ""
+      const args = argsOf(input, output)
+      const sub = extractSubagentType(args)
+      // Round-rail warn (#482): the counter was already incremented in "tool.execute.before"
+      // above (same process-local Map, peeked here — never incremented twice); this hook is
+      // where `output.metadata` is a real, delivered field, unlike before's `{ args }`-only shape.
+      if (sessionID && loopCounterKey(sub) === "plan_review_count") {
+        const dispatchCount = planReviewDispatchCounts.get(sessionID) ?? 0
+        const roundRail = decidePlanReviewRoundRail({ subagentType: sub, count: dispatchCount })
+        if (roundRail.decision === "warn" && output != null && typeof output === "object") {
+          if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
+          output.metadata.loop_guard_warning = roundRail.reason
+        }
+      }
       persistOutcome(input, output)
     },
 

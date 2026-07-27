@@ -407,6 +407,12 @@ export function decideDualBeforeDelivery(input = {}) {
     };
   } catch (err) {
     // Pure path: on unexpected error, deny closed for delivery hands (safe).
+    // #482 deliberately does NOT extend the fail-open drive-by here (unlike entry-decide.mjs's
+    // generic ceremony catch-all): this function is the ADR-003 dual-review-coverage authority,
+    // its input is gate-state.json — writable by hands via bash before this decision runs — and
+    // an adversarial review found that an unexpected exception here would silently release a
+    // delivery hand with NO recorded review coverage at all, a materially stronger invariant than
+    // the "has ceremony started" check entry-decide.mjs guards. Deny-closed on an internal fault.
     return {
       ok: false,
       decision: "deny",
