@@ -1004,3 +1004,77 @@ test("seedOpencodeRootConfig: [security] an integer-like source key cannot displ
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("seedOpencodeRootConfig: [security] a malformed example config with permission null does not crash the seed (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-example-null-permission-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: { question: "deny", external_directory: "allow", bash: { "*": "allow" } },
+      }),
+    );
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "opencode.json.example"),
+      JSON.stringify({ permission: null }),
+    );
+    assert.doesNotThrow(
+      () => seedOpencodeRootConfig(worktree, projectRoot),
+      "a malformed example config with permission: null must not crash the seed — typeof null === 'object' passes the object guard, and dereferencing examplePermission.bash on the null then throws",
+    );
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const map = cfg.permission.read;
+    assert.equal(
+      Object.keys(map)[0],
+      "*",
+      "permission.read's \"*\" wildcard must still be the FIRST key even when the example config's permission field was null",
+    );
+    assert.deepEqual(
+      Object.keys(map).slice(-8),
+      CANONICAL_SECRET_DENIES,
+      "the 8 canonical denies must still be the LAST 8 serialized keys even when the example config's permission field was null",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: [security] an invalid scalar source permission falls back to allow instead of being emitted verbatim (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-invalid-scalar-value-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: "banana",
+          edit: "Deny",
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    for (const key of ["read", "edit"]) {
+      const map = cfg.permission[key];
+      assert.equal(
+        Object.keys(map)[0],
+        "*",
+        `permission.${key}'s "*" wildcard must be the FIRST key even when the source scalar was an invalid action`,
+      );
+      assert.equal(
+        map["*"],
+        "allow",
+        `permission.${key}["*"] must fall back to 'allow' — an invalid scalar source value must never be emitted verbatim into the seeded config`,
+      );
+      assert.deepEqual(
+        Object.keys(map).slice(-8),
+        CANONICAL_SECRET_DENIES,
+        `permission.${key}'s 8 canonical denies must still be the LAST 8 serialized keys even when the source scalar was an invalid action`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
