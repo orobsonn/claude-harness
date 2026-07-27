@@ -8,6 +8,9 @@ import { createPlannerRecoveryHooks } from "./planner-recovery.ts";
 import { createPlanGateHooks } from "./plan-gate.ts";
 import { reconcilePlannerStateFromDisk, semanticPlanHash } from "./lib/planner-artifact.mjs";
 import { sealedMarkerRecord } from "./lib/marker-seal.mjs";
+import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs";
+
+isolateObservabilityRunPath();
 
 const SESSION = "ses_plannerRecovery01";
 const FEATURE = "planner-recovery";
