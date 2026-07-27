@@ -40,6 +40,7 @@ import {
   normalizeRuntimeTarget,
   resolveProjectTarget,
   writeOpencodeConfig,
+  writeSettings,
   installRepoFiles,
   assertFreshNativeInstall,
 } from "./vendor-core.mjs";
@@ -60,6 +61,9 @@ const harnessRoot = existsSync(join(__dirname, "../../../../../package.json"))
 const OC_EXAMPLE_PATH = join(__dirname, "../../../../opencode/opencode.json.example");
 // repo-root opencode.json (5 up from references/ to reach the repo root)
 const ROOT_OPENCODE_JSON_PATH = join(__dirname, "../../../../../opencode.json");
+// core/claude-code (3 up from references/ to reach core/claude-code/)
+const CC_CORE_DIR = join(harnessRoot, "core/claude-code");
+const CC_SETTINGS_PATH = join(CC_CORE_DIR, "settings.json");
 
 function createIssueAuthoringSourceFixture() {
   const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-source-fixture-"));
@@ -1136,5 +1140,167 @@ test("writeOpencodeConfig (issue #479): a malformed manifest.owned degrades grac
     assert.equal(readFileSync(join(tempDir, "opencode.json"), "utf8"), originalConfig);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------- writeSettings (issue #487: cc-settings-migration) ----------
+
+test("writeSettings: fresh project gets the shipped settings.json and a manifest", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-fresh-"));
+  try {
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    assert.equal(status, "created");
+
+    const written = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    const shipped = JSON.parse(readFileSync(CC_SETTINGS_PATH, "utf8"));
+    assert.deepEqual(written, shipped);
+
+    const manifest = JSON.parse(readFileSync(join(claudeDir, ".harness-config-manifest.json"), "utf8"));
+    assert.equal(manifest.harnessVersion, "v0.50.0");
+    assert.deepEqual(manifest.owned.permissions.deny, shipped.permissions.deny);
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings (ac-1.1): an already-vendored project without the migration's manifest gains the secret-read denies while its own custom permission survives", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-ac11-"));
+  try {
+    // Simulate a project vendored before this migration existed (v0.18.7-era): no denies at all,
+    // plus an operator customization the migration must never touch.
+    const legacySettings = {
+      permissions: {
+        allow: ["Edit", "Write", "Bash(git status:*)", "Bash(my-custom-tool:*)"],
+        deny: [],
+        defaultMode: "acceptEdits",
+      },
+    };
+    writeFileSync(join(claudeDir, "settings.json"), `${JSON.stringify(legacySettings, null, 2)}\n`);
+    writeFileSync(join(claudeDir, ".harness-version"), "v0.18.7\nvendored_at: 2026-01-01T00:00:00.000Z\n");
+
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.51.0");
+    assert.match(status, /merged existing settings\.json/);
+    assert.match(status, /added/);
+
+    const migrated = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    for (const secretDeny of ["Read(.env)", "Read(.env.*)", "Read(.dev.vars)", "Read(~/.ssh/**)", "Read(~/.aws/**)"]) {
+      assert.ok(migrated.permissions.deny.includes(secretDeny), `must inject ${secretDeny}`);
+    }
+    assert.ok(
+      migrated.permissions.allow.includes("Bash(my-custom-tool:*)"),
+      "operator's own permission must survive the migration untouched",
+    );
+    assert.equal(migrated.permissions.defaultMode, "acceptEdits");
+
+    const manifest = JSON.parse(readFileSync(join(claudeDir, ".harness-config-manifest.json"), "utf8"));
+    assert.equal(manifest.harnessVersion, "v0.51.0");
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings (ac-1.2): a stale settings.harness.json orphan is consumed and removed", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-orphan-"));
+  try {
+    const shipped = JSON.parse(readFileSync(CC_SETTINGS_PATH, "utf8"));
+    writeFileSync(join(claudeDir, "settings.json"), `${JSON.stringify(shipped, null, 2)}\n`);
+    // The old (pre-#487) writeSettings behavior: copy parked here for "manual merge" that never happened.
+    writeFileSync(join(claudeDir, "settings.harness.json"), `${JSON.stringify(shipped, null, 2)}\n`);
+
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    assert.match(status, /removed stale settings\.harness\.json orphan/);
+    assert.equal(existsSync(join(claudeDir, "settings.harness.json")), false);
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings (ac-1.3): a second pass over an already-migrated project is byte-identical", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-idempotent-"));
+  try {
+    writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    const configBefore = readFileSync(join(claudeDir, "settings.json"), "utf8");
+    const manifestBefore = readFileSync(join(claudeDir, ".harness-config-manifest.json"), "utf8");
+
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    assert.match(status, /already up to date/);
+    assert.equal(readFileSync(join(claudeDir, "settings.json"), "utf8"), configBefore);
+    assert.equal(readFileSync(join(claudeDir, ".harness-config-manifest.json"), "utf8"), manifestBefore);
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings (adversary finding, issue #487): a secret-read deny that silently disappears from a shrunken/corrupted source is NEVER dropped without an explicit ledger entry, even though the manifest recorded it as harness-owned", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-tier1-"));
+  const fakeCoreV1 = mkdtempSync(join(tmpdir(), "vendor-cc-fakecore-v1-"));
+  const fakeCoreV2 = mkdtempSync(join(tmpdir(), "vendor-cc-fakecore-v2-"));
+  try {
+    writeFileSync(
+      join(fakeCoreV1, "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Edit"], deny: ["Read(.env)", "Read(.dev.vars)"] } }),
+    );
+    writeSettings(fakeCoreV1, claudeDir, "v0.50.0");
+
+    // Operator customization: an extra deny the harness never shipped.
+    const afterFirst = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    afterFirst.permissions.deny.push("Read(secrets/**)");
+    writeFileSync(join(claudeDir, "settings.json"), `${JSON.stringify(afterFirst, null, 2)}\n`);
+
+    // A shrunken source — a bad --source, a truncated checkout, a merge mistake — no longer ships
+    // Read(.dev.vars) even though RETIRED_CC_PERMISSION_ENTRIES has no ledger entry for it. This
+    // must NOT be treated as a legitimate retirement: manifest ownership alone is not corroboration.
+    writeFileSync(
+      join(fakeCoreV2, "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Edit"], deny: ["Read(.env)", "Read(.aws/**)"] } }),
+    );
+    const status = writeSettings(fakeCoreV2, claudeDir, "v0.51.0");
+    assert.doesNotMatch(status, /removed retired/, "no ledger entry exists for Read(.dev.vars) — it must survive, not be pruned");
+    assert.equal(existsSync(join(claudeDir, "settings.json.pre-migration.bak")), false, "nothing was removed, so no backup should be created");
+
+    const migrated = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    assert.ok(
+      migrated.permissions.deny.includes("Read(.dev.vars)"),
+      "a previously-shipped secret-read deny must survive even when the new source stops shipping it, absent a ledger entry",
+    );
+    assert.ok(migrated.permissions.deny.includes("Read(.aws/**)"), "new v2 entry must still be added");
+    assert.ok(migrated.permissions.deny.includes("Read(secrets/**)"), "operator's own addition must survive untouched");
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(fakeCoreV1, { recursive: true, force: true });
+    rmSync(fakeCoreV2, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings preserves malformed existing settings.json and emits a repair sidecar", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-invalid-"));
+  try {
+    const original = "{ project-owned invalid json\n";
+    writeFileSync(join(claudeDir, "settings.json"), original);
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    assert.match(status, /manual repair/);
+    assert.equal(readFileSync(join(claudeDir, "settings.json"), "utf8"), original);
+    const sidecar = JSON.parse(readFileSync(join(claudeDir, "settings.harness.json"), "utf8"));
+    assert.ok(Array.isArray(sidecar.permissions.deny));
+    assert.equal(existsSync(join(claudeDir, ".harness-config-manifest.json")), false);
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("writeSettings: a malformed manifest.owned degrades gracefully and never blocks a valid re-migration", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-manifest-corrupt-"));
+  try {
+    writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    const originalConfig = readFileSync(join(claudeDir, "settings.json"), "utf8");
+
+    const manifestPath = join(claudeDir, ".harness-config-manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({ version: 1, harnessVersion: "v0.50.0", owned: "not-an-object" }));
+
+    const status = writeSettings(CC_CORE_DIR, claudeDir, "v0.50.0");
+    assert.doesNotMatch(status, /manual repair/, "a malformed manifest must degrade gracefully, not corrupt the project");
+    assert.equal(readFileSync(join(claudeDir, "settings.json"), "utf8"), originalConfig);
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
   }
 });
