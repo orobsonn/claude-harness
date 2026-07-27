@@ -52,7 +52,7 @@ test("#ac-1.1 decide: hand-ran resolves against a REAL multi-line (pretty-printe
   );
 
   const result = decide(payload);
-  assert.deepEqual(result, { action: "hand-ran", descriptorPath: "/tmp/d.json" });
+  assert.deepEqual(result, { action: "hand-ran", descriptorPath: "/tmp/d.json", outcomeStatus: "done" });
 });
 
 // ---------------------------------------------------------------------------

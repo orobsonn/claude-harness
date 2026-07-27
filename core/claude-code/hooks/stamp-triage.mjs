@@ -250,8 +250,11 @@ function sanitizeScopeList(value) {
  *         | { action: 'plan-reviewed',  verdict: 'APPROVE'|'REVISE' }  observability-only (no gate-state write)
  *         | { action: 'task-executing', n: number, total: number }     observability-only (no gate-state write)
  *         | { action: 'final-review-done' }                           observability-only (no gate-state write)
- *         | { action: 'hand-ran', descriptorPath: string }              observability-only (no gate-state write);
- *                                 task/model are read from the --descriptor file at effect time
+ *         | { action: 'hand-ran', descriptorPath: string, outcomeStatus?: string }  observability-only (no gate-state write);
+ *                                 task/model are read from the --descriptor file at effect time; outcomeStatus
+ *                                 (DONE|FAILED|NOT_DONE, from the run-record's own `outcome.status`) is what
+ *                                 also structurally derives `gates-ran` (and, for a sniper descriptor, `sniper-ran`)
+ *                                 — no separate marker, the SAME detection already carries it
  *         | { action: 'marker-ambiguous' }
  *         | { action: 'none' }}
  */
@@ -329,11 +332,14 @@ export function decide(payload) {
     // NO role field and NO top-level task_id/feature_id, so task/model are sourced from the
     // --descriptor file named in argv at effect time — never fabricated from stdout. The hook
     // appends a {type:'hand-ran', task, model} checkpoint to the observability outbox, closing
-    // executor/sniper blindness (hands are Bash via spawn-hand, not Agent).
+    // executor/sniper blindness (hands are Bash via spawn-hand, not Agent). `outcome.status` IS
+    // the step-4 gate's own outcome (DONE = captured green; FAILED/NOT_DONE = red) — carried
+    // through so the effect layer can ALSO structurally derive {type:'gates-ran'} (and, for a
+    // sniper descriptor, {type:'sniper-ran'}) from this SAME detection, never a separate marker.
     if (isRealRunRecord(parsed)) {
       const descriptorPath = extractDescriptorPath(command);
       if (descriptorPath) {
-        return { action: "hand-ran", descriptorPath };
+        return { action: "hand-ran", descriptorPath, outcomeStatus: parsed.outcome?.status };
       }
     }
     return { action: "none" };
@@ -1043,6 +1049,42 @@ export function handle(payload, opts = {}) {
         event.role = descriptor.role;
       }
       obsAppend(event, appendEventFn);
+
+      // Structural gates-ran (#491): this SAME run-record's own outcome.status IS the step-4
+      // gate's outcome — DONE means the independent capture came back green (pass), FAILED/
+      // NOT_DONE means it did not (fail). No separate marker; re-run after a sniper fix produces
+      // its own fresh hand-ran detection, so every gate run gets its own event, never deduped.
+      // SCOPE (deliberate, not a gap this diff owns to close): `outcome.status` comes from
+      // evaluateRun (dispatch-hand.mjs) — scope/frozen/allowed-write checks + the locked test's
+      // exit code ONLY. It never runs `tsc --noEmit` or lint (those are separate ad-hoc Bash calls
+      // the orchestrator issues afterward per SKILL.md step 4, with no fixed/parseable command
+      // shape stamp-triage.mjs could detect generically — unlike spawn-hand.mjs, there is no
+      // single well-known script to hook). So `result` reports the ONE gate that is actually
+      // delivery-blocking (SKILL.md's own "gate of record"), not the full tsc+lint+test bundle
+      // the issue's prose describes — GitHub CI on the PR remains the real backstop for tsc/lint,
+      // exactly as the equally-partial `ci-suite-result.json` check is already a documented
+      // residual elsewhere in this SKILL.md (Phase 3, "not yet an entry-gate-enforced marker
+      // rail"). The rendered body line says "(teste travado)" so a quick glance is not misread as
+      // "build+lint+tests all green" — see notify-telegram.mjs's cosmeticBodyLines gates-ran case.
+      if (decision.outcomeStatus === "DONE" || decision.outcomeStatus === "FAILED" || decision.outcomeStatus === "NOT_DONE") {
+        obsAppend(
+          { type: "gates-ran", task: descriptor.task_id, result: decision.outcomeStatus === "DONE" ? "pass" : "fail" },
+          appendEventFn,
+        );
+      }
+
+      // Structural sniper-ran (#491): a sniper descriptor already carries the resolved severity
+      // tier (model_resolution.tier) the dispatch used to pick hand_tiers[...] — surface it as the
+      // "Correção cirúrgica" feed fact, distinct from hand-ran (which only names the model). Read
+      // from model_resolution.role, NOT the top-level descriptor.role the hand-ran branch above
+      // checks — emitDescriptor never writes a top-level `role` (only nested in model_resolution,
+      // set by resolveExecutorModel/resolveSniperModel), so a real descriptor only has it there.
+      if (descriptor.model_resolution?.role === "sniper" && typeof descriptor.model_resolution?.tier === "string") {
+        obsAppend(
+          { type: "sniper-ran", task: descriptor.task_id, severity: descriptor.model_resolution.tier },
+          appendEventFn,
+        );
+      }
     }
     return;
   }

@@ -92,6 +92,8 @@ const EMOJI = {
   "hand-ran": "✋",
   eye: "👁️",
   "regate-pending": "🔒",
+  "sniper-ran": "🔧",
+  "gates-ran": "🚦",
   pr: "🔗",
 };
 
@@ -745,10 +747,13 @@ function consumeBudget() {
 /**
  * @description The curated per-run checkpoint feed: ONLY these types reach the Telegram topic. The
  * operator's wished milestones — session start, classify, spec, spec-adversary, plan, plan
- * review/approval, task loop, models per task (hand-ran), final review, PR. Everything else in the
- * outbox (raw `eye`, `regate-pending`, and any lifecycle/reaper/chain events) is audit-only:
- * suppressed at DRAIN/RENDER time, never at append time (the JSONL stays the full audit trail;
- * `criticalSent`/`cursor` indices are positional and must not be renumbered).
+ * review/approval, task loop, models per task (hand-ran), the sniper's fix (sniper-ran), the
+ * technical gates (gates-ran), final review, PR. Everything else in the outbox (`regate-pending`,
+ * and any lifecycle/reaper/chain events) is audit-only: suppressed at DRAIN/RENDER time, never at
+ * append time (the JSONL stays the full audit trail; `criticalSent`/`cursor` indices are positional
+ * and must not be renumbered). `eye` is curated CONDITIONALLY on `event.role` — see
+ * `isCuratedFeedEvent` — never via this flat type Set, since a `plan-reviewer` role must stay
+ * suppressed (its own dedicated `plan-reviewed` checkpoint already covers that fact).
  */
 const CURATED_FEED_TYPES = new Set([
   "picked",
@@ -760,13 +765,25 @@ const CURATED_FEED_TYPES = new Set([
   "plan-reviewed",
   "task-executing",
   "hand-ran",
+  "sniper-ran",
+  "gates-ran",
   "final-review-done",
   "pr",
 ]);
 
-/** @description True when an event belongs in the curated Telegram feed (case-insensitive). */
+/** @description The `eye` roles curated into the per-task feed (compliance/adversary/security). A
+ * `plan-reviewer` eye (or any other/unknown role) is deliberately excluded — its verdict already
+ * has a dedicated `plan-reviewed` checkpoint, so a raw `eye` line would duplicate the same fact. */
+const EYE_CURATED_ROLES = new Set(["compliance", "adversary", "security"]);
+
+/** @description True when an event belongs in the curated Telegram feed (case-insensitive). `eye`
+ * is special-cased on `event.role` (see `EYE_CURATED_ROLES`) rather than being a flat member of
+ * `CURATED_FEED_TYPES`. */
 export function isCuratedFeedEvent(event) {
   const type = String(event?.type ?? "").toLowerCase();
+  if (type === "eye") {
+    return EYE_CURATED_ROLES.has(String(event?.role ?? "").toLowerCase());
+  }
   return CURATED_FEED_TYPES.has(type);
 }
 
@@ -778,7 +795,9 @@ export function isCriticalEvent(event) {
   return CRITICAL_TYPES.has(event.type);
 }
 
-/** @description Operator-facing pt-br label per curated checkpoint type. */
+/** @description Operator-facing pt-br label per curated checkpoint type. `eye` and `gates-ran` are
+ * NOT here — their label depends on `event.role` / `event.result` respectively, resolved by
+ * `resolveCheckpointLabel`. */
 const CHECKPOINT_LABELS = {
   picked: "Sessão iniciada",
   "pipeline-type": "Classificação",
@@ -789,9 +808,39 @@ const CHECKPOINT_LABELS = {
   "plan-reviewed": "Revisão do plano",
   "task-executing": "Tarefa",
   "hand-ran": "Tarefa implementada",
+  "sniper-ran": "Correção cirúrgica",
   "final-review-done": "Revisão final concluída",
   pr: "PR aberto",
 };
+
+/** @description Operator-facing pt-br label per `eye` role — compliance/adversary/security, the
+ * three roles `EYE_CURATED_ROLES` lets through. A `plan-reviewer` (or any other/unknown) role never
+ * reaches here in production (isCuratedFeedEvent denies it before rendering); the UPPERCASE type
+ * fallback below exists only as a defensive backstop, never a real label the operator sees. */
+const EYE_ROLE_LABELS = {
+  compliance: "Conformidade",
+  adversary: "Adversarial da tarefa",
+  security: "Segurança",
+};
+
+/** @description Resolves a checkpoint's operator-facing pt-br label. Two types carry a
+ * dynamic label instead of a flat `CHECKPOINT_LABELS` entry: `eye` (keyed by `event.role`) and
+ * `gates-ran` (keyed by `event.result`, pass|fail). Every other curated type resolves through the
+ * static map, falling back to the UPPERCASE taxonomy key for any type that reaches the renderer
+ * without a curated label (defensive — should not happen for a curated event in practice).
+ * @param {string} type - Lowercased event type.
+ * @param {object} event
+ * @returns {string}
+ */
+function resolveCheckpointLabel(type, event) {
+  if (type === "eye") {
+    return EYE_ROLE_LABELS[String(event?.role ?? "").toLowerCase()] ?? type.toUpperCase();
+  }
+  if (type === "gates-ran") {
+    return event?.result === "fail" ? "Portões: FALHOU" : "Portões: OK";
+  }
+  return CHECKPOINT_LABELS[type] ?? type.toUpperCase();
+}
 
 /** @description The operator's timezone — checkpoint clock times render in São Paulo local time
  * regardless of the VPS host timezone, so `14:32` means 14:32 for the operator. */
@@ -827,7 +876,7 @@ export function formatCheckpointTime(ts) {
 function checkpointTitle(event) {
   const type = String(event?.type ?? "evento").toLowerCase();
   const emoji = EMOJI[type] ?? "🔔";
-  const label = CHECKPOINT_LABELS[type] ?? type.toUpperCase();
+  const label = resolveCheckpointLabel(type, event);
   const time = formatCheckpointTime(event?.ts);
   return `${time ? `${time} ` : ""}${emoji} ${label}`;
 }
@@ -884,6 +933,17 @@ function cosmeticBodyLines(event, meta, isFallback) {
         `${event.task ?? "tarefa"}${event.role ? " (" + event.role + ")" : ""} — modelo ${event.model ?? "?"}`
       );
       break;
+    case "sniper-ran":
+      lines.push(`tarefa ${event.task ?? "?"} — severidade ${event.severity ?? "?"}`);
+      break;
+    case "gates-ran":
+      // Scope hedge (deliberate, not filler): this reflects the frozen-test capture — the single
+      // structural, delivery-blocking gate — NOT the orchestrator's separate tsc/lint pass, which
+      // has no per-task observability today (see the stamp-triage.mjs producer comment). Naming
+      // "teste travado" here keeps a quick Telegram glance from reading "Portões: OK" as "build +
+      // lint + tests all green" when only the locked test was verified.
+      lines.push(`tarefa ${event.task ?? "?"} (teste travado)`);
+      break;
     case "final-review-done":
       // No info line: the label ("Revisão final concluída") already says everything → title-only.
       break;
@@ -895,7 +955,8 @@ function cosmeticBodyLines(event, meta, isFallback) {
       // No info line: the label ("Sessão iniciada") already says everything → title-only.
       break;
     case "eye":
-      lines.push(`${event.role ?? "eye"} returned`);
+      // No info line: the role-specific label (Conformidade/Adversarial da tarefa/Segurança,
+      // resolved by resolveCheckpointLabel) already says everything → title-only checkpoint.
       break;
     default:
       lines.push("checkpoint");
