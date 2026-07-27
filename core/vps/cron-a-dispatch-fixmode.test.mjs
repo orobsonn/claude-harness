@@ -11,13 +11,26 @@
  *
  * #ac-2.1 (issue #488): the OTHER half of fix-mode — whether the sniper TASK DISPATCH composed
  * above actually survives the real 5-plugin OpenCode gate chain (planner-recovery → plan-gate →
- * obs-hand → loop-guard → entry-gate, docs/OC-CC-PARITY-REPORT.md §2) when it lands on a cold/empty
- * gate-state (no `.opencode/plans/.state/<sid>/gate-state.json`, no `harness.routing.json` — the
- * real fix-mode/repo-frio shape). The tests above never exercised this: they only assert what
- * cron-a-dispatch.mjs COMPOSES for tmux, never what the OpenCode plugin chain does with it once
- * dispatched. See the `chain:` test group below.
+ * obs-hand → loop-guard → entry-gate, docs/OC-CC-PARITY-REPORT.md §2). The tests above never
+ * exercised this: they only assert what cron-a-dispatch.mjs COMPOSES for tmux, never what the
+ * OpenCode plugin chain does with it once dispatched. Two `chain:`/`#ac-3.1` tests below cover the
+ * two shapes that matter:
+ *   - a REALISTIC fresh fix-mode gate-state (classify/mode stamped — triaging-requests always runs
+ *     at session start per core/CLAUDE.md; recorded prior dual/plan_verdict; no planner ceremony/
+ *     binding/regate/fidelity) survives all 5 plugins (#ac-3.1, below).
+ *   - a genuinely COLD/EMPTY gate-state (no `.opencode/plans/.state/<sid>/gate-state.json` at all)
+ *     is DENIED at entry-gate's Gate 1 (CC parity, #485/#509: every delivery role — sniper included
+ *     — requires a classified mode of LIGHT/FULL). This is the honest current behavior, not the
+ *     hoped-for one: `FIX_MODE_TRIGGER` (cron-a-dispatch.mjs:247) — unlike `TRIGGER_PROMPT` and
+ *     `OPENCODE_TRIGGER_PROMPT` — never instructs the session to follow the vendored entry policy,
+ *     so whether a real fix-mode session actually runs `triaging-requests`/classify before
+ *     dispatching the sniper is model-judgment, not code-guaranteed. See the tracking issue this
+ *     PR opens for closing that gap; this test intentionally asserts the DENY, not survival, so it
+ *     regresses loudly if Gate 1 is ever silently loosened instead of the trigger being fixed.
  *
- * Run with: node --test core/vps/cron-a-dispatch-fixmode.test.mjs
+ * Run with: HARNESS_MEM_GUARD_BYTES=0 node --test core/vps/cron-a-dispatch-fixmode.test.mjs
+ * (the memory guard in cron-a-dispatch.mjs's `dispatch()` fails 4 of the tests above under low free
+ * memory — a pre-existing machine condition unrelated to this issue, first documented in PR #508).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -311,45 +324,57 @@ async function runDispatchChain(root, input, output) {
   return { survived: true };
 }
 
-test("chain: sniper Task dispatch with a COLD gate-state (only the classify/mode stamp core/CLAUDE.md always writes first; no planner binding/ceremony, no dual_status/plan_verdict, no fidelity_pass, no regate, no harness.routing.json) survives the real 5-plugin chain end to end", async () => {
-  // #488/#483/#485/#486 are all closed and merged into this branch — re-verified empirically:
+test("chain: sniper Task dispatch with a TRULY COLD/EMPTY gate-state (no gate-state.json at all, no harness.routing.json) is DENIED at entry-gate's Gate 1 (ceremony/classify missing) — the honest current behavior, not the hoped-for one", async () => {
+  // #483/#484/#485/#486 are all closed and merged into this branch — re-verified empirically that
+  // FOUR of the five plugins now fail open against a cold/empty gate-state:
   //   - planner-recovery: allows (non-planner role).
   //   - plan-gate: the planner_plan_binding block is now conditional on the binding's EXISTENCE
-  //     (#476/#500) — absent → skip entirely, fail-open like Claude Code (no plan-gate on
-  //     dispatch at all). dual/plan_verdict classification is record-only (#483/#511) — it never
-  //     denies, regardless of harness.routing.json being present on disk.
+  //     (#476/#500) — absent → skip entirely. dual/plan_verdict classification is record-only
+  //     (#483/#511) — it never denies, regardless of harness.routing.json being present on disk.
   //   - obs-hand: shadow-records only (#488's own T17 half, PR #508/#509) — never denies dispatch.
   //   - loop-guard: no counters seeded → allow.
-  //   - entry-gate: sniper is fidelity-exempt (#485/#509) and there is no regate_pending (shipper
-  //     is the only role Gate 3 gates) — BUT Gate 1 (entry-gate.mjs:819-842 parity, #485/#509)
-  //     requires EVERY delivery role, sniper included, to dispatch only under a classified
-  //     mode of LIGHT or FULL; Claude Code has no per-role exemption there either. Production
-  //     never actually skips this: core/CLAUDE.md runs `triaging-requests` at the start of every
-  //     session, fix-mode's FIX_MODE_TRIGGER only skips planner/plan-reviewer (see #ac-3.1 above),
-  //     never classify. So "cold" here means no PLANNER/dual/fidelity/regate artifacts on disk —
-  //     the classify/mode stamp itself is never actually absent in a real dispatch, and asserting
-  //     survival against a gate-state with THAT stamp missing would test a shape production never
-  //     produces, not a real regression.
+  // But entry-gate's Gate 1 (entry-decide.mjs:88-109, CC parity #485/#509) requires EVERY delivery
+  // role — sniper included, no per-role exemption, exactly like Claude Code's entry-gate.mjs — to
+  // be dispatched under a classified mode of LIGHT or FULL. A literally empty gate-state has
+  // neither, so it is denied with "ceremony missing".
+  //
+  // An earlier version of this test injected {classified:true, mode:"LIGHT"} into the gate-state
+  // to make it pass, on the premise that "core/CLAUDE.md always runs triaging-requests at session
+  // start, so a real fix-mode dispatch never actually reaches Gate 1 without that stamp". That
+  // premise does NOT hold under scrutiny: unlike TRIGGER_PROMPT and OPENCODE_TRIGGER_PROMPT
+  // (cron-a-dispatch.mjs:135-151), which explicitly say "Follow the vendored .claude/.opencode/
+  // entry policy", FIX_MODE_TRIGGER (cron-a-dispatch.mjs:247-258) never does — and the classify
+  // stamp is model-invoked (via the triaging-requests skill calling classify.mjs), never a
+  // deterministic code guarantee. Asserting `survived: true` against a fixture edited to inject
+  // exactly the field whose absence causes the denial characterizes the fixture, not the system —
+  // see the tracking issue this PR opens for closing the real gap (FIX_MODE_TRIGGER should
+  // explicitly instruct the session to classify before dispatching the sniper). This test instead
+  // asserts today's REAL, deterministic behavior so it regresses loudly if Gate 1 is ever silently
+  // loosened, independent of whether/when the trigger prompt gets fixed.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
   try {
-    // Deliberately nothing else on disk: no `harness.routing.json`, no planner_plan_binding, no
-    // dual_status/plan_verdict, no fidelity_pass, no regate_pending — the cold-repo / fleet-fix-mode
-    // shape the roadmap names, minus the classify/mode stamp core/CLAUDE.md always writes first.
+    // Deliberately nothing on disk: no `.opencode/plans/.state/<sid>/gate-state.json`, no
+    // `.opencode/harness.routing.json` — the cold-repo / fleet-fix-mode shape the roadmap names.
     const sessionId = "ses_fixmode_chain";
-    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ session_id: sessionId, classified: true, mode: "LIGHT" }),
-      "utf8",
-    );
-    const input = { tool: "task", sessionID: sessionId, callID: "fixmode-chain-sniper" };
-    const output = { args: { description: "fix the finding", prompt: "Fix it.", subagent_type: "sniper-medium" } };
+    const input = {
+      tool: "task",
+      sessionID: sessionId,
+      callID: "fixmode-chain-sniper",
+    };
+    const output = {
+      args: {
+        prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-fix"}[/HARNESS_TASK_CONTEXT]\nFix the reported bug.`,
+        subagent_type: "sniper-medium",
+        feature_id: "feat-fixmode-chain",
+        task_id: "t0-fix",
+      },
+    };
 
     const result = await runDispatchChain(root, input, output);
-    assert.equal(result.survived, true,
-      `expected the sniper dispatch to survive the 5-plugin chain with a cold (classify-only) gate-state; ` +
-      `denied at "${result.deniedAt}": ${result.message}`);
+    assert.equal(result.survived, false,
+      "expected a truly cold/empty gate-state to be DENIED (ceremony/classify missing), not to survive");
+    assert.equal(result.deniedAt, "entry-gate");
+    assert.match(result.message, /ceremony missing/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
