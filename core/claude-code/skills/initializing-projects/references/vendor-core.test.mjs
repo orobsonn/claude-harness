@@ -1272,6 +1272,55 @@ test("writeSettings (adversary finding, issue #487): a secret-read deny that sil
   }
 });
 
+test("writeSettings (regression, issue #487 second adversary pass): a ledger-matched retirement IS removed, backs up the true pre-migration bytes exactly once, and a later no-op run never re-creates the backup", () => {
+  // RETIRED_CC_PERMISSION_ENTRIES is empty in production (no entry has ever been retired yet), so
+  // the removal path it gates is otherwise unreachable by any test — the fresh-virgin re-attack on
+  // the issue #487 fix flagged this as a real regression gap on the very mechanism the HIGH finding
+  // hardened. `retiredEntries` is writeSettings' test-only seam (never used outside this file).
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-ledger-removal-"));
+  const fakeCoreV1 = mkdtempSync(join(tmpdir(), "vendor-cc-fakecore-ledger-v1-"));
+  const fakeCoreV2 = mkdtempSync(join(tmpdir(), "vendor-cc-fakecore-ledger-v2-"));
+  try {
+    writeFileSync(
+      join(fakeCoreV1, "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Edit"], deny: ["Read(.env)", "Read(legacy-secret)"] } }),
+    );
+    writeSettings(fakeCoreV1, claudeDir, "v0.50.0");
+
+    // v2 genuinely retires Read(legacy-secret) — this time with a real, checked-in-shaped ledger entry.
+    writeFileSync(
+      join(fakeCoreV2, "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Edit"], deny: ["Read(.env)"] } }),
+    );
+    const retiredEntries = [
+      {
+        arrayPath: ["permissions", "deny"],
+        entry: "Read(legacy-secret)",
+        shippedThroughGeneration: { major: 0, minor: 50, patch: 0 },
+      },
+    ];
+
+    const status = writeSettings(fakeCoreV2, claudeDir, "v0.51.0", { retiredEntries });
+    assert.match(status, /removed retired/);
+
+    const migrated = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    assert.ok(!migrated.permissions.deny.includes("Read(legacy-secret)"), "a genuine ledger match must still remove the entry");
+
+    const backupPath = join(claudeDir, "settings.json.pre-migration.bak");
+    assert.ok(existsSync(backupPath), "a real removal must create the rollback backup");
+    const backup = JSON.parse(readFileSync(backupPath, "utf8"));
+    assert.ok(backup.permissions.deny.includes("Read(legacy-secret)"), "the backup must hold the true pre-migration bytes");
+
+    const backupBefore = readFileSync(backupPath, "utf8");
+    writeSettings(fakeCoreV2, claudeDir, "v0.52.0", { retiredEntries });
+    assert.equal(readFileSync(backupPath, "utf8"), backupBefore, "a later no-op run must never overwrite the one-time backup");
+  } finally {
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(fakeCoreV1, { recursive: true, force: true });
+    rmSync(fakeCoreV2, { recursive: true, force: true });
+  }
+});
+
 test("writeSettings preserves malformed existing settings.json and emits a repair sidecar", () => {
   const claudeDir = mkdtempSync(join(tmpdir(), "vendor-cc-settings-invalid-"));
   try {

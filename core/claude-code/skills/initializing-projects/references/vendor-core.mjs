@@ -1450,7 +1450,7 @@ function isPermissionArrayPath(path) {
  * checked-in ledger entry can retire an entry). Everything else the operator added, or that the
  * harness once owned but stopped shipping without a ledger entry, survives untouched.
  */
-function mergePermissionArray(path, existingArr, newArr, _ownedArr, ledgerByPath, projectGeneration) {
+function mergePermissionArray(path, existingArr, newArr, ledgerByPath, projectGeneration) {
   const existing = Array.isArray(existingArr) ? existingArr : [];
   const shipped = Array.isArray(newArr) ? newArr : [];
   const shippedSet = new Set(shipped);
@@ -1494,7 +1494,10 @@ function mergePermissionArray(path, existingArr, newArr, _ownedArr, ledgerByPath
  */
 function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration) {
   if (isPermissionArrayPath(path)) {
-    return mergePermissionArray(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration);
+    // No `ownedNode` here on purpose: removal from a permission array requires an explicit ledger
+    // match regardless of manifest ownership (see mergePermissionArray's doc) — passing it through
+    // would invite a future "restore the owned check as a shortcut" regression of issue #487.
+    return mergePermissionArray(path, existingNode, newNode, ledgerByPath, projectGeneration);
   }
 
   const existingIsMissingOrObject = existingNode === undefined || isPlainObject(existingNode);
@@ -1538,12 +1541,24 @@ function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath,
  * vendored at to the current one, without ever discarding an operator customization. Same
  * manifest/ledger model as `migrateOpencodeConfig` (issue #479), adapted for settings.json's
  * array-based `permissions.{allow,deny,ask}` lists instead of OpenCode's nested permission map.
+ * No `tier` in the return value: unlike the OpenCode side, a permission-array removal here never
+ * branches on tier (see `mergePermissionArray`) — reintroducing a tier-gated field here would only
+ * invite a future "restore the OC-style backup gate" regression of issue #487.
+ * @param {object} params
+ * @param {ReadonlyArray<{arrayPath: string[], entry: string, shippedThroughGeneration: {major:number,minor:number,patch:number}}>} [params.retiredEntries] -
+ *   the ledger consulted for removal corroboration; defaults to the real `RETIRED_CC_PERMISSION_ENTRIES`. Overridable ONLY so tests can
+ *   exercise the removal path without a real production retirement — callers must never override this
+ *   in non-test code.
  */
-function migrateClaudeSettings({ existingConfig, newConfig, manifest = null, previousHarnessVersionStamp = null, newHarnessVersion = null }) {
-  const tier = manifest ? 1 : previousHarnessVersionStamp ? 2 : 3;
-  const ledgerByPath = new Map(
-    RETIRED_CC_PERMISSION_ENTRIES.map((entry) => [`${JSON.stringify(entry.arrayPath)}::${entry.entry}`, entry]),
-  );
+function migrateClaudeSettings({
+  existingConfig,
+  newConfig,
+  manifest = null,
+  previousHarnessVersionStamp = null,
+  newHarnessVersion = null,
+  retiredEntries = RETIRED_CC_PERMISSION_ENTRIES,
+}) {
+  const ledgerByPath = new Map(retiredEntries.map((entry) => [`${JSON.stringify(entry.arrayPath)}::${entry.entry}`, entry]));
   const ownedRoot = manifest && isPlainObject(manifest.owned) ? manifest.owned : {};
   const projectGeneration = normalizeHarnessVersionStamp(previousHarnessVersionStamp ?? manifest?.harnessVersion ?? null);
 
@@ -1556,7 +1571,6 @@ function migrateClaudeSettings({ existingConfig, newConfig, manifest = null, pre
       harnessVersion: newHarnessVersion ?? previousHarnessVersionStamp ?? manifest?.harnessVersion ?? "unknown",
       owned: merged.owned,
     },
-    tier,
     report: merged.report,
   };
 }
@@ -1573,9 +1587,11 @@ function migrateClaudeSettings({ existingConfig, newConfig, manifest = null, pre
  * @param {string} coreDir - source core/claude-code
  * @param {string} claudeDir - project's .claude/
  * @param {string} [version] - harness version currently being vendored (stamped into the manifest)
+ * @param {object} [testOverrides] - test-only seam, never passed in production; see `migrateClaudeSettings`
+ * @param {ReadonlyArray<object>} [testOverrides.retiredEntries] - overrides RETIRED_CC_PERMISSION_ENTRIES for a test run
  * @returns {string} status
  */
-export function writeSettings(coreDir, claudeDir, version) {
+export function writeSettings(coreDir, claudeDir, version, { retiredEntries } = {}) {
   const src = join(coreDir, "settings.json");
   if (!existsSync(src)) return "skipped (no source settings.json)";
 
@@ -1626,6 +1642,7 @@ export function writeSettings(coreDir, claudeDir, version) {
     manifest,
     previousHarnessVersionStamp,
     newHarnessVersion: version ?? null,
+    retiredEntries,
   });
 
   if (!isValidClaudeSettingsShape(migrated.config)) {
