@@ -179,9 +179,11 @@ export async function createLoopGuardHooks(
       return outcome.state
     })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
-    // Deterministic continuation nudge: a REVISE verdict blocks every writing hand, so the loop
-    // only advances if the orchestrator re-dispatches the plan-reviewer. Injected on the metadata
-    // channel (the one OC actually delivers) strictly AFTER the verdict is persisted.
+    // Deterministic continuation nudge: a REVISE verdict is supposed to keep every writing hand
+    // waiting (prose + orchestration discipline as of #483 — nothing in the dispatch gate itself
+    // blocks on it anymore), so the loop only advances if the orchestrator re-dispatches the
+    // plan-reviewer instead of a writing hand. Injected on the metadata channel (the one OC
+    // actually delivers) strictly AFTER the verdict is persisted.
     try {
       const nudge = decideReviseNudge({ state: result.state, subagentType: sub })
       if (nudge.action === "inject" && output != null && typeof output === "object") {

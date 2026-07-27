@@ -1,12 +1,16 @@
 /**
- * @description OC plan-gate plugin — full plan required + ADR-003 dual enforcement.
- * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full),
- * then dual_status must be a recorded attempt.
- * Deny throws [plan-gate]. Conditional on planner_plan_binding: absent (no ceremony ever ran for
- * this session, or a terminated/failed attempt with no binding) -> fail-open, no plan required
- * (operator no-ceremony branch, fleet fix-mode); present -> validated for real, unchanged from
- * before. Gate-state reconciliation failure fails open only for genuinely missing/unreadable
- * state — lock contention or a write failure still denies.
+ * @description OC plan-gate plugin — full plan required + ADR-003 dual classification.
+ * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
+ * Dual/plan_verdict classification (enforceDualFromDiskOrThrow) is record-only as of #483 — it
+ * never denies dispatch; it only logs and reports dual_status/plan_verdict for observability.
+ * Discipline around waiting for plan-review APPROVE is prose + orchestration now (see
+ * lib/revise-nudge.mjs), exactly like Claude Code, which has no dual gate on dispatch at all.
+ * Deny throws [plan-gate] (from the plan-require block above; never from dual). Conditional on
+ * planner_plan_binding: absent (no ceremony ever ran for this session, or a terminated/failed
+ * attempt with no binding) -> fail-open, no plan required (operator no-ceremony branch, fleet
+ * fix-mode); present -> validated for real, unchanged from before. Gate-state reconciliation
+ * failure fails open only for genuinely missing/unreadable state — lock contention or a write
+ * failure still denies.
  * Roles outside the guarded downstream set skip plan require.
  * Load shape matches loop-guard: dynamic import of pure mjs inside Plugin factory
  * (static import of dual-enforcement.mjs breaks OC plugin loader — "export is not a function").

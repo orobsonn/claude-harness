@@ -18,7 +18,11 @@ test("REVISE below the budget injects a continue nudge naming the next round", (
   assert.match(res.context, /re-dispatch the plan-reviewer for round 3/);
   assert.match(res.context, /3 round\(s\) remain/);
   assert.match(res.context, /material finding still unresolved/);
-  assert.match(res.context, /HARD-BLOCKED/);
+  // #483: the dual gate is record-only — the nudge frames this as the orchestrator's
+  // obligation, never as a runtime block that will refuse the dispatch.
+  assert.match(res.context, /MUST wait for plan_verdict APPROVE/);
+  assert.doesNotMatch(res.context, /HARD-BLOCKED/);
+  assert.doesNotMatch(res.context, /dispatching one now will be denied/);
 });
 
 test("the nudge tells the orchestrator not to stop and not to hand back to the operator", () => {

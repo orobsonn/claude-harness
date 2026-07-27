@@ -1,17 +1,19 @@
 /**
- * @description Deterministic ADR-003 dual enforcement for OC entry-gate / plan-gate.
- * requireDualOn from harness.routing.json; dual_status enum on gate-state.
- * dual_status is per-phase ({ plan_review, adversary } map, or legacy scalar =
- * plan_review only). Before executor/delivery hands: plan_review dual must be a
- * recorded attempt (both | primary_only | legacy primary_only_failopen/error) —
- * never pending/missing — AND plan_verdict must be APPROVE (REVISE/missing
- * fail-closed; dual alone never unlocks). Adversary dual does not unlock executor.
- * primary_only_failopen allows continue; isFullDualCoverage is false for it.
- * Never invents secondary findings; never leaks secondary verdicts.
- * Pure Decision returns — shells throw. Disk loaders return Result (never throw).
- * Role matching is case-insensitive. Task tool with empty subagent_type fails closed.
+ * @description ADR-003 dual/plan_verdict classification for OC entry-gate / plan-gate.
+ * Record-only (#483): the dual/plan_verdict gate left the Task dispatch surface entirely —
+ * decideDualBeforeDelivery never denies a delivery hand (executor/sniper) anymore, mirroring
+ * Claude Code, whose entry-gate has no dual_status concept in any dispatch decision at all.
+ * A pending/missing dual_status, a non-APPROVE plan_verdict, or an unreadable/corrupt
+ * gate-state all now behave identically: dispatch is allowed. `details` still reports
+ * dual_status / plan_verdict / isFullDualCoverage / requireDualOn for observability, and
+ * never invents secondary findings or leaks secondary verdicts.
+ * Discipline around waiting for plan-review APPROVE before dispatching a writing hand is
+ * prose + orchestration now, exactly like Claude Code (see lib/revise-nudge.mjs) — not a
+ * runtime gate. The actual recording of dual_status/plan_verdict into gate-state is a
+ * separate writer path (dual-merge.mjs / dual-nudge.mjs), untouched by this change.
+ * Pure Decision returns — never throws. Disk loaders return Result (never throw).
+ * Role matching is case-insensitive.
  * Production shells load gate-state from .opencode/plans/.state and routing from disk.
- * Fail-closed when gate-state is unreadable for delivery hands.
  * dualStatusGatePatch / dualStatusGatePatchForPhase are the only allowed dual_status
  * writer shapes (enum only). No Map-only state.
  */
@@ -182,15 +184,18 @@ export function readPlanVerdict(gateState) {
 }
 
 /**
- * @description Decide whether a delivery hand may proceed given dual_status.
- * Pure Decision — never throws.
+ * @description Classify dual_status/plan_verdict for a delivery hand dispatch. Record-only
+ * (#483) — never denies. Kept as a rich classifier (rather than collapsing to one generic
+ * "allow") because `details` is what a caller logs or feeds to a prose nudge; the branches
+ * below preserve which distinct condition was observed (missing/pending/invalid/REVISE/…)
+ * even though every one of them now resolves to "allow".
  *
- * Rules (resolved_judgments):
- * - dual_status_required_before_executor: true
- * - pending_blocks_executor: true
- * - primary_only_failopen_allows_continue: true
- * - primary_only_failopen_is_full_dual: false
- * - bare_boolean_dual_completed_rejected: true
+ * Rules (resolved_judgments, #483 supersedes the #482-era deny rules below with allow):
+ * - dual_status_required_before_executor: false (record-only)
+ * - pending_blocks_executor: false (record-only)
+ * - plan_verdict_revise_blocks_executor: false (record-only)
+ * - bare_boolean_dual_completed_rejected: false (record-only; still flagged in `reason`)
+ * - primary_only_failopen_is_full_dual: false (unchanged — coverage classification, not a gate)
  *
  * @param {{
  *   subagentType?: unknown,
@@ -200,8 +205,8 @@ export function readPlanVerdict(gateState) {
  *   toolName?: unknown,
  * }} [input]
  * @returns {{
- *   ok: boolean,
- *   decision: "allow" | "deny" | "warn",
+ *   ok: true,
+ *   decision: "allow",
  *   reason: string,
  *   details?: {
  *     dual_status?: string | null,
@@ -218,31 +223,7 @@ export function decideDualBeforeDelivery(input = {}) {
       gateState,
       routing,
       requireDualCheck = true,
-      toolName,
     } = input;
-
-    const bare = bareSubagentType(subagentType);
-
-    // Task tool with empty/unknown agent after parse → fail-closed
-    // (cannot skip dual by omitting subagent_type).
-    if (
-      requireDualCheck &&
-      toolName != null &&
-      isTaskTool(toolName) &&
-      bare.length === 0
-    ) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "dual_status-required-unknown-agent — task tool missing subagent_type; fail-closed",
-        details: {
-          dual_status: readDualStatus(gateState) ?? null,
-          isFullDualCoverage: false,
-          requireDualOn: readRequireDualOn(routing),
-        },
-      };
-    }
 
     // Non-delivery hands: allow without dual check.
     if (!isDeliveryHandRequiringDual(subagentType)) {
@@ -272,33 +253,22 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // Reject forged dual_completed boolean / invalid dual fields.
+    // Forged dual_completed boolean / invalid dual fields — record-only (#483): flagged in
+    // `reason` for observability, never denied. Bare `dual_completed` is checked explicitly
+    // too (in case it slips past validateGateStateDualFields's own rules in the future).
     const shape = validateGateStateDualFields(gateState ?? {});
-    if (!shape.ok) {
-      return {
-        ok: false,
-        decision: "deny",
-        reason: `dual-state-invalid: ${shape.errors.join("; ")}`,
-        details: {
-          dual_status: readDualStatus(gateState) ?? null,
-          isFullDualCoverage: false,
-          requireDualOn: readRequireDualOn(routing),
-        },
-      };
-    }
-
-    // Also reject dual_completed even if dual_status is valid (forged path).
-    if (
+    const hasBareDualCompleted =
       gateState != null &&
       typeof gateState === "object" &&
       !Array.isArray(gateState) &&
-      "dual_completed" in /** @type {object} */ (gateState)
-    ) {
+      "dual_completed" in /** @type {object} */ (gateState);
+    if (!shape.ok || hasBareDualCompleted) {
       return {
-        ok: false,
-        decision: "deny",
-        reason:
-          "dual-state-invalid: dual_completed bare boolean rejected — use dual_status enum only",
+        ok: true,
+        decision: "allow",
+        reason: !shape.ok
+          ? `dual-state-invalid-record-only: ${shape.errors.join("; ")}`
+          : "dual-state-invalid-record-only: dual_completed bare boolean present — use dual_status enum only",
         details: {
           dual_status: readDualStatus(gateState) ?? null,
           isFullDualCoverage: false,
@@ -310,13 +280,13 @@ export function decideDualBeforeDelivery(input = {}) {
     // Executor path reads plan_review axis only (adversary dual never unlocks hands).
     const dualStatus = readDualStatus(gateState, "plan_review");
 
-    // Missing dual_status → deny (pending_blocks_executor / dual_status_required_before_executor).
+    // Missing dual_status — record-only (#483): no longer blocks executor.
     if (dualStatus === undefined || dualStatus === null || dualStatus === "") {
       return {
-        ok: false,
-        decision: "deny",
+        ok: true,
+        decision: "allow",
         reason:
-            "dual_status.plan_review missing — requireDualOn plan-review post must record a primary result before executor (both | primary_only)",
+          "dual_status.plan_review missing — record-only, no longer blocks executor (#483)",
         details: {
           dual_status: null,
           isFullDualCoverage: false,
@@ -325,12 +295,12 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // Non-enum dual_status → deny.
+    // Non-enum dual_status — record-only (#483).
     if (!isDualStatusEnum(dualStatus)) {
       return {
-        ok: false,
-        decision: "deny",
-        reason: `dual_status invalid enum: ${String(dualStatus)}`,
+        ok: true,
+        decision: "allow",
+        reason: `dual_status invalid enum (record-only): ${String(dualStatus)}`,
         details: {
           dual_status: dualStatus,
           isFullDualCoverage: false,
@@ -339,13 +309,13 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // pending blocks executor.
+    // Pending — record-only (#483): no longer blocks executor.
     if (dualStatus === DUAL_STATUS.PENDING) {
       return {
-        ok: false,
-        decision: "deny",
+        ok: true,
+        decision: "allow",
         reason:
-          "dual_status pending — primary result not yet recorded; block executor until both | primary_only",
+          "dual_status pending — record-only, no longer blocks executor (#483; discipline is prose+orchestration, see revise-nudge.mjs)",
         details: {
           dual_status: dualStatus,
           isFullDualCoverage: false,
@@ -354,19 +324,20 @@ export function decideDualBeforeDelivery(input = {}) {
       };
     }
 
-    // Recorded dual is necessary but not sufficient: plan-review must APPROVE.
-    // dual_status both + REVISE (or missing plan_verdict) must not unlock executors.
+    // Recorded dual attempt. plan_verdict is reported for observability but — unlike before
+    // #483 — a non-APPROVE (or missing) verdict no longer blocks the executor either.
     if (isRecordedDualAttempt(dualStatus)) {
       const full = isFullDualCoverage(dualStatus);
       const planVerdict = readPlanVerdict(gateState);
       if (planVerdict !== "APPROVE") {
         return {
-          ok: false,
-          decision: "deny",
+          ok: true,
+          decision: "allow",
           reason:
-            planVerdict === "REVISE"
-              ? "plan_verdict REVISE — executor blocked until plan-review APPROVE"
-              : "plan_verdict missing — executor requires plan-review APPROVE (not only dual_status)",
+            (planVerdict === "REVISE"
+              ? "plan_verdict REVISE"
+              : "plan_verdict missing") +
+            " — record-only, no longer blocks executor (#483; discipline is prose+orchestration, see revise-nudge.mjs)",
           details: {
             dual_status: dualStatus,
             plan_verdict: planVerdict ?? null,
@@ -396,9 +367,9 @@ export function decideDualBeforeDelivery(input = {}) {
     }
 
     return {
-      ok: false,
-      decision: "deny",
-      reason: `dual_status not a recorded attempt: ${dualStatus}`,
+      ok: true,
+      decision: "allow",
+      reason: `dual_status not a recorded attempt (record-only): ${dualStatus}`,
       details: {
         dual_status: dualStatus,
         isFullDualCoverage: false,
@@ -406,41 +377,33 @@ export function decideDualBeforeDelivery(input = {}) {
       },
     };
   } catch (err) {
-    // Pure path: on unexpected error, deny closed for delivery hands (safe).
-    // #482 deliberately does NOT extend the fail-open drive-by here (unlike entry-decide.mjs's
-    // generic ceremony catch-all): this function is the ADR-003 dual-review-coverage authority,
-    // its input is gate-state.json — writable by hands via bash before this decision runs — and
-    // an adversarial review found that an unexpected exception here would silently release a
-    // delivery hand with NO recorded review coverage at all, a materially stronger invariant than
-    // the "has ceremony started" check entry-decide.mjs guards. Deny-closed on an internal fault.
+    // #483 supersedes the #482-era deny-closed rationale that used to live here: with the
+    // dual gate off the dispatch surface entirely, an unexpected exception can no longer
+    // "silently release a delivery hand with no recorded review coverage" any more than the
+    // ordinary allow path already does by design — there is no asymmetry left to protect.
     return {
-      ok: false,
-      decision: "deny",
+      ok: true,
+      decision: "allow",
       reason:
         err instanceof Error
-          ? `dual-enforcement-error: ${err.message}`
-          : "dual-enforcement-error",
+          ? `dual-classification-error-record-only: ${err.message}`
+          : "dual-classification-error-record-only",
     };
   }
 }
 
 /**
- * @description Shell helper: throw with stable prefix when dual decision is deny.
- * Used by entry-gate / plan-gate OC plugins.
+ * @description Shell helper: classify dual state for logging. Record-only (#483) — never
+ * throws, since decideDualBeforeDelivery never returns "deny" anymore. Kept as a thin,
+ * stably-named wrapper (rather than inlining decideDualBeforeDelivery at call sites) so
+ * entry-gate/plan-gate/the headless probe keep one unchanged import surface across this
+ * change.
  * @param {string} prefix - e.g. "[entry-gate]" or "[plan-gate]"
  * @param {Parameters<typeof decideDualBeforeDelivery>[0]} input
  * @returns {ReturnType<typeof decideDualBeforeDelivery>}
  */
 export function enforceDualOrThrow(prefix, input = {}) {
-  const decision = decideDualBeforeDelivery(input);
-  if (decision.decision === "deny") {
-    const p =
-      typeof prefix === "string" && prefix.length > 0
-        ? prefix
-        : "[dual-enforcement]";
-    throw new Error(`${p} ${decision.reason}`);
-  }
-  return decision;
+  return decideDualBeforeDelivery(input);
 }
 
 /**
@@ -677,8 +640,11 @@ export function loadGateStateFromDisk(projectRoot, opts = {}) {
 }
 
 /**
- * @description Load disk state for a delivery-hand task and enforce dual, or throw.
- * Fail-closed when gate-state is unreadable. Used by entry-gate / plan-gate shells.
+ * @description Load disk state for a delivery-hand task and classify dual state. Record-only
+ * (#483) — never throws. An unreadable gate-state (missing sessionId, corrupt JSON, any
+ * other disk-load fault) is shadow-recorded (logged) and treated identically to an absent
+ * ceremony (#ac-1.3): classification proceeds against an empty state instead of failing
+ * closed. Used by entry-gate / plan-gate shells.
  * @param {string} prefix
  * @param {{
  *   projectRoot: string,
@@ -696,8 +662,6 @@ export function enforceDualFromDiskOrThrow(prefix, input) {
 
   const subagentType = extractSubagentType(input.toolArgs);
   const bare = bareSubagentType(subagentType);
-  // Empty agent on task → still enforce (fail-closed via decideDualBeforeDelivery).
-  // Non-delivery named agents skip dual.
   if (bare.length > 0 && !isDeliveryHandRequiringDual(subagentType)) {
     return { ok: true, decision: "allow", reason: "not-a-delivery-hand" };
   }
@@ -708,18 +672,23 @@ export function enforceDualFromDiskOrThrow(prefix, input) {
   const loaded = loadGateStateFromDisk(input.projectRoot, {
     sessionId: sessionId ?? undefined,
   });
-  if (!loaded.ok) {
+  let gateState = {};
+  let routing = null;
+  if (loaded.ok) {
+    gateState = loaded.state;
+    const routingLoaded = loadRoutingFromDisk(input.projectRoot);
+    routing = routingLoaded.ok ? routingLoaded.routing : null;
+  } else {
     const p =
       typeof prefix === "string" && prefix.length > 0
         ? prefix
         : "[dual-enforcement]";
-    throw new Error(`${p} gate-state-unreadable: ${loaded.reason}`);
+    console.warn(`${p} gate-state-unreadable (record-only, dispatch allowed): ${loaded.reason}`);
   }
-  const routingLoaded = loadRoutingFromDisk(input.projectRoot);
   return enforceDualOrThrow(prefix, {
     subagentType,
-    gateState: loaded.state,
-    routing: routingLoaded.ok ? routingLoaded.routing : null,
+    gateState,
+    routing,
     requireDualCheck: true,
     toolName,
   });

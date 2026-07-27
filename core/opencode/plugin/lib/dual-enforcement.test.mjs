@@ -1,11 +1,12 @@
 /**
- * @description Locked tests for ADR-003 dual enforcement (task-3).
- * plan-gate/entry-gate throw deny on pending/missing before executor;
- * primary_only_failopen accepted but isFullDualCoverage false;
- * both allows path; bare boolean dual_completed rejected.
- * Adversarial: skip-pending, forge dual_completed, treat failopen as full dual,
- * invent secondary, leak verdict.
- * Sniper fixes: case-insensitive roles, empty subagent fail-closed, disk loaders.
+ * @description Locked tests for ADR-003 dual classification (task-3, record-only per #483).
+ * decideDualBeforeDelivery/enforceDualOrThrow/enforceDualFromDiskOrThrow never deny a delivery
+ * hand anymore — pending/missing/invalid dual_status, a non-APPROVE plan_verdict, a forged
+ * dual_completed boolean, and an unreadable/corrupt gate-state all resolve to "allow"
+ * (#ac-1.1, #ac-1.3). `details` still reports the classification (dual_status/plan_verdict/
+ * isFullDualCoverage) for observability; the actual recording of dual_status/plan_verdict is a
+ * separate writer path (dual-merge.mjs/dual-nudge.mjs, #ac-1.2) untouched by this change.
+ * Sniper fixes retained: case-insensitive roles, disk loaders, session-id ceremony binding.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -65,73 +66,49 @@ function asLegacyRouting(routing) {
   return legacy;
 }
 
-// ---- locked: pending/missing throws deny before executor ----
+// ---- record-only: pending/missing no longer deny before executor (#483) ----
 
-test("asserts plan-gate or entry-gate throws deny when dual_status is pending before executor", () => {
-  let threwPlan = false;
-  try {
-    enforceDualOrThrow("[plan-gate]", {
-      subagentType: "executor-high",
-      gateState: { dual_status: "pending" },
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threwPlan = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[plan-gate\]/);
-    assert.match(err.message, /pending/i);
-  }
-  assert.equal(threwPlan, true);
+test("dual_status pending before executor is record-only — plan-gate and entry-gate both allow, not deny (#ac-1.1)", () => {
+  const plan = enforceDualOrThrow("[plan-gate]", {
+    subagentType: "executor-high",
+    gateState: { dual_status: "pending" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.decision, "allow");
+  assert.match(plan.reason, /pending/i);
 
-  let threwEntry = false;
-  try {
-    enforceDualOrThrow("[entry-gate]", {
-      subagentType: "executor-medium",
-      gateState: { dual_status: DUAL_STATUS.PENDING },
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threwEntry = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[entry-gate\]/);
-    assert.match(err.message, /pending/i);
-  }
-  assert.equal(threwEntry, true);
+  const entry = enforceDualOrThrow("[entry-gate]", {
+    subagentType: "executor-medium",
+    gateState: { dual_status: DUAL_STATUS.PENDING },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(entry.ok, true);
+  assert.equal(entry.decision, "allow");
+  assert.match(entry.reason, /pending/i);
 });
 
-test("asserts plan-gate or entry-gate throws deny when dual_status is missing before executor", () => {
-  let threwPlan = false;
-  try {
-    enforceDualOrThrow("[plan-gate]", {
-      subagentType: "executor-low",
-      gateState: {},
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threwPlan = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[plan-gate\]/);
-    assert.match(err.message, /missing|dual_status/i);
-  }
-  assert.equal(threwPlan, true);
+test("dual_status missing before executor is record-only — plan-gate and entry-gate both allow, not deny (#ac-1.1)", () => {
+  const plan = enforceDualOrThrow("[plan-gate]", {
+    subagentType: "executor-low",
+    gateState: {},
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.decision, "allow");
+  assert.match(plan.reason, /missing|dual_status/i);
 
-  let threwEntry = false;
-  try {
-    enforceDualOrThrow("[entry-gate]", {
-      subagentType: "sniper-high",
-      gateState: { feature_id: "oc-port-phase-2" },
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threwEntry = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[entry-gate\]/);
-  }
-  assert.equal(threwEntry, true);
+  const entry = enforceDualOrThrow("[entry-gate]", {
+    subagentType: "sniper-high",
+    gateState: { feature_id: "oc-port-phase-2" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(entry.ok, true);
+  assert.equal(entry.decision, "allow");
 
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
@@ -139,8 +116,8 @@ test("asserts plan-gate or entry-gate throws deny when dual_status is missing be
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.ok, false);
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
 });
 
 // ---- locked: primary_only_failopen allows continue; not full dual ----
@@ -158,7 +135,7 @@ test("asserts dual_status primary_only_failopen is accepted and allows continue 
   assert.equal(d.details?.isFullDualCoverage, false);
   assert.equal(isFullDualCoverage("primary_only_failopen"), false);
 
-  // enforceDualOrThrow must NOT throw on failopen
+  // enforceDualOrThrow never throws (record-only, #483) — verified explicitly here too
   const r = enforceDualOrThrow("[plan-gate]", {
     subagentType: "executor-high",
     gateState: { dual_status: "primary_only_failopen", plan_verdict: "APPROVE" },
@@ -171,7 +148,7 @@ test("asserts dual_status primary_only_failopen is accepted and allows continue 
 
 // ---- locked: both allows; never dual_completed boolean ----
 
-test("asserts dual_status both allows executor path and gate-state never stores dual_completed as bare boolean true", () => {
+test("asserts dual_status both allows executor path, and a forged dual_completed boolean is record-only — flagged in `reason`, never denied (#483)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_status: "both", plan_verdict: "APPROVE" },
@@ -186,31 +163,27 @@ test("asserts dual_status both allows executor path and gate-state never stores 
   assert.equal("dual_completed" in patch, false);
   assert.equal(/** @type {{ dual_status: string }} */ (patch).dual_status, "both");
 
-  // Forged dual_completed boolean is denied even if dual_status is both
+  // Forged dual_completed boolean is flagged in `reason` but no longer denies dispatch,
+  // even if dual_status is otherwise both.
   const forged = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_status: "both", dual_completed: true },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(forged.decision, "deny");
+  assert.equal(forged.ok, true);
+  assert.equal(forged.decision, "allow");
   assert.match(forged.reason, /dual_completed|boolean/i);
 
-  let threwForge = false;
-  try {
-    enforceDualOrThrow("[entry-gate]", {
-      subagentType: "executor-high",
-      gateState: { dual_completed: true },
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threwForge = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[entry-gate\]/);
-    assert.match(err.message, /dual_completed|boolean|invalid/i);
-  }
-  assert.equal(threwForge, true);
+  const entryForged = enforceDualOrThrow("[entry-gate]", {
+    subagentType: "executor-high",
+    gateState: { dual_completed: true },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(entryForged.ok, true);
+  assert.equal(entryForged.decision, "allow");
+  assert.match(entryForged.reason, /dual_completed|boolean|invalid/i);
 });
 
 // ---- locked: dualStatusGatePatch rejects bare boolean / unknown ----
@@ -243,29 +216,30 @@ test("primary_only_error allows executor continue and is not full dual coverage"
   assert.equal(d.details?.isFullDualCoverage, false);
 });
 
-// ---- adversarial: skip dual with pending ----
+// ---- adversarial: dual_status pending no longer blocks dispatch (#483) ----
 
-test("adversarial: skip dual and proceed with pending is denied", () => {
+test("adversarial: dual_status pending is record-only — allow, not deny (#483)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_status: "pending" },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.ok, false);
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
 });
 
-// ---- adversarial: forge dual_completed ----
+// ---- adversarial: forged dual_completed is flagged, not denied ----
 
-test("adversarial: forge dual_completed true boolean is denied", () => {
+test("adversarial: forged dual_completed true boolean is record-only — allow, flagged in reason (#483)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_completed: true, dual_status: "both" },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
+  assert.match(d.reason, /dual_completed|boolean/i);
 });
 
 // ---- adversarial: treat failopen as full dual ----
@@ -328,7 +302,7 @@ test("isDeliveryHandRequiringDual is case-insensitive — Executor-High requires
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
   assert.match(d.reason, /pending/i);
 
   // Mixed-case still allows when dual_status is recorded failopen
@@ -342,30 +316,23 @@ test("isDeliveryHandRequiringDual is case-insensitive — Executor-High requires
   assert.equal(fo.details?.isFullDualCoverage, false);
 });
 
-test("task tool with empty subagent_type fails closed (cannot skip dual)", () => {
+test("task tool with empty subagent_type is not a delivery hand — allow; dual no longer special-cases it as a bypass attempt (#483)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "",
     gateState: { dual_status: "both" },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /unknown-agent|missing subagent/i);
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "not-a-delivery-hand");
 
-  let threw = false;
-  try {
-    enforceDualOrThrow("[entry-gate]", {
-      subagentType: "",
-      gateState: { dual_status: "both" },
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threw = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[entry-gate\]/);
-  }
-  assert.equal(threw, true);
+  const r = enforceDualOrThrow("[entry-gate]", {
+    subagentType: "",
+    gateState: { dual_status: "both" },
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(r.decision, "allow");
 });
 
 test("non-delivery hands allow without dual_status", () => {
@@ -381,15 +348,15 @@ test("non-delivery hands allow without dual_status", () => {
 
 // ---- #375 plan_verdict gates executor (money-preflight) ----
 
-test("REVISE + dual_status both → deny executor (money-preflight repro)", () => {
+test("REVISE + dual_status both → record-only allow (#483 supersedes the old money-preflight deny; discipline is prose+orchestration now)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_status: "both", plan_verdict: "REVISE" },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.ok, false);
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
   assert.match(d.reason, /REVISE/);
   assert.equal(d.details?.plan_verdict, "REVISE");
   assert.equal(d.details?.dual_status, "both");
@@ -437,7 +404,7 @@ test("#383 plan_review dual both does NOT satisfy adversary axis (fail-closed)",
   assert.equal(readDualStatus(legacy, "adversary"), undefined);
 });
 
-test("#383 adversary dual both alone does NOT unlock executor without plan_review dual", () => {
+test("#383 adversary dual both alone does not read as plan_review coverage, but no longer blocks executor either (#483)", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: {
@@ -447,7 +414,7 @@ test("#383 adversary dual both alone does NOT unlock executor without plan_revie
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
+  assert.equal(d.decision, "allow");
   assert.match(d.reason, /dual_status|missing|plan_review/i);
 });
 
@@ -462,15 +429,15 @@ test("#383 legacy scalar dual_status both + plan_verdict APPROVE still allows ex
   assert.equal(readDualStatus({ dual_status: "both" }, "plan_review"), "both");
 });
 
-test("dual both without plan_verdict → deny executor (fail-closed)", () => {
+test("dual both without plan_verdict → record-only allow (#483); plan_verdict still reported as missing", () => {
   const d = decideDualBeforeDelivery({
     subagentType: "executor-high",
     gateState: { dual_status: "both" },
     routing: ROUTING,
     toolName: "task",
   });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.ok, false);
+  assert.equal(d.decision, "allow");
+  assert.equal(d.ok, true);
   assert.match(d.reason, /plan_verdict missing/i);
   assert.equal(d.details?.plan_verdict, null);
   assert.equal(readPlanVerdict({ dual_status: "both" }), undefined);
@@ -570,21 +537,15 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
     assert.equal(allowed.decision, "allow");
     assert.equal(allowed.details?.isFullDualCoverage, false);
 
-    let threw = false;
-    try {
-      enforceDualFromDiskOrThrow("[entry-gate]", {
-        projectRoot: root,
-        toolName: "task",
-        toolArgs: { subagent_type: "executor-high" },
-        sessionId: "ses_missing_xyz",
-      });
-    } catch (err) {
-      threw = true;
-      assert.ok(err instanceof Error);
-      // Empty missing gate-state → dual_status missing (ceremony fail), not unreadable
-      assert.match(err.message, /\[entry-gate\].*(dual_status|missing)/i);
-    }
-    assert.equal(threw, true, "expected throw on empty dual ceremony");
+    const allowedMissing = enforceDualFromDiskOrThrow("[entry-gate]", {
+      projectRoot: root,
+      toolName: "task",
+      toolArgs: { subagent_type: "executor-high" },
+      sessionId: "ses_missing_xyz",
+    });
+    // Empty missing gate-state → dual_status missing — record-only allow, not a throw (#483).
+    assert.equal(allowedMissing.decision, "allow");
+    assert.match(allowedMissing.reason, /dual_status|missing/i);
   } finally {
     try {
       fs.rmSync(root, { recursive: true, force: true });
@@ -670,23 +631,17 @@ test("loadGateStateFromDisk / loadRoutingFromDisk fall back to cwd when projectR
   }
 });
 
-// ---- enforceDualOrThrow entry-gate + executor-low missing (if not covered) ----
-test("enforceDualOrThrow with missing dual + executor-low throws [entry-gate]", () => {
-  let threw = false;
-  try {
-    enforceDualOrThrow("[entry-gate]", {
-      subagentType: "executor-low",
-      gateState: {},
-      routing: ROUTING,
-      toolName: "task",
-    });
-  } catch (err) {
-    threw = true;
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /^\[entry-gate\]/);
-    assert.match(err.message, /missing|dual_status/i);
-  }
-  assert.equal(threw, true);
+// ---- enforceDualOrThrow entry-gate + executor-low missing (record-only, #483) ----
+test("enforceDualOrThrow with missing dual + executor-low is record-only allow, never a throw", () => {
+  const r = enforceDualOrThrow("[entry-gate]", {
+    subagentType: "executor-low",
+    gateState: {},
+    routing: ROUTING,
+    toolName: "task",
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.decision, "allow");
+  assert.match(r.reason, /missing|dual_status/i);
 });
 
 // ---- task-1 locked tests: sessionId ceremony for load / extract / dual bind (no toolArgs rebind) ----
@@ -774,13 +729,13 @@ test("lt-extract-hook-sessionid-alias — extractHookTaskContext accepts session
   assert.equal(ctxArgs.toolName, "task");
 });
 
-test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow with caller sessionId S1 (incomplete dual) + toolArgs.session_id S2 (full dual ceremony on disk) → must use S1 (deny dual_status class, not allow from S2). AND when caller passes sessionId: null (key present / unbound) + toolArgs S2 full dual → must NOT allow via toolArgs rebind (throw with sessionId or gate-state-unreadable/sessionId)", () => {
+test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow always allows now (#483), but still classifies against the CALLER's sessionId (S1), never rebinding to toolArgs.session_id (S2). When sessionId is explicitly null (unbound), gate-state load fails closed on sessionId (a separate, still-enforced identity concern) — shadow-recorded and classified against an empty state, never S2's favorable one", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-callerbind-"));
   try {
     const S1 = "ses_S1_incomplete";
     const S2 = "ses_S2_fullDual";
 
-    // S1: incomplete (pending) → will cause dual_status deny
+    // S1: incomplete (pending)
     const d1 = path.join(root, ".opencode", "plans", ".state", S1);
     fs.mkdirSync(d1, { recursive: true });
     fs.writeFileSync(
@@ -805,44 +760,45 @@ test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow with
       "utf8",
     );
 
-    // Subcase A: explicit caller sessionId S1 must win over toolArgs S2
-    let threwA = false;
-    let errA;
-    try {
-      enforceDualFromDiskOrThrow("[plan-gate]", {
-        projectRoot: root,
-        toolName: "task",
-        toolArgs: { subagent_type: "executor-high", session_id: S2 },
-        sessionId: S1,
-      });
-    } catch (e) {
-      threwA = true;
-      errA = e;
-    }
-    assert.equal(threwA, true);
-    assert.ok(errA instanceof Error);
-    assert.match(errA.message, /^\[plan-gate\]/);
-    assert.match(errA.message, /dual_status|pending/i);
+    // Subcase A: explicit caller sessionId S1 must win over toolArgs S2 — classification
+    // reflects S1 (pending), never S2 (both/APPROVE), even though both now allow (#483).
+    const a = enforceDualFromDiskOrThrow("[plan-gate]", {
+      projectRoot: root,
+      toolName: "task",
+      toolArgs: { subagent_type: "executor-high", session_id: S2 },
+      sessionId: S1,
+    });
+    assert.equal(a.ok, true);
+    assert.equal(a.decision, "allow");
+    assert.equal(a.details?.dual_status, "pending");
 
-    // Subcase B: explicit sessionId: null (unbound) must NOT fallback to toolArgs S2
-    // (must fail with sessionId-related reason, not allow from S2's full dual)
-    let threwB = false;
-    let errB;
+    // Subcase B: explicit sessionId: null (unbound) must NOT fall back to toolArgs S2 either.
+    // sessionId resolution is a separate identity concern from dual/plan_verdict — it still
+    // fails closed on disk load, but that failure is shadow-recorded (not thrown) and
+    // classification proceeds against an empty state, never S2's.
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (message) => warnings.push(message);
+    let b;
     try {
-      enforceDualFromDiskOrThrow("[entry-gate]", {
+      b = enforceDualFromDiskOrThrow("[entry-gate]", {
         projectRoot: root,
         toolName: "task",
         toolArgs: { subagent_type: "executor-high", session_id: S2 },
         sessionId: null,
       });
-    } catch (e) {
-      threwB = true;
-      errB = e;
+    } finally {
+      console.warn = originalWarn;
     }
-    assert.equal(threwB, true, "expected throw for unbound sessionId even with toolArgs present");
-    assert.ok(errB instanceof Error);
-    assert.match(errB.message, /^\[entry-gate\]/);
-    assert.match(errB.message, /sessionId|gate-state-unreadable/i);
+    assert.equal(b.ok, true);
+    assert.equal(b.decision, "allow");
+    assert.equal(b.details?.dual_status, null);
+    assert.ok(
+      warnings.some(
+        (w) => /gate-state-unreadable/.test(String(w)) && /sessionId/i.test(String(w)),
+      ),
+      `expected a gate-state-unreadable shadow-record log mentioning sessionId, got: ${JSON.stringify(warnings)}`,
+    );
   } finally {
     try {
       fs.rmSync(root, { recursive: true, force: true });

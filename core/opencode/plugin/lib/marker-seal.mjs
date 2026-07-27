@@ -61,7 +61,18 @@ export function hasValidMarkerSeal(state, { sessionId, featureId, operation, pay
   );
 }
 
-/** @description Reject every present privileged marker not sealed by this process instance. */
+/**
+ * @description Reject every present privileged marker not sealed by this process instance.
+ * #483: dual_status/plan_verdict are deliberately NOT in this check anymore — the ADR-003
+ * dual/plan_verdict gate is record-only now (see lib/dual-enforcement.mjs), and sealing these
+ * two fields here re-created the exact deny this issue removes: any OpenCode process restart
+ * invalidates the per-process HMAC secret (`secret` above), so a dual_status/plan_verdict
+ * written before a restart would fail `hasValidMarkerSeal` and throw for every executor/sniper
+ * dispatch afterward — the #423-shaped brick this repo's docs/OC-CC-PARITY-REPORT.md item #32
+ * already names. brainstormed/adversary_fired/final_review_done/demo_done and the array
+ * markers (fidelity/regate/hand-finished/capture-verified) keep their seal — only dual/
+ * plan_verdict are exempted, since those two are the ones #483 makes non-blocking by design.
+ */
 export function validatePrivilegedMarkerSeals(state, { sessionId, featureId }) {
   const value = state && typeof state === "object" && !Array.isArray(state) ? state : {};
   const checks = [];
@@ -69,20 +80,6 @@ export function validatePrivilegedMarkerSeals(state, { sessionId, featureId }) {
   if (value.adversary_fired === true) checks.push(["adversary_fired", true]);
   if (value.final_review_done === true) checks.push(["final-review", true]);
   if (value.demo_done === true) checks.push(["demo-done", true]);
-  if (typeof value.dual_status === "string") {
-    checks.push(["dual", value.dual_status]);
-  } else if (value.dual_status && typeof value.dual_status === "object" && !Array.isArray(value.dual_status)) {
-    // Map form: seal payload is the stable phase map written by dualState / dual-nudge.
-    const stable = {};
-    for (const phase of ["plan_review", "adversary"]) {
-      const st = value.dual_status[phase];
-      if (typeof st === "string") stable[phase] = st;
-    }
-    if (Object.keys(stable).length > 0) checks.push(["dual", stable]);
-  }
-  if (typeof value.plan_verdict === "string" && value.plan_verdict.length > 0) {
-    checks.push(["plan_verdict", value.plan_verdict]);
-  }
   for (const [key, operation] of [
     ["fidelity_pass", "fidelity"],
     ["regate_pending", "regate-pending"],

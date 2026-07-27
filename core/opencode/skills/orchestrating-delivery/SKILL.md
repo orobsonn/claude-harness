@@ -156,7 +156,7 @@ Never use the edit tool.
 
 3. Run the **`validate-plan` tool** on that file — a deterministic **structural** gate. On FAIL, hand its error list to `planner` and re-plan. **Cap 2 loops**, then escalate to the operator in product-language.
 
-4. Dispatch `plan-reviewer-family-1` (read-only) for **engineering soundness**, then attempt `plan-reviewer-family-2` → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Keep looping until APPROVE** — a REVISE verdict hard-blocks every writing hand, so stopping mid-loop strands the run. The budget is enforced by the gate (`plan_review_count`, 5 useful rounds), not by your judgment: the `revise_nudge` on the review's return tells you the round and what remains. Escalate to the operator **only** when that nudge says the budget is exhausted.
+4. Dispatch `plan-reviewer-family-1` (read-only) for **engineering soundness**, then attempt `plan-reviewer-family-2` → `APPROVE | REVISE`. On REVISE: hand findings to `planner`, re-plan, re-run `validate-plan`, re-review. **Keep looping until APPROVE** — YOU must not dispatch a writing hand (executor/sniper/test-author) while REVISE stands; this is orchestration discipline, not a runtime gate (nothing refuses the dispatch for you — #483), so stopping mid-loop and dispatching one anyway silently strands the run's quality bar, not the run itself. The budget is enforced by the gate (`plan_review_count`, 5 useful rounds), not by your judgment: the `revise_nudge` on the review's return tells you the round and what remains. Escalate to the operator **only** when that nudge says the budget is exhausted.
 
 5. **DETERMINISTIC sensitive-path override:** compare the plan's `scope_paths` against the allowlist:
    `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).
@@ -321,7 +321,7 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 
 - Dispatch `harvester` once: consolidates `findings.md`, routes durable learnings by blast-radius (project pattern → native MEMORY.md + index · law of one folder → that folder's nested `AGENTS.md` + root router row · global convention → kaizen proposal), then **deletes the ephemeral run buffers** — `findings.md` (project root) + `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (git is the durable audit). It owns `oc-recording-findings` / `oc-distilling-learnings` / `oc-proposing-improvements`. It never auto-writes to memory.
 - Delivery (branch/commit/push/PR via `shipper`) happens **only on explicit operator authorization** — merge/deploy is irreversible (human checkpoint). `shipper` never edits code.
-- **FULL ship preconditions (bash-decide):** ceremony + dual + regate + capture + **final-review** + **demo when interactive**. Missing final/demo → deny with explicit `denied_class`.
+- **FULL ship preconditions (bash-decide):** ceremony + regate + capture + **final-review** + **demo when interactive**. (`dual`/`plan_verdict` is NOT one of these as of #483 — the dual gate is record-only; discipline around it is yours, not the bash gate's.) Missing final/demo → deny with explicit `denied_class`.
 
 ---
 
