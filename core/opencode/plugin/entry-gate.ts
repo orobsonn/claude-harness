@@ -4,9 +4,19 @@
  * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
  *   (gate-state from disk)
  * - task: decideEntryTask then enforceDualFromDiskOrThrow for executor/sniper
- * Deny throws [entry-gate]. Fail-closed on unreadable gate-state for delivery.
- * Delivery bash injects gitState + isAncestorFn + listHandRecordsForFeatureFn;
- * non-delivery never probes git/list/ancestor.
+ * Deny throws [entry-gate]. Bash delivery is fail-OPEN on unreadable/missing gate-state and
+ * on a missing/unsafe sessionId (Claude Code parity) — decideBashDelivery's own rails
+ * (branch/zero-commits, regate, capture, real-file) still apply against the resulting {}.
+ * The sole deliberate fail-closed exception is a CORRUPT regate_pending (present but not a
+ * JSON array); hand_finished/capture_verified/regate_passed coerce to [] on a non-array value,
+ * mirroring Claude Code exactly. Marker-seal validation is deliberately NOT applied on this
+ * bash path (see docs/OC-CC-PARITY-REPORT.md item #32 — per-process-instance seal secret +
+ * incident #423 would brick delivery for any session resumed after an OpenCode restart); it
+ * remains unchanged on the Task/Agent dispatch branch below.
+ * Delivery bash always injects isAncestorFn + listHandRecordsForFeatureFn (cheap lazy
+ * closures; decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
+ * dispatches, and the freeze-commit early trigger); gitState (a real git probe) is injected
+ * only for delivery commands.
  * Load shape matches loop-guard: dynamic import of pure mjs inside factory
  * (static import of mjs breaks OC plugin loader — "export is not a function").
  */
@@ -27,8 +37,6 @@ export type EntryGateDeps = {
   } | null
   isAncestorFn?: (sha: string) => boolean | null
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
-  /** Read the bound execution-plan snapshot for the A5 capture rail (injectable). */
-  readBoundPlanFn?: (gateState: unknown) => unknown
   ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
@@ -195,10 +203,6 @@ export async function createEntryGateHooks(
   const { isDeliveryRole, isPlannerRole } = await import("./lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
-  const { readBoundPlanSnapshot } = await import("./lib/bound-plan.mjs")
-  const readBoundPlanFn =
-    deps.readBoundPlanFn ??
-    ((gateState: unknown) => readBoundPlanSnapshot(root, gateState))
 
   const gitStateFn =
     deps.gitStateFn ?? (() => defaultGitState(computeGitState))
@@ -271,23 +275,19 @@ export async function createEntryGateHooks(
             ? sessionId
             : undefined
         const loaded = loadGateStateFromDisk(root, { sessionId: sid })
-        if (isDeliveryCommand(command) && !loaded.ok) {
-          throw new Error(`${PREFIX} ${loaded.reason}`)
-        }
+        // Fail-open on unreadable/missing gate-state (Claude Code parity): an empty or
+        // unreadable gate-state is not itself grounds to block delivery — decideBashDelivery's
+        // own rails (branch/commits, regate, capture, real-file) still apply against {}.
         const gateState = loaded.ok ? loaded.state : {}
-        if (loaded.ok) {
-          const seals = validatePrivilegedMarkerSeals(gateState, {
-            sessionId: sid,
-            featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
-          })
-          if (!seals.ok && isDeliveryCommand(command)) throw new Error(`${PREFIX} ${seals.reason}`)
-          const binding = validateCeremonyBinding(gateState, {
-            sessionId: sid,
-            featureId: typeof gateState.feature_id === "string" ? gateState.feature_id : "",
-            required: ["brainstormed", "adversary_fired"],
-          })
-          if (!binding.ok && isDeliveryCommand(command)) throw new Error(`${PREFIX} ${binding.reason}`)
-        }
+        // Deliberately NOT validating marker seals on the bash delivery path (reverted after
+        // review — see docs/OC-CC-PARITY-REPORT.md item #32 "delivery-marker-seal-process-instance":
+        // the seal secret is per-process-instance (marker-seal.mjs), so validating it here would
+        // resurrect incident #423 — every marker sealed before an OpenCode restart becomes
+        // PERMANENTLY unverifiable, bricking delivery for any resumed session. The parity report's
+        // resolved judgment is to remove seal validation from all 3 read sites (this one, the Task
+        // branch, plan-gate.ts) + the writers — not partially; removing only here (this issue's
+        // scope) while Task/plan-gate keep validating does not reintroduce the brick for THIS path.
+        // Claude Code has no marker-seal concept at all (grep marker-seal core/claude-code = 0).
         if (
           gateState != null &&
           typeof gateState === "object" &&
@@ -298,20 +298,19 @@ export async function createEntryGateHooks(
           throw new Error(`${PREFIX} Blocked: bound execution-plan.json is immutable until a new planner claim.`)
         }
 
-        /** Delivery-only rails: never probe git/list/ancestor for non-delivery bash. */
+        /** git branch/commit probe is delivery-only (a real git shellout, fail-open on throw);
+         * isAncestorFn and listHandRecordsForFeatureFn are cheap lazy closures always safe to
+         * pass — decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
+         * dispatches, and the freeze-commit early trigger. */
         const deliveryExtras: {
           gitState?: ReturnType<typeof gitStateFn>
-          isAncestorFn?: typeof isAncestorFn
-          listHandRecordsForFeatureFn?: typeof listHandRecordsForFeatureFn
-          boundPlan?: unknown
         } = {}
         if (isDeliveryCommand(command)) {
-          deliveryExtras.gitState = gitStateFn()
-          deliveryExtras.isAncestorFn = isAncestorFn
-          deliveryExtras.listHandRecordsForFeatureFn =
-            listHandRecordsForFeatureFn
-          // A5: bound-plan snapshot for multitask capture coverage (fail-open → null).
-          deliveryExtras.boundPlan = readBoundPlanFn(gateState)
+          try {
+            deliveryExtras.gitState = gitStateFn()
+          } catch {
+            deliveryExtras.gitState = null
+          }
         }
 
         throwIfBashDenied(
@@ -319,7 +318,8 @@ export async function createEntryGateHooks(
             command,
             gateState,
             sessionId: sid ?? null,
-            gateStateLoadOk: loaded.ok,
+            isAncestorFn,
+            listHandRecordsForFeatureFn,
             ...deliveryExtras,
           }),
         )

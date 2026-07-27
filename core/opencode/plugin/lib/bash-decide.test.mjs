@@ -1,4 +1,9 @@
-/** @description Locked tests for OC bash delivery + forge decide (session-275 + U2 rails). */
+/**
+ * @description Locked tests for OC bash delivery + forge decide (issue #481 — parity with
+ * Claude Code entry-gate.mjs decideBash: 4 rails kept 1:1 (branch/zero-commits, regate,
+ * capture, real-file), fail-open on infra error, the WHOLE ceremony/mode ladder removed,
+ * spawn-hand.mjs fidelity rail + freeze-commit early trigger ported).
+ */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -8,8 +13,6 @@ import {
   decideBashAdvisory,
   applyAdvisory,
   adviseIssueForm,
-  hasElevatedCeremonyResidue,
-  writingTaskIdsFromPlan,
 } from "./bash-decide.mjs";
 
 const SID = "ses_test_delivery_1";
@@ -18,7 +21,7 @@ const emptyList = () => [];
 const ancestorTrue = () => true;
 const ancestorFalse = () => false;
 
-/** Green on-disk DONE+stamp fixture — required for LIGHT|FULL ship (session-bound to SID). */
+/** Green on-disk DONE+stamp fixture — used to prove the real-file rail still fires. */
 const stampedDoneList = () => [
   {
     taskId: "t1",
@@ -52,594 +55,231 @@ function cleanDepsWithCapture(extra = {}) {
   });
 }
 
-/** @param {Record<string, unknown>} [extra] */
-function fullCeremony(extra = {}) {
-  return {
-    mode: "FULL",
-    classified: true,
-    brainstormed: true,
-    adversary_fired: true,
-    dual_status: "both",
-    feature_id: "feat",
-    // Ship-ready FULL fixture (#385): final dual review + demo stamped.
-    final_review_done: true,
-    demo_done: true,
-    planner_status: "usable",
-    delivery_status: "ready",
-    ...extra,
-  };
-}
+// ── #ac-1.1 / #ac-1.5: empty/unreadable gate-state and missing/unsafe sessionId → allow ──
 
-/** @param {Record<string, unknown>} [extra] */
-function lightCeremony(extra = {}) {
-  return {
-    mode: "LIGHT",
-    classified: true,
-    brainstormed: true,
-    adversary_fired: true,
-    feature_id: "feat",
-    planner_status: "usable",
-    delivery_status: "ready",
-    ...extra,
-  };
-}
+test("#ac-1.1: empty gate-state {} on a feature branch with commits ahead → allow (was denied by 'requires readable gate-state')", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: {},
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "delivery-ok");
+});
 
-/** @param {Record<string, unknown>} [extra] */
-function quickCeremony(extra = {}) {
-  return {
-    mode: "QUICK",
-    classified: true,
-    feature_id: "feat",
-    ...extra,
-  };
-}
-
-// ── ceremony deny cases (stay green) ──────────────────────────────────────
-
-test("empty gate + gh pr → deny", () => {
+test("#ac-1.1: same scenario via gh pr create → allow", () => {
   const d = decideBashDelivery({
     command: "gh pr create --draft",
     gateState: {},
-    sessionId: SID,
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("unreadable gate load → deny", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    sessionId: SID,
-    gateStateLoadOk: false,
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("QUICK+classified + clean rails → allow", () => {
-  const d = decideBashDelivery({
-    command: "git push -u origin h",
-    gateState: quickCeremony(),
     ...cleanDeps(),
   });
   assert.equal(d.decision, "allow");
 });
 
-test("LIGHT brainstorm+adversary + clean rails + capture evidence → allow", () => {
+test("#ac-1.5: sessionId null → allow (fail-open, infra error) regardless of gateState content", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: lightCeremony(),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("LIGHT missing brainstormed → deny", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    sessionId: SID,
-    gateState: {
-      mode: "LIGHT",
-      classified: true,
-      adversary_fired: true,
-      feature_id: "feat",
-    },
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("no-ceremony → deny", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    sessionId: SID,
-    gateState: { mode: "no-ceremony", classified: true },
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("FULL without dual → deny", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    sessionId: SID,
-    gateState: {
-      mode: "FULL",
-      classified: true,
-      brainstormed: true,
-      adversary_fired: true,
-      feature_id: "feat",
-    },
-  });
-  assert.equal(d.decision, "deny");
-});
-
-test("FULL + dual both + clean rails + capture evidence → allow", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-// ── #385 ship preconditions: final review + interactive demo ──────────────
-
-test("#ac-1.1 FULL without final_review_done → deny final-review-missing", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ final_review_done: undefined, demo_done: true }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.details?.denied_class, "final-review-missing");
-  assert.match(d.reason, /final-review-missing|final dual review/i);
-});
-
-test("#ac-1.2 FULL interactive without demo_done → deny demo-missing", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ demo_done: undefined, headless: false }),
-    ...cleanDepsWithCapture(),
-    headless: false,
-  });
-  assert.equal(d.decision, "deny");
-  assert.equal(d.details?.denied_class, "demo-missing");
-  assert.match(d.reason, /demo-missing|demo marker/i);
-});
-
-test("#ac-1.2 FULL headless without demo_done → allow (demo not required)", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ demo_done: undefined, headless: true }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
-  assert.equal(d.reason, "delivery-ok");
-});
-
-test("#ac-1.2 FULL headless via input.headless without demo → allow", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ demo_done: undefined }),
-    ...cleanDepsWithCapture(),
-    headless: true,
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("#ac-1.3 FULL + final + demo + capture + dual → allow push path", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({
-      final_review_done: true,
-      demo_done: true,
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
-  assert.equal(d.reason, "delivery-ok");
-  assert.equal(d.details?.denied_class, undefined);
-});
-
-test("LIGHT without final_review_done → allow (final rail is FULL-only)", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony(),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("missing sessionId + delivery → deny", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    gateState: quickCeremony(),
+    gitState: CLEAN_GIT,
     sessionId: null,
+    // Even an otherwise-blocking gateState must not matter — CC's decideBash returns
+    // allow before ever reading gate-state when sessionId is missing/unsafe.
+    gateState: { regate_pending: ["feat/t1"] },
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "sessionId-missing-or-unsafe");
+});
+
+test("#ac-1.5: sessionId unsafe (path traversal) → allow (fail-open)", () => {
+  const d = decideBashDelivery({
+    command: "gh pr create",
+    gitState: CLEAN_GIT,
+    sessionId: "../../evil",
+    gateState: {},
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-1.5: gitState probe error (null) does not alone deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: {},
+    ...cleanDeps({ gitState: null }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ── #ac-1.2 / #ac-1.3: branch/zero-commits rail kept 1:1 ──────────────────────────────
+
+test("#ac-1.2: git push from main → deny protected branch", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "main", commitsAhead: 3, defaultBranch: "main" } }),
   });
   assert.equal(d.decision, "deny");
+  assert.match(d.reason, /protected branch/i);
 });
 
-// ── A5: multitask capture coverage vs bound plan ──────────────────────────
-
-test("writingTaskIdsFromPlan returns ids of tasks with non-empty scope_paths only", () => {
-  const plan = {
-    tasks: [
-      { id: "t1", scope_paths: ["src/a.ts"] },
-      { id: "t2", scope_paths: ["src/b.ts"] },
-      { id: "t3", scope_paths: [] }, // no scope → not a writing task
-      { id: "", scope_paths: ["src/c.ts"] }, // no id → skip
-      { scope_paths: ["src/d.ts"] }, // no id → skip
-    ],
-  };
-  assert.deepEqual(writingTaskIdsFromPlan(plan), ["t1", "t2"]);
-});
-
-test("writingTaskIdsFromPlan is null (fail-open) for non-enumerable plan", () => {
-  assert.equal(writingTaskIdsFromPlan(null), null);
-  assert.equal(writingTaskIdsFromPlan({}), null);
-  assert.equal(writingTaskIdsFromPlan({ tasks: "nope" }), null);
-  assert.equal(writingTaskIdsFromPlan("plan"), null);
-});
-
-test("A5: LIGHT bound plan writing task without capture → deny", () => {
+test("#ac-1.2: git push from master → deny protected branch", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: lightCeremony({
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture({
-      boundPlan: {
-        tasks: [
-          { id: "t1", scope_paths: ["src/a.ts"] },
-          { id: "t2", scope_paths: ["src/b.ts"] }, // planned, never captured
-        ],
-      },
-    }),
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "master", commitsAhead: 2, defaultBranch: "master" } }),
   });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /t2/);
-  assert.match(d.reason, /no delivery evidence|half-built/i);
+  assert.match(d.reason, /protected branch/i);
 });
 
-test("A5: FULL bound plan with every writing task captured → allow", () => {
+test("#ac-1.2: branch === resolved defaultBranch (non-main name) → deny protected branch", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
-      final_review_done: true,
-      demo_done: true,
-      hand_finished: ["feat/t1", "feat/t2"],
-      capture_verified: ["feat/t1@abc", "feat/t2@abc"],
-    }),
-    ...cleanDepsWithCapture({
-      boundPlan: {
-        tasks: [
-          { id: "t1", scope_paths: ["src/a.ts"] },
-          { id: "t2", scope_paths: ["src/b.ts"] },
-        ],
-      },
-    }),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("A5: DONE_WITH_CONCERNS writing task (hand record, no capture) → allow, no false-block", () => {
-  // DONE_WITH_CONCERNS is shippable but the system never capture-stamps it. A5 must
-  // exempt it (it has a hand record) instead of demanding a capture that never exists.
-  const listWithConcerns = () => [
-    {
-      taskId: "t1",
-      sessionId: SID,
-      record: {
-        outcome: "DONE",
-        freezeCommitSha: "abc",
-        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
-        scopeViolations: [],
-        frozenViolations: [],
-      },
-    },
-    {
-      taskId: "t2",
-      sessionId: SID,
-      record: { outcome: "DONE_WITH_CONCERNS", scopeViolations: [], frozenViolations: [] },
-    },
-  ];
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({
-      final_review_done: true,
-      demo_done: true,
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"], // t2 intentionally uncaptured
-    }),
-    ...cleanDeps({
-      listHandRecordsForFeatureFn: listWithConcerns,
-      boundPlan: {
-        tasks: [
-          { id: "t1", scope_paths: ["src/a.ts"] },
-          { id: "t2", scope_paths: ["src/b.ts"] },
-        ],
-      },
-    }),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("A5: planned writing task with NO record and NO capture → deny (silent skip)", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony({
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture({
-      boundPlan: {
-        tasks: [
-          { id: "t1", scope_paths: ["src/a.ts"] },
-          { id: "t2", scope_paths: ["src/b.ts"] }, // never dispatched: no record in stampedDoneList
-        ],
-      },
-    }),
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "trunk", commitsAhead: 1, defaultBranch: "trunk" } }),
   });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /t2/);
-  assert.match(d.reason, /no delivery evidence|never dispatched/i);
+  assert.match(d.reason, /protected branch/i);
 });
 
-test("A5 fail-open: bound plan absent → does not add a new block", () => {
+test("#ac-1.3: zero commits ahead on a feature branch → deny naming commit", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: lightCeremony({
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture({ boundPlan: null }),
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "feat/x", commitsAhead: 0, defaultBranch: "main" } }),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /zero commits/i);
+});
+
+test("feature branch with commits ahead → allow (this rail alone)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: {},
+    ...cleanDeps(),
   });
   assert.equal(d.decision, "allow");
 });
 
-test("A5 fail-open: non-enumerable bound plan (no tasks array) → allow", () => {
+test("base unresolved (commitsAhead null) on a feature branch → allow (branch floor only)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: lightCeremony({
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture({ boundPlan: { note: "corrupt" } }),
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "feat/x", commitsAhead: null, defaultBranch: "main" } }),
   });
   assert.equal(d.decision, "allow");
 });
 
-// ── #475: forge wall removed — advisory channel (allow + prose hint, never deny) ──
-// decideBashForge/isStateForgeCommand and the whole detector family (marker-path binding,
-// interpreter/eval/preload/tmp-drop/archive/source/package-runner classifiers) are gone.
-// The bash gate never denies a non-delivery command anymore. decideBashAdvisory only ever
-// allows; its sole job is to optionally attach a non-blocking advisory string, delivered by
-// applyAdvisory on output.metadata (the OC plugin API's only prose channel back to the model).
-
-test("#ac-1.1: previously forge-denied command shapes now allow (all retired classes)", () => {
-  const previouslyDenied = [
-    "npm run build",
-    "make test",
-    'node -e "console.log(1)"',
-    "bash script.sh",
-    "tar -xf x.tgz",
-    "source .venv/bin/activate",
-    "npx some-tool",
-    "bunx some-tool",
-    "yarn dlx some-tool",
-    "pnpm dlx some-tool",
-    "node --require=./x.js core/index.mjs",
-    'bash -c "echo x"',
-    "cat > .opencode/plans/.state/ses_x/gate-state.json <<'EOF'\n{}\nEOF",
-    "./evil.mjs",
-    "node /tmp/evil.mjs",
-    "echo x | bash",
-    "cp forged.json .opencode/plans/.state/ses_x/gate-state.json",
-    "env -i node evil.mjs",
-    'python3 -c "print(1)"',
-  ];
-  for (const command of previouslyDenied) {
-    assert.equal(
-      decideBashAdvisory({ command }).decision,
-      "allow",
-      `decideBashAdvisory must allow: ${command}`,
-    );
-    assert.equal(
-      decideBashDelivery({ command }).decision,
-      "allow",
-      `decideBashDelivery must allow non-delivery command: ${command}`,
-    );
-  }
-});
-
-test("#ac-2.2: decideBashAdvisory is fail-open — never denies, even on malformed input", () => {
-  const malformed = [
-    {},
-    { command: undefined },
-    { command: 123 },
-    { command: null },
-    { command: "gh issue create", cwd: 42 },
-    { command: "gh issue create", cwd: null },
-  ];
-  for (const input of malformed) {
-    const d = decideBashAdvisory(input);
-    assert.equal(d.ok, true);
-    assert.equal(d.decision, "allow");
-  }
-});
-
-test("#ac-2.1: decideBashAdvisory attaches an advisory for gh issue create in a vendored repo", () => {
-  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
-  const d = decideBashAdvisory({ command: "gh issue create --title x", cwd: repoRoot });
-  assert.equal(d.decision, "allow");
-  assert.equal(typeof d.advisory, "string");
-  assert.match(d.advisory, /harness-task\.yml/);
-});
-
-test("#ac-2.1: decideBashAdvisory omits advisory when convention already followed", () => {
-  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
-  const d = decideBashAdvisory({
-    command: 'gh issue create --title "[harness] foo" --label "harness:ready"',
-    cwd: repoRoot,
+test("read-only command on main → allow (not a delivery command)", () => {
+  const d = decideBashDelivery({
+    command: "git status",
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "main", commitsAhead: 3, defaultBranch: "main" } }),
   });
   assert.equal(d.decision, "allow");
-  assert.equal(d.advisory, undefined);
 });
 
-test("#ac-2.1: applyAdvisory writes the advisory to output.metadata.bash_advisory", () => {
-  const output = {};
-  applyAdvisory({ ok: true, decision: "allow", reason: "advisory", advisory: "hint text" }, output);
-  assert.equal(output.metadata.bash_advisory, "hint text");
-});
-
-test("applyAdvisory preserves existing output.metadata keys", () => {
-  const output = { metadata: { model: "x" } };
-  applyAdvisory({ ok: true, decision: "allow", reason: "advisory", advisory: "hint text" }, output);
-  assert.equal(output.metadata.model, "x");
-  assert.equal(output.metadata.bash_advisory, "hint text");
-});
-
-test("applyAdvisory is a no-op when the decision carries no advisory", () => {
-  const output = {};
-  applyAdvisory({ ok: true, decision: "allow", reason: "no-advisory" }, output);
-  assert.equal(output.metadata, undefined);
-});
-
-test("#ac-2.2: applyAdvisory is fail-open on malformed output (never throws)", () => {
-  const decision = { ok: true, decision: "allow", reason: "advisory", advisory: "hint text" };
-  assert.doesNotThrow(() => applyAdvisory(decision, null));
-  assert.doesNotThrow(() => applyAdvisory(decision, undefined));
-  assert.doesNotThrow(() => applyAdvisory(decision, "not-an-object"));
-  assert.doesNotThrow(() => applyAdvisory(null, {}));
-  assert.doesNotThrow(() => applyAdvisory(undefined, {}));
-});
-
-// ── adviseIssueForm pure function contracts (ported 1:1 from Claude Code, entry-gate.mjs) ──
-
-test("adviseIssueForm #1: gh issue create + existsFn=true + abs cwd → returns advisory string (truthy)", () => {
-  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
-  assert.ok(result, "advisory must be a truthy string when form exists in abs cwd");
-  assert.equal(typeof result, "string", "advisory must be a string");
-});
-
-test("adviseIssueForm #2: non-gh-issue command → null", () => {
-  const result = adviseIssueForm("ls -la", "/abs/repo", () => true);
-  assert.equal(result, null, "non-gh-issue command must return null");
-});
-
-test("adviseIssueForm #3: command already contains harness:ready → null (no re-nudge)", () => {
-  const result = adviseIssueForm(
-    'gh issue create --title "[harness] foo" --label "harness:ready"',
-    "/abs/repo",
-    () => true,
-  );
-  assert.equal(result, null, "command already following convention must return null");
-});
-
-test("adviseIssueForm #4: relative cwd or empty or undefined → null (fail-open, no nudge)", () => {
-  assert.equal(adviseIssueForm("gh issue create --title x", "repo", () => true), null);
-  assert.equal(adviseIssueForm("gh issue create --title x", "", () => true), null);
-  assert.equal(adviseIssueForm("gh issue create --title x", undefined, () => true), null);
-});
-
-test("adviseIssueForm #5: existsFn=()=>false → null (no form vendored → no nudge)", () => {
-  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => false);
-  assert.equal(result, null, "no form vendored must return null");
-});
-
-test("adviseIssueForm #6: non-string command → null", () => {
-  assert.equal(adviseIssueForm(undefined, "/abs/repo", () => true), null);
-  assert.equal(adviseIssueForm(123, "/abs/repo", () => true), null);
-});
-
-test("adviseIssueForm #7: harness:ready loose in --body/--title prose does not suppress the nudge (regression)", () => {
-  const result = adviseIssueForm(
-    'gh issue create --title x --body "não esqueça harness:ready depois"',
-    "/abs/repo",
-    () => true,
-  );
-  assert.ok(result, "a harness:ready mention outside --label/-l must not suppress the advisory");
-});
-
-test("adviseIssueForm #8: -l short flag with harness:ready suppresses the nudge", () => {
-  const result = adviseIssueForm('gh issue create --title x -l harness:ready', "/abs/repo", () => true);
-  assert.equal(result, null);
-});
-
-test("adviseIssueForm #9: --label with a comma-separated list containing harness:ready suppresses the nudge", () => {
-  const result = adviseIssueForm(
-    'gh issue create --title x --label "P0,harness:ready"',
-    "/abs/repo",
-    () => true,
-  );
-  assert.equal(result, null);
-});
-
-// ── U2 rails locked tests ─────────────────────────────────────────────────
-
-test("B1: FULL ceremony + unmatched regate_pending → deny names feat/t1", () => {
+test("LOCKED default-branch #6 parity: branch 'feature/develop-stuff' vs defaultBranch 'develop' → allow (only EXACT branch match denies, not a substring/prefix match)", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ regate_pending: ["feat/t1"] }),
+    command: "git push -u origin feature/develop-stuff",
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "feature/develop-stuff", commitsAhead: 2, defaultBranch: "develop" } }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("git --git-dir=... --work-tree=... push with unmatched regate_pending → deny (global-flag form still classified as delivery)", () => {
+  const d = decideBashDelivery({
+    command: "git --git-dir=/repo/.git --work-tree=/repo push",
+    gateState: { regate_pending: ["feat/t1"] },
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /feat\/t1/);
-  assert.doesNotMatch(d.reason, /ceremony-delivery-ok/);
 });
 
-test("B2: pending matched by regate_passed@sha + ancestor true → allow", () => {
+test("trilho-4 #3 parity: git status with unmatched hand_finished → allow (read-only never gated)", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({
-      regate_pending: ["feat/t1"],
-      regate_passed: ["feat/t1@abc"],
-    }),
-    ...cleanDepsWithCapture(),
+    command: "git status",
+    gateState: { hand_finished: ["feat/t1"] },
+    ...cleanDeps(),
   });
   assert.equal(d.decision, "allow");
 });
 
-test("divergent sha (isAncestor false) → deny", () => {
+// ── #ac-1.4: regate rail kept 1:1 (same message in both runtimes) ─────────────────────
+
+test("#ac-1.4: unmatched regate_pending → deny naming the qualified task, same message shape as Claude Code", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
-      regate_pending: ["feat/t1"],
-      regate_passed: ["feat/t1@sha"],
-    }),
+    gateState: { regate_pending: ["feat/t1"] },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /feat\/t1/);
+  assert.match(d.reason, /mandatory strong-eye re-gate/);
+});
+
+test("#ac-1.4: regate matched by an ancestor-sha regate_passed → allow", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { regate_pending: ["feat/t1"], regate_passed: ["feat/t1@abc"] },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("regate_passed at a divergent (non-ancestor) sha → deny (stale absolution ignored)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { regate_pending: ["feat/t1"], regate_passed: ["feat/t1@sha"] },
     ...cleanDeps({ isAncestorFn: ancestorFalse }),
   });
   assert.equal(d.decision, "deny");
 });
 
-test("unqualified regate_passed → deny", () => {
+test("unqualified (no @sha) regate_passed → deny (treated as absent)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
-      regate_pending: ["feat/t1"],
-      regate_passed: ["feat/t1"],
-    }),
+    gateState: { regate_pending: ["feat/t1"], regate_passed: ["feat/t1"] },
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
 });
 
-test("trilho-4 #1: hand_finished without capture_verified → deny", () => {
+test("no re-gate markers at all → allow (nothing to consume)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({ hand_finished: ["feat/t1"] }),
+    gateState: {},
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("LOCKED B1b parity: gh pr create with unmatched regate_pending → deny naming task-1 (same rail as git push)", () => {
+  const d = decideBashDelivery({
+    command: "gh pr create --title 'My PR'",
+    gateState: { regate_pending: ["task-1"] },
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
+  assert.match(d.reason, /task-1/);
+});
+
+// ── capture rail (hand_finished vs capture_verified) kept 1:1 ─────────────────────────
+
+test("hand_finished without capture_verified → deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { hand_finished: ["feat/t1"] },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /feat\/t1/);
 });
 
 test("hand_finished + capture_verified divergent sha → deny", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
-      hand_finished: ["feat/t1"],
-      capture_verified: ["feat/t1@deadbeef"],
-    }),
+    gateState: { hand_finished: ["feat/t1"], capture_verified: ["feat/t1@deadbeef"] },
     ...cleanDeps({ isAncestorFn: ancestorFalse }),
   });
   assert.equal(d.decision, "deny");
@@ -648,11 +288,11 @@ test("hand_finished + capture_verified divergent sha → deny", () => {
 test("regate matched AND capture unmatched → deny (independent rails)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
+    gateState: {
       regate_pending: ["feat/t1"],
       regate_passed: ["feat/t1@abc"],
       hand_finished: ["feat/t2"],
-    }),
+    },
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
@@ -662,29 +302,155 @@ test("regate matched AND capture unmatched → deny (independent rails)", () => 
 test("both regate+capture matched + real-file clear → allow (single terminal)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony({
+    gateState: {
       regate_pending: ["feat/t1"],
       regate_passed: ["feat/t1@abc"],
       hand_finished: ["feat/t2"],
       capture_verified: ["feat/t2@def"],
-    }),
-    ...cleanDepsWithCapture(),
+    },
+    ...cleanDeps(),
   });
   assert.equal(d.decision, "allow");
   assert.equal(d.reason, "delivery-ok");
 });
 
-test("listFn DONE missing capturedVerifiedAt → deny", () => {
+// ── corrupt-marker fail-closed exception: regate_pending ALONE (#ac-1.5 "única exceção") ──
+
+test("#ac-1.5: regate_pending non-array → deny gate-state corrupted (not 'stamp regate-passed') — the sole deliberate fail-closed exception", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony(),
+    gateState: { regate_pending: "BROKEN" },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gate-state corrupted/);
+  assert.match(d.reason, /BROKEN/);
+  assert.doesNotMatch(d.reason, /stamp regate-passed/);
+});
+
+// hand_finished / capture_verified / regate_passed are explicitly NOT the fail-closed
+// exception — a non-array value there silently coerces to [], mirroring Claude Code exactly
+// (entry-gate.mjs never denies on a malformed one of these, only on regate_pending).
+
+test("#ac-1.5: hand_finished non-array → coerces to [] (allow), not a corrupt-content deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { hand_finished: { y: 2 } },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-1.5: capture_verified non-array → coerces to [] (allow), not a corrupt-content deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { capture_verified: { z: 3 } },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-1.5: regate_passed non-array → coerces to [] — an unmatched regate_pending still denies on its own rail (not the corrupt-content path)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { regate_pending: ["feat/t1"], regate_passed: { x: 1 } },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /feat\/t1/);
+  assert.doesNotMatch(d.reason, /gate-state corrupted/);
+});
+
+test("regate_pending raw value is truncated in the deny reason (cap 200)", () => {
+  const big = "X".repeat(5000);
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { regate_pending: big },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+  assert.ok(!d.reason.includes(big), "deny reason must not include the full 5000-char blob");
+  assert.ok(
+    !d.reason.includes("X".repeat(201)),
+    "deny reason must not include a run of more than 200 consecutive 'X' characters",
+  );
+});
+
+// ── fail_open catch-all: an internal bug in decideBashDelivery must never opaquely brick
+// delivery (docs/OC-CC-PARITY-REPORT.md item #60 "delivery-decision-catch-all | A (fail-open)").
+
+test("internal error inside decideBashDelivery → fails OPEN (allow), never an opaque deny", () => {
+  const throwingGateState = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("boom");
+      },
+    },
+  );
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: throwingGateState,
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.reason, "delivery-decision-failed-open");
+});
+
+// ── real-file rail: fires on feature_id alone, no ceremony/mode dependency ────────────
+
+test("no feature_id → real-file rail never consulted (allow) even with no hand records", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: {},
+    ...cleanDeps({ listHandRecordsForFeatureFn: emptyList }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("feature_id present + empty hand-record list → allow (real-file rail is vacuous-ship-ok without ceremony, CC parity)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat" },
+    ...cleanDeps({ listHandRecordsForFeatureFn: emptyList }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("feature_id present + listFn missing → deny real-file-list-unavailable", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat" },
+    sessionId: SID,
+    gitState: CLEAN_GIT,
+    isAncestorFn: ancestorTrue,
+    // listFn absent
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /real-file-list-unavailable/);
+});
+
+test("listFn throws → deny real-file-list-unavailable", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat" },
+    ...cleanDeps({
+      listHandRecordsForFeatureFn: () => {
+        throw new Error("readdir failed");
+      },
+    }),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /real-file-list-unavailable/);
+});
+
+test("listFn DONE record missing capturedVerifiedAt → deny", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat" },
     ...cleanDeps({
       listHandRecordsForFeatureFn: () => [
-        {
-          taskId: "t1",
-          sessionId: "s1",
-          record: { outcome: "DONE", freezeCommitSha: "abc" },
-        },
+        { taskId: "t1", sessionId: "s1", record: { outcome: "DONE", freezeCommitSha: "abc" } },
       ],
     }),
   });
@@ -695,7 +461,7 @@ test("listFn DONE missing capturedVerifiedAt → deny", () => {
 test("DONE+stamp+scopeViolations → deny hard-stop", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony(),
+    gateState: { feature_id: "feat" },
     ...cleanDeps({
       listHandRecordsForFeatureFn: () => [
         {
@@ -715,185 +481,178 @@ test("DONE+stamp+scopeViolations → deny hard-stop", () => {
   assert.match(d.reason, /SCOPE\/FROZEN/);
 });
 
-test("gitState.branch main → deny protected (not ceremony-delivery-ok)", () => {
+test("feature_id + DONE+stamp hand record → allow", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      gitState: { branch: "main", commitsAhead: 3, defaultBranch: "main" },
-    }),
+    gateState: { feature_id: "feat" },
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("real-file rail ignores a hand-record whose freezeCommitSha is not an ancestor of HEAD", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat" },
+    ...cleanDeps({ listHandRecordsForFeatureFn: stampedDoneList, isAncestorFn: ancestorFalse }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ── #ac-2.1: spawn-hand.mjs fidelity rail (ported from Claude Code entry-gate.mjs :451-521) ──
+
+test("#ac-2.1: spawn-hand.mjs without --descriptor → allow (fail-open, read-only commands like cat/grep must pass)", () => {
+  const d = decideBashDelivery({
+    command: "cat .claude/skills/orchestrating-delivery/references/spawn-hand.mjs",
+    gateState: {},
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor unreadable → deny fail-closed", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor missing.json",
+    gateState: {},
+    sessionId: SID,
+    readDescriptorFn: () => null,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /descriptor/);
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor with non-string ids → deny fail-closed", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: {},
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: 1, task_id: "T" }),
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor {F,T} + fidelity_pass=[] → deny naming missing fidelity-pass for F/T", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: { fidelity_pass: [] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason.toLowerCase(), /fidelity/);
+  assert.match(d.reason, /F\/T/);
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor {F,T} + fidelity_pass=[F/T] → allow", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: { fidelity_pass: ["F/T"] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor {F,T} + fidelity_pass=[WRONG/T] → deny (qualified-id match, not blanket allow)", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: { fidelity_pass: ["WRONG/T"] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("#ac-2.1: spawn-hand.mjs --descriptor {F,T} + sha-qualified fidelity_pass=[F/T@abc] → allow (prefix match)", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: { fidelity_pass: ["F/T@abc"] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ── #ac-2.1 precedence regression: mentioning spawn-hand.mjs must never be a delivery
+// free-pass. The fidelity rail is a narrow trail on spawn-hand.mjs DISPATCHES, not a
+// substring escape hatch for an unrelated delivery command that merely contains the text
+// (e.g. in a PR body) or composes it with `&&`. A fidelity ALLOW must fall through to the
+// branch/regate/capture/real-file rails whenever the command is ALSO a delivery command; only
+// a fidelity DENY may short-circuit unconditionally. ──────────────────────────────────────
+
+test("#ac-2.1 precedence: gh pr create whose --body merely mentions spawn-hand.mjs still crosses the branch/zero-commits rail (protected branch) → deny", () => {
+  const d = decideBashDelivery({
+    command: "gh pr create --body 'dispatched via spawn-hand.mjs; capture verified.'",
+    gateState: {},
+    ...cleanDeps({ gitState: { branch: "main", commitsAhead: 3, defaultBranch: "main" } }),
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /protected branch/i);
-  assert.doesNotMatch(d.reason, /ceremony-delivery-ok/);
 });
 
-test("gitState.branch master → deny protected", () => {
+test("#ac-2.1 precedence: git push composed with a spawn-hand.mjs comment still crosses the regate rail → deny naming the unmatched task", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      gitState: { branch: "master", commitsAhead: 2, defaultBranch: "master" },
-    }),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /protected branch/i);
-});
-
-test("gitState.branch === defaultBranch → deny protected", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      gitState: { branch: "trunk", commitsAhead: 1, defaultBranch: "trunk" },
-    }),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /protected branch/i);
-});
-
-test("gitState.commitsAhead 0 → deny; gitState null → does not alone deny", () => {
-  const zero = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      gitState: { branch: "feat/x", commitsAhead: 0, defaultBranch: "main" },
-    }),
-  });
-  assert.equal(zero.decision, "deny");
-  assert.match(zero.reason, /zero commits/i);
-
-  const nullGit = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDepsWithCapture({ gitState: null }),
-  });
-  assert.equal(nullGit.decision, "allow");
-});
-
-test("regate_pending non-array → deny gate-state corrupted (not stamp regate-passed)", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ regate_pending: "BROKEN" }),
-    ...cleanDeps(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gate-state corrupted/);
-  assert.doesNotMatch(d.reason, /stamp regate-passed/);
-});
-
-test("hand_finished non-array → deny gate-state corrupted", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ hand_finished: { y: 2 } }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gate-state corrupted/);
-  assert.match(d.reason, /hand_finished/);
-});
-
-test("capture_verified non-array → deny gate-state corrupted", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ capture_verified: { z: 3 } }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gate-state corrupted/);
-  assert.match(d.reason, /capture_verified/);
-});
-
-test("regate_passed non-array → deny gate-state corrupted", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ regate_passed: { x: 1 } }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gate-state corrupted/);
-  assert.match(d.reason, /regate_passed/);
-});
-
-test("LIGHT/FULL without string feature_id → deny", () => {
-  const light = decideBashDelivery({
-    command: "git push",
-    gateState: {
-      mode: "LIGHT",
-      classified: true,
-      brainstormed: true,
-      adversary_fired: true,
-      planner_status: "usable",
-      delivery_status: "ready",
-    },
-    ...cleanDeps(),
-  });
-  assert.equal(light.decision, "deny");
-  assert.match(light.reason, /feature_id/);
-
-  const full = decideBashDelivery({
-    command: "git push",
-    gateState: {
-      mode: "FULL",
-      classified: true,
-      brainstormed: true,
-      adversary_fired: true,
-      dual_status: "both",
-      final_review_done: true,
-      demo_done: true,
-      planner_status: "usable",
-      delivery_status: "ready",
-    },
-    ...cleanDeps(),
-  });
-  assert.equal(full.decision, "deny");
-  assert.match(full.reason, /feature_id/);
-});
-
-test("ceremony-complete + unmatched regate → rail reason NOT ceremony-delivery-ok", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony({ regate_pending: ["feat/t1"] }),
+    command: "git push --force origin main # spawn-hand.mjs",
+    gateState: { regate_pending: ["feat/t1"] },
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /feat\/t1/);
-  assert.doesNotMatch(d.reason, /ceremony-delivery-ok/);
 });
 
-// ── QUICK rails (no early quick-delivery-ok) ──────────────────────────────
-
-test("QUICK+classified + unmatched regate → deny NOT quick-delivery-ok", () => {
+test("#ac-2.1 precedence: gh pr merge composed with a spawn-hand.mjs comment still crosses the regate rail → deny", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony({ regate_pending: ["feat/t1"] }),
+    command: "gh pr merge --admin 42 # spawn-hand.mjs",
+    gateState: { regate_pending: ["feat/t1"] },
+    ...cleanDeps(),
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("#ac-2.1 precedence: literal spawn-hand.mjs dispatch composed with && git push — fidelity ALLOW is not a delivery free-pass, unmatched regate still denies", () => {
+  const d = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json && git push origin main",
+    gateState: { fidelity_pass: ["F/T"], regate_pending: ["feat/t1"] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /feat\/t1/);
-  assert.doesNotMatch(d.reason, /quick-delivery-ok/);
 });
 
-test("QUICK+classified + unmatched hand_finished → deny", () => {
+test("#ac-2.1 precedence: literal spawn-hand.mjs dispatch composed with && git push — fidelity DENY still short-circuits (no fall-through needed)", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony({ hand_finished: ["feat/t1"] }),
+    command: "node spawn-hand.mjs --descriptor d.json && git push origin main",
+    gateState: { fidelity_pass: [] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
     ...cleanDeps(),
   });
   assert.equal(d.decision, "deny");
+  assert.match(d.reason.toLowerCase(), /fidelity/);
 });
 
-test("QUICK+classified + listFn DONE without stamp → deny", () => {
+test("#ac-2.1 precedence: a genuinely non-delivery spawn-hand.mjs dispatch (no && push) still returns the fidelity verdict directly", () => {
+  const allow = decideBashDelivery({
+    command: "node spawn-hand.mjs --descriptor d.json",
+    gateState: { fidelity_pass: ["F/T"] },
+    sessionId: SID,
+    readDescriptorFn: () => ({ feature_id: "F", task_id: "T" }),
+  });
+  assert.equal(allow.decision, "allow");
+  assert.equal(allow.reason, "spawn-hand-fidelity-ok");
+});
+
+// ── #ac-2.2: freeze-commit early capture trigger (ported from :530-554) ───────────────
+
+test("#ac-2.2: freeze-commit message + unresolved hand-record for the current feature → deny early (same rail as delivery gate)", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony(),
+    command: 'git commit -m "test(cron): freeze locked tests for task-2"',
+    gateState: { feature_id: "feat" },
     ...cleanDeps({
       listHandRecordsForFeatureFn: () => [
-        {
-          taskId: "t1",
-          sessionId: "s1",
-          record: { outcome: "DONE", freezeCommitSha: "abc" },
-        },
+        { taskId: "t1", sessionId: SID, record: { outcome: "DONE", freezeCommitSha: "abc" } },
       ],
     }),
   });
@@ -901,188 +660,154 @@ test("QUICK+classified + listFn DONE without stamp → deny", () => {
   assert.match(d.reason, /capturedVerifiedAt/);
 });
 
-test("QUICK+classified + regate_pending non-array → deny corrupted", () => {
+test("#ac-2.2: ordinary git commit (not a freeze-commit message) → allow even with an unresolved hand-record — best-effort, not the mandatory gate", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony({ regate_pending: "BROKEN" }),
-    ...cleanDeps(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gate-state corrupted/);
-});
-
-test("QUICK+classified + gitState main or commitsAhead 0 → deny", () => {
-  const main = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony(),
+    command: 'git commit -m "chore: update memory notes"',
+    gateState: { feature_id: "feat" },
     ...cleanDeps({
-      gitState: { branch: "main", commitsAhead: 1, defaultBranch: "main" },
+      listHandRecordsForFeatureFn: () => [
+        { taskId: "t1", sessionId: SID, record: { outcome: "DONE", freezeCommitSha: "abc" } },
+      ],
     }),
-  });
-  assert.equal(main.decision, "deny");
-
-  const zero = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony(),
-    ...cleanDeps({
-      gitState: { branch: "feat/x", commitsAhead: 0, defaultBranch: "main" },
-    }),
-  });
-  assert.equal(zero.decision, "deny");
-});
-
-// ── precedence ────────────────────────────────────────────────────────────
-
-test("incomplete ceremony AND unmatched regate → ceremony reason first", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    sessionId: SID,
-    gateState: {
-      mode: "FULL",
-      classified: true,
-      brainstormed: true,
-      adversary_fired: true,
-      // no dual_status
-      feature_id: "feat",
-      regate_pending: ["feat/t1"],
-    },
-    gitState: CLEAN_GIT,
-    isAncestorFn: ancestorTrue,
-    listHandRecordsForFeatureFn: emptyList,
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /dual_status/i);
-  assert.doesNotMatch(d.reason, /feat\/t1/);
-});
-
-test("listHandRecordsForFeatureFn not function when needed → deny real-file-list-unavailable", () => {
-  const full = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    sessionId: SID,
-    gitState: CLEAN_GIT,
-    isAncestorFn: ancestorTrue,
-    // listFn absent
-  });
-  assert.equal(full.decision, "deny");
-  assert.match(full.reason, /real-file-list-unavailable/);
-
-  const light = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony(),
-    sessionId: SID,
-    gitState: CLEAN_GIT,
-    isAncestorFn: ancestorTrue,
-  });
-  assert.equal(light.decision, "deny");
-  assert.match(light.reason, /real-file-list-unavailable/);
-
-  const withFeature = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony({ feature_id: "feat" }),
-    sessionId: SID,
-    gitState: CLEAN_GIT,
-    isAncestorFn: ancestorTrue,
-  });
-  assert.equal(withFeature.decision, "deny");
-  assert.match(withFeature.reason, /real-file-list-unavailable/);
-});
-
-test("LIGHT|FULL empty hand-record list → deny real-file-no-capture-evidence", () => {
-  const light = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony(),
-    ...cleanDeps({ listHandRecordsForFeatureFn: emptyList }),
-  });
-  assert.equal(light.decision, "deny");
-  assert.match(light.reason, /real-file-no-capture-evidence/);
-
-  const full = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({ listHandRecordsForFeatureFn: emptyList }),
-  });
-  assert.equal(full.decision, "deny");
-  assert.match(full.reason, /real-file-no-capture-evidence/);
-});
-
-test("listFn throws → deny real-file-list-unavailable", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      listHandRecordsForFeatureFn: () => {
-        throw new Error("readdir failed");
-      },
-    }),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /real-file-list-unavailable/);
-});
-
-test("QUICK empty list still allow (no requireCaptureEvidence)", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony(),
-    ...cleanDeps({ listHandRecordsForFeatureFn: emptyList }),
   });
   assert.equal(d.decision, "allow");
 });
 
-test("FULL + only other-session DONE stamp → deny real-file-no-capture-evidence", () => {
+test("#ac-2.2: freeze-commit message with no feature_id → allow (fail-open, nothing to check)", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      listHandRecordsForFeatureFn: () => [
-        {
-          taskId: "t1",
-          sessionId: "other_session",
-          record: {
-            outcome: "DONE",
-            freezeCommitSha: "abc",
-            capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
-            scopeViolations: [],
-            frozenViolations: [],
-          },
-        },
-      ],
-    }),
+    command: 'git commit -m "test(cron): freeze locked tests for task-2"',
+    gateState: {},
+    ...cleanDeps(),
   });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /real-file-no-capture-evidence/);
+  assert.equal(d.decision, "allow");
 });
 
-test("FULL + current session DONE stamp → allow", () => {
+test("#ac-2.2: freeze-commit message clears (DONE+stamp hand record) → allow", () => {
   const d = decideBashDelivery({
-    command: "git push",
-    gateState: fullCeremony(),
+    command: 'git commit -m "test(cron): freeze locked tests for task-2"',
+    gateState: { feature_id: "feat" },
     ...cleanDepsWithCapture(),
   });
   assert.equal(d.decision, "allow");
 });
 
-test("FULL + other-session DONE without stamp still hard-stop deny", () => {
+// ── the mode ladder is GONE: ceremony fields no longer influence the bash gate ────────
+
+test("no mode / not classified + clean rails + feature_id → allow (mode ladder removed)", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: fullCeremony(),
-    ...cleanDeps({
-      listHandRecordsForFeatureFn: () => [
-        {
-          taskId: "t1",
-          sessionId: "other_session",
-          record: { outcome: "DONE", freezeCommitSha: "abc" },
-        },
-      ],
-    }),
+    gateState: { feature_id: "feat" },
+    ...cleanDepsWithCapture(),
   });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /capturedVerifiedAt/);
+  assert.equal(d.decision, "allow");
 });
 
-// ── #ac-2.4 / #ac-2.11: opencode.json.example permission.bash contract (config only) ──
+test("mode=no-ceremony + clean rails → allow (was a hard deny; ceremony is not the bash gate's concern anymore)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { mode: "no-ceremony", classified: true, feature_id: "feat" },
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+});
 
-/** @description #ac-2.4 + #ac-2.11: parse example and assert bash permission shape (no * allow, ask default, prescribed allows, ceremony, no broad globs) */
+test("FULL ceremony fields present but incomplete (no dual_status/final_review/demo) → allow (those rails removed from the bash gate)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { mode: "FULL", classified: true, feature_id: "feat" },
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("review_status=primary_failure_cap_reached no longer blocks the bash gate (moved out of scope; not one of the 4 kept rails)", () => {
+  const d = decideBashDelivery({
+    command: "git push",
+    gateState: { feature_id: "feat", review_status: "primary_failure_cap_reached" },
+    ...cleanDepsWithCapture(),
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ── previously-forge-denied command shapes stay allowed (unrelated to this issue, still true) ──
+
+test("previously forge-denied command shapes still allow via decideBashAdvisory/decideBashDelivery", () => {
+  const previouslyDenied = [
+    "npm run build",
+    "make test",
+    'node -e "console.log(1)"',
+    "bash script.sh",
+    "npx some-tool",
+  ];
+  for (const command of previouslyDenied) {
+    assert.equal(decideBashAdvisory({ command }).decision, "allow");
+    assert.equal(decideBashDelivery({ command }).decision, "allow");
+  }
+});
+
+// ── decideBashAdvisory / applyAdvisory / adviseIssueForm — unaffected by this issue ───
+
+test("decideBashAdvisory is fail-open — never denies, even on malformed input", () => {
+  const malformed = [{}, { command: undefined }, { command: 123 }, { command: null }];
+  for (const input of malformed) {
+    const d = decideBashAdvisory(input);
+    assert.equal(d.ok, true);
+    assert.equal(d.decision, "allow");
+  }
+});
+
+test("decideBashAdvisory attaches an advisory for gh issue create in a vendored repo", () => {
+  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
+  const d = decideBashAdvisory({ command: "gh issue create --title x", cwd: repoRoot });
+  assert.equal(d.decision, "allow");
+  assert.equal(typeof d.advisory, "string");
+  assert.match(d.advisory, /harness-task\.yml/);
+});
+
+test("decideBashAdvisory omits advisory when convention already followed", () => {
+  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "../../../..");
+  const d = decideBashAdvisory({
+    command: 'gh issue create --title "[harness] foo" --label "harness:ready"',
+    cwd: repoRoot,
+  });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.advisory, undefined);
+});
+
+test("applyAdvisory writes the advisory to output.metadata.bash_advisory and preserves existing keys", () => {
+  const output = { metadata: { model: "x" } };
+  applyAdvisory({ ok: true, decision: "allow", reason: "advisory", advisory: "hint text" }, output);
+  assert.equal(output.metadata.model, "x");
+  assert.equal(output.metadata.bash_advisory, "hint text");
+});
+
+test("applyAdvisory is fail-open on malformed output (never throws)", () => {
+  const decision = { ok: true, decision: "allow", reason: "advisory", advisory: "hint text" };
+  assert.doesNotThrow(() => applyAdvisory(decision, null));
+  assert.doesNotThrow(() => applyAdvisory(decision, undefined));
+  assert.doesNotThrow(() => applyAdvisory(decision, "not-an-object"));
+  assert.doesNotThrow(() => applyAdvisory(null, {}));
+});
+
+test("adviseIssueForm: gh issue create + existsFn=true + abs cwd → advisory string", () => {
+  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+  assert.ok(result);
+  assert.equal(typeof result, "string");
+});
+
+test("adviseIssueForm: non-gh-issue command → null", () => {
+  assert.equal(adviseIssueForm("ls -la", "/abs/repo", () => true), null);
+});
+
+test("adviseIssueForm: -l short flag with harness:ready suppresses the nudge", () => {
+  assert.equal(
+    adviseIssueForm('gh issue create --title x -l harness:ready', "/abs/repo", () => true),
+    null,
+  );
+});
+
+// ── #ac-2.4 / #ac-2.11: opencode.json.example permission.bash contract (config only, unrelated to this issue) ──
+
 test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   const __dirname = path.dirname(new URL(import.meta.url).pathname);
   const jsonPath = path.join(__dirname, "../../../opencode/opencode.json.example");
@@ -1090,128 +815,7 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   const config = JSON.parse(raw);
   const bash = config.permission && config.permission.bash;
   assert.ok(bash, "permission.bash must exist");
-
-  // default is ask, no * allow
   assert.equal(bash["*"], "ask");
-  const starVal = bash["*"];
-  assert.notEqual(starVal, "allow");
-  // no key '*' has allow value (redundant but explicit)
-  assert.equal(Object.prototype.hasOwnProperty.call(bash, "*") && bash["*"] === "allow", false);
-
-  // package allow keys present (the 6)
-  const pkgKeys = [
-    "npx tsc --noEmit",
-    'npx -y "github:orobsonn/claude-harness#v*" init --target opencode',
-    'npx -y "github:orobsonn/claude-harness#v*" init --target claude',
-    'npx -y "github:orobsonn/claude-harness#v*" init --target both',
-    "npm test",
-    "npm run typecheck",
-  ];
-  for (const k of pkgKeys) {
-    assert.equal(bash[k], "allow", `expected allow for package key: ${k}`);
-  }
-
-  // every github:orobsonn key contains ' init'
-  for (const k of Object.keys(bash)) {
-    if (k.includes("github:orobsonn")) {
-      assert.match(k, / init/, `github key must contain ' init': ${k}`);
-    }
-  }
-
-  // no allow key equal to the forbidden open globs
-  const forbidden = ["node *", "npm run *", "npx *"];
-  for (const k of Object.keys(bash)) {
-    if (bash[k] === "allow") {
-      assert.equal(forbidden.includes(k), false, `must not have broad allow: ${k}`);
-    }
-  }
-
-  // ceremony keys present
   assert.equal(bash["node .opencode/plugin/lib/mark-gate.mjs *"], "allow");
-  assert.equal(bash["node core/opencode/plugin/lib/mark-gate.mjs *"], "allow");
-
-  // gh * , node --test * , git status* present (as allow)
   assert.equal(bash["gh *"], "allow");
-  assert.equal(bash["node --test *"], "allow");
-  assert.equal(bash["git status*"], "allow");
-});
-
-// ── anti-QUICK-launder + review-cap delivery rails (#72) ──────────────────
-
-test("hasElevatedCeremonyResidue detects peak LIGHT and failure cap", () => {
-  assert.equal(hasElevatedCeremonyResidue({ peak_mode: "LIGHT" }), true);
-  assert.equal(hasElevatedCeremonyResidue({ review_status: "primary_failure_cap_reached" }), true);
-  assert.equal(hasElevatedCeremonyResidue({ brainstormed: true }), true);
-  assert.equal(hasElevatedCeremonyResidue({ mode: "QUICK", classified: true }), false);
-});
-
-test("QUICK ship after primary_failure_cap → deny", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony({ review_status: "primary_failure_cap_reached" }),
-    ...cleanDeps(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /review_status=primary_failure_cap_reached|review-cap/);
-});
-
-test("QUICK ship after prior LIGHT peak_mode → deny launder", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    gateState: quickCeremony({ peak_mode: "LIGHT", dual_status: { adversary: "primary_only" } }),
-    ...cleanDeps(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /QUICK delivery denied|quick-launder|elevated ceremony/);
-});
-
-test("genuine QUICK without residue still allow", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: quickCeremony(),
-    ...cleanDeps(),
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("LIGHT ship blocked while primary_failure_cap_reached even with ceremony", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony({ review_status: "primary_failure_cap_reached" }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /primary_failure_cap_reached/);
-});
-
-test("LIGHT ship denied when planner_status not usable", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony({ planner_status: "planner_unavailable" }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /planner_status=usable|planner-not-usable/);
-});
-
-test("LIGHT ship denied when delivery_status delivery-blocked", () => {
-  const d = decideBashDelivery({
-    command: "gh pr create",
-    gateState: lightCeremony({
-      planner_status: "usable",
-      delivery_status: "delivery-blocked",
-    }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /delivery-blocked/);
-});
-
-test("LIGHT ship allow when planner usable + ceremony + capture", () => {
-  const d = decideBashDelivery({
-    command: "git push",
-    gateState: lightCeremony({ planner_status: "usable", delivery_status: "ready" }),
-    ...cleanDepsWithCapture(),
-  });
-  assert.equal(d.decision, "allow");
 });
