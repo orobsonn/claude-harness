@@ -982,10 +982,10 @@ test("harnessOcPluginFiles lists obs-eye and agent-idle-nudge on disk (auto-load
   assert.ok(files.every((p) => isHarnessAutoloadPluginPath(p)));
 });
 
-test("core/opencode/opencode.json.example sets permission.question deny and permission.external_directory allow", () => {
+test("core/opencode/opencode.json.example sets permission.question allow and permission.external_directory allow", () => {
   const cfg = JSON.parse(readFileSync(OC_EXAMPLE_PATH, "utf8"));
 
-  assert.strictEqual(cfg.permission.question, "deny");
+  assert.strictEqual(cfg.permission.question, "allow");
   assert.strictEqual(cfg.permission.external_directory, "allow");
 });
 
@@ -1002,7 +1002,7 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
     assert.strictEqual(status, "created");
 
     const written = JSON.parse(readFileSync(join(targetDir, "opencode.json"), "utf8"));
-    assert.strictEqual(written.permission.question, "deny");
+    assert.strictEqual(written.permission.question, "allow");
     assert.strictEqual(written.permission.external_directory, "allow");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1064,7 +1064,7 @@ test("writeOpencodeConfig (issue #479): a fresh project gains a manifest and re-
     assert.ok(existsSync(manifestPath), "a fresh project must gain the manifest sidecar (ac-1.3)");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     assert.equal(manifest.harnessVersion, "v0.50.0");
-    assert.equal(manifest.owned.question, "deny");
+    assert.equal(manifest.owned.question, "allow");
 
     const configBefore = readFileSync(join(tempDir, "opencode.json"), "utf8");
     const manifestBefore = readFileSync(manifestPath, "utf8");

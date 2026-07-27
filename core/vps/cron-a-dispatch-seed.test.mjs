@@ -62,6 +62,185 @@ test("OpenCode plugin[] is empty for harness; CANONICAL files stay on disk (auto
   assert.ok(CANONICAL_OC_PLUGINS.length >= 10);
 });
 
+// --- #473 oc-permission-bash-parity ------------------------------------------------------
+
+const CLAUDE_SETTINGS = JSON.parse(
+  readFileSync(join(process.cwd(), "core", "claude-code", "settings.json"), "utf8"),
+);
+
+/**
+ * @description Last-match-wins resolver over an OC `permission.bash` map, mirroring the REAL
+ * OpenCode permission engine: `Permission.evaluate` resolves with `Array.prototype.findLast`
+ * (confirmed by reading the installed `opencode` binary's minified source —
+ * `K.flat().findLast((z) => match(...) && match(...))`) — the LAST entry in the object whose
+ * pattern matches `command` wins, not the first and not the most specific. Iterates keys in
+ * REVERSE insertion order (excluding the `"*"` fallback) and returns the first match found that
+ * way, which is equivalent to `findLast` over the forward order.
+ * @param {Record<string,string>} bashMap
+ * @param {string} command
+ * @returns {string}
+ */
+function resolveBash(bashMap, command) {
+  const entries = Object.entries(bashMap).filter(([pattern]) => pattern !== "*");
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const [pattern, action] = entries[i];
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    if (new RegExp(`^${escaped}$`).test(command)) return action;
+  }
+  return bashMap["*"];
+}
+
+/**
+ * @description Builds a representative sample command for a `Bash(...)` allow pattern: the
+ * `cmd:*` idiom gets a generic trailing arg (`cmd x`); a bare exact pattern (no `:*`) is used
+ * verbatim. Lets the allowlist-parity test assert behavioral coverage without assuming the OC
+ * glob key is byte-identical to the Claude Code pattern string (the two DSLs format prefix
+ * matches differently, e.g. `Bash(gh:*)` vs OC's `"gh *"`).
+ * @param {string} claudePattern
+ * @returns {string}
+ */
+function claudeAllowToSample(claudePattern) {
+  const inner = claudePattern.replace(/^Bash\(/, "").replace(/\)$/, "");
+  return inner.endsWith(":*") ? `${inner.slice(0, -2)} x` : inner;
+}
+
+const CLAUDE_BASH_ALLOW_SAMPLES = CLAUDE_SETTINGS.permissions.allow
+  .filter((p) => p.startsWith("Bash("))
+  .map(claudeAllowToSample);
+
+/** @description Real commands each of settings.json's 6 destructive-git Bash denies must block. */
+const DESTRUCTIVE_GIT_SAMPLES = [
+  "git reset --hard HEAD~1",
+  "git push --force origin main",
+  "git push origin --force",
+  "git push -f origin main",
+  "git push origin -f",
+  "git clean -fd",
+];
+
+test("opencode.json + opencode.json.example: permission.bash contains the same broad allowlist as core/claude-code/settings.json (#ac-1.1)", () => {
+  const configs = {
+    root: JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")),
+    example: JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")),
+  };
+  for (const [label, cfg] of Object.entries(configs)) {
+    for (const sample of CLAUDE_BASH_ALLOW_SAMPLES) {
+      assert.equal(
+        resolveBash(cfg.permission.bash, sample),
+        "allow",
+        `${label} opencode.json permission.bash must allow ${JSON.stringify(sample)} (mirrors settings.json)`,
+      );
+    }
+  }
+});
+
+test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 6 destructive-git classes from settings.json — no extras, and none of them swallow git push --force-with-lease (#ac-1.1/#ac-2.1/#ac-2.2)", () => {
+  const claudeDenyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
+  assert.equal(claudeDenyCount, 6, "settings.json must carry exactly 6 destructive-git Bash denies");
+  const configs = {
+    root: JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")),
+    example: JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")),
+  };
+  for (const [label, cfg] of Object.entries(configs)) {
+    const bash = cfg.permission.bash;
+    const denyKeyCount = Object.entries(bash).filter(([key, value]) => key !== "*" && value === "deny").length;
+    assert.equal(denyKeyCount, 6, `${label}: permission.bash must carry exactly 6 deny keys — no extras`);
+    for (const sample of DESTRUCTIVE_GIT_SAMPLES) {
+      assert.equal(resolveBash(bash, sample), "deny", `${label}: ${JSON.stringify(sample)} must resolve deny`);
+    }
+    assert.equal(
+      resolveBash(bash, "git push --force-with-lease origin br"),
+      "allow",
+      `${label}: git push --force-with-lease must NOT be swallowed by the 6 destructive-git denies`,
+    );
+  }
+});
+
+test("opencode.json + opencode.json.example: permission.question resolves 'allow' locally (#ac-1.2)", () => {
+  const root = JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8"));
+  const example = JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8"));
+  assert.equal(root.permission.question, "allow", "root opencode.json: permission.question must resolve 'allow' locally");
+  assert.equal(example.permission.question, "allow", "opencode.json.example: permission.question must resolve 'allow' locally");
+});
+
+test("opencode.json + opencode.json.example: git push --force-with-lease resolves 'allow'; raw --force/-f stay 'deny' — the lease allow is ordered AFTER the broad deny so findLast (last-match-wins) picks it (#ac-2.1/#ac-2.2/#ac-2.3)", () => {
+  const configs = {
+    root: JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")),
+    example: JSON.parse(readFileSync(join(process.cwd(), "core", "opencode", "opencode.json.example"), "utf8")),
+  };
+  for (const [label, cfg] of Object.entries(configs)) {
+    const bash = cfg.permission.bash;
+    assert.equal(resolveBash(bash, "git push --force-with-lease origin minha-branch"), "allow", `${label}: force-with-lease must resolve allow`);
+    assert.equal(resolveBash(bash, "git push origin --force-with-lease"), "allow", `${label}: force-with-lease (remote-first form) must resolve allow`);
+    assert.equal(resolveBash(bash, "git push --force origin main"), "deny", `${label}: raw --force must stay denied`);
+    assert.equal(resolveBash(bash, "git push -f origin main"), "deny", `${label}: raw -f must stay denied`);
+    assert.equal(resolveBash(bash, "git push origin --force"), "deny", `${label}: raw --force (remote-first form) must stay denied`);
+    // #ac-2.3 invariant for THIS engine (findLast/last-match-wins, verified against the installed
+    // opencode binary): the lease allow keys must be positioned AFTER (not before) the broader
+    // --force/-f deny keys they would otherwise collide with — the opposite of a "most specific
+    // rule wins" intuition. Locks the ORDER itself so a future edit can't silently un-invert it.
+    const keys = Object.keys(bash);
+    const leaseIdx = keys.indexOf("git push --force-with-lease*");
+    const forceIdx = keys.indexOf("git push --force*");
+    assert.ok(leaseIdx > -1 && forceIdx > -1, `${label}: both keys must exist`);
+    assert.ok(leaseIdx > forceIdx, `${label}: git push --force-with-lease* must be ordered AFTER git push --force* (findLast picks the last match)`);
+  }
+});
+
+/**
+ * @description Minimal matcher for Claude Code's `Bash(...)` dialect, implementing only what's
+ * needed to test our 2 narrowed deny patterns: per the official docs (code.claude.com/docs/en/permissions,
+ * "Bash" section), a space immediately before a trailing `*` — or the equivalent `:*` suffix —
+ * enforces a WORD BOUNDARY: the prefix must be followed by a space or end-of-string. `Bash(cmd *)`
+ * matches `cmd foo` and bare `cmd`, but NOT `cmd-foo` (no boundary). A bare trailing `*` (no space)
+ * has no such boundary. Deny always wins over allow in Claude Code regardless of pattern
+ * specificity or file order ("Rules are evaluated in order: deny, then ask, then allow. The first
+ * match in that order determines the outcome, and rule specificity doesn't change the order.") —
+ * so the ONLY way to let force-with-lease through is to narrow the deny pattern itself, not reorder it.
+ * @param {string} claudePattern
+ * @param {string} command
+ * @returns {boolean}
+ */
+function claudeBashMatches(claudePattern, command) {
+  const inner = claudePattern.replace(/^Bash\(/, "").replace(/\)$/, "");
+  // Reduce the `:*` idiom to its documented-equivalent literal " *" so one regex pass handles
+  // both spellings; a trailing " *" (space before the star) enforces the word-boundary rule
+  // (prefix followed by a space OR end-of-string) — a bare trailing "*" or an embedded "*" (e.g.
+  // "git push * --force") is an ordinary unbounded wildcard, handled by the blanket replace below.
+  const normalized = inner.endsWith(":*") ? `${inner.slice(0, -2)} *` : inner;
+  const boundary = normalized.endsWith(" *");
+  const body = boundary ? normalized.slice(0, -2) : normalized;
+  const escapedBody = body.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const suffix = boundary ? "(?: .*)?" : "";
+  return new RegExp(`^${escapedBody}${suffix}$`).test(command);
+}
+
+/**
+ * @description Resolves a command against settings.json's Bash rules using Claude Code's real
+ * precedence: deny always wins over allow, unconditionally (see `claudeBashMatches` doc).
+ * @param {object} settings
+ * @param {string} command
+ * @returns {"deny"|"allow"|"ask"}
+ */
+function resolveClaudeBash(settings, command) {
+  const denies = settings.permissions.deny.filter((p) => p.startsWith("Bash("));
+  if (denies.some((p) => claudeBashMatches(p, command))) return "deny";
+  const allows = settings.permissions.allow.filter((p) => p.startsWith("Bash("));
+  if (allows.some((p) => claudeBashMatches(p, command))) return "allow";
+  return "ask";
+}
+
+test("settings.json: git push --force-with-lease resolves allow (deny narrowed with a word-boundary space); raw --force/-f stay denied; exactly 6 destructive-git denies (#ac-2.1/#ac-2.2)", () => {
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push --force-with-lease origin minha-branch"), "allow");
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin --force-with-lease"), "allow");
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push --force origin main"), "deny");
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin --force"), "deny");
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push -f origin main"), "deny");
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin -f"), "deny");
+  const denyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
+  assert.equal(denyCount, 6, "settings.json permissions.deny must still carry exactly 6 destructive-git Bash denies");
+});
+
 const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
 const CANONICAL_ROUTING = JSON.parse(
   readFileSync(new URL("../opencode/harness.routing.json", import.meta.url), "utf8"),
@@ -189,6 +368,25 @@ test("seedOpencodeRootConfig: forces permission.question to 'deny' even when the
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.equal(cfg.permission.question, "deny", "permission.question must be forced to 'deny' regardless of the stale source");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seedOpencodeRootConfig: forces permission.question to 'deny' in the seeded worktree even when the projectRoot source explicitly carries the new local default 'allow' (#ac-1.2)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-question-local-allow-");
+  try {
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({ permission: { question: "allow", external_directory: "allow", bash: { "*": "allow" } } }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    assert.equal(
+      cfg.permission.question,
+      "deny",
+      "the local session's 'allow' must NOT leak into the fleet-seeded worktree — deny stays worktree-only (#ac-1.2)",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -403,6 +601,33 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
       cfg.permission.bash["git push --force*"],
       "deny",
       "on a double-fault the dangerous-command deny entries must come from the in-code DANGEROUS_BASH_DENYLIST constant — never an allow-all bash lacking denies",
+    );
+    // #ac-2.1/#ac-2.2: even on a genuine double-fault, DANGEROUS_BASH_DENYLIST itself (not just
+    // the project's own opencode.json) must allow force-with-lease while still denying raw
+    // --force/-f — the fleet's own fallback safety net must never regress the parity decision.
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push --force-with-lease origin minha-branch"),
+      "allow",
+      "double-fault worktree config must still allow git push --force-with-lease (DANGEROUS_BASH_DENYLIST fallback)",
+    );
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push --force origin main"),
+      "deny",
+      "double-fault worktree config must still deny raw git push --force",
+    );
+    // DANGEROUS_BASH_DENYLIST must ALSO carry the remote-first (`git push * --force*`/`* -f*`)
+    // variants — without them, a double-fault would silently allow `git push origin --force`
+    // through the default "*": "allow" fallback (no entry in the pure denylist-only bash map
+    // would match it).
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push origin --force"),
+      "deny",
+      "double-fault worktree config must deny the remote-first raw --force form too",
+    );
+    assert.equal(
+      resolveBash(cfg.permission.bash, "git push origin -f"),
+      "deny",
+      "double-fault worktree config must deny the remote-first raw -f form too",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

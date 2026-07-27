@@ -432,10 +432,21 @@ export function prepareOpencodeDataHome({ stateDir, issueNumber, homeDir }) {
  * differently-worded or obfuscated command bypasses a string match trivially). Real containment of
  * an adversarial agent requires OS-level isolation — an unprivileged/dedicated account, no ambient
  * credentials, and controlled egress — which this list does not implement and is not a substitute for.
+ *
+ * [#473] `git push --force-with-lease*` is deliberately an ALLOW entry placed LAST (after every
+ * deny it would otherwise collide with). OpenCode's own permission engine resolves a pattern list
+ * with `Array.prototype.findLast` (confirmed by inspecting the installed `opencode` binary's
+ * `Permission.evaluate`: `K.flat().findLast((z) => match(...) && match(...))`) — the LAST matching
+ * entry wins, not the first or the most specific. Placing this allow before `"git push --force*"`
+ * (as a naive "more specific rule should win" instinct would suggest) would have the broader deny
+ * win instead, silently denying the safe lease-guarded push. This ordering is load-bearing — do
+ * not move it earlier in this object.
  */
 const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "git push --force*": "deny",
+  "git push * --force*": "deny",
   "git push -f*": "deny",
+  "git push * -f*": "deny",
   "git reset --hard*": "deny",
   "git clean -f*": "deny",
   "rm -rf /": "deny",
@@ -455,6 +466,8 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "ncat *": "deny",
   "dd if=*": "deny",
   ":(){ :|:& };:": "deny",
+  "git push --force-with-lease*": "allow",
+  "git push * --force-with-lease*": "allow",
 });
 
 /**
