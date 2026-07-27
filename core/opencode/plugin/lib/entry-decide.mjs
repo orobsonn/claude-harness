@@ -150,11 +150,17 @@ export function decideEntryTask(input = {}) {
     }
 
     return { ok: true, decision: "allow", reason: "entry-allow" };
-  } catch {
+  } catch (err) {
+    // Drive-by catch-all: an unexpected internal error here is an entry-gate bug, not evidence
+    // the dispatch itself is unsafe. Fail-open like the rest of the OC entry-gate (#482) — deny
+    // dead-ends the run over a decision-logic fault the operator cannot fix from the prompt.
+    console.error(
+      `[entry-gate] entry decision failed unexpectedly, allowing dispatch: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return {
-      ok: false,
-      decision: "deny",
-      reason: "[entry-gate] Blocked: entry decision failed",
+      ok: true,
+      decision: "allow",
+      reason: "[entry-gate] entry decision failed unexpectedly — allow-with-log (fail-open)",
     };
   }
 }

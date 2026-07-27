@@ -110,7 +110,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 **Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models.
 
-**Retry K=3 (every Task agent — all of them):** planner, plan-reviewer-*, adversary-*, executor-*, sniper-*, test-author, compliance, security, harvester, shipper. On failure, retry the **same** `subagent_type` up to **3** times. After 3 → stop (product error). Host enforces the cap. Never ladder models.
+**Retry K=3 (every Task agent — all of them):** planner, plan-reviewer-*, adversary-*, executor-*, sniper-*, test-author, compliance, security, harvester, shipper. On failure, retry the **same** `subagent_type` up to **3** times. After 3 → stop (product error). Never ladder models. **The host does NOT enforce this cap** (#482: the in-session same-agent retry brake was removed and is not replaced — the real per-issue ceiling lives in the fleet engine, `core/vps/cron-a-exit.mjs`, outside this session). You are the only enforcement in an interactive session: count failures yourself and stop at 3.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
