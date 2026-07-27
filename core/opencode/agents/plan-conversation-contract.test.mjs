@@ -48,6 +48,55 @@ function permissionRules(fm, key) {
     .filter(Boolean);
 }
 
+/**
+ * @description Parses `permissionRules()` output ('"pattern": action' lines) into {pattern, action} pairs.
+ */
+function parsePatternRules(rules) {
+  return rules.map((line) => {
+    const m = line.match(/^"((?:[^"\\]|\\.)*)":\s*(allow|deny|ask)$/);
+    assert.ok(m, `unparsable permission rule line: ${line}`);
+    return { pattern: m[1], action: m[2] };
+  });
+}
+
+/**
+ * @description Mirrors the OpenCode 1.18.4 `Wildcard.match` engine, read directly from the shipped
+ * binary across two independent adversarial rounds: both the command and the pattern normalize
+ * backslashes to forward slashes, `*` becomes an unanchored `.*`, `?` becomes a single-char `.`, a
+ * pattern ending in a literal ` *` gets its trailing ` .*` rewritten to `( .*)?`, and the whole
+ * thing is a `^...$`-anchored regex with the dotAll flag. The winning rule is the LAST one in file
+ * order whose pattern matches (`rulesets.flat().findLast(...)`), defaulting to "ask" when nothing
+ * matches — but every rule list here starts with `"*": deny`, so something always matches.
+ *
+ * KNOWN BLIND SPOT — do not "fix" by adding a grouped/subshelled case to `dangerous` below. The
+ * real `ShellTool` only ever submits a `command` AST node's OWN text (or its immediate
+ * `redirected_statement` parent's text when a redirect attaches directly to that node). Wrapping
+ * the same command in a group or subshell — `{ git log ...; } > /path` — pushes the redirect one
+ * level up the parse tree; the string actually submitted is then just `git log ...`, indistinguishable
+ * from the safe bare command. No glob pattern — real or simulated — can see that redirect, so
+ * neither this simulator nor the allowlist it mirrors can deny it. This is a confirmed, accepted
+ * residual risk (see plan.md's "Known residual gap" paragraph), not something a `dangerous` test
+ * case here could ever assert honestly.
+ */
+function patternToRegExp(pattern) {
+  const normalizedPattern = pattern.replaceAll("\\", "/");
+  let escaped = normalizedPattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  if (escaped.endsWith(" .*")) escaped = `${escaped.slice(0, -3)}( .*)?`;
+  return new RegExp(`^${escaped}$`, "s");
+}
+
+function resolveBashAction(rules, command) {
+  const normalizedCommand = command.replaceAll("\\", "/");
+  let resolved = "ask";
+  for (const { pattern, action } of parsePatternRules(rules)) {
+    if (patternToRegExp(pattern).test(normalizedCommand)) resolved = action;
+  }
+  return resolved;
+}
+
 test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony", () => {
   const body = read("plan.md");
   const fm = frontmatter(body);
@@ -55,7 +104,7 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   assert.match(fm, /^mode: primary$/m);
   assert.match(fm, /^model: openai\/gpt-5\.6-terra$/m);
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["bash", "external_directory", "classify", "mark", "verify", "ceremony-next"]) {
+  for (const permission of ["external_directory", "classify", "mark", "verify", "ceremony-next"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   for (const permission of ["webfetch", "websearch"]) {
@@ -70,6 +119,43 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
     ['"*": deny', '"docs/prd/*.md": allow', '"docs/architecture/deepening-candidates.md": allow'],
     "edit must deny by default and allow ONLY the grill PRD and the deepening candidates file",
   );
+  // Bash carve-out (oc-agents-permission-parity, issue #472): a narrow read-only git-history
+  // allowlist, never a flat allow — mutation and every other shell command stay denied.
+  // The deny rows AFTER the allow rows are load-bearing: the permission engine resolves a
+  // pattern list with `findLast` (last matching rule wins), so closing `difftool` (RCE via
+  // `--extcmd`), `--output=<file>` (arbitrary-content write via `--format=tformat:`), and a bare
+  // `>`/`>>` shell redirect (same arbitrary-write class, via the shell instead of a git flag)
+  // must stay ordered after the broad `git diff*`/`git log*`/`git show*` allows, never before.
+  assert.doesNotMatch(fm, /^ {2}bash: *(allow|ask)$/m, "bash must never be a flat allow/ask");
+  assert.deepEqual(
+    permissionRules(fm, "bash"),
+    [
+      '"*": deny',
+      '"git log*": allow',
+      '"git diff*": allow',
+      '"git show*": allow',
+      '"git blame*": allow',
+      '"git status*": allow',
+      '"git difftool*": deny',
+      '"git show-ref*": deny',
+      '"git show-branch*": deny',
+      '"git log*--output*": deny',
+      '"git diff*--output*": deny',
+      '"git show*--output*": deny',
+      '"git blame*--output*": deny',
+      '"git log*>*": deny',
+      '"git diff*>*": deny',
+      '"git show*>*": deny',
+      '"git blame*>*": deny',
+      '"git status*>*": deny',
+      '"git diff*--ext-diff*": deny',
+      '"git log*--ext-diff*": deny',
+      '"git diff*--textconv*": deny',
+      '"git show*--textconv*": deny',
+      '"git blame*--textconv*": deny',
+    ],
+    "bash must deny by default, allow ONLY the read-only git-history commands, and close difftool/--output/redirect/--ext-diff/--textconv after them",
+  );
   assert.deepEqual(
     permissionRules(fm, "task"),
     ['"*": deny', '"discussion-adversary": allow'],
@@ -83,6 +169,47 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   assert.match(fm, /^  "mv_\*": allow$/m);
   assert.match(fm, /^  "mp_\*": allow$/m);
   assert.match(fm, /read:\n    "\*": allow[\s\S]*"\*\*\/\.env\*": deny/);
+});
+
+test("plan lane's bash allowlist denies every known write/exec vector riding on an allowed git command", () => {
+  const fm = frontmatter(read("plan.md"));
+  const rules = permissionRules(fm, "bash");
+
+  const dangerous = [
+    // Bare shell redirect (this test's regression target): the redirect target rides through
+    // the same prefix match as the "read-only" command it decorates.
+    "git log --format=tformat:%H > /tmp/pwned.txt",
+    "git log --format=tformat:%H >> /tmp/pwned.txt",
+    "git diff --format=tformat:%H > /tmp/pwned.txt",
+    "git show --format=tformat:%H > /tmp/pwned.txt",
+    "git blame src/foo.ts > /tmp/pwned.txt",
+    "git status > /tmp/pwned.txt",
+    // Previously-fixed vectors, locked here so a future edit can't silently reopen them.
+    "git difftool --no-prompt --extcmd=sh -- a.txt b.txt",
+    "git show-ref --head",
+    "git show-branch --all",
+    "git log -1 --format=tformat:X --output=/tmp/pwned.txt",
+    "git blame --output=/tmp/pwned.txt README.md",
+    "git diff --ext-diff",
+    "git log -p --ext-diff",
+    "git diff --textconv a.bin b.bin",
+    "git show --textconv HEAD:a.bin",
+    "git blame --textconv README.md",
+  ];
+  for (const command of dangerous) {
+    assert.strictEqual(resolveBashAction(rules, command), "deny", `must deny: ${command}`);
+  }
+
+  const legitimate = [
+    "git log --oneline -20",
+    "git diff HEAD~1",
+    "git show HEAD",
+    "git blame src/foo.ts",
+    "git status",
+  ];
+  for (const command of legitimate) {
+    assert.strictEqual(resolveBashAction(rules, command), "allow", `must still allow: ${command}`);
+  }
 });
 
 test("plan lane emits an in-conversation Build Spec and hands execution to build", () => {
@@ -105,11 +232,15 @@ test("plan lane documents its write carve-outs without weakening read-only ident
   assert.match(body, /`docs\/prd\/<slug>\.md`/, "the PRD artifact path must be explicit");
   assert.match(body, /ONLY permitted write/, "the carve-outs must be stated as the sole writes");
   assert.match(body, /`oc-grill`/, "a carve-out must be bound to the oc-grill skill");
-  assert.match(body, /`bash` stays denied/, "the carve-outs must not imply shell access");
-  assert.match(body, /Never run shell commands, mutate git/);
+  assert.match(
+    body,
+    /`bash` remains restricted to a read-only git-history allowlist/,
+    "the carve-outs must not expand shell access beyond the read-only git-history allowlist",
+  );
+  assert.match(body, /never mutate git, run any other shell command/);
 });
 
-test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only lane", () => {
+test("plan hosts proposing-deepening as a propose-only, bash-restricted, local-only lane", () => {
   const body = read("plan.md");
 
   assert.match(
@@ -118,7 +249,11 @@ test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only 
     "the deepening candidates path must be documented",
   );
   assert.match(body, /`oc-proposing-deepening`/, "the second carve-out must be bound to its skill");
-  assert.match(body, /`bash` stays denied/, "hosting the skill must not unlock a shell");
+  assert.match(
+    body,
+    /`bash` remains restricted to a read-only git-history allowlist/,
+    "hosting the skill must not unlock a shell beyond the read-only git-history allowlist",
+  );
   assert.match(
     body,
     /never `harness:ready`/,
