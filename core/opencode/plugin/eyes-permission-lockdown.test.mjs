@@ -81,13 +81,24 @@ test("lt-compliance-bash-preserved", () => {
 })
 
 /**
- * @description All 7 eyes declare edit: deny; the six non-compliance eyes declare bash: deny.
+ * @description Edit/bash matrix per oc-agents-permission-parity (issue #472): planner is the only
+ * eye with edit: allow (parity write access; the plan JSON is still persisted by the
+ * planner-recovery plugin, never by the planner itself); compliance, security, and planner have
+ * bash: allow (audit/exploration parity); every other eye keeps edit: deny and bash: deny.
  */
 test("lt-eyes-edit-deny-and-noncompliance-bash-deny", () => {
+  const EDIT_ALLOWED = new Set(["planner.md"])
+  const BASH_ALLOWED = new Set(["compliance.md", "security.md", "planner.md"])
   for (const f of EYE_FILES) {
     const perms = extractPermissions(readAgent(f))
-    assert.strictEqual(perms.edit, "deny", `${f} must have edit: deny`)
-    if (f !== "compliance.md") {
+    if (EDIT_ALLOWED.has(f)) {
+      assert.strictEqual(perms.edit, "allow", `${f} must have edit: allow`)
+    } else {
+      assert.strictEqual(perms.edit, "deny", `${f} must have edit: deny`)
+    }
+    if (BASH_ALLOWED.has(f)) {
+      assert.strictEqual(perms.bash, "allow", `${f} must have bash: allow`)
+    } else {
       assert.strictEqual(perms.bash, "deny", `${f} must have bash: deny`)
     }
   }

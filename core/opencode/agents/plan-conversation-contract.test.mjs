@@ -55,7 +55,7 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   assert.match(fm, /^mode: primary$/m);
   assert.match(fm, /^model: openai\/gpt-5\.6-terra$/m);
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["bash", "external_directory", "classify", "mark", "verify", "ceremony-next"]) {
+  for (const permission of ["external_directory", "classify", "mark", "verify", "ceremony-next"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   for (const permission of ["webfetch", "websearch"]) {
@@ -69,6 +69,31 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
     permissionRules(fm, "edit"),
     ['"*": deny', '"docs/prd/*.md": allow', '"docs/architecture/deepening-candidates.md": allow'],
     "edit must deny by default and allow ONLY the grill PRD and the deepening candidates file",
+  );
+  // Bash carve-out (oc-agents-permission-parity, issue #472): a narrow read-only git-history
+  // allowlist, never a flat allow — mutation and every other shell command stay denied.
+  // The deny rows AFTER the allow rows are load-bearing: the permission engine resolves a
+  // pattern list with `findLast` (last matching rule wins), so closing `difftool` (RCE via
+  // `--extcmd`) and `--output=<file>` (arbitrary-content write via `--format=tformat:`) must
+  // stay ordered after the broad `git diff*`/`git log*`/`git show*` allows, never before.
+  assert.doesNotMatch(fm, /^ {2}bash: *(allow|ask)$/m, "bash must never be a flat allow/ask");
+  assert.deepEqual(
+    permissionRules(fm, "bash"),
+    [
+      '"*": deny',
+      '"git log*": allow',
+      '"git diff*": allow',
+      '"git show*": allow',
+      '"git blame*": allow',
+      '"git status*": allow',
+      '"git difftool*": deny',
+      '"git show-ref*": deny',
+      '"git show-branch*": deny',
+      '"git log*--output*": deny',
+      '"git diff*--output*": deny',
+      '"git show*--output*": deny',
+    ],
+    "bash must deny by default, allow ONLY the read-only git-history commands, and close difftool/--output after them",
   );
   assert.deepEqual(
     permissionRules(fm, "task"),
@@ -105,11 +130,15 @@ test("plan lane documents its write carve-outs without weakening read-only ident
   assert.match(body, /`docs\/prd\/<slug>\.md`/, "the PRD artifact path must be explicit");
   assert.match(body, /ONLY permitted write/, "the carve-outs must be stated as the sole writes");
   assert.match(body, /`oc-grill`/, "a carve-out must be bound to the oc-grill skill");
-  assert.match(body, /`bash` stays denied/, "the carve-outs must not imply shell access");
-  assert.match(body, /Never run shell commands, mutate git/);
+  assert.match(
+    body,
+    /`bash` remains restricted to a read-only git-history allowlist/,
+    "the carve-outs must not expand shell access beyond the read-only git-history allowlist",
+  );
+  assert.match(body, /never mutate git, run any other shell command/);
 });
 
-test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only lane", () => {
+test("plan hosts proposing-deepening as a propose-only, bash-restricted, local-only lane", () => {
   const body = read("plan.md");
 
   assert.match(
@@ -118,7 +147,11 @@ test("plan hosts proposing-deepening as a propose-only, bash-denied, local-only 
     "the deepening candidates path must be documented",
   );
   assert.match(body, /`oc-proposing-deepening`/, "the second carve-out must be bound to its skill");
-  assert.match(body, /`bash` stays denied/, "hosting the skill must not unlock a shell");
+  assert.match(
+    body,
+    /`bash` remains restricted to a read-only git-history allowlist/,
+    "hosting the skill must not unlock a shell beyond the read-only git-history allowlist",
+  );
   assert.match(
     body,
     /never `harness:ready`/,
