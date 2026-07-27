@@ -14,7 +14,10 @@
  *   - framework-owned (overwritten): agents/, skills/, rules/, hooks/ (*.test.mjs excluded), CLAUDE-HARNESS-MEMORY-MODEL.md
  *   - accumulated (created only if absent, never clobbered): memory/MEMORY.md, kaizen.md
  *   - .claude/CLAUDE.md: harness block merged between markers, project content preserved
- *   - settings.json: copied if absent; if present, written as settings.harness.json for manual merge
+ *   - settings.json: copied if absent; if present, MERGED via manifest/ledger (issue #487, same
+ *     model as the OpenCode config migration) — harness-owned keys move forward, operator
+ *     customizations survive, a stale settings.harness.json orphan from before this migration existed
+ *     is consumed and removed
  *   - .claude/.gitignore + .claude/.harness-version: written
  *
  * Exit codes: 0 ok · 1 usage/IO error.
@@ -47,6 +50,7 @@ import {
   MANIFEST_FILENAME,
   isValidOpencodeConfigShape,
   migrateOpencodeConfig,
+  normalizeOcVersionStamp as normalizeHarnessVersionStamp,
   readHarnessVersionStamp,
 } from "../../../../shared/lib/opencode-config-migration.mjs";
 
@@ -919,7 +923,7 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   const claudeMd = mergeClaudeMd(claudeCodeDir, claudeDir);
   ok(`CLAUDE.md: ${claudeMd}`);
 
-  const settings = writeSettings(claudeCodeDir, claudeDir);
+  const settings = writeSettings(claudeCodeDir, claudeDir, version);
   ok(`settings.json: ${settings}`);
 
   const repoFiles = installRepoFiles(coreDir, targetDir);
@@ -1383,19 +1387,304 @@ export function mergeClaudeGitignore(claudeDir) {
 }
 
 /**
- * @description Writes settings.json if absent; otherwise writes settings.harness.json
- * so the operator merges manually (never clobber an existing config).
+ * Ledger of retired `permissions.{allow,deny,ask}` entries for the Claude Code side. Empty today —
+ * settings.json has never dropped a shipped entry — but the shape mirrors the OpenCode ledger
+ * (RETIRED_OC_PERMISSION_ENTRIES, core/shared/lib/opencode-config-migration.mjs) so a future
+ * retirement has somewhere to land without re-deriving the mechanism. See `ledgerMatches` in
+ * `mergePermissionArray` for how an entry here is consulted.
  */
-function writeSettings(coreDir, claudeDir) {
+const RETIRED_CC_PERMISSION_ENTRIES = Object.freeze([]);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepEqualValue(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => deepEqualValue(item, b[index]));
+  }
+  if (typeof a !== typeof b) return false;
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => Object.hasOwn(b, key) && deepEqualValue(a[key], b[key]));
+}
+
+/** @description Compares two normalized generations numerically (mirrors the OC migration lib's private helper). */
+function compareGeneration(a, b) {
+  if (a.major !== b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
+  return 0;
+}
+
+/**
+ * @description Structural shape check run right before the atomic rename — catches a migration
+ * that produced something un-writable-as-config before it ever reaches disk.
+ */
+function isValidClaudeSettingsShape(config) {
+  if (!isPlainObject(config)) return false;
+  if (config.permissions === undefined) return true;
+  if (!isPlainObject(config.permissions)) return false;
+  return ["allow", "deny", "ask"].every(
+    (key) => config.permissions[key] === undefined || Array.isArray(config.permissions[key]),
+  );
+}
+
+function isPermissionArrayPath(path) {
+  return path.length === 2 && path[0] === "permissions" && ["allow", "deny", "ask"].includes(path[1]);
+}
+
+/**
+ * Merges one `permissions.{allow,deny,ask}` array as a SET UNION: every entry the new generation
+ * ships is present (added if missing — this is what carries a new secret-read deny into an
+ * already-vendored project, issue #487/ac-1.1). An existing entry is dropped ONLY when it is both
+ * no longer shipped AND explicitly matched by the retired-entries ledger at or before its
+ * `shippedThroughGeneration` — manifest ownership alone is never sufficient (deliberately stricter
+ * than the OpenCode model this mirrors: a permission array here gates SECRET-READ denies, so a
+ * shrunken/corrupted/truncated source `settings.json` — a bad `--source`, a partial checkout, a
+ * merge mistake — must never silently erase protection that was already in place; only a reviewed,
+ * checked-in ledger entry can retire an entry). Everything else the operator added, or that the
+ * harness once owned but stopped shipping without a ledger entry, survives untouched.
+ */
+function mergePermissionArray(path, existingArr, newArr, ledgerByPath, projectGeneration) {
+  const existing = Array.isArray(existingArr) ? existingArr : [];
+  const shipped = Array.isArray(newArr) ? newArr : [];
+  const shippedSet = new Set(shipped);
+  const report = [];
+  const result = [];
+  const seen = new Set();
+
+  function ledgerMatches(entry) {
+    const ledgerEntry = ledgerByPath.get(`${JSON.stringify(path)}::${entry}`);
+    if (ledgerEntry === undefined || projectGeneration === null) return false;
+    return compareGeneration(projectGeneration, ledgerEntry.shippedThroughGeneration) <= 0;
+  }
+
+  for (const entry of existing) {
+    if (seen.has(entry)) continue;
+    if (!shippedSet.has(entry) && ledgerMatches(entry)) {
+      report.push({ path, action: "removed-retired", value: entry });
+      continue;
+    }
+    if (!shippedSet.has(entry)) report.push({ path, action: "kept-custom", value: entry });
+    result.push(entry);
+    seen.add(entry);
+  }
+  for (const entry of shipped) {
+    if (seen.has(entry)) continue;
+    result.push(entry);
+    seen.add(entry);
+    report.push({ path, action: "added", value: entry });
+  }
+
+  return { value: result, owned: shipped, report };
+}
+
+/**
+ * Recursively merges one node of the settings tree. Mirrors `mergeNode` in
+ * core/shared/lib/opencode-config-migration.mjs, adapted for settings.json's shape: a
+ * `permissions.{allow,deny,ask}` path gets set-union array treatment (`mergePermissionArray`);
+ * every other array (e.g. a `hooks.*` entry) is an opaque leaf, replaced only when the existing
+ * value still equals what the manifest recorded as harness-owned — never force-overwritten,
+ * since there is no ledger of retired hook wiring to arbitrate a diverged value.
+ */
+function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration) {
+  if (isPermissionArrayPath(path)) {
+    // No `ownedNode` here on purpose: removal from a permission array requires an explicit ledger
+    // match regardless of manifest ownership (see mergePermissionArray's doc) — passing it through
+    // would invite a future "restore the owned check as a shortcut" regression of issue #487.
+    return mergePermissionArray(path, existingNode, newNode, ledgerByPath, projectGeneration);
+  }
+
+  const existingIsMissingOrObject = existingNode === undefined || isPlainObject(existingNode);
+  if (isPlainObject(newNode) && existingIsMissingOrObject) {
+    const existingObj = isPlainObject(existingNode) ? existingNode : {};
+    const ownedObj = isPlainObject(ownedNode) ? ownedNode : {};
+    const mergedObj = {};
+    const ownedOut = {};
+    const report = [];
+
+    for (const key of Object.keys(newNode)) {
+      const childPath = [...path, key];
+      const result = mergeSettingsNode(childPath, existingObj[key], newNode[key], ownedObj[key], ledgerByPath, projectGeneration);
+      mergedObj[key] = result.value;
+      if (result.owned !== undefined) ownedOut[key] = result.owned;
+      report.push(...result.report);
+    }
+    for (const key of Object.keys(existingObj)) {
+      if (Object.hasOwn(newNode, key)) continue;
+      mergedObj[key] = existingObj[key];
+    }
+
+    return { value: mergedObj, owned: ownedOut, report };
+  }
+
+  if (existingNode === undefined) {
+    return { value: newNode, owned: newNode, report: [{ path, action: "added", value: newNode }] };
+  }
+  if (deepEqualValue(existingNode, newNode)) {
+    return { value: existingNode, owned: newNode, report: [] };
+  }
+  const matchesOwned = ownedNode !== undefined && deepEqualValue(existingNode, ownedNode);
+  if (matchesOwned) {
+    return { value: newNode, owned: newNode, report: [{ path, action: "updated", from: existingNode, to: newNode }] };
+  }
+  return { value: existingNode, owned: undefined, report: [{ path, action: "kept-custom", value: existingNode }] };
+}
+
+/**
+ * @description Migrates a project's `.claude/settings.json` from whatever generation it was last
+ * vendored at to the current one, without ever discarding an operator customization. Same
+ * manifest/ledger model as `migrateOpencodeConfig` (issue #479), adapted for settings.json's
+ * array-based `permissions.{allow,deny,ask}` lists instead of OpenCode's nested permission map.
+ * No `tier` in the return value: unlike the OpenCode side, a permission-array removal here never
+ * branches on tier (see `mergePermissionArray`) — reintroducing a tier-gated field here would only
+ * invite a future "restore the OC-style backup gate" regression of issue #487.
+ * @param {object} params
+ * @param {ReadonlyArray<{arrayPath: string[], entry: string, shippedThroughGeneration: {major:number,minor:number,patch:number}}>} [params.retiredEntries] -
+ *   the ledger consulted for removal corroboration; defaults to the real `RETIRED_CC_PERMISSION_ENTRIES`. Overridable ONLY so tests can
+ *   exercise the removal path without a real production retirement — callers must never override this
+ *   in non-test code.
+ */
+function migrateClaudeSettings({
+  existingConfig,
+  newConfig,
+  manifest = null,
+  previousHarnessVersionStamp = null,
+  newHarnessVersion = null,
+  retiredEntries = RETIRED_CC_PERMISSION_ENTRIES,
+}) {
+  const ledgerByPath = new Map(retiredEntries.map((entry) => [`${JSON.stringify(entry.arrayPath)}::${entry.entry}`, entry]));
+  const ownedRoot = manifest && isPlainObject(manifest.owned) ? manifest.owned : {};
+  const projectGeneration = normalizeHarnessVersionStamp(previousHarnessVersionStamp ?? manifest?.harnessVersion ?? null);
+
+  const merged = mergeSettingsNode([], existingConfig ?? {}, newConfig ?? {}, ownedRoot, ledgerByPath, projectGeneration);
+
+  return {
+    config: merged.value,
+    manifest: {
+      version: 1,
+      harnessVersion: newHarnessVersion ?? previousHarnessVersionStamp ?? manifest?.harnessVersion ?? "unknown",
+      owned: merged.owned,
+    },
+    report: merged.report,
+  };
+}
+
+/**
+ * @description Writes/merges `.claude/settings.json` (issue #487). A fresh project gets the
+ * shipped config outright; an already-vendored project gets it MERGED (manifest/ledger — see
+ * `migrateClaudeSettings`) instead of parked in a `settings.harness.json` sidecar nobody reads —
+ * that was the bug: a project vendored before this existed never received new harness-owned keys
+ * (e.g. the secret-read denies), silently running without them. A pre-existing
+ * `settings.harness.json` orphan from that era is consumed (superseded by the merge) and removed.
+ * Validation gate before the rename: a migration producing something un-writable falls to the same
+ * manual-repair sidecar an unparseable project config uses, never a partial write.
+ * @param {string} coreDir - source core/claude-code
+ * @param {string} claudeDir - project's .claude/
+ * @param {string} [version] - harness version currently being vendored (stamped into the manifest)
+ * @param {object} [testOverrides] - test-only seam, never passed in production; see `migrateClaudeSettings`
+ * @param {ReadonlyArray<object>} [testOverrides.retiredEntries] - overrides RETIRED_CC_PERMISSION_ENTRIES for a test run
+ * @returns {string} status
+ */
+export function writeSettings(coreDir, claudeDir, version, { retiredEntries } = {}) {
   const src = join(coreDir, "settings.json");
   if (!existsSync(src)) return "skipped (no source settings.json)";
-  const dest = join(claudeDir, "settings.json");
-  if (!existsSync(dest)) {
-    cpSync(src, dest);
-    return "created";
+
+  let newConfig;
+  try {
+    newConfig = JSON.parse(readFileSync(src, "utf8"));
+  } catch {
+    return "skipped (source settings.json invalid)";
   }
-  cpSync(src, join(claudeDir, "settings.harness.json"));
-  return "exists → wrote settings.harness.json for manual merge";
+
+  const dest = join(claudeDir, "settings.json");
+  const manifestPath = join(claudeDir, MANIFEST_FILENAME);
+  const versionPath = join(claudeDir, ".harness-version");
+  const orphanPath = join(claudeDir, "settings.harness.json");
+  const backupPath = join(claudeDir, "settings.json.pre-migration.bak");
+  const wasPresent = existsSync(dest);
+  const hadOrphan = existsSync(orphanPath);
+
+  let existing = newConfig;
+  let existingRaw = null;
+  if (wasPresent) {
+    existingRaw = readFileSync(dest, "utf8");
+    try {
+      existing = JSON.parse(existingRaw);
+      if (!existing || typeof existing !== "object" || Array.isArray(existing)) throw new Error("not object");
+    } catch {
+      writeFileSync(orphanPath, `${JSON.stringify(newConfig, null, 2)}\n`);
+      return "invalid existing settings.json → wrote settings.harness.json for manual repair";
+    }
+  }
+
+  let manifest = null;
+  if (existsSync(manifestPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) manifest = parsed;
+    } catch {
+      manifest = null;
+    }
+  }
+  const previousHarnessVersionStamp = existsSync(versionPath)
+    ? readHarnessVersionStamp(readFileSync(versionPath, "utf8"))
+    : null;
+
+  const migrated = migrateClaudeSettings({
+    existingConfig: existing,
+    newConfig,
+    manifest,
+    previousHarnessVersionStamp,
+    newHarnessVersion: version ?? null,
+    retiredEntries,
+  });
+
+  if (!isValidClaudeSettingsShape(migrated.config)) {
+    writeFileSync(orphanPath, `${JSON.stringify(newConfig, null, 2)}\n`);
+    return "migration failed validation gate → wrote settings.harness.json for manual repair";
+  }
+
+  const addedEntries = migrated.report.filter((r) => r.action === "added");
+  const removedEntries = migrated.report.filter((r) => r.action === "removed-retired");
+
+  // Rollback layer 2 (layer 1 is git itself): once, whenever a ledger match actually dropped
+  // something — tier-agnostic on purpose (a permission-array removal here always requires an
+  // explicit ledger entry, regardless of tier; gating this on tier alone would leave it permanently
+  // dead for any project past its first migration, since the manifest this function writes makes
+  // every later run tier 1 — adversary finding, issue #487) — preserves the exact pre-migration
+  // bytes, never overwritten by a later run.
+  if (wasPresent && removedEntries.length > 0 && existingRaw !== null && !existsSync(backupPath)) {
+    writeFileSync(backupPath, existingRaw);
+  }
+
+  const temp = `${dest}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(migrated.config, null, 2)}\n`);
+  renameSync(temp, dest);
+
+  const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
+  writeFileSync(manifestTemp, `${JSON.stringify(migrated.manifest, null, 2)}\n`);
+  renameSync(manifestTemp, manifestPath);
+
+  // ac-1.2: a settings.harness.json orphan from before this migration existed is superseded by the
+  // merge above — nobody was ever going to merge it by hand — so it is consumed and removed here.
+  if (hadOrphan) rmSync(orphanPath);
+
+  if (!wasPresent) return "created";
+  const orphanNote = hadOrphan ? "; removed stale settings.harness.json orphan" : "";
+  if (addedEntries.length === 0 && removedEntries.length === 0) {
+    return `already up to date${orphanNote}`;
+  }
+  const describe = (r) => `${r.path.join(".")}=${JSON.stringify(r.value)}`;
+  const addedNote = addedEntries.length ? `added [${addedEntries.map(describe).join(", ")}]` : "";
+  const removedNote = removedEntries.length ? `removed retired [${removedEntries.map(describe).join(", ")}]` : "";
+  const migrationNote = [addedNote, removedNote].filter(Boolean).join("; ");
+  return `merged existing settings.json (${migrationNote})${orphanNote}`;
 }
 
 // ---------- main (runs only when invoked directly as a script) ----------
