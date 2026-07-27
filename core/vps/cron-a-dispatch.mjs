@@ -590,15 +590,21 @@ function tryReadJsonObject(path) {
  * the 8 canonical secret-path denies (`OC_SECRET_READ_DENIES`) must always be spread LAST — a scalar
  * source can never replace the map wholesale, and a source deny/allow for one of the canonical paths
  * can never resurrect access to it. Three cases:
- * - source is a scalar `s` → `{ "*": s, ...OC_SECRET_READ_DENIES }`
+ * - source is a scalar `s` → `{ "*": <s if a valid action, else "allow">, ...OC_SECRET_READ_DENIES }`
+ *   (an invalid scalar like `"banana"` falls back to `"allow"`, and `"ask"` is NOT propagated — it
+ *   would reproduce the headless permission-ask hang this seed exists to prevent; `"allow"` mirrors
+ *   the map branch's locked fallback, never `"deny"` which would block all reads and kill the run)
  * - source is a map `m` → the source `"*"` key is REMOVED from `m` (it can never be re-emitted later
  *   and would otherwise be displaced from index 0 by an integer-like key), but its VALUE survives as
  *   the first key's value when it is a valid action (`allow`/`ask`/`deny`), otherwise `"allow"`;
- *   integer-like keys (`/^(0|[1-9]\d*)$/`) are rejected (JavaScript serializes integer-index own keys
- *   before string keys regardless of insertion order, which would displace the wildcard from index 0
- *   and break last-match-wins); the canonical keys are removed; any remaining value that is not
- *   exactly `allow`/`ask`/`deny` is CLAMPED to `deny` (unknown input fails CLOSED — never silently
- *   dropped, which would leave the path to fall under the forced wildcard allow); the result is
+ *   integer-index keys (`/^(0|[1-9]\d*)$/` AND `Number(key) < 2^32 - 1`, the JS array-index predicate
+ *   `ToString(ToUint32(k)) === k && k < 2^32 - 1`) are dropped (JavaScript serializes integer-index own
+ *   keys before string keys regardless of insertion order, which would displace the wildcard from
+ *   index 0 and break last-match-wins); the canonical keys are removed; any remaining value that is
+ *   not exactly `allow`/`ask`/`deny` is CLAMPED to `deny` (unknown input fails CLOSED — integer-index
+ *   keys ARE dropped by design because their serialization order would break the wildcard's
+ *   first-position invariant, but no other key is ever silently dropped, which would leave the path
+ *   to fall under the forced wildcard allow); the result is
  *   `{ "*": <source-or-allow wildcard>, ...sanitized, ...OC_SECRET_READ_DENIES }` (a project-specific
  *   extra deny in `m` survives the union, clamped if its value was unrecognised)
  * - source is absent → `{ "*": "allow", ...OC_SECRET_READ_DENIES }`
@@ -618,14 +624,14 @@ function buildDenyPreservingPermission(sourceValue) {
           ([key]) =>
             key !== "*" &&
             !Object.prototype.hasOwnProperty.call(OC_SECRET_READ_DENIES, key) &&
-            !/^(0|[1-9]\d*)$/.test(key),
+            !(/^(0|[1-9]\d*)$/.test(key) && Number(key) < 4294967295),
         )
         .map(([key, value]) => [key, clampAction(value)]),
     );
     return { "*": wildcard, ...sanitized, ...OC_SECRET_READ_DENIES };
   }
   if (typeof sourceValue === "string") {
-    return { "*": sourceValue, ...OC_SECRET_READ_DENIES };
+    return { "*": VALID_ACTIONS.includes(sourceValue) ? sourceValue : "allow", ...OC_SECRET_READ_DENIES };
   }
   return { "*": "allow", ...OC_SECRET_READ_DENIES };
 }
@@ -660,7 +666,9 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
       : {};
   const baseBash = basePermission.bash && typeof basePermission.bash === "object" ? basePermission.bash : {};
   const examplePermission =
-    exampleConfig && typeof exampleConfig.permission === "object" ? exampleConfig.permission : {};
+    exampleConfig && exampleConfig.permission && typeof exampleConfig.permission === "object" && !Array.isArray(exampleConfig.permission)
+      ? exampleConfig.permission
+      : {};
   const exampleBash = examplePermission.bash && typeof examplePermission.bash === "object" ? examplePermission.bash : {};
   // Deny-only extraction: an entry from a LATER source can never overwrite a 'deny' already set by
   // an EARLIER source — plain object-spread union would let exampleBash's (or the denylist's) value
