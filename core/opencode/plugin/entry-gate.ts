@@ -1,7 +1,8 @@
 /**
  * @description OC entry-gate plugin — ceremony + bash delivery/forge + ADR-003 dual.
  * On tool.execute.before:
- * - bash/shell: decideBashForge then decideBashDelivery (gate-state from disk)
+ * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
+ *   (gate-state from disk)
  * - task: decideEntryTask then enforceDualFromDiskOrThrow for executor/sniper
  * Deny throws [entry-gate]. Fail-closed on unreadable gate-state for delivery.
  * Delivery bash injects gitState + isAncestorFn + listHandRecordsForFeatureFn;
@@ -181,7 +182,8 @@ export async function createEntryGateHooks(
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const {
-    decideBashForge,
+    decideBashAdvisory,
+    applyAdvisory,
     decideBashDelivery,
     isDeliveryCommand,
     throwIfDenied: throwIfBashDenied,
@@ -262,7 +264,7 @@ export async function createEntryGateHooks(
 
       if (isBashOrShellTool(toolName)) {
         const command = extractBashCommand(toolArgs)
-        throwIfBashDenied(decideBashForge({ command }))
+        applyAdvisory(decideBashAdvisory({ command, cwd: root }), output)
 
         const sid =
           typeof sessionId === "string" && sessionId.length > 0
