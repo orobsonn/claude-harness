@@ -36,8 +36,28 @@
   },
   "plugin": [],
   "permission": {
-    "edit": "allow",
-    "read": "allow",
+    "edit": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      ".dev.vars": "deny",
+      "**/.dev.vars": "deny",
+      "~/.ssh/**": "deny",
+      "~/.aws/**": "deny"
+    },
+    "read": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      ".dev.vars": "deny",
+      "**/.dev.vars": "deny",
+      "~/.ssh/**": "deny",
+      "~/.aws/**": "deny"
+    },
     "glob": "allow",
     "grep": "allow",
     "list": "allow",

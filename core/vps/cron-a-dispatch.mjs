@@ -458,17 +458,49 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
 });
 
 /**
+ * @description Frozen deny map for the 8 canonical secret-path patterns (`.env`/`.dev.vars`/SSH/AWS
+ * credential globs) that `permission.read` and `permission.edit` must NEVER allow, no matter what a
+ * source `opencode.json` `config.permission` says. In any map built from it, source-supplied copies
+ * of the canonical keys are REMOVED before the canonical deny map is spread LAST after `"*"`
+ * (OpenCode resolves permissions last-match-wins), so the canonical denies can only exist in the
+ * final position and can never be shadowed by an earlier `"*": "allow"` or a source-supplied allow
+ * for the same key. Not exported — only `buildDenyPreservingPermission` (invoked by
+ * `enforceOpencodePermissions`) and `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ *
+ * CAVEAT — scope of this guarantee: it covers `config.permission` ONLY. It does NOT cover
+ * `config.agent.<name>.permission` (a separate rule set evaluated afterwards), `permission.bash`
+ * (whose `"*"` wildcard is force-set to `"allow"` by `enforceOpencodePermissions`), or
+ * `permission.grep` — all three are recorded open risks pending an operator decision and are
+ * deliberately out of scope for this hardening.
+ */
+const OC_SECRET_READ_DENIES = Object.freeze({
+  ".env": "deny",
+  ".env.*": "deny",
+  "**/.env": "deny",
+  "**/.env.*": "deny",
+  ".dev.vars": "deny",
+  "**/.dev.vars": "deny",
+  "~/.ssh/**": "deny",
+  "~/.aws/**": "deny",
+});
+
+/**
  * @description Frozen safe defaults for every non-forced `permission` key. `enforceOpencodePermissions`
- * force-overwrites only `question`, `external_directory`, and `bash` — a minimalist but otherwise valid
- * source config (e.g. one that only sets `permission.bash`) leaves the other keys (`edit`, `read`, etc.)
- * undefined, and if OpenCode defaults an undefined key to `"ask"`, a headless run hangs on the first use
- * of that tool with no operator to answer. Spread FIRST in the final `permission` object so a key the
- * source config DOES define still wins (spread order), while an ABSENT key falls back to `"allow"`
- * instead of staying undefined. Mirrors `core/opencode/opencode.json.example`'s non-bash permission keys.
+ * force-overwrites `question`, `external_directory`, `bash`, `read`, and `edit` — a minimalist but
+ * otherwise valid source config (e.g. one that only sets `permission.bash`) leaves the other keys
+ * (`glob`, `grep`, etc.) undefined, and if OpenCode defaults an undefined key to `"ask"`, a headless run
+ * hangs on the first use of that tool with no operator to answer. Spread FIRST in the final `permission`
+ * object so a key the source config DOES define still wins (spread order), while an ABSENT key falls
+ * back to `"allow"` instead of staying undefined. `read`/`edit` are the EXCEPTION to that "source wins"
+ * rule: they are shaped here as deny-preserving maps (`"*": "allow"` first, the 8 canonical secret-path
+ * denies last) purely so this constant matches the shape of a real seeded config, but
+ * `enforceOpencodePermissions` always REPLACES them afterwards with a freshly-built map derived from the
+ * source — never leaving these frozen defaults as the final value. Mirrors
+ * `core/opencode/opencode.json.example`'s non-bash permission keys.
  */
 const HEADLESS_SAFE_PERMISSION_DEFAULTS = Object.freeze({
-  edit: "allow",
-  read: "allow",
+  edit: Object.freeze({ "*": "allow", ...OC_SECRET_READ_DENIES }),
+  read: Object.freeze({ "*": "allow", ...OC_SECRET_READ_DENIES }),
   glob: "allow",
   grep: "allow",
   list: "allow",
@@ -553,6 +585,59 @@ function tryReadJsonObject(path) {
 }
 
 /**
+ * @description Builds a fresh, deny-preserving `read` or `edit` permission map from a source value of
+ * any shape. OpenCode resolves permissions last-match-wins, so `"*"` must always be the FIRST key and
+ * the 8 canonical secret-path denies (`OC_SECRET_READ_DENIES`) must always be spread LAST — a scalar
+ * source can never replace the map wholesale, and a source deny/allow for one of the canonical paths
+ * can never resurrect access to it. Three cases:
+ * - source is a scalar `s` → `{ "*": <s if a valid action, else "allow">, ...OC_SECRET_READ_DENIES }`
+ *   (a VALID scalar — `allow`/`ask`/`deny` — is propagated VERBATIM to the wildcard, mirroring the
+ *   map branch's pinned behaviour; only an INVALID scalar like `"banana"` falls back to `"allow"`.
+ *   NOTE: this means a source scalar `read: "ask"` still reaches the seeded config and would stall a
+ *   headless run — flagged as an open operator decision, deliberately NOT clamped here)
+ * - source is a map `m` → the source `"*"` key is REMOVED from `m` (it can never be re-emitted later
+ *   and would otherwise be displaced from index 0 by an integer-like key), but its VALUE survives as
+ *   the first key's value when it is a valid action (`allow`/`ask`/`deny`), otherwise `"allow"`;
+ *   integer-index keys (`/^(0|[1-9]\d*)$/` AND `Number(key) < 2^32 - 1`, the JS array-index predicate
+ *   `ToString(ToUint32(k)) === k && k < 2^32 - 1`) are dropped (JavaScript serializes integer-index own
+ *   keys before string keys regardless of insertion order, which would displace the wildcard from
+ *   index 0 and break last-match-wins); the canonical keys are removed; any remaining value that is
+ *   not exactly `allow`/`ask`/`deny` is CLAMPED to `deny` (unknown input fails CLOSED — integer-index
+ *   keys ARE dropped by design because their serialization order would break the wildcard's
+ *   first-position invariant, but no other key is ever silently dropped, which would leave the path
+ *   to fall under the forced wildcard allow); the result is
+ *   `{ "*": <source-or-allow wildcard>, ...sanitized, ...OC_SECRET_READ_DENIES }` (a project-specific
+ *   extra deny in `m` survives the union, clamped if its value was unrecognised)
+ * - source is absent → `{ "*": "allow", ...OC_SECRET_READ_DENIES }`
+ * Always returns a brand-new object — never mutates `sourceValue` or `OC_SECRET_READ_DENIES` in place,
+ * so nothing leaks across the several projects `run-cron-a.mjs` seeds in one process.
+ * @param {unknown} sourceValue - `basePermission.read` or `basePermission.edit`, whatever shape it is.
+ * @returns {Record<string, string>}
+ */
+function buildDenyPreservingPermission(sourceValue) {
+  const VALID_ACTIONS = ["allow", "ask", "deny"];
+  const clampAction = (v) => (VALID_ACTIONS.includes(v) ? v : "deny");
+  if (sourceValue && typeof sourceValue === "object" && !Array.isArray(sourceValue)) {
+    const wildcard = VALID_ACTIONS.includes(sourceValue["*"]) ? sourceValue["*"] : "allow";
+    const sanitized = Object.fromEntries(
+      Object.entries(sourceValue)
+        .filter(
+          ([key]) =>
+            key !== "*" &&
+            !Object.prototype.hasOwnProperty.call(OC_SECRET_READ_DENIES, key) &&
+            !(/^(0|[1-9]\d*)$/.test(key) && Number(key) < 4294967295),
+        )
+        .map(([key, value]) => [key, clampAction(value)]),
+    );
+    return { "*": wildcard, ...sanitized, ...OC_SECRET_READ_DENIES };
+  }
+  if (typeof sourceValue === "string") {
+    return { "*": VALID_ACTIONS.includes(sourceValue) ? sourceValue : "allow", ...OC_SECRET_READ_DENIES };
+  }
+  return { "*": "allow", ...OC_SECRET_READ_DENIES };
+}
+
+/**
  * @description Force-enforces the critical opencode permission keys onto a base config object.
  * `permission.question` and `permission.external_directory` are ALWAYS overwritten to the safe
  * values regardless of what the base config carried. `permission.bash` is a UNION, never a
@@ -560,6 +645,14 @@ function tryReadJsonObject(path) {
  * project-specific extra deny already present in `base.bash` always survives, and no canonical deny
  * is ever dropped just because the source config omitted it. `'*': 'allow'` is spread LAST so no
  * deny entry (from any source) can ever shadow the forced wildcard allow.
+ * `permission.read` and `permission.edit` are a SECOND deny-preserving union, built by
+ * `buildDenyPreservingPermission` and written as explicit keys AFTER the `...basePermission` spread
+ * (never left to `HEADLESS_SAFE_PERMISSION_DEFAULTS` alone) — a source config that carries the scalar
+ * `read: "allow"` would otherwise replace the whole map via `...basePermission` and strip every
+ * secret-path deny for every project except this repo's own tracked config. This hardening covers
+ * `config.permission` only; `config.agent.<name>.permission` and the `permission:` frontmatter of
+ * `core/opencode/agents/*.md` are separate rule sets evaluated afterwards and are deliberately NOT
+ * covered here (recorded open risk, operator decision pending).
  * @param {object} baseConfig - The config chosen as the write base (source, example, or {}).
  * @param {object|null} exampleConfig - The vendored example, read independently of whether it was
  *   the base, purely so its deny entries also join the union (belt-and-suspenders vs. drift between
@@ -568,10 +661,15 @@ function tryReadJsonObject(path) {
  */
 function enforceOpencodePermissions(baseConfig, exampleConfig) {
   const config = baseConfig && typeof baseConfig === "object" ? { ...baseConfig } : {};
-  const basePermission = config.permission && typeof config.permission === "object" ? config.permission : {};
+  const basePermission =
+    config.permission && typeof config.permission === "object" && !Array.isArray(config.permission)
+      ? config.permission
+      : {};
   const baseBash = basePermission.bash && typeof basePermission.bash === "object" ? basePermission.bash : {};
   const examplePermission =
-    exampleConfig && typeof exampleConfig.permission === "object" ? exampleConfig.permission : {};
+    exampleConfig && exampleConfig.permission && typeof exampleConfig.permission === "object" && !Array.isArray(exampleConfig.permission)
+      ? exampleConfig.permission
+      : {};
   const exampleBash = examplePermission.bash && typeof examplePermission.bash === "object" ? examplePermission.bash : {};
   // Deny-only extraction: an entry from a LATER source can never overwrite a 'deny' already set by
   // an EARLIER source — plain object-spread union would let exampleBash's (or the denylist's) value
@@ -595,6 +693,8 @@ function enforceOpencodePermissions(baseConfig, exampleConfig) {
     question: "deny",
     external_directory: "allow",
     bash,
+    read: buildDenyPreservingPermission(basePermission.read),
+    edit: buildDenyPreservingPermission(basePermission.edit),
   };
   return config;
 }
