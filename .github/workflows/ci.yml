@@ -29,3 +29,12 @@ jobs:
       - run: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs" "scripts/**/*.test.mjs"
       - name: Scan for leaked secrets
         run: node core/skills/initializing-projects/references/scan-secrets-in-tree.mjs
+      - name: Grep-gate — retired bash anti-forgery prose must not resurface (#475)
+        run: |
+          set -e
+          PATTERN='anti-forgery|package_launcher|package launcher|denied_class[^"'"'"']{0,40}(targeted_vitest|package_launcher|interpreter)|interpreter workaround|forge wall|isStateForgeCommand|decideBashForge|bash forge|state-forge'
+          if grep -rniE "$PATTERN" core/opencode/skills core/opencode/agents core/opencode/AGENTS.md; then
+            echo "" >&2
+            echo "Retired bash anti-forgery prose resurfaced above (issue #475 removed the wall — decideBashForge/isStateForgeCommand and the whole detector family). The advisory channel (allow + prose hint) survives; deny-teaching prose does not. If new prose legitimately needs one of these phrases, narrow the pattern in this step instead of reintroducing the wall's vocabulary." >&2
+            exit 1
+          fi
