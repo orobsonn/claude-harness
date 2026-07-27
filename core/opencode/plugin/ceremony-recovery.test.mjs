@@ -105,6 +105,43 @@ test("restart preflight reissues current seals from durable canonical evidence a
   } finally { run.cleanup(); }
 });
 
+test("both phases recoverable from durable evidence in one dispatch → single lock round-trip, not one per phase", async () => {
+  const run = fixture();
+  try {
+    const moduleUrl = pathToFileURL(path.resolve("core/opencode/plugin/lib/ceremony-transition.mjs")).href;
+    // Both markers get real, valid transitions — but in a CHILD process, so their seals were
+    // signed by a different secret and read as invalid here. Durable evidence for BOTH phases
+    // is available on disk, so one planner dispatch must recover both in a single locked pass —
+    // the old per-phase while(true) loop would have taken two persist() round-trips for this.
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+      import fs from "node:fs";
+      const api = await import(${JSON.stringify(moduleUrl)});
+      const root = process.argv[1];
+      const stateFile = process.argv[2];
+      let state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      state = api.transitionCeremony(root, state, "brainstormed").state;
+      api.captureSpecAdversaryResult(root, {
+        sessionId: state.session_id, featureId: state.feature_id, generation: state.ceremony_generation,
+        callId: "child-adversary", role: "adversary-family-1", output: '{"issues":[]}',
+      });
+      state = api.transitionCeremony(root, state, "adversary_fired").state;
+      fs.writeFileSync(stateFile, JSON.stringify(state));
+    `, run.root, run.stateFile], { encoding: "utf8" });
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    let persistCalls = 0;
+    const hooks = await createEntryGateHooks(run.root, {
+      ceremonyPersistFn: (file, mutate) => {
+        persistCalls += 1;
+        return withGateStateLock(file, mutate);
+      },
+    });
+    await assert.doesNotReject(() => planner(hooks));
+    assert.equal(persistCalls, 1);
+    assert.equal(run.read().brainstormed, true);
+    assert.equal(run.read().adversary_fired, true);
+  } finally { run.cleanup(); }
+});
+
 test("multiprocess restart between phases persists brainstorm recovery, consumes next transition, then resumes planner", async () => {
   const run = fixture();
   try {

@@ -153,6 +153,54 @@ test("a claim counts against both the round budget and the session ceiling", () 
   assert.equal(first.state.planner_dispatches_total, 1);
 });
 
+test("a claim bound to a prior process instance is dead: reconciled under lock, not blocked forever", () => {
+  const deadClaim = {
+    ...BASE,
+    planner_status: "running",
+    delivery_status: "planning",
+    planner_primary_attempts: 1,
+    planner_dispatches_total: 1,
+    planner_active_attempt: {
+      call_id: "dead-call",
+      token: "dead-token",
+      role: "planner",
+      session_id: "session-1",
+      feature_id: "feature",
+      model: "openai/model",
+      started_at: 1_000,
+      expires_at: null,
+      baseline_plan: null,
+      // Not this test process's real PROCESS_INSTANCE — simulates a claim that survived
+      // a restart, so the Task that owned it can never complete or fail it.
+      process_instance: "prior-process-instance",
+    },
+  };
+  const claimed = claim(deadClaim, { callId: "call-fresh", token: "token-fresh", now: 5_000 });
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.state.planner_active_attempt.call_id, "call-fresh");
+  assert.equal(claimed.state.planner_last_attempt.call_id, "dead-call");
+  assert.equal(claimed.state.planner_last_attempt.reconciled_reason, "dead claim: prior process instance");
+  // A late result for the dead call must stay rejected as stale, not overwrite the fresh claim.
+  const late = completePlannerAttempt(claimed.state, {
+    callId: "dead-call",
+    token: "dead-token",
+    resultKind: "usable_plan",
+    planHash: "late",
+    now: 6_000,
+  });
+  assert.equal(late.accepted, false);
+  assert.equal(late.state.planner_active_attempt.call_id, "call-fresh");
+});
+
+test("a claim owned by THIS process instance is still genuinely active and blocks a concurrent claim", () => {
+  const first = claim(BASE);
+  assert.equal(first.ok, true);
+  assert.equal(first.state.planner_active_attempt.process_instance !== "prior-process-instance", true);
+  const concurrent = claim(first.state, { callId: "call-2", token: "token-2" });
+  assert.equal(concurrent.ok, false);
+  assert.match(concurrent.reason, /already active/);
+});
+
 test("invalid plan from primary opens revision not fallback", () => {
   const first = claim(BASE);
   const done = completePlannerAttempt(first.state, {

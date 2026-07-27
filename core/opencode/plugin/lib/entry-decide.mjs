@@ -93,18 +93,29 @@ export function decideEntryTask(input = {}) {
 
     // Planner ceremony: brainstormed + adversary_fired
     if (isPlannerRole(sub)) {
-      if (gs.brainstormed !== true) {
+      // dispatchFeatureId is what THIS dispatch declares, kept independent of gs.feature_id by
+      // the caller (entry-gate.ts) — comparing gs.feature_id against a value the caller already
+      // collapsed into gs.feature_id itself would make this check an unreachable tautology.
+      const plannerFeatureId = typeof input.dispatchFeatureId === "string" ? input.dispatchFeatureId : "";
+      // Bind the ceremony flags to the feature being planned: a gate-state stamped for a
+      // DIFFERENT feature carries stale brainstormed/adversary_fired from a prior feature in
+      // the same session. Mirrors Claude Code entry-gate.mjs featureMismatch (entry-gate.mjs:944-947) —
+      // treat that as ceremony-not-done and re-instruct for this feature.
+      const featureMismatch =
+        typeof gs.feature_id === "string" && gs.feature_id !== "" &&
+        plannerFeatureId !== "" && gs.feature_id !== plannerFeatureId;
+      if (featureMismatch || gs.brainstormed !== true) {
         return {
           ok: false,
           decision: "deny",
-          reason: JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "brainstorming_completion_evidence", next_transition: { phase: "brainstorming", action: "resume", marker: "brainstormed" } }),
+          reason: `[entry-gate] ${JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "brainstorming_completion_evidence", next_transition: { phase: "brainstorming", action: "resume", marker: "brainstormed" } })}`,
         };
       }
       if (gs.adversary_fired !== true) {
         return {
           ok: false,
           decision: "deny",
-          reason: JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "spec_adversary_completion_evidence", next_transition: { phase: "spec-adversary", action: "resume", marker: "adversary_fired" } }),
+          reason: `[entry-gate] ${JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "spec_adversary_completion_evidence", next_transition: { phase: "spec-adversary", action: "resume", marker: "adversary_fired" } })}`,
         };
       }
     }
