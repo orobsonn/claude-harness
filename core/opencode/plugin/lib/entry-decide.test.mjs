@@ -28,20 +28,32 @@ test("delivery role with no classify/triage/mode stamp → ceremony missing deny
   assert.match(decision.reason, /ceremony missing/);
 });
 
-test("QUICK/no-ceremony backstop blocks compliance/security/harvester/shipper, exempts executor", () => {
-  for (const role of ["compliance", "security", "harvester", "shipper"]) {
-    const decision = decideEntryTask({ subagentType: role, gateState: { mode: "QUICK" } });
-    assert.equal(decision.ok, false);
-    assert.match(decision.reason, /\[entry-gate\]/);
-    assert.match(decision.reason, new RegExp(role));
+test("#ac-1.1 QUICK/no-ceremony denies EVERY delivery role, executor and sniper included (CC parity — no per-role exemption)", () => {
+  for (const role of ["compliance", "security", "harvester", "shipper", "executor", "sniper"]) {
+    for (const mode of ["QUICK", "no-ceremony"]) {
+      const decision = decideEntryTask({
+        subagentType: role,
+        gateState: { mode, fidelity_pass: ["feat/t1"] },
+        featureId: "feat",
+        taskId: "t1",
+      });
+      assert.equal(decision.ok, false, `${role} under ${mode} should deny`);
+      assert.match(decision.reason, /\[entry-gate\]/);
+      assert.match(decision.reason, /LIGHT or FULL/);
+    }
   }
-  const executor = decideEntryTask({
-    subagentType: "executor",
-    gateState: { mode: "QUICK", fidelity_pass: ["feat/t1"] },
-    featureId: "feat",
-    taskId: "t1",
-  });
-  assert.equal(executor.ok, true);
+});
+
+test("executor under LIGHT/FULL with fidelity-pass is allowed", () => {
+  for (const mode of ["LIGHT", "FULL"]) {
+    const decision = decideEntryTask({
+      subagentType: "executor",
+      gateState: { mode, fidelity_pass: ["feat/t1"] },
+      featureId: "feat",
+      taskId: "t1",
+    });
+    assert.equal(decision.ok, true);
+  }
 });
 
 test("planner without brainstormed → CEREMONY_PROOF_REQUIRED brainstorming deny", () => {
@@ -131,13 +143,11 @@ test("test-author is exempt from the fidelity rail", () => {
   assert.equal(decision.ok, true);
 });
 
-test("executor/sniper blocked until fidelity-pass for the task; unblocked once present", () => {
+test("executor blocked until feature-level fidelity-pass; unblocked once present", () => {
   const gateState = { mode: "FULL", feature_id: "feat" };
-  for (const role of ["executor-low", "sniper-high"]) {
-    const blocked = decideEntryTask({ subagentType: role, gateState, featureId: "feat", taskId: "t1" });
-    assert.equal(blocked.ok, false);
-    assert.match(blocked.reason, /fidelity-pass/);
-  }
+  const blocked = decideEntryTask({ subagentType: "executor-low", gateState, featureId: "feat", taskId: "t1" });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /fidelity-pass/);
   const passed = decideEntryTask({
     subagentType: "executor-low",
     gateState: { ...gateState, fidelity_pass: ["feat/t1"] },
@@ -147,12 +157,67 @@ test("executor/sniper blocked until fidelity-pass for the task; unblocked once p
   assert.equal(passed.ok, true);
 });
 
-test("hasFidelityPass matches feature-only and feature/task qualified entries, ignores optional @sha", () => {
-  assert.equal(hasFidelityPass(["feat/t1@abc123"], "feat", "t1"), true);
-  assert.equal(hasFidelityPass(["feat/t1"], "feat", "t2"), false);
+test("#ac-2.1 sniper of fix-mode (fresh session, empty fidelity_pass) is unconditionally allowed — sniper is EXEMPT like CC", () => {
+  const decision = decideEntryTask({
+    subagentType: "sniper-high",
+    gateState: { mode: "FULL", feature_id: "feat" },
+    featureId: "feat",
+    taskId: "t1",
+  });
+  assert.equal(decision.ok, true);
+  assert.equal(decision.reason, "sniper-fidelity-exempt");
+});
+
+test("#ac-2.2 headless executor with fidelity stamped for a DIFFERENT task of the SAME feature is allowed (feature-level match, not task-exact)", () => {
+  const decision = decideEntryTask({
+    subagentType: "executor",
+    gateState: { mode: "FULL", feature_id: "feat", fidelity_pass: ["feat/other-task@abc123"] },
+    featureId: "feat",
+    taskId: "t1",
+  });
+  assert.equal(decision.ok, true);
+});
+
+test("hasFidelityPass matches feature-only and feature/task qualified entries at feature granularity, ignores optional @sha", () => {
+  assert.equal(hasFidelityPass(["feat/t1@abc123"], "feat"), true);
+  assert.equal(hasFidelityPass(["feat/t1"], "feat"), true);
   assert.equal(hasFidelityPass(["feat"], "feat"), true);
   assert.equal(hasFidelityPass([], "feat"), false);
   assert.equal(hasFidelityPass(null, "feat"), false);
+});
+
+test("#ac-1.2 shipper with corrupt regate_pending (not a JSON array) denies fail-closed", () => {
+  const decision = decideEntryTask({
+    subagentType: "shipper",
+    gateState: { mode: "FULL", regate_pending: "not-an-array" },
+  });
+  assert.equal(decision.ok, false);
+  assert.match(decision.reason, /\[entry-gate\]/);
+  assert.match(decision.reason, /gate-state corrupted/);
+});
+
+test("#ac-1.3 shipper with unmatched regate_pending (no regate_passed) denies with the instructive CC-shaped message", () => {
+  const decision = decideEntryTask({
+    subagentType: "shipper",
+    gateState: { mode: "FULL", regate_pending: ["feat/t1"] },
+  });
+  assert.equal(decision.ok, false);
+  assert.match(decision.reason, /\[entry-gate\]/);
+  assert.match(decision.reason, /strong-eye re-gate/);
+  assert.match(decision.reason, /feat\/t1/);
+});
+
+test("shipper with regate_pending matched by regate_passed (any sha suffix) is allowed", () => {
+  const decision = decideEntryTask({
+    subagentType: "shipper",
+    gateState: { mode: "FULL", regate_pending: ["feat/t1"], regate_passed: ["feat/t1@abc123"] },
+  });
+  assert.equal(decision.ok, true);
+});
+
+test("shipper with no regate_pending at all is allowed", () => {
+  const decision = decideEntryTask({ subagentType: "shipper", gateState: { mode: "FULL" } });
+  assert.equal(decision.ok, true);
 });
 
 test("throwIfDenied throws only on deny, using the decision's own reason", () => {

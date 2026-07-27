@@ -31,6 +31,7 @@ import { createPlanGateHooks } from "../opencode/plugin/plan-gate.ts";
 import { createObsHandHooks } from "../opencode/plugin/obs-hand.ts";
 import { createLoopGuardHooks } from "../opencode/plugin/loop-guard.ts";
 import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
+import { sealedMarkerRecord } from "../opencode/plugin/lib/marker-seal.mjs";
 
 function makeTempDirs() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-dispatch-"));
@@ -186,6 +187,71 @@ test("fail-CLOSED: findings file with an EMPTY changedFiles scope → NORMAL mod
   }
 });
 
+// ---------------------------------------------------------------------------
+// #ac-3.1 (issue #485): the sniper Task dispatch that fix-mode actually issues must survive the
+// REAL 5-plugin chain (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate, the
+// documented order from plugin-dispatch-order.test.mjs) against a REALISTIC fresh fix-mode
+// session's gate-state: classified/mode present (triaging-requests always runs at session start
+// per core/CLAUDE.md — the FIX_MODE_TRIGGER only skips planner/plan-reviewer, not classify) and
+// dual_status/plan_verdict recorded+sealed (the plan WAS already dual-reviewed and APPROVEd by
+// the original pre-rejection pipeline this branch resumes — dual-enforcement.mjs's
+// requireDualOn-by-default check, out of THIS issue's scope, would otherwise deny any executor/
+// sniper dispatch missing it, unrelated to what #485 fixes). NO planner_plan_binding, NO
+// brainstormed/adversary_fired, NO regate, NO fidelity_pass — a resumed branch's session never
+// re-ran planner/plan-reviewer ceremony (#476 already made plan-gate.ts's binding block
+// conditional/skip on that absence). Before #485 this died on entry-decide.mjs's fidelity rail:
+// the sniper was gated by the SAME fidelity-pass check as the executor (now EXEMPT, ac-2.1) with
+// an empty fidelity_pass. This is a superset/stronger check than the unit tests in
+// entry-decide.test.mjs: it drives the REAL hook wiring (entry-gate.ts, untouched by #485)
+// end-to-end instead of just the pure decideEntryTask function.
+// DISPATCH_CHAIN is declared once, below, alongside issue #488's `chain:` test group — this test
+// runs inside a node:test callback (executed after the whole module has finished evaluating), so
+// referencing the later `const` here is safe (no temporal-dead-zone at actual test-run time).
+// ---------------------------------------------------------------------------
+
+test("#ac-3.1 sniper Task dispatch with a realistic fresh fix-mode gate-state (recorded prior dual/plan_verdict; no planner ceremony/binding/regate/fidelity for THIS session) survives all 5 real dispatch-chain plugins", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
+  try {
+    const sessionId = "ses_fixmode_chain";
+    const featureId = "feat-fixmode-chain";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    const gateState = {
+      session_id: sessionId,
+      feature_id: featureId,
+      mode: "LIGHT",
+      classified: true,
+      dual_status: "both",
+      plan_verdict: "APPROVE",
+      marker_seals: [
+        sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: "both" }),
+        sealedMarkerRecord({ sessionId, featureId, operation: "plan_verdict", payload: "APPROVE" }),
+      ],
+    };
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify(gateState), "utf8");
+
+    const input = { tool: "task", sessionID: sessionId, callID: "call-fixmode-1" };
+    const output = {
+      args: {
+        prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-fix"}[/HARNESS_TASK_CONTEXT]\nFix the reported bug.`,
+        subagent_type: "sniper-high",
+        feature_id: featureId,
+        task_id: "t0-fix",
+      },
+    };
+
+    for (const [name, createHooks] of DISPATCH_CHAIN) {
+      const hooks = await createHooks(root);
+      await assert.doesNotReject(
+        () => hooks["tool.execute.before"](input, output),
+        `${name} must not deny the fix-mode sniper dispatch`,
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("stale hygiene: a NON-resume (fresh-branch) dispatch prunes any leftover findings file for that root", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
@@ -246,22 +312,20 @@ async function runDispatchChain(root, input, output) {
 }
 
 test("chain: sniper Task dispatch with a COLD/EMPTY gate-state (no gate-state.json, no harness.routing.json — the real fix-mode/repo-frio shape) survives the real 5-plugin chain end to end", {
-  // BLOCKED on issue #483 (oc-dual-gate-to-recording) and issue #485 (oc-cc-gate1-gate3-fidelity),
-  // both open at the time this test was written. Reproduced empirically against this branch's HEAD:
-  //   1st deny — plan-gate.ts → dual-enforcement.mjs: with no harness.routing.json on disk,
+  // BLOCKED on issue #483 (oc-dual-gate-to-recording) — #485 (oc-cc-gate1-gate3-fidelity) merged
+  // and closed its half of this wall (re-verified empirically on this branch, post-#485: the sniper
+  // no longer denies on ceremony/fidelity in entry-decide.mjs — a cold empty gate-state now sails
+  // through planner-recovery, and reaches plan-gate ONLY).
+  //   Remaining deny — plan-gate.ts → dual-enforcement.mjs: with no harness.routing.json on disk,
   //     readRequireDualOn(null) returns DEFAULT_REQUIRE_DUAL_ON (["plan-reviewer","adversary"]), and
   //     routingRequiresDual() treats that DEFAULT as "dual IS required" (an empty
   //     `constraints.requireDualOn: []` is treated the same as "unset" — dual-enforcement.mjs:126-127
   //     falls back to the default either way) — so a cold project denies with
   //     "dual_status.plan_review missing" even though no routing.json ever opted in. This is
   //     exactly what #483 replaces with record-only behavior.
-  //   2nd deny (once #483 is fixed) — entry-gate.ts → entry-decide.mjs:75 ("ceremony missing") and,
-  //     after that, entry-decide.mjs's fidelity block (~:133-149) still gates sniper on
-  //     `fidelity_pass`, which #485's ac-2.1 explicitly carves out as a sniper exemption not yet
-  //     implemented.
-  // Un-skip (remove `todo`) once #483 AND #485 are both merged — at that point this is a genuine
-  // end-to-end regression test for the fix-mode dispatch path.
-  todo: "blocked on #483 (dual-enforcement default denies with no routing.json) and #485 (sniper not yet exempt from ceremony/fidelity in entry-decide.mjs) — see docs/OC-CC-PARITY-ROADMAP-INPUT.md items 13 and 14",
+  // Un-skip (remove `todo`) once #483 merges — at that point this is a genuine end-to-end
+  // regression test for the fix-mode dispatch path.
+  todo: "blocked on #483 (dual-enforcement default denies with no routing.json) — see docs/OC-CC-PARITY-ROADMAP-INPUT.md item 13. #485's half of this wall (sniper ceremony/fidelity) is resolved.",
 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
   try {

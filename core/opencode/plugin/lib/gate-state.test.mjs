@@ -360,7 +360,11 @@ test("bareRole is case-insensitive — Executor-High is delivery/executor", () =
   assert.equal(isExecutorRole("Sniper-High"), false);
 });
 
-test("t5-fidelity: sniper requires fidelity-pass like executor", () => {
+// Superseded by issue #485 (oc-cc-gate1-gate3-fidelity, docs/OC-CC-PARITY-REPORT.md T14): the
+// sniper is now EXEMPT from the fidelity rail, mirroring Claude Code entry-gate.mjs (which never
+// blocks the sniper on fidelity — it is the post-gate fixer, dispatched precisely because
+// something already went wrong, and must not wait on the fidelity-pass its own fix may produce).
+test("t5-fidelity: sniper is EXEMPT from fidelity-pass regardless of gate-state", () => {
   const baseState = {
     mode: "LIGHT",
     classified: true,
@@ -369,26 +373,14 @@ test("t5-fidelity: sniper requires fidelity-pass like executor", () => {
     fidelity_pass: [],
   };
 
-  const sniperBlocked = decideEntryTask({
+  const sniperOk = decideEntryTask({
     subagentType: "sniper-high",
     gateState: baseState,
     featureId: "feat-x",
     taskId: "task-1",
   });
-  assert.equal(sniperBlocked.decision, "deny");
-  assert.match(sniperBlocked.reason, /\[entry-gate\].*sniper.*fidelity-pass/);
-
-  const withPass = {
-    ...baseState,
-    fidelity_pass: ["feat-x/task-1"],
-  };
-  const sniperOk = decideEntryTask({
-    subagentType: "sniper-medium",
-    gateState: withPass,
-    featureId: "feat-x",
-    taskId: "task-1",
-  });
   assert.equal(sniperOk.decision, "allow");
+  assert.match(sniperOk.reason, /sniper-fidelity-exempt/);
 });
 
 // ---------------------------------------------------------------------------
@@ -576,8 +568,12 @@ test("gate-state is disk-backed (not Map-only): second process sees markers", as
 });
 
 // ---------------------------------------------------------------------------
-// lt- quick/no-ceremony backstop for four roles (compliance etc) + executor carve-out
-// (locked per gate-parity spec; do not weaken)
+// lt- quick/no-ceremony backstop for four roles (compliance etc)
+// The former "+ executor carve-out" locked here (PR #299/#305) is REMOVED by issue #485
+// (oc-cc-gate1-gate3-fidelity, docs/OC-CC-PARITY-REPORT.md Gate 1 / roadmap item 14): Claude
+// Code's triage-mode gate has no per-role exemption, so QUICK/no-ceremony now denies EVERY
+// delivery role — executor and sniper included — not just the four eyes. See
+// lt-quick-no-ceremony-denies-executor-too below.
 // ---------------------------------------------------------------------------
 
 test("lt-quick-no-ceremony-four-roles-matrix: QUICK/quick/no-ceremony + classified → compliance/security/harvester/shipper all deny", () => {
@@ -617,7 +613,7 @@ test("lt-ceremony-missing-still-deny: empty gateState + compliance → deny with
   assert.match(d.reason, /ceremony missing/);
 });
 
-test("lt-quick-executor-still-allow: QUICK + classified + fidelity_pass allows executor-medium (executor not blocked by four-role backstop)", () => {
+test("lt-quick-no-ceremony-denies-executor-too: QUICK + classified + fidelity_pass still denies executor-medium (#485 — no per-role exemption, CC parity)", () => {
   const d = decideEntryTask({
     subagentType: "executor-medium",
     gateState: {
@@ -628,5 +624,6 @@ test("lt-quick-executor-still-allow: QUICK + classified + fidelity_pass allows e
     featureId: "feat",
     taskId: "t1",
   });
-  assert.equal(d.decision, "allow");
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /LIGHT or FULL/);
 });
