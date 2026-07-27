@@ -4,13 +4,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveHookIdentity } from "./hook-identity.mjs";
 
-test("conflicting untrusted task aliases fail closed and report values", () => {
+test("conflicting untrusted task aliases resolve tolerantly to the first alias in priority order (#484)", () => {
   const result = resolveHookIdentity({
     input: { sessionID: "ses-a" },
     toolArgs: { task: "task-a", taskId: "task-b" },
   });
+  assert.equal(result.ok, true);
+  assert.equal(result.taskId, "task-b");
+  assert.equal(result.taskIdSource, "tool-input");
+});
+
+test("untrusted taskId dispatch args diverging from the brief's HARNESS_TASK_CONTEXT marker fail closed (#484 adversary finding)", () => {
+  const result = resolveHookIdentity({
+    input: { sessionID: "ses-a" },
+    toolArgs: { taskId: "task-2" },
+    promptTaskId: "task-5",
+  });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /taskId.*conflict.*task-[ab].*task-[ab]/);
+  assert.match(result.reason, /taskId dispatch args diverge from the brief.*task-2.*task-5/);
 });
 
 test("trusted platform task identity overrides one consistent untrusted identity", () => {
@@ -24,13 +35,14 @@ test("trusted platform task identity overrides one consistent untrusted identity
   assert.equal(result.taskIdSource, "runtime-envelope");
 });
 
-test("trusted aliases also fail closed when the runtime envelope conflicts with itself", () => {
+test("trusted aliases resolve tolerantly to the first alias when the runtime envelope disagrees with itself (#484)", () => {
   const result = resolveHookIdentity({
     input: { sessionID: "ses-a", sessionId: "ses-b" },
     toolArgs: {},
   });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /sessionId.*conflict/);
+  assert.equal(result.ok, true);
+  assert.equal(result.sessionId, "ses-a");
+  assert.equal(result.sessionIdSource, "runtime-envelope");
 });
 
 test("official Task command/task_id are not harness role or plan-task", () => {

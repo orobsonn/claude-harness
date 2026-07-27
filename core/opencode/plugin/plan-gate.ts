@@ -65,7 +65,6 @@ export async function createPlanGateHooks(
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
-  const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
   const {
     bareRole,
     isExecutorRole,
@@ -143,11 +142,6 @@ export async function createPlanGateHooks(
               if (!ceremonyBinding.ok) {
                 throw new Error(`${PREFIX} delivery-blocked: ${ceremonyBinding.reason}`)
               }
-              const seals = validatePrivilegedMarkerSeals(state, {
-                sessionId: sid,
-                featureId: typeof state.feature_id === "string" ? state.feature_id : "",
-              })
-              if (!seals.ok) throw new Error(`${PREFIX} delivery-blocked: ${seals.reason}`)
               if (state.planner_status !== "usable") {
                 throw new Error(`${PREFIX} delivery-blocked: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
               }

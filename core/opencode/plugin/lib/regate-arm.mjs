@@ -8,7 +8,6 @@ import { withGateStateLock as defaultWithGateStateLock } from "./gate-state.mjs"
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 import { gateStatePath as defaultGateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
 
 /**
  * @description True when role is sniper-high or sniper-medium (incl. -spawn twins).
@@ -90,28 +89,6 @@ export function armRegatePending({
       const patch = { regate_pending: [bare] };
       const applied = mergeGateStatePatch(prev, patch);
       if (!applied.ok) return applied;
-
-      const record = sealedMarkerRecord({
-        sessionId,
-        featureId,
-        operation: "regate-pending",
-        payload: bare,
-      });
-      const prior = Array.isArray(prev.marker_seals) ? prev.marker_seals : [];
-      applied.state.marker_seals = [
-        ...prior.filter(
-          (candidate) =>
-            !(
-              candidate &&
-              typeof candidate === "object" &&
-              candidate.operation === "regate-pending" &&
-              candidate.session_id === sessionId &&
-              candidate.feature_id === featureId &&
-              JSON.stringify(candidate.payload) === JSON.stringify(bare)
-            ),
-        ),
-        record,
-      ];
       return applied.state;
     });
 

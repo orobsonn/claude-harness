@@ -211,8 +211,10 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
       task_id: "official-host-resume-id",
       command: "resume-or-skill-command",
     }))
-    // Harness-only taskId alias still conflicts with the prompt marker.
-    await assert.rejects(() => dispatch(valid, { taskId: "missing-task" }), /conflict/)
+    // Harness-only taskId alias still fails closed when it disagrees with the prompt's
+    // HARNESS_TASK_CONTEXT marker (#484 adversary finding) — tolerance does not extend to
+    // decoupling dispatch args from the brief the hand was actually given.
+    await assert.rejects(() => dispatch(valid, { taskId: "missing-task" }), /taskId dispatch args diverge from the brief/)
     const review = (args) => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION },
       { args: { description: "review", prompt: "Review plan.", subagent_type: "plan-reviewer-family-1", ...args } },

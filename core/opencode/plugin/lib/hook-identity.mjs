@@ -22,27 +22,21 @@ function aliasValues(source, aliases) {
   return values;
 }
 
-function oneIdentity(label, values) {
-  const distinct = [...new Set(values)];
-  if (distinct.length > 1) {
-    return { ok: false, reason: `${label} identity aliases conflict (conflicts): ${distinct.join(" != ")}` };
-  }
-  return { ok: true, value: distinct[0] ?? "" };
+/** @description First present alias value wins — tolerant of disagreeing aliases (#484). */
+function oneIdentity(values) {
+  return { ok: true, value: values[0] ?? "" };
 }
 
-/** @description Resolve one identity dimension; conflicts inside either trust tier fail closed. */
+/** @description Resolve one identity dimension; the trusted tier always wins over untrusted. */
 export function resolveIdentityAliases({
-  label,
   trusted,
   untrusted,
   aliases,
   extraTrusted = [],
   extraUntrusted = [],
 }) {
-  const trustedResult = oneIdentity(label, [...aliasValues(trusted, aliases), ...extraTrusted]);
-  if (!trustedResult.ok) return trustedResult;
-  const untrustedResult = oneIdentity(label, [...aliasValues(untrusted, aliases), ...extraUntrusted]);
-  if (!untrustedResult.ok) return untrustedResult;
+  const trustedResult = oneIdentity([...aliasValues(trusted, aliases), ...extraTrusted]);
+  const untrustedResult = oneIdentity([...aliasValues(untrusted, aliases), ...extraUntrusted]);
   return {
     ok: true,
     value: trustedResult.value || untrustedResult.value,
@@ -62,7 +56,9 @@ export function resolveHookIdentity({ input, toolArgs, promptTaskId = "" } = {})
     featureId: ["feature_id", "featureId", "feature"],
     // Do not read official Task.task_id from tool args (resume). Envelope may still stamp task_id.
     taskId: ["taskId", "task"],
-    role: ["agent", "agentType", "agent_type", "subagent_type", "subagentType", "subagent"],
+    // subagent_type is the canonical role field the host stamps; it must win when a role
+    // alias disagrees with a looser agent/agentType alias (#484).
+    role: ["subagent_type", "subagentType", "subagent", "agent", "agentType", "agent_type"],
   };
   const result = {};
   for (const [label, aliases] of Object.entries(dimensions)) {
@@ -70,15 +66,29 @@ export function resolveHookIdentity({ input, toolArgs, promptTaskId = "" } = {})
       label === "taskId"
         ? aliasValues(input, ["task_id"]).filter((v) => TASK_ID.test(v))
         : [];
+    // The brief embeds its task id in the prompt's HARNESS_TASK_CONTEXT marker — that is
+    // the ONE thing a dispatcher cannot silently swap without also rewriting the prompt
+    // text. Untrusted dispatch args (taskId/task) disagreeing with it is not "just another
+    // alias divergence" (#484 tolerance does not cover this): it decouples the fidelity/
+    // scope gates from what the hand was actually briefed to do, laundering the frozen-test
+    // fidelity check. Fail closed here; a genuinely trusted envelope task_id (extraTrusted
+    // above) still wins over both, unaffected by this check.
+    if (label === "taskId" && TASK_ID.test(promptTaskId)) {
+      const argsTaskId = aliasValues(toolArgs, aliases)[0];
+      if (argsTaskId && argsTaskId !== promptTaskId) {
+        return {
+          ok: false,
+          reason: `taskId dispatch args diverge from the brief's HARNESS_TASK_CONTEXT marker: ${argsTaskId} != ${promptTaskId}`,
+        };
+      }
+    }
     const resolved = resolveIdentityAliases({
-      label,
       trusted: input,
       untrusted: toolArgs,
       aliases,
       extraTrusted: trustedTaskId,
       extraUntrusted: label === "taskId" && TASK_ID.test(promptTaskId) ? [promptTaskId] : [],
     });
-    if (!resolved.ok) return resolved;
     result[label] = resolved.value;
     result[`${label}Source`] = resolved.source;
   }

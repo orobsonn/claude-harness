@@ -6,7 +6,6 @@ import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
 import { fidelityPassEntry, defaultHeadSha } from "./mark-gate.mjs";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { writeHandRecord } from "./hand-records.mjs";
 
 /**
@@ -124,23 +123,10 @@ export function hostStampOcHandCapture(input) {
 
     const bare = fidelityPassEntry(featureId, taskId, null);
     const capEntry = fidelityPassEntry(featureId, taskId, sha);
-    const hfSeal = sealedMarkerRecord({
-      sessionId,
-      featureId,
-      operation: "hand-finished",
-      payload: bare,
-    });
-    const capSeal = sealedMarkerRecord({
-      sessionId,
-      featureId,
-      operation: "capture-verified",
-      payload: capEntry,
-    });
 
-    // The array and its seals MUST use the same per-(feature,task) policy: this run
-    // supersedes every prior SHA for this task. Prune the task's prior array entries
-    // (any SHA) before appending, mirroring the seal filter — otherwise an old-SHA
-    // entry survives while its seal is pruned, orphaning the array and wedging the gate.
+    // This run supersedes every prior SHA for this task: prune the task's prior array
+    // entries (any SHA) before appending — otherwise an old-SHA entry survives alongside
+    // the new one for the same task.
     const belongsToTask = (payload) => {
       const s = String(payload ?? "");
       return s === bare || s.startsWith(`${bare}@`);
@@ -154,26 +140,10 @@ export function hostStampOcHandCapture(input) {
         (e) => !belongsToTask(e),
       );
       capture_verified.push(capEntry);
-      const prior = Array.isArray(prev.marker_seals) ? prev.marker_seals : [];
-      const seals = [
-        ...prior.filter(
-          (s) =>
-            !(
-              s &&
-              typeof s === "object" &&
-              (s.operation === "hand-finished" || s.operation === "capture-verified") &&
-              s.session_id === sessionId &&
-              belongsToTask(s.payload)
-            ),
-        ),
-        hfSeal,
-        capSeal,
-      ];
       return {
         ...prev,
         hand_finished,
         capture_verified,
-        marker_seals: seals,
       };
     });
     if (!locked.ok) return { ok: true, outcome: finalOutcome, reason: "gate-lock-skip" };

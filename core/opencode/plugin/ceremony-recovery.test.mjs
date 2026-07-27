@@ -74,7 +74,7 @@ test("fresh flow persists brainstorm then accepted adversary before planner pref
   } finally { run.cleanup(); }
 });
 
-test("restart preflight reissues current seals from durable canonical evidence and is idempotent", async () => {
+test("restart preflight recognizes durable canonical evidence from a prior process and is idempotent (#484)", async () => {
   const run = fixture();
   try {
     const moduleUrl = pathToFileURL(path.resolve("core/opencode/plugin/lib/ceremony-transition.mjs")).href;
@@ -93,13 +93,11 @@ test("restart preflight reissues current seals from durable canonical evidence a
       fs.writeFileSync(stateFile, JSON.stringify(state));
     `, run.root, run.stateFile], { encoding: "utf8" });
     assert.equal(child.status, 0, child.stderr || child.stdout);
-    const oldSeal = run.read().brainstormed_binding.seal;
     const hooks = await createEntryGateHooks(run.root);
     await assert.doesNotReject(() => planner(hooks));
     const once = fs.readFileSync(run.stateFile, "utf8");
     assert.equal(run.read().brainstormed, true);
     assert.equal(run.read().adversary_fired, true);
-    assert.notEqual(run.read().brainstormed_binding.seal, oldSeal);
     await assert.doesNotReject(() => planner(hooks));
     assert.equal(fs.readFileSync(run.stateFile, "utf8"), once);
   } finally { run.cleanup(); }
@@ -155,7 +153,6 @@ test("multiprocess restart between phases persists brainstorm recovery, consumes
       fs.writeFileSync(stateFile, JSON.stringify(transitionCeremony(root, state, "brainstormed").state));
     `, run.root, run.stateFile], { encoding: "utf8" });
     assert.equal(child.status, 0, child.stderr || child.stdout);
-    const staleSeal = run.read().brainstormed_binding.seal;
     const hooks = await createEntryGateHooks(run.root);
     const roles = [];
     await assert.rejects(() => {
@@ -169,7 +166,6 @@ test("multiprocess restart between phases persists brainstorm recovery, consumes
       return true;
     });
     assert.equal(run.read().brainstormed, true);
-    assert.notEqual(run.read().brainstormed_binding.seal, staleSeal);
     assert.equal(run.read().adversary_fired, undefined);
 
     roles.push("adversary-family-1");
@@ -195,7 +191,7 @@ test("multiprocess restart between phases persists brainstorm recovery, consumes
   } finally { run.cleanup(); }
 });
 
-test("concurrent and repeated partial preflights converge on one brainstorm seal and same next proof", async () => {
+test("concurrent and repeated partial preflights converge on one brainstorm binding and same next proof", async () => {
   const run = fixture();
   try {
     const brainstorm = transitionCeremony(run.root, run.state, "brainstormed");
@@ -207,7 +203,7 @@ test("concurrent and repeated partial preflights converge on one brainstorm seal
     const state = run.read();
     assert.equal(state.brainstormed, true);
     assert.equal(state.adversary_fired, undefined);
-    assert.equal(state.marker_seals.filter((record) => record.operation === "brainstormed").length, 1);
+    assert.equal(state.brainstormed_binding.session_id, run.state.session_id);
     const stable = fs.readFileSync(run.stateFile, "utf8");
     await assert.rejects(() => planner(hooks), /spec_adversary_completion_evidence/);
     assert.equal(fs.readFileSync(run.stateFile, "utf8"), stable);

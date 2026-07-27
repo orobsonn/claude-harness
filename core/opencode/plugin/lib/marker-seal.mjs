@@ -1,4 +1,7 @@
-/** @description Process-instance HMAC seals for privileged marker semantics. Secret bytes never leave this module. */
+/**
+ * @description Process-instance HMAC signing for dual/plan_verdict recording only (#484) —
+ * nothing in the harness validates these seals anymore. Secret bytes never leave this module.
+ */
 
 import crypto from "node:crypto";
 
@@ -22,19 +25,15 @@ export function signMarker({ sessionId, featureId, operation, payload }) {
   return crypto.createHmac("sha256", secret).update(message({ sessionId, featureId, operation, payload })).digest("base64url");
 }
 
-/** @description Timing-safe verification against this process instance only. */
-export function verifyMarker({ sessionId, featureId, operation, payload, seal }) {
-  if (typeof seal !== "string" || seal.length === 0) return false;
-  try {
-    const expected = Buffer.from(signMarker({ sessionId, featureId, operation, payload }), "base64url");
-    const actual = Buffer.from(seal, "base64url");
-    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
-  } catch {
-    return false;
-  }
-}
-
-/** @description Create a persistable marker seal record without exposing secret bytes. */
+/**
+ * @description Create a persistable marker seal record without exposing secret bytes.
+ * Kept for dual/plan_verdict recording (loop-decide.mjs, dual-nudge.mjs) — the per-process
+ * HMAC signature is no longer read or validated anywhere (see docs/OC-CC-PARITY-REPORT.md
+ * item #32 / issue #484): a fresh secret on every OpenCode restart made every marker sealed
+ * before the restart permanently unverifiable, bricking delivery for any resumed session
+ * (incident #423). `signMarker`/`sealedMarkerRecord` remain so existing dual/plan_verdict
+ * recording call sites keep working unchanged; nothing validates the `seal` field anymore.
+ */
 export function sealedMarkerRecord({ sessionId, featureId, operation, payload }) {
   return {
     version: 1,
@@ -46,56 +45,4 @@ export function sealedMarkerRecord({ sessionId, featureId, operation, payload })
   };
 }
 
-/** @description True when state contains this exact marker sealed by the current process. */
-export function hasValidMarkerSeal(state, { sessionId, featureId, operation, payload }) {
-  if (!state || typeof state !== "object" || !Array.isArray(state.marker_seals)) return false;
-  return state.marker_seals.some((record) =>
-    record &&
-    typeof record === "object" &&
-    record.version === 1 &&
-    record.session_id === sessionId &&
-    record.feature_id === featureId &&
-    record.operation === operation &&
-    JSON.stringify(record.payload) === JSON.stringify(payload) &&
-    verifyMarker({ sessionId, featureId, operation, payload, seal: record.seal }),
-  );
-}
-
-/**
- * @description Reject every present privileged marker not sealed by this process instance.
- * #483: dual_status/plan_verdict are deliberately NOT in this check anymore — the ADR-003
- * dual/plan_verdict gate is record-only now (see lib/dual-enforcement.mjs), and sealing these
- * two fields here re-created the exact deny this issue removes: any OpenCode process restart
- * invalidates the per-process HMAC secret (`secret` above), so a dual_status/plan_verdict
- * written before a restart would fail `hasValidMarkerSeal` and throw for every executor/sniper
- * dispatch afterward — the #423-shaped brick this repo's docs/OC-CC-PARITY-REPORT.md item #32
- * already names. brainstormed/adversary_fired/final_review_done/demo_done and the array
- * markers (fidelity/regate/hand-finished/capture-verified) keep their seal — only dual/
- * plan_verdict are exempted, since those two are the ones #483 makes non-blocking by design.
- */
-export function validatePrivilegedMarkerSeals(state, { sessionId, featureId }) {
-  const value = state && typeof state === "object" && !Array.isArray(state) ? state : {};
-  const checks = [];
-  if (value.brainstormed === true) checks.push(["brainstormed", true]);
-  if (value.adversary_fired === true) checks.push(["adversary_fired", true]);
-  if (value.final_review_done === true) checks.push(["final-review", true]);
-  if (value.demo_done === true) checks.push(["demo-done", true]);
-  for (const [key, operation] of [
-    ["fidelity_pass", "fidelity"],
-    ["regate_pending", "regate-pending"],
-    ["regate_passed", "regate-passed"],
-    ["hand_finished", "hand-finished"],
-    ["capture_verified", "capture-verified"],
-  ]) {
-    if (!Array.isArray(value[key])) continue;
-    for (const payload of value[key]) checks.push([operation, payload]);
-  }
-  for (const [operation, payload] of checks) {
-    if (!hasValidMarkerSeal(value, { sessionId, featureId, operation, payload })) {
-      return { ok: false, reason: `${operation} marker is unsigned or sealed by another process instance` };
-    }
-  }
-  return { ok: true };
-}
-
-export default { signMarker, verifyMarker, sealedMarkerRecord, hasValidMarkerSeal, validatePrivilegedMarkerSeals };
+export default { signMarker, sealedMarkerRecord };

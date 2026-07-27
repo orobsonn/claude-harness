@@ -1,15 +1,12 @@
 /** @description Validate ceremony markers against the runtime session and classified feature. */
 
-import { hasValidMarkerSeal, verifyMarker } from "./marker-seal.mjs";
-
-export function ceremonyMarkerPatch(key, sessionId, featureId, seal) {
+export function ceremonyMarkerPatch(key, sessionId, featureId) {
   return {
     [key]: true,
     [`${key}_binding`]: {
       session_id: sessionId,
       feature_id: featureId,
       operation: key,
-      seal,
     },
   };
 }
@@ -34,20 +31,7 @@ export function validateCeremonyBinding(gateState, { sessionId, featureId, requi
       Array.isArray(binding) ||
       binding.session_id !== sessionId ||
       binding.feature_id !== classifiedFeature ||
-      binding.operation !== key ||
-      !hasValidMarkerSeal(state, {
-        sessionId,
-        featureId: classifiedFeature,
-        operation: key,
-        payload: true,
-      }) ||
-      !verifyMarker({
-        sessionId,
-        featureId: classifiedFeature,
-        operation: key,
-        payload: true,
-        seal: binding.seal,
-      })
+      binding.operation !== key
     ) {
       return { ok: false, reason: `${key} marker is not bound to current session and feature` };
     }

@@ -15,7 +15,7 @@ import {
 } from "./loop-decide.mjs";
 import { createLoopGuardHooks } from "../loop-guard.ts";
 import { createEntryGateHooks } from "../entry-gate.ts";
-import { sealedMarkerRecord, validatePrivilegedMarkerSeals } from "./marker-seal.mjs";
+import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { decideDualBeforeDelivery } from "./dual-enforcement.mjs";
 import { isRecordedDualAttempt } from "../../../shared/lib/gate-state-shape.mjs";
 import {
@@ -133,7 +133,6 @@ test("usable family-1 terminal increments exactly once; failures are separate an
   assert.equal(first.state.plan_review_count, 1);
   assert.equal(first.state.dual_status?.plan_review, "primary_only");
   assert.equal(first.state.dual_status?.adversary, undefined);
-  assert.equal(validatePrivilegedMarkerSeals(first.state, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 
   const replay = applyReviewOutcome(first.state, input());
   assert.equal(replay.accepted, false);
@@ -204,7 +203,6 @@ test("primary failure cap counts family-1 inflight so concurrent fan-out cannot 
 
 test("valid primary review signs primary_only and permits hand progression; useful secondary signs both", () => {
   const primary = complete(state()).state;
-  assert.equal(validatePrivilegedMarkerSeals(primary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
   assert.equal(primary.plan_verdict, "APPROVE");
   assert.equal(decideDualBeforeDelivery({
     subagentType: "executor-high",
@@ -217,7 +215,6 @@ test("valid primary review signs primary_only and permits hand progression; usef
   assert.equal(secondary.dual_status?.plan_review, "both");
   assert.equal(secondary.dual_status?.adversary, undefined);
   assert.equal(secondary.plan_verdict, "APPROVE");
-  assert.equal(validatePrivilegedMarkerSeals(secondary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 
   const failedSecondary = complete(primary, {
     subagentType: "plan-reviewer-family-2",
@@ -227,7 +224,6 @@ test("valid primary review signs primary_only and permits hand progression; usef
   assert.equal(failedSecondary.dual_status?.plan_review, "primary_only");
   assert.equal(failedSecondary.dual_secondary_status, "failed");
   assert.equal(failedSecondary.dual_secondary_failure_class, "provider_error");
-  assert.equal(validatePrivilegedMarkerSeals(failedSecondary, { sessionId: SESSION, featureId: FEATURE }).ok, true);
 });
 
 test("a harness-gate deny on the secondary eye does not degrade the dual to primary_only", () => {
