@@ -464,8 +464,8 @@ const DANGEROUS_BASH_DENYLIST = Object.freeze({
  * of the canonical keys are REMOVED before the canonical deny map is spread LAST after `"*"`
  * (OpenCode resolves permissions last-match-wins), so the canonical denies can only exist in the
  * final position and can never be shadowed by an earlier `"*": "allow"` or a source-supplied allow
- * for the same key. Not exported — only `enforceOpencodePermissions` and
- * `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
+ * for the same key. Not exported — only `buildDenyPreservingPermission` (invoked by
+ * `enforceOpencodePermissions`) and `HEADLESS_SAFE_PERMISSION_DEFAULTS` consume it.
  *
  * CAVEAT — scope of this guarantee: it covers `config.permission` ONLY. It does NOT cover
  * `config.agent.<name>.permission` (a separate rule set evaluated afterwards), `permission.bash`
@@ -591,9 +591,10 @@ function tryReadJsonObject(path) {
  * source can never replace the map wholesale, and a source deny/allow for one of the canonical paths
  * can never resurrect access to it. Three cases:
  * - source is a scalar `s` → `{ "*": <s if a valid action, else "allow">, ...OC_SECRET_READ_DENIES }`
- *   (an invalid scalar like `"banana"` falls back to `"allow"`, and `"ask"` is NOT propagated — it
- *   would reproduce the headless permission-ask hang this seed exists to prevent; `"allow"` mirrors
- *   the map branch's locked fallback, never `"deny"` which would block all reads and kill the run)
+ *   (a VALID scalar — `allow`/`ask`/`deny` — is propagated VERBATIM to the wildcard, mirroring the
+ *   map branch's pinned behaviour; only an INVALID scalar like `"banana"` falls back to `"allow"`.
+ *   NOTE: this means a source scalar `read: "ask"` still reaches the seeded config and would stall a
+ *   headless run — flagged as an open operator decision, deliberately NOT clamped here)
  * - source is a map `m` → the source `"*"` key is REMOVED from `m` (it can never be re-emitted later
  *   and would otherwise be displaced from index 0 by an integer-like key), but its VALUE survives as
  *   the first key's value when it is a valid action (`allow`/`ask`/`deny`), otherwise `"allow"`;
