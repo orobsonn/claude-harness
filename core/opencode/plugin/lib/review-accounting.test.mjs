@@ -791,7 +791,6 @@ test("classifyReviewBoundaryError labels harness-internal deny errors as gate_bl
   );
   assert.equal(classifyReviewBoundaryError("[plan-write-gate] delivery-blocked: canonical plan write denied"), "gate_blocked");
   assert.equal(classifyReviewBoundaryError("[marker-authority] seal mismatch"), "gate_blocked");
-  assert.equal(classifyReviewBoundaryError("[command-resolver] command not allowed"), "gate_blocked");
   // A genuine provider error is NOT reclassified.
   assert.equal(classifyReviewBoundaryError({ statusCode: 429, message: "rate limit" }), "rate_limited");
 });

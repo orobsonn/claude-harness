@@ -576,6 +576,56 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
   }
 });
 
+test("re-vendoring onto an already-vendored project deletes retired plugin files (no zombie auto-load)", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-"));
+  try {
+    const staleResolver = join(tempDir, ".opencode/plugin/command-resolver.ts");
+    const staleLib = join(tempDir, ".opencode/plugin/lib/command-resolver.mjs");
+    mkdirSync(dirname(staleResolver), { recursive: true });
+    mkdirSync(dirname(staleLib), { recursive: true });
+    writeFileSync(staleResolver, "// stale plugin from a prior vendor\n", "utf8");
+    writeFileSync(staleLib, "// stale lib from a prior vendor\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    assert.ok(!existsSync(staleResolver), "retired plugin file must be deleted on re-vendor");
+    assert.ok(!existsSync(staleLib), "retired plugin lib must be deleted on re-vendor");
+    // A live harness plugin planted the same run must survive untouched (only the exact
+    // retired paths are pruned — this is not a directory wipe).
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("retired-file prune matches exact case only — a same-name-different-case user plugin survives on a case-insensitive fs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-case-"));
+  try {
+    // Deliberately different case from the retired "command-resolver.ts" — on a
+    // case-insensitive filesystem (default macOS/Windows) a naive rmSync(join(dir, retiredName))
+    // would resolve and delete this file too, even though its real on-disk name differs.
+    const userPlugin = join(tempDir, ".opencode/plugin/Command-Resolver.ts");
+    mkdirSync(dirname(userPlugin), { recursive: true });
+    writeFileSync(userPlugin, "// user's own local plugin, unrelated to the harness one\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    assert.ok(existsSync(userPlugin), "a differently-cased user plugin must NOT be pruned");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("OpenCode vendor rejects a symlink target root before any external or partial write", () => {
   const parent = mkdtempSync(join(tmpdir(), "vendor-root-link-parent-"));
   const outside = mkdtempSync(join(tmpdir(), "vendor-root-link-outside-"));
