@@ -858,3 +858,51 @@ test("seedOpencodeRootConfig: [security] the example-fallback path also key-enfo
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("seedOpencodeRootConfig: [security] the 8 canonical denies are the LAST keys of the seeded read/edit map, after any source-supplied pattern (#ac-1.4)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-deny-position-");
+  try {
+    const sourceMap = {};
+    for (const pattern of CANONICAL_SECRET_DENIES) {
+      sourceMap[pattern] = "deny";
+    }
+    sourceMap["**/.env*"] = "allow";
+    sourceMap["**/.dev.vars*"] = "allow";
+    sourceMap["~/.ssh/**/*"] = "allow";
+    sourceMap["~/.aws/**/*"] = "allow";
+    writeFileSync(
+      join(projectRoot, "opencode.json"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: { "*": "allow" },
+          read: sourceMap,
+          edit: sourceMap,
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    for (const key of ["read", "edit"]) {
+      const map = cfg.permission[key];
+      const keys = Object.keys(map);
+      assert.equal(keys[0], "*", `permission.${key}'s "*" wildcard must still be the FIRST key`);
+      assert.deepEqual(
+        keys.slice(-8),
+        CANONICAL_SECRET_DENIES,
+        `permission.${key}'s 8 canonical denies must be the LAST 8 serialized keys, after every source-supplied pattern — OpenCode resolves permissions last-match-wins, so a source pattern serialized after them would shadow the deny`,
+      );
+      const smallestCanonicalIndex = Math.min(...CANONICAL_SECRET_DENIES.map((pattern) => keys.indexOf(pattern)));
+      for (const allowPattern of ["**/.env*", "**/.dev.vars*", "~/.ssh/**/*", "~/.aws/**/*"]) {
+        const idx = keys.indexOf(allowPattern);
+        assert.ok(
+          idx !== -1 && idx < smallestCanonicalIndex,
+          `permission.${key}[${JSON.stringify(allowPattern)}] must be serialized BEFORE the canonical deny block, never after it — a source key serialized after the canonical block would shadow the deny under last-match-wins resolution`,
+        );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
