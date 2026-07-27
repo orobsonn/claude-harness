@@ -638,23 +638,50 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
 
 // --- #486 oc-fleet-seed-migration ---------------------------------------------------------
 
-test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-git classes from settings.json — no OpenCode-only extras (sudo/rm-rf/chmod/nc/dd/fork-bomb/git-add/no-verify) (#ac-1.3, denylist_final)", () => {
+test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-git classes from settings.json plus the #499 fleet-only hardening classes (bash -c/node -e/python -c/npx/bunx/tar/source and their sibling spellings) — no OpenCode-only extras (sudo/rm-rf/chmod/nc/dd/fork-bomb/git-add/no-verify) (#ac-1.3, denylist_final)", () => {
   const denyKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
     .filter(([, value]) => value === "deny")
     .map(([key]) => key);
-  assert.equal(
-    denyKeys.length,
-    6,
-    `DANGEROUS_BASH_DENYLIST must carry exactly 6 deny keys — no extras, got ${JSON.stringify(denyKeys)}`,
-  );
-  for (const key of [
+  const expectedDenyKeys = [
     "git push --force*",
     "git push * --force*",
     "git push -f*",
     "git push * -f*",
     "git reset --hard*",
     "git clean -f*",
-  ]) {
+    "bash -c*",
+    "sh -c*",
+    "zsh -c*",
+    "*/bash -c*",
+    "env bash -c*",
+    "node -e*",
+    "node --eval*",
+    "node -p*",
+    "node --print*",
+    "python -c*",
+    "python3 -c*",
+    "python3.* -c*",
+    "python* -m*",
+    "npx *",
+    "npm exec*",
+    "npm x *",
+    "pnpm dlx*",
+    "yarn dlx*",
+    "bun x*",
+    "bunx *",
+    "tar -x*",
+    "tar --extract*",
+    "tar x*",
+    "unzip *",
+    "source *",
+    ". *",
+  ];
+  assert.deepEqual(
+    denyKeys,
+    expectedDenyKeys,
+    `DANGEROUS_BASH_DENYLIST deny keys drifted from the pinned list — no extras, none missing, order preserved (order is load-bearing for findLast). Got ${JSON.stringify(denyKeys)}`,
+  );
+  for (const key of expectedDenyKeys) {
     assert.equal(DANGEROUS_BASH_DENYLIST[key], "deny", `DANGEROUS_BASH_DENYLIST must deny ${JSON.stringify(key)}`);
   }
   for (const retiredClass of [
@@ -679,8 +706,194 @@ test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-
     assert.equal(
       Object.prototype.hasOwnProperty.call(DANGEROUS_BASH_DENYLIST, retiredClass),
       false,
-      `DANGEROUS_BASH_DENYLIST must no longer carry the OpenCode-only class ${JSON.stringify(retiredClass)} — Claude Code never denied it (parity)`,
+      `DANGEROUS_BASH_DENYLIST must not resurrect the #475-retired OpenCode-only class ${JSON.stringify(retiredClass)} — issue #499's scope is limited to bash -c/node -e/python -c/npx/bunx/tar/source, not the full pre-#475 wall`,
     );
+  }
+});
+
+test("DANGEROUS_BASH_DENYLIST: the FULL allow-key list is pinned — a future edit that widens or adds a carve-out must update this test, not slip in silently (the exact gap the compliance review caught: only deny keys were counted, so a new allow needed no review)", () => {
+  const allowKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
+    .filter(([, value]) => value === "allow")
+    .map(([key]) => key);
+  assert.deepEqual(allowKeys, [
+    "git push --force-with-lease*",
+    "git push * --force-with-lease*",
+    "npx tsc --noEmit*",
+    "npx github:orobsonn/claude-harness#v* init*",
+    "npx -y github:orobsonn/claude-harness#v* init*",
+    'npx -y "github:orobsonn/claude-harness#v*" init*',
+    "npx @orobsonn/claude-harness init*",
+    "npx @orobsonn/claude-harness setup-*",
+    "npx vitest*",
+    "npx jest*",
+    "npx mocha*",
+    "npx --no-install vitest*",
+    "npx --no-install jest*",
+    "npx --no-install mocha*",
+    "npx -y vitest*",
+    "npx -y jest*",
+    "npx -y mocha*",
+    "npx --yes vitest*",
+    "npx --yes jest*",
+    "npx --yes mocha*",
+  ], `DANGEROUS_BASH_DENYLIST allow keys drifted from the pinned list, got ${JSON.stringify(allowKeys)}`);
+});
+
+test("DANGEROUS_BASH_DENYLIST: #499 hardening denies bash -c, node -e, python -c/python3 -c, npx, bunx, tar extraction, source, AND the sibling spellings (sh -c/zsh -c/env bash -c, node --eval/-p/--print, python3.x -c, python -m, npm exec/x, pnpm/yarn dlx, bun x, tar --extract/tar x, unzip, dot-source) — the forms an adversarial round found still resolved allow (#ac-1.1, #uj-1)", () => {
+  const bash = { "*": "allow", ...DANGEROUS_BASH_DENYLIST };
+  bash["*"] = "allow";
+  for (const command of [
+    'bash -c "echo x"',
+    'sh -c "echo x"',
+    'zsh -c "echo x"',
+    '/bin/bash -c "echo x"',
+    'env bash -c "echo x"',
+    'node -e "1"',
+    'node --eval "1"',
+    'node -p "1"',
+    'node --print "1"',
+    'python -c "1"',
+    'python3 -c "1"',
+    'python3.12 -c "1"',
+    "python -m http.server",
+    "python3 -m pip install evil",
+    "npx anything",
+    "npm exec cowsay hi",
+    "npm x cowsay hi",
+    "pnpm dlx cowsay hi",
+    "yarn dlx cowsay hi",
+    "bun x cowsay hi",
+    "bunx anything",
+    "tar -xf x.tgz",
+    "tar --extract -f x.tgz",
+    "tar xf x.tgz",
+    "unzip x.zip",
+    "source ./x.sh",
+    ". ./x.sh",
+  ]) {
+    assert.equal(resolveBash(bash, command), "deny", `DANGEROUS_BASH_DENYLIST must deny ${JSON.stringify(command)}`);
+  }
+});
+
+test("DANGEROUS_BASH_DENYLIST: the #499 hardening does not deny the harness's own prescribed npx commands (typecheck gate, self-installer in BOTH documented forms, and the locked-test runner) that the fleet already runs in production (#ac-1.2, #uj-2, zero regression)", () => {
+  const bash = { "*": "allow", ...DANGEROUS_BASH_DENYLIST };
+  bash["*"] = "allow";
+  for (const command of [
+    // typecheck gate
+    "npx tsc --noEmit",
+    // self-installer — GitHub-ref form (README.md alternate form + pinned/legacy tag variants)
+    'npx -y "github:orobsonn/claude-harness#v0.51.0" init --target opencode',
+    'npx -y "github:orobsonn/claude-harness#v0.51.0" init --target claude',
+    'npx -y "github:orobsonn/claude-harness#v0.51.0" init --target both',
+    "npx github:orobsonn/claude-harness#v0.45.0 init --target opencode",
+    "npx -y github:orobsonn/claude-harness#v0.45.0 init --target opencode",
+    // self-installer — published npm-scoped package form (README.md:259/267/292)
+    "npx @orobsonn/claude-harness init --target opencode",
+    "npx @orobsonn/claude-harness setup-local",
+    "npx @orobsonn/claude-harness setup-vps",
+    // locked-test runner — core/shared/lib/validate-plan.mjs's isAllowlistedLockedTestCommand,
+    // prescribed by executor-{low,medium,high}.md and build.md against the frozen test snapshot
+    "npx vitest run tests/a.spec.ts",
+    "npx --no-install vitest run --reporter=json tests/a.spec.ts",
+    "npx -y vitest run tests/a.spec.ts",
+    "npx jest tests/a.spec.ts",
+    "npx mocha tests/a.spec.ts",
+  ]) {
+    assert.equal(resolveBash(bash, command), "allow", `DANGEROUS_BASH_DENYLIST must still allow the prescribed command ${JSON.stringify(command)}`);
+  }
+  // #ac-1.1 must still hold: the carve-outs are narrow enough that the AC's own generic sample
+  // (no runner/installer substring) still resolves deny.
+  assert.equal(resolveBash(bash, "npx anything"), "deny", "a generic npx invocation outside the prescribed set must still be denied");
+});
+
+test("DANGEROUS_BASH_DENYLIST: the npx runner/installer carve-outs are anchored at the START of the command — a substring-anywhere carve-out would let an attacker smuggle an allowed command past the new npx deny by appending the runner name as a trailing token", () => {
+  const bash = { "*": "allow", ...DANGEROUS_BASH_DENYLIST };
+  bash["*"] = "allow";
+  for (const command of [
+    "npx evil-package vitest",
+    "npx exfil-tool --config vitest.config.ts",
+    "npx curl-pipe-thing # vitest",
+    'npx some-pkg && cat ~/.ssh/id_rsa # jest',
+    "npx malicious-mocha-lookalike-tool",
+    "npx not-orobsonn/claude-harness-clone init",
+    "npx @orobsonn/claude-harness-not-really-ours x",
+    // #499 review round 2: the FIRST fix for the installer carve-out (`npx
+    // *orobsonn/claude-harness#*init*`) still had a leading `*` before the org name — it let an
+    // attacker's OWN package name (the actual thing npx executes) through as long as the literal
+    // substring "orobsonn/claude-harness#" and "init" appeared LATER in the same command string.
+    "npx -y evilpkg orobsonn/claude-harness# init",
+    "npx github:attacker/orobsonn/claude-harness#main init",
+  ]) {
+    assert.equal(resolveBash(bash, command), "deny", `an npx command that merely CONTAINS a carved-out runner/installer name must still be denied: ${JSON.stringify(command)}`);
+  }
+  // The legitimate, anchored forms must still resolve allow.
+  for (const command of [
+    "npx github:orobsonn/claude-harness#v0.45.0 init --target opencode",
+    "npx -y github:orobsonn/claude-harness#v0.45.0 init --target opencode",
+    'npx -y "github:orobsonn/claude-harness#v0.51.0" init --target opencode',
+  ]) {
+    assert.equal(resolveBash(bash, command), "allow", `the legitimate anchored installer form must still resolve allow: ${JSON.stringify(command)}`);
+  }
+});
+
+test("seedOpencodeRootConfig: #499 hardening survives the REAL 3-source merge (baseBash + exampleBash + DANGEROUS_BASH_DENYLIST) — the fleet's own prescribed npx allows are declared EARLY by the project's real opencode.json.example, and must still win over the new broad npx/bunx/etc denies added LAST by the denylist (#ac-1.1, #ac-1.2)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-499-hardening-");
+  try {
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "opencode.json.example"),
+      JSON.stringify({
+        permission: {
+          question: "deny",
+          external_directory: "allow",
+          bash: {
+            "*": "ask",
+            "npx tsc --noEmit": "allow",
+            'npx -y "github:orobsonn/claude-harness#v*" init --target opencode': "allow",
+            "npm test*": "allow",
+            "node*": "allow",
+            "git status*": "allow",
+          },
+        },
+      }),
+    );
+    seedOpencodeRootConfig(worktree, projectRoot);
+    const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
+    const bash = cfg.permission.bash;
+    // #ac-1.1: the new dangerous forms are denied even though they came through the full merge,
+    // not just the isolated DANGEROUS_BASH_DENYLIST constant.
+    for (const command of [
+      'bash -c "echo x"',
+      'node -e "1"',
+      'python3 -c "1"',
+      "npx anything",
+      "bunx anything",
+      "tar -xf x.tgz",
+      "source ./x.sh",
+    ]) {
+      assert.equal(resolveBash(bash, command), "deny", `seeded worktree must deny ${JSON.stringify(command)}`);
+    }
+    // #ac-1.2: the project's OWN early-declared prescribed npx allows (typecheck + installer) must
+    // NOT be shadowed by the new broad "npx *" deny appended after them by DANGEROUS_BASH_DENYLIST —
+    // this is the exact ordering hazard the [#499] doc comment on DANGEROUS_BASH_DENYLIST calls out.
+    assert.equal(resolveBash(bash, "npx tsc --noEmit"), "allow", "npx typecheck gate must not regress");
+    assert.equal(
+      resolveBash(bash, 'npx -y "github:orobsonn/claude-harness#v0.51.0" init --target opencode'),
+      "allow",
+      "npx self-installer must not regress",
+    );
+    // #ac-1.2: the npm-scoped installer form and the locked-test runner are NOT declared by this
+    // project's own opencode.json.example fixture above — they only survive because
+    // DANGEROUS_BASH_DENYLIST itself carries the carve-out, proving the fix does not depend on a
+    // consumer project happening to declare these commands.
+    assert.equal(resolveBash(bash, "npx @orobsonn/claude-harness init --target opencode"), "allow", "npm-scoped installer must not regress");
+    assert.equal(resolveBash(bash, "npx vitest run tests/a.spec.ts"), "allow", "locked-test runner (vitest) must not regress");
+    assert.equal(resolveBash(bash, "npx jest tests/a.spec.ts"), "allow", "locked-test runner (jest) must not regress");
+    // Untouched prescribed commands must resolve exactly as before.
+    assert.equal(resolveBash(bash, "npm test foo"), "allow");
+    assert.equal(resolveBash(bash, "node script.js"), "allow");
+    assert.equal(resolveBash(bash, "git status"), "allow");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -936,6 +1149,32 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source stil
       "git push * -f*": "deny",
       "git reset --hard*": "deny",
       "git clean -f*": "deny",
+      "bash -c*": "deny",
+      "sh -c*": "deny",
+      "zsh -c*": "deny",
+      "*/bash -c*": "deny",
+      "env bash -c*": "deny",
+      "node -e*": "deny",
+      "node --eval*": "deny",
+      "node -p*": "deny",
+      "node --print*": "deny",
+      "python -c*": "deny",
+      "python3 -c*": "deny",
+      "python3.* -c*": "deny",
+      "python* -m*": "deny",
+      "npx *": "deny",
+      "npm exec*": "deny",
+      "npm x *": "deny",
+      "pnpm dlx*": "deny",
+      "yarn dlx*": "deny",
+      "bun x*": "deny",
+      "bunx *": "deny",
+      "tar -x*": "deny",
+      "tar --extract*": "deny",
+      "tar x*": "deny",
+      "unzip *": "deny",
+      "source *": "deny",
+      ". *": "deny",
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
