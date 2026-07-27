@@ -19,9 +19,15 @@
  * a shell treats identically to `npx evil`) fails EVERY pattern in this list — including the 6
  * pre-existing git denies — and falls through to `"*": "allow"`. No pattern rewrite closes this; it
  * is a property of the matcher itself, present before and independent of this hardening.
- * `resolveDangerousBashCommand` below does NOT replicate this specific matcher normalization —
- * it has no leading-backslash special case, so it independently closes that one documented bypass
- * for the plugin-level choke-point (issue #516) without needing to touch the native OC matcher.
+ * **`resolveDangerousBashCommand` below does NOT close this bypass either** (verified empirically
+ * during the #516 post-merge review, 2026-07-27): `matchesBashPattern` is a plain `^pattern$` regex
+ * anchor against the literal command string with no backslash normalization of its own, so
+ * `\npx evil` fails every pattern here the same way it fails the native OC matcher and resolves
+ * `allow` at BOTH layers. This remains an open, accepted risk in the same class as the leading-`\`
+ * gap #499 already documented — string-match defense-in-depth, not a sandbox; closing it would
+ * require normalizing the segment the same way the native matcher does before calling
+ * `matchesBashPattern`, tracked as follow-up rather than blocking #516 (whose actual scope was the
+ * agent-permission-override bypass, which IS closed — see `[security, CLOSED by #516]` below).
  *
  * [#486 oc-fleet-seed-migration] The 6 destructive-git denies mirror Claude Code exactly
  * (`core/claude-code/settings.json` `permissions.deny`) — parity decision recorded in
