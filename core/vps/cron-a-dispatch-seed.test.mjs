@@ -922,6 +922,21 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source stil
     assert.equal(existsSync(join(worktree, ".opencode/plugin/obs-eye.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(cfg.permission.question, "deny");
+    // This fixture has no opencode.json.example anywhere either (writeMinimalOcRuntime doesn't
+    // write one) — same starved-permission-source shape as a real double-fault. Pin the actual
+    // resulting deny set here (not just DANGEROUS_BASH_DENYLIST's own shape, already covered
+    // elsewhere) so a future regression in the [baseBash, exampleBash, DANGEROUS_BASH_DENYLIST]
+    // union — the exact class of bug issue #282 was about — fails THIS executable path, not just
+    // a structural assertion on the constant in isolation.
+    const denyKeys = Object.fromEntries(Object.entries(cfg.permission.bash).filter(([, v]) => v === "deny"));
+    assert.deepEqual(denyKeys, {
+      "git push --force*": "deny",
+      "git push * --force*": "deny",
+      "git push -f*": "deny",
+      "git push * -f*": "deny",
+      "git reset --hard*": "deny",
+      "git clean -f*": "deny",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
