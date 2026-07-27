@@ -929,7 +929,7 @@ function writeMinimalPermissionExample(projectRoot) {
   );
 }
 
-test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission entry (still equal to its ledger historicalValue, project generation at/before the shipping cutoff) seeds a worktree CLEAN of it (#ac-1.1)", () => {
+test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission entry (still equal to its ledger historicalValue, harness provenance present) seeds a worktree CLEAN of it (#ac-1.1)", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-drop-");
   try {
     writeMinimalPermissionExample(projectRoot);
@@ -942,13 +942,15 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
           bash: {
             "*": "allow",
             "npx github:orobsonn/claude-harness#* init*": "allow",
+            // NOT in the ledger (issue #513 adversarial finding): no evidence the harness ever
+            // shipped this wildcard form — the shipped default has always been the narrower
+            // "git pull" (no wildcard) — so it must survive untouched, never dropped as "retired".
             "git pull*": "allow",
           },
         },
       }),
     );
     mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
-    // Bare SHA stamp — normalizes to generation zero, at/before every ledger entry's cutoff.
     writeFileSync(join(projectRoot, ".opencode", ".harness-version"), "a1b2c3d4e5f6\n");
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
@@ -958,9 +960,9 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
       "the retired unpinned npx wildcard key must be dropped from the seeded worktree config",
     );
     assert.equal(
-      Object.prototype.hasOwnProperty.call(cfg.permission.bash, "git pull*"),
-      false,
-      "the retired git pull* wildcard key must be dropped from the seeded worktree config",
+      cfg.permission.bash["git pull*"],
+      "allow",
+      "git pull* is NOT a ledger entry (no evidence it was ever a harness default) — it must survive, not be dropped",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -995,7 +997,7 @@ test("seedOpencodeRootConfig: an operator custom bash deny that is NOT in the re
   }
 });
 
-test("seedOpencodeRootConfig: a retired-shaped entry whose project generation is PAST the ledger's shipping cutoff is treated as an operator customization and survives (#ac-1.2)", () => {
+test("issue #513 ac-1: seedOpencodeRootConfig drops a retired-shaped entry by content match EVEN WHEN the project's version stamp is newer than the ledger's historical shipping generation", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-retired-past-cutoff-");
   try {
     writeMinimalPermissionExample(projectRoot);
@@ -1010,15 +1012,16 @@ test("seedOpencodeRootConfig: a retired-shaped entry whose project generation is
       }),
     );
     mkdirSync(join(projectRoot, ".opencode"), { recursive: true });
-    // Ledger entry for this exact key ships only through v0.45.0 — a project vendored well after
-    // that could never have received it from the harness, so it must be the operator's own doing.
+    // Real-population case #513 reports: seeded before the entry's retirement, re-vendored after it
+    // (while the fleet-seed migration engine itself didn't exist yet) — a version stamp well past
+    // the entry's historical last-shipped generation, still carrying the exact retired value.
     writeFileSync(join(projectRoot, ".opencode", ".harness-version"), "v0.49.0\n");
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.equal(
-      cfg.permission.bash["npx github:orobsonn/claude-harness#* init*"],
-      "allow",
-      "a project generation past the ledger's shippedThroughGeneration must keep the entry — it can't have come from the harness default",
+      Object.prototype.hasOwnProperty.call(cfg.permission.bash, "npx github:orobsonn/claude-harness#* init*"),
+      false,
+      "a retired key must be dropped by content match alone, regardless of the project's own generation stamp — the project HAS harness provenance (a legible .harness-version stamp), so a coincidental match cannot be the operator's own doing",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1039,7 +1042,7 @@ test("seedOpencodeRootConfig: with no readable .harness-version and no manifest,
         },
       }),
     );
-    // No .opencode/.harness-version and no manifest — projectGeneration cannot be determined.
+    // No .opencode/.harness-version and no manifest — zero harness provenance.
     seedOpencodeRootConfig(worktree, projectRoot);
     const cfg = JSON.parse(readFileSync(join(worktree, "opencode.json"), "utf8"));
     assert.equal(

@@ -9,24 +9,33 @@
  *   - anti-stale (NEW-2): fix-mode engages only when the reviewed sha matches the PR head; a mismatch
  *     / gh error / empty scope falls back to normal mode, and any stale findings file is pruned.
  *
- * #ac-2.1 (issue #488): the OTHER half of fix-mode — whether the sniper TASK DISPATCH composed
- * above actually survives the real 5-plugin OpenCode gate chain (planner-recovery → plan-gate →
- * obs-hand → loop-guard → entry-gate, docs/OC-CC-PARITY-REPORT.md §2). The tests above never
- * exercised this: they only assert what cron-a-dispatch.mjs COMPOSES for tmux, never what the
- * OpenCode plugin chain does with it once dispatched. Two `chain:`/`#ac-3.1` tests below cover the
- * two shapes that matter:
- *   - a REALISTIC fresh fix-mode gate-state (classify/mode stamped — triaging-requests always runs
- *     at session start per core/CLAUDE.md; recorded prior dual/plan_verdict; no planner ceremony/
- *     binding/regate/fidelity) survives all 5 plugins (#ac-3.1, below).
+ * #ac-2.1 (issue #488) / #ac-3 (issue #513): the OTHER half of fix-mode — whether the sniper TASK
+ * DISPATCH composed above actually survives the real 5-plugin OpenCode gate chain
+ * (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate,
+ * docs/OC-CC-PARITY-REPORT.md §2). The tests above never exercised this: they only assert what
+ * cron-a-dispatch.mjs COMPOSES for tmux, never what the OpenCode plugin chain does with it once
+ * dispatched. Three tests below cover the shapes that matter:
+ *   - a REALISTIC fresh fix-mode gate-state (classify/mode stamped; recorded prior dual/
+ *     plan_verdict; no planner ceremony/binding/regate/fidelity) survives all 5 plugins
+ *     (#ac-3.1, below).
  *   - a genuinely COLD/EMPTY gate-state (no `.opencode/plans/.state/<sid>/gate-state.json` at all)
  *     is DENIED at entry-gate's Gate 1 (CC parity, #485/#509: every delivery role — sniper included
- *     — requires a classified mode of LIGHT/FULL). This is the honest current behavior, not the
- *     hoped-for one: `FIX_MODE_TRIGGER` (cron-a-dispatch.mjs:247) — unlike `TRIGGER_PROMPT` and
- *     `OPENCODE_TRIGGER_PROMPT` — never instructs the session to follow the vendored entry policy,
- *     so whether a real fix-mode session actually runs `triaging-requests`/classify before
- *     dispatching the sniper is model-judgment, not code-guaranteed. See the tracking issue this
- *     PR opens for closing that gap; this test intentionally asserts the DENY, not survival, so it
- *     regresses loudly if Gate 1 is ever silently loosened instead of the trigger being fixed.
+ *     — requires a classified mode of LIGHT/FULL). This is intentional, correct-by-design behavior
+ *     (Gate 1 itself is out of #513's scope) — the `chain:` test asserts the DENY so it regresses
+ *     loudly if Gate 1 is ever silently loosened.
+ *   - issue #513's fix: `FIX_MODE_TRIGGER` (cron-a-dispatch.mjs:247) now explicitly instructs the
+ *     session to call the `classify` tool DIRECTLY (mode LIGHT, fixed — not routed through the full
+ *     `triaging-requests` protocol, whose own rubric could land a small fix on QUICK, which Gate 1
+ *     also denies) BEFORE dispatching the sniper — unlike before, where only `TRIGGER_PROMPT`/
+ *     `OPENCODE_TRIGGER_PROMPT` pointed the session at the entry policy. The `#ac-3` test below
+ *     proves the CONDITIONAL consequence: IF a session follows that instruction and classify
+ *     genuinely runs (simulated by calling the real classify pipeline against a cold root, not a
+ *     fixture edited to inject the field), the sniper dispatch survives the same real chain the
+ *     `chain:` test denies. What it does NOT prove — and cannot, by test alone — is that a real
+ *     session actually FOLLOWS the trigger's instruction: that stamp is still model-invoked, never a
+ *     code guarantee. The trigger text is the strongest lever available at this issue's scope
+ *     (FIX_MODE_TRIGGER prose only, no plugin/gate code); closing the "model ignores the
+ *     instruction" residual risk would require a code-level guarantee outside #513's scope.
  *
  * Run with: HARNESS_MEM_GUARD_BYTES=0 node --test core/vps/cron-a-dispatch-fixmode.test.mjs
  * (the memory guard in cron-a-dispatch.mjs's `dispatch()` fails 4 of the tests above under low free
@@ -37,6 +46,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
 import { createPlannerRecoveryHooks } from "../opencode/plugin/planner-recovery.ts";
@@ -45,6 +56,74 @@ import { createObsHandHooks } from "../opencode/plugin/obs-hand.ts";
 import { createLoopGuardHooks } from "../opencode/plugin/loop-guard.ts";
 import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
 import { sealedMarkerRecord } from "../opencode/plugin/lib/marker-seal.mjs";
+import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
+import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
+import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
+import { persistClassifyArtifacts } from "../opencode/tools/lib/classify-persist.mjs";
+import { plannerCycleResetPatch } from "../opencode/plugin/lib/planner-state.mjs";
+
+/**
+ * Reconstructs, from its real pure sub-functions, exactly what `core/opencode/tools/classify.ts`'s
+ * `executeClassify` does for a fresh (never-classified) session at mode LIGHT. The `classify`
+ * native tool itself cannot be imported in this test process — it statically imports
+ * `@opencode-ai/plugin/tool` (the OpenCode host SDK), which is not installed outside a real
+ * OpenCode runtime — so this repo's own convention (classify-persist.test.mjs,
+ * classify-stub.test.mjs, classify-authority.test.mjs) is to exercise the underlying pure
+ * functions directly rather than the tool wrapper. This is the SAME sequence classify.ts runs
+ * (authority check → transition decision → stub build → persist), calling the real production
+ * functions unmodified — not a hand-crafted gate-state fixture.
+ */
+function runRealClassify({ root, sessionId, featureId, mode }) {
+  const auth = decideClassifyAuthority({ agent: "", parentSessionId: null, sessionId });
+  if (!auth.ok) throw new Error(`classify authority denied: ${auth.reason}`);
+
+  const gsPath = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId });
+  if (!gsPath.ok) throw new Error(`invalid gate-state path: ${gsPath.reason}`);
+
+  const transition = decideClassifyTransition({
+    requestedMode: mode,
+    requestedFeatureId: featureId,
+    currentMode: undefined,
+    currentFeatureId: undefined,
+    peakMode: undefined,
+    classified: false,
+  });
+  if (!transition.ok) throw new Error(`classify transition denied: ${transition.reason}`);
+  // This helper only reconstructs classify.ts's "fresh" branch (a genuinely cold, never-classified
+  // session) — if the transition ever resolves to noop/escalate here, the helper's hand-written
+  // statePatch below would silently diverge from what classify.ts actually persists in that branch.
+  if (transition.action !== "fresh") {
+    throw new Error(`runRealClassify only models the "fresh" transition; got "${transition.action}"`);
+  }
+
+  const built = buildClassifyStub({ mode: transition.mode, featureId: transition.featureId, sessionId });
+  if (!built.ok) throw new Error(`classify stub build failed: ${built.reason}`);
+
+  const pd = planDir({ projectRoot: root, runtime: "opencode", sessionId, featureId: transition.featureId });
+  if (!pd.ok) throw new Error(`invalid plan path: ${pd.reason}`);
+  const planPath = path.join(pd.path, "execution-plan.json");
+
+  const statePatch = {
+    session_id: sessionId,
+    feature_id: transition.featureId,
+    mode: transition.mode,
+    peak_mode: transition.peakMode,
+    classified: true,
+    triaged: true,
+    brainstormed: false,
+    brainstormed_binding: null,
+    adversary_fired: false,
+    adversary_fired_binding: null,
+    ceremony_generation: crypto.randomUUID(),
+    ceremony_evidence: {},
+    marker_seals: null,
+    ...plannerCycleResetPatch(),
+  };
+
+  const persisted = persistClassifyArtifacts({ planPath, stub: built.stub, statePath: gsPath.path, statePatch });
+  if (!persisted.ok) throw new Error(`classify persistence failed: ${persisted.reason}`);
+  return persisted.state;
+}
 
 function makeTempDirs() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-dispatch-"));
@@ -118,6 +197,26 @@ test("#ac-1.1 fix-mode: resumed rejected PR with matching-sha findings → sessi
     assert.ok(/sniper loop/.test(cmd), "the trigger must run only the sniper loop");
     assert.ok(!/Follow the vendored .claude\/ entry policy and orchestrating-delivery/.test(cmd),
       "fix-mode must NOT use the normal full-pipeline trigger");
+
+    // #ac-2 (issue #513): the trigger must instruct calling `classify` (mode LIGHT) BEFORE
+    // dispatching the sniper — the gap this issue closes. It must call classify DIRECTLY rather than
+    // routing through the full triaging-requests mode-selection protocol (adversarial finding: that
+    // protocol's own rubric could land a small review-findings fix on QUICK, which Gate 1 also
+    // denies — reproducing the exact failure this fix exists to avoid). Order matters: the classify
+    // instruction must precede "sniper loop" in the composed prompt, mirroring the real sequence a
+    // compliant session must follow (classify, then dispatch).
+    assert.ok(/`classify`/.test(cmd), "the trigger must name the classify tool (#513 ac-2)");
+    assert.ok(/\bLIGHT\b/.test(cmd), "the trigger must specify mode LIGHT for the classify step (#513 ac-2)");
+    assert.ok(
+      /triaging-requests\/oc-triaging-requests protocol to pick the mode/.test(cmd),
+      "the trigger must explicitly steer away from the full triaging-requests mode-selection protocol, which could land on QUICK (#513 ac-2)",
+    );
+    const classifyIdx = cmd.search(/`classify`/);
+    const sniperLoopIdx = cmd.search(/sniper loop/);
+    assert.ok(
+      classifyIdx >= 0 && sniperLoopIdx >= 0 && classifyIdx < sniperLoopIdx,
+      "the classify instruction must come BEFORE the sniper-loop dispatch instruction in the trigger",
+    );
 
     const env = readEnvFile(stateDir, 42);
     assert.ok(/HARNESS_FIX_MODE='?1'?/.test(env), "HARNESS_FIX_MODE=1 must be threaded into the env-file (deterministic skip signal)");
@@ -377,5 +476,84 @@ test("chain: sniper Task dispatch with a TRULY COLD/EMPTY gate-state (no gate-st
     assert.match(result.message, /ceremony missing/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// #ac-3 (issue #513) — the literal form of #488's original #ac-2.1: a sniper Task dispatch from a
+// TRULY COLD gate-state survives the real 5-plugin chain WHEN classify has genuinely run first
+// (mode LIGHT) — not because this test injects `{classified, mode}` into a hand-written fixture (the
+// exact shortcut the `chain:` test above documents as illegitimate). This is a CONDITIONAL proof:
+// FIX_MODE_TRIGGER (edited above, cron-a-dispatch.mjs:247) now instructs the session to call
+// classify directly before dispatching the sniper, but whether a real session follows that
+// instruction remains model-judgment, not code-guaranteed (see the file header docstring). What
+// this test proves is the consequence, not the compliance: IF classify runs — via the REAL classify
+// pipeline (runRealClassify, defined above — the exact pure sub-functions
+// `core/opencode/tools/classify.ts` itself calls; see that helper's docstring for why the tool
+// wrapper can't be imported directly in this test process) against a genuinely empty root — THEN the
+// sniper dispatch survives the same unmodified real chain the `chain:` test denies.
+test("#ac-3 (issue #513): once classify has genuinely run first (mode LIGHT), a sniper Task dispatch survives the real 5-plugin chain from a truly cold start — not a field injected into a fixture", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-classify-"));
+  try {
+    const sessionId = "ses_fixmode_classify_513";
+    const featureId = "feat-fixmode-classify-513";
+
+    // Nothing on disk yet — same cold start as the `chain:` test above. Simulate a session that
+    // followed FIX_MODE_TRIGGER's new instruction by actually running the real classify pipeline
+    // before the sniper dispatch.
+    const persistedState = runRealClassify({ root, sessionId, featureId, mode: "LIGHT" });
+    assert.equal(persistedState.classified, true, "classify must persist classified:true");
+    assert.equal(persistedState.mode, "LIGHT", "classify must persist mode LIGHT");
+
+    const input = { tool: "task", sessionID: sessionId, callID: "call-fixmode-classify-1" };
+    const output = {
+      args: {
+        prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-fix"}[/HARNESS_TASK_CONTEXT]\nFix the reported bug.`,
+        subagent_type: "sniper-high",
+        feature_id: featureId,
+        task_id: "t0-fix",
+      },
+    };
+
+    const result = await runDispatchChain(root, input, output);
+    assert.equal(
+      result.survived,
+      true,
+      `expected the sniper dispatch to survive once classify genuinely ran first; denied at ${result.deniedAt}: ${result.message}`,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Drift guard (adversarial finding on #513): `runRealClassify` above hand-writes the "fresh" branch
+// of classify.ts's statePatch instead of calling it (see runRealClassify's docstring for why the
+// tool wrapper can't be imported here). That duplication has no lock-step tie to classify.ts — if a
+// future change adds/renames a field there, this test file could keep passing while silently
+// modeling a state the real system no longer produces. This test fails loudly instead: every literal
+// key the helper writes must still appear in classify.ts's own "fresh" statePatch block.
+test("drift guard: runRealClassify's hand-written statePatch keys all still appear in classify.ts's real 'fresh' branch", () => {
+  const classifyTsPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../opencode/tools/classify.ts");
+  const src = fs.readFileSync(classifyTsPath, "utf8");
+  const freshKeys = [
+    "session_id",
+    "feature_id",
+    "mode",
+    "peak_mode",
+    "classified",
+    "triaged",
+    "brainstormed",
+    "brainstormed_binding",
+    "adversary_fired",
+    "adversary_fired_binding",
+    "ceremony_generation",
+    "ceremony_evidence",
+    "marker_seals",
+    "plannerCycleResetPatch",
+  ];
+  for (const key of freshKeys) {
+    assert.ok(
+      src.includes(key),
+      `runRealClassify hand-writes "${key}" as part of classify.ts's fresh statePatch, but classify.ts no longer mentions it — the test helper has drifted from production`,
+    );
   }
 });

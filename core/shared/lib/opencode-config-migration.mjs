@@ -5,43 +5,53 @@ export const MANIFEST_FILENAME = ".harness-config-manifest.json";
 
 /**
  * Ledger of retired `permission.*` entries. A project's current value for `path` is safe to
- * drop (or force-upgrade to the new generation's value) only when BOTH hold: it still EQUALS
- * `historicalValue` (the operator never touched it) AND the project's own generation is at or
- * before `shippedThroughGeneration` (the last generation that actually shipped this default —
- * a project vendored after that point could never have received it from the harness, so an
- * identical key+value there is the operator's own doing, not a stale harness default). Any
- * other value, or a project generation past the cutoff, is an operator customization and must
- * survive the migration untouched.
+ * drop (or force-upgrade to the new generation's value) when it still EQUALS `historicalValue`
+ * (the operator never touched it) AND the project has ANY harness provenance — a manifest or a
+ * legible `.harness-version` stamp, proof the harness vendored this project at some point.
+ *
+ * Retirement is deliberately NOT gated by which generation that stamp shows (issue #513): the
+ * original design additionally required the project's generation to be at or before the
+ * entry's last-shipped generation, on the premise that "a project vendored after that point
+ * could never have received it from the harness, so an identical key+value there must be the
+ * operator's own doing." That premise is false for the real population — a project seeded
+ * BEFORE an entry's retirement and re-vendored AFTER it (while the migration engine itself
+ * still didn't exist, #503) carries the legacy key alongside a version stamp that already
+ * cleared the cutoff, and a generation-gated ledger leaves it stuck forever. Content match is
+ * the sole discriminator once provenance is established; a project with ZERO provenance (never
+ * vendored by the harness — no manifest, no stamp) is the one case where a coincidentally
+ * matching value can only be the operator's own doing, and that case alone survives untouched.
  */
 export const RETIRED_OC_PERMISSION_ENTRIES = Object.freeze([
   Object.freeze({
     path: Object.freeze(["bash", "npx github:orobsonn/claude-harness#* init*"]),
     historicalValue: "allow",
     // last shipped in v0.45.0 (core/opencode/opencode.json.example); replaced by the pinned #v* set in v0.45.1 (#359)
-    shippedThroughGeneration: Object.freeze({ major: 0, minor: 45, patch: 0 }),
   }),
   Object.freeze({
     path: Object.freeze(["bash", "npx -y github:orobsonn/claude-harness#* init*"]),
     historicalValue: "allow",
-    shippedThroughGeneration: Object.freeze({ major: 0, minor: 45, patch: 0 }),
+    // last shipped in v0.45.0; replaced by the pinned #v* set in v0.45.1 (#359)
   }),
   Object.freeze({
     path: Object.freeze(["bash", 'npx -y "github:orobsonn/claude-harness#*" init*']),
     historicalValue: "allow",
-    shippedThroughGeneration: Object.freeze({ major: 0, minor: 45, patch: 0 }),
-  }),
-  Object.freeze({
-    path: Object.freeze(["bash", "git pull*"]),
-    historicalValue: "allow",
-    // predates opencode.json.example (introduced v0.39.0) — no tagged evidence; gate to generation zero only
-    shippedThroughGeneration: Object.freeze({ major: 0, minor: 0, patch: 0 }),
+    // last shipped in v0.45.0; replaced by the pinned #v* set in v0.45.1 (#359)
   }),
   Object.freeze({
     path: Object.freeze(["bash", "*"]),
     historicalValue: "allow",
-    shippedThroughGeneration: Object.freeze({ major: 0, minor: 0, patch: 0 }),
+    // the original catch-all default (superseded by "ask" in the current generation) — reproduced
+    // empirically in a real vendored project (issue #513: victor-bot, .harness-version v0.45.3)
   }),
 ]);
+// `["bash", "git pull*"]` was DELIBERATELY left out of this ledger (adversarial finding on #513):
+// its own removed comment admitted "predates opencode.json.example — no tagged evidence of when it
+// stopped shipping", and the harness's shipped default has always been the narrower `"git pull"`
+// (no wildcard) — `git pull*` is exactly the form an operator would author by hand to cover
+// `git pull origin main` / `git pull --rebase`. With content-based retirement (no generation gate),
+// keeping this low-confidence entry would silently strip a plausible operator customization from
+// every provenanced project; without real evidence it was ever a harness default, it does not
+// belong in a ledger whose entire premise is "prove the harness authored this."
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -100,19 +110,6 @@ export function normalizeOcVersionStamp(stamp) {
 }
 
 /**
- * @description Compares two normalized generations numerically.
- * @param {{major:number,minor:number,patch:number}} a
- * @param {{major:number,minor:number,patch:number}} b
- * @returns {-1 | 0 | 1}
- */
-function compareGeneration(a, b) {
-  if (a.major !== b.major) return a.major < b.major ? -1 : 1;
-  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
-  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
-  return 0;
-}
-
-/**
  * @description Structural shape check run as a validation gate right before the atomic rename —
  * catches a migration that produced something un-writable-as-config before it ever reaches disk.
  * @param {unknown} config
@@ -131,18 +128,19 @@ export function isValidOpencodeConfigShape(config) {
  * @param {unknown} existingNode - value at `path` in the project's current config
  * @param {unknown} newNode - value at `path` in the new generation's canonical config
  * @param {unknown} ownedNode - value at `path` the manifest recorded as harness-written (tier 1)
- * @param {Map<string, {path: string[], historicalValue: unknown, shippedThroughGeneration: {major:number,minor:number,patch:number}}>} ledgerByPath
- * @param {{major:number,minor:number,patch:number} | null} projectGeneration - normalized stamp of
- *   the project's own last-vendored generation; a ledger match only applies at or before the
- *   entry's `shippedThroughGeneration` (a project newer than that never received it from the harness)
+ * @param {Map<string, {path: string[], historicalValue: unknown}>} ledgerByPath
+ * @param {boolean} hasHarnessProvenance - whether the harness has EVER vendored this project (a
+ *   manifest or a legible `.harness-version` stamp) — a ledger content match only applies when
+ *   this holds; a project with no provenance keeps a coincidentally matching value untouched,
+ *   since there it can only be the operator's own doing (issue #513)
  * @returns {{ value: unknown, owned: unknown, report: Array<Record<string, unknown>> }}
  */
-function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration) {
+function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, hasHarnessProvenance) {
   function ledgerMatches(childPath, value) {
+    if (!hasHarnessProvenance) return false;
     const entry = ledgerByPath.get(pathKey(childPath));
-    if (entry === undefined || !deepEqual(value, entry.historicalValue)) return false;
-    if (projectGeneration === null) return false;
-    return compareGeneration(projectGeneration, entry.shippedThroughGeneration) <= 0;
+    if (entry === undefined) return false;
+    return deepEqual(value, entry.historicalValue);
   }
 
   // Recurse only when both sides agree the node is a map (or the key is simply new). A type
@@ -159,7 +157,7 @@ function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, project
 
     for (const key of Object.keys(newNode)) {
       const childPath = [...path, key];
-      const result = mergeNode(childPath, existingObj[key], newNode[key], ownedObj[key], ledgerByPath, projectGeneration);
+      const result = mergeNode(childPath, existingObj[key], newNode[key], ownedObj[key], ledgerByPath, hasHarnessProvenance);
       mergedObj[key] = result.value;
       if (result.owned !== undefined) ownedOut[key] = result.owned;
       report.push(...result.report);
@@ -234,9 +232,9 @@ export function migrateOpencodeConfig({
   const ownedRoot = manifest && isPlainObject(manifest.owned) ? manifest.owned : {};
   const existingPermission = isPlainObject(existingConfig?.permission) ? existingConfig.permission : {};
   const newPermission = isPlainObject(newConfig?.permission) ? newConfig.permission : {};
-  const projectGeneration = normalizeOcVersionStamp(previousHarnessVersionStamp ?? manifest?.harnessVersion ?? null);
+  const hasHarnessProvenance = tier !== 3;
 
-  const merged = mergeNode([], existingPermission, newPermission, ownedRoot, ledgerByPath, projectGeneration);
+  const merged = mergeNode([], existingPermission, newPermission, ownedRoot, ledgerByPath, hasHarnessProvenance);
 
   return {
     config: { ...existingConfig, permission: merged.value },
