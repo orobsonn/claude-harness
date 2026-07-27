@@ -5,6 +5,38 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.50.0](https://github.com/orobsonn/claude-harness/compare/v0.49.8...v0.50.0) (2026-07-27)
+
+
+### Features
+
+* **oc:** motor de migração de opencode.json entre gerações do harness ([#503](https://github.com/orobsonn/claude-harness/issues/503)) ([5867da7](https://github.com/orobsonn/claude-harness/commit/5867da7052d8f9b9d05759bd5ef546762e0af13a)), closes [#479](https://github.com/orobsonn/claude-harness/issues/479)
+* **oc:** nega leitura e edição de arquivo de segredo por config, à prova de sobrescrita ([#492](https://github.com/orobsonn/claude-harness/issues/492)) ([3998416](https://github.com/orobsonn/claude-harness/commit/399841615cda6f1ef240af53b5fb7abccf0c84d7)), closes [#471](https://github.com/orobsonn/claude-harness/issues/471)
+* **oc:** remove muralha anti-forgery de bash-decide.mjs, adiciona canal advisory ([#497](https://github.com/orobsonn/claude-harness/issues/497)) ([0753387](https://github.com/orobsonn/claude-harness/commit/07533873d510be8a98413d4d1642fbeaed26ea76)), closes [#475](https://github.com/orobsonn/claude-harness/issues/475)
+* **oc:** trava ordem da cadeia de dispatch + sinal de harness desatualizado ([#502](https://github.com/orobsonn/claude-harness/issues/502)) ([a4664ed](https://github.com/orobsonn/claude-harness/commit/a4664ed6c25bfe41977844e3eeb644478d088be1)), closes [#478](https://github.com/orobsonn/claude-harness/issues/478)
+* **vps:** feed-per-task-steps — Conformidade/Adversarial/Segurança/Correção cirúrgica/Portões no feed ([#498](https://github.com/orobsonn/claude-harness/issues/498)) ([e86a98c](https://github.com/orobsonn/claude-harness/commit/e86a98cab8fd25d629900d3c51db386e5f142738)), closes [#491](https://github.com/orobsonn/claude-harness/issues/491)
+
+
+### Bug Fixes
+
+* **cc:** settings.json de projeto vendorizado ganha merge real, não fica só em sidecar órfão ([#507](https://github.com/orobsonn/claude-harness/issues/507)) ([774b882](https://github.com/orobsonn/claude-harness/commit/774b88214b37c852679ebe01f38561b9155aff82))
+* **gate-state:** escopa validação de dual-fields ao delta do patch ([#494](https://github.com/orobsonn/claude-harness/issues/494)) ([26f6ed9](https://github.com/orobsonn/claude-harness/commit/26f6ed988262c1d31e85382778647422d7d5e9b0)), closes [#474](https://github.com/orobsonn/claude-harness/issues/474)
+* **oc:** alinha o portão de entrega bash do OpenCode ao do Claude Code ([#505](https://github.com/orobsonn/claude-harness/issues/505)) ([5fa444a](https://github.com/orobsonn/claude-harness/commit/5fa444a1925714ff93b4cf717cbb78524606fb56)), closes [#481](https://github.com/orobsonn/claude-harness/issues/481)
+* **oc:** condiciona plan-gate ao binding real do planner ([#476](https://github.com/orobsonn/claude-harness/issues/476)) ([#500](https://github.com/orobsonn/claude-harness/issues/500)) ([115185c](https://github.com/orobsonn/claude-harness/commit/115185cc41a6ecfd1d468d48dd37f6c0d405e20f))
+* **oc:** endurece DANGEROUS_BASH_DENYLIST da frota contra bash -c/npx/tar/source ([#517](https://github.com/orobsonn/claude-harness/issues/517)) ([00e6e46](https://github.com/orobsonn/claude-harness/commit/00e6e4633dbba0262c7a1fbd9b45c01464c826e6)), closes [#499](https://github.com/orobsonn/claude-harness/issues/499)
+* **oc:** entry-gate do OpenCode vira fail-open como o do Claude Code ([#506](https://github.com/orobsonn/claude-harness/issues/506)) ([54d7fee](https://github.com/orobsonn/claude-harness/commit/54d7feec069f6302bfb586235ce671e9c0a64b24)), closes [#482](https://github.com/orobsonn/claude-harness/issues/482)
+* **oc:** fecha bypass do bash denylist via override de agente + choke-point no plugin ([#520](https://github.com/orobsonn/claude-harness/issues/520)) ([07afd98](https://github.com/orobsonn/claude-harness/commit/07afd9802b746aa276c245a449fac0d32151d6fd)), closes [#516](https://github.com/orobsonn/claude-harness/issues/516)
+* **oc:** fecha paridade CC nos gates 1/3 e isenta sniper do fidelity rail ([#509](https://github.com/orobsonn/claude-harness/issues/509)) ([d861f67](https://github.com/orobsonn/claude-harness/commit/d861f675857306930f2c574f0e36f9931c172b4d)), closes [#485](https://github.com/orobsonn/claude-harness/issues/485)
+* **oc:** gate de dual/plan_verdict sai do dispatch, vira gravação ([#511](https://github.com/orobsonn/claude-harness/issues/511)) ([6ef5edc](https://github.com/orobsonn/claude-harness/commit/6ef5edc2c7d5d8715c5b3d41858285af18bd99ba)), closes [#483](https://github.com/orobsonn/claude-harness/issues/483)
+* **oc:** isola HARNESS_OBSERVABILITY_RUN_PATH nos testes do plugin, corta vazamento de eventos falsos no feed real ([#515](https://github.com/orobsonn/claude-harness/issues/515)) ([31a6f82](https://github.com/orobsonn/claude-harness/commit/31a6f8283028e3acf59596b99ea1be6e578323a3)), closes [#490](https://github.com/orobsonn/claude-harness/issues/490)
+* **oc:** migra permission.bash da frota antes do enforce + paridade de denylist com CC ([#510](https://github.com/orobsonn/claude-harness/issues/510)) ([6ec32c0](https://github.com/orobsonn/claude-harness/commit/6ec32c0d0fde665c798abc1a2b7f3db4d665404c))
+* **oc:** paridade de permissão dos agentes build/planner/plan/security ([#495](https://github.com/orobsonn/claude-harness/issues/495)) ([3771f89](https://github.com/orobsonn/claude-harness/commit/3771f898166bfe71948b4d8fc5b2b933d57676da))
+* **oc:** paridade permission.bash com Claude Code + libera force-with-lease ([#504](https://github.com/orobsonn/claude-harness/issues/504)) ([be594ad](https://github.com/orobsonn/claude-harness/commit/be594ada6531988e8c3d5d50292e7cdafddfe31d))
+* **oc:** remove command-resolver e tool verify, órfãos após a muralha ([#501](https://github.com/orobsonn/claude-harness/issues/501)) ([903137f](https://github.com/orobsonn/claude-harness/commit/903137f7a21a42650412764f6bdc4e3b2cea5a28)), closes [#480](https://github.com/orobsonn/claude-harness/issues/480)
+* **oc:** remove loop de ceremony-recovery e repara ciclo de vida do claim do planner ([#496](https://github.com/orobsonn/claude-harness/issues/496)) ([19e3ba1](https://github.com/orobsonn/claude-harness/commit/19e3ba1a0dae291b63f16398122f10d4df5fcc96)), closes [#477](https://github.com/orobsonn/claude-harness/issues/477)
+* **oc:** remove selo HMAC por processo do marker-seal e endurece taskId ([#512](https://github.com/orobsonn/claude-harness/issues/512)) ([5fd7cdb](https://github.com/orobsonn/claude-harness/commit/5fd7cdbda5892c911c862c053e9db67fd7f2127e)), closes [#484](https://github.com/orobsonn/claude-harness/issues/484)
+* **oc:** retira permissão legada por conteúdo e garante classify no fix-mode ([#519](https://github.com/orobsonn/claude-harness/issues/519)) ([52ee765](https://github.com/orobsonn/claude-harness/commit/52ee7651b84d8d6086739bd8ae586145c8758adb))
+
 ## [0.49.8](https://github.com/orobsonn/claude-harness/compare/v0.49.7...v0.49.8) (2026-07-25)
 
 
