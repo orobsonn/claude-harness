@@ -105,7 +105,7 @@ test("ac-1.2: tier 2 (no manifest, legible .harness-version) prunes a retired ke
 });
 
 test("ac-1.2: tier 2 keeps and reports a retired key whose value diverges from the ledger's historical default", () => {
-  const retired = RETIRED_OC_PERMISSION_ENTRIES[3]; // ["bash", "git pull*"]
+  const retired = RETIRED_OC_PERMISSION_ENTRIES[0]; // ["bash", "npx github:orobsonn/claude-harness#* init*"]
   const existingConfig = {
     permission: {
       bash: {
@@ -245,8 +245,8 @@ test("isValidOpencodeConfigShape rejects a non-object config or a mis-shaped per
   assert.equal(isValidOpencodeConfigShape({ plugin: "not an array" }), false);
 });
 
-test("the generation gate stops a coincidental value match on a project newer than the ledger's shippedThroughGeneration", () => {
-  const retired = RETIRED_OC_PERMISSION_ENTRIES[0]; // shippedThroughGeneration v0.45.0
+test("issue #513 ac-1: a retired key with a matching value is removed EVEN when the project's version stamp is newer than the entry was last shipped — retirement is by content, not by generation cutoff", () => {
+  const retired = RETIRED_OC_PERMISSION_ENTRIES[0];
   const existingConfig = {
     permission: { bash: { "*": "ask", "npx tsc --noEmit": "allow", "git pull": "allow", [retired.path[1]]: retired.historicalValue } },
   };
@@ -255,15 +255,39 @@ test("the generation gate stops a coincidental value match on a project newer th
     existingConfig,
     newConfig: NEW_CONFIG,
     manifest: null,
-    previousHarnessVersionStamp: "v0.46.0", // newer than shippedThroughGeneration -> harness never shipped this key here
+    // Re-vendored well after the entry's historical last-shipped generation (a project seeded
+    // before the retirement and re-vendored after it, while the migration engine itself didn't
+    // exist yet — #503 — is exactly the real-population case #513 reports).
+    previousHarnessVersionStamp: "v0.49.1",
+  });
+
+  assert.ok(
+    !Object.hasOwn(result.config.permission.bash, retired.path[1]),
+    "a retired key must be removed by content match alone, regardless of the project's own generation stamp",
+  );
+  const removed = result.report.find((r) => r.path.join(" ") === retired.path.join(" "));
+  assert.equal(removed.action, "removed-retired");
+});
+
+test("issue #513 ac-1: a project with ZERO harness provenance (no manifest, no version stamp) keeps a coincidentally matching value untouched", () => {
+  const retired = RETIRED_OC_PERMISSION_ENTRIES[RETIRED_OC_PERMISSION_ENTRIES.length - 1]; // ["bash", "*"]
+  const existingConfig = {
+    permission: { bash: { "*": retired.historicalValue, "npx tsc --noEmit": "allow", "git pull": "allow" } },
+  };
+
+  const result = migrateOpencodeConfig({
+    existingConfig,
+    newConfig: NEW_CONFIG,
+    manifest: null,
+    previousHarnessVersionStamp: null, // never vendored by the harness before
   });
 
   assert.equal(
-    result.config.permission.bash[retired.path[1]],
+    result.config.permission.bash["*"],
     retired.historicalValue,
-    "a project newer than the retirement cutoff must keep the key — it can only be the operator's own doing",
+    "with no proof the harness ever touched this project, a coincidental match can only be the operator's own doing",
   );
-  const kept = result.report.find((r) => r.path.join(" ") === retired.path.join(" "));
+  const kept = result.report.find((r) => r.path.join(" ") === "bash *");
   assert.equal(kept.action, "kept-custom");
 });
 
