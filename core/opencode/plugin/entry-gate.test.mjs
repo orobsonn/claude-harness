@@ -674,20 +674,85 @@ test("classify allowed for top-level build", async () => {
   )
 })
 
-test("task denied after 3 same-agent failures (K=3)", async () => {
+test("#ac-1.3 task permitted on the 4th dispatch after 3 same-agent failures — the in-session K=3 retry brake was removed", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, fullCeremony({
       agent_dispatch_failures: { "planner": 3 },
     }))
     const before = hooks["tool.execute.before"]
-    await assert.rejects(
-      () =>
-        before(
+    // The real per-issue ceiling now lives outside the session (core/vps cron-a-exit.mjs:116) —
+    // a 4th same-agent dispatch is no longer refused by the entry-gate itself. fullCeremony()
+    // satisfies every OTHER planner precondition, so a genuine doesNotReject actually proves the
+    // K=3 brake is gone (not just "denied for some other reason").
+    await assert.doesNotReject(() => before(
+      { tool: "task", sessionID: SID },
+      { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
+    ))
+  })
+})
+
+test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged warning, and a transient hiccup self-heals on retry", async () => {
+  await withHooks(async (hooks, root) => {
+    const dir = path.join(root, ".opencode", "plans", ".state", SID)
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, "gate-state.json")
+    fs.writeFileSync(file, "{not valid json", "utf8")
+    const before = hooks["tool.execute.before"]
+    const originalError = console.error
+    const logged = []
+    console.error = (...args) => { logged.push(args.map(String).join(" ")) }
+    try {
+      // Every harness role is a "delivery role" — a genuinely EMPTY fallback state (what an
+      // unreadable file collapses to) still fails ITS OWN ceremony check downstream. This
+      // dispatch alone cannot prove "permitted"; it only proves the unreadable FILE itself is
+      // never the denial reason (never gate-state-unreadable / invalid JSON).
+      try {
+        await before(
           { tool: "task", sessionID: SID },
           { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
-        ),
-      /agent retry exhausted|3\/3/,
-    )
+        )
+      } catch (err) {
+        assert.ok(err instanceof Error)
+        assert.doesNotMatch(err.message, /gate-state-unreadable|gate-state invalid JSON/)
+      }
+    } finally {
+      console.error = originalError
+    }
+    assert.ok(logged.some((line) => /gate-state unreadable/.test(line)), "expected a logged warning")
+
+    // The real, provable value of #ac-1.1: a TRANSIENT infra hiccup (the realistic case — a race
+    // with a concurrent writer, a momentary read error) does not permanently brick the session.
+    // Once the file is readable again, the NEXT dispatch proceeds normally — unlike the old
+    // fail-closed behavior, which denied unconditionally and never recovered on retry.
+    writeGateState(root, SID, fullCeremony())
+    await assert.doesNotReject(() => before(
+      { tool: "task", sessionID: SID },
+      { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
+    ))
+  })
+})
+
+test("#ac-1.2 review_cap_reached no longer blocks executor/sniper/test-author dispatch", async () => {
+  await withHooks(async (hooks, root) => {
+    for (const status of ["review_cap_reached", "primary_failure_cap_reached"]) {
+      for (const subagent of ["executor-high", "sniper-high", "test-author"]) {
+        // test-author is fidelity-exempt (decideEntryTask); executor/sniper need fidelity_pass —
+        // a state missing it would deny for THAT reason, proving nothing about the review cap.
+        const needsFidelity = subagent !== "test-author"
+        writeGateState(root, SID, fullCeremony({
+          review_status: status,
+          ...(needsFidelity ? { fidelity_pass: ["feat/task-1"] } : {}),
+        }))
+        const before = hooks["tool.execute.before"]
+        await assert.doesNotReject(
+          () => before(
+            { tool: "task", sessionID: SID },
+            { args: { subagent_type: subagent, feature_id: "feat", task_id: "task-1" } },
+          ),
+          `${subagent} under ${status} must be permitted now that the review-cap writing-hand block is removed`,
+        )
+      }
+    }
   })
 })
 

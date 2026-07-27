@@ -174,7 +174,6 @@ export async function createEntryGateHooks(
     loadGateStateFromDisk,
   } = await import("./lib/dual-enforcement.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
-  const { decideReviewCapBeforeWriting } = await import("./lib/loop-decide.mjs")
   const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { validatePrivilegedMarkerSeals } = await import("./lib/marker-seal.mjs")
@@ -333,28 +332,23 @@ export async function createEntryGateHooks(
           ? sessionId
           : undefined
       const loaded = loadGateStateFromDisk(root, { sessionId: sid })
+      // Fail-open ONLY when the gate-state FILE ITSELF is unreadable/corrupt (#482, mirrors
+      // Claude Code entry-gate.mjs): infra trouble reading gate-state.json is not evidence the
+      // dispatch itself is unsafe, and the real cost ceiling lives in the fleet engine
+      // (cron-a-exit.mjs/cron-review.mjs), outside the session. A missing/unsafe SESSION
+      // IDENTITY ("sessionId required…", "unsafe sessionId") is a different, foundational
+      // problem — we cannot know whose ceremony to even check — and stays fail-closed.
+      const gateStateUnreadable =
+        !loaded.ok && typeof loaded.reason === "string" && loaded.reason.startsWith("gate-state")
       if (!loaded.ok && isDeliveryRole(subagentType)) {
-        throw new Error(`${PREFIX} ${loaded.reason}`)
+        if (gateStateUnreadable) {
+          console.error(`${PREFIX} gate-state unreadable, allowing dispatch: ${loaded.reason}`)
+        } else {
+          throw new Error(`${PREFIX} ${loaded.reason}`)
+        }
       }
       let gateState = loaded.ok ? loaded.state : {}
 
-      // Unified K=3 same-agent retry: block 4th dispatch after 3 failures of this role(/task).
-      if (subagentType && loaded.ok) {
-        const { decideAgentRetryAllowed, decideGateBlockedDispatchAllowed } = await import(
-          "../../shared/lib/agent-retry.mjs"
-        )
-        const taskId = promptMarker.ok ? promptMarker.taskId : ""
-        const retry = decideAgentRetryAllowed(gateState, { role: subagentType, taskId })
-        if (!retry.ok) {
-          throw new Error(`${PREFIX} ${retry.reason}`)
-        }
-        // Separate bound for harness-gate denials: the agent keeps its budget, but a dispatcher
-        // that cannot satisfy the precondition still stops instead of re-dispatching forever.
-        const gateBlocked = decideGateBlockedDispatchAllowed(gateState, { role: subagentType, taskId })
-        if (!gateBlocked.ok) {
-          throw new Error(`${PREFIX} ${gateBlocked.reason}`)
-        }
-      }
       if (loaded.ok && isPlannerRole(subagentType) && sid) {
         const stateFile = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId: sid })
         if (!stateFile.ok) throw new Error(`${PREFIX} ${stateFile.reason}`)
@@ -404,10 +398,10 @@ export async function createEntryGateHooks(
       })
       if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
 
-      const reviewCap = decideReviewCapBeforeWriting({ subagentType, gateState })
-      if (reviewCap.decision === "deny") {
-        throw new Error(`${PREFIX} ${reviewCap.reason}`)
-      }
+      // review_cap_reached / primary_failure_cap_reached no longer freeze writing hands (#482):
+      // decideReviewCapBeforeWriting is removed. The review reservation budget itself (reserved
+      // in loop-decide.mjs) still requires a verified restart before another review round — that
+      // is a separate, still-enforced concern — but executor/sniper/test-author dispatch proceeds.
 
       throwIfEntryDenied(
         decideEntryTask({

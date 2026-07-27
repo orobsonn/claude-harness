@@ -9,7 +9,7 @@ import {
   applyReviewOutcome,
   classifyReviewBoundaryError,
   decideLoopGuard,
-  decideReviewCapBeforeWriting,
+  decidePlanReviewRoundRail,
   reopenReviewEpoch,
   reserveReviewAttempt,
 } from "./loop-decide.mjs";
@@ -453,6 +453,43 @@ test("reservation derives feature from session-bound state and rejects conflicti
   assert.equal(unsafeFeature.reason, "review reservation identity mismatch");
 });
 
+test("#ac-2.4 an adversary reservation in a cold repo (no session_id/feature_id stamped yet) does not die on identity-mismatch", () => {
+  // Cold: gate-state is a genuinely fresh {} (e.g. the very first spec-adversary attack, before
+  // classify has stamped session_id/feature_id on disk) — "not yet bound" must bind to whatever
+  // THIS reservation supplies, not read as a mismatch.
+  const cold = reserveReviewAttempt({}, input({
+    subagentType: "adversary-family-1",
+    taskId: "",
+    phase: "",
+    featureId: FEATURE,
+  }));
+  assert.equal(cold.ok, true, cold.reason);
+  assert.equal(cold.reservation.session_id, SESSION);
+  assert.equal(cold.reservation.feature_id, FEATURE);
+
+  // A REAL mismatch (state already bound to something else) must still refuse.
+  const stillMismatches = reserveReviewAttempt({ session_id: "other-session" }, input({
+    subagentType: "adversary-family-1",
+    taskId: "",
+    phase: "",
+    featureId: FEATURE,
+    callId: "still-mismatched",
+  }));
+  assert.equal(stillMismatches.ok, false);
+  assert.equal(stillMismatches.reason, "review reservation identity mismatch");
+
+  // Cold state with no featureId supplied either has no safe identity to bind — still refused.
+  const noFeatureAtAll = reserveReviewAttempt({}, input({
+    subagentType: "adversary-family-1",
+    taskId: "",
+    phase: "",
+    featureId: undefined,
+    callId: "no-feature",
+  }));
+  assert.equal(noFeatureAtAll.ok, false);
+  assert.equal(noFeatureAtAll.reason, "review reservation identity mismatch");
+});
+
 test("first terminal outcome wins in both error-after orders", () => {
   const firstReservation = reserveReviewAttempt(state(), input({ callId: "error-first" })).state;
   const errorFirst = applyReviewOutcome(firstReservation, input({ callId: "error-first", failureClass: "provider_error" }));
@@ -529,7 +566,9 @@ test("cap cannot reopen from a new report hash; explicit newer generation plus n
   assert.equal(capped.cap_generation, GENERATION_1);
   assert.equal(capped.cap_snapshot_hash, "a".repeat(64));
   assert.equal(reserveReviewAttempt(capped, input({ callId: "new-report-hash", response: report() })).ok, false);
-  assert.equal(decideReviewCapBeforeWriting({ subagentType: "executor-high", gateState: capped }).decision, "deny");
+  // #ac-1.2: review_cap_reached no longer freezes writing hands — decideReviewCapBeforeWriting
+  // was removed. The review reservation budget above is still enforced (a verified restart is
+  // still required for another review round); only the writing-hand block is gone.
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-canonical-restart-"));
   try {
@@ -597,6 +636,107 @@ test("hook persists reservations before dispatch and consumes them after complet
     persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.review_inflight.length, 0);
     assert.equal(persisted.plan_review_count, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("#482 hook round-rail: real dispatches warn past the documented cap and hard-deny past the runaway ceiling — interactive only", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-round-rail-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state()));
+    const args = {
+      description: "Review the plan",
+      prompt: "Review the canonical plan without prior verdicts.",
+      subagent_type: "plan-reviewer-family-1",
+    };
+
+    // Resolve each dispatch as a harness-gate-blocked failure via BOTH the event path AND
+    // tool.execute.after (OC really fires both for the same Task — the codebase's own
+    // decideCallOutcomeOnce dedup exists exactly because of this). classifyReviewBoundaryError
+    // tags it "gate_blocked", which clears inflight WITHOUT touching plan_review_count or the
+    // primary failure streak — isolating this test to the round-rail dispatch counter only. The
+    // round-rail's warn is injected in tool.execute.after (its output truly has a `metadata`
+    // field on the wire — tool.execute.before's output type is `{ args }` only, so a warn written
+    // there would silently vanish, which is exactly the bug an adversarial review caught).
+    async function dispatchOnce(hooks, callId) {
+      const runtimeInput = { tool: "task", sessionID: SESSION, callID: callId };
+      const output = { args, metadata: {} };
+      await hooks["tool.execute.before"](runtimeInput, output);
+      await hooks.event({
+        event: {
+          type: "message.part.updated",
+          properties: {
+            part: {
+              type: "tool",
+              tool: "task",
+              sessionID: SESSION,
+              callID: callId,
+              state: {
+                status: "error",
+                input: args,
+                metadata: {},
+                error: "[plan-gate] delivery-blocked: isolating this dispatch for the round-rail test",
+              },
+            },
+          },
+        },
+      });
+      output.output = "[plan-gate] delivery-blocked: isolating this dispatch for the round-rail test";
+      await hooks["tool.execute.after"](runtimeInput, output);
+      return output;
+    }
+
+    const interactiveHooks = await createLoopGuardHooks(root);
+    let lastOutput;
+    for (let round = 1; round <= 3; round += 1) {
+      lastOutput = await dispatchOnce(interactiveHooks, `rr-${round}`);
+    }
+    assert.equal(lastOutput.metadata.loop_guard_warning, undefined, "round 3 is still within the documented cap");
+
+    // #ac-2.1: round 5 (past the cap of 3) → visible warning, still permits.
+    await dispatchOnce(interactiveHooks, "rr-4");
+    lastOutput = await dispatchOnce(interactiveHooks, "rr-5");
+    assert.match(lastOutput.metadata.loop_guard_warning, /\[loop-guard\]/);
+
+    for (let round = 6; round <= 10; round += 1) {
+      await dispatchOnce(interactiveHooks, `rr-${round}`);
+    }
+
+    // #ac-2.2: round 11, interactive session → hard deny.
+    await assert.rejects(() => dispatchOnce(interactiveHooks, "rr-11"), /\[loop-guard\] Blocked/);
+
+    // #ac-2.2: round 11, headless (CLAUDE_CODE_REMOTE present) → warns only, still permits.
+    const originalRemote = process.env.CLAUDE_CODE_REMOTE;
+    process.env.CLAUDE_CODE_REMOTE = "1";
+    try {
+      const headlessHooks = await createLoopGuardHooks(root);
+      for (let round = 1; round <= 10; round += 1) {
+        await dispatchOnce(headlessHooks, `hl-${round}`);
+      }
+      const headlessRound11 = await dispatchOnce(headlessHooks, "hl-11");
+      assert.match(headlessRound11.metadata.loop_guard_warning, /headless fleet session/);
+    } finally {
+      if (originalRemote === undefined) delete process.env.CLAUDE_CODE_REMOTE;
+      else process.env.CLAUDE_CODE_REMOTE = originalRemote;
+    }
+
+    // #ac-2.3: a fleet-look-alike env (HARNESS_NOTIFY_PROJECT set) WITHOUT CLAUDE_CODE_REMOTE
+    // must NOT bypass the interactive hard-stop.
+    const originalNotify = process.env.HARNESS_NOTIFY_PROJECT;
+    process.env.HARNESS_NOTIFY_PROJECT = "/tmp/notify";
+    try {
+      const fleetLookAlikeHooks = await createLoopGuardHooks(root);
+      for (let round = 1; round <= 10; round += 1) {
+        await dispatchOnce(fleetLookAlikeHooks, `fl-${round}`);
+      }
+      await assert.rejects(() => dispatchOnce(fleetLookAlikeHooks, "fl-11"), /\[loop-guard\] Blocked/);
+    } finally {
+      if (originalNotify === undefined) delete process.env.HARNESS_NOTIFY_PROJECT;
+      else process.env.HARNESS_NOTIFY_PROJECT = originalNotify;
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -857,9 +997,6 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
   assert.equal(current.primary_review_failure_streak, LOOP_THRESHOLDS.primary_failure_streak.deny);
   // No freezing status, and the hands + delivery stay available.
   assert.equal(current.review_status, undefined);
-  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
-    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
-  }
   // The broken eye IS stopped, with an instruction instead of a dead end.
   const again = reserveReviewAttempt(current, broken("broken-extra"));
   assert.equal(again.ok, false);
@@ -883,7 +1020,9 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
     plan = complete(plan, { callId: `pr-broken-${round}`, response: "not json" }).state;
   }
   assert.equal(plan.review_status, "primary_failure_cap_reached");
-  assert.equal(decideReviewCapBeforeWriting({ subagentType: "executor-high", gateState: plan }).decision, "deny");
+  // #ac-1.2: primary_failure_cap_reached still bounds the review reservation itself (asserted
+  // above), but no longer blocks executor/sniper/test-author dispatch — decideReviewCapBeforeWriting
+  // was removed. See entry-gate.test.mjs's own ac-1.2 coverage through the real hook.
 });
 
 test("the spec pass snapshots its material issues so an accepted risk survives the plan-review overwrite", () => {
@@ -952,9 +1091,6 @@ test("the spec-adversary loop is never refused and never freezes the run", () =>
   assert.equal(current.adversary_loop_count, LOOP_THRESHOLDS.adversary.deny);
   // No status is written at all: an adversary loop must never put the run into a capped state.
   assert.equal(current.review_status, undefined);
-  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
-    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
-  }
   // Past the threshold the dispatch is still ALLOWED — stopping is the orchestrator's call, driven
   // by the escalation nudge. A deterministic refusal here is exactly what stranded two live runs.
   const beyond = reserveReviewAttempt(current, advInput({ callId: "adv-beyond" }));
@@ -988,16 +1124,15 @@ test("no adversary loop freezes the run — only the plan-review verdict loop do
   // no deterministic cap either: no status, no refusal, no frozen hand.
   assert.equal(current.review_status, undefined);
   assert.equal(reserveReviewAttempt(current, taskAdv("t-beyond")).ok, true);
-  for (const hand of ["executor-high", "sniper-high", "test-author"]) {
-    assert.equal(decideReviewCapBeforeWriting({ subagentType: hand, gateState: current }).decision, "allow", hand);
-  }
-  // The plan-review verdict loop is the ONE that still freezes: REVISE means no hand may write yet.
+  // The plan-review verdict loop is the ONE that still caps the REVIEW RESERVATION itself: REVISE
+  // means no further plan-review round without a verified restart. It no longer blocks writing
+  // hands either (#ac-1.2, decideReviewCapBeforeWriting removed) — dual/plan_verdict REVISE
+  // (dual-enforcement.mjs) is the mechanism that still blocks a hand pending plan-review APPROVE.
   let planLoop = state();
   for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
     planLoop = complete(planLoop, { callId: `pr-${round}`, response: report("REVISE", [finding]) }).state;
   }
   assert.equal(planLoop.review_status, "review_cap_reached");
-  assert.equal(decideReviewCapBeforeWriting({ subagentType: "executor-high", gateState: planLoop }).decision, "deny");
 });
 
 test("no round credit at the cap: a budget nobody can review is never advertised", () => {
@@ -1093,13 +1228,48 @@ test("plan-review scope follows the bound plan: a stale peer REVISE from an earl
   assert.equal(round2.state.dual_status?.plan_review, "primary_only");
 });
 
-test("primary_failure_cap_reached blocks writing hands", () => {
-  const d = decideReviewCapBeforeWriting({
-    subagentType: "executor-high",
-    gateState: { review_status: "primary_failure_cap_reached" },
+test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the documented cap, denies past the runaway ceiling — interactive only", () => {
+  // Below the documented cap: allow, no warning.
+  assert.equal(decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: 2 }).decision, "allow");
+
+  // #ac-2.1: round 5 (past the cap of 3) → visible warning, still permits.
+  const round5 = decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: 5 });
+  assert.equal(round5.ok, true);
+  assert.equal(round5.decision, "warn");
+  assert.match(round5.reason, /\[loop-guard\]/);
+
+  // #ac-2.2: round 11, interactive (no CLAUDE_CODE_REMOTE) → hard deny.
+  const round11Interactive = decidePlanReviewRoundRail({
+    subagentType: "plan-reviewer-family-1",
+    count: 11,
+    env: {},
   });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /primary_failure_cap_reached/);
+  assert.equal(round11Interactive.ok, false);
+  assert.equal(round11Interactive.decision, "deny");
+  assert.match(round11Interactive.reason, /\[loop-guard\] Blocked/);
+
+  // #ac-2.2: round 11, headless (CLAUDE_CODE_REMOTE present) → warns only, still permits.
+  const round11Headless = decidePlanReviewRoundRail({
+    subagentType: "plan-reviewer-family-1",
+    count: 11,
+    env: { CLAUDE_CODE_REMOTE: "1" },
+  });
+  assert.equal(round11Headless.ok, true);
+  assert.equal(round11Headless.decision, "warn");
+
+  // #ac-2.3: a fleet-look-alike env (HARNESS_NOTIFY_PROJECT set) WITHOUT CLAUDE_CODE_REMOTE must
+  // NOT bypass the interactive hard-stop — the signal is exactly Boolean(env.CLAUDE_CODE_REMOTE),
+  // mirroring Claude Code entry-gate.mjs:116-118, never another variable.
+  const round11FleetLookAlike = decidePlanReviewRoundRail({
+    subagentType: "plan-reviewer-family-1",
+    count: 11,
+    env: { HARNESS_NOTIFY_PROJECT: "/tmp/notify" },
+  });
+  assert.equal(round11FleetLookAlike.ok, false);
+  assert.equal(round11FleetLookAlike.decision, "deny");
+
+  // The adversary counter is untouched by this round-rail (only plan_review_count is gated).
+  assert.equal(decidePlanReviewRoundRail({ subagentType: "adversary-family-1", count: 99 }).decision, "allow");
 });
 
 test("applyReviewOutcome stores sanitized provider diagnostic on failure", () => {

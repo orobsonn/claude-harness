@@ -165,7 +165,7 @@ Never use the edit tool.
 **HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.**  
 **HEADLESS:** plan-reviewer dual **APPROVE** is the gate; on REVISE past cap, stop and comment — do not ship.
 
-**Primary failure cap (`primary_failure_cap_reached`):** after consecutive family-1 provider/empty/malformed failures hit the streak cap, **stop delivery**. Do **not** reclassify to QUICK, do **not** implement via build bash, do **not** `git push` / `gh pr`. Host rails deny writing hands and delivery until a canonical ceremony restart (new generation + bound plan). Comment the issue/PR in pt-br with the blocked reason (and any `last_provider_diagnostic` on gate-state).
+**Primary failure cap (`primary_failure_cap_reached`):** after consecutive family-1 provider/empty/malformed failures hit the streak cap, **stop delivery**. Do **not** reclassify to QUICK, do **not** `git push` / `gh pr` — host rails still deny delivery (`bash-decide.mjs`) until a canonical ceremony restart (new generation + bound plan). **Writing hands (executor/sniper/test-author) are NOT blocked by this status anymore** (#482: `decideReviewCapBeforeWriting` was removed) — but their work cannot ship until the restart clears delivery, so re-dispatching them without a restart plan just burns cost. Comment the issue/PR in pt-br with the blocked reason (and any `last_provider_diagnostic` on gate-state).
 
 ---
 
@@ -264,7 +264,7 @@ Advance to the next task only when its gates are green.
 
 ### Escalation ladder (engineering — never handed to the human)
 
-**Same-agent retry K=3 (all Task roles — planner, eyes, hands):** on provider/transient Task failure, re-dispatch the **same** `subagent_type` (same model) up to **3** times. Host blocks the 4th dispatch (`agent retry exhausted`). After 3 failures → **product error / CRITICAL EXCEPTION** (stop + comment) — never swap models, never ladder. Success resets the counter for that role(/task).
+**Same-agent retry K=3 (all Task roles — planner, eyes, hands):** on provider/transient Task failure, re-dispatch the **same** `subagent_type` (same model) up to **3** times. After 3 failures → **product error / CRITICAL EXCEPTION** (stop + comment) — never swap models, never ladder. **The host does NOT block the 4th dispatch anymore** (#482: the in-session brake was removed and is not replaced — cron-a-exit.mjs is the real per-issue ceiling, outside this session). You must count failures and stop at 3 yourself; success resets the counter for that role(/task).
 
 retry same tier within K=3 → still failing after 3 → **CRITICAL EXCEPTION**: translate to product impact, surface to operator in pt-br ("o login pode falhar se o usuário fizer X — (a) aceita (b) repensa?"), never as a technical problem.
 

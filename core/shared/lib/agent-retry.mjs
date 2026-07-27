@@ -44,6 +44,12 @@ export function getAgentFailureCount(state, key) {
 
 /**
  * @description Whether another dispatch of this agent key is allowed.
+ * NOTE (#482): no production call site left in core/ — the OC entry-gate's in-session K=3 same-
+ * agent retry brake that consumed this was removed and is not replaced (the real per-issue
+ * ceiling lives in core/vps/cron-a-exit.mjs, outside the session). Kept for
+ * applyAgentDispatchOutcome/applyGateBlockedDispatch (still active bookkeeping in loop-guard.ts)
+ * and for AGENT_RETRY_K (still used by primary_failure_streak and PLANNER_SESSION_DISPATCH_CEILING)
+ * — this specific decision function itself is exercised only by agent-retry.test.mjs now.
  * @param {unknown} state
  * @param {{ role?: unknown, taskId?: unknown, k?: number }} input
  * @returns {{ ok: true, remaining: number, failures: number } | { ok: false, reason: string, failures: number }}
@@ -148,6 +154,9 @@ export function getGateBlockedCount(state, key) {
 /**
  * @description Whether another dispatch is allowed given prior harness-gate denials.
  * Bounded like the agent budget, but in its own namespace and with a dispatcher-facing reason.
+ * NOTE (#482): no production call site left in core/ — see decideAgentRetryAllowed's note above;
+ * applyGateBlockedDispatch (still called from loop-guard.ts) keeps writing the counter this reads,
+ * but nothing calls this decision function anymore outside agent-retry.test.mjs.
  * @param {unknown} state
  * @param {{ role?: unknown, taskId?: unknown, k?: number }} input
  * @returns {{ ok: true, remaining: number, blocked: number } | { ok: false, reason: string, blocked: number }}
