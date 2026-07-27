@@ -156,9 +156,12 @@ test("returning the plan it was asked to revise does not release downstream", as
     assert.equal(state().planner_plan_binding, undefined);
     assert.match(output.metadata.planner_recovery, /idêntico/);
     const gate = await createPlanGateHooks(root);
+    // #476: an absent planner_plan_binding is only fail-open when no ceremony ran at all — a
+    // real attempt that ended plan_invalid (as here) still denies, now via the terminal-blocked
+    // check rather than the "bound artifact required" branch.
     await assert.rejects(
       () => gate["tool.execute.before"]({ tool: "task", sessionID: SESSION }, { args: gateArgs("test-author") }),
-      /bound artifact/,
+      /non-usable state/,
     );
   }, FULL_PLAN);
 });

@@ -2,12 +2,17 @@
  * @description Structural mid-run obs for hand roles (executor/sniper/test-author).
  * before: task-executing (n/total from plan when possible)
  * after: hand-ran
- * The Task before/after boundary also owns writing-hand active_dispatch claims.
+ * The Task before/after boundary also owns writing-hand active_dispatch claims — best-effort:
+ * a missing marker/session identity or a rejected claim never denies dispatch, it shadow-records
+ * (logs) and continues. Evidence writes (hand-record, capture_verified) do not require claim
+ * success — they only need a resolvable task_id/feature_id on the terminal writing-hand result.
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import crypto from "node:crypto";
+
+const PREFIX = "[obs-hand]";
 
 /**
  * @description Build before+after hooks for hand observability.
@@ -230,28 +235,47 @@ export async function createObsHandHooks(
       if (writingHand(ids.role)) {
         const prompt = typeof args?.prompt === "string" ? args.prompt : "";
         const marker = parseTaskDispatchIdentity(prompt);
-        if (!sessionId || !callId || !marker.ok) {
-          throw new Error(`[obs-hand] writing-hand dispatch requires runtime sessionID/callID and canonical task marker`);
+        // The active-dispatch claim is best-effort observability, not a gate: plan-gate no
+        // longer requires the prompt marker (#ac-2.1), and a rejected claim must not deny the
+        // dispatch (#ac-2.2) — it downgrades to a shadow-record (logged, not persisted) while
+        // evidence writes in the after-hook (hand-record, capture_verified) still happen
+        // unconditionally on the terminal writing-hand result.
+        if (!sessionId || !callId) {
+          console.warn(`${PREFIX} writing-hand dispatch shadow-record: runtime sessionID/callID unavailable, active-dispatch claim skipped`);
+        } else {
+          const reconciled = reconcileCleanupPending(cwd, sessionId);
+          if (!reconciled.ok) {
+            console.warn(`${PREFIX} writing-hand dispatch shadow-record: cleanup_pending unresolved (${reconciled.reason}), active-dispatch claim skipped`);
+          } else {
+            const key = claimKey(sessionId, callId);
+            const token = claims.get(key) ?? crypto.randomUUID();
+            const claimed = claimActiveDispatch(cwd, {
+              sessionId,
+              callId,
+              role: ids.role,
+              // Marker no longer required (#ac-2.1): ids.taskId already prefers the marker when
+              // present (extractTaskIds), so this is identical with a marker and only changes
+              // the markerless case — without it, taskId is always empty and the claim always
+              // fails, meaning active_dispatch never arms for a markerless dispatch. That claim
+              // is what plan-write-gate reads to scope writes and allowlist bash for the hand
+              // (decideScopeRail / bashTool branches) — a markerless writing-hand would otherwise
+              // run with no scope rail and unrestricted bash.
+              taskId: marker.ok ? marker.taskId : ids.taskId,
+              token,
+            });
+            if (!claimed.ok) {
+              console.warn(`${PREFIX} writing-hand dispatch shadow-record: active-dispatch claim rejected (${claimed.reason})`);
+            } else {
+              // Authoritative token is whatever the disk claim holds (idempotent re-entry
+              // from a second plugin instance may return a different instance's token).
+              const authoritative =
+                typeof claimed.claim?.claim_token === "string" && claimed.claim.claim_token
+                  ? claimed.claim.claim_token
+                  : token;
+              claims.set(key, authoritative);
+            }
+          }
         }
-        const reconciled = reconcileCleanupPending(cwd, sessionId);
-        if (!reconciled.ok) throw new Error(`[obs-hand] cleanup_pending blocks dispatch: ${reconciled.reason}`);
-        const key = claimKey(sessionId, callId);
-        const token = claims.get(key) ?? crypto.randomUUID();
-        const claimed = claimActiveDispatch(cwd, {
-          sessionId,
-          callId,
-          role: ids.role,
-          taskId: marker.taskId,
-          token,
-        });
-        if (!claimed.ok) throw new Error(`[obs-hand] writing-hand dispatch blocked: ${claimed.reason}`);
-        // Authoritative token is whatever the disk claim holds (idempotent re-entry
-        // from a second plugin instance may return a different instance's token).
-        const authoritative =
-          typeof claimed.claim?.claim_token === "string" && claimed.claim.claim_token
-            ? claimed.claim.claim_token
-            : token;
-        claims.set(key, authoritative);
       }
       try {
         emitTaskExecuting(sessionId, ids);
@@ -318,11 +342,11 @@ export async function createObsHandHooks(
             // Background still needs binding_pending via catch. Terminal: hand-record already
             // written — do not throw (headless often lacks SDK child binding).
             if (backgroundRunning) {
-              throw new Error(`[obs-hand] ${reason}`);
+              throw new Error(`${PREFIX} ${reason}`);
             }
           }
         } else if (backgroundRunning) {
-          throw new Error("[obs-hand] running background Task result has no child identity");
+          throw new Error(`${PREFIX} running background Task result has no child identity`);
         }
         if (!isHandRole(ids.role)) return;
         // No structured task_id → skip hand-ran (avoid task:"unknown" spam).
@@ -334,13 +358,25 @@ export async function createObsHandHooks(
         if (ev) obsAppend(ev, { dedupe: dedupeByType });
       } catch (error) {
         if (backgroundRunning) {
-          const pending = preservePendingBinding(input?.sessionID, input?.callID, childSessionId, jobId);
-          if (!pending.ok) throw new Error(`[obs-hand] ${pending.reason}`);
+          const sessionIdForClaim = input?.sessionID;
+          const callIdForClaim = input?.callID;
+          // par_atômico: a before-hook shadow-record (no claim registered) must not turn into
+          // an after-hook deny for the same dispatch — only a dispatch that actually holds a
+          // claim is required to successfully preserve its pending child binding.
+          const hasClaim =
+            typeof sessionIdForClaim === "string" &&
+            typeof callIdForClaim === "string" &&
+            claims.has(claimKey(sessionIdForClaim, callIdForClaim));
+          const pending = preservePendingBinding(sessionIdForClaim, callIdForClaim, childSessionId, jobId);
+          if (!pending.ok) {
+            if (hasClaim) throw new Error(`${PREFIX} ${pending.reason}`);
+            console.warn(`${PREFIX} background dispatch shadow-record: pending binding preserve skipped (${pending.reason})`);
+          }
         }
       } finally {
         if (terminal) {
           const finished = cleanup(input?.sessionID, input?.callID);
-          if (finished && !finished.ok) throw new Error(`[obs-hand] ${finished.reason}`);
+          if (finished && !finished.ok) throw new Error(`${PREFIX} ${finished.reason}`);
         }
       }
     },
@@ -352,20 +388,20 @@ export async function createObsHandHooks(
         try { session = await reader.getSession(info.sessionID); } catch { return; }
         if (typeof session?.parentID === "string") {
           const bound = bindChildSession(cwd, { parentSessionId: session.parentID, childSessionId: info.sessionID, role: info.agent });
-          if (!bound.ok) throw new Error(`[obs-hand] ${bound.reason}`);
+          if (!bound.ok) throw new Error(`${PREFIX} ${bound.reason}`);
         }
         return;
       }
       if (event?.type === "session.idle" || event?.type === "session.error") {
         const sessionId = event?.properties?.sessionID;
         const finished = await cleanupChild(sessionId);
-        if (finished && !finished.ok && !/not bound/.test(String(finished.reason))) throw new Error(`[obs-hand] ${finished.reason}`);
+        if (finished && !finished.ok && !/not bound/.test(String(finished.reason))) throw new Error(`${PREFIX} ${finished.reason}`);
         return;
       }
       const part = event?.properties?.part ?? event?.part;
       if (event?.type !== "message.part.updated" || part?.type !== "tool" || !isTaskTool(part?.tool) || part?.state?.status !== "error") return;
       const finished = cleanup(part.sessionID, part.callID);
-      if (finished && !finished.ok) throw new Error(`[obs-hand] ${finished.reason}`);
+      if (finished && !finished.ok) throw new Error(`${PREFIX} ${finished.reason}`);
     },
   };
 }
