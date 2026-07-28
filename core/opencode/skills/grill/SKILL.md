@@ -6,7 +6,7 @@ compatibility: opencode
 metadata:
   phase: pre-spec
   gate: none
-  writes: docs/prd/<slug>.md
+  writes: "docs/prd/<slug>.md (+ docs/prd/<slug>-mockup.html in build, on request)"
 ---
 
 # Grill — interrogate an idea until it becomes a PRD
@@ -67,9 +67,11 @@ Headless is active when **any** of:
 > `$HARNESS_OC_DATA_HOME` is **not** a headless signal on its own — a live operator on the VPS
 > inherits it from the shell. Use the trigger prefix and `$HARNESS_OBSERVABILITY_RUN_PATH`.
 
-In `plan`, **bash is denied** — there is no shell probe available. Decide from the trigger prompt:
-a `plan` session reached through an autonomous/cron prompt is headless and must refuse; a live
-operator conversation is interactive.
+In `plan`, **bash is restricted to a read-only git-history allowlist** (`git log`/`diff`/`show`/
+`blame`/`status` only — see `agents/plan.md`) — there is no generic shell probe available (the probe
+above needs an arbitrary `printf`/env read, which is not on that allowlist). Decide from the trigger
+prompt instead: a `plan` session reached through an autonomous/cron prompt is headless and must
+refuse; a live operator conversation is interactive.
 
 Also refuse when you were invoked from inside a subagent/hand `task` with a work brief — the grill
 only ever runs in a top-level operator session — `plan`, or `build` **after** `oc-triaging-requests`
@@ -83,19 +85,26 @@ Refusal (pt-br, then stop — do not fall back to "interviewing yourself"):
 
 ---
 
-## No state, anywhere, except the PRD
+## No state, anywhere, except the PRD (and, in `build`, one on-demand mockup)
 
-The **only** artifact is `docs/prd/<slug>.md`. No `.opencode/` state, no session markers, no gate
-stamps, no resume file, no decision ledger. Resuming a multi-session grill means **re-reading the
-PRD's own `## Em aberto` section** and continuing from there — the file is the memory.
+The **only** artifact is `docs/prd/<slug>.md`, plus — only in `build`, only when the operator
+explicitly asks to see one — a single companion `docs/prd/<slug>-mockup.html` (§ Visual mockup on
+demand). No `.opencode/` state, no session markers, no gate stamps, no resume file, no decision
+ledger. Resuming a multi-session grill means **re-reading the PRD's own `## Em aberto` section** and
+continuing from there — the file is the memory.
 
 ### Writing the file, per primary agent
 
 - **In `plan` (the normal home for this skill):** `plan` is read-only by design and holds a
-  **narrow write permission scoped to `docs/prd/*.md` only**. Write the PRD there and **nowhere
-  else** — do not attempt any other path, and never use bash (denied in `plan`).
-- **In `build`:** `edit` is denied. Write the PRD through `printf` / `tee` (or any other bash form) —
-  quote a literal `$` in the content (unescaped, the shell expands it before the file is written).
+  **narrow write permission scoped to `docs/prd/*.md` only** (`agents/plan.md`: `edit: {"*": deny,
+  "docs/prd/*.md": allow}`). Write the PRD there and **nowhere else** — do not attempt any other
+  path, including a mockup file: the glob does not match `.html`, and `plan`'s bash is limited to a
+  read-only git-history allowlist (no generic write/exec vector), so there is no workaround either.
+  The visual mockup capability below does **not** exist in `plan`.
+- **In `build`:** `edit` is allowed without restriction (`agents/build.md`: `edit: allow`) — write
+  the PRD directly with the edit tool, same as any other file. (Older revisions of this skill said
+  `edit` was denied here and to use `printf`/`tee` — that predates the current `build.md`; ignore it
+  if you see it cached anywhere.)
 
 ---
 
@@ -183,6 +192,42 @@ independent eye.)
 rule on.** Never present N architectures for the operator to choose between — that is handing an
 engineering decision to someone who cannot evaluate it, and the "choice" becomes a coin flip you
 will later cite as his decision.
+
+### 9. Visual mockup on demand (`build` only)
+
+A UI question is sometimes easier to answer by looking than by reading — the operator asking to
+*see* a layout before answering is not a different activity from answering a text question, it is
+the same discovery step in another modality. When the operator explicitly asks to see a UI option
+("mostra como ficaria", "quero ver a tela", "gera um mock disso") — never unprompted, and only when
+the session's primary agent is `build` (confirm from the running session; do not assume) — write
+**one** static file, `docs/prd/<slug>-mockup.html`. On a later request for the same slug, overwrite
+that same file — never accumulate a second mockup file.
+
+Content rules, no exceptions, checked before every write (this is a checklist, not a judgment call):
+
+- No `<script>`, no inline event handlers (`onclick=` and friends).
+- No remote reference of **any** kind — no `http://` / `https://` anywhere in the file: not in
+  `url()`, `@font-face`, `@import`, `<base href>`, `<link href>`, `<img src>`, `<iframe src>`, form
+  `action=`. Everything inline — CSS in a single `<style>` block, no external assets, no fonts/CDNs.
+- Wireframe/placeholder content only — box labels, dummy text. **Never** copy real PRD content
+  (names, figures, decisions already recorded) into it; the mockup communicates layout and
+  hierarchy, not data.
+- Plain HTML+CSS, opens directly from disk in any browser — no build step, no framework.
+
+After writing, best-effort try to open it for the operator via bash (`open` on macOS / `xdg-open` on
+Linux / `start` on Windows). None of these three are on `build`'s local bash allowlist
+(`permission.bash` in `opencode.json` — default `"*": "ask"`), so this is a live permission prompt in
+an interactive session, not a silent execution — that's expected here, answer it. If the operator
+declines, or it fails for any other reason, just state the path in pt-br and let the operator open
+it themselves.
+
+The operator's reaction to the mockup is ordinary interview input, nothing more — fold it into
+`## Decisões travadas` / `## Suposições do modelo` like any other answer, and close or refine the
+`## Em aberto` line it responds to. The mockup file is a discovery aid, not a spec: it never
+substitutes for `## Requisitos`, and `oc-creating-issues` does not read it.
+
+In `plan`, this does not exist (see § Writing the file above) — keep pointing the operator at the
+`build` → `oc-creating-issues` → craft/`QUICK-craft` handoff for anything visual.
 
 ---
 

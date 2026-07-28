@@ -104,18 +104,15 @@ Never skip the second family when configured. Never treat fail-open as cross-fam
 
 ---
 
-## File writes — bash only
+## File writes
 
-`build`'s `edit` permission is **denied**. ALL file writes use bash with `cat >` / heredoc:
-
-```bash
-mkdir -p ".opencode/plans/<sessionID>-<feature_id>"
-cat > ".opencode/plans/<sessionID>-<feature_id>/execution-plan.json" << 'EOF'
-{ ... }
-EOF
-```
-
-Never use the edit tool.
+`build`'s `edit` permission is **allowed** (`agents/build.md`: `edit: allow` — see PR #495). Write
+spec/decision-ledger content directly with the edit tool. Older revisions of this skill said `edit`
+was denied here and showed a bash/heredoc workaround for every write, including a manual
+`execution-plan.json` write — that predates the current `build.md` and is gone from this section
+because it was also wrong on its own terms: **you never hand-write `execution-plan.json`, in `edit`
+or in bash.** Phase 1 below (`planner-recovery`) persists it for you, atomically, on a usable planner
+result — do not pre-empt that with a manual write.
 
 ---
 
@@ -124,7 +121,7 @@ Never use the edit tool.
 1. Read the native durable index — global/project `AGENTS.md` and any root router table (folder → what lives there). This is your macro view.
    - **Cold-start check:** if this is a non-trivial existing codebase and the index is cold (no entries in MEMORY.md, root router unfilled), dispatch the `oc-surveying-codebase` skill **first** to seed durable knowledge from the code, then read the now-populated index before shaping the spec.
 2. **Load and follow the `oc-brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
-3. Write the spec file **via bash** (`cat >`) — `edit` is denied.
+3. Write the spec file directly with the **edit** tool (`build`'s `edit` is allowed — `agents/build.md`).
    - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This session+feature-bound artifact is the durable brainstorming completion evidence source; a docs copy alone is not restart evidence.
 4. **Upfront spec-adversary (mandatory LIGHT/FULL):** dispatch `adversary-family-1` (+ optional `adversary-family-2`). The Task prompt MUST say to follow the agent's exact JSON schema and MUST NOT request `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, `blockers`, or any extra field. Family 1 returns only `{ "issues": [...] }`.
 
@@ -270,7 +267,7 @@ retry same tier within K=3 → still failing after 3 → **CRITICAL EXCEPTION**:
 
 **Hand CONFIG_ERROR → critical exception (NOT a K=1 escalation):** when a hand dispatch fails precondition / never ran (e.g. missing fidelity_pass stamp, missing/invalid setup, CONFIG_ERROR from spawn), do NOT retry same tier and do NOT bump tier. Route to CRITICAL EXCEPTION: INTERACTIVE surface to operator in pt-br product language; HEADLESS record as open PR risk item.
 
-A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. **Any split/re-plan that re-runs `planner` → write the new plan to `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json` via bash and re-run `validate-plan` before resuming executors.**
+A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. **Any split/re-plan that re-runs `planner` → `planner-recovery` persists the revised plan for you, the same as the first dispatch (§ Phase 1): the plugin's hook fires on every `planner`/`planner-fallback` Task call, not only the session's first, and rejects a re-dispatch that returns the plan unchanged. Never hand-write `execution-plan.json` yourself, in `edit` or in bash — `planner` is the only role whose dispatch may bind it.** Re-run `validate-plan` before resuming executors.
 
 ---
 
@@ -370,4 +367,4 @@ Engineering (tier escalation, retry, sniper) is **NEVER** delegated to the human
 - `harvester` ran; durable learnings routed (native memory / nested AGENTS.md / kaizen); ephemeral buffers deleted.
 - **adversary entered virgin on every dispatch** — no prior verdict leaked.
 - Every operator message was pt-br product-language.
-- No file was written via the edit tool — all writes went through bash (`cat >` / heredoc).
+- No product code or test file was written by `build` itself, via the edit tool or bash — those only ever come from a dispatched executor/sniper/test-author. (`build`'s own orchestration artifacts — spec, plan cache, shared context, decision ledger — are written directly with the edit tool; see `## File writes` above.)

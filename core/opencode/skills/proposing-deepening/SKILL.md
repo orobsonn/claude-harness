@@ -1,6 +1,6 @@
 ---
 name: oc-proposing-deepening
-description: "Architectural retrofit analysis for an EXISTING codebase — walks the code, finds DIRECTORIES of shallow modules, and proposes at most 5 ranked deepening candidates to docs/architecture/deepening-candidates.md. Runs in the `plan` primary agent, where bash and source edits are DENIED: read-only on source and propose-only are enforced by permission, not by prose. LOCAL/interactive only — it refuses in any headless or cron session. A candidate is a model deduction, never a locked decision, and the issue derived from it is NEVER created harness:ready: a blind restructure of working code is delivered locally, never auto-merged. Use when a legacy/existing project needs its architecture retrofitted toward deep modules, or when asked to find where the codebase became hard to change."
+description: "Architectural retrofit analysis for an EXISTING codebase — walks the code, finds DIRECTORIES of shallow modules, and proposes at most 5 ranked deepening candidates to docs/architecture/deepening-candidates.md. Runs in the `plan` primary agent, where source edits are DENIED and bash is restricted to a read-only git-history allowlist (no generic shell): never-write-source and propose-only are enforced by permission, not by prose. (One narrower exception is prose-enforced, not permission-enforced: the git-history allowlist has no path-scoping, so a secret committed to history is technically reachable via `git show`/`blame` on a pathspec — this skill's own instructions avoid that, they are not blocked from attempting it.) LOCAL/interactive only — it refuses in any headless or cron session. A candidate is a model deduction, never a locked decision, and the issue derived from it is NEVER created harness:ready: a blind restructure of working code is delivered locally, never auto-merged. Use when a legacy/existing project needs its architecture retrofitted toward deep modules, or when asked to find where the codebase became hard to change."
 license: MIT
 compatibility: opencode
 metadata:
@@ -23,7 +23,9 @@ product-language** — he decides on impact and risk, never on class names.
 
 ## Where it runs (OpenCode) — `plan`, and the boundary is a permission, not a promise
 
-Runs in the **`plan` primary agent**, the same host as `oc-grill`. There, `bash` is **denied**, `task` is
+Runs in the **`plan` primary agent**, the same host as `oc-grill`. There, `bash` is restricted to a
+**read-only git-history allowlist** (`git log`/`diff`/`show`/`blame`/`status` only — no `--output`,
+no `>`/`>>` redirect, no `--ext-diff`/`--textconv`, no other command; see `agents/plan.md`), `task` is
 limited to `discussion-adversary`, and `edit` denies every path except `docs/prd/*.md` and
 `docs/architecture/deepening-candidates.md`. So "never edits source, never opens an issue, never
 dispatches a delivery agent" is **impossible by construction here** — not a prose commitment. Do not
@@ -59,9 +61,10 @@ Headless is active when **any** of these holds:
     "$CLAUDE_CODE_REMOTE" "$HARNESS_NOTIFY_PROJECT" "$HARNESS_OBSERVABILITY_RUN_PATH"
   ```
 
-> **In `plan` bash is denied** — there is no shell probe. Decide from the trigger prompt: a `plan`
-> session reached through an autonomous/cron prompt is headless and must refuse; a live operator
-> conversation is interactive.
+> **In `plan` bash is restricted to the read-only git-history allowlist above** — there is no generic
+> shell probe (the headless-detection probe used elsewhere needs an arbitrary `printf`/env read, which
+> is not on this allowlist). Decide from the trigger prompt instead: a `plan` session reached through
+> an autonomous/cron prompt is headless and must refuse; a live operator conversation is interactive.
 >
 > `$CLAUDE_CODE_REMOTE` alone is **not** a sufficient test. The VPS cron dispatcher
 > (`core/vps/cron-a-dispatch.mjs`) **deliberately unsets it** so the run stays "headless-local" and
@@ -202,7 +205,7 @@ would make it sliceable.
 Rank on **how much complexity concentrates behind the smaller interface** (the deletion-test result):
 forwarding hops removed, callers freed from knowing the internal order, places where the same domain
 knowledge stops being re-derived. That is the leverage, and it is structural — it does not need git,
-which is exactly why this skill can live in a bash-denied host.
+which is why it is the primary axis even now that a narrow git-history allowlist exists in `plan`.
 
 **Do not rank by change frequency.** The heuristic is anti-correlated with the actual problem: the
 worst module in a codebase is often the one **nobody touches because everybody is afraid of it**, and
@@ -213,12 +216,17 @@ functions, "legacy"/"não mexer"/"TODO" comments, and — the strongest signal �
 duplicates its job elsewhere** rather than changing it. Ask the operator one direct question, since
 this is a product-level answer he owns: *"Tem alguma parte do sistema que todo mundo evita mexer?"*
 
-Change signal is a **secondary tie-breaker only**, never the axis — and it is **not available in this
-host** (no bash). On the Claude Code side it may be gathered as read-only context with
-`git log --no-merges`, excluding lockfiles, snapshots, `CHANGELOG`, `dist/`, `vendor/`,
-`node_modules/` and generated trees, dropping paths that no longer exist on disk, and remembering
-that a **squash-merge repo collapses a whole PR into one commit** so churn understates activity. Here,
-rank without it.
+Change signal is a **secondary tie-breaker only**, never the axis. It **is** now gatherable in `plan`
+too — the git-history allowlist covers plain `git log --no-merges -- <path>` (never `--output`, never
+a `>`/`>>` redirect, never combined with `--ext-diff`/`--textconv`; a bare count/date read only, not a
+content dump) — excluding lockfiles, snapshots, `CHANGELOG`, `dist/`, `vendor/`, `node_modules/` and
+generated trees, dropping paths that no longer exist on disk, and remembering that a **squash-merge
+repo collapses a whole PR into one commit** so churn understates activity. Do not use `-p`/`git show`/
+`git blame` on a path to pull this signal — those can surface file content this agent's own read
+denylist blocks (`.env*`, `*.pem`, `*.key`, secrets committed to history) and the allowlist has no
+path-scoping to stop it; a bare `git log --no-merges -- <path>` for counts/dates carries none of that
+risk. If for any reason the signal cannot be gathered, rank without it rather than reach for a denied
+form of the command.
 
 Push down anything that crosses a sensitive path (auth, payment, billing, SQL, migrations) — it costs
 a FULL delivery with a security auditor and must be a deliberate choice, never a by-product of a
@@ -253,8 +261,9 @@ demoted entry moves to `## Fila` with one line saying what outranked it. Never l
 past 5 by accumulation.
 
 **It must be committed — and you cannot commit it here.** `docs/architecture/` is outside any
-delivery scope and the `shipper` never runs in this flow, so nothing auto-stages the file; `plan` has
-no bash. Close with one line: `Candidatos escritos em docs/architecture/deepening-candidates.md —
+delivery scope and the `shipper` never runs in this flow, so nothing auto-stages the file; `plan`'s
+git-history allowlist is read-only inspection only (`log`/`diff`/`show`/`blame`/`status`) — no `add`,
+no `commit`, no write git command of any kind. Close with one line: `Candidatos escritos em docs/architecture/deepening-candidates.md —
 troque para build com Tab e peça o commit (committing-changes).` Uncommitted, the next scan reads
 nothing and re-proposes everything the operator already rejected.
 

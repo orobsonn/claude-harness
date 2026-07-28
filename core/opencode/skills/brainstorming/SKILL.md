@@ -81,7 +81,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 ## After the Design
 
 **Documentation:**
-- Write the validated design to the canonical runtime path `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build` (whose `edit` is denied), write via bash** — do not try the edit/write tool.
+- Write the validated design to the canonical runtime path `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build`, write it directly with the edit tool** (`agents/build.md`: `edit: allow`) — older revisions of this skill said `edit` was denied there and instructed a bash workaround; that predates the current `build.md` and no longer applies.
 - Commit only the durable docs copy (via `oc-committing-changes`); the runtime spec remains session state.
 
 **Spec self-review** — look with fresh eyes:
