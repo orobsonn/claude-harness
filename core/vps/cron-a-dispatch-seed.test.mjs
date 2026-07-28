@@ -541,6 +541,27 @@ test("seedOpencodeRootConfig: rejects an unknown materialized routing version", 
   }
 });
 
+test("seedOpencodeRootConfig: accepts routing v2 with single evaluators and no families (#576 ac-2.1)", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-routing-single-evaluator-");
+  try {
+    const routing = structuredClone(CANONICAL_ROUTING);
+    routing.roles["plan-reviewer"] = { model: "openai/gpt-5.6-sol" };
+    routing.roles.adversary = { model: "openai/gpt-5.6-sol" };
+    writeFileSync(
+      join(projectRoot, "core", "opencode", "harness.routing.json"),
+      JSON.stringify(routing),
+    );
+
+    assert.doesNotThrow(() => seedOpencodeRootConfig(worktree, projectRoot));
+    const materialized = JSON.parse(
+      readFileSync(join(worktree, ".opencode", "harness.routing.json"), "utf8"),
+    );
+    assert.deepEqual(materialized.roles.adversary, { model: "openai/gpt-5.6-sol" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("seedOpencodeRootConfig: preserves the return-shape contract — 'copied' still includes 'opencode.json' when a projectRoot source is written", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-return-shape-");
   try {

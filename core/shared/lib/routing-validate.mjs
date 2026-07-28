@@ -69,6 +69,7 @@ export function validateRouting(config) {
 
     for (const role of REVIEW_ROLES) {
       const r = roles[role];
+      if (isModelRoute(r)) continue;
       const families = r.families;
       if (!families || typeof families !== "object" || Array.isArray(families)) {
         return { ok: false, reason: `missing families on ${role}` };
