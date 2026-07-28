@@ -45,7 +45,15 @@ git log --oneline -5
 - If no changes (staged or unstaged), report and exit.
 - If already on a branch other than main, use that branch.
 
-### 2. Create branch (if on main)
+### 2. Create branch (fallback only — should already exist)
+
+`orchestrating-delivery/SKILL.md` ("Before the first task") now creates the feature branch
+**before the first `executor` dispatch**, at the start of the run — not here. By the time delivery
+reaches you, the session should already be on a feature branch (step 1 above). This step is a
+**fallback/assertion**, not the primary branch-creation mechanism: it only fires if step 1 still
+found `main`/`master`, which signals the upstream check was skipped or the branch was somehow reset
+mid-run.
+
 ```bash
 git checkout -b <type>/<short-description>
 ```
