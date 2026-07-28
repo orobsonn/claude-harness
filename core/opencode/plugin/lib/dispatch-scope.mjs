@@ -115,7 +115,11 @@ export function normalizeProjectPath(projectRoot, value) {
   if (raw.split("/").includes("..")) return { ok: false, reason: "scope path traversal rejected" };
   let realRoot;
   try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
-  const absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(realRoot, raw);
+  const lexicalRoot = path.resolve(projectRoot);
+  let absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(realRoot, raw);
+  if (!inside(realRoot, absolute) && inside(lexicalRoot, absolute)) {
+    absolute = path.resolve(realRoot, path.relative(lexicalRoot, absolute));
+  }
   if (!inside(realRoot, absolute)) return { ok: false, reason: "absolute path outside project root" };
   const existing = nearestRealPath(absolute);
   if (!existing || !inside(realRoot, existing)) return { ok: false, reason: "scope path symlink escape rejected" };

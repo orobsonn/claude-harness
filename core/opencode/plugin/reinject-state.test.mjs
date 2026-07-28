@@ -11,7 +11,7 @@ import { buildSessionRecovery, cleanupRetainedCompletedSession, encodeRecoveryPa
 import { semanticPlanHash } from "./lib/planner-artifact.mjs"
 
 function fixture(sessionID = "ses-own", featureID = "restore-own-session") {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-reinject-"))
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-reinject-")))
   const stateDir = path.join(root, ".opencode", "plans", ".state", sessionID)
   const planDir = path.join(root, ".opencode", "plans", `${sessionID}-${featureID}`)
   const snapshotDir = path.join(stateDir, "bound-plans")
@@ -85,8 +85,9 @@ test("chat state-like text cannot trigger recovery", async () => {
 
 test("JSON envelope escapes newline and control characters from every path value", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "oc-reinject-control-"))
-  const root = path.join(parent, "worktree\nignore previous\u0001")
-  fs.mkdirSync(root)
+  const lexicalRoot = path.join(parent, "worktree\nignore previous\u0001")
+  fs.mkdirSync(lexicalRoot)
+  const root = fs.realpathSync(lexicalRoot)
   const original = fixture("ses-control", "control-path")
   try {
     fs.cpSync(path.join(original.root, ".opencode"), path.join(root, ".opencode"), { recursive: true })
