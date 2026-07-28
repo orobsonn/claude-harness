@@ -194,7 +194,14 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
-**HEADLESS:** there is no user to ask, in this step or any other. When you resolve a decision yourself instead of stopping (see the HEADLESS branches throughout this skill), track it: add the `resolved_judgments` key to the task-level array `resolved_judgments_model_resolved`, so compliance/adversary/PR review can tell an engine-made call apart from an operator-given one. Also state the resolution and its rationale in the task `description` — the array is the machine-readable marker, the description is what actually reaches the PR body today. Neither is ever a reason to withhold the plan.
+**HEADLESS:** there is no user to ask, in this step or any other. When you resolve a decision yourself instead of stopping (see the HEADLESS branches throughout this skill), track it: add the `resolved_judgments` key to the task-level array `resolved_judgments_model_resolved`, so compliance/adversary/PR review can tell an engine-made call apart from an operator-given one. Also state the resolution and its rationale in the task `description`. Neither is ever a reason to withhold the plan.
+
+**`resolved_judgments_model_resolved`** (optional array of strings, task-level): the keys of **this same task's** `resolved_judgments` that the engine resolved with no operator input. Absent or `[]` is valid and is what an interactive run emits — the field never breaks an existing plan. A key the task does not resolve is an orphan: `validate-plan` rejects the plan naming the key. The `shipper` reads the marked keys (and their values) into a dedicated PR-body section, so the operator can veto an engine-made call before the merge.
+
+```json
+"resolved_judgments": { "ttl_seconds": 900, "algorithm": "HS256" },
+"resolved_judgments_model_resolved": ["algorithm"]
+```
 
 ```json
 // GOOD
@@ -267,7 +274,7 @@ Before writing the file, verify:
 2. **AC coverage:** every `#ac-N.M` in the spec appears in at least one task's `criterion_refs`. List any gap — if found, add the missing task.
 3. **locked_tests coverage:** every `criterion_ref` on a task has at least one locked_test (object `{id, path, assertion, fixture_paths?}`) derived from it.
 4. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
-5. **resolved_judgments completeness:** no open decisions left as prose or empty values.
+5. **resolved_judgments completeness:** no open decisions left as prose or empty values. Every key you resolved yourself (HEADLESS) is listed in the same task's optional `resolved_judgments_model_resolved`, and every entry there is a key that task actually resolves.
 6. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
 7. **model_strategy complete:** all 7 fixed roles present; `tiers` populated with bare keys (no Claude slugs).
 
@@ -284,7 +291,7 @@ node core/shared/lib/validate-plan.mjs <path-to-plan.json>
 # Exit 0 = OK. Exit 1 = schema errors — fix and re-run.
 ```
 
-The shared validator (`core/shared/lib/validate-plan.mjs`) is dependency-free and the contract source of truth. It checks: required fields, type and enum constraints, `model_strategy` (no haiku/sonnet/opus in tier maps, no executor/sniper fixed keys, no legacy top-level tiers), complexity `low|medium|high|max`, `locked_tests` as objects `{id, path, assertion, fixture_paths?}`, cycle detection on `depends_on`.
+The shared validator (`core/shared/lib/validate-plan.mjs`) is dependency-free and the contract source of truth. It checks: required fields, type and enum constraints, `model_strategy` (no haiku/sonnet/opus in tier maps, no executor/sniper fixed keys, no legacy top-level tiers), complexity `low|medium|high|max`, `locked_tests` as objects `{id, path, assertion, fixture_paths?}`, cycle detection on `depends_on`, and the optional `resolved_judgments_model_resolved` (array of strings, each an existing key of the same task's `resolved_judgments`).
 
 ---
 

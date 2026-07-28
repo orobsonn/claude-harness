@@ -71,7 +71,7 @@ Also consult the operator's `mp` MCP through retrieval-only `code` for relevant 
 7. **Classify complexity** (residual reasoning → executor model) from the scorer. Bias DOWN: a rich plan plus the strong review net (compliance + adversary + sniper) means a cheaper executor usually suffices.
 8. **Decide `adversarial.enabled`** — `true` ONLY for auth, payment, data-integrity, concurrency, external-input-reaching-storage, or secrets. When `true`, `focus` MUST be non-empty. `false` for config/types/trivial wiring.
 9. **Set `scope_paths`** — specific globs, prefer `src/handlers/foo.ts` over `src/**`. This is the write boundary.
-10. **Set `resolved_judgments`** — scalar key→value pairs (string/number/boolean). No prose sentences, no objects, no arrays, no "TBD".
+10. **Set `resolved_judgments`** — scalar key→value pairs (string/number/boolean). No prose sentences, no objects, no arrays, no "TBD". Every one of those keys you resolved **yourself** (HEADLESS: no operator to ask) also goes into the optional `resolved_judgments_model_resolved` array on the same task — that is what reaches the PR body as an engine-made decision.
 11. **Set `criterion_refs`** — every AC owned by at least one task; no unowned AC.
 12. **Assemble `model_strategy`** snapshot, `final_review` (both true), and `demo` config.
 
@@ -109,6 +109,7 @@ Use THIS harness's tier and agent names. NEVER use haiku/sonnet/opus or model sl
   "complexity": "low | medium | high | max",
   "scope_paths": [ "src/handlers/foo.ts" ],
   "resolved_judgments": { "key": "scalar value — string|number|boolean only, never prose/object/array" },
+  "resolved_judgments_model_resolved": [ "key" ],
   "criterion_refs": [ "#ac-17" ],
   "locked_tests": [ /* LockedTest[], ≥1, each derived from a criterion_ref */ ],
   "adversarial": { "enabled": false, "focus": [] }
@@ -119,6 +120,7 @@ Use THIS harness's tier and agent names. NEVER use haiku/sonnet/opus or model sl
 - `complexity` = RESIDUAL REASONING → drives the executor model (`low`→executor-low, `medium`→executor-medium, `high`/`max`→executor-high). OPTIONAL; if absent, `build` falls back to `severity`. Bands (the `complexity-scorer` tool computes them; bias DOWN): low ≤10, medium ≤30, high ≤45, **max** 46-60 (still `executor-high`), x-high/split >60 (MUST be split — never ship an x-high task).
 - `scope_paths` ≥1, specific globs — the write boundary.
 - `resolved_judgments` ≥1 entry; all values scalar.
+- `resolved_judgments_model_resolved` — **OPTIONAL** array of strings; each string MUST be a key of the **same task's** `resolved_judgments`. It marks the decisions **you resolved on your own** (HEADLESS, with no operator input) so the PR review can tell an engine-made call from an operator-given one — the `shipper` reads it into the PR body. Omit the field, or emit `[]`, when the operator resolved everything. A key that the task does not resolve is an orphan and the `validate-plan` tool rejects the plan.
 - `criterion_refs` ≥1, each matches `/#ac-\d+/` (flat anchor — the spec's AC numbering).
 - `locked_tests` ≥1, each derived from a `criterion_ref`; asserts an observable, never status-only/theatre.
 - `adversarial.focus` REQUIRED and non-empty WHEN `enabled: true`; `enabled: true` ONLY for the sensitive categories above.
@@ -165,7 +167,7 @@ Canonical object shape (shared `validatePlan` source of truth) — **not** a bar
 1. Every acceptance criterion in the spec is owned by ≥1 `task.criterion_refs` (flat `#ac-N` anchors) — no unowned ACs.
 2. Every `criterion_ref` on a task has ≥1 `locked_test` derived from it.
 3. `depends_on`: every referenced id exists in `tasks[]` and appears earlier; no cycles.
-4. `resolved_judgments`: all values scalar; no "TBD"/open values; no prose.
+4. `resolved_judgments`: all values scalar; no "TBD"/open values; no prose. `resolved_judgments_model_resolved` (optional): array of strings, every entry a key of the SAME task's `resolved_judgments`; absent or `[]` when the operator resolved everything, and every judgment you resolved yourself in HEADLESS is listed.
 5. `scope_paths`: tasks at the same DAG level (no dependency between them) do NOT share writable paths.
 6. `adversarial.focus` non-empty whenever `adversarial.enabled` is `true`; `adversarial.enabled` is `false` for config/types/trivial wiring.
 7. `final_review.compliance === true` AND `final_review.adversary === true`.
