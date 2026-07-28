@@ -7,10 +7,20 @@ function norm(s) {
 }
 
 /**
- * Stable dedup key. Prefer `id` when present; else
+ * Fields identifying a plan-review finding (schema: area, severity, task_id, problem,
+ * planner_instruction — no id/title/description). Severity NEVER enters the key: two
+ * distinct defects of equal severity are not the same defect.
+ */
+export const PLAN_REVIEW_DEDUP_FIELDS = Object.freeze(['task_id', 'problem', 'area'])
+
+/**
+ * Stable dedup key. When an explicit `fields` override is passed and yields a usable
+ * identity, it wins over `id` — the caller knows its schema better than a generic
+ * upstream-synthesized id (e.g. a hash derived from title/scope, which is empty for
+ * plan-review findings and would otherwise collapse onto severity alone). Without a
+ * usable `fields` override: prefer `id` when present; else
  * normalize(title||description) + '|' + severity + '|' + (scope||category||'').
  * Never keys on severity alone (two distinct highs must not collapse).
- * Optional `fields` override still supported for callers that pass an explicit list.
  * @param {unknown} finding
  * @param {string[]} [fields]
  * @returns {string}
@@ -18,10 +28,6 @@ function norm(s) {
 export function dedupKey(finding, fields) {
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return ''
   const f = /** @type {Record<string, unknown>} */ (finding)
-  // Prefer stable id — distinct findings keep distinct keys even at same severity.
-  if (typeof f.id === 'string' && f.id.trim().length > 0) {
-    return `id:${f.id.trim()}`
-  }
   if (Array.isArray(fields) && fields.length > 0) {
     const parts = fields.map((name) => norm(f[name]))
     const nonEmpty = parts.filter((p) => p.length > 0)
@@ -29,6 +35,10 @@ export function dedupKey(finding, fields) {
     if (nonEmpty.length >= 2 || (nonEmpty.length === 1 && fields.length === 1 && fields[0] !== 'severity')) {
       return parts.join('|')
     }
+  }
+  // Prefer stable id — distinct findings keep distinct keys even at same severity.
+  if (typeof f.id === 'string' && f.id.trim().length > 0) {
+    return `id:${f.id.trim()}`
   }
   const text = norm(f.title || f.description || '')
   const severity = norm(f.severity || '')
@@ -46,7 +56,14 @@ export function isRefuteVehicle(f) {
          typeof r.reason === 'string' && r.reason.trim().length >= 1
 }
 
-export function classifyFindings(familyAIssues = [], familyBIssues = [], labels = { a: 'primary', b: 'secondary' }) {
+/**
+ * @param {object[]} [familyAIssues]
+ * @param {object[]} [familyBIssues]
+ * @param {{a?: string, b?: string}} [labels]
+ * @param {string[]} [fields] - explicit dedup-key field override (e.g. PLAN_REVIEW_DEDUP_FIELDS
+ *   for plan-review findings, whose schema has no id/title/description). Forwarded to dedupKey.
+ */
+export function classifyFindings(familyAIssues = [], familyBIssues = [], labels = { a: 'primary', b: 'secondary' }, fields) {
   const aLabel =
     labels && typeof labels === 'object' && !Array.isArray(labels) && labels.a != null
       ? String(labels.a)
@@ -65,10 +82,10 @@ export function classifyFindings(familyAIssues = [], familyBIssues = [], labels 
         .filter(f => f && typeof f === 'object')
         .map(f => ({ ...f, family: bLabel }))
     : []
-  const keyToA = new Map(onlyA.map(f => [dedupKey(f), f]))
-  const both = onlyB.filter(f => keyToA.has(dedupKey(f))).map(f => ({ ...f, family: 'both' }))
-  const onlyBfinal = onlyB.filter(f => !keyToA.has(dedupKey(f)))
-  const onlyAfinal = onlyA.filter(f => !both.some(b => dedupKey(b) === dedupKey(f)))
+  const keyToA = new Map(onlyA.map(f => [dedupKey(f, fields), f]))
+  const both = onlyB.filter(f => keyToA.has(dedupKey(f, fields))).map(f => ({ ...f, family: 'both' }))
+  const onlyBfinal = onlyB.filter(f => !keyToA.has(dedupKey(f, fields)))
+  const onlyAfinal = onlyA.filter(f => !both.some(b => dedupKey(b, fields) === dedupKey(f, fields)))
   return {
     onlyA: onlyAfinal,
     onlyB: onlyBfinal,

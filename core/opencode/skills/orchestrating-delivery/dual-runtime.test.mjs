@@ -430,6 +430,73 @@ test("t8-merge-description-only: two primary description-only highs + one second
   }
 });
 
+// ---- t8-merge-plan-review-fields (#531: plan-review findings deduped by severity alone) ----
+
+function planReviewFinding(over = {}) {
+  return {
+    area: "decomposition",
+    severity: "high",
+    task_id: "task-1",
+    problem: "race no lock",
+    planner_instruction: "add mutex around the shared counter",
+    ...over,
+  };
+}
+
+function planReviewReport(findings, family) {
+  return {
+    ...(family === 2 ? { family: "family-2" } : {}),
+    verdict: findings.length > 0 ? "REVISE" : "APPROVE",
+    findings,
+  };
+}
+
+test("t8-merge-plan-review-fields: plan-reviewer findings of equal severity from both families are not collapsed (#531)", () => {
+  const primaryFinding = planReviewFinding({
+    task_id: "task-1",
+    area: "decomposition",
+    problem: "race no lock",
+  });
+  const secondaryFinding = planReviewFinding({
+    task_id: "task-9",
+    area: "introduced-risk",
+    problem: "N+1 query introduced by the new fetch loop",
+  });
+
+  const dual = driveDualEye({
+    post: "plan-reviewer",
+    primaryResult: planReviewReport([primaryFinding], 1),
+    primaryFamily: "claude",
+    secondaryFamily: "codex",
+    runSecondary: () => ({ ok: true, result: planReviewReport([secondaryFinding], 2) }),
+  });
+
+  assert.equal(dual.dual_status, DUAL_STATUS.BOTH);
+  const problems = dual.findings.map((f) => f.problem);
+  assert.ok(problems.includes("race no lock"), "primary plan-review finding must survive the merge");
+  assert.ok(
+    problems.includes("N+1 query introduced by the new fetch loop"),
+    "secondary plan-review finding must survive the merge, not be consumed by a severity-only dedup key",
+  );
+  assert.equal(dual.findings.length, 2, "no plan-review finding may disappear from the merge");
+});
+
+test("t8-merge-plan-review-fields: same defect (same task_id + problem) from both families unifies into one entry", () => {
+  const shared = planReviewFinding({ task_id: "task-1", area: "decomposition", problem: "race no lock" });
+
+  const dual = driveDualEye({
+    post: "plan-reviewer",
+    primaryResult: planReviewReport([shared], 1),
+    primaryFamily: "claude",
+    secondaryFamily: "codex",
+    runSecondary: () => ({ ok: true, result: planReviewReport([{ ...shared }], 2) }),
+  });
+
+  assert.equal(dual.dual_status, DUAL_STATUS.BOTH);
+  assert.equal(dual.findings.length, 1, "identical plan-review defect must unify into a single entry");
+  assert.equal(dual.findings[0].problem, "race no lock");
+});
+
 // ---- supporting contracts (not locked ids but required by DoD) ----
 
 test("t8-posts: dual posts dispatch canonical provider-agnostic family agents", () => {

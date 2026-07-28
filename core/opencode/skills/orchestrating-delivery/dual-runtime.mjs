@@ -7,6 +7,7 @@ import {
   classifyFindings,
   finalizeFindings,
   isRefuteVehicle,
+  PLAN_REVIEW_DEDUP_FIELDS,
 } from "../../../shared/lib/merge-findings.mjs";
 import { mergeVerdicts } from "../../../shared/lib/merge-verdicts.mjs";
 import { reviewDispatchFor } from "../../agents/review-catalog.mjs";
@@ -257,13 +258,15 @@ export function pendingDualState(primaryResult, meta = {}) {
  * @param {object[]} primaryFindings
  * @param {object[]} secondaryFindings
  * @param {{ a?: string, b?: string }} [labels]
+ * @param {string[]} [fields] - dedup-key field override forwarded to classifyFindings (e.g.
+ *   PLAN_REVIEW_DEDUP_FIELDS for the plan-reviewer/verdict shape).
  * @returns {{ findings: object[], dropped: object[], policy: 'B', ok: boolean, reason?: string }}
  */
-export function mergeDualFindings(primaryFindings, secondaryFindings, labels = { a: "primary", b: "secondary" }) {
+export function mergeDualFindings(primaryFindings, secondaryFindings, labels = { a: "primary", b: "secondary" }, fields) {
   try {
     const a = Array.isArray(primaryFindings) ? primaryFindings : [];
     const b = Array.isArray(secondaryFindings) ? secondaryFindings : [];
-    const classified = classifyFindings(a, b, labels);
+    const classified = classifyFindings(a, b, labels, fields);
     const finalized = finalizeFindings(classified);
     return {
       findings: finalized.findings ?? [],
@@ -582,11 +585,14 @@ function finalizeBoth(args) {
       ...extractFindings(primaryResult),
       ...extractFindings(secondaryResult),
     ];
-    // Policy B on any issues carried in verdicts
+    // Policy B on any issues carried in verdicts. plan-reviewer findings have no
+    // id/title/description (closed schema), so the dedup key must use the plan-review
+    // fields override — otherwise distinct findings of equal severity collapse together.
     const mergedFindings = mergeDualFindings(
       extractFindings(primaryResult),
       extractFindings(secondaryResult),
       { a: primaryFamily, b: secondaryFamily },
+      PLAN_REVIEW_DEDUP_FIELDS,
     );
     const kept = mergedFindings.findings;
     // Either-REVISE-wins + non-refuted issues → top-level blocking REVISE for orchestrator
