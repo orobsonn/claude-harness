@@ -376,7 +376,9 @@ export async function createObsHandHooks(
       } finally {
         if (terminal) {
           const finished = cleanup(input?.sessionID, input?.callID);
-          if (finished && !finished.ok) throw new Error(`${PREFIX} ${finished.reason}`);
+          if (finished && !finished.ok) {
+            console.warn(`${PREFIX} after-hook cleanup skipped (session=${input?.sessionID} call=${input?.callID}): ${finished.reason}`);
+          }
         }
       }
     },
@@ -386,22 +388,30 @@ export async function createObsHandHooks(
         if (info?.role !== "user" || !writingHand(info?.agent) || typeof info?.sessionID !== "string") return;
         let session;
         try { session = await reader.getSession(info.sessionID); } catch { return; }
+        // Belt is fail-open (#532): a binding-accounting miss here must never crash the run —
+        // warn and let the dispatch proceed unbound.
         if (typeof session?.parentID === "string") {
           const bound = bindChildSession(cwd, { parentSessionId: session.parentID, childSessionId: info.sessionID, role: info.agent });
-          if (!bound.ok) throw new Error(`${PREFIX} ${bound.reason}`);
+          if (!bound.ok) {
+            console.warn(`${PREFIX} message.updated bind skipped (child=${info.sessionID} parent=${session.parentID}): ${bound.reason}`);
+          }
         }
         return;
       }
       if (event?.type === "session.idle" || event?.type === "session.error") {
         const sessionId = event?.properties?.sessionID;
         const finished = await cleanupChild(sessionId);
-        if (finished && !finished.ok && !/not bound/.test(String(finished.reason))) throw new Error(`${PREFIX} ${finished.reason}`);
+        if (finished && !finished.ok && !/not bound/.test(String(finished.reason))) {
+          console.warn(`${PREFIX} ${event.type} cleanup skipped (child=${sessionId}): ${finished.reason}`);
+        }
         return;
       }
       const part = event?.properties?.part ?? event?.part;
       if (event?.type !== "message.part.updated" || part?.type !== "tool" || !isTaskTool(part?.tool) || part?.state?.status !== "error") return;
       const finished = cleanup(part.sessionID, part.callID);
-      if (finished && !finished.ok) throw new Error(`${PREFIX} ${finished.reason}`);
+      if (finished && !finished.ok) {
+        console.warn(`${PREFIX} tool-error cleanup skipped (session=${part.sessionID} call=${part.callID}): ${finished.reason}`);
+      }
     },
   };
 }
