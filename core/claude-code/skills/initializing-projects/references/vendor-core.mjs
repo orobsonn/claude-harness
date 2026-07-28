@@ -789,9 +789,32 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
  * Exact relative paths ONLY (never a directory or a glob) — this must never risk deleting a
  * user's own local plugin placed alongside the harness ones in the same auto-load directory.
  */
-const OC_RETIRED_FILES = [
+export const OC_RETIRED_FILES = [
   "plugin/command-resolver.ts",
   "plugin/lib/command-resolver.mjs",
+  "agents/adversary-family-1.md",
+  "agents/adversary-family-2.md",
+  "agents/executor-high-spawn.md",
+  "agents/executor-low-spawn.md",
+  "agents/executor-medium-spawn.md",
+  "agents/plan-reviewer-family-1.md",
+  "agents/plan-reviewer-family-2.md",
+  "agents/sniper-high-spawn.md",
+  "agents/sniper-low-spawn.md",
+  "agents/sniper-medium-spawn.md",
+  "agents/test-author-spawn.md",
+  "plugin/loop-guard.ts",
+  "plugin/lib/adversary-nudge.mjs",
+  "plugin/lib/adversary-nudge.test.mjs",
+  "plugin/lib/dual-enforcement.mjs",
+  "plugin/lib/dual-enforcement.test.mjs",
+  "plugin/lib/dual-merge.mjs",
+  "plugin/lib/dual-merge.test.mjs",
+  "plugin/lib/dual-nudge.mjs",
+  "plugin/lib/marker-seal.mjs",
+  "plugin/lib/marker-security.test.mjs",
+  "skills/orchestrating-delivery/dual-runtime.mjs",
+  "skills/orchestrating-delivery/dual-runtime.test.mjs",
 ];
 
 /**
@@ -809,12 +832,15 @@ function existsWithExactCase(dir, name) {
 }
 
 /**
- * @description Delete each `OC_RETIRED_FILES` entry under `ocDir`, but only on an exact
- * case-sensitive filename match — never a case-insensitive filesystem coincidence.
+ * @description Delete each `OC_RETIRED_FILES` entry missing from the source, but only on
+ * an exact case-sensitive destination match. Paths can be predeclared before source removal.
  * @param {string} ocDir
+ * @param {string} sourceOcDir
  */
-function pruneOcRetiredFiles(ocDir) {
+function pruneOcRetiredFiles(ocDir, sourceOcDir) {
   for (const rel of OC_RETIRED_FILES) {
+    const source = join(sourceOcDir, rel);
+    if (existsWithExactCase(dirname(source), rel.split("/").pop())) continue;
     const abs = join(ocDir, rel);
     if (existsWithExactCase(dirname(abs), rel.split("/").pop())) rmSync(abs, { force: true });
   }
@@ -843,7 +869,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
-  pruneOcRetiredFiles(ocDir);
+  pruneOcRetiredFiles(ocDir, openCodeDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
   if (existsSync(sharedDir)) {

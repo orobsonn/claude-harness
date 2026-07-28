@@ -38,6 +38,13 @@ describe("routing-validate", () => {
     assert.match(res.reason, /invalid required family-1 on adversary/);
   });
 
+  it("#576: v2 review roles accept the new single-evaluator shape without families", () => {
+    const cfg = structuredClone(defaultRouting);
+    cfg.roles["plan-reviewer"] = { model: "openai/gpt-5.6-sol" };
+    cfg.roles.adversary = { model: "openai/gpt-5.6-sol" };
+    assert.deepEqual(validateRouting(cfg), { ok: true });
+  });
+
   it("t1-required-shape: empty roles and input-controlled constraints cannot bypass canonical validation", () => {
     for (const mutate of [
       (cfg) => { cfg.roles = {}; },

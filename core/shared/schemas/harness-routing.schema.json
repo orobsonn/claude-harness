@@ -12,8 +12,18 @@
       "properties": {
         "build": { "$ref": "#/definitions/roleSimple" },
         "planner": { "$ref": "#/definitions/rolePlanner" },
-        "plan-reviewer": { "$ref": "#/definitions/roleFamilies" },
-        "adversary": { "$ref": "#/definitions/roleFamilies" },
+        "plan-reviewer": {
+          "oneOf": [
+            { "$ref": "#/definitions/roleSimple" },
+            { "$ref": "#/definitions/roleFamilies" }
+          ]
+        },
+        "adversary": {
+          "oneOf": [
+            { "$ref": "#/definitions/roleSimple" },
+            { "$ref": "#/definitions/roleFamilies" }
+          ]
+        },
         "compliance": { "$ref": "#/definitions/roleSimple" },
         "security": { "$ref": "#/definitions/roleSimple" },
         "executor": { "$ref": "#/definitions/roleTiers" },

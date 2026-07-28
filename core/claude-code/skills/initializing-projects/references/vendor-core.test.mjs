@@ -43,6 +43,7 @@ import {
   writeSettings,
   installRepoFiles,
   assertFreshNativeInstall,
+  OC_RETIRED_FILES,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -602,6 +603,55 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
+  const scheduled = [
+    "agents/adversary-family-1.md",
+    "agents/adversary-family-2.md",
+    "agents/executor-high-spawn.md",
+    "agents/executor-low-spawn.md",
+    "agents/executor-medium-spawn.md",
+    "agents/plan-reviewer-family-1.md",
+    "agents/plan-reviewer-family-2.md",
+    "agents/sniper-high-spawn.md",
+    "agents/sniper-low-spawn.md",
+    "agents/sniper-medium-spawn.md",
+    "agents/test-author-spawn.md",
+    "plugin/loop-guard.ts",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/dual-enforcement.mjs",
+    "plugin/lib/dual-enforcement.test.mjs",
+    "plugin/lib/dual-merge.mjs",
+    "plugin/lib/dual-merge.test.mjs",
+    "plugin/lib/dual-nudge.mjs",
+    "plugin/lib/marker-seal.mjs",
+    "plugin/lib/marker-security.test.mjs",
+    "skills/orchestrating-delivery/dual-runtime.mjs",
+    "skills/orchestrating-delivery/dual-runtime.test.mjs",
+  ];
+
+  for (const path of scheduled) {
+    assert.ok(OC_RETIRED_FILES.includes(path), `missing scheduled retired path: ${path}`);
+  }
+  assert.equal(new Set(OC_RETIRED_FILES).size, OC_RETIRED_FILES.length, "retired paths must be unique");
+});
+
+test("predeclared retired files remain vendored while their source still exists (#576)", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-predeclared-retired-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/loop-guard.ts")));
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
