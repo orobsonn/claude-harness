@@ -14,13 +14,101 @@ function norm(s) {
 export const PLAN_REVIEW_DEDUP_FIELDS = Object.freeze(['task_id', 'problem', 'area'])
 
 /**
+ * Keys that never contribute identity: `severity` (two distinct defects of equal severity are
+ * not the same defect) and `family` (injected by classifyFindings — including it would make a
+ * primary finding never match its secondary twin).
+ */
+const NON_IDENTIFYING_KEYS = Object.freeze(['severity', 'family'])
+
+/**
+ * @description Key-ordered serialization so a nested value carries identity (a finding whose
+ * only content is nested — e.g. a refutes vehicle — must not read as contentless). Cycles
+ * collapse to a marker instead of recursing forever; the module never throws.
+ * @param {unknown} value
+ * @param {Set<object>} seen
+ * @returns {string}
+ */
+function stableJson(value, seen) {
+  if (value === null || typeof value !== 'object') return stablePrimitive(value)
+  if (seen.has(value)) return '"[circular]"'
+  seen.add(value)
+  if (Array.isArray(value)) return `[${value.map((v) => stableJson(v, seen)).join(',')}]`
+  const body = Object.keys(value)
+    .sort()
+    .map((k) => `${stablePrimitive(k)}:${stableJson(readField(value, k), seen)}`)
+    .join(',')
+  return `{${body}}`
+}
+
+/**
+ * @description Primitive serialization that keeps identity for the shapes JSON refuses
+ * (BigInt, symbol, undefined) instead of throwing out of the module.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function stablePrimitive(value) {
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+/**
+ * @description Identity of one field value. Primitives normalize as free text; objects and
+ * arrays serialize key-ordered (never '[object Object]', which would make distinct findings
+ * collide). Functions and symbols carry no identity.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function fieldIdentity(value) {
+  if (value === null || value === undefined) return ''
+  const t = typeof value
+  if (t === 'string' || t === 'number' || t === 'boolean') return norm(value)
+  if (t !== 'object') return ''
+  return norm(stableJson(value, new Set()))
+}
+
+/**
+ * @description Field read that upholds the module's never-throws contract: a throwing getter
+ * costs that one field's identity, not the whole key.
+ * @param {Record<string, unknown>} f
+ * @param {string} name
+ * @returns {unknown}
+ */
+function readField(f, name) {
+  try {
+    return f[name]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * @description Stable identity built from the finding's own non-empty fields, severity and
+ * family excluded.
+ * @param {Record<string, unknown>} f
+ * @returns {string}
+ */
+function structuralIdentity(f) {
+  return Object.keys(f)
+    .filter((k) => !NON_IDENTIFYING_KEYS.includes(k))
+    .sort()
+    .map((k) => [k, fieldIdentity(readField(f, k))])
+    .filter(([, v]) => v.length > 0)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('|')
+}
+
+/**
  * Stable dedup key. When an explicit `fields` override is passed and yields a usable
  * identity, it wins over `id` — the caller knows its schema better than a generic
  * upstream-synthesized id (e.g. a hash derived from title/scope, which is empty for
  * plan-review findings and would otherwise collapse onto severity alone). Without a
  * usable `fields` override: prefer `id` when present; else
  * normalize(title||description) + '|' + severity + '|' + (scope||category||'').
- * Never keys on severity alone (two distinct highs must not collapse).
+ * Never keys on severity alone (two distinct highs must not collapse) — the tail falls back
+ * to the finding's structural identity when the generic text/scope shape is empty too.
  * @param {unknown} finding
  * @param {string[]} [fields]
  * @returns {string}
@@ -29,21 +117,32 @@ export function dedupKey(finding, fields) {
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return ''
   const f = /** @type {Record<string, unknown>} */ (finding)
   if (Array.isArray(fields) && fields.length > 0) {
-    const parts = fields.map((name) => norm(f[name]))
+    const parts = fields.map((name) => norm(readField(f, name)))
     const nonEmpty = parts.filter((p) => p.length > 0)
     // Guard: never return a severity-only key when multi-field list collapses to one part.
     if (nonEmpty.length >= 2 || (nonEmpty.length === 1 && fields.length === 1 && fields[0] !== 'severity')) {
       return parts.join('|')
     }
+    // Degenerate override: `fields` named 2+ columns but runtime data left fewer than two
+    // non-empty parts — too weak to key on (a stable `id`, when present, identifies better).
+    // Falling through is only safe because every branch below refuses a severity-only key.
   }
   // Prefer stable id — distinct findings keep distinct keys even at same severity.
-  if (typeof f.id === 'string' && f.id.trim().length > 0) {
-    return `id:${f.id.trim()}`
+  const id = readField(f, 'id')
+  if (typeof id === 'string' && id.trim().length > 0) {
+    return `id:${id.trim()}`
   }
-  const text = norm(f.title || f.description || '')
-  const severity = norm(f.severity || '')
-  const disc = norm(f.scope || f.category || '')
-  return `${text}|${severity}|${disc}`
+  const text = norm(readField(f, 'title') || readField(f, 'description') || '')
+  const severity = norm(readField(f, 'severity') || '')
+  const disc = norm(readField(f, 'scope') || readField(f, 'category') || '')
+  if (text.length > 0 || disc.length > 0) {
+    return `${text}|${severity}|${disc}`
+  }
+  // Nothing in the generic shape (plan-review findings carry none of title/description/
+  // scope/category): `${text}|${severity}|${disc}` would emit `|<severity>|` and collapse every
+  // distinct finding of that severity into one (#531). Key on the finding's own content, so
+  // the guard holds without depending on an external validator rejecting degenerate input.
+  return `struct:${structuralIdentity(f)}|${severity}`
 }
 
 /** @description Valid refutes vehicle: has refutes.{target_id,target_family,reason} — non-blocking even with title. */
