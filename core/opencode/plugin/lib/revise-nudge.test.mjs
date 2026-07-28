@@ -14,9 +14,9 @@ test("REVISE below the budget injects a continue nudge naming the next round", (
   });
   assert.equal(res.action, "inject");
   assert.equal(res.kind, "continue");
-  assert.match(res.context, /round 2\/5/);
+  assert.match(res.context, /round 2\/10/);
   assert.match(res.context, /re-dispatch the plan-reviewer for round 3/);
-  assert.match(res.context, /3 round\(s\) remain/);
+  assert.match(res.context, /8 round\(s\) remain/);
   assert.match(res.context, /material finding still unresolved/);
   // #483: the dual gate is record-only — the nudge frames this as the orchestrator's
   // obligation, never as a runtime block that will refuse the dispatch.
@@ -88,8 +88,8 @@ test("an active review cap escalates even when the counter was reset", () => {
   assert.equal(res.kind, "cap");
 });
 
-test("the budget is 5 rounds", () => {
-  assert.equal(LOOP_THRESHOLDS.plan_review.deny, 5);
+test("the budget is 10 rounds", () => {
+  assert.equal(LOOP_THRESHOLDS.plan_review.deny, 10);
 });
 
 test("a corrupt counter degrades to round 0 instead of throwing", () => {
@@ -98,7 +98,7 @@ test("a corrupt counter degrades to round 0 instead of throwing", () => {
     subagentType: PRIMARY,
   });
   assert.equal(res.kind, "continue");
-  assert.match(res.context, /round 0\/5/);
+  assert.match(res.context, /round 0\/10/);
 });
 
 test("a non-object state does not throw", () => {

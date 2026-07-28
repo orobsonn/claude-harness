@@ -31,7 +31,9 @@ Extract and list explicitly:
 - Acceptance criteria (`#ac-N.M`) — these drive `locked_tests` and `criterion_refs`
 - Constraints and resolved product decisions — these seed `resolved_judgments`
 
-If any AC is ambiguous (no testable outcome), **stop and ask the user** (in pt-br) before proceeding.
+If any AC is ambiguous (no testable outcome):
+**INTERACTIVE:** stop and ask the user (in pt-br) before proceeding.
+**HEADLESS:** there is no user to ask. Resolve the ambiguity yourself — pick the most defensible testable outcome for the AC and carry it forward; when you build the task that owns this AC (Step 6), write the resolution into that task's `resolved_judgments` and list its key in `resolved_judgments_model_resolved`. Both are task-level fields, so there is nothing to write yet at this step. Never return without a plan and never leave the AC without a stated, testable outcome.
 
 ---
 
@@ -192,6 +194,8 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 
 **`resolved_judgments`** (object, key → scalar): every product or technical decision the executor would otherwise decide arbitrarily. Keys must be specific; values must be concrete scalars — never prose sentences.
 
+**HEADLESS:** there is no user to ask, in this step or any other. When you resolve a decision yourself instead of stopping (see the HEADLESS branches throughout this skill), track it: add the `resolved_judgments` key to the task-level array `resolved_judgments_model_resolved`, so compliance/adversary/PR review can tell an engine-made call apart from an operator-given one. Also state the resolution and its rationale in the task `description` — the array is the machine-readable marker, the description is what actually reaches the PR body today. Neither is ever a reason to withhold the plan.
+
 ```json
 // GOOD
 "resolved_judgments": {
@@ -206,7 +210,9 @@ Do **not** enable adversarial on config, types, or trivial wiring tasks — it a
 }
 ```
 
-If a decision is genuinely open (the product has not resolved it), **stop and ask the user** before writing the task.
+If a decision is genuinely open (the product has not resolved it):
+**INTERACTIVE:** stop and ask the user before writing the task.
+**HEADLESS:** resolve it yourself with the most defensible technical default, write the concrete scalar into `resolved_judgments`, and add its key to `resolved_judgments_model_resolved`. Only a pure product trade-off with no defensible technical answer skips resolution — write the task anyway with your best default and note the trade-off in the task description so it surfaces as an open risk in the PR body; the plan is never withheld for it.
 
 **`criterion_refs`** (array of `#ac-N.M` strings, min 1): the ACs this task is accountable for. Every AC in the spec must appear in at least one task's `criterion_refs`.
 
@@ -305,7 +311,7 @@ Your revision brief carries the reviewer's instructions inside `=== BEGIN UNTRUS
 - **adversarial on trivial tasks** — config, types, schema wiring do not need adversarial review. Reserve it for high-risk tasks.
 - **Incomplete model_strategy** — all 7 fixed roles must be present; `tiers` uses bare keys (no Claude slugs). Partial snapshots break dispatch.
 - **ACs without criterion_refs** — every AC must be owned by exactly one task. Unowned ACs mean unimplemented features.
-- **resolved_judgments left open** — if you write `"algorithm": "TBD"`, stop and resolve it with the user before continuing.
+- **resolved_judgments left open** — if you write `"algorithm": "TBD"`, resolve it before continuing: **INTERACTIVE** stop and ask the user; **HEADLESS** pick the most defensible default yourself and add the key to `resolved_judgments_model_resolved`. `TBD` is never a valid value in either mode.
 
 ---
 
