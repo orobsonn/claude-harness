@@ -68,11 +68,13 @@ Refusal (pt-br, then stop — do not fall back to "interviewing yourself"):
 
 ---
 
-## No state, anywhere, except the PRD
+## No state, anywhere, except the PRD (and, on demand, one mockup)
 
-The **only** artifact is `docs/prd/<slug>.md`. No `.claude/` state, no session markers, no gate
-stamps, no resume file, no decision ledger. Resuming a multi-session grill means **re-reading the
-PRD's own `## Em aberto` section** and continuing from there — the file is the memory.
+The **only** artifact is `docs/prd/<slug>.md`, plus — only when the operator explicitly asks to see
+one — a single companion `docs/prd/<slug>-mockup.html` (§ Visual mockup on demand). No other
+`.claude/` state, no session markers, no gate stamps, no resume file, no decision ledger. Resuming a
+multi-session grill means **re-reading the PRD's own `## Em aberto` section** and continuing from
+there — the file is the memory.
 
 ---
 
@@ -157,6 +159,56 @@ independent designers (blind to each other) and have the adversary attack their 
 rule on.** Never present N architectures for the operator to choose between — that is handing an
 engineering decision to someone who cannot evaluate it, and the "choice" becomes a coin flip you
 will later cite as his decision.
+
+### 9. Visual mockup on demand
+
+A UI question is sometimes easier to answer by looking than by reading — the operator asking to
+*see* a layout before answering is not a different activity from answering a text question, it is
+the same discovery step in another modality. When the operator explicitly asks to see a UI option
+("mostra como ficaria", "quero ver a tela", "gera um mock disso") — never unprompted — write **one**
+file, `docs/prd/<slug>-mockup.html`. On a later request for the same slug, overwrite that same file
+— never accumulate a second mockup file.
+
+Content rules, no exceptions, checked before every write (this is a checklist, not a judgment call):
+
+- No `<script>`, no inline event handlers (`onclick=` and friends).
+- No remote reference of **any** kind — no `http://` / `https://` anywhere in the file: not in
+  `url()`, `@font-face`, `@import`, `<base href>`, `<link href>`, `<img src>`, `<iframe src>`, form
+  `action=`. Everything inline — CSS in a single `<style>` block, no external assets, no fonts/CDNs,
+  no CDN framework of any kind (this overrides any contrary suggestion in the reference below).
+- Wireframe/placeholder content only — box labels, dummy text. **Never** copy real PRD content
+  (names, figures, decisions already recorded) into it; the mockup communicates layout and
+  hierarchy, not data.
+- Plain HTML+CSS, opens directly from disk in any browser — no build step, no framework.
+
+**Review the mockup interactively via `lavish-axi`** (github.com/kunchenguid/lavish-axi, MIT) —
+a local CLI that serves the file through a browser UI where the operator clicks elements to
+annotate and sends feedback back, instead of only describing changes in text. Full command
+sequence, retry-on-timeout handling, and the forbidden-commands list (`share`, `setup hooks`) are in
+`references/lavish-usage.md` — **read it before the first mockup of the session**, it is the
+authoritative source for this step, this section is only the summary:
+
+1. Write the mockup per the content rules above.
+2. `npx -y lavish-axi docs/prd/<slug>-mockup.html` to open the review session — this is a normal
+   Bash tool call, expect a permission prompt on the first call unless already allowlisted.
+3. `npx -y lavish-axi poll docs/prd/<slug>-mockup.html` to wait for the operator's feedback. Keep it
+   in the foreground; if the Bash tool call times out, that's expected — just re-run `poll`, nothing
+   is lost.
+4. Apply feedback, `poll --agent-reply "..."` again, repeat until the operator ends the session.
+
+**If `npx -y lavish-axi` fails outright** (no network, registry unreachable, broken release) — fall
+back to opening the static file for the operator: best-effort try `open` (macOS) / `xdg-open`
+(Linux) / `start` (Windows) via Bash, or if that also fails, just state the path in pt-br and let
+the operator open it themselves. Never treat either failure as blocking the interview.
+
+**Never run `lavish-axi share`** (publishes to a third-party host, ht-ml.app, public by default) or
+**`lavish-axi setup hooks`** (installs a `SessionStart` hook that competes with this harness's own) —
+see `references/lavish-usage.md` for why.
+
+The operator's reaction to the mockup is ordinary interview input, nothing more — fold it into
+`## Decisões travadas` / `## Suposições do modelo` like any other answer, and close or refine the
+`## Em aberto` line it responds to. The mockup file is a discovery aid, not a spec: it never
+substitutes for `## Requisitos`, and `creating-issues` does not read it.
 
 ---
 

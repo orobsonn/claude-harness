@@ -200,26 +200,46 @@ A UI question is sometimes easier to answer by looking than by reading — the o
 the same discovery step in another modality. When the operator explicitly asks to see a UI option
 ("mostra como ficaria", "quero ver a tela", "gera um mock disso") — never unprompted, and only when
 the session's primary agent is `build` (confirm from the running session; do not assume) — write
-**one** static file, `docs/prd/<slug>-mockup.html`. On a later request for the same slug, overwrite
-that same file — never accumulate a second mockup file.
+**one** file, `docs/prd/<slug>-mockup.html`. On a later request for the same slug, overwrite that
+same file — never accumulate a second mockup file.
 
 Content rules, no exceptions, checked before every write (this is a checklist, not a judgment call):
 
 - No `<script>`, no inline event handlers (`onclick=` and friends).
 - No remote reference of **any** kind — no `http://` / `https://` anywhere in the file: not in
   `url()`, `@font-face`, `@import`, `<base href>`, `<link href>`, `<img src>`, `<iframe src>`, form
-  `action=`. Everything inline — CSS in a single `<style>` block, no external assets, no fonts/CDNs.
+  `action=`. Everything inline — CSS in a single `<style>` block, no external assets, no fonts/CDNs,
+  no CDN framework of any kind (this overrides any contrary suggestion in the reference below).
 - Wireframe/placeholder content only — box labels, dummy text. **Never** copy real PRD content
   (names, figures, decisions already recorded) into it; the mockup communicates layout and
   hierarchy, not data.
 - Plain HTML+CSS, opens directly from disk in any browser — no build step, no framework.
 
-After writing, best-effort try to open it for the operator via bash (`open` on macOS / `xdg-open` on
-Linux / `start` on Windows). None of these three are on `build`'s local bash allowlist
-(`permission.bash` in `opencode.json` — default `"*": "ask"`), so this is a live permission prompt in
-an interactive session, not a silent execution — that's expected here, answer it. If the operator
-declines, or it fails for any other reason, just state the path in pt-br and let the operator open
-it themselves.
+**Review the mockup interactively via `lavish-axi`** (github.com/kunchenguid/lavish-axi, MIT) —
+a local CLI that serves the file through a browser UI where the operator clicks elements to
+annotate and sends feedback back, instead of only describing changes in text. Full command
+sequence, retry-on-timeout handling, and the forbidden-commands list (`share`, `setup hooks`) are in
+`references/lavish-usage.md` — **read it before the first mockup of the session**, it is the
+authoritative source for this step, this section is only the summary:
+
+1. Write the mockup per the content rules above.
+2. `npx -y lavish-axi docs/prd/<slug>-mockup.html` to open the review session. This is not on
+   `build`'s local bash allowlist (`permission.bash` in `opencode.json` — default `"*": "ask"`), so
+   this is a live permission prompt in an interactive session — expected, answer it.
+3. `npx -y lavish-axi poll docs/prd/<slug>-mockup.html` to wait for the operator's feedback. Keep it
+   in the foreground; if the bash call times out, that's expected — just re-run `poll`, nothing is
+   lost.
+4. Apply feedback, `poll --agent-reply "..."` again, repeat until the operator ends the session.
+
+**If `npx -y lavish-axi` fails outright** (no network, registry unreachable, broken release) — fall
+back to the pre-lavish path: best-effort try to open the static file for the operator via bash
+(`open` on macOS / `xdg-open` on Linux / `start` on Windows), or if that also fails, just state the
+path in pt-br and let the operator open it themselves. Never treat either failure as blocking the
+interview.
+
+**Never run `lavish-axi share`** (publishes to a third-party host, ht-ml.app, public by default) or
+**`lavish-axi setup hooks`** (installs a `SessionStart` hook that competes with this harness's own) —
+see `references/lavish-usage.md` for why.
 
 The operator's reaction to the mockup is ordinary interview input, nothing more — fold it into
 `## Decisões travadas` / `## Suposições do modelo` like any other answer, and close or refine the
