@@ -5,6 +5,37 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.51.0](https://github.com/orobsonn/claude-harness/compare/v0.50.1...v0.51.0) (2026-07-28)
+
+
+### Features
+
+* **grill:** integra lavish-axi como review interativo do mockup visual ([#528](https://github.com/orobsonn/claude-harness/issues/528)) ([98de367](https://github.com/orobsonn/claude-harness/commit/98de36754d1f7787e6845815d696ccf5227ac130))
+
+
+### Bug Fixes
+
+* **merge:** chave de dedup de plan-review para de descartar findings por severidade ([#542](https://github.com/orobsonn/claude-harness/issues/542)) ([a7cde5d](https://github.com/orobsonn/claude-harness/commit/a7cde5d01265562391c4d36502fb2d640a3b87c7)), closes [#531](https://github.com/orobsonn/claude-harness/issues/531)
+* **merge:** guard de dedup para de depender de validador externo ([#557](https://github.com/orobsonn/claude-harness/issues/557)) ([e32a033](https://github.com/orobsonn/claude-harness/commit/e32a033d0ad4003208ad67b4ac2c730f60a394cf)), closes [#549](https://github.com/orobsonn/claude-harness/issues/549)
+* **oc:** CAP=3 do loop pós-sniper nomeia o contador que a governa ([#561](https://github.com/orobsonn/claude-harness/issues/561)) ([d3b4286](https://github.com/orobsonn/claude-harness/commit/d3b4286e178ccfa70f0c179cc801ae4491d59abd)), closes [#537](https://github.com/orobsonn/claude-harness/issues/537)
+* **oc:** captura pós-mão separa mão que recusou de falha transitória ([#558](https://github.com/orobsonn/claude-harness/issues/558)) ([#567](https://github.com/orobsonn/claude-harness/issues/567)) ([514514a](https://github.com/orobsonn/claude-harness/commit/514514ac14557d67c0c1bb013cdef69fc20df1dd))
+* **oc:** corrige drift de permissão pós-PR [#495](https://github.com/orobsonn/claude-harness/issues/495) em 4 skills do OpenCode ([#525](https://github.com/orobsonn/claude-harness/issues/525)) ([14e11db](https://github.com/orobsonn/claude-harness/commit/14e11dba6c9eb362d3a1313626e5d499962b5c01))
+* **oc:** cria branch de feature antes do primeiro executor, não só no shipper ([#535](https://github.com/orobsonn/claude-harness/issues/535)) ([5f9bb00](https://github.com/orobsonn/claude-harness/commit/5f9bb008e1186d876ef98db5d2ddb8d074a560dd)), closes [#533](https://github.com/orobsonn/claude-harness/issues/533)
+* **oc:** desambigua o K=3 de re-dispatch da mão no post-hand capture path ([#556](https://github.com/orobsonn/claude-harness/issues/556)) ([31163c4](https://github.com/orobsonn/claude-harness/commit/31163c4632bad5e20b3a85e91eb2a0982982e8d4)), closes [#538](https://github.com/orobsonn/claude-harness/issues/538)
+* **oc:** escada de tier do executor antes da exceção crítica ([#543](https://github.com/orobsonn/claude-harness/issues/543)) ([#555](https://github.com/orobsonn/claude-harness/issues/555)) ([d312a7e](https://github.com/orobsonn/claude-harness/commit/d312a7e30684db4575f1f330e57bdd4eeb7ddd65))
+* **oc:** escopa cada stop-rule ao seu loop e libera plan-review convergente ([#550](https://github.com/orobsonn/claude-harness/issues/550)) ([033fd11](https://github.com/orobsonn/claude-harness/commit/033fd1134bf2cd364e4a6fb4e8a8df854423a5b2)), closes [#529](https://github.com/orobsonn/claude-harness/issues/529)
+* **oc:** fidelidade do test-author escala pra mão mais forte em vez de matar a run ([#534](https://github.com/orobsonn/claude-harness/issues/534)) ([#548](https://github.com/orobsonn/claude-harness/issues/548)) ([48a3060](https://github.com/orobsonn/claude-harness/commit/48a3060bb899caace7474f51f56ef1900388e493))
+* **oc:** loop do spec-adversary declara inline que a CAP=3 nao o governa ([#554](https://github.com/orobsonn/claude-harness/issues/554)) ([3fce487](https://github.com/orobsonn/claude-harness/commit/3fce487a0bfb8eced344e9aceee1d66c3b125ae8)), closes [#541](https://github.com/orobsonn/claude-harness/issues/541)
+* **oc:** loop pós-sniper e passo g passam a usar um critério de parada só ([#545](https://github.com/orobsonn/claude-harness/issues/545)) ([#564](https://github.com/orobsonn/claude-harness/issues/564)) ([dea6be8](https://github.com/orobsonn/claude-harness/commit/dea6be86752df6a8226860045e6f4537f5bcb16e))
+* **oc:** loop pós-sniper ganha hand mais forte e saída pro regate órfão ([#544](https://github.com/orobsonn/claude-harness/issues/544)) ([#563](https://github.com/orobsonn/claude-harness/issues/563)) ([17d2f12](https://github.com/orobsonn/claude-harness/commit/17d2f122b7099c597673e93d603295b230513e29))
+* **oc:** nomeia o teto de sessão do planner no SKILL.md do orchestrating-delivery ([#553](https://github.com/orobsonn/claude-harness/issues/553)) ([4efb81c](https://github.com/orobsonn/claude-harness/commit/4efb81c83e40d16b2f17b8abcbfb2a374927dc14)), closes [#539](https://github.com/orobsonn/claude-harness/issues/539)
+* **oc:** número do orçamento de plan-review vira cópia declarada do rail ([#551](https://github.com/orobsonn/claude-harness/issues/551)) ([6ac2eb5](https://github.com/orobsonn/claude-harness/commit/6ac2eb574dfb7c3b47690cec79996b89a0d5e3a7)), closes [#536](https://github.com/orobsonn/claude-harness/issues/536)
+* **oc:** obs-hand nao derruba mais a run quando o belt de observabilidade falha ([#547](https://github.com/orobsonn/claude-harness/issues/547)) ([d9baeb7](https://github.com/orobsonn/claude-harness/commit/d9baeb70b9bae5fd29a5663d6a5bd10ac48a440e)), closes [#532](https://github.com/orobsonn/claude-harness/issues/532)
+* **oc:** primary failure cap nomeia valor, contador e a isenção de spec-phase ([#562](https://github.com/orobsonn/claude-harness/issues/562)) ([637678d](https://github.com/orobsonn/claude-harness/commit/637678d5d0e9258fc8f57a941ff011c2230d83b7)), closes [#540](https://github.com/orobsonn/claude-harness/issues/540)
+* **oc:** resolved_judgments_model_resolved passa a ser validado e a chegar no PR ([#566](https://github.com/orobsonn/claude-harness/issues/566)) ([98ef383](https://github.com/orobsonn/claude-harness/commit/98ef383704b08a0f6ef9bbb4fa4c4dbba879fa44)), closes [#559](https://github.com/orobsonn/claude-harness/issues/559)
+* **oc:** segunda estagnação no mesmo achado vira exceção crítica terminal ([#570](https://github.com/orobsonn/claude-harness/issues/570)) ([dd8eaf0](https://github.com/orobsonn/claude-harness/commit/dd8eaf0427d5d43ea48abd56be46ee0669abf7e5)), closes [#565](https://github.com/orobsonn/claude-harness/issues/565)
+* **vps:** preserva mtime de eventos derivados ([#530](https://github.com/orobsonn/claude-harness/issues/530)) ([9c6ec8a](https://github.com/orobsonn/claude-harness/commit/9c6ec8ac679d18b62b5b441ff3d456485f504a05))
+
 ## [0.50.1](https://github.com/orobsonn/claude-harness/compare/v0.50.0...v0.50.1) (2026-07-27)
 
 
