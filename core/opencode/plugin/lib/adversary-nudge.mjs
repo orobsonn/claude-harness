@@ -34,11 +34,19 @@ function object(value) {
 
 function currentSpecLoopRound(state) {
   const outcomes = Array.isArray(state.review_outcomes) ? state.review_outcomes : [];
-  return outcomes.filter((value) => {
+  const usefulSpecOutcomes = outcomes.filter((value) => {
     const outcome = object(value);
     const taskId = typeof outcome.task_id === "string" ? outcome.task_id.trim() : "";
     return outcome.logical_role === "adversary" && outcome.family === 1 && outcome.outcome === "useful" && !taskId;
-  }).length;
+  });
+  const escalationHash = object(state.spec_adversary_escalation).report_hash;
+  if (typeof escalationHash !== "string" || !escalationHash) return usefulSpecOutcomes.length;
+  for (let index = usefulSpecOutcomes.length - 1; index >= 0; index -= 1) {
+    if (object(usefulSpecOutcomes[index]).report_hash === escalationHash) {
+      return usefulSpecOutcomes.length - index - 1;
+    }
+  }
+  return usefulSpecOutcomes.length;
 }
 
 /**

@@ -73,6 +73,31 @@ test("the nudge reflects useful rounds from the current spec loop, not the run t
   assert.match(res.context, new RegExp(`\\b${DENY} spec-adversary rounds\\b`));
 });
 
+test("a spec change after escalation opens a new taskless loop at round one", () => {
+  const previousLoop = Array.from({ length: DENY }, (_, index) => ({
+    logical_role: "adversary",
+    family: 1,
+    task_id: "",
+    outcome: "useful",
+    report_hash: `previous-${index + 1}`,
+  }));
+  const res = decideAdversaryNudge({
+    subagentType: PRIMARY,
+    state: state({
+      adversary_loop_count: DENY + 1,
+      review_outcomes: [
+        ...previousLoop,
+        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful", report_hash: "new-loop-1" },
+      ],
+      spec_adversary_escalation: { round: DENY, report_hash: previousLoop.at(-1).report_hash },
+    }),
+  });
+
+  assert.equal(res.kind, "revise");
+  assert.equal(res.round, 1);
+  assert.match(res.context, /round 1\/4/);
+});
+
 test("a loop that is not converging STOPS and escalates to the human — nothing refuses it, so the instruction must", () => {
   // There is no deterministic cap on the adversary loop any more (a hard refusal froze two real
   // runs). The escalation instruction is the whole stop mechanism, including past the threshold.
