@@ -13,6 +13,33 @@ import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
 import { semanticPlanHash } from "./lib/planner-artifact.mjs";
 import { fidelityPassEntry } from "./lib/mark-gate.mjs";
 
+/** @param {() => Promise<void>} fn */
+async function captureWarnings(fn) {
+  const original = console.warn;
+  const warnings = [];
+  console.warn = (message) => warnings.push(message);
+  try {
+    await fn();
+  } finally {
+    console.warn = original;
+  }
+  return warnings;
+}
+
+/**
+ * Replace a session's gate-state directory with a plain file so any subsequent lock/read/write
+ * against it fails instantly (ENOTDIR/EEXIST) — a deterministic, fast way to force a
+ * binding-accounting helper (bindChildSession, cleanupChild, cleanup/finishActiveDispatch) to
+ * return `{ ok: false }` without waiting on lock timeouts.
+ * @param {string} dir
+ * @param {string} sessionId
+ */
+function corruptGateStateDir(dir, sessionId) {
+  const stateDir = join(dir, ".opencode", "plans", ".state", sessionId);
+  rmSync(stateDir, { recursive: true, force: true });
+  writeFileSync(stateDir, "corrupted");
+}
+
 test("obs-plan-write: output.args → plan-created with tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-pw-"));
   try {
@@ -736,6 +763,265 @@ test("obs-hand: sniper-high BLOCKED does not arm regate_pending", async () => {
 
     const disk = JSON.parse(readFileSync(gatePath, "utf8"));
     assert.equal(disk.regate_pending == null || disk.regate_pending.length === 0, true);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #532: the observability belt (obs-hand's event/after-hook binding accounting) is declared
+// fail-open by orchestrating-delivery's skill doc. A binding-accounting miss used to `throw`
+// from inside the plugin hook, which OpenCode surfaces as a tool-error that kills the whole
+// headless run — discarding an approved plan and already-written code for what should be, at
+// most, a missing line in the Telegram feed. These four tests pin the fail-open contract at
+// each site that used to throw.
+
+test("#532 ac-1.1: message.updated bind failure warns, never crashes the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-bind-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    // No claim was ever armed for "ses_no_claim_532" — bindChildSession fails with the exact
+    // reason observed in the wild (#532): "live parent dispatch capability or role mismatch".
+    const client = {
+      session: { get: async ({ path: p }) => ({ data: { id: p.id, parentID: "ses_no_claim_532" } }) },
+    };
+    const hooks = await createObsHandHooks(dir, { client });
+    const warnings = await captureWarnings(() =>
+      assert.doesNotReject(() =>
+        hooks.event({
+          event: {
+            type: "message.updated",
+            properties: {
+              info: { id: "u1", sessionID: "child-no-claim-532", role: "user", agent: "executor-medium" },
+            },
+          },
+        }),
+      ),
+    );
+    assert.ok(
+      warnings.some((w) => /message\.updated bind skipped/.test(String(w))),
+      `expected a bind-skip warning, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-idle-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_532_idle";
+    const fid = "feat-532-idle";
+    const tid = "t-532-idle";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const client = { session: { get: async ({ path: p }) => ({ data: { id: p.id, parentID: sid } }) } };
+    const hooks = await createObsHandHooks(dir, { client });
+    const args = {
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
+      subagent_type: "executor-medium",
+      feature_id: fid,
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-idle" }, { args });
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { info: { id: "u1", sessionID: "child-532-idle", role: "user", agent: "executor-medium" } },
+      },
+    });
+    const boundBefore = JSON.parse(
+      readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8"),
+    ).active_dispatch;
+    assert.equal(boundBefore.status, "active");
+    assert.equal(boundBefore.child_session_id, "child-532-idle");
+
+    // Simulate the parent's gate-state directory becoming unreadable mid-flight (disk
+    // contention, permission drift) — cleanupChild must degrade to a warning, not a crash.
+    corruptGateStateDir(dir, sid);
+
+    const warnings = await captureWarnings(() =>
+      assert.doesNotReject(() =>
+        hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-532-idle" } } }),
+      ),
+    );
+    assert.ok(
+      warnings.some((w) => /session\.idle cleanup skipped/.test(String(w))),
+      `expected a cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#532 ac-1.3: after-hook finally cleanup failure warns, never crashes the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-finally-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_532_finally";
+    const fid = "feat-532-finally";
+    const tid = "t-532-finally";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
+      subagent_type: "executor-medium",
+      feature_id: fid,
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-finally" }, { args });
+
+    // Simulate the parent's gate-state directory becoming unreadable/unwritable mid-flight —
+    // the terminal after-hook's finally cleanup must degrade to a warning, not crash the run.
+    corruptGateStateDir(dir, sid);
+
+    const warnings = await captureWarnings(() =>
+      assert.doesNotReject(() =>
+        hooks["tool.execute.after"](
+          { tool: "task", sessionID: sid, callID: "call-532-finally" },
+          { args, output: "Status: DONE\n" },
+        ),
+      ),
+    );
+    assert.ok(
+      warnings.some((w) => /after-hook cleanup skipped/.test(String(w))),
+      `expected an after-hook cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#532 message.part.updated tool-error cleanup failure warns, never crashes the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-toolerr-"));
+  try {
+    const meta = join(dir, "obs.json");
+    writeFileSync(meta, "{}");
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const sid = "ses_532_toolerr";
+    const fid = "feat-532-toolerr";
+    const tid = "t-532-toolerr";
+    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
+    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
+    const plan = {
+      feature_id: fid,
+      kind: "full",
+      mode: "full",
+      tasks: [{
+        id: tid,
+        severity: "medium",
+        complexity: "medium",
+        scope_paths: ["src/a.ts"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
+      }],
+    };
+    const hash = semanticPlanHash(plan);
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
+    writeFileSync(
+      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
+      JSON.stringify({
+        session_id: sid,
+        feature_id: fid,
+        planner_status: "usable",
+        delivery_status: "ready",
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+      }),
+    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+
+    const hooks = await createObsHandHooks(dir);
+    const args = {
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
+      subagent_type: "executor-medium",
+      feature_id: fid,
+    };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-toolerr" }, { args });
+
+    corruptGateStateDir(dir, sid);
+
+    const warnings = await captureWarnings(() =>
+      assert.doesNotReject(() =>
+        hooks.event({
+          event: {
+            type: "message.part.updated",
+            properties: {
+              part: { type: "tool", tool: "task", sessionID: sid, callID: "call-532-toolerr", state: { status: "error" } },
+            },
+          },
+        }),
+      ),
+    );
+    assert.ok(
+      warnings.some((w) => /tool-error cleanup skipped/.test(String(w))),
+      `expected a tool-error cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
+    );
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
