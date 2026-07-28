@@ -16,7 +16,7 @@ import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
 
 export const LOOP_THRESHOLDS = Object.freeze({
-  plan_review: Object.freeze({ warn: 2, deny: 5 }),
+  plan_review: Object.freeze({ warn: 2, deny: 10 }),
   adversary: Object.freeze({ warn: 2, deny: 4 }),
   /** Consecutive primary (family-1) failure streak — same K as all-agent retry. */
   primary_failure_streak: Object.freeze({ deny: AGENT_RETRY_K }),
@@ -679,18 +679,32 @@ function isHeadlessRemote(env) {
   return Boolean(source?.CLAUDE_CODE_REMOTE);
 }
 
-/** Documented plan-review revision-loop cap — past this, warn (not deny). */
-const PLAN_REVIEW_ROUND_CAP = 3;
-/** Runaway backstop — past this, the interactive session hard-stops. */
-const PLAN_REVIEW_ROUND_CEILING = 10;
+/**
+ * Churn-warning threshold — past this many dispatches the rail warns (never denies). It is a
+ * "look at this" signal, not a budget: the plan-review loop's only budget is
+ * `LOOP_THRESHOLDS.plan_review.deny`, surfaced to the orchestrator by `revise_nudge`. The warning
+ * text below therefore names no cap and no stop — a second numbered authority delivered on the
+ * same metadata channel as the nudge is what aborted a converging review in #529.
+ */
+export const PLAN_REVIEW_ROUND_WARN_AT = 3;
+/**
+ * Runaway backstop — past this, the interactive session hard-stops. Derived, never picked: the
+ * rail counts DISPATCHES while the budget counts USEFUL rounds, so it must clear the full budget
+ * plus one round's worth of failure retries (a malformed/empty/timeout review spends a dispatch
+ * without crediting a round). A ceiling at or below `LOOP_THRESHOLDS.plan_review.deny` makes the
+ * last rounds unreachable and hands the operator a converging review with budget left — exactly
+ * the #529 defect, in runtime instead of prose.
+ */
+export const PLAN_REVIEW_ROUND_CEILING = LOOP_THRESHOLDS.plan_review.deny + AGENT_RETRY_K;
 
 /**
  * @description Orchestrator-facing plan-review round-rail. Decoupled from the review
  * reservation budget (`LOOP_THRESHOLDS.plan_review`, which governs `review_cap_reached` /
- * reservation-slot exhaustion — a separate OC bookkeeping concern, untouched here). Mirrors
- * Claude Code entry-gate.mjs's Fix C (`PLAN_REVIEW_CAP`=3 / `PLAN_REVIEW_CEILING`=10, count >
- * ceiling denies at the 11th dispatch): past the documented cap it warns and permits; past the
- * runaway ceiling it denies — but ONLY in an interactive session. HEADLESS has no operator to
+ * reservation-slot exhaustion — a separate OC bookkeeping concern, untouched here). Structurally
+ * mirrors Claude Code entry-gate.mjs's Fix C (warn-then-ceiling, ceiling denies on the dispatch
+ * past it); the OC numbers are derived from this lane's own budget, not copied from that one:
+ * past the churn-warning threshold it warns and permits; past the runaway ceiling it denies —
+ * but ONLY in an interactive session. HEADLESS has no operator to
  * escalate to, so it stays warn-only forever there — the fleet engine cap
  * (core/vps/cron-a-exit.mjs, cron-review.mjs) is the real ceiling.
  * @param {{ subagentType?: unknown, count?: number, env?: Record<string, string | undefined> }} [input]
@@ -724,14 +738,13 @@ export function decidePlanReviewRoundRail(input = {}) {
       count,
     };
   }
-  if (count > PLAN_REVIEW_ROUND_CAP) {
+  if (count > PLAN_REVIEW_ROUND_WARN_AT) {
     return {
       ok: true,
       decision: "warn",
       reason:
-        `[loop-guard] plan-review round ${count} exceeds the documented cap of ${PLAN_REVIEW_ROUND_CAP} revision loops. ` +
-        "Confirm this round is genuine new-bug discovery, not churn." +
-        (headless ? "" : ` A hard stop applies at round ${PLAN_REVIEW_ROUND_CEILING + 1}.`),
+        `[loop-guard] plan-review round ${count}: confirm this round is genuine new-bug discovery, not churn. ` +
+        "This is a churn warning, not a budget — the revise_nudge remains the only authority on when this loop ends.",
       count,
     };
   }

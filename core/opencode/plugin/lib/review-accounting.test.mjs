@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   LOOP_THRESHOLDS,
+  PLAN_REVIEW_ROUND_CEILING,
+  PLAN_REVIEW_ROUND_WARN_AT,
   applyReviewOutcome,
   classifyReviewBoundaryError,
   decideLoopGuard,
@@ -694,30 +696,36 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
     for (let round = 1; round <= 3; round += 1) {
       lastOutput = await dispatchOnce(interactiveHooks, `rr-${round}`);
     }
-    assert.equal(lastOutput.metadata.loop_guard_warning, undefined, "round 3 is still within the documented cap");
+    assert.equal(lastOutput.metadata.loop_guard_warning, undefined, "round 3 is still below the churn-warning threshold");
 
-    // #ac-2.1: round 5 (past the cap of 3) → visible warning, still permits.
+    // #ac-2.1: round 5 (past the churn-warning threshold) → visible warning, still permits.
     await dispatchOnce(interactiveHooks, "rr-4");
     lastOutput = await dispatchOnce(interactiveHooks, "rr-5");
     assert.match(lastOutput.metadata.loop_guard_warning, /\[loop-guard\]/);
+    // #529: the warning is a churn signal, never a second numbered budget competing with the nudge.
+    assert.doesNotMatch(lastOutput.metadata.loop_guard_warning, /\bcaps?\b/i);
+    assert.doesNotMatch(lastOutput.metadata.loop_guard_warning, /\bhard stop\b/i);
 
-    for (let round = 6; round <= 10; round += 1) {
+    for (let round = 6; round <= PLAN_REVIEW_ROUND_CEILING; round += 1) {
       await dispatchOnce(interactiveHooks, `rr-${round}`);
     }
 
-    // #ac-2.2: round 11, interactive session → hard deny.
-    await assert.rejects(() => dispatchOnce(interactiveHooks, "rr-11"), /\[loop-guard\] Blocked/);
+    // #ac-2.2: the dispatch past the runaway ceiling, interactive session → hard deny.
+    await assert.rejects(
+      () => dispatchOnce(interactiveHooks, `rr-${PLAN_REVIEW_ROUND_CEILING + 1}`),
+      /\[loop-guard\] Blocked/,
+    );
 
     // #ac-2.2: round 11, headless (CLAUDE_CODE_REMOTE present) → warns only, still permits.
     const originalRemote = process.env.CLAUDE_CODE_REMOTE;
     process.env.CLAUDE_CODE_REMOTE = "1";
     try {
       const headlessHooks = await createLoopGuardHooks(root);
-      for (let round = 1; round <= 10; round += 1) {
+      for (let round = 1; round <= PLAN_REVIEW_ROUND_CEILING; round += 1) {
         await dispatchOnce(headlessHooks, `hl-${round}`);
       }
-      const headlessRound11 = await dispatchOnce(headlessHooks, "hl-11");
-      assert.match(headlessRound11.metadata.loop_guard_warning, /headless fleet session/);
+      const headlessPastCeiling = await dispatchOnce(headlessHooks, `hl-${PLAN_REVIEW_ROUND_CEILING + 1}`);
+      assert.match(headlessPastCeiling.metadata.loop_guard_warning, /headless fleet session/);
     } finally {
       if (originalRemote === undefined) delete process.env.CLAUDE_CODE_REMOTE;
       else process.env.CLAUDE_CODE_REMOTE = originalRemote;
@@ -729,10 +737,13 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
     process.env.HARNESS_NOTIFY_PROJECT = "/tmp/notify";
     try {
       const fleetLookAlikeHooks = await createLoopGuardHooks(root);
-      for (let round = 1; round <= 10; round += 1) {
+      for (let round = 1; round <= PLAN_REVIEW_ROUND_CEILING; round += 1) {
         await dispatchOnce(fleetLookAlikeHooks, `fl-${round}`);
       }
-      await assert.rejects(() => dispatchOnce(fleetLookAlikeHooks, "fl-11"), /\[loop-guard\] Blocked/);
+      await assert.rejects(
+        () => dispatchOnce(fleetLookAlikeHooks, `fl-${PLAN_REVIEW_ROUND_CEILING + 1}`),
+        /\[loop-guard\] Blocked/,
+      );
     } finally {
       if (originalNotify === undefined) delete process.env.HARNESS_NOTIFY_PROJECT;
       else process.env.HARNESS_NOTIFY_PROJECT = originalNotify;
@@ -1227,48 +1238,86 @@ test("plan-review scope follows the bound plan: a stale peer REVISE from an earl
   assert.equal(round2.state.dual_status?.plan_review, "primary_only");
 });
 
-test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the documented cap, denies past the runaway ceiling — interactive only", () => {
-  // Below the documented cap: allow, no warning.
-  assert.equal(decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: 2 }).decision, "allow");
+test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn threshold, denies past the runaway ceiling — interactive only", () => {
+  const pastCeiling = PLAN_REVIEW_ROUND_CEILING + 1;
 
-  // #ac-2.1: round 5 (past the cap of 3) → visible warning, still permits.
-  const round5 = decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: 5 });
-  assert.equal(round5.ok, true);
-  assert.equal(round5.decision, "warn");
-  assert.match(round5.reason, /\[loop-guard\]/);
+  // Below the churn-warning threshold: allow, no warning.
+  assert.equal(
+    decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: PLAN_REVIEW_ROUND_WARN_AT - 1 }).decision,
+    "allow",
+  );
 
-  // #ac-2.2: round 11, interactive (no CLAUDE_CODE_REMOTE) → hard deny.
-  const round11Interactive = decidePlanReviewRoundRail({
+  // #ac-2.1: past the churn-warning threshold → visible warning, still permits.
+  const warned = decidePlanReviewRoundRail({
     subagentType: "plan-reviewer-family-1",
-    count: 11,
+    count: PLAN_REVIEW_ROUND_WARN_AT + 1,
+  });
+  assert.equal(warned.ok, true);
+  assert.equal(warned.decision, "warn");
+  assert.match(warned.reason, /\[loop-guard\]/);
+
+  // #529: this warning rides the SAME metadata channel as revise_nudge, so it must not deliver a
+  // second numbered authority — no foreign cap, no stop instruction, no competing round budget.
+  assert.doesNotMatch(warned.reason, /\bcaps?\b/i);
+  assert.doesNotMatch(warned.reason, /\bhard stop\b/i);
+  assert.match(warned.reason, /revise_nudge remains the only authority/);
+
+  // #ac-2.2: past the runaway ceiling, interactive (no CLAUDE_CODE_REMOTE) → hard deny.
+  const interactivePastCeiling = decidePlanReviewRoundRail({
+    subagentType: "plan-reviewer-family-1",
+    count: pastCeiling,
     env: {},
   });
-  assert.equal(round11Interactive.ok, false);
-  assert.equal(round11Interactive.decision, "deny");
-  assert.match(round11Interactive.reason, /\[loop-guard\] Blocked/);
+  assert.equal(interactivePastCeiling.ok, false);
+  assert.equal(interactivePastCeiling.decision, "deny");
+  assert.match(interactivePastCeiling.reason, /\[loop-guard\] Blocked/);
 
-  // #ac-2.2: round 11, headless (CLAUDE_CODE_REMOTE present) → warns only, still permits.
-  const round11Headless = decidePlanReviewRoundRail({
+  // #ac-2.2: past the runaway ceiling, headless (CLAUDE_CODE_REMOTE present) → warns only.
+  const headlessPastCeiling = decidePlanReviewRoundRail({
     subagentType: "plan-reviewer-family-1",
-    count: 11,
+    count: pastCeiling,
     env: { CLAUDE_CODE_REMOTE: "1" },
   });
-  assert.equal(round11Headless.ok, true);
-  assert.equal(round11Headless.decision, "warn");
+  assert.equal(headlessPastCeiling.ok, true);
+  assert.equal(headlessPastCeiling.decision, "warn");
 
   // #ac-2.3: a fleet-look-alike env (HARNESS_NOTIFY_PROJECT set) WITHOUT CLAUDE_CODE_REMOTE must
   // NOT bypass the interactive hard-stop — the signal is exactly Boolean(env.CLAUDE_CODE_REMOTE),
   // mirroring Claude Code entry-gate.mjs:116-118, never another variable.
-  const round11FleetLookAlike = decidePlanReviewRoundRail({
+  const fleetLookAlikePastCeiling = decidePlanReviewRoundRail({
     subagentType: "plan-reviewer-family-1",
-    count: 11,
+    count: pastCeiling,
     env: { HARNESS_NOTIFY_PROJECT: "/tmp/notify" },
   });
-  assert.equal(round11FleetLookAlike.ok, false);
-  assert.equal(round11FleetLookAlike.decision, "deny");
+  assert.equal(fleetLookAlikePastCeiling.ok, false);
+  assert.equal(fleetLookAlikePastCeiling.decision, "deny");
 
   // The adversary counter is untouched by this round-rail (only plan_review_count is gated).
   assert.equal(decidePlanReviewRoundRail({ subagentType: "adversary-family-1", count: 99 }).decision, "allow");
+});
+
+/**
+ * #529 — the rail counts DISPATCHES, the budget counts USEFUL rounds. A failed review spends a
+ * dispatch without crediting a round, so a ceiling at or below the budget makes the last rounds
+ * unreachable and hands the operator a converging review with budget left. Pin the derivation.
+ */
+test("#529 the plan-review runaway ceiling clears the full review budget plus one round of retries", () => {
+  assert.equal(PLAN_REVIEW_ROUND_CEILING, LOOP_THRESHOLDS.plan_review.deny + AGENT_RETRY_K);
+  assert.ok(
+    PLAN_REVIEW_ROUND_CEILING > LOOP_THRESHOLDS.plan_review.deny,
+    "the dispatch ceiling must leave headroom above the useful-round budget",
+  );
+
+  // The last useful round must still be dispatchable after a full round of failure retries.
+  const lastRoundAfterRetries = LOOP_THRESHOLDS.plan_review.deny + AGENT_RETRY_K;
+  assert.notEqual(
+    decidePlanReviewRoundRail({
+      subagentType: "plan-reviewer-family-1",
+      count: lastRoundAfterRetries,
+      env: {},
+    }).decision,
+    "deny",
+  );
 });
 
 test("applyReviewOutcome stores sanitized provider diagnostic on failure", () => {
