@@ -31,6 +31,7 @@ The orchestrator passes you:
 - **Type** — feat, fix, refactor, test, chore (default: feat)
 - **Issue** (optional) — issue number to reference with `Closes #N`
 - **Merge** (optional) — whether to auto-merge after PR creation
+- **Plan path** (optional) — the run's `execution-plan.json`; source of the engine-resolved decisions section (step 5). Absent on QUICK deliveries, which have no plan.
 
 ---
 
@@ -91,16 +92,54 @@ git push -u origin <branch>
 ```
 
 ### 5. Create PR
+
+**Engine-resolved decisions — read the plan before writing the body.** In a headless run the planner
+resolves ambiguities on its own and marks each one in the task-level array
+`resolved_judgments_model_resolved` (each entry is a key of that same task's `resolved_judgments`).
+The operator reviewing this PR cannot otherwise tell an engine-made call apart from one they gave —
+and the engine may auto-merge. So surface it:
+
+1. Read **this run's** execution plan — `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json`.
+   The conductor's brief names the path; use it verbatim when it does. Without it, `.opencode/plans/`
+   is **not** a safe place to guess: it accumulates one directory per run and nothing prunes it, so a
+   blind glob hands you another feature's decisions. Only accept a directory whose plan's `feature_id`
+   equals this run's feature; if zero or more than one match, take **no** plan and say so in your reply
+   — a wrong plan here puts a decision this PR never made in front of the operator.
+2. Collect, across every task, each key listed in `resolved_judgments_model_resolved` together with
+   its value from that task's `resolved_judgments`. Two tasks may resolve the same key differently, so
+   carry the owning `task.id` with each pair.
+3. If the collection is non-empty, the body carries a **`## Decisions the engine made on its own`**
+   section: one bullet per pair — `` `<task.id>` · `<key>` → `<value>` `` plus one short line of what
+   it means for the product, in **product language** (what the reviewer is being asked to keep or
+   veto), never engineering jargon.
+4. If every array is empty or absent — or you have no plan for this run (a QUICK delivery never has
+   one) — emit **no section**. Never an empty section, never an "n/a" placeholder.
+
+**Render each `<value>` as a single line.** The value comes from the plan verbatim and lands inside the
+`--body` heredoc: a multi-line value wrecks the body, and a line that happens to read `EOF` closes the
+heredoc early and turns the remainder into commands. So drop any value that is not a string, number, or
+boolean, drop any that contains a newline or carriage return, truncate at ~200 characters — and name
+what you dropped in your reply instead of reshaping it into the body.
+
+Never invent an entry: a decision belongs in this section only if the plan marks its key.
+
 ```bash
 gh pr create --title "<conventional commit title>" --body "$(cat <<'EOF'
 ## Summary
 <1-3 bullets of what was done>
+
+## Decisions the engine made on its own
+- `<task.id>` · `<resolved_judgments key>` → `<value>` — <what it means for the product, one line>
 
 ## Test plan
 <manual or automated verification checklist>
 EOF
 )"
 ```
+
+The middle section above is **conditional** — the template shows it filled in. Delete the heading and
+its bullets outright when no task lists a model-resolved key; never ship the heading with a placeholder
+under it.
 
 ### 6. Merge (only if authorized)
 ```bash
@@ -122,6 +161,7 @@ Reply concisely:
 
 ## Rules
 - NEVER edit code — you only deliver.
+- NEVER drop the engine-resolved decisions section when the plan marks at least one key, and never emit it when no key is marked. The section reports the decisions the **plan marked** — an unmarked judgment is not proof the operator gave it, so never present the section as the exhaustive list of what the machine decided alone.
 - NEVER run tsc, tests, or lint — gates already ran.
 - NEVER add a `Co-Authored-By` trailer or any generated-by line — the environment rejects fabricated authorship; the commit ends at the description/body.
 - NEVER merge without explicit authorization.

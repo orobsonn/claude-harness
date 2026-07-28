@@ -271,6 +271,154 @@ test("#ac-1.1 dangling depends_on: ghost task id → ok false with dangling ref"
   assert.ok(res.errors.some((e) => e.includes("dangling ref") && e.includes("ghost-task")));
 });
 
+/**
+ * @description Build a one-task full plan whose single task carries the given extra fields.
+ * @param {Record<string, unknown>} taskOverrides
+ * @returns {Record<string, unknown>}
+ */
+function planWithTask(taskOverrides) {
+  return {
+    feature_id: "model-resolved",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "Given x, When y, Then z" }],
+        ...taskOverrides,
+      },
+    ],
+  };
+}
+
+test("#559 #ac-1.1 resolved_judgments_model_resolved as object → ok false naming the field", () => {
+  const res = validatePlan(
+    planWithTask({
+      resolved_judgments: { ttl_seconds: 900 },
+      resolved_judgments_model_resolved: { ttl_seconds: true },
+    }),
+    { expect: "full" }
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some((e) => e.includes("task[0].resolved_judgments_model_resolved") && e.includes("array"))
+  );
+});
+
+test("#559 #ac-1.1 resolved_judgments_model_resolved as number → ok false naming the field", () => {
+  const res = validatePlan(
+    planWithTask({
+      resolved_judgments: { ttl_seconds: 900 },
+      resolved_judgments_model_resolved: 3,
+    }),
+    { expect: "full" }
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some((e) => e.includes("task[0].resolved_judgments_model_resolved") && e.includes("array"))
+  );
+});
+
+test("#559 #ac-1.1 resolved_judgments_model_resolved with an empty item → ok false naming the field", () => {
+  const res = validatePlan(
+    planWithTask({
+      resolved_judgments: { ttl_seconds: 900 },
+      resolved_judgments_model_resolved: ["ttl_seconds", "   "],
+    }),
+    { expect: "full" }
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some(
+      (e) => e.includes("task[0].resolved_judgments_model_resolved[1]") && e.includes("non-empty string")
+    )
+  );
+});
+
+test("#559 #ac-1.2 resolved_judgments_model_resolved listing a key absent from the same task's resolved_judgments → ok false citing the orphan key", () => {
+  const res = validatePlan(
+    planWithTask({
+      resolved_judgments: { ttl_seconds: 900 },
+      resolved_judgments_model_resolved: ["algorithm"],
+    }),
+    { expect: "full" }
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some(
+      (e) => e.includes("task[0].resolved_judgments_model_resolved") && e.includes("algorithm")
+    ),
+    res.errors.join("; ")
+  );
+});
+
+test("#559 #ac-1.2 a key resolved by ANOTHER task is still orphan on this task", () => {
+  const plan = {
+    feature_id: "cross-task",
+    kind: "full",
+    mode: "full",
+    tasks: [
+      {
+        id: "t1",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-1"],
+        locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "x" }],
+        resolved_judgments: { algorithm: "HS256" },
+      },
+      {
+        id: "t2",
+        severity: "low",
+        scope_paths: ["src/"],
+        criterion_refs: ["#ac-2"],
+        locked_tests: [{ id: "lt-2", path: "src/b.test.ts", assertion: "y" }],
+        resolved_judgments: { ttl_seconds: 900 },
+        resolved_judgments_model_resolved: ["algorithm"],
+      },
+    ],
+  };
+  const res = validatePlan(plan, { expect: "full" });
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some(
+      (e) => e.includes("task[1].resolved_judgments_model_resolved") && e.includes("algorithm")
+    ),
+    res.errors.join("; ")
+  );
+});
+
+test("#559 #ac-1.3 task without resolved_judgments_model_resolved → ok true (field is optional)", () => {
+  const res = validatePlan(planWithTask({ resolved_judgments: { ttl_seconds: 900 } }), { expect: "full" });
+  assert.equal(res.ok, true, res.errors?.join("; "));
+});
+
+test("#559 #ac-1.3 empty resolved_judgments_model_resolved → ok true, even with no resolved_judgments at all", () => {
+  const withRj = validatePlan(
+    planWithTask({ resolved_judgments: { ttl_seconds: 900 }, resolved_judgments_model_resolved: [] }),
+    { expect: "full" }
+  );
+  assert.equal(withRj.ok, true, withRj.errors?.join("; "));
+
+  const withoutRj = validatePlan(planWithTask({ resolved_judgments_model_resolved: [] }), {
+    expect: "full",
+  });
+  assert.equal(withoutRj.ok, true, withoutRj.errors?.join("; "));
+});
+
+test("#559 #ac-1.3 every key present in resolved_judgments → ok true", () => {
+  const res = validatePlan(
+    planWithTask({
+      resolved_judgments: { ttl_seconds: 900, algorithm: "HS256" },
+      resolved_judgments_model_resolved: ["ttl_seconds", "algorithm"],
+    }),
+    { expect: "full" }
+  );
+  assert.equal(res.ok, true, res.errors?.join("; "));
+});
+
 test("#ac-1.2 empty scope_paths under expect full → ok false", () => {
   const plan = {
     feature_id: "empty-scope",

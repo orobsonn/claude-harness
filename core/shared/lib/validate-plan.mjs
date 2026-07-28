@@ -1,4 +1,4 @@
-/** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. Canonical locked_tests shape: {id, path, assertion, fixture_paths?}. Complexity allowlist: low|medium|high|max. */
+/** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. Canonical locked_tests shape: {id, path, assertion, fixture_paths?}. Complexity allowlist: low|medium|high|max. Optional per-task audit marker: resolved_judgments_model_resolved (array of that task's resolved_judgments keys) — OpenCode lane only; the claude-code copy under skills/creating-plans/references does not implement it. */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isSafeFeatureId } from "./feature-id.mjs";
@@ -251,6 +251,29 @@ export function validatePlan(plan, opts = {}) {
               errors.push(
                 `${ltBase}.command must be an allowlisted runner argv form (node --test, vitest/jest/mocha, npm/pnpm/yarn/bun test, npx vitest|jest|mocha)`
               );
+            }
+          }
+        }
+      }
+
+      // resolved_judgments_model_resolved — OPTIONAL audit marker: which of THIS task's
+      // resolved_judgments the engine decided on its own (headless, no operator input).
+      // Absent or [] is always valid — no existing plan may break on it.
+      if (t.resolved_judgments_model_resolved !== undefined) {
+        const mrBase = `task[${idx}].resolved_judgments_model_resolved`;
+        const marked = t.resolved_judgments_model_resolved;
+        if (!Array.isArray(marked)) {
+          errors.push(`${mrBase} must be an array of resolved_judgments keys when present`);
+        } else {
+          const rj =
+            t.resolved_judgments && typeof t.resolved_judgments === "object" && !Array.isArray(t.resolved_judgments)
+              ? t.resolved_judgments
+              : null;
+          for (const [mrIdx, key] of marked.entries()) {
+            if (typeof key !== "string" || key.trim().length === 0) {
+              errors.push(`${mrBase}[${mrIdx}] must be a non-empty string`);
+            } else if (!rj || !Object.prototype.hasOwnProperty.call(rj, key)) {
+              errors.push(`${mrBase} orphan key: ${key} — not a key of task[${idx}].resolved_judgments`);
             }
           }
         }
