@@ -759,8 +759,20 @@ test("hook leaves a durable escalation trace when the spec-adversary loop stops 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-escalation-"));
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    const specFile = path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`, "spec.md");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(state({ adversary_loop_count: LOOP_THRESHOLDS.adversary.deny })));
+    fs.mkdirSync(path.dirname(specFile), { recursive: true });
+    fs.writeFileSync(specFile, "# attacked spec\n");
+    fs.writeFileSync(file, JSON.stringify(state({
+      adversary_loop_count: LOOP_THRESHOLDS.adversary.deny,
+      review_outcomes: Array.from({ length: LOOP_THRESHOLDS.adversary.deny }, (_, index) => ({
+        logical_role: "adversary",
+        family: 1,
+        task_id: "",
+        outcome: "useful",
+        identity_hash: `prior-spec-${index + 1}`,
+      })),
+    })));
     const hooks = await createLoopGuardHooks(root);
     const runtimeInput = { tool: "task", sessionID: SESSION, callID: "escalate-call" };
     const output = {
@@ -786,6 +798,8 @@ test("hook leaves a durable escalation trace when the spec-adversary loop stops 
     assert.equal(typeof persisted.spec_adversary_escalation, "object");
     assert.equal(persisted.spec_adversary_escalation.round, LOOP_THRESHOLDS.adversary.deny + 1);
     assert.equal(persisted.spec_adversary_escalation.report_hash, persisted.primary_review_last_report_hash);
+    assert.equal(persisted.spec_adversary_escalation.identity_hash, persisted.review_outcomes.at(-1).identity_hash);
+    assert.match(persisted.spec_adversary_escalation.surface_hash, /^[a-f0-9]{64}$/);
     assert.match(persisted.spec_adversary_escalation.at, /^\d{4}-\d{2}-\d{2}T/);
     // And the residual risk was snapshotted for the planner brief in the same pass.
     assert.equal(persisted.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
