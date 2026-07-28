@@ -214,9 +214,12 @@ Content rules, no exceptions, checked before every write (this is a checklist, n
   hierarchy, not data.
 - Plain HTML+CSS, opens directly from disk in any browser — no build step, no framework.
 
-After writing, best-effort open it for the operator (`open` on macOS / `xdg-open` on Linux / `start`
-on Windows — bash is available in `build`); if that fails for any reason, just state the path in
-pt-br and let the operator open it.
+After writing, best-effort try to open it for the operator via bash (`open` on macOS / `xdg-open` on
+Linux / `start` on Windows). None of these three are on `build`'s local bash allowlist
+(`permission.bash` in `opencode.json` — default `"*": "ask"`), so this is a live permission prompt in
+an interactive session, not a silent execution — that's expected here, answer it. If the operator
+declines, or it fails for any other reason, just state the path in pt-br and let the operator open
+it themselves.
 
 The operator's reaction to the mockup is ordinary interview input, nothing more — fold it into
 `## Decisões travadas` / `## Suposições do modelo` like any other answer, and close or refine the

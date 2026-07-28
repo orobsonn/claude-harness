@@ -367,4 +367,4 @@ Engineering (tier escalation, retry, sniper) is **NEVER** delegated to the human
 - `harvester` ran; durable learnings routed (native memory / nested AGENTS.md / kaizen); ephemeral buffers deleted.
 - **adversary entered virgin on every dispatch** — no prior verdict leaked.
 - Every operator message was pt-br product-language.
-- No file was written via the edit tool — all writes went through bash (`cat >` / heredoc).
+- No product code or test file was written by `build` itself, via the edit tool or bash — those only ever come from a dispatched executor/sniper/test-author. (`build`'s own orchestration artifacts — spec, plan cache, shared context, decision ledger — are written directly with the edit tool; see `## File writes` above.)
