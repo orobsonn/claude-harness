@@ -612,18 +612,18 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
   const scheduled = [
     "agents/adversary-family-1.md",
     "agents/adversary-family-2.md",
+    "agents/adversary-openai.md",
     "agents/executor-high-spawn.md",
     "agents/executor-low-spawn.md",
     "agents/executor-medium-spawn.md",
     "agents/plan-reviewer-family-1.md",
     "agents/plan-reviewer-family-2.md",
+    "agents/plan-reviewer-openai.md",
     "agents/sniper-high-spawn.md",
     "agents/sniper-low-spawn.md",
     "agents/sniper-medium-spawn.md",
     "agents/test-author-spawn.md",
     "plugin/loop-guard.ts",
-    "plugin/lib/adversary-nudge.mjs",
-    "plugin/lib/adversary-nudge.test.mjs",
     "plugin/lib/dual-enforcement.mjs",
     "plugin/lib/dual-enforcement.test.mjs",
     "plugin/lib/dual-merge.mjs",
@@ -639,6 +639,20 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     assert.ok(OC_RETIRED_FILES.includes(path), `missing scheduled retired path: ${path}`);
   }
   assert.equal(new Set(OC_RETIRED_FILES).size, OC_RETIRED_FILES.length, "retired paths must be unique");
+
+  // The pruning keeps these modules alive on purpose (docs/prd/oc-parity-pruning.md § Passo 5,
+  // #583): adversary-nudge is the spec loop's only brake — the Claude Code lane has no adversary
+  // cap to replace it — and revise-nudge is the authoritative round budget. Listing either as
+  // retired would delete it from every vendored project the day its path changes.
+  const keptOnPurpose = [
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+  ];
+  for (const path of keptOnPurpose) {
+    assert.ok(!OC_RETIRED_FILES.includes(path), `retired path must not include a module kept on purpose: ${path}`);
+  }
 });
 
 test("predeclared retired files remain vendored while their source still exists (#576)", () => {
