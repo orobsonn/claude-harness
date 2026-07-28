@@ -206,7 +206,7 @@ export async function createLoopGuardHooks(
       // fails exactly like prose nobody obeys. Persist the escalation and emit it on the
       // observability feed so an ignored one is visible to the operator instead of invisible.
       if (nudge.action === "inject" && nudge.kind === "escalate") {
-        const round = typeof result.state.adversary_loop_count === "number" ? result.state.adversary_loop_count : 0
+        const round = nudge.round
         const reportHash = typeof result.state.primary_review_last_report_hash === "string" ? result.state.primary_review_last_report_hash : ""
         withGateStateLock(sp, (prev) => {
           const already = prev.spec_adversary_escalation as Record<string, unknown> | undefined

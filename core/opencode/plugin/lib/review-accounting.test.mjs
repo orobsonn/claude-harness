@@ -760,7 +760,16 @@ test("hook leaves a durable escalation trace when the spec-adversary loop stops 
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(state({ adversary_loop_count: LOOP_THRESHOLDS.adversary.deny })));
+    fs.writeFileSync(file, JSON.stringify(state({
+      adversary_loop_count: LOOP_THRESHOLDS.adversary.deny,
+      review_outcomes: Array.from({ length: LOOP_THRESHOLDS.adversary.deny }, (_, index) => ({
+        logical_role: "adversary",
+        family: 1,
+        task_id: "",
+        outcome: "useful",
+        identity_hash: `prior-spec-${index + 1}`,
+      })),
+    })));
     const hooks = await createLoopGuardHooks(root);
     const runtimeInput = { tool: "task", sessionID: SESSION, callID: "escalate-call" };
     const output = {

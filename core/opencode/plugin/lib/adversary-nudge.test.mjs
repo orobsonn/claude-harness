@@ -11,6 +11,7 @@ const DENY = LOOP_THRESHOLDS.adversary.deny;
 function state(overrides = {}) {
   return {
     adversary_loop_count: 1,
+    review_outcomes: [{ logical_role: "adversary", family: 1, task_id: "", outcome: "useful" }],
     primary_review_last_material_unresolved: true,
     primary_review_last_report_hash: "a".repeat(64),
     ...overrides,
@@ -38,12 +39,52 @@ test("a material finding with rounds left says revise the spec FIRST, then re-at
   assert.match(res.context, /empty issues array is not a realistic bar/);
 });
 
+test("run-wide adversary outcomes from earlier phases do not spend a fresh spec loop", () => {
+  const res = decideAdversaryNudge({
+    subagentType: PRIMARY,
+    state: state({
+      adversary_loop_count: DENY + 3,
+      review_outcomes: [
+        { logical_role: "adversary", family: 1, task_id: "task-1", outcome: "useful" },
+        { logical_role: "adversary", family: 1, task_id: "task-2", outcome: "useful" },
+        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful" },
+      ],
+    }),
+  });
+
+  assert.equal(res.kind, "revise");
+  assert.match(res.context, /round 1\/4/);
+});
+
+test("the nudge reflects useful rounds from the current spec loop, not the run total", () => {
+  const reviewOutcomes = Array.from({ length: DENY }, (_, index) => ({
+    logical_role: "adversary",
+    family: 1,
+    task_id: "",
+    outcome: "useful",
+    call_id: `spec-${index + 1}`,
+  }));
+  const res = decideAdversaryNudge({
+    subagentType: PRIMARY,
+    state: state({ adversary_loop_count: DENY + 8, review_outcomes: reviewOutcomes }),
+  });
+
+  assert.equal(res.kind, "escalate");
+  assert.match(res.context, new RegExp(`\\b${DENY} spec-adversary rounds\\b`));
+});
+
 test("a loop that is not converging STOPS and escalates to the human — nothing refuses it, so the instruction must", () => {
   // There is no deterministic cap on the adversary loop any more (a hard refusal froze two real
   // runs). The escalation instruction is the whole stop mechanism, including past the threshold.
   for (const s of [
-    state({ adversary_loop_count: DENY }),
-    state({ adversary_loop_count: DENY + 3 }),
+    state({
+      adversary_loop_count: DENY,
+      review_outcomes: Array.from({ length: DENY }, () => ({ logical_role: "adversary", family: 1, task_id: "", outcome: "useful" })),
+    }),
+    state({
+      adversary_loop_count: DENY + 3,
+      review_outcomes: Array.from({ length: DENY + 3 }, () => ({ logical_role: "adversary", family: 1, task_id: "", outcome: "useful" })),
+    }),
     state({ adversary_loop_count: 2, review_status: "review_cap_reached" }),
   ]) {
     const res = decideAdversaryNudge({ subagentType: PRIMARY, state: s });

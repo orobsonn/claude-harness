@@ -32,13 +32,22 @@ function object(value) {
   return value != null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function currentSpecLoopRound(state) {
+  const outcomes = Array.isArray(state.review_outcomes) ? state.review_outcomes : [];
+  return outcomes.filter((value) => {
+    const outcome = object(value);
+    const taskId = typeof outcome.task_id === "string" ? outcome.task_id.trim() : "";
+    return outcome.logical_role === "adversary" && outcome.family === 1 && outcome.outcome === "useful" && !taskId;
+  }).length;
+}
+
 /**
  * @description Decide the spec-adversary continuation instruction after a primary outcome.
  * Only the primary (loop-counting) family drives it — family 2 is optional and fail-open. Only the
  * SPEC pass qualifies: a per-task adversary (non-empty task_id) belongs to the implementation loop,
  * whose findings route to a sniper, not to a spec rewrite.
  * @param {{ state?: unknown, subagentType?: unknown, taskId?: unknown, overrides?: object }} input
- * @returns {{ action: "inject", kind: "accept" | "revise" | "escalate", context: string }
+ * @returns {{ action: "inject", kind: "accept" | "revise" | "escalate", round: number, context: string }
  *          | { action: "skip", reason: string }}
  */
 export function decideAdversaryNudge(input = {}) {
@@ -62,7 +71,7 @@ export function decideAdversaryNudge(input = {}) {
   const key = loopCounterKey(identity.canonicalName);
   if (key !== "adversary_loop_count") return { action: "skip", reason: "not-the-adversary-loop-counter" };
   const { deny } = thresholdsFor(key, object(input.overrides));
-  const count = Number.isInteger(state[key]) && state[key] >= 0 ? state[key] : 0;
+  const count = currentSpecLoopRound(state);
   const unresolved = state.primary_review_last_material_unresolved === true;
   const budgetSpent = count >= deny || BUDGET_SPENT_STATUSES.has(state.review_status);
 
@@ -70,6 +79,7 @@ export function decideAdversaryNudge(input = {}) {
     return {
       action: "inject",
       kind: "accept",
+      round: count,
       context:
         `[adversary-nudge] spec-adversary round ${count}/${deny} returned no unresolved material finding. ` +
         'This pass is ACCEPTED: call native `mark({ action: "adversary_fired" })` now, then dispatch `planner`. ' +
@@ -82,6 +92,7 @@ export function decideAdversaryNudge(input = {}) {
     return {
       action: "inject",
       kind: "escalate",
+      round: count,
       context:
         `[adversary-nudge] ${count} spec-adversary rounds and material findings are still open. This loop is not ` +
         "converging: each round rewrites the spec and the next round finds fresh surface, which can continue " +
@@ -99,6 +110,7 @@ export function decideAdversaryNudge(input = {}) {
   return {
     action: "inject",
     kind: "revise",
+    round: count,
     context:
       `[adversary-nudge] spec-adversary round ${count}/${deny} left a material finding open. ` +
       "Next action: revise spec.md so the finding is answered — an acceptance criterion that pins the " +
