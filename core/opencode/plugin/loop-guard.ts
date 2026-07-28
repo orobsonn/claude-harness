@@ -199,7 +199,7 @@ export async function createLoopGuardHooks(
     // definition in code, so it behaved like a coin flip — one session stamped after round 1, the
     // next re-attacked to the cap and froze before the planner ever ran.
     try {
-      const surfaceHash = specSurfaceHash(result.state)
+      const surfaceHash = specSurfaceHash(result.state, sessionID, featureOf(args))
       const nudge = decideAdversaryNudge({ state: result.state, subagentType: sub, taskId, surfaceHash })
       if (nudge.action === "inject" && output != null && typeof output === "object") {
         if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
@@ -258,9 +258,15 @@ export async function createLoopGuardHooks(
     return res.ok ? res.path : null
   }
 
-  function specSurfaceHash(state: Record<string, unknown>): string {
-    const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
-    const sessionId = typeof state.session_id === "string" ? state.session_id : ""
+  function specSurfaceHash(state: Record<string, unknown>, runtimeSessionId: string, dispatchedFeatureId: string): string {
+    const outcomes = Array.isArray(state.review_outcomes) ? state.review_outcomes : []
+    const latest = outcomes.at(-1) as Record<string, unknown> | undefined
+    const stateFeatureId = typeof state.feature_id === "string" ? state.feature_id : ""
+    const receiptFeatureId = typeof latest?.feature_id === "string" ? latest.feature_id : ""
+    const stateSessionId = typeof state.session_id === "string" ? state.session_id : ""
+    const receiptSessionId = typeof latest?.session_id === "string" ? latest.session_id : ""
+    const featureId = stateFeatureId || receiptFeatureId || dispatchedFeatureId
+    const sessionId = stateSessionId || receiptSessionId || runtimeSessionId
     const dir = planDir({ projectRoot: dirSafe, runtime: "opencode", sessionId, featureId })
     if (!dir.ok) return ""
     try {
