@@ -1,5 +1,7 @@
 /** @description OC loop guard: useful family-1 reports count only after execution. */
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
+import crypto from "node:crypto"
+import fs from "node:fs"
 
 /**
  * @description Builds loop-guard hooks (async load of pure mjs).
@@ -24,7 +26,7 @@ export async function createLoopGuardHooks(
   const { dedupeByType, obsAppend } = await import("./lib/obs-emit.mjs")
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
-  const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
+  const { gateStatePath, planDir } = await import("../../shared/lib/path-helpers.mjs")
   // Host dual-merge path (#384): finalizeHostDualMerge → driveDualEye (dual-runtime) — not skill-only.
   const {
     dualMergeIntentFromOutcome,
@@ -197,7 +199,8 @@ export async function createLoopGuardHooks(
     // definition in code, so it behaved like a coin flip — one session stamped after round 1, the
     // next re-attacked to the cap and froze before the planner ever ran.
     try {
-      const nudge = decideAdversaryNudge({ state: result.state, subagentType: sub, taskId })
+      const surfaceHash = specSurfaceHash(result.state)
+      const nudge = decideAdversaryNudge({ state: result.state, subagentType: sub, taskId, surfaceHash })
       if (nudge.action === "inject" && output != null && typeof output === "object") {
         if (!output.metadata || typeof output.metadata !== "object") output.metadata = {}
         output.metadata.adversary_nudge = nudge.context
@@ -210,8 +213,18 @@ export async function createLoopGuardHooks(
         const reportHash = typeof result.state.primary_review_last_report_hash === "string" ? result.state.primary_review_last_report_hash : ""
         withGateStateLock(sp, (prev) => {
           const already = prev.spec_adversary_escalation as Record<string, unknown> | undefined
-          if (already && already.report_hash === reportHash && already.round === round) return prev
-          return { ...prev, spec_adversary_escalation: { round, report_hash: reportHash, at: new Date().toISOString() } }
+          if (already && already.identity_hash === nudge.currentIdentity) return prev
+          return {
+            ...prev,
+            spec_adversary_escalation: {
+              round,
+              report_hash: reportHash,
+              identity_hash: nudge.currentIdentity,
+              loop_boundary_identity_hash: nudge.loopBoundaryIdentity,
+              surface_hash: surfaceHash,
+              at: new Date().toISOString(),
+            },
+          }
         })
         try {
           obsAppend({ type: "spec-adversary-escalated", round }, { dedupe: dedupeByType })
@@ -243,6 +256,18 @@ export async function createLoopGuardHooks(
       sessionId: sessionID,
     })
     return res.ok ? res.path : null
+  }
+
+  function specSurfaceHash(state: Record<string, unknown>): string {
+    const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
+    const sessionId = typeof state.session_id === "string" ? state.session_id : ""
+    const dir = planDir({ projectRoot: dirSafe, runtime: "opencode", sessionId, featureId })
+    if (!dir.ok) return ""
+    try {
+      return crypto.createHash("sha256").update(fs.readFileSync(`${dir.path}/spec.md`)).digest("hex")
+    } catch {
+      return ""
+    }
   }
 
   return {

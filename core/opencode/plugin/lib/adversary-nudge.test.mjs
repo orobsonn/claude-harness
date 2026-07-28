@@ -79,23 +79,58 @@ test("a spec change after escalation opens a new taskless loop at round one", ()
     family: 1,
     task_id: "",
     outcome: "useful",
-    report_hash: `previous-${index + 1}`,
+    report_hash: "same-report",
+    identity_hash: `previous-${index + 1}`,
   }));
   const res = decideAdversaryNudge({
     subagentType: PRIMARY,
+    surfaceHash: "changed-spec",
     state: state({
       adversary_loop_count: DENY + 1,
       review_outcomes: [
         ...previousLoop,
-        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful", report_hash: "new-loop-1" },
+        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful", report_hash: "same-report", identity_hash: "new-loop-1" },
       ],
-      spec_adversary_escalation: { round: DENY, report_hash: previousLoop.at(-1).report_hash },
+      spec_adversary_escalation: {
+        round: DENY,
+        report_hash: previousLoop.at(-1).report_hash,
+        identity_hash: previousLoop.at(-1).identity_hash,
+        surface_hash: "original-spec",
+      },
     }),
   });
 
   assert.equal(res.kind, "revise");
   assert.equal(res.round, 1);
   assert.match(res.context, /round 1\/4/);
+});
+
+test("ignoring an escalation without changing the spec does not reset its loop", () => {
+  const reviewOutcomes = Array.from({ length: DENY + 1 }, (_, index) => ({
+    logical_role: "adversary",
+    family: 1,
+    task_id: "",
+    outcome: "useful",
+    report_hash: "same-report",
+    identity_hash: `spec-${index + 1}`,
+  }));
+  const res = decideAdversaryNudge({
+    subagentType: PRIMARY,
+    surfaceHash: "unchanged-spec",
+    state: state({
+      adversary_loop_count: DENY + 1,
+      review_outcomes: reviewOutcomes,
+      spec_adversary_escalation: {
+        round: DENY,
+        report_hash: "same-report",
+        identity_hash: `spec-${DENY}`,
+        surface_hash: "unchanged-spec",
+      },
+    }),
+  });
+
+  assert.equal(res.kind, "escalate");
+  assert.equal(res.round, DENY + 1);
 });
 
 test("a loop that is not converging STOPS and escalates to the human — nothing refuses it, so the instruction must", () => {
