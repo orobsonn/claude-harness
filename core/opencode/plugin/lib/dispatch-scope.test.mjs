@@ -138,6 +138,22 @@ test("scope rejects traversal, external absolute paths, and symlink escape", (t)
   } finally { f.close(); }
 });
 
+test("scope accepts an absolute path under a lexical alias of the real project root", (t) => {
+  const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), "scope-real-root-"));
+  const lexicalRoot = `${realRoot}-alias`;
+  try {
+    fs.mkdirSync(path.join(realRoot, "src"));
+    try { fs.symlinkSync(realRoot, lexicalRoot, "dir"); } catch { t.skip("symlinks unavailable"); return; }
+    assert.deepEqual(normalizeProjectPath(lexicalRoot, path.join(lexicalRoot, "src", "a.ts")), {
+      ok: true,
+      path: "src/a.ts",
+    });
+  } finally {
+    try { fs.unlinkSync(lexicalRoot); } catch { /* absent alias */ }
+    fs.rmSync(realRoot, { recursive: true, force: true });
+  }
+});
+
 test("composition proof requires all three real plugin factories in this process", async () => {
   const f = fixture();
   try {
