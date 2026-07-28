@@ -1011,6 +1011,7 @@ export async function sendRenderedMessage({ config, text, fetch: fetchImpl, log 
 function deriveBorderCheckpoints(metaPath, meta, seams) {
   const read = seams.readEvents ?? defaultReadEvents;
   const append = seams.appendEvent ?? defaultAppendEvent;
+  const stat = seams.statSync ?? statSync;
   const events = read(metaPath);
   const worktreePath = meta?.worktreePath;
   if (typeof worktreePath !== "string" || !worktreePath) return;
@@ -1021,7 +1022,11 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
     join(worktreePath, ".opencode", "plans"),
   ];
   let hasSpec = false;
+  let specPathForTimestamp = null;
+  let specTimestamp = null;
   let taskCount = null;
+  let planPathForTimestamp = null;
+  let planTimestamp = null;
   for (const plansDir of plansDirs) {
     try {
       const entries = readdirSync(plansDir);
@@ -1030,7 +1035,7 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
         const subPath = join(plansDir, entry);
         let st;
         try {
-          st = statSync(subPath);
+          st = stat(subPath);
         } catch {
           continue;
         }
@@ -1038,10 +1043,21 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
 
         const specPath = join(subPath, "spec.md");
         try {
-          if (statSync(specPath).isFile()) hasSpec = true;
+          const specStats = stat(specPath);
+          if (specStats.isFile()) {
+            hasSpec = true;
+            if (!specPathForTimestamp) {
+              specPathForTimestamp = specPath;
+              specTimestamp = specStats.mtime.toISOString();
+            }
+          }
         } catch {}
 
         const planPath = join(subPath, "execution-plan.json");
+        let detectedPlanTimestamp;
+        try {
+          detectedPlanTimestamp = stat(planPath).mtime.toISOString();
+        } catch {}
         try {
           const raw = readFileSync(planPath, "utf8");
           const parsed = JSON.parse(raw);
@@ -1049,7 +1065,11 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
           if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
             const n = parsed.tasks.length;
             // Prefer the largest full plan if multiple dirs exist (avoid last-wins wrong count).
-            if (taskCount == null || n > taskCount) taskCount = n;
+            if (taskCount == null || n > taskCount) {
+              taskCount = n;
+              planPathForTimestamp = planPath;
+              planTimestamp = detectedPlanTimestamp;
+            }
           }
         } catch {}
       }
@@ -1058,11 +1078,24 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
     }
   }
 
+  // Re-stat at append time so a removal or rewrite after detection falls back to appendEvent's
+  // current-time stamp instead of producing a checkpoint from one artifact version with another's
+  // mtime. The checkpoint remains fail-open in either case.
+  const timestampFor = (path, detectedTimestamp) => {
+    try {
+      return detectedTimestamp && stat(path).mtime.toISOString() === detectedTimestamp ? detectedTimestamp : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   if (hasSpec && !events.some((event) => event.type === "spec-created")) {
-    append(metaPath, { type: "spec-created" });
+    const ts = timestampFor(specPathForTimestamp, specTimestamp);
+    append(metaPath, ts ? { type: "spec-created", ts } : { type: "spec-created" });
   }
   if (taskCount != null && !events.some((event) => event.type === "plan-created")) {
-    append(metaPath, { type: "plan-created", tasks: taskCount });
+    const ts = timestampFor(planPathForTimestamp, planTimestamp);
+    append(metaPath, ts ? { type: "plan-created", tasks: taskCount, ts } : { type: "plan-created", tasks: taskCount });
   }
 }
 
@@ -1121,7 +1154,7 @@ const MAX_HEAL_ATTEMPTS = 3;
  * cursor is still drained. Fail-open: never throws and never delays the cron.
  *
  * @param {{ stateDir: string, homeDir: string, chatId: number|string, limitPerMinute?: number, sendDelayMs?: number }} opts
- * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, send?: Function, sleep?: Function, createTopic?: Function }} seams
+ * @param {{ readEvents?: Function, readMeta?: Function, advanceCursor?: Function, updateMeta?: Function, appendEvent?: Function, statSync?: Function, send?: Function, sleep?: Function, createTopic?: Function }} seams
  * @returns {Promise<void>}
  */
 export async function drainTelegramOutbox(opts = {}, seams = {}) {
@@ -1169,7 +1202,7 @@ export async function drainTelegramOutbox(opts = {}, seams = {}) {
       const metaPath = join(stateDir, file);
       const meta = readMeta(metaPath);
       if (!meta) continue;
-      deriveBorderCheckpoints(metaPath, meta, { readEvents, appendEvent });
+      deriveBorderCheckpoints(metaPath, meta, { readEvents, appendEvent, statSync: seams.statSync });
       const events = readEvents(metaPath);
       runs.push({ metaPath, meta, events });
     }

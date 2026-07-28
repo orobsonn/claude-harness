@@ -17,7 +17,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -325,6 +325,35 @@ test("drainTelegramOutbox derives a {type:'spec-created'} checkpoint from spec.m
   assert.strictEqual(specSends.length, 1, "the derived spec-created checkpoint was delivered by exactly one send to thread 707");
 });
 
+test("drainTelegramOutbox stamps a derived spec-created checkpoint with spec.md's mtime", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
+  const specPath = join(worktreePath, ".claude", "plans", "f", "spec.md");
+  mkdirSync(join(worktreePath, ".claude", "plans", "f"), { recursive: true });
+  writeFileSync(specPath, "# spec\n", "utf8");
+  const specMtime = new Date("2026-07-28T00:54:08.000Z");
+  utimesSync(specPath, specMtime, specMtime);
+
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath,
+    threadId: 707,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, [{ type: "spec-adversary", ts: "2026-07-28T00:55:01.000Z" }]);
+
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, limitPerMinute: 30 },
+    { ...seams, send: async () => ({ sent: true }) },
+  );
+
+  const specEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "spec-created");
+  assert.strictEqual(specEvent.ts, statSync(specPath).mtime.toISOString());
+  assert.ok(new Date(specEvent.ts) < new Date("2026-07-28T00:55:01.000Z"));
+});
+
 /**
  * @description #8 — Given the worktreePath contains .claude/plans/f/execution-plan.json with 9
  * tasks and no plan-created event yet, When the drain tick runs TWICE, Then a single
@@ -383,6 +412,150 @@ test("drainTelegramOutbox derives {type:'plan-created', tasks:9} once, idempoten
     1,
     "a second tick must NOT deliver a duplicate plan-created send (still exactly one, cumulative across both ticks)",
   );
+});
+
+test("drainTelegramOutbox stamps a derived plan-created checkpoint with execution-plan.json's mtime", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
+  const planPath = join(worktreePath, ".claude", "plans", "f", "execution-plan.json");
+  mkdirSync(join(worktreePath, ".claude", "plans", "f"), { recursive: true });
+  writeFileSync(planPath, JSON.stringify({ tasks: [{ id: "task-1" }] }), "utf8");
+  const planMtime = new Date("2026-07-28T00:56:00.000Z");
+  utimesSync(planPath, planMtime, planMtime);
+
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath,
+    threadId: 707,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, []);
+
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, limitPerMinute: 30 },
+    { ...seams, send: async () => ({ sent: true }) },
+  );
+
+  const planEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "plan-created");
+  assert.strictEqual(planEvent.ts, statSync(planPath).mtime.toISOString());
+});
+
+test("drainTelegramOutbox falls back to append time when derived artifacts cannot be re-statted", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
+  const specPath = join(worktreePath, ".claude", "plans", "f", "spec.md");
+  const planPath = join(worktreePath, ".claude", "plans", "f", "execution-plan.json");
+  mkdirSync(join(worktreePath, ".claude", "plans", "f"), { recursive: true });
+  writeFileSync(specPath, "# spec\n", "utf8");
+  writeFileSync(planPath, JSON.stringify({ tasks: [{ id: "task-1" }] }), "utf8");
+  const staleMtime = new Date("2000-01-01T00:00:00.000Z");
+  utimesSync(specPath, staleMtime, staleMtime);
+  utimesSync(planPath, staleMtime, staleMtime);
+
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath,
+    threadId: 707,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, []);
+
+  const artifactStats = new Map();
+  const statAfterDetectionFails = (path) => {
+    if (path === specPath || path === planPath) {
+      const calls = (artifactStats.get(path) ?? 0) + 1;
+      artifactStats.set(path, calls);
+      if (calls === 2) throw new Error("artifact removed after detection");
+    }
+    return statSync(path);
+  };
+  const beforeDrain = Date.now();
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, limitPerMinute: 30 },
+    { ...seams, statSync: statAfterDetectionFails, send: async () => ({ sent: true }) },
+  );
+
+  const specEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "spec-created");
+  const planEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "plan-created");
+  assert.ok(specEvent, "the spec checkpoint is still appended when its timestamp lookup fails");
+  assert.ok(planEvent, "the plan checkpoint is still appended when its timestamp lookup fails");
+  assert.notStrictEqual(specEvent.ts, staleMtime.toISOString(), "appendEvent supplies the current-time fallback");
+  assert.notStrictEqual(planEvent.ts, staleMtime.toISOString(), "appendEvent supplies the current-time fallback");
+  assert.ok(new Date(specEvent.ts).getTime() >= beforeDrain);
+  assert.ok(new Date(planEvent.ts).getTime() >= beforeDrain);
+});
+
+test("drainTelegramOutbox derives a plan with an append-time fallback when its initial stat fails", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
+  const planPath = join(worktreePath, ".claude", "plans", "f", "execution-plan.json");
+  mkdirSync(join(worktreePath, ".claude", "plans", "f"), { recursive: true });
+  writeFileSync(planPath, JSON.stringify({ tasks: [{ id: "task-1" }] }), "utf8");
+
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath,
+    threadId: 707,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, []);
+
+  const statPlanFails = (path) => {
+    if (path === planPath) throw new Error("plan stat unavailable");
+    return statSync(path);
+  };
+  const beforeDrain = Date.now();
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, limitPerMinute: 30 },
+    { ...seams, statSync: statPlanFails, send: async () => ({ sent: true }) },
+  );
+
+  const planEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "plan-created");
+  assert.ok(planEvent, "the parsed plan still produces its checkpoint");
+  assert.ok(new Date(planEvent.ts).getTime() >= beforeDrain);
+});
+
+test("drainTelegramOutbox falls back to append time when a derived plan is rewritten after detection", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
+  const planPath = join(worktreePath, ".claude", "plans", "f", "execution-plan.json");
+  mkdirSync(join(worktreePath, ".claude", "plans", "f"), { recursive: true });
+  writeFileSync(planPath, JSON.stringify({ tasks: [{ id: "task-1" }] }), "utf8");
+  const detectedMtime = new Date("2000-01-01T00:00:00.000Z");
+  utimesSync(planPath, detectedMtime, detectedMtime);
+
+  writeMeta(stateDir, 141, {
+    issueNumber: 141,
+    project: "demo",
+    worktreePath,
+    threadId: 707,
+    cursor: 0,
+    status: "active",
+  });
+  writeEvents(stateDir, 141, []);
+
+  let planStats = 0;
+  const statAfterRewrite = (path) => {
+    if (path === planPath && ++planStats === 2) {
+      return { mtime: new Date("2026-07-28T01:00:00.000Z") };
+    }
+    return statSync(path);
+  };
+  const beforeDrain = Date.now();
+  await drainTelegramOutbox(
+    { stateDir, homeDir: stateDir, chatId: 999, limitPerMinute: 30 },
+    { ...seams, statSync: statAfterRewrite, send: async () => ({ sent: true }) },
+  );
+
+  const planEvent = readEvents(metaPath(stateDir, 141)).find((event) => event.type === "plan-created");
+  assert.notStrictEqual(planEvent.ts, detectedMtime.toISOString());
+  assert.ok(new Date(planEvent.ts).getTime() >= beforeDrain);
 });
 
 /**
