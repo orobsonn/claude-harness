@@ -189,6 +189,8 @@ Curate **layered** context per agent (budget ~2k–8k tokens/step), never the wh
 
 ## Phase 2 — Per-task loop
 
+**Ensure a feature branch (NOT main/master) before the first write-capable hand dispatch in this phase:** OC's per-task loop has no per-task commit — every write-capable hand writes straight to the working tree, uncommitted; commits only happen once, in `shipper`, at the very end of the run (unchanged). The first write-capable dispatch in this phase is **not always `executor`** — in LIGHT mode it can be the `sniper` fixing an upfront spec-adversary finding (see "LIGHT: upfront spec-adversary" right below), which runs BEFORE the per-task loop's own `test-author` (step a′) and `executor` (step b). Any of these hands — `sniper`, `test-author`, `executor` — writing to `main`/`master` with no branch reproduces exactly the bug this fix closes. So: before dispatching **any** of them for the first time in this run — the LIGHT upfront sniper pass included, not just the per-task loop's executor — run `git branch --show-current`; if it returns `main` or `master`, create and check out a feature branch with `git switch -c <type>/<feature_id>` (kebab-case `<type>` per git.md — `feat`/`fix`/`refactor`/`chore`/`docs`). If the session is already on a branch other than main/master, use it as-is — do not create a new one. `shipper`'s own "Create branch" step becomes a fallback/assertion for the case where this check already ran (see `shipper.md`).
+
 **LIGHT** runs `executor + gates` per task, plus ONE upfront `adversary` pass on the spec before the loop, and a final dual review (Phase 3).
 **FULL** runs the full loop below per task.
 
@@ -207,7 +209,7 @@ There is no "loop until clean" contract. Convergence is declared by the stop cri
 
 ### Before the first task
 
-Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** (`cat >` / heredoc) — a **real file on disk** (not in-context memory): the task-to-task knowledge ledger. On-disk so it survives context compaction and keeps task-to-task traceability auditable.
+Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** (`cat >` / heredoc) — a **real file on disk** (not in-context memory): the task-to-task knowledge ledger. On-disk so it survives context compaction and keeps task-to-task traceability auditable. (The feature-branch guarantee is already handled above, at the top of Phase 2 — it runs before this ledger init too, since LIGHT's upfront sniper pass can precede it.)
 
 ### Per-task steps (topological order via `depends_on`)
 
