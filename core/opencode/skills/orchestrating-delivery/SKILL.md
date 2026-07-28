@@ -251,7 +251,7 @@ Do not invent alternate event type strings — only the types in `notify-telegra
 **Post-hand capture path (OC-native — Task hands, not CC spawn-hand):**
 
 1. Host `obs-hand` writes the hand-record on Task terminal and, when outcome is DONE (Status line **or** git touched paths), **auto-stamps** sealed `hand_finished` + `capture_verified` + `capturedVerifiedAt`. You do **not** need `capture-hand.mjs` (that is Claude Code only).
-2. Still call native `mark` `hand-finished` / `capture-verified` if the host did not stamp (belt) — if mark returns `ok:false` because record is not DONE, treat as hand failure and re-dispatch the hand (within K=3), do not ship.
+2. Still call native `mark` `hand-finished` / `capture-verified` if the host did not stamp (belt) — if mark returns `ok:false` because record is not DONE, treat as hand failure and re-dispatch the hand, do not ship. The budget for that re-dispatch is the **same-agent K=3 defined below in § Escalation ladder** — 3 attempts of *this specific hand*, counted per role(/task), reset on success. It is that role(/task)'s **existing** counter, not a fresh 3: attempts this hand already burned earlier in the task still count against it. It is **not** the planner's K=3 (per plan-review round) and **not** the adversary's CAP = 3 rounds (§ Adversary re-dispatch stop-rule); rounds already spent by those counters do not consume this hand's attempts.
 3. Never use Bash or `mark-gate` CLI for privileged markers.
 4. **Ship on the parent `build` session only.** Do **not** rely on `shipper` Task child for `git push` / `gh pr` (child sessions are not writing-hand-bound). `shipper` may draft PR title/body text; conductor runs push/PR bash on the parent after capture is present.
 
