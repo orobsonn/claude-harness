@@ -93,4 +93,6 @@ test("build contract keeps optional eyes advisory and primary-authoritative", ()
   assert.match(source, /optional second eye/i);
   assert.match(source, /primary result remains authoritative/i);
   assert.doesNotMatch(source, /dual_status|dual-runtime|secondary_failure_class/);
+  assert.match(source, /primary verdict advances normally without blocking/i);
+  assert.match(source, /evidence.*file:function/i);
 });

@@ -29,7 +29,7 @@ This skill runs inside the `build` (primary) agent. Its output is the approved (
 ## Interactive vs headless
 
 - **INTERACTIVE:** ask the operator **one question at a time**; present design; wait for approval.
-- **HEADLESS** (autonomous / VPS cron / `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / trigger says "without asking"): **do not wait for a human**. Simulate exploration with **read-only** investigation + optional fan-out `task` exploration lenses (user-journeys, edge-cases, constraints), synthesize a spec from the trigger + codebase, then run **spec-adversary** (`adversary` dual if configured). If blocking product decisions cannot be resolved from the trigger, stop and comment on the issue/PR — do not invent product judgments silently.
+- **HEADLESS** (autonomous / VPS cron / `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / trigger says "without asking"): **do not wait for a human**. Simulate exploration with **read-only** investigation + optional fan-out `task` exploration lenses (user-journeys, edge-cases, constraints), synthesize a spec from the trigger + codebase, then run one primary **spec-adversary**. Dispatch an optional second eye only when routing explicitly configures one via `secondEyeModel` or legacy `families.family-2`; catalog presence alone is not authorization. If blocking product decisions cannot be resolved from the trigger, stop and comment on the issue/PR — do not invent product judgments silently.
 
 Start by understanding the current project context (files, MEMORY, AGENTS). Interactive: refine with the operator. Headless: refine from trigger + investigation.
 
