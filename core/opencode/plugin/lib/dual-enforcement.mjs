@@ -108,7 +108,7 @@ export function readRequireDualOn(routing) {
       typeof routing !== "object" ||
       Array.isArray(routing)
     ) {
-      return [...DEFAULT_REQUIRE_DUAL_ON];
+      return [];
     }
     const constraints =
       /** @type {Record<string, unknown>} */ (routing).constraints;
@@ -117,16 +117,18 @@ export function readRequireDualOn(routing) {
       typeof constraints !== "object" ||
       Array.isArray(constraints)
     ) {
-      return [...DEFAULT_REQUIRE_DUAL_ON];
+      // Single-evaluator default: no constraints ⇒ dual not required.
+      // Legacy families shape still carries explicit requireDualOn after v1 adapt.
+      return [];
     }
     const list =
       /** @type {Record<string, unknown>} */ (constraints).requireDualOn;
     if (!Array.isArray(list) || list.length === 0) {
-      return [...DEFAULT_REQUIRE_DUAL_ON];
+      return [];
     }
     return list.filter((r) => typeof r === "string" && r.length > 0);
   } catch {
-    return [...DEFAULT_REQUIRE_DUAL_ON];
+    return [];
   }
 }
 

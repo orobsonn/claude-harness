@@ -172,6 +172,9 @@ function collectModelEntries(value, entries = []) {
   if (typeof value.model === "string") {
     entries.push({ model: value.model, reasoningEffort: value.reasoningEffort });
   }
+  if (typeof value.secondEyeModel === "string") {
+    entries.push({ model: value.secondEyeModel, reasoningEffort: undefined });
+  }
   for (const nested of Object.values(value)) collectModelEntries(nested, entries);
   return entries;
 }

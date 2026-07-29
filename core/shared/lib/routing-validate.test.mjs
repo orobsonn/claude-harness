@@ -52,6 +52,15 @@ describe("routing-validate", () => {
     assert.match(result.reason, /invalid secondEyeModel on adversary/);
   });
 
+  it("#582: secondEyeModel requires modelCapabilities entry", () => {
+    const cfg = structuredClone(defaultRouting);
+    cfg.roles.adversary.secondEyeModel = "xai/grok-4.5";
+    cfg.roles["plan-reviewer"].secondEyeModel = "xai/grok-4.5";
+    const res = validateRouting(cfg);
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /missing supportsReasoningEffort for xai\/grok-4\.5/);
+  });
+
   it("#576: legacy families shape still validates when fully formed", () => {
     const cfg = structuredClone(defaultRouting);
     cfg.roles["plan-reviewer"] = {

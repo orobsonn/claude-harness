@@ -33,17 +33,26 @@ export const DUAL_STATUS_VALUES = Object.freeze(
   ]),
 );
 
-/** Always-dual posts (ADR-003). */
-export const DUAL_POSTS = Object.freeze({
-  "plan-reviewer": Object.freeze({
-    ...reviewDispatchFor("plan-reviewer"),
-    shape: "verdict",
-  }),
-  adversary: Object.freeze({
-    ...reviewDispatchFor("adversary"),
-    shape: "findings",
-  }),
-});
+/**
+ * @description Dispatch names for review posts. Default (no routing) = single evaluator.
+ * Pass routing with `secondEyeModel` to enable optional secondary `*-family-2`.
+ * @param {{ roles?: Record<string, { secondEyeModel?: string }> } | null} [routing]
+ */
+export function dualPostsFor(routing = null) {
+  return Object.freeze({
+    "plan-reviewer": Object.freeze({
+      ...reviewDispatchFor("plan-reviewer", routing),
+      shape: "verdict",
+    }),
+    adversary: Object.freeze({
+      ...reviewDispatchFor("adversary", routing),
+      shape: "findings",
+    }),
+  });
+}
+
+/** Default single-evaluator posts (no second eye). Prefer dualPostsFor(routing) at call sites. */
+export const DUAL_POSTS = dualPostsFor(null);
 
 /** primary_only_error retries secondary once (K=1). Auth/unavailable never retries. */
 export const PRIMARY_ONLY_ERROR_RETRY_COUNT = 1;
@@ -387,9 +396,10 @@ export function driveDualEye(opts) {
       primaryFamily = "primary",
       secondaryFamily = "secondary",
       maxRetries = PRIMARY_ONLY_ERROR_RETRY_COUNT,
+      routing = null,
     } = opts ?? {};
 
-    const postCfg = DUAL_POSTS[post] || null;
+    const postCfg = dualPostsFor(routing)[post] || null;
     const primaryValidation = validateReviewReport(post, primaryResult);
     if (!postCfg || !primaryValidation.ok) {
       return {

@@ -34,6 +34,8 @@ function activeJsonModels(value, models = [], path = "") {
 const SECOND_EYE_AGENT_FILES = new Set([
   "adversary-family-2.md",
   "plan-reviewer-family-2.md",
+  "adversary-openai.md",
+  "plan-reviewer-openai.md",
 ]);
 
 /** @description Model slugs in slots where xAI/Grok is banned (everything but optional second eye). */

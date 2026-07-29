@@ -206,6 +206,14 @@ test("t6-models-match-routing: agent frontmatter models match harness.routing.js
       `${name}.md model must be ${model}`,
     );
   }
+  // Alias stubs: family-1 tracks primary; family-2 / openai are second-eye stubs (cross-provider).
+  assert.equal(fmField(frontmatter(read(join(AGENTS_DIR, "adversary-family-1.md"))), "model"), expected.adversary);
+  assert.equal(fmField(frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-1.md"))), "model"), expected["plan-reviewer"]);
+  for (const second of ["adversary-family-2", "adversary-openai", "plan-reviewer-family-2", "plan-reviewer-openai"]) {
+    const model = fmField(frontmatter(read(join(AGENTS_DIR, `${second}.md`))), "model");
+    assert.ok(model && model.includes("/"), `${second} has a model`);
+    assert.notEqual(model.split("/")[0], expected.adversary.split("/")[0], `${second} stays cross-provider vs primary`);
+  }
 });
 
 test("executor and sniper tiers use the Ollama Cloud default ladder", () => {

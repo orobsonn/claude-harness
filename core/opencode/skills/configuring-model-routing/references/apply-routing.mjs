@@ -22,6 +22,8 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
   "test-author": (r) => r["test-author"]?.model,
   "plan-reviewer": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
   "plan-reviewer-family-1": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
+  // family-2 / openai: second-eye slot. Only rewrite when secondEyeModel (or legacy family-2) is set —
+  // never hardcode Grok when the opt-in is off (absence must leave the stub inert).
   "plan-reviewer-family-2": (r) =>
     r["plan-reviewer"]?.secondEyeModel ?? r["plan-reviewer"]?.families?.["family-2"]?.model,
   "plan-reviewer-openai": (r) =>
@@ -671,6 +673,8 @@ export function applyRoutingToDisk(args) {
       const model = resolveModel(routing.roles);
       if (typeof model !== "string" || !model.includes("/")) {
         if (basename === "planner-fallback" && !routing.roles.planner?.fallback) continue;
+        // Optional second-eye stubs: leave frontmatter untouched when secondEyeModel is absent.
+        if (/-family-2$|-openai$/.test(basename)) continue;
         return { ok: false, reason: `no model resolved for agent ${basename}.md` };
       }
       const body = fs.readFileSync(file, "utf8");
