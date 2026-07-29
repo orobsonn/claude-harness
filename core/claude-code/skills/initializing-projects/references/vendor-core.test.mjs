@@ -64,6 +64,13 @@ const harnessRoot = existsSync(join(__dirname, "../../../../../package.json"))
 const OC_EXAMPLE_PATH = join(__dirname, "../../../../opencode/opencode.json.example");
 // repo-root opencode.json (5 up from references/ to reach the repo root)
 const ROOT_OPENCODE_JSON_PATH = join(__dirname, "../../../../../opencode.json");
+
+/** Retired in v0.45.1 (#359) — the unpinned `#*` ref accepted any branch/PR/commit as executable. */
+const RETIRED_NPX_WILDCARDS = [
+  "npx github:orobsonn/claude-harness#* init*",
+  "npx -y github:orobsonn/claude-harness#* init*",
+  'npx -y "github:orobsonn/claude-harness#*" init*',
+];
 // core/claude-code (3 up from references/ to reach core/claude-code/)
 const CC_CORE_DIR = join(harnessRoot, "core/claude-code");
 const CC_SETTINGS_PATH = join(CC_CORE_DIR, "settings.json");
@@ -1186,6 +1193,11 @@ test("writeOpencodeConfig (issue #479, ac-1.2/ac-1.7-style): tier 2 drops the re
     mkdirSync(join(tempDir, ".opencode"), { recursive: true });
     writeFileSync(join(tempDir, ".opencode", ".harness-version"), "v0.14.0\nvendored_at: 2026-01-01T00:00:00.000Z\n");
     const legacyConfig = JSON.parse(readFileSync(ROOT_OPENCODE_JSON_PATH, "utf8"));
+    // The legacy state must be built here, never borrowed from the repo's live opencode.json: that
+    // file is itself migrated over time, and once the harness retires these keys from it the
+    // fixture silently stops carrying anything to remove — the migration then reports only "kept
+    // custom" and this test fails for a reason that has nothing to do with the code under test.
+    for (const wildcard of RETIRED_NPX_WILDCARDS) legacyConfig.permission.bash[wildcard] = "allow";
     legacyConfig.permission.bash["git pull*"] = "ask"; // operator customization diverging from the historical "allow"
     writeFileSync(join(tempDir, "opencode.json"), `${JSON.stringify(legacyConfig, null, 2)}\n`);
 
@@ -1196,11 +1208,7 @@ test("writeOpencodeConfig (issue #479, ac-1.2/ac-1.7-style): tier 2 drops the re
     assert.match(status, /removed retired/);
 
     const migrated = JSON.parse(readFileSync(join(tempDir, "opencode.json"), "utf8"));
-    for (const wildcard of [
-      "npx github:orobsonn/claude-harness#* init*",
-      "npx -y github:orobsonn/claude-harness#* init*",
-      'npx -y "github:orobsonn/claude-harness#*" init*',
-    ]) {
+    for (const wildcard of RETIRED_NPX_WILDCARDS) {
       assert.ok(!Object.hasOwn(migrated.permission.bash, wildcard), `retired wildcard must be pruned: ${wildcard}`);
     }
     assert.equal(migrated.permission.bash["git pull*"], "ask", "a value diverging from the ledger's historical default must survive");
