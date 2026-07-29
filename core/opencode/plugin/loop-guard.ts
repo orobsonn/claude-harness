@@ -32,7 +32,7 @@ export async function createLoopGuardHooks(
     dualMergeIntentFromOutcome,
     finalizeHostDualMerge,
   } = await import("./lib/dual-merge.mjs")
-  const { extractSubagentType, isTaskTool } = await import("./lib/dual-enforcement.mjs")
+  const { extractSubagentType, isTaskTool } = await import("./lib/task-dispatch-identity.mjs")
   const { applyAgentDispatchOutcome, applyGateBlockedDispatch } = await import("../../shared/lib/agent-retry.mjs")
   const { decideCallOutcomeOnce } = await import("../../shared/lib/agent-retry-call.mjs")
   const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")

@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeliveryCommand } from "./is-delivery-command.mjs";
-import { isSafeSessionIdSegment } from "./dual-enforcement.mjs";
+import { isSafeSessionIdSegment } from "./gate-state.mjs";
 import { matchesAbsolution, absolutionPrefix } from "../../../shared/lib/absolution.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";
 import {

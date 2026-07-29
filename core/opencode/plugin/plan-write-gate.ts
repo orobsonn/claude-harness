@@ -92,7 +92,7 @@ export async function createPlanWriteGateHooks(
     "./lib/plan-write-decide.mjs"
   );
   const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
-  const { loadGateStateFromDisk } = await import("./lib/dual-enforcement.mjs");
+  const { loadGateStateFromDisk } = await import("./lib/gate-state.mjs");
   const { invalidateScopeRuntimeIdentity, resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
 
   const root =

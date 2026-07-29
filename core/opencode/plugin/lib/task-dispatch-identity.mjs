@@ -4,6 +4,67 @@ const OPEN = "[HARNESS_TASK_CONTEXT]";
 const CLOSE = "[/HARNESS_TASK_CONTEXT]";
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/**
+ * @description Whether tool name is the OC Task/agent dispatch family.
+ * Canonical rule (shared with loop-guard, obs-hand, obs-eye): task | agent |
+ * endsWith .task | .agent (case-insensitive).
+ * @param {unknown} toolName
+ * @returns {boolean}
+ */
+export function isTaskTool(toolName) {
+  if (typeof toolName !== "string") return false;
+  const n = toolName.toLowerCase();
+  return (
+    n === "task" ||
+    n === "agent" ||
+    n.endsWith(".task") ||
+    n.endsWith(".agent")
+  );
+}
+
+/**
+ * @description Extract subagent_type from OC task tool args (best-effort).
+ * Role sources only: subagent_type / agent* aliases (flat + nested input).
+ * Never reads official Task `command` or `task_id` — those are host resume fields.
+ * Never throws.
+ * @param {unknown} toolArgs
+ * @returns {string}
+ */
+export function extractSubagentType(toolArgs) {
+  try {
+    if (
+      toolArgs == null ||
+      typeof toolArgs !== "object" ||
+      Array.isArray(toolArgs)
+    ) {
+      return "";
+    }
+    const a = /** @type {Record<string, unknown>} */ (toolArgs);
+    const nested =
+      a.input != null && typeof a.input === "object" && !Array.isArray(a.input)
+        ? /** @type {Record<string, unknown>} */ (a.input)
+        : null;
+    const candidates = [
+      a.subagent_type,
+      a.subagentType,
+      a.agent,
+      a.agent_type,
+      a.subagent,
+      nested?.subagent_type,
+      nested?.subagentType,
+      nested?.agent,
+      nested?.agent_type,
+      nested?.subagent,
+    ];
+    for (const raw of candidates) {
+      if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 /** @description Parse exactly one JSON task marker without accepting prose-like aliases. */
 export function parseTaskDispatchIdentity(prompt) {
   if (typeof prompt !== "string") return { ok: false, reason: "task prompt marker missing" };
@@ -27,4 +88,4 @@ export function parseTaskDispatchIdentity(prompt) {
   }
 }
 
-export default { parseTaskDispatchIdentity };
+export default { parseTaskDispatchIdentity, isTaskTool, extractSubagentType };
