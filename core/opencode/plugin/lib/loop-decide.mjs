@@ -1,15 +1,9 @@
-/** @description Atomic review reservations, terminal accounting, dual authority, and review-cap epochs. */
+/** @description Atomic single-evaluator review reservations, terminal accounting, and review-cap epochs. */
 
 import crypto from "node:crypto";
 import { bareRole } from "./roles.mjs";
 import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
-import {
-  dualStatusPhaseFromRole,
-  normalizeDualStatusMap,
-  stableDualStatusMap,
-} from "../../../shared/lib/gate-state-shape.mjs";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { deriveCanonicalReviewRestart } from "./review-restart.mjs";
 import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 
@@ -18,7 +12,7 @@ import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
 export const LOOP_THRESHOLDS = Object.freeze({
   plan_review: Object.freeze({ warn: 2, deny: 10 }),
   adversary: Object.freeze({ warn: 2, deny: 4 }),
-  /** Consecutive primary (family-1) failure streak — same K as all-agent retry. */
+  /** Consecutive unusable results from one evaluator — same K as all-agent retry. */
   primary_failure_streak: Object.freeze({ deny: AGENT_RETRY_K }),
 });
 
@@ -100,10 +94,34 @@ function identityKey(receipt) {
     session_id: receipt.session_id,
     feature_id: receipt.feature_id,
     logical_role: receipt.logical_role,
-    family: receipt.family,
     call_id: receipt.call_id,
     epoch: receipt.epoch,
   });
+}
+
+function canonicalReviewIdentity(value) {
+  return reviewAgentIdentity(value)?.canonicalName ?? (typeof value === "string" ? value : "");
+}
+
+function sameReviewCall(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    canonicalReviewIdentity(left.canonical_identity) === canonicalReviewIdentity(right.canonical_identity) &&
+    left.session_id === right.session_id &&
+    left.feature_id === right.feature_id &&
+    left.logical_role === right.logical_role &&
+    left.call_id === right.call_id &&
+    left.epoch === right.epoch
+  );
+}
+
+function countsForSingleEvaluator(reservation) {
+  if (!reservation) return false;
+  const { family } = reservation;
+  if (family != null) return family === 1;
+  const identity = reviewAgentIdentity(reservation.canonical_identity);
+  return identity ? identity.countsLoop === true : true;
 }
 
 function currentReceipts(state) {
@@ -114,91 +132,18 @@ function currentInflight(state) {
   return Array.isArray(state.review_inflight) ? state.review_inflight : [];
 }
 
-/**
- * @description Write dual_status for one phase axis (map form). Legacy scalar is
- * normalized to { plan_review } first so adversary writes never clobber plan dual.
- * Seal payload is the full stable dual_status map.
- * @param {Record<string, unknown>} state
- * @param {string} status
- * @param {"plan_review" | "adversary"} phase
- */
-function dualState(state, status, phase) {
-  const sessionId = typeof state.session_id === "string" ? state.session_id : "";
-  const featureId = typeof state.feature_id === "string" ? state.feature_id : "";
-  if (!sessionId || !featureId) return { ok: false, reason: "dual transition requires classified identity" };
-  if (phase !== "plan_review" && phase !== "adversary") {
-    return { ok: false, reason: `invalid dual_status phase: ${String(phase)}` };
-  }
-  const nextMap = stableDualStatusMap({
-    ...normalizeDualStatusMap(state.dual_status),
-    [phase]: status,
-  });
-  const seal = sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: nextMap });
-  const prior = Array.isArray(state.marker_seals) ? state.marker_seals : [];
-  return {
-    ok: true,
-    state: {
-      ...state,
-      dual_status: nextMap,
-      marker_seals: [...prior.filter((candidate) => candidate?.operation !== "dual"), seal],
-    },
-  };
-}
-
-/** @description dual_status phase for a review reservation; unknown role → null (fail-closed). */
-function dualPhaseForReservation(reservation) {
-  return dualStatusPhaseFromRole(reservation?.logical_role) ?? null;
-}
-
 /** @description Normalize plan-review verdict; only APPROVE stays APPROVE (else REVISE). */
 function normPlanVerdict(v) {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "APPROVE" ? "APPROVE" : "REVISE";
 }
 
-/**
- * @description Persist + seal plan_verdict from useful plan-reviewer only.
- * either-REVISE-wins across families on the same scope (dual pair).
- * No unconditional sticky REVISE: a later dual pair of APPROVE+APPROVE on the same
- * scope must be able to unlock delivery after the plan was fixed (money-preflight
- * still blocks while either peer on this scope is REVISE).
- */
-function withPlanVerdict(next, state, classified, reservation, scope) {
+/** @description Persist the current useful plan-review verdict from the single evaluator. */
+function withPlanVerdict(next, classified, reservation) {
   if (reservation.logical_role !== "plan-reviewer" || classified.kind !== "useful") {
     return next;
   }
-  const v = normPlanVerdict(object(classified.report).verdict);
-  let verdict = v;
-  const otherSameScope =
-    reservation.family === 1
-      ? state.secondary_review_last_scope_hash === scope
-      : state.primary_review_last_scope_hash === scope;
-  if (otherSameScope) {
-    const otherReport =
-      reservation.family === 1
-        ? state.secondary_review_last_report
-        : state.primary_review_last_report;
-    const otherV = normPlanVerdict(object(otherReport).verdict);
-    // either-REVISE-wins for the dual pair currently on this scope
-    verdict = v === "REVISE" || otherV === "REVISE" ? "REVISE" : "APPROVE";
-  }
-  const sessionId = typeof next.session_id === "string" ? next.session_id : typeof state.session_id === "string" ? state.session_id : "";
-  const featureId = typeof next.feature_id === "string" ? next.feature_id : typeof state.feature_id === "string" ? state.feature_id : "";
-  if (!sessionId || !featureId) {
-    return { ...next, plan_verdict: verdict };
-  }
-  const seal = sealedMarkerRecord({
-    sessionId,
-    featureId,
-    operation: "plan_verdict",
-    payload: verdict,
-  });
-  const prior = Array.isArray(next.marker_seals) ? next.marker_seals : Array.isArray(state.marker_seals) ? state.marker_seals : [];
-  return {
-    ...next,
-    plan_verdict: verdict,
-    marker_seals: [...prior.filter((c) => c?.operation !== "plan_verdict"), seal],
-  };
+  return { ...next, plan_verdict: normPlanVerdict(object(classified.report).verdict) };
 }
 
 export function loopCounterKey(subagentType) {
@@ -256,22 +201,15 @@ export function reopenReviewEpoch(stateValue, options = {}) {
       // deadlock EARLIER than an unfixed one. The session dispatch ceiling is not reset here.
       planner_attempts_round: 0,
       primary_review_failure_streak: 0,
-      secondary_review_failure_streak: 0,
       review_status: "active",
       review_cap_receipt: null,
       cap_generation: null,
       cap_snapshot_hash: null,
       primary_review_last_scope_hash: null,
-      secondary_review_last_scope_hash: null,
       primary_review_last_report_hash: null,
-      secondary_review_last_report_hash: null,
       primary_review_last_report: null,
-      secondary_review_last_report: null,
       dual_status: undefined,
       plan_verdict: undefined,
-      marker_seals: (Array.isArray(state.marker_seals) ? state.marker_seals : []).filter(
-        (candidate) => candidate?.operation !== "dual" && candidate?.operation !== "plan_verdict",
-      ),
     },
   };
 }
@@ -319,23 +257,21 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   ) {
     return { ok: false, reason: "review reservation identity mismatch", state };
   }
+  if (!identity.countsLoop) {
+    return { ok: true, accepted: false, reservation: null, state };
+  }
   const epoch = epochOf(state);
   const reservation = {
     canonical_identity: identity.canonicalName,
     session_id: sessionId,
     feature_id: featureId,
     logical_role: identity.logicalRole,
-    family: identity.family,
     call_id: callId,
     epoch,
     task_id: typeof input.taskId === "string" ? input.taskId : "",
     phase: typeof input.phase === "string" ? input.phase : "",
   };
-  // The plan-review scope must move with the artifact under review. Without this, every revision
-  // round shares one scope, so `withPlanVerdict`'s either-REVISE-wins pairs a fresh report with a
-  // peer's REVISE from an EARLIER round — a family-1 APPROVE on a re-planned artifact is overridden
-  // by a stale peer verdict and the run can never reach APPROVE (observed live: round-2 REVISE from
-  // family-2 pinned the verdict while family-2 malformed in the next round, so nothing cleared it).
+  // The plan-review scope moves with the artifact so receipts remain auditable across revisions.
   if (identity.logicalRole === "plan-reviewer") {
     const binding = object(state.planner_plan_binding);
     reservation.plan_binding_hash = typeof binding.snapshot_hash === "string" ? binding.snapshot_hash : "";
@@ -353,54 +289,47 @@ export function reserveReviewAttempt(stateValue, input = {}) {
       state,
     };
   }
-  if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash)) {
+  if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash || sameReviewCall(item, reservation))) {
     return { ok: false, reason: "review call already has terminal outcome", state };
   }
-  if (inflight.some((item) => item?.identity_hash === reservation.identity_hash)) {
+  if (inflight.some((item) => item?.identity_hash === reservation.identity_hash || sameReviewCall(item, reservation))) {
     return { ok: true, accepted: false, reservation, state };
   }
-  if (identity.family === 1) {
-    const failureCap = primaryFailureStreakCap(input);
-    // The streak means "THIS eye keeps returning garbage" — it is evidence about one role, never a
-    // verdict on the next phase's eye. Left global, a broken spec-adversary barred every later
-    // family-1 eye (plan-reviewer, per-task adversary, final review) for the rest of the session,
-    // and since reservations are refused before dispatch no useful outcome could ever clear it.
-    // Absent owner (legacy state) keeps the old global behaviour — conservative, not fail-open.
-    const streakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
-    const failureStreak = streakRole && streakRole !== identity.logicalRole ? 0 : primaryFailureStreakOf(state);
-    const inflightFamily1 = inflight.filter((item) => item?.family === 1 && item?.epoch === epoch).length;
-    if (failureStreak + inflightFamily1 >= failureCap) {
-      const specPhaseEye =
-        identity.logicalRole === "adversary" &&
-        !(typeof input.taskId === "string" && input.taskId.trim()) &&
-        state.adversary_fired !== true;
-      return {
-        ok: false,
-        reason: specPhaseEye
-          ? `[loop-guard] the spec-adversary eye returned an unusable report ${Math.min(failureStreak, failureCap)}/${failureCap} times — do NOT re-dispatch it, the schema or the prompt is the problem, not the spec. Nothing is frozen: report this to the operator in product language (the spec could not be attacked, so it goes to the plan unattacked or the run stops — their call) and STOP looping.`
-          : `[loop-guard] primary failure-cap: ${identity.canonicalName} streak=${Math.min(failureStreak, failureCap)}/${failureCap} inflight_family1=${inflightFamily1}. Halt. Fix review prompt/schema, then verified ceremony restart (new generation+plan binding) before re-dispatch.`,
-        state,
-      };
-    }
-    const key = loopCounterKey(identity.canonicalName);
-    const { deny } = thresholdsFor(key, input);
-    const count = Number.isInteger(state[key]) ? state[key] : 0;
-    const reserved = inflight.filter((item) => item?.family === 1 && item?.logical_role === identity.logicalRole && item?.epoch === epoch).length;
-    // The ADVERSARY loop has no deterministic refusal. A hard cap here fired twice on legitimate
-    // work — once on a spec-refinement loop before the planner had run, and it was one run-wide
-    // counter away from doing it mid-implementation — and each time the run had no way out. The
-    // Claude Code variant has no such cap and does not stall this way. Convergence is now driven by
-    // the adversary nudge, which tells the orchestrator to stop and escalate to the operator when
-    // the rounds stop producing progress. The PLAN-REVIEW loop keeps its deterministic cap: a REVISE
-    // verdict genuinely forbids every writing hand, so that budget is load-bearing.
-    if (key === "plan_review_count" && count + reserved >= deny) {
-      return { ok: false, reason: `${key} has no remaining useful-review reservation slot`, state };
-    }
+  const failureCap = primaryFailureStreakCap(input);
+  const streakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
+  const failureStreak = streakRole && streakRole !== identity.logicalRole ? 0 : primaryFailureStreakOf(state);
+  const inflightEvaluator = inflight.filter(
+    (item) => item?.logical_role === identity.logicalRole && item?.epoch === epoch && countsForSingleEvaluator(item),
+  ).length;
+  if (failureStreak + inflightEvaluator >= failureCap) {
+    const specPhaseEye =
+      identity.logicalRole === "adversary" &&
+      !(typeof input.taskId === "string" && input.taskId.trim()) &&
+      state.adversary_fired !== true;
+    return {
+      ok: false,
+      reason: specPhaseEye
+        ? `[loop-guard] the spec-adversary eye returned an unusable report ${Math.min(failureStreak, failureCap)}/${failureCap} times — do NOT re-dispatch it, the schema or the prompt is the problem, not the spec. Nothing is frozen: report this to the operator in product language (the spec could not be attacked, so it goes to the plan unattacked or the run stops — their call) and STOP looping.`
+        : `[loop-guard] primary failure-cap: ${identity.canonicalName} streak=${Math.min(failureStreak, failureCap)}/${failureCap} inflight_evaluator=${inflightEvaluator}. Halt. Fix review prompt/schema, then verified ceremony restart (new generation+plan binding) before re-dispatch.`,
+      state,
+    };
   }
-  return { ok: true, accepted: true, reservation, state: { ...state, review_epoch: epoch, review_inflight: [...inflight, reservation] } };
+  const key = loopCounterKey(identity.canonicalName);
+  const { deny } = thresholdsFor(key, input);
+  const count = Number.isInteger(state[key]) ? state[key] : 0;
+  const reserved = inflightEvaluator;
+  if (key === "plan_review_count" && count + reserved >= deny) {
+    return { ok: false, reason: `${key} has no remaining useful-review reservation slot`, state };
+  }
+  return {
+    ok: true,
+    accepted: true,
+    reservation,
+    state: { ...state, review_epoch: epoch, review_inflight: [...inflight, reservation], dual_status: "pending" },
+  };
 }
 
-function reportClassification(response, logicalRole, family) {
+function reportClassification(response, logicalRole) {
   const source = text(response).trim();
   if (!source) return { kind: "failure", failureClass: "empty" };
   if (/\b(?:permission denied|access denied|tool denied|request denied)\b/i.test(source)) return { kind: "failure", failureClass: "denied" };
@@ -418,7 +347,9 @@ function matchingReservation(state, input) {
   if (matches.length !== 1) return null;
   const reservation = matches[0];
   const supplied = reviewAgentIdentity(input.subagentType);
-  if (supplied && supplied.canonicalName !== reservation.canonical_identity) return null;
+  const reserved = reviewAgentIdentity(reservation.canonical_identity);
+  if (!countsForSingleEvaluator(reservation) || reserved?.countsLoop === false) return null;
+  if (supplied && supplied.canonicalName !== canonicalReviewIdentity(reservation.canonical_identity)) return null;
   if (input.featureId && input.featureId !== reservation.feature_id) return null;
   return reservation;
 }
@@ -429,7 +360,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
   const reservation = matchingReservation(state, input);
   if (!reservation) return { state, accepted: false, classified: { kind: "ignore", reason: "matching reservation missing" } };
   const outcomes = currentReceipts(state);
-  if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash)) {
+  if (outcomes.some((item) => item?.identity_hash === reservation.identity_hash || sameReviewCall(item, reservation))) {
     return { state, accepted: false, classified: { kind: "ignore", reason: "terminal outcome already recorded" } };
   }
   const diagnostic = input.diagnostic && typeof input.diagnostic === "object" && !Array.isArray(input.diagnostic)
@@ -439,9 +370,12 @@ export function applyReviewOutcome(stateValue, input = {}) {
       : null;
   const classified = input.failureClass
     ? { kind: "failure", failureClass: FAILURE_CLASSES.has(input.failureClass) ? input.failureClass : "provider_error" }
-    : reportClassification(input.response, reservation.logical_role, reservation.family);
+    : reportClassification(input.response, reservation.logical_role);
   const outcome = {
     ...reservation,
+    // Persisted outcome compatibility for adversary-nudge.mjs, which remains unchanged in #584.
+    // This is a fixed single-evaluator marker, not dispatch authority and not part of reservations.
+    family: 1,
     outcome: classified.kind,
     failure_class: classified.kind === "failure" ? classified.failureClass : undefined,
     // The validator says exactly which rule broke; dropping it left "malformed" as the only evidence
@@ -456,94 +390,48 @@ export function applyReviewOutcome(stateValue, input = {}) {
     review_inflight: currentInflight(state).filter((item) => item?.identity_hash !== reservation.identity_hash),
     review_outcomes: [...outcomes, outcome],
   };
-  const prefix = reservation.family === 1 ? "primary" : "secondary";
   if (classified.kind === "failure") {
     // A harness-internal deny means this eye never ran. It is evidence about the DISPATCH, not
-    // about the eye or its model family — so it is recorded for forensics but must not consume the
-    // failure streak, trip the primary cap, or degrade the cross-family review to primary_only.
-    // (A real run lost its second-family plan review to two self-inflicted plan-gate denials.)
+    // about the evaluator — so it is recorded for forensics but must not consume the failure streak.
     const gateBlocked = classified.failureClass === "gate_blocked";
     const counts = { ...object(state.review_failure_counts) };
     counts[classified.failureClass] = bounded(counts[classified.failureClass], 1);
-    next[`${prefix}_review_failure_count`] = bounded(state[`${prefix}_review_failure_count`], 1);
+    next.primary_review_failure_count = bounded(state.primary_review_failure_count, 1);
     if (gateBlocked) {
       if (diagnostic) next.last_gate_diagnostic = diagnostic;
       next.review_failure_counts = counts;
       return { state: next, accepted: true, classified };
     }
-    // A streak belongs to the role that produced it: a different family-1 eye failing starts its own.
+    // A streak belongs to the logical evaluator role that produced it.
     const priorStreakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
-    const continuesStreak = reservation.family !== 1 || !priorStreakRole || priorStreakRole === reservation.logical_role;
-    next[`${prefix}_review_failure_streak`] = continuesStreak ? bounded(state[`${prefix}_review_failure_streak`], 1) : 1;
-    if (reservation.family === 1) next.primary_review_failure_streak_role = reservation.logical_role;
+    const continuesStreak = !priorStreakRole || priorStreakRole === reservation.logical_role;
+    next.primary_review_failure_streak = continuesStreak ? bounded(state.primary_review_failure_streak, 1) : 1;
+    next.primary_review_failure_streak_role = reservation.logical_role;
     if (diagnostic) next.last_provider_diagnostic = diagnostic;
-    if (reservation.family === 1) {
-      const failureCap = primaryFailureStreakCap(input);
-      // A broken SPEC-phase eye stops being dispatched (the streak refusal in reserveReviewAttempt
-      // does that, and retrying an unparseable schema is pointless) — but it must not write the
-      // freezing status. Same category error as the round cap: a spec-phase failure would deny every
-      // writing hand and the delivery for the rest of the run, in a phase where nothing has been
-      // written yet. The live incident's round 1 was malformed; two more and the run would have
-      // bricked before the planner ever ran. A per-task adversary or a plan-reviewer keeps the
-      // freezing status — there the code already exists and a broken eye means it cannot be judged.
-      const specPhaseEye =
-        reservation.logical_role === "adversary" && !reservation.task_id && state.adversary_fired !== true;
-      if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached" && !specPhaseEye) {
-        next.review_status = "primary_failure_cap_reached";
-        next.cap_generation = state.ceremony_generation;
-        next.cap_snapshot_hash = snapshotHash(state);
-        next.review_cap_receipt = {
-          epoch: epochOf(state),
-          identity_hash: reservation.identity_hash,
-          failure_class: classified.failureClass,
-          cap_generation: state.ceremony_generation,
-          cap_snapshot_hash: snapshotHash(state),
-          kind: "primary_failure_cap",
-          ...(diagnostic ? { diagnostic } : {}),
-        };
-      }
-    }
-    if (reservation.family === 2 && state.primary_review_last_scope_hash === scopeHash(reservation)) {
-      const failPhase = dualPhaseForReservation(reservation);
-      if (!failPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-      const signed = dualState(next, "primary_only", failPhase);
-      if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-      next = {
-        ...signed.state,
-        dual_secondary_status: classified.failureClass === "unauthenticated" ? "unavailable" : "failed",
-        dual_secondary_failure_class: classified.failureClass,
+    const failureCap = primaryFailureStreakCap(input);
+    const specPhaseEye =
+      reservation.logical_role === "adversary" && !reservation.task_id && state.adversary_fired !== true;
+    if (next.primary_review_failure_streak >= failureCap && next.review_status !== "review_cap_reached" && !specPhaseEye) {
+      next.review_status = "primary_failure_cap_reached";
+      next.cap_generation = state.ceremony_generation;
+      next.cap_snapshot_hash = snapshotHash(state);
+      next.review_cap_receipt = {
+        epoch: epochOf(state),
+        identity_hash: reservation.identity_hash,
+        failure_class: classified.failureClass,
+        cap_generation: state.ceremony_generation,
+        cap_snapshot_hash: snapshotHash(state),
+        kind: "primary_failure_cap",
+        ...(diagnostic ? { diagnostic } : {}),
       };
     }
     next.review_failure_counts = counts;
     return { state: next, accepted: true, classified };
   }
 
-  next[`${prefix}_review_failure_streak`] = 0;
-  if (reservation.family === 1) next.primary_review_failure_streak_role = null;
+  next.primary_review_failure_streak = 0;
+  next.primary_review_failure_streak_role = null;
   const scope = scopeHash(reservation);
-  const dualPhase = dualPhaseForReservation(reservation);
-  if (reservation.family === 2) {
-    next.secondary_review_last_report_hash = classified.reportHash;
-    next.secondary_review_last_scope_hash = scope;
-    next.secondary_review_last_report = classified.report;
-    next = withPlanVerdict(next, state, classified, reservation, scope);
-    // Secondary useful without matching primary scope → pending (never false both / merge).
-    const status = state.primary_review_last_scope_hash === scope ? "both" : "pending";
-    if (!dualPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-    const signed = dualState(next, status, dualPhase);
-    if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-    // Clear the peer's failure class with its status: a live gate-state carried
-    // dual_secondary_failure_class "malformed" next to dual_secondary_status "useful".
-    next = { ...signed.state, dual_secondary_status: "useful", dual_secondary_failure_class: null };
-    return {
-      state: next,
-      accepted: true,
-      classified,
-      dualPhase,
-      scopeHash: scope,
-      dualBecameBoth: status === "both",
-    };
-  }
 
   const key = loopCounterKey(reservation.canonical_identity);
   const count = bounded(state[key], 1);
@@ -575,12 +463,8 @@ export function applyReviewOutcome(stateValue, input = {}) {
   next.primary_review_last_scope_hash = scope;
   next.primary_review_last_report = classified.report;
   next.primary_review_last_material_unresolved = classified.materialUnresolved;
-  next = withPlanVerdict(next, state, classified, reservation, scope);
-  const status = state.secondary_review_last_scope_hash === scope ? "both" : "primary_only";
-  if (!dualPhase) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-  const signed = dualState(next, status, dualPhase);
-  if (!signed.ok) return { state, accepted: false, classified: { kind: "failure", failureClass: "malformed" } };
-  next = signed.state;
+  next = withPlanVerdict(next, classified, reservation);
+  next.dual_status = currentInflight(next).some(countsForSingleEvaluator) ? "pending" : "done";
   // A REVISE is an instruction to re-plan — progress, not a planner failure. Credit a fresh
   // planner failure-retry budget for the new round, so the advertised review budget is actually
   // reachable instead of being consumed by the planner's K=3. Stamped with the round number: the
@@ -600,19 +484,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
       next.planner_primary_attempts = 0;
     }
   }
-  if (count >= deny && classified.materialUnresolved) {
-    // Only the plan-review verdict loop reaches a hard cap. An adversary loop records its rounds
-    // and lets the nudge escalate to the operator; it never writes a status that freezes the run.
-    if (key === "adversary_loop_count") {
-      return {
-        state: next,
-        accepted: true,
-        classified,
-        dualPhase,
-        scopeHash: scope,
-        dualBecameBoth: status === "both",
-      };
-    }
+  if (count >= deny && key === "plan_review_count" && next.plan_verdict === "REVISE") {
     next.review_status = "review_cap_reached";
     next.cap_generation = state.ceremony_generation;
     next.cap_snapshot_hash = snapshotHash(state);
@@ -628,9 +500,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
     state: next,
     accepted: true,
     classified,
-    dualPhase,
     scopeHash: scope,
-    dualBecameBoth: status === "both",
   };
 }
 

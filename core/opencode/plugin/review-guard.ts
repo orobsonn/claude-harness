@@ -138,14 +138,17 @@ export async function createReviewGuardHooks(
     const callID = input?.callID ?? input?.callId ?? ""
     const args = argsOf(input, output)
     const sub = extractSubagentType(args)
+    const identity = reviewAgentIdentity(sub)
+    if (identity && !identity.countsLoop) return
     if (!sessionID || !callID) return
     const sp = statePathFor(sessionID)
     if (!sp) return
     const taskId = taskIdOf(args)
+    const countsRetry = !identity || identity.countsLoop
     // Unified K=3: count once per callId (error event and after-hook may both fire).
-    if (failureClass || rawError) {
+    if (countsRetry && (failureClass || rawError)) {
       recordAgentRetry(sessionID, callID, sub, taskId, "failure", failureClass, rawError)
-    } else if (sub) {
+    } else if (countsRetry && sub) {
       recordAgentRetry(sessionID, callID, sub, taskId, "success")
     }
     const model =
@@ -154,8 +157,8 @@ export async function createReviewGuardHooks(
         : typeof output?.metadata?.model === "string"
           ? output.metadata.model
           : undefined
-    const identity = reviewAgentIdentity(sub)
     if (!identity) return
+    let reviewAccepted = false
     const result = withGateStateLock(sp, (prev) => {
       const outcome = applyReviewOutcome(prev, {
         subagentType: sub,
@@ -169,9 +172,11 @@ export async function createReviewGuardHooks(
         error: rawError,
         model,
       })
+      reviewAccepted = outcome.accepted === true
       return outcome.state
     })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
+    if (!reviewAccepted) return
     // Deterministic continuation nudge: a REVISE verdict is supposed to keep every writing hand
     // waiting (prose + orchestration discipline as of #483 — nothing in the dispatch gate itself
     // blocks on it anymore), so the loop only advances if the orchestrator re-dispatches the
@@ -264,6 +269,7 @@ export async function createReviewGuardHooks(
       const sub = extractSubagentType(args)
       const identity = reviewAgentIdentity(sub)
       if (!identity) return
+      if (!identity.countsLoop) return
       const key = loopCounterKey(sub)
 
       if (key === "plan_review_count") {

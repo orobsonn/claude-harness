@@ -49,6 +49,7 @@ test("retired dual modules are absent while review accounting modules remain", (
     "plugin/lib/dual-nudge.mjs",
     "plugin/lib/dual-enforcement.mjs",
     "plugin/lib/dual-enforcement.test.mjs",
+    "plugin/lib/marker-seal.mjs",
     "skills/orchestrating-delivery/dual-runtime.mjs",
     "skills/orchestrating-delivery/dual-runtime.test.mjs",
   ]) {
@@ -58,7 +59,6 @@ test("retired dual modules are absent while review accounting modules remain", (
     "plugin/review-guard.ts",
     "plugin/lib/adversary-nudge.mjs",
     "plugin/lib/revise-nudge.mjs",
-    "plugin/lib/marker-seal.mjs",
   ]) {
     assert.equal(existsSync(join(ocRoot, relativePath)), true, `required path missing: ${relativePath}`);
   }

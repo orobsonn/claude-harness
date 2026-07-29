@@ -9,6 +9,8 @@ import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/p
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
 import { acquireLock, releaseLock, writeGateStateAtomic } from "./gate-state.mjs";
+import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
+import { readDualStatus } from "../../../shared/lib/gate-state-shape.mjs";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_REINJECT_BYTES = 8 * 1024;
@@ -222,11 +224,24 @@ function hasOwnedChildIndex(projectRoot, sessionId) {
   return false;
 }
 
+/** @description Whether current or persisted legacy review state blocks terminal retention. */
+export function isPendingReviewState(state) {
+  if (readDualStatus(state) === "pending") return true;
+  const inflight = Array.isArray(state?.review_inflight) ? state.review_inflight : [];
+  return inflight.some((reservation) => {
+    if (!reservation || typeof reservation !== "object") return true;
+    const { family } = reservation;
+    if (family != null) return family === 1;
+    const identity = reviewAgentIdentity(reservation.canonical_identity);
+    return identity ? identity.countsLoop === true : true;
+  });
+}
+
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
   if (state.session_id !== sessionId || state.active_dispatch != null) return false;
   if (hasCleanupPending(projectRoot, sessionId) || hasOwnedChildIndex(projectRoot, sessionId)) return false;
   if (state.planner_status !== "usable" || state.delivery_status === "delivery-blocked" || state.planner_binding_error != null ||
-      state.classified === false || state.dual_status === "pending" || state.dual_status === "primary_only_error") return false;
+      state.classified === false || isPendingReviewState(state)) return false;
   const featureId = state.feature_id;
   if (!isSafeFeatureId(featureId)) return false;
   const resolved = currentPlan(projectRoot, sessionId, featureId, state);

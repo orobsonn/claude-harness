@@ -7,7 +7,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createEntryGateHooks } from "./entry-gate.ts"
-import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
+import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
 
 const SID = "ses_test1"
 
@@ -53,7 +53,7 @@ function fullCeremony(extra = {}, sessionId = SID) {
     classified: true,
     brainstormed: true,
     adversary_fired: true,
-    dual_status: "both",
+    dual_status: "done",
     plan_verdict: "APPROVE",
     feature_id: "feat",
     final_review_done: true,
@@ -67,27 +67,8 @@ function fullCeremony(extra = {}, sessionId = SID) {
     ...extra,
   }
   const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
-  const markerSeals = []
-  for (const [key, action] of [
-    ["brainstormed", "brainstormed"],
-    ["adversary_fired", "adversary_fired"],
-    ["final_review_done", "final-review"],
-    ["demo_done", "demo-done"],
-    ["dual_status", "dual"],
-    ["plan_verdict", "plan_verdict"],
-  ]) {
-    if (state[key] === true || typeof state[key] === "string") {
-      markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: state[key] }))
-    }
-  }
-  for (const [key, action] of [["fidelity_pass", "fidelity"], ["regate_pending", "regate-pending"], ["regate_passed", "regate-passed"], ["hand_finished", "hand-finished"], ["capture_verified", "capture-verified"]]) {
-    if (Array.isArray(state[key])) {
-      for (const value of state[key]) markerSeals.push(sealedMarkerRecord({ sessionId, featureId, operation: action, payload: value }))
-    }
-  }
-  if (!("marker_seals" in extra)) state.marker_seals = markerSeals
-  if (!("brainstormed_binding" in extra)) state.brainstormed_binding = { session_id: sessionId, feature_id: featureId, operation: "brainstormed", seal: markerSeals.find((record) => record.operation === "brainstormed").seal }
-  if (!("adversary_fired_binding" in extra)) state.adversary_fired_binding = { session_id: sessionId, feature_id: featureId, operation: "adversary_fired", seal: markerSeals.find((record) => record.operation === "adversary_fired").seal }
+  if (!("brainstormed_binding" in extra)) Object.assign(state, ceremonyMarkerPatch("brainstormed", sessionId, featureId))
+  if (!("adversary_fired_binding" in extra)) Object.assign(state, ceremonyMarkerPatch("adversary_fired", sessionId, featureId))
   return state
 }
 
@@ -140,7 +121,7 @@ test("direct unsigned marker mutation cannot release a delivery role", async () 
       classified: true,
       brainstormed: true,
       adversary_fired: true,
-      dual_status: "both",
+      dual_status: "done",
       plan_verdict: "APPROVE",
     })
     await assert.rejects(

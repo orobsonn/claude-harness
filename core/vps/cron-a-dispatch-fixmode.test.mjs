@@ -55,7 +55,6 @@ import { createPlanGateHooks } from "../opencode/plugin/plan-gate.ts";
 import { createObsHandHooks } from "../opencode/plugin/obs-hand.ts";
 import { createReviewGuardHooks } from "../opencode/plugin/review-guard.ts";
 import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
-import { sealedMarkerRecord } from "../opencode/plugin/lib/marker-seal.mjs";
 import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
 import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
 import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
@@ -333,12 +332,8 @@ test("#ac-3.1 sniper Task dispatch with a realistic fresh fix-mode gate-state (r
       feature_id: featureId,
       mode: "LIGHT",
       classified: true,
-      dual_status: "both",
+      dual_status: "done",
       plan_verdict: "APPROVE",
-      marker_seals: [
-        sealedMarkerRecord({ sessionId, featureId, operation: "dual", payload: "both" }),
-        sealedMarkerRecord({ sessionId, featureId, operation: "plan_verdict", payload: "APPROVE" }),
-      ],
     };
     fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify(gateState), "utf8");
 

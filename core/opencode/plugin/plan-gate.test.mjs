@@ -9,7 +9,7 @@ import os from "node:os"
 import path from "node:path"
 import { createPlanGateHooks } from "./plan-gate.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "./lib/planner-artifact.mjs"
-import { sealedMarkerRecord } from "./lib/marker-seal.mjs"
+import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
 
 const SESSION = "ses_planGateTest01"
 const FEATURE = "feat-plan-gate"
@@ -17,10 +17,8 @@ const FEATURE = "feat-plan-gate"
 function sealGateState(gateState) {
   const state = { session_id: SESSION, ...gateState }
   const featureId = typeof state.feature_id === "string" ? state.feature_id : FEATURE
-  const markerSeals = Array.isArray(state.marker_seals) ? [...state.marker_seals] : []
-  if (state.brainstormed === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "brainstormed", payload: true }))
-  if (state.adversary_fired === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "adversary_fired", payload: true }))
-  state.marker_seals = markerSeals
+  if (state.brainstormed === true && !("brainstormed_binding" in state)) Object.assign(state, ceremonyMarkerPatch("brainstormed", SESSION, featureId))
+  if (state.adversary_fired === true && !("adversary_fired_binding" in state)) Object.assign(state, ceremonyMarkerPatch("adversary_fired", SESSION, featureId))
   return state
 }
 
@@ -331,13 +329,10 @@ test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony m
       session_id: SESSION,
       feature_id: FEATURE,
       brainstormed: true,
-      ceremony_binding: {
-        brainstormed: {
-          session_id: "ses-foreign",
-          feature_id: FEATURE,
-          operation: "brainstormed",
-          seal: sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true }).seal,
-        },
+      brainstormed_binding: {
+        session_id: "ses-foreign",
+        feature_id: FEATURE,
+        operation: "brainstormed",
       },
       planner_status: "usable",
       planner_plan_binding: {
