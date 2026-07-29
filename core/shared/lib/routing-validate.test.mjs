@@ -286,4 +286,28 @@ describe("routing-validate", () => {
     assert.equal(adapted.constraints, undefined);
     assert.equal(validateRouting(adapted).ok, true);
   });
+
+  it("t1-v1-adapter-preserves: primary route extensions survive on the flat role", () => {
+    const legacy = structuredClone(defaultRouting);
+    legacy.version = 1;
+    for (const role of ["plan-reviewer", "adversary"]) {
+      legacy.roles[role] = {
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeout: 45_000,
+        extension: { trace: true },
+        label: "primary-label",
+        dual: [{ model: "ollama-cloud/kimi-k2.7-code", label: "secondary-label" }],
+      };
+    }
+    const adapted = adaptRoutingV1(legacy);
+    const eye = adapted.roles.adversary;
+    assert.equal(eye.model, "openai/gpt-5.6-sol");
+    assert.equal(eye.secondEyeModel, "ollama-cloud/kimi-k2.7-code");
+    assert.equal(eye.reasoningEffort, "high");
+    assert.equal(eye.timeout, 45_000);
+    assert.deepEqual(eye.extension, { trace: true });
+    assert.equal(eye.label, "primary-label");
+    assert.equal(validateRouting(adapted).ok, true);
+  });
 });

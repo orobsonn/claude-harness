@@ -370,10 +370,16 @@ export function mergeDualVerdicts(primary, secondary, meta = {}) {
  */
 
 /**
- * @description Drive dual-eye for a requireDualOn post after primary has returned.
+ * @description Drive dual-eye after primary has returned.
  * Injectable runSecondary for unit tests (no live provider). Never throws.
  * Never invents secondary findings. Auth/unavailable → primary_only_failopen (no retry).
  * Infra error → primary_only_error, retry secondary once (K=1), then fail-open with primary only.
+ *
+ * Pass `routing` so secondary dispatch follows the live config:
+ * - default / no second eye → dualPostsFor(routing).secondary is null (single evaluator)
+ * - `roles.<post>.secondEyeModel` or legacy `families.family-2.model` → secondary `*-family-2`
+ * Without `routing`, behavior matches `DUAL_POSTS` (routing-blind, secondary always null).
+ * Callers that need the second eye on vendored projects MUST pass the loaded harness.routing.json.
  *
  * @param {{
  *   post: 'plan-reviewer' | 'adversary' | string,
@@ -383,6 +389,7 @@ export function mergeDualVerdicts(primary, secondary, meta = {}) {
  *   primaryFamily?: string,
  *   secondaryFamily?: string,
  *   maxRetries?: number,
+ *   routing?: { roles?: Record<string, unknown> } | null,
  * }} opts
  * @returns {DualRuntimeResult}
  */

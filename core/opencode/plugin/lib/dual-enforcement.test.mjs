@@ -48,7 +48,7 @@ function asLegacyRouting(routing) {
   legacy.modelCapabilities["xai/grok-build-0.1"] = { supportsReasoningEffort: false };
   legacy.modelCapabilities["ollama-cloud/kimi-k2.7-code"] = { supportsReasoningEffort: false };
   for (const role of ["plan-reviewer", "adversary"]) {
-    // v1 dual shape — adapter still emits families regardless of the current single-evaluator default
+    // v1 dual shape — adapter emits flat { model, secondEyeModel } (no families / requireDualOn).
     legacy.roles[role] = {
       model: "xai/grok-4.5",
       dual: [{ model: "ollama-cloud/kimi-k2.7-code" }],

@@ -79,12 +79,14 @@ There is **NO** single `executor` or `sniper` agent — tiered names only. Tier 
 
 **One required evaluator** by default (`plan-reviewer` / `adversary`). Optional second eye is opt-in and fail-open — dispatch `*-family-2` **only when** routing declares `secondEyeModel` (or a legacy `families.family-2` model). Never require dual on the default path. Task tool has no model field — second eye = second agent file when configured.
 
-**Runtime module:** `dual-runtime.mjs` in this skill folder — `driveDualEye`, `dualPostsFor`, `mergeDualFindings`, `mergeDualVerdicts`, `virginSecondaryBrief`, `isFullDualCoverage`, `dualStatusGatePatch`.
+**Runtime module:** `dual-runtime.mjs` in this skill folder — `driveDualEye`, `dualPostsFor(routing)`, `mergeDualFindings`, `mergeDualVerdicts`, `virginSecondaryBrief`, `isFullDualCoverage`, `dualStatusGatePatch`.
+
+**Do not use the frozen `DUAL_POSTS` export for dispatch decisions** — it is `dualPostsFor(null)` (always single-evaluator). Always call `dualPostsFor(routing)` with the loaded `harness.routing.json`, and pass the same `routing` into `driveDualEye({ …, routing })`. That is how `secondEyeModel` and legacy `families.family-2` reach the secondary name; without `routing`, the second eye never dispatches even when configured.
 
 | Step | Action |
 |---|---|
 | 1 | Dispatch primary (`plan-reviewer` / `adversary`) |
-| 2 | Dispatch secondary (`plan-reviewer-family-2` / `adversary-family-2`) **only when** routing declares a second eye — virgin brief, fail-open, never blocking. If unset → skip; single-evaluator APPROVE is enough |
+| 2 | Resolve secondary via `dualPostsFor(routing)[post].secondary`. Dispatch `plan-reviewer-family-2` / `adversary-family-2` only when that value is non-null — virgin brief, fail-open, never blocking. If null → skip; single-evaluator APPROVE is enough |
 | 3 | On secondary auth/unavailable → `dual_status: "primary_only"`; record the reason separately; keep primary findings only; **never invent** secondary findings; warn operator (pt-br) |
 | 4 | On secondary infra error (rate limit / 5xx / crash) → retry secondary once (K=1); if retry ok → upgrade to `both` + merge; if retry fails → `dual_status: "primary_only"`, record failure separately, keep primary only + warn |
 | 5 | On both ok → merge via policy B (shared `finalizeFindings` / `mergeVerdicts`); `dual_status: "both"` |
