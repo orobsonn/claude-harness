@@ -5,6 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   DUAL_STATUS,
   DUAL_STATUS_VALUES,
@@ -19,6 +20,26 @@ import {
   validateGateStateDualFields,
   mergeGateStatePatch,
 } from "./gate-state-shape.mjs";
+
+function redactedVendoredGateState(fixture) {
+  return JSON.parse(fs.readFileSync(new URL(`./fixtures/oc-gate-state/${fixture}/gate-state.json`, import.meta.url), "utf8"));
+}
+
+test("#584 reads redacted real-shape vendored gate-state maps without treating them as stale or corrupt", () => {
+  const adversaryOnly = redactedVendoredGateState("adversary-both");
+  assert.equal(adversaryOnly.session_id, "ses_fixture_adversary_both");
+  assert.deepEqual(adversaryOnly.dual_status, { adversary: "both" });
+  assert.equal(validateGateStateDualFields(adversaryOnly).ok, true);
+  assert.equal(readDualStatus(adversaryOnly, "adversary"), "both");
+  assert.equal(readDualStatus(adversaryOnly, "plan_review"), undefined);
+
+  const bothPhases = redactedVendoredGateState("both-phases-both");
+  assert.equal(bothPhases.session_id, "ses_fixture_both_phases");
+  assert.deepEqual(bothPhases.dual_status, { plan_review: "both", adversary: "both" });
+  assert.equal(validateGateStateDualFields(bothPhases).ok, true);
+  assert.equal(readDualStatus(bothPhases, "plan_review"), "both");
+  assert.equal(readDualStatus(bothPhases, "adversary"), "both");
+});
 
 test("dual_status enum includes authoritative primary_only without treating it as full dual", () => {
   assert.equal(DUAL_STATUS_VALUES.size, 5);

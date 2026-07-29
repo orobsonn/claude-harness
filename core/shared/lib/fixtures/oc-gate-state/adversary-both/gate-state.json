@@ -1,0 +1,68 @@
+{
+  "session_id": "ses_fixture_adversary_both",
+  "feature_id": "fixture-adversary-review",
+  "mode": "FULL",
+  "peak_mode": "FULL",
+  "classified": true,
+  "triaged": true,
+  "brainstormed": true,
+  "adversary_fired": false,
+  "planner_status": "not_started",
+  "delivery_status": "planning",
+  "classify_status": "ready",
+  "review_epoch": 1,
+  "review_inflight": [],
+  "review_outcomes": [
+    {
+      "canonical_identity": "adversary-family-1",
+      "session_id": "ses_fixture_adversary_both",
+      "feature_id": "fixture-adversary-review",
+      "logical_role": "adversary",
+      "family": 1,
+      "call_id": "call_fixture_primary",
+      "epoch": 1,
+      "task_id": "",
+      "phase": "",
+      "identity_hash": "fixture-primary-identity",
+      "outcome": "useful",
+      "report_hash": "fixture-primary-report",
+      "material_unresolved": true
+    },
+    {
+      "canonical_identity": "adversary-family-2",
+      "session_id": "ses_fixture_adversary_both",
+      "feature_id": "fixture-adversary-review",
+      "logical_role": "adversary",
+      "family": 2,
+      "call_id": "call_fixture_secondary",
+      "epoch": 1,
+      "task_id": "",
+      "phase": "",
+      "identity_hash": "fixture-secondary-identity",
+      "outcome": "useful",
+      "report_hash": "fixture-secondary-report",
+      "material_unresolved": true
+    }
+  ],
+  "primary_review_failure_streak": 0,
+  "adversary_loop_count": 1,
+  "primary_review_last_report_hash": "fixture-primary-report",
+  "primary_review_last_scope_hash": "fixture-shared-scope",
+  "primary_review_last_report": {
+    "issues": []
+  },
+  "primary_review_last_material_unresolved": true,
+  "dual_status": {
+    "adversary": "both"
+  },
+  "secondary_review_failure_streak": 0,
+  "secondary_review_last_report_hash": "fixture-secondary-report",
+  "secondary_review_last_scope_hash": "fixture-shared-scope",
+  "secondary_review_last_report": {
+    "family": "family-2",
+    "issues": []
+  },
+  "dual_secondary_status": "useful",
+  "dual_secondary_failure_class": null,
+  "session_status": "active"
+}
