@@ -5,7 +5,8 @@
  * frontmatter is merged AFTER the global ruleset — so a "bash: allow" scalar or a "*": allow entry inside a
  * nested permission.bash map makes every deny in the global DANGEROUS_BASH_DENYLIST (core/vps/cron-a-dispatch.mjs)
  * unreachable for that agent. The fleet dispatches via `opencode run --agent build`, so this was reachable in
- * production for all 12 agents fixed by #516.
+ * production for all 12 agents fixed by #516. Shared mode-all hands remain covered by the
+ * repo-wide scan after their CLI spawn twins were retired.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -241,7 +242,7 @@ test("lt-bash-permission-violation-detector: catches every override shape, ignor
 /**
  * @description Every core/opencode/agents/*.md frontmatter is free of a permission.bash override that
  * widens beyond the global ruleset — the regression this repo hit before #516 (build/compliance/harvester/
- * planner/security/shipper/executor-{low,medium,high}[-spawn].md all declared "bash: allow").
+ * planner/security/shipper/executor-{low,medium,high}.md all declared "bash: allow").
  */
 test("lt-no-agent-bash-override-drift", () => {
   const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith(".md"))

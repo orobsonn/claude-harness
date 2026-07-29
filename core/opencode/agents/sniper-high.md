@@ -1,8 +1,10 @@
 ---
 description: Surgical fix for HIGH-severity defects (race condition, security, data corruption, auth-bypass). ollama-cloud/kimi-k2.7-code. Minimum delta only, no new files.
-mode: subagent
+mode: all
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
+tools:
+  task: false
 permission:
   classify: deny
   edit: allow

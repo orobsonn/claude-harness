@@ -25,11 +25,8 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
     "plan-reviewer-family-1",
     "plan-reviewer-family-2",
     "executor-low",
-    "executor-low-spawn",
     "sniper-high",
-    "sniper-high-spawn",
     "test-author",
-    "test-author-spawn",
     "shipper",
   ]) {
     assert.ok(EXPECTED_HARNESS_AGENTS.includes(name), name);
@@ -66,15 +63,15 @@ test("checkAgentCatalogHealth does not mask an incomplete runtime catalog with c
   assert.deepEqual(result.missing, ["adversary"]);
 });
 
-test("checkAgentCatalogHealth marks a missing spawn twin unhealthy", () => {
-  const root = "/tmp/harness-missing-spawn";
+test("checkAgentCatalogHealth does not require retired spawn twins", () => {
+  const root = "/tmp/harness-shared-hand";
   const runtime = path.join(root, ".opencode", "agents");
   const existing = new Set([runtime, path.join(runtime, "executor-low.md")]);
   const result = checkAgentCatalogHealth(root, {
-    expected: ["executor-low", "executor-low-spawn"],
+    expected: ["executor-low"],
     existsSync: (candidate) => existing.has(candidate),
   });
-  assert.deepEqual(result.missing, ["executor-low-spawn"]);
+  assert.deepEqual(result.missing, []);
 });
 
 test("checkAgentCatalogHealth falls back to core only when runtime catalog is absent", () => {

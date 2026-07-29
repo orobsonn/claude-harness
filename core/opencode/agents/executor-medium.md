@@ -1,8 +1,10 @@
 ---
 description: Implements MEDIUM-complexity tasks — the DEFAULT executor. Ollama Cloud hand (glm-5.2).
-mode: subagent
+mode: all
 model: ollama-cloud/glm-5.2
 temperature: 0.1
+tools:
+  task: false
 permission:
   classify: deny
   edit: allow

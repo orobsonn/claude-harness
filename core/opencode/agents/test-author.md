@@ -1,8 +1,10 @@
 ---
-description: Transcribes pinned locked_test assertions into one test file (and narrow maintenance edits). Hand role — fidelity-exempt (creates the frozen test). In-session mode subagent; CLI uses test-author-spawn.
-mode: subagent
+description: Transcribes pinned locked_test assertions into one test file (and narrow maintenance edits). Hand role — fidelity-exempt (creates the frozen test).
+mode: all
 model: ollama-cloud/glm-5.2
 temperature: 0.1
+tools:
+  task: false
 permission:
   classify: deny
   edit: allow

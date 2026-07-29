@@ -1,8 +1,10 @@
 ---
-description: Implements HIGH-complexity tasks (band 31+ residual reasoning). Ollama Cloud hand (kimi-k2.7-code). Stays strictly inside scope_paths. In-session loop uses mode subagent; CLI cheap-hand uses executor-high-spawn (mode primary).
-mode: subagent
+description: Implements HIGH-complexity tasks (band 31+ residual reasoning). Ollama Cloud hand (kimi-k2.7-code). Stays strictly inside scope_paths.
+mode: all
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
+tools:
+  task: false
 permission:
   classify: deny
   edit: allow

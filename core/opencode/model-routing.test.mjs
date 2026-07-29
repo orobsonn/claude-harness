@@ -123,14 +123,12 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
   }
 });
 
-test("approved defaults and test-author twins are active", () => {
+test("approved defaults and the shared test-author agent are active", () => {
   for (const relative of ["opencode.json", "core/opencode/opencode.json.example"]) {
     const config = JSON.parse(readFileSync(join(repoRoot, relative), "utf8"));
     assert.equal(config.model, "openai/gpt-5.6-terra");
     assert.equal(config.small_model, "openai/gpt-5.6-terra");
   }
-  for (const agent of ["test-author.md", "test-author-spawn.md"]) {
-    const body = readFileSync(join(ocRoot, "agents", agent), "utf8");
-    assert.match(body, /^model: ollama-cloud\/glm-5\.2$/m);
-  }
+  const body = readFileSync(join(ocRoot, "agents", "test-author.md"), "utf8");
+  assert.match(body, /^model: ollama-cloud\/glm-5\.2$/m);
 });
