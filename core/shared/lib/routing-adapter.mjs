@@ -69,15 +69,18 @@ export function adaptRoutingV1(config) {
     };
   }
   // v1 dual → flat single evaluator + optional secondEyeModel (no families / requireDualOn).
-  // Primary non-model fields (reasoningEffort, timeout, label, extension, …) survive on the flat role.
+  // Only known primary extensions pass through — never arbitrary keys (families, bogus, …).
+  const PRIMARY_KEEP = Object.freeze(["reasoningEffort", "timeout", "label", "extension"]);
   for (const roleName of ["plan-reviewer", "adversary"]) {
     const role = roles[roleName];
     if (role == null || typeof role !== "object" || Array.isArray(role)) continue;
-    const { dual, model: _dropModel, ...primaryRest } = role;
-    const secondary = Array.isArray(dual) ? dual[0] : undefined;
+    const secondary = Array.isArray(role.dual) ? role.dual[0] : undefined;
     const primaryModel = migrateLegacyDefaultModel(role.model, "openai/gpt-5.6-sol");
     /** @type {Record<string, unknown>} */
-    const flat = { ...primaryRest, model: primaryModel };
+    const flat = { model: primaryModel };
+    for (const key of PRIMARY_KEEP) {
+      if (Object.hasOwn(role, key)) flat[key] = role[key];
+    }
     if (secondary && typeof secondary === "object" && !Array.isArray(secondary)) {
       const migrated = migrateRouteModel(secondary, "ollama-cloud/kimi-k2.7-code");
       if (typeof migrated?.model === "string" && migrated.model.includes("/")) {
