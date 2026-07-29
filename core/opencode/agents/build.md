@@ -49,7 +49,7 @@ CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each sha
 
 Every evaluator Task brief, primary or explicitly opted-in second eye, MUST require two separate passes: internal consistency of the spec/plan/diff, then confrontation against every real file in `scope_paths` and its relevant callers/callees. Never assume another eye covers either pass.
 
-Validate every finding before accepting a report. Adversary findings require the existing `evidence` field exactly as repo-relative `file:function`. Plan-reviewer findings preserve their exact schema and begin `problem` with `Evidence: file:function — `. Missing, line-only, artifact-only, bare-file, or invented anchors make the report unusable under the normal same-agent failure budget.
+Validate every finding before accepting a report. Adversary findings require repo-relative `file:anchor` evidence; plan-reviewer findings preserve their exact schema and begin `problem` with `Evidence: file:anchor — `. The anchor is a function/exported symbol for code, or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Missing, line-only, bare-file, prose-only, or invented anchors make the report unusable.
 
 When no second eye is configured, the primary verdict advances normally without blocking, retrying an absent secondary, or requiring an operator warning.
 

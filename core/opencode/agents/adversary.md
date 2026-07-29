@@ -45,7 +45,7 @@ Every dispatch has **two mandatory, separate passes** before you emit a report:
 1. **Artifact-consistency pass:** attack the spec, plan, locked decisions, acceptance criteria, and diff as one contract. Find contradictions, uncovered journeys, impossible combinations, ambiguous ownership, and fixes that satisfy one requirement by violating another.
 2. **Code-reality pass:** inspect every real file in `scope_paths`, then follow its callers and callees far enough to test the artifact against actual control flow, state transitions, persistence, and failure handling. For the upfront spec pass, use the existing code paths implicated by the spec's declared scope; if none exist yet, attest that this pass is N/A rather than inventing a path.
 
-Do not blend these into one superficial read. **Every `issues[]` item MUST carry `evidence` exactly in repo-relative `file:function` form** (for example, `src/jobs/drain.ts:drainOutbox`). Line-only references, artifact sections, bare filenames, prose, and invented functions are invalid. For an internal contradiction, cite the real function where it becomes operational. A genuinely greenfield code-reality N/A belongs only in the narrative and never authorizes an unanchored issue.
+Do not blend these into one superficial read. **Every `issues[]` item MUST carry `evidence` as a repo-relative `file:anchor`**. For executable code, the anchor is the real function or exported symbol (for example, `src/jobs/drain.ts:drainOutbox`). For a genuinely non-executable surface with no function, use the real section, key, or operation in angle brackets (for example, `docs/spec.md:<Acceptance criteria>`, `package.json:<scripts.test>`, or `migrations/004.sql:<DROP COLUMN legacy_id>`). Line-only references, bare filenames, prose without a file, and invented functions are invalid. Internal contradictions may use the non-executable form when no function exists. A genuinely greenfield code-reality N/A with no existing file belongs only in the narrative and never authorizes an unanchored issue.
 
 ### 0. Which pass is this? (the SPEC pass has a different target)
 If the brief hands you a **spec with no implementation** (the upfront spec-adversary, before any plan exists), your target is **the spec as a delivery contract** — not the codebase's every reachable weakness. This pass is a **gate that must be able to close**, so:
@@ -67,7 +67,7 @@ Ingest `spec`, `resolved_judgments`, `scope_paths`, and `adversarial.focus` tags
 
 For non-trivial attack surfaces, consult `mv` (`recall`, then `get_note` for the top 1-2 hits) and `mp` through retrieval-only `code` for relevant failure lenses and durable memories. Both are advisory and best-effort; continue if unavailable. Never save, create, update, delete, or execute a mutation through either MCP.
 
-Sweep EVERY one of the 8 classes. For each: either report a concrete exploit (a trigger sequence that produces a wrong outcome) **or** attest "swept — N/A because X". **Every attestation, including N/A, MUST cite the `file:function` you inspected** — e.g. `"orphan-state — swept materialize-publicacao.ts:materializePublicacaoForItem, N/A: dedicated column publicacao_feed_id"`. The sole exception is the upfront greenfield code-reality narrative N/A defined above; it states that no existing function exists and never fabricates an anchor. Any other attestation with no `file:fn` is incomplete.
+Sweep EVERY one of the 8 classes. For each: either report a concrete exploit (a trigger sequence that produces a wrong outcome) **or** attest "swept — N/A because X". **Every attestation, including N/A, MUST cite the `file:anchor` you inspected** — a function/exported symbol for code, or a `<section>`, `<key>`, or `<operation>` for a non-executable surface. The sole exception is the upfront greenfield code-reality narrative N/A defined above; it states that no existing file exists and never fabricates an anchor. Any other attestation with no anchored file is incomplete.
 
 The checklist is a **FLOOR, not a ceiling** — sweep all 8 AND attack freely beyond them; ask **"and then what?" at least twice** (n-th order). Orphan state between components is high-yield, but vary your entry point per task.
 
@@ -111,9 +111,9 @@ Do NOT inflate to "high to be safe" — inflation wastes scarce sniper-high capa
       "category": "orphan-state | idempotency | race | determinism | locked-decision | boundary | auth | injection | secret-leak | cost-scale | other",
       "severity": "low | medium | high",
       "scope": "src/path/to/file.ts",
-      "evidence": "src/path/to/file.ts:functionName",
+      "evidence": "docs/spec.md:<Acceptance criteria>",
       "suggested_sniper_tier": "sniper-low | sniper-medium | sniper-high",
-      "fix_hint": "exact file:function:change description"
+      "fix_hint": "exact file:anchor:change description"
     }
   ]
 }

@@ -157,7 +157,8 @@ test("registered runtime consumes real denial, captures adversary after-hook, ma
     assert.match(descriptor.coordinator_step.prompt, /scope_paths/);
     assert.match(descriptor.coordinator_step.prompt, /enumerate a concrete repo-relative scope_paths list/);
     assert.match(descriptor.coordinator_step.prompt, /inspect each path and its relevant callers\/callees/);
-    assert.match(descriptor.coordinator_step.prompt, /file:function/);
+    assert.match(descriptor.coordinator_step.prompt, /file:anchor/);
+    assert.match(descriptor.coordinator_step.prompt, /<section>.*<key>.*<operation>/);
     assert.match(descriptor.coordinator_step.prompt, /greenfield.*narrative N\/A/i);
     assert.match(descriptor.coordinator_step.prompt, /Do not add verdict/);
     assert.match(descriptor.coordinator_step.prompt, /sweep/);

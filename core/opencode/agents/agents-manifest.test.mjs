@@ -158,7 +158,8 @@ test("t6-build-prose: build.md keeps the optional eye advisory and primary-autho
   assert.match(body, /primary result remains authoritative/i);
   assert.doesNotMatch(body, /dual-runtime|dual_status|dual_completed/i);
   assert.match(body, /two separate passes/i);
-  assert.match(body, /file:function/i);
+  assert.match(body, /file:anchor/i);
+  assert.match(body, /<section>.*<key>.*<operation>/i);
   for (const name of [
     "plan-reviewer", "plan-reviewer-family-1", "plan-reviewer-openai", "plan-reviewer-family-2",
     "adversary", "adversary-family-1", "adversary-openai", "adversary-family-2",
@@ -166,7 +167,8 @@ test("t6-build-prose: build.md keeps the optional eye advisory and primary-autho
     const prompt = read(join(AGENTS_DIR, `${name}.md`));
     assert.match(prompt, /Artifact-consistency pass/i, `${name} must require artifact consistency`);
     assert.match(prompt, /Code-reality pass/i, `${name} must require code reality`);
-    assert.match(prompt, /file:function/i, `${name} must require anchored evidence`);
+    assert.match(prompt, /file:anchor/i, `${name} must require anchored evidence`);
+    assert.match(prompt, /<section>.*<key>.*<operation>/i, `${name} must support non-executable anchors`);
   }
 });
 
