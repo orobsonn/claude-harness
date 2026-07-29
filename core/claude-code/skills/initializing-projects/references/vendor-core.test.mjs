@@ -618,16 +618,12 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
 });
 
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
+  // Review alias / second-eye agent files stay in source for the two-release compatibility
+  // window (#582) — they are NOT retired. Spawn hands and dual plugin modules remain scheduled.
   const scheduled = [
-    "agents/adversary-family-1.md",
-    "agents/adversary-family-2.md",
-    "agents/adversary-openai.md",
     "agents/executor-high-spawn.md",
     "agents/executor-low-spawn.md",
     "agents/executor-medium-spawn.md",
-    "agents/plan-reviewer-family-1.md",
-    "agents/plan-reviewer-family-2.md",
-    "agents/plan-reviewer-openai.md",
     "agents/sniper-high-spawn.md",
     "agents/sniper-low-spawn.md",
     "agents/sniper-medium-spawn.md",
@@ -643,6 +639,16 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "skills/orchestrating-delivery/dual-runtime.mjs",
     "skills/orchestrating-delivery/dual-runtime.test.mjs",
   ];
+  for (const kept of [
+    "agents/adversary-family-1.md",
+    "agents/adversary-family-2.md",
+    "agents/adversary-openai.md",
+    "agents/plan-reviewer-family-1.md",
+    "agents/plan-reviewer-family-2.md",
+    "agents/plan-reviewer-openai.md",
+  ]) {
+    assert.ok(!OC_RETIRED_FILES.includes(kept), `review alias stub must stay loadable: ${kept}`);
+  }
 
   for (const path of scheduled) {
     assert.ok(OC_RETIRED_FILES.includes(path), `missing scheduled retired path: ${path}`);

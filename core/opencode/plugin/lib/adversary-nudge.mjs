@@ -144,7 +144,7 @@ export function decideAdversaryNudge(input = {}) {
     context:
       `[adversary-nudge] spec-adversary round ${count}/${deny} left a material finding open. ` +
       "Next action: revise spec.md so the finding is answered — an acceptance criterion that pins the " +
-      "behaviour, or an explicit locked decision that accepts it — then re-dispatch `adversary-family-1`. " +
+      "behaviour, or an explicit locked decision that accepts it — then re-dispatch `adversary`. " +
       "Re-attacking WITHOUT changing spec.md wastes the round: the same spec yields the same class of finding. " +
       `${remaining} round(s) before this loop is treated as not converging, at which point you STOP and escalate ` +
       "to the operator instead of grinding out more rounds. Do not treat 'clean' as the only way out — an empty " +

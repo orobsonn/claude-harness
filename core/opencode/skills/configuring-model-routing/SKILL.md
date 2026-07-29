@@ -45,10 +45,8 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 | `build.md`, `plan.md`, `harness-config.md` | `roles.build.model` |
 | `planner.md` | `roles.planner.model` |
 | `planner-fallback.md` | `roles.planner.fallback.model` (opcional) |
-| `plan-reviewer.md`, `plan-reviewer-family-1.md` | `plan-reviewer.families.family-1` |
-| `plan-reviewer-family-2.md`, `plan-reviewer-openai.md` | `plan-reviewer.families.family-2` |
-| `adversary.md`, `adversary-family-1.md` | `adversary.families.family-1` |
-| `adversary-family-2.md`, `adversary-openai.md` | `adversary.families.family-2` |
+| `plan-reviewer.md` | `roles.plan-reviewer.model` (+ optional `secondEyeModel`) |
+| `adversary.md` | `roles.adversary.model` (+ optional `secondEyeModel`) |
 | `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*.model` |
 | `executor-{low,medium,high}.md` | `executor.tiers.*` |
 | `sniper-{low,medium,high}.md` | `sniper.tiers.*` |
@@ -69,9 +67,8 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 ## Does not
 
-- Offer single-provider “all Grok / all Ollama” presets — **invalid** under dual cross-family constraint (`family-1` provider ≠ `family-2` provider).
+- Force a second eye on by default — `secondEyeModel` is opt-in and fail-open.
 - Confuse runtime `primary_only` with a config toggle.
-- Disable `requireDualOn` without explicit operator override + warning.
 - Invent roles, touch hand auth tokens, or auto-commit.
 - Write invalid config (zero partial write on validate fail).
 
@@ -87,19 +84,19 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 |---|---|
 | Orquestrador / build | … |
 | Planejador | … |
-| Revisor de plano (família 1 + 2) | … |
-| Adversário (família 1 + 2) | … |
+| Revisor de plano (avaliador único) | … |
+| Adversário (avaliador único) | … |
 | Compliance / security | … |
 | Mãos low/medium/high | … |
 | Test-author / harvester / shipper | … |
 
-Highlight: dual exige **dois providers**.
+Highlight: avaliador único por padrão; `secondEyeModel` é opt-in fail-open (outro provider).
 
 ### 2. Elicit (one question at a time)
 
 **Q1 — Onde aplicar?**
 - Projeto vendored (`.opencode/`) — recomendado pra teste
-- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em surfaces committed, **exceto** o olho opcional family-2, que é Grok por default)
+- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em slots obrigatórios; `secondEyeModel` opcional é exempt)
 
 **Q2 — Preset ou custom?**
 
@@ -108,15 +105,15 @@ Presets válidos (`listPresets()`):
 | id | Label pt-br |
 |---|---|
 | `openai-ollama-default` | Olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama (default shippado) |
-| `xai-ollama-dual` | Olhos Grok (xAI, camadas colapsadas em grok-4.5) + family-2/hands Ollama |
+| `xai-ollama-dual` | Olhos Grok (xAI) + second eye/hands Ollama |
 
 O preset `openai-ollama-default` **deriva de `CANONICAL_DEFAULT_ROUTING`** (fonte única) — é deep-equal ao `harness.routing.json` shippado por drift-guard test. Aplicá-lo nunca reintroduz layout stale.
 
 Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não no core sem atualizar testes CI).
 
 **Custom slots** (escape hatch de baixo nível — o caminho primário é linguagem natural → preset). Chave desconhecida/typo é **rejeitada** (falha alto, nunca grava routing degradado):
-1. `primaryEye` — build, planner, plan-reviewer-f1, adversary-f1  
-2. `secondaryEye` — plan-reviewer-f2, adversary-f2 (**outro provider**)  
+1. `primaryEye` — build, planner, plan-reviewer, adversary, test-author (default)  
+2. `secondaryEye` — optional `secondEyeModel` on review roles (**outro provider**, fail-open)  
 3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
 4. `hands` low/medium/high (default Ollama ladder)  
 5. `testAuthor`, `plannerFallback`, `supportsReasoningEffort` (opcionais)  
@@ -145,8 +142,8 @@ On `ok:true` → list `changed` + `warnings`.
 **Hard gates (enforced by the engine, not prose):**
 - Same-provider dual → reject  
 - Weak **support** eye (compliance/security/harvester/shipper não openai/xai) → reject unless the operator confirms → pass `confirm_weak_eyes: true`  
-- Weak **judgment** eye (family-1 de plan-reviewer/adversary não openai/xai) → reject unless the operator confirms → pass `confirm_weak_judgment_eyes: true` (degrades the harness safety net; surface the warning first)  
-- xAI/Grok num slot **obrigatório** do **source** `core/opencode` (family-1, hands, support, build/planner) → reject unless `force_core_grok: true`. O olho opcional family-2 é exempt — é o default shippado.  
+- Weak **judgment** eye (plan-reviewer/adversary não openai/xai) → reject unless the operator confirms → pass `confirm_weak_judgment_eyes: true` (degrades the harness safety net; surface the warning first)  
+- xAI/Grok num slot **obrigatório** do **source** `core/opencode` (avaliador, hands, support, build/planner) → reject unless `force_core_grok: true`. `secondEyeModel` opcional é exempt.  
 - `targetRoot` = cwd sempre; `opencode.json` só sob cwd/ocRoot (nunca `../`)  
 - AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 
@@ -162,8 +159,8 @@ On `ok:true` → list `changed` + `warnings`.
 ## Constraints (schema / 02-routing)
 
 - `version: 2`; every required role present.
-- Dual posts: `family-1` required + `family-2` optional fail-open; **providers must differ**.
-- `requireDualOn` / `crossFamilyRoles` = plan-reviewer + adversary.
+- Review roles default to single evaluator `{ model }`. Optional `secondEyeModel` is fail-open (other provider when set).
+- Legacy `families` shape still validates when fully formed (adapter / old projects).
 - Every model needs `modelCapabilities[model].supportsReasoningEffort` boolean.
 - Models with `supportsReasoningEffort: false` must not receive reasoningEffort from plugins.
 

@@ -49,7 +49,7 @@ export default tool({
     confirm_weak_judgment_eyes: tool.schema
       .boolean()
       .optional()
-      .describe("allow weak JUDGMENT eyes (adversary/plan-reviewer family-1) — degrades the safety net; only after explicit operator confirmation"),
+      .describe("allow weak JUDGMENT eyes (adversary/plan-reviewer) — degrades the safety net; only after explicit operator confirmation"),
     force_core_grok: tool.schema.boolean().optional().describe("allow xAI/Grok on harness source (CI-banned by default)"),
   },
   async execute(args, context) {

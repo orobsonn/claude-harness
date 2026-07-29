@@ -149,9 +149,9 @@ Canonical object shape (shared `validatePlan` source of truth) — **not** a bar
 {
   "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
   "planner": "planner",
-  "plan_reviewer": "plan-reviewer-family-1",
+  "plan_reviewer": "plan-reviewer",
   "compliance": "compliance",
-  "adversary": "adversary-family-1",
+"adversary": "adversary",
   "security": "security",
   "harvester": "harvester",
   "shipper": "shipper"

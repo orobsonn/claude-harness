@@ -21,9 +21,9 @@ All internal reasoning, JSON, and identifiers stay in **English**. **Every opera
 
 | Role | Names |
 |---|---|
-| Plan | `planner`, `plan-reviewer-family-1`, `plan-reviewer-family-2` |
+| Plan | `planner`, `plan-reviewer` (+ optional `plan-reviewer-family-2` when `secondEyeModel` set) |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
-| Verify | `compliance`, `adversary-family-1`, `adversary-family-2`, `security` |
+| Verify | `compliance`, `adversary` (+ optional `adversary-family-2` when `secondEyeModel` set), `security` |
 | Fix | `sniper-high`, `sniper-medium`, `sniper-low` |
 | Close | `harvester`, `shipper` |
 
@@ -31,22 +31,22 @@ There is **NO** single `executor` or `sniper` agent — tiered names only. Tier 
 
 CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each shared hand is `mode: all`, keeps its routed `model:` for in-session dispatch, and declares `tools.task: false`; the adapter passes that model explicitly to `opencode run` — see `docs/SPAWN-PATTERN.md`.
 
-## Dual-always protocol (plan-reviewer + adversary)
+## Single-evaluator protocol (plan-reviewer + adversary)
 
-**Always dual** on these posts (ADR-003 / harness.routing `requireDualOn`):
+**One required evaluator** per post. Optional second eye only when routing declares `secondEyeModel` (fail-open, never blocking):
 
-| Post | Primary eye | Second-family eye |
+| Post | Primary eye | Optional second eye |
 |---|---|---|
-| plan-reviewer | `plan-reviewer-family-1` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` (`xai/grok-4.5`) |
-| adversary | `adversary-family-1` (`openai/gpt-5.6-sol`) | `adversary-family-2` (`xai/grok-4.5`) |
+| plan-reviewer | `plan-reviewer` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` only when `secondEyeModel` set |
+| adversary | `adversary` (`openai/gpt-5.6-sol`) | `adversary-family-2` only when `secondEyeModel` set |
 
 **Runtime wiring:** pure module `skills/orchestrating-delivery/dual-runtime.mjs` (`driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `isFullDualCoverage`). Shared policy B via `core/shared/lib/merge-findings.mjs` + `merge-verdicts.mjs`.
 
 **Protocol (mandatory):**
 
-1. Dispatch **primary** eye first (or fan-out both if runtime allows parallel). Task tool has **no model field** — dual = two agent files.
-2. Dispatch **secondary** with a **virgin** brief (`virginSecondaryBrief`) — never leak the other family's verdict, compliance output, or `shared_context` into the secondary prompt.
-3. Run `driveDualEye({ post, primaryResult, runSecondary, originalBrief })` (or equivalent merge path) after both attempts resolve.
+1. Dispatch **primary** eye (`plan-reviewer` / `adversary`).
+2. Dispatch **secondary** only when `roles.<post>.secondEyeModel` is set — virgin brief, fail-open, never blocking.
+3. When secondary ran, merge via `driveDualEye({ post, primaryResult, runSecondary, originalBrief })`.
 4. **Merge** via policy B: keep a finding unless the other family **explicitly refutes** it (`refutes` object). Never invent secondary findings.
 5. Record gate-state **`dual_status` enum only** — never a bare boolean `dual_completed: true`:
    | Value | Meaning |
@@ -92,7 +92,7 @@ The entry-gate **denies** CC marker CLIs. If you see that deny, switch to the OC
 
 For LIGHT/FULL, the approved spec is canonical at `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Immediately after brainstorming approval, call native `mark({ action: "brainstormed" })`. Immediately after the required spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Both transitions MUST complete, in that order, before the first planner Task call.
 
-On planner preflight denial, pass the exact structured denial object to native `ceremony-next({ denial })`. Execute only its returned `descriptor.coordinator_step`, then call its `descriptor.completion_transition` after successful completion/acceptance. The consumer validates `code`, `missing_proof`, `phase`, `action`, `marker`, current sealed state, and a closed mapping: the brainstorming phase → skill `oc-brainstorming`; the spec-adversary phase → Task `adversary-family-1`. Rejection means stop. Never derive a role from strings or dispatch `explore`, `general`, or another diagnostic agent. Preflight may reissue a current-process HMAC seal only when the matching session+feature+phase completion evidence verifies against its canonical spec/result. Missing or invalid evidence means resume that exact prior phase or stop with `missing_proof`; never infer completion from prose, an old marker, or an unsigned boolean.
+On planner preflight denial, pass the exact structured denial object to native `ceremony-next({ denial })`. Execute only its returned `descriptor.coordinator_step`, then call its `descriptor.completion_transition` after successful completion/acceptance. The consumer validates `code`, `missing_proof`, `phase`, `action`, `marker`, current sealed state, and a closed mapping: the brainstorming phase → skill `oc-brainstorming`; the spec-adversary phase → Task `adversary`. Rejection means stop. Never derive a role from strings or dispatch `explore`, `general`, or another diagnostic agent. Preflight may reissue a current-process HMAC seal only when the matching session+feature+phase completion evidence verifies against its canonical spec/result. Missing or invalid evidence means resume that exact prior phase or stop with `missing_proof`; never infer completion from prose, an old marker, or an unsigned boolean.
 
 ---
 
@@ -144,9 +144,9 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
-- [ ] **plan-reviewer dual** — `plan-reviewer-family-1` ran and optional `plan-reviewer-family-2` was attempted; merged verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
+- [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final dual review, both modes).
-- [ ] **adversary dual** — `adversary-family-1` and optional `adversary-family-2` entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
+- [ ] **adversary** — `adversary` (and optional `adversary-family-2` only when `secondEyeModel` is set) entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.
 - [ ] **Dual review** (compliance + dual adversary, feature-wide) completed; findings routed to tiered sniper; gates re-run after every fix.
 - [ ] **test-author** wrote locked tests before executor when the rail requires freeze; fidelity-pass stamped after compliance fidelity check.

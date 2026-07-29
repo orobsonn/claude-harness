@@ -15,14 +15,8 @@ const KNOWLEDGE_EYES = [
   "planner.md",
   "planner-fallback.md",
   "plan-reviewer.md",
-  "plan-reviewer-openai.md",
-  "plan-reviewer-family-1.md",
-  "plan-reviewer-family-2.md",
   "discussion-adversary.md",
   "adversary.md",
-  "adversary-openai.md",
-  "adversary-family-1.md",
-  "adversary-family-2.md",
 ];
 
 function read(file) {

@@ -1,4 +1,4 @@
-/** @description Parity manifesto tests exercising locked gates: agents presence, no token reads, dual config, vendored smoke. Hard asserts — no theater. */
+/** @description Parity manifesto tests: agents presence, no token reads, single-evaluator routing, vendored smoke. */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync } from "node:fs";
@@ -35,14 +35,18 @@ describe("parity-manifest", () => {
     }
   });
 
-  it("t11-canonical-review-agents: all four provider-agnostic family agents are mandatory", () => {
-    const canonical = [
+  it("t11-canonical-review-agents: single evaluator + alias stubs are mandatory", () => {
+    for (const required of [
+      "plan-reviewer",
+      "adversary",
       "plan-reviewer-family-1",
-      "plan-reviewer-family-2",
       "adversary-family-1",
+      "plan-reviewer-family-2",
       "adversary-family-2",
-    ];
-    for (const missing of canonical) {
+    ]) {
+      assert.ok(OC_REQUIRED_AGENTS.includes(required), required);
+    }
+    for (const missing of ["plan-reviewer", "adversary"]) {
       const tmp = mkdtempSync(join(tmpdir(), "parity-canonical-agent-"));
       try {
         mkdirSync(join(tmp, "agents"), { recursive: true });
@@ -78,16 +82,19 @@ describe("parity-manifest", () => {
     }
   });
 
-  it("t11-dual: asserts dual config present for plan-reviewer and adversary", () => {
+  it("t11-routing: asserts single-evaluator routing validates", () => {
     const res = checkDualConfig("core/opencode");
-    assert.equal(res.ok, true, res.reason || "dual config required");
+    assert.equal(res.ok, true, res.reason || "single-evaluator routing required");
+    assert.equal(canonicalRouting.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(canonicalRouting.roles["plan-reviewer"].model, "openai/gpt-5.6-sol");
+    assert.equal(canonicalRouting.roles["test-author"].model, "openai/gpt-5.6-sol");
   });
 
-  it("t11-routing-validator: fails on manipulated constraints, catalog policy, and model capabilities", () => {
+  it("t11-routing-validator: fails on manipulated model capabilities", () => {
     for (const mutate of [
-      (routing) => { routing.constraints.requireDualOn = []; },
-      (routing) => { routing.roles.adversary.families["family-1"].countsLoop = false; },
       (routing) => { routing.roles.build.model = "tampered/missing-capability"; },
+      (routing) => { delete routing.roles.adversary.model; },
+      (routing) => { routing.roles.adversary.secondEyeModel = "not-a-slug"; },
     ]) {
       const tmp = mkdtempSync(join(tmpdir(), "parity-routing-validator-"));
       try {
@@ -117,7 +124,6 @@ describe("parity-manifest", () => {
         mkdirSync(join(tgt, ".opencode/agents"), { recursive: true });
         mkdirSync(join(tgt, ".opencode/plugin"), { recursive: true });
         mkdirSync(join(tgt, ".opencode/shared/lib"), { recursive: true });
-        // full minimal vendored (build.md + gates + agents + dual routing) simulating vendor
         for (const a of OC_REQUIRED_AGENTS) {
           writeFileSync(join(tgt, `.opencode/agents/${a}.md`), `# ${a}\n`);
         }
@@ -133,7 +139,6 @@ describe("parity-manifest", () => {
         assert.equal(gates.ok, true);
         const res = runParity([join(tgt, ".opencode")]);
         assert.equal(res.ok, true);
-        // assert no global harness reads (empty HOME has zero harness artifacts)
         assert.equal(existsSync(join(home, ".config/opencode")), false);
       } finally {
         process.env.HOME = prevHome;

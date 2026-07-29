@@ -168,14 +168,14 @@ test("multiprocess restart between phases persists brainstorm recovery, consumes
     assert.equal(run.read().brainstormed, true);
     assert.equal(run.read().adversary_fired, undefined);
 
-    roles.push("adversary-family-1");
+    roles.push("adversary");
     await assert.doesNotReject(() => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION, callID: "spec-adversary" },
-      { args: { subagent_type: "adversary-family-1", prompt: "Attack canonical spec." } },
+      { args: { subagent_type: "adversary", prompt: "Attack canonical spec." } },
     ));
     assert.equal(captureSpecAdversaryResult(run.root, {
       sessionId: SESSION, featureId: FEATURE, generation: run.state.ceremony_generation,
-      callId: "spec-adversary", role: "adversary-family-1", output: '{"issues":[]}',
+      callId: "spec-adversary", role: "adversary", output: '{"issues":[]}',
     }), true);
     const accepted = withGateStateLock(run.stateFile, (previous) => {
       const transition = transitionCeremony(run.root, previous, "adversary_fired");
@@ -186,7 +186,7 @@ test("multiprocess restart between phases persists brainstorm recovery, consumes
 
     roles.push("planner");
     await assert.doesNotReject(() => planner(hooks));
-    assert.deepEqual(roles, ["planner", "adversary-family-1", "planner"]);
+    assert.deepEqual(roles, ["planner", "adversary", "planner"]);
     assert.equal(roles.some((role) => role === "explore" || role === "general"), false);
   } finally { run.cleanup(); }
 });

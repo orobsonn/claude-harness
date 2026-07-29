@@ -130,17 +130,17 @@ Any match in plan `scope_paths` forces FULL mode.
 |---|---|
 | build | `openai/gpt-5.6-terra` |
 | planner | `openai/gpt-5.6-sol` |
-| plan-reviewer | required family 1 `openai/gpt-5.6-sol` + optional family 2 `xai/grok-4.5` |
-| adversary | required family 1 `openai/gpt-5.6-sol` + optional family 2 `xai/grok-4.5` |
+| plan-reviewer | `openai/gpt-5.6-sol` |
+| adversary | `openai/gpt-5.6-sol` |
 | compliance | `openai/gpt-5.6-terra` |
 | security | `openai/gpt-5.6-sol` |
 | executor/sniper low | `ollama-cloud/gemma4:31b` |
 | executor/sniper medium | `ollama-cloud/glm-5.2` |
 | executor/sniper high | `ollama-cloud/kimi-k2.7-code` |
-| test-author | `ollama-cloud/glm-5.2` |
+| test-author | `openai/gpt-5.6-sol` |
 | harvester / shipper | `openai/gpt-5.6-luna` |
 
-**Family 1 is mandatory; family 2 is optional and fail-open** on plan-reviewer and adversary (two `task` dispatches + shared merge when available).
+**Single evaluator** on plan-reviewer and adversary. Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.
 Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuring-model-routing` command.
 
 

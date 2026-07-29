@@ -14,6 +14,12 @@ import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
 import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
 import { fidelityPassEntry, defaultHeadSha } from "./lib/mark-gate.mjs"
+import { reviewAgentIdentity } from "../agents/review-catalog.mjs"
+
+function isPrimaryAdversaryRole(role: unknown): boolean {
+  const identity = reviewAgentIdentity(role)
+  return Boolean(identity && identity.logicalRole === "adversary" && identity.family === 1)
+}
 
 type MarkerArgs = {
   action?: string
@@ -222,7 +228,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
     "tool.execute.after": async (input: any, output: any) => {
       const args = output?.args ?? input?.args
       const role = args && typeof args === "object" ? args.subagent_type ?? args.subagentType : ""
-      if (input?.tool !== "task" || role !== "adversary-family-1") return
+      if (input?.tool !== "task" || !isPrimaryAdversaryRole(role)) return
       const sessionID = typeof input.sessionID === "string" ? input.sessionID : ""
       const callID = typeof input.callID === "string" ? input.callID : ""
       const statePath = gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })

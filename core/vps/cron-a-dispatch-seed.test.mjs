@@ -252,13 +252,10 @@ function legacyRouting() {
   const legacy = structuredClone(CANONICAL_ROUTING);
   legacy.version = 1;
   for (const role of ["plan-reviewer", "adversary"]) {
-    const primary = { ...legacy.roles[role].families["family-1"] };
-    const secondary = { ...legacy.roles[role].families["family-2"] };
-    for (const key of ["primary", "optional", "countsLoop"]) {
-      delete primary[key];
-      delete secondary[key];
-    }
-    legacy.roles[role] = { ...primary, dual: [secondary] };
+    legacy.roles[role] = {
+      model: legacy.roles[role].model ?? "openai/gpt-5.6-sol",
+      dual: [{ model: "ollama-cloud/kimi-k2.7-code" }],
+    };
   }
   return legacy;
 }
@@ -519,7 +516,8 @@ test("seedOpencodeRootConfig: never promotes an unmerged sidecar and materialize
     assert.equal(cfg.small_model, "openai/gpt-5.5");
     assert.equal(cfg.custom, undefined);
     assert.equal(routing.version, 2);
-    assert.equal(routing.roles.adversary.families["family-1"].primary, true);
+    assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(typeof routing.roles.adversary.secondEyeModel, "string");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -68,34 +68,26 @@ export function adaptRoutingV1(config) {
       ])),
     };
   }
+  // v1 dual → flat single evaluator + optional secondEyeModel (no families / requireDualOn).
+  // Only known primary extensions pass through — never arbitrary keys (families, bogus, …).
+  const PRIMARY_KEEP = Object.freeze(["reasoningEffort", "timeout", "label", "extension"]);
   for (const roleName of ["plan-reviewer", "adversary"]) {
     const role = roles[roleName];
     if (role == null || typeof role !== "object" || Array.isArray(role)) continue;
-    const { dual, ...primaryConfig } = role;
-    const secondary = Array.isArray(dual) ? dual[0] : undefined;
-    const alternates = Array.isArray(dual)
-      ? dual.slice(1).map((entry) => migrateRouteModel(entry, "ollama-cloud/kimi-k2.7-code"))
-      : [];
-    adaptedRoles[roleName] = {
-      families: {
-        "family-1": {
-          ...primaryConfig,
-          model: migrateLegacyDefaultModel(primaryConfig.model, "openai/gpt-5.6-sol"),
-          primary: true,
-          optional: false,
-          countsLoop: true,
-        },
-        "family-2": {
-          ...(secondary && typeof secondary === "object" && !Array.isArray(secondary)
-            ? migrateRouteModel(secondary, "ollama-cloud/kimi-k2.7-code")
-            : { model: undefined }),
-          ...(alternates.length > 0 ? { alternates } : {}),
-          primary: false,
-          optional: true,
-          countsLoop: false,
-        },
-      },
-    };
+    const secondary = Array.isArray(role.dual) ? role.dual[0] : undefined;
+    const primaryModel = migrateLegacyDefaultModel(role.model, "openai/gpt-5.6-sol");
+    /** @type {Record<string, unknown>} */
+    const flat = { model: primaryModel };
+    for (const key of PRIMARY_KEEP) {
+      if (Object.hasOwn(role, key)) flat[key] = role[key];
+    }
+    if (secondary && typeof secondary === "object" && !Array.isArray(secondary)) {
+      const migrated = migrateRouteModel(secondary, "ollama-cloud/kimi-k2.7-code");
+      if (typeof migrated?.model === "string" && migrated.model.includes("/")) {
+        flat.secondEyeModel = migrated.model;
+      }
+    }
+    adaptedRoles[roleName] = flat;
   }
 
   const modelCapabilities = { ...(config.modelCapabilities ?? {}) };
@@ -111,8 +103,17 @@ export function adaptRoutingV1(config) {
       modelCapabilities[model] = { supportsReasoningEffort };
     }
   }
+  // Caps for any secondEyeModel emitted above.
+  for (const roleName of ["plan-reviewer", "adversary"]) {
+    const second = adaptedRoles[roleName]?.secondEyeModel;
+    if (typeof second === "string" && !Object.hasOwn(modelCapabilities, second)) {
+      modelCapabilities[second] = { supportsReasoningEffort: false };
+    }
+  }
 
-  return { ...config, version: 2, roles: adaptedRoles, modelCapabilities };
+  // Do not inject requireDualOn — single-evaluator default; second eye is opt-in via secondEyeModel.
+  const { constraints: _dropConstraints, ...rest } = config;
+  return { ...rest, version: 2, roles: adaptedRoles, modelCapabilities };
 }
 
 export default { adaptRoutingV1, migrateLegacyDefaultModel };

@@ -9,36 +9,10 @@
       "model": "openai/gpt-5.6-sol"
     },
     "plan-reviewer": {
-      "families": {
-        "family-1": {
-          "model": "openai/gpt-5.6-sol",
-          "primary": true,
-          "optional": false,
-          "countsLoop": true
-        },
-        "family-2": {
-          "model": "xai/grok-4.5",
-          "primary": false,
-          "optional": true,
-          "countsLoop": false
-        }
-      }
+      "model": "openai/gpt-5.6-sol"
     },
     "adversary": {
-      "families": {
-        "family-1": {
-          "model": "openai/gpt-5.6-sol",
-          "primary": true,
-          "optional": false,
-          "countsLoop": true
-        },
-        "family-2": {
-          "model": "xai/grok-4.5",
-          "primary": false,
-          "optional": true,
-          "countsLoop": false
-        }
-      }
+      "model": "openai/gpt-5.6-sol"
     },
     "compliance": {
       "model": "openai/gpt-5.6-terra"
@@ -73,7 +47,7 @@
       }
     },
     "test-author": {
-      "model": "ollama-cloud/glm-5.2"
+      "model": "openai/gpt-5.6-sol"
     },
     "harvester": {
       "model": "openai/gpt-5.6-luna"
@@ -81,16 +55,6 @@
     "shipper": {
       "model": "openai/gpt-5.6-luna"
     }
-  },
-  "constraints": {
-    "crossFamilyRoles": [
-      "plan-reviewer",
-      "adversary"
-    ],
-    "requireDualOn": [
-      "plan-reviewer",
-      "adversary"
-    ]
   },
   "modelCapabilities": {
     "openai/gpt-5.6-terra": {
@@ -106,9 +70,6 @@
       "supportsReasoningEffort": true
     },
     "ollama-cloud/gemma4:31b": {
-      "supportsReasoningEffort": false
-    },
-    "xai/grok-4.5": {
       "supportsReasoningEffort": false
     },
     "ollama-cloud/kimi-k2.7-code": {

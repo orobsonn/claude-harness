@@ -46,17 +46,13 @@ function asLegacyRouting(routing) {
   legacy.modelCapabilities["xai/grok-4.3"] = { supportsReasoningEffort: true };
   legacy.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: true };
   legacy.modelCapabilities["xai/grok-build-0.1"] = { supportsReasoningEffort: false };
+  legacy.modelCapabilities["ollama-cloud/kimi-k2.7-code"] = { supportsReasoningEffort: false };
   for (const role of ["plan-reviewer", "adversary"]) {
-    const primary = { ...legacy.roles[role].families["family-1"] };
-    const secondary = { ...legacy.roles[role].families["family-2"] };
-    delete primary.primary;
-    delete primary.optional;
-    delete primary.countsLoop;
-    delete secondary.primary;
-    delete secondary.optional;
-    delete secondary.countsLoop;
-    primary.model = "xai/grok-4.5";
-    legacy.roles[role] = { ...primary, dual: [secondary] };
+    // v1 dual shape — adapter emits flat { model, secondEyeModel } (no families / requireDualOn).
+    legacy.roles[role] = {
+      model: "xai/grok-4.5",
+      dual: [{ model: "ollama-cloud/kimi-k2.7-code" }],
+    };
   }
   return legacy;
 }
@@ -445,6 +441,12 @@ test("readRequireDualOn reads harness.routing constraints.requireDualOn", () => 
   assert.deepEqual(roles, ["plan-reviewer", "adversary"]);
 });
 
+test("readRequireDualOn is empty when constraints absent (single-evaluator default)", () => {
+  assert.deepEqual(readRequireDualOn({ version: 2, roles: {} }), []);
+  assert.deepEqual(readRequireDualOn({ version: 2, roles: {}, constraints: {} }), []);
+  assert.deepEqual(readRequireDualOn(null), []);
+});
+
 test("enforceDualFromDiskOrThrow + loadRoutingFromDisk read real files under project root", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-enf-disk-"));
   try {
@@ -460,9 +462,10 @@ test("enforceDualFromDiskOrThrow + loadRoutingFromDisk read real files under pro
       }),
       "utf8",
     );
+    // Disk routing for this test keeps explicit requireDualOn so enforceDual still classifies.
     fs.writeFileSync(
       path.join(root, ".opencode", "harness.routing.json"),
-      JSON.stringify(DEFAULT_ROUTING),
+      JSON.stringify({ ...DEFAULT_ROUTING, constraints: ROUTING.constraints }),
       "utf8",
     );
 
@@ -512,10 +515,11 @@ test("loadRoutingFromDisk adapts v1 and warns exactly once per path", () => {
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
     assert.equal(first.routing.version, 2);
-    assert.equal(first.routing.roles.adversary.families["family-1"].primary, true);
-    assert.equal(first.routing.roles.adversary.families["family-1"].model, "openai/gpt-5.6-sol");
+    assert.equal(first.routing.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(first.routing.roles.adversary.secondEyeModel, "ollama-cloud/kimi-k2.7-code");
     assert.equal(first.routing.roles.build.model, "openai/gpt-5.6-sol");
     assert.equal(first.routing.roles["test-author"].model, "ollama-cloud/glm-5.2");
+    assert.equal(first.routing.constraints, undefined);
     assert.equal(Object.keys(first.routing.modelCapabilities).some((model) => model.startsWith("xai/grok")), false);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /routing v1 compatibility adapter used/);

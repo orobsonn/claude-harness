@@ -8,6 +8,7 @@ import {
   DUAL_STATUS,
   DUAL_STATUS_VALUES,
   DUAL_POSTS,
+  dualPostsFor,
   PRIMARY_ONLY_ERROR_RETRY_COUNT,
   isFullDualCoverage,
   isDualStatusEnum,
@@ -500,12 +501,20 @@ test("t8-merge-plan-review-fields: same defect (same task_id + problem) from bot
 // ---- supporting contracts (not locked ids but required by DoD) ----
 
 test("t8-posts: dual posts dispatch canonical provider-agnostic family agents", () => {
-  assert.equal(DUAL_POSTS["plan-reviewer"].primary, "plan-reviewer-family-1");
-  assert.equal(DUAL_POSTS["plan-reviewer"].secondary, "plan-reviewer-family-2");
-  assert.equal(DUAL_POSTS.adversary.primary, "adversary-family-1");
-  assert.equal(DUAL_POSTS.adversary.secondary, "adversary-family-2");
+  assert.equal(DUAL_POSTS["plan-reviewer"].primary, "plan-reviewer");
+  assert.equal(DUAL_POSTS["plan-reviewer"].secondary, null);
+  assert.equal(DUAL_POSTS.adversary.primary, "adversary");
+  assert.equal(DUAL_POSTS.adversary.secondary, null);
+  const withEye = dualPostsFor({
+    roles: {
+      adversary: { model: "openai/gpt-5.6-sol", secondEyeModel: "xai/grok-4.5" },
+      "plan-reviewer": { model: "openai/gpt-5.6-sol", secondEyeModel: "xai/grok-4.5" },
+    },
+  });
+  assert.equal(withEye.adversary.secondary, "adversary-family-2");
+  assert.equal(withEye["plan-reviewer"].secondary, "plan-reviewer-family-2");
   for (const post of Object.values(DUAL_POSTS)) {
-    assert.doesNotMatch(`${post.primary} ${post.secondary}`, /openai|anthropic|xai|ollama/i);
+    assert.doesNotMatch(`${post.primary}`, /openai|anthropic|xai|ollama/i);
   }
   assert.equal(DUAL_POSTS["plan-reviewer"].shape, "verdict");
   assert.equal(DUAL_POSTS.adversary.shape, "findings");

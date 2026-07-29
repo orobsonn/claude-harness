@@ -14,13 +14,13 @@
         "planner": { "$ref": "#/definitions/rolePlanner" },
         "plan-reviewer": {
           "oneOf": [
-            { "$ref": "#/definitions/roleSimple" },
+            { "$ref": "#/definitions/roleReview" },
             { "$ref": "#/definitions/roleFamilies" }
           ]
         },
         "adversary": {
           "oneOf": [
-            { "$ref": "#/definitions/roleSimple" },
+            { "$ref": "#/definitions/roleReview" },
             { "$ref": "#/definitions/roleFamilies" }
           ]
         },
@@ -58,6 +58,15 @@
       "required": ["model"],
       "properties": {
         "model": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
+        "reasoningEffort": {}
+      }
+    },
+    "roleReview": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
+        "secondEyeModel": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
         "reasoningEffort": {}
       }
     },
