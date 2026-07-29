@@ -43,6 +43,10 @@ function fmNestedBool(fm, parent, key) {
   return v;
 }
 
+function requiresTaskLockdown(fm) {
+  return fmField(fm, "mode") === "all" && fmNestedBool(fm, "permission", "edit") !== "deny";
+}
+
 const REQUIRED_AGENTS = [
   "build",
   "plan",
@@ -193,10 +197,11 @@ test("t6-shared-hands: no spawn twins exist and each shared hand preserves its f
 });
 
 test("t6-mode-all-lockdown: every writable mode-all agent explicitly disables task dispatch", () => {
+  assert.equal(requiresTaskLockdown("mode: all\nmodel: test/model"), true);
+  assert.equal(requiresTaskLockdown("mode: all\npermission:\n  edit: deny"), false);
   for (const f of readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".md"))) {
     const fm = frontmatter(read(join(AGENTS_DIR, f)));
-    if (fmField(fm, "mode") !== "all") continue;
-    if (fmNestedBool(fm, "permission", "edit") !== "allow") continue;
+    if (!requiresTaskLockdown(fm)) continue;
     assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
   }
 });
