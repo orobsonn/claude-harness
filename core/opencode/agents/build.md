@@ -21,9 +21,9 @@ All internal reasoning, JSON, and identifiers stay in **English**. **Every opera
 
 | Role | Names |
 |---|---|
-| Plan | `planner`, `plan-reviewer` (+ optional `plan-reviewer-family-2` when `secondEyeModel` set) |
+| Plan | `planner`, `plan-reviewer` (+ optional `plan-reviewer-family-2` when routing configures a second eye) |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
-| Verify | `compliance`, `adversary` (+ optional `adversary-family-2` when `secondEyeModel` set), `security` |
+| Verify | `compliance`, `adversary` (+ optional `adversary-family-2` when routing configures a second eye), `security` |
 | Fix | `sniper-high`, `sniper-medium`, `sniper-low` |
 | Close | `harvester`, `shipper` |
 
@@ -33,12 +33,12 @@ CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each sha
 
 ## Single-evaluator protocol (plan-reviewer + adversary)
 
-**One required evaluator** per post. Optional second eye only when routing declares `secondEyeModel` (fail-open, never blocking):
+**One required evaluator** per post. Optional second eye only when `roles.<post>.secondEyeModel` is set (fail-open, never blocking):
 
 | Post | Primary eye | Optional second eye |
 |---|---|---|
-| plan-reviewer | `plan-reviewer` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` only when `secondEyeModel` set |
-| adversary | `adversary` (`openai/gpt-5.6-sol`) | `adversary-family-2` only when `secondEyeModel` set |
+| plan-reviewer | `plan-reviewer` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` only when `secondEyeModel` is set |
+| adversary | `adversary` (`openai/gpt-5.6-sol`) | `adversary-family-2` only when `secondEyeModel` is set |
 
 **Protocol (mandatory):**
 
@@ -46,6 +46,12 @@ CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each sha
 2. Dispatch the optional second eye only when `roles.<post>.secondEyeModel` is set — virgin brief, advisory, fail-open, never blocking.
 3. The primary result remains authoritative. Route an adopted optional finding through the phase's normal remediation (plan-review finding → planner; adversary finding → sniper); never invent findings or wait on a failed optional eye.
 4. Every review Task prompt must defer to the selected agent's exact output schema. Never request extra fields such as `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, or `blockers`; schema-invalid prose cannot become canonical evidence.
+
+Every evaluator Task brief, primary or explicitly opted-in second eye, MUST require two separate passes: internal consistency of the spec/plan/diff, then confrontation against every real file in `scope_paths` and its relevant callers/callees. Never assume another eye covers either pass.
+
+Validate every finding before accepting a report. Adversary findings require repo-relative `file:anchor` evidence; plan-reviewer findings preserve their exact schema and begin `problem` with `Evidence: file:anchor — `. The anchor is a function/exported symbol for code, or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Missing, line-only, bare-file, prose-only, or invented anchors make the report unusable.
+
+When no second eye is configured, the primary verdict advances normally without blocking, retrying an absent secondary, or requiring an operator warning.
 
 Compliance and security are **single-eye**.
 
@@ -136,7 +142,7 @@ Re-inject this checklist on every turn to survive context compaction. Before dec
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final review, both modes).
 - [ ] **adversary** — `adversary` (and optional `adversary-family-2` only when `secondEyeModel` is set) entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.
-- [ ] **Final review** (compliance + adversary, feature-wide) completed; findings routed to tiered sniper; gates re-run after every fix.
+- [ ] **Final review** (compliance + primary adversary, plus an optional second eye only when `secondEyeModel` is set) completed feature-wide; findings routed to tiered sniper; gates re-run after every fix.
 - [ ] **test-author** wrote locked tests before executor when the rail requires freeze; fidelity-pass stamped after compliance fidelity check.
 - [ ] **harvest** ran once at the end; ephemeral buffers deleted.
 - [ ] All tasks' gates green, or a product-level decision recorded for any accepted risk.

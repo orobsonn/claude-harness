@@ -151,6 +151,15 @@ test("registered runtime consumes real denial, captures adversary after-hook, ma
     assert.match(descriptor.coordinator_step.description, new RegExp(FEATURE));
     assert.match(descriptor.coordinator_step.prompt, new RegExp(`\\.opencode/plans/${SESSION}-${FEATURE}/spec\\.md`));
     assert.match(descriptor.coordinator_step.prompt, /single top-level key issues/);
+    assert.match(descriptor.coordinator_step.prompt, /two separate passes/);
+    assert.match(descriptor.coordinator_step.prompt, /internal consistency/);
+    assert.match(descriptor.coordinator_step.prompt, /callers\/callees/);
+    assert.match(descriptor.coordinator_step.prompt, /scope_paths/);
+    assert.match(descriptor.coordinator_step.prompt, /enumerate a concrete repo-relative scope_paths list/);
+    assert.match(descriptor.coordinator_step.prompt, /inspect each path and its relevant callers\/callees/);
+    assert.match(descriptor.coordinator_step.prompt, /file:anchor/);
+    assert.match(descriptor.coordinator_step.prompt, /<section>.*<key>.*<operation>/);
+    assert.match(descriptor.coordinator_step.prompt, /greenfield.*narrative N\/A/i);
     assert.match(descriptor.coordinator_step.prompt, /Do not add verdict/);
     assert.match(descriptor.coordinator_step.prompt, /sweep/);
     assert.match(descriptor.coordinator_step.prompt, /mechanism/);
