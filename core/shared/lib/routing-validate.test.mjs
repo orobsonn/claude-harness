@@ -42,7 +42,16 @@ describe("routing-validate", () => {
     const cfg = structuredClone(defaultRouting);
     cfg.roles["plan-reviewer"] = { model: "openai/gpt-5.6-sol" };
     cfg.roles.adversary = { model: "openai/gpt-5.6-sol" };
+    delete cfg.constraints;
     assert.deepEqual(validateRouting(cfg), { ok: true });
+  });
+
+  it("#576: review roles cannot mix the simple and families shapes", () => {
+    const cfg = structuredClone(defaultRouting);
+    cfg.roles.adversary.model = "openai/gpt-5.6-sol";
+    const result = validateRouting(cfg);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /mixed review route on adversary/);
   });
 
   it("t1-required-shape: empty roles and input-controlled constraints cannot bypass canonical validation", () => {

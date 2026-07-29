@@ -85,7 +85,11 @@ import {
   readMemGuardBytesFromEnv,
   DEFAULT_MEM_GUARD_BYTES,
 } from "./mem-guard.mjs";
-import { rewriteSharedImportsForVendor } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
+import {
+  OC_RETIRED_FILES,
+  pruneOcRetiredFiles,
+  rewriteSharedImportsForVendor,
+} from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 import { adaptRoutingV1, migrateLegacyDefaultModel } from "../shared/lib/routing-adapter.mjs";
 import { validateRouting } from "../shared/lib/routing-validate.mjs";
 import {
@@ -918,6 +922,7 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
+  pruneOcRetiredFiles(ocDir, openCodeSrc);
 
   normalizeMaterializedRouting(ocDir);
 
@@ -988,7 +993,13 @@ export function ensureOcPluginPathsExist(worktreePath, plugins) {
   }
   // Always verify harness governance files on disk — OC auto-loads them from
   // `.opencode/plugin/*.{ts,js}`. Config plugin[] must NOT list them (double factory).
-  const harnessList = [...CANONICAL_OC_PLUGINS];
+  const harnessList = CANONICAL_OC_PLUGINS.filter((entry) => {
+    const rel = entry.replace(/^\.\/\.opencode\//, "");
+    if (!OC_RETIRED_FILES.includes(rel)) return true;
+    const vendored = join(worktreePath, entry.replace(/^\.\//, ""));
+    const monorepo = join(worktreePath, "core", "opencode", rel);
+    return existsSync(vendored) || existsSync(monorepo);
+  });
   if (!ocPluginFilesExist(worktreePath, harnessList)) {
     const rewritten = rewriteOcPluginsToMonorepoCore(harnessList);
     if (!ocPluginFilesExist(worktreePath, rewritten)) {
