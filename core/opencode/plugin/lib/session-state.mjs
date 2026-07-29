@@ -9,7 +9,6 @@ import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/p
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
 import { acquireLock, releaseLock, writeGateStateAtomic } from "./gate-state.mjs";
-import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { readDualStatus } from "../../../shared/lib/gate-state-shape.mjs";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -226,15 +225,7 @@ function hasOwnedChildIndex(projectRoot, sessionId) {
 
 /** @description Whether current or persisted legacy review state blocks terminal retention. */
 export function isPendingReviewState(state) {
-  if (readDualStatus(state) === "pending") return true;
-  const inflight = Array.isArray(state?.review_inflight) ? state.review_inflight : [];
-  return inflight.some((reservation) => {
-    if (!reservation || typeof reservation !== "object") return true;
-    const { family } = reservation;
-    if (family != null) return family === 1;
-    const identity = reviewAgentIdentity(reservation.canonical_identity);
-    return identity ? identity.countsLoop === true : true;
-  });
+  return readDualStatus(state) === "pending";
 }
 
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {

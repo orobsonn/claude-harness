@@ -63,15 +63,15 @@ test("legacy primary_only_error preserves scalar-vs-map lifecycle behavior", () 
   assert.equal(isPendingReviewState({ dual_status: { plan_review: "pending" } }), false);
 });
 
-test("authoritative inflight review blocks terminal state even after an approval", () => {
+test("orphaned legacy inflight receipts do not change the scalar lifecycle decision", () => {
   assert.equal(isPendingReviewState({
     dual_status: "done",
     review_inflight: [{ canonical_identity: "plan-reviewer", family: 1 }],
-  }), true);
-  assert.equal(isPendingReviewState({
-    dual_status: "done",
-    review_inflight: [{ canonical_identity: "plan-reviewer", family: 2 }],
   }), false);
+  assert.equal(isPendingReviewState({
+    review_inflight: [{ canonical_identity: "plan-reviewer", family: 1 }],
+  }), false);
+  assert.equal(isPendingReviewState({ dual_status: "pending", review_inflight: [] }), true);
 });
 
 test("new patches reject legacy writer values and bare booleans", () => {

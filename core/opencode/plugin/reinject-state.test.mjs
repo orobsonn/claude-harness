@@ -401,14 +401,13 @@ test("idle mid-run does not start retention", async () => {
   } finally { cleanup(f) }
 })
 
-test("idle cannot start retention while an authoritative review remains inflight", async () => {
+test("idle can retain a completed legacy session with orphaned inflight receipts", async () => {
   const f = fixture("ses-review-inflight", "review-inflight-feature")
   try {
     const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
     state.hand_finished = [`${f.featureID}/task-one`, `${f.featureID}/task-two`]
     state.capture_verified = [`${f.featureID}/task-one@aaa1111`, `${f.featureID}/task-two@bbb2222`]
     state.regate_passed = [`${f.featureID}/task-two@bbb2222`]
-    state.dual_status = "done"
     state.review_inflight = [{ canonical_identity: "plan-reviewer", family: 1 }]
     fs.writeFileSync(f.statePath, JSON.stringify(state))
     const hooks = await createReinjectStateHooks(f.root, f.root, {
@@ -418,7 +417,8 @@ test("idle cannot start retention while an authoritative review remains inflight
     })
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: f.sessionID } } })
     const persisted = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
-    assert.equal(persisted.session_completed_at, undefined)
+    assert.equal(persisted.session_status, "completed")
+    assert.equal(Number.isFinite(Date.parse(persisted.session_completed_at)), true)
     assert.equal(persisted.review_inflight.length, 1)
   } finally { cleanup(f) }
 })
