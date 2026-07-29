@@ -297,6 +297,8 @@ describe("routing-validate", () => {
         timeout: 45_000,
         extension: { trace: true },
         label: "primary-label",
+        bogus: 1,
+        families: { "family-1": { model: "should-not-survive" } },
         dual: [{ model: "ollama-cloud/kimi-k2.7-code", label: "secondary-label" }],
       };
     }
@@ -308,6 +310,10 @@ describe("routing-validate", () => {
     assert.equal(eye.timeout, 45_000);
     assert.deepEqual(eye.extension, { trace: true });
     assert.equal(eye.label, "primary-label");
+    assert.equal(eye.bogus, undefined);
+    assert.equal(eye.families, undefined);
+    assert.equal(adapted.roles["plan-reviewer"].bogus, undefined);
+    assert.equal(adapted.roles["plan-reviewer"].families, undefined);
     assert.equal(validateRouting(adapted).ok, true);
   });
 });
