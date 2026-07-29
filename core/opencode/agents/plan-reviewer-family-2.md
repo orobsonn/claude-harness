@@ -31,7 +31,7 @@ Before applying the categories below, perform **two mandatory, separate passes**
 1. **Artifact-consistency pass:** test the approved spec and execution plan against themselves.
 2. **Code-reality pass:** read every real file in each task's `scope_paths`, then follow relevant callers and callees.
 
-Every finding MUST carry a real repo-relative `file:function` anchor. Preserve the executable schema by beginning `problem` with `Evidence: file:function — `. Line-only, artifact-only, bare-file, prose, and invented anchors are invalid.
+Every finding MUST carry a real repo-relative `file:anchor`. For executable code, use a function or exported symbol. For a genuinely non-executable surface, use its real `<section>`, `<key>`, or `<operation>`. Preserve the schema by beginning `problem` with `Evidence: file:anchor — `. Line-only references, bare files, prose without a file, and invented functions are invalid.
 
 ### 1. Decomposition soundness (SRP)
 - Each task has one reason to exist? A task whose spec says "and" / "then" is a smell — flag it to split.
@@ -95,7 +95,7 @@ Emit ONE strict JSON object:
       "area": "decomposition | judgment | locked-test | scope | model-routing | introduced-risk",
       "severity": "low | medium | high",
       "task_id": "task-N or (plan-wide)",
-      "problem": "Evidence: src/path/to/file.ts:functionName — what is wrong and why it matters",
+      "problem": "Evidence: docs/spec.md:<Acceptance criteria> — what is wrong and why it matters",
       "planner_instruction": "exact change the planner must make"
     }
   ]

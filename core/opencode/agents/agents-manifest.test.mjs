@@ -168,7 +168,8 @@ test("t6-build-prose: build.md still documents dual_status / secondary failure f
     assert.match(optionalPrompt, /secondEyeModel.*legacy `families\.family-2`/i, `${name} must preserve legacy opt-in`);
   }
   assert.match(body, /two separate passes/i);
-  assert.match(body, /file:function/i);
+  assert.match(body, /file:anchor/i);
+  assert.match(body, /<section>.*<key>.*<operation>/i);
   for (const name of [
     "plan-reviewer", "plan-reviewer-family-1", "plan-reviewer-openai", "plan-reviewer-family-2",
     "adversary", "adversary-family-1", "adversary-openai", "adversary-family-2",
@@ -176,7 +177,8 @@ test("t6-build-prose: build.md still documents dual_status / secondary failure f
     const prompt = read(join(AGENTS_DIR, `${name}.md`));
     assert.match(prompt, /Artifact-consistency pass/i, `${name} must require artifact consistency`);
     assert.match(prompt, /Code-reality pass/i, `${name} must require code reality`);
-    assert.match(prompt, /file:function/i, `${name} must require anchored evidence`);
+    assert.match(prompt, /file:anchor/i, `${name} must require anchored evidence`);
+    assert.match(prompt, /<section>.*<key>.*<operation>/i, `${name} must support non-executable anchors`);
   }
 });
 

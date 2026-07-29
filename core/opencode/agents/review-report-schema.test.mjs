@@ -91,7 +91,8 @@ test("legacy family marker on a report is ignored, never required", () => {
 test("build single-evaluator contract maps primary_only to fail-open advancement", () => {
   const source = fs.readFileSync(new URL("./build.md", import.meta.url), "utf8");
   assert.match(source, /records `primary_only`/);
-  assert.match(source, /`primary_only_failopen`/);
+  assert.doesNotMatch(source, /primary_only_failopen/);
   assert.match(source, /advances normally and never blocks, triggers a secondary retry, or requires an operator warning/i);
-  assert.match(source, /evidence.*file:function/i);
+  assert.match(source, /evidence.*file:anchor/i);
+  assert.match(source, /<section>.*<key>.*<operation>/i);
 });
