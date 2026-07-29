@@ -193,7 +193,7 @@ dispatch, the first plugin to `throw` wins, so **discovery order decides which g
 operator actually sees deny**. The chain that gates a real Task dispatch runs, in order:
 
 ```
-planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate
+review-guard → planner-recovery → plan-gate → obs-hand → entry-gate
 ```
 
 Note `entry-gate.ts` — the plugin usually thought of as "the gate" — runs **last**. A rename

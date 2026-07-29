@@ -227,7 +227,7 @@ test("failed privileged mutation consumes authorization and remains byte-neutral
   try {
     const { file, bytes } = seed(root);
     const { before, execute } = await harness(root);
-    const args = { action: "dual", status: "not-an-enum" };
+    const args = { action: "regate-passed", task_id: "task-1", sha: "a".repeat(40) };
     await before({ tool: "mark", sessionID: "ses-authority", callID: "call-authority" }, { args });
     const failed = await execute(args, context());
     assert.equal(failed.metadata.ok, false);

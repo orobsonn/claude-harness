@@ -168,8 +168,8 @@ test("the loop is the SPEC pass only — a per-task adversary is the implementat
   assert.match(res.reason, /per-task/);
 });
 
-test("only the primary family drives the loop, and only before acceptance", () => {
-  assert.equal(decideAdversaryNudge({ subagentType: SECONDARY, state: state() }).action, "skip");
+test("legacy adversary aliases drive the same loop, and only before acceptance", () => {
+  assert.equal(decideAdversaryNudge({ subagentType: SECONDARY, state: state() }).action, "inject");
   assert.equal(decideAdversaryNudge({ subagentType: PRIMARY, state: state({ adversary_fired: true }) }).action, "skip");
   assert.equal(decideAdversaryNudge({ subagentType: "plan-reviewer-family-1", state: state() }).action, "skip");
   assert.equal(decideAdversaryNudge({ subagentType: "executor-high", state: state() }).action, "skip");

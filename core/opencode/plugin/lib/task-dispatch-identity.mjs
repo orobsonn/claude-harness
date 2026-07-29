@@ -6,7 +6,7 @@ const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /**
  * @description Whether tool name is the OC Task/agent dispatch family.
- * Canonical rule (shared with loop-guard, obs-hand, obs-eye): task | agent |
+ * Canonical rule (shared with review-guard, obs-hand, obs-eye): task | agent |
  * endsWith .task | .agent (case-insensitive).
  * @param {unknown} toolName
  * @returns {boolean}

@@ -8,7 +8,7 @@
  * across machines/CI, so this test asserts the one property that IS portable and that a
  * rename of one of the 5 tracked files actually breaks: each file's name-sorted position
  * relative to the others. Scope, honestly stated: this catches a rename/removal of
- * `planner-recovery.ts`, `plan-gate.ts`, `obs-hand.ts`, `loop-guard.ts`, or `entry-gate.ts`
+ * `review-guard.ts`, `planner-recovery.ts`, `plan-gate.ts`, `obs-hand.ts`, or `entry-gate.ts`
  * that changes their relative alphabetical order. It does NOT reproduce the real node-glob
  * nosort walk, so it canNOT catch a 6th plugin file joining the directory and shifting the
  * true unsorted walk order without touching any of the 5 tracked names — that residual gap is
@@ -27,7 +27,7 @@ const pluginDir = dirname(fileURLToPath(import.meta.url))
  * The Task-dispatch chain that actually gates a dispatch, in the order the operator
  * experiences a deny (first throw wins) — see AGENTS.md §12 for the human-readable doc.
  */
-const DISPATCH_CHAIN_ORDER = ["planner-recovery", "plan-gate", "obs-hand", "loop-guard", "entry-gate"]
+const DISPATCH_CHAIN_ORDER = ["review-guard", "planner-recovery", "plan-gate", "obs-hand", "entry-gate"]
 
 /**
  * Sorted-then-reversed basenames of every auto-globbed plugin file — a deterministic,

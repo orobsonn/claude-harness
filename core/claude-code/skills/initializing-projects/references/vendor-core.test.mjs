@@ -670,7 +670,7 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
   }
 });
 
-test("predeclared retired files remain vendored while their source still exists (#576)", () => {
+test("retired dual files are pruned while review-guard and review budgets remain vendored (#583)", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-predeclared-retired-"));
   try {
     const result = spawnSync(
@@ -679,8 +679,12 @@ test("predeclared retired files remain vendored while their source still exists 
       { encoding: "utf8", stdio: "pipe" },
     );
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/loop-guard.ts")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/review-guard.ts")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/loop-guard.ts")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
+    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -696,7 +700,6 @@ test("a pruned source removes vendored zombies, tolerates absent targets, and no
     mkdirSync(join(ocDir, "plugin/lib"), { recursive: true });
     for (const entry of harnessOcPluginFiles()) {
       const rel = entry.replace(/^\.\/\.opencode\//, "");
-      if (rel === "plugin/loop-guard.ts") continue;
       mkdirSync(dirname(join(source, rel)), { recursive: true });
       mkdirSync(dirname(join(target, entry.replace(/^\.\//, ""))), { recursive: true });
       writeFileSync(join(source, rel), "// live\n", "utf8");
@@ -1008,9 +1011,9 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     assert.match(entry, /import\("\.\/lib\/hook-identity\.mjs"\)/);
     assert.match(entry, /import\("\.\/lib\/gate-state\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
-    const dualEnf = readFileSync(join(tempDir, ".opencode/plugin/lib/dual-enforcement.mjs"), "utf8");
-    assert.match(dualEnf, /from "\.\.\/\.\.\/shared\/lib\/gate-state-shape\.mjs"/);
-    assert.ok(!dualEnf.includes("/Users/"), "vendored shared import must be relative, not home path");
+    const reviewGuard = readFileSync(join(tempDir, ".opencode/plugin/review-guard.ts"), "utf8");
+    assert.match(reviewGuard, /import\("\.\.\/shared\/lib\/path-helpers\.mjs"\)/);
+    assert.ok(!reviewGuard.includes("/Users/"), "vendored shared import must be relative, not home path");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

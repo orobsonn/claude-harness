@@ -88,8 +88,8 @@ Três coisas que mudam o resultado:
 |---|---|---|
 | **Sem cerimônia** | Pergunta, leitura, chat | Resposta direta |
 | **QUICK** | Hotfix óbvio, 1–2 arquivos, **nada sensível** | Inline / 1 mão + gates baratos |
-| **LIGHT** | Feature pequena, escopo claro | Spec → plano → loop leve → dual final |
-| **FULL** | Multi-arquivo, risco, ou path sensível | Loop completo + dual + demo + trilhos de ship |
+| **LIGHT** | Feature pequena, escopo claro | Spec → plano → loop leve → review final |
+| **FULL** | Multi-arquivo, risco, ou path sensível | Loop completo + review final + demo + trilhos de ship |
 
 **Só sobe de modo, nunca rebaixa** pedido sensível com “faz rápido”.
 
@@ -111,7 +111,7 @@ oc-triaging-requests
       oc-brainstorming  ── HARD-GATE: você aprova a spec ──►
             │
             ▼
-      planner (plano JSON) ── validate-plan ── plan-reviewer dual ── HARD-GATE
+      planner (plano JSON) ── validate-plan ── plan-reviewer ── HARD-GATE
             │
             ▼
       por task: test-author → executor → compliance
@@ -119,7 +119,7 @@ oc-triaging-requests
                → sniper (se preciso) → gates / regate
             │
             ▼
-      dual final → demo (interativo) → harvester → shipper (PR)
+      review final → demo (interativo) → harvester → shipper (PR)
 ```
 
 **Interativo:** você aprova spec/plano/demo.  
@@ -293,15 +293,15 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Sintoma | Causa comum | O que fazer |
 |---|---|---|
 | “Planner negado” / cerimônia | Spec ainda não passou brainstorm + ataque | Completar brainstorm; não pular pro plano |
-| Executor bloqueado após review do plano | **REVISE** no dual de plano (`plan_verdict`) | Corrigir o plano; dual **both** sozinho **não** libera se foi REVISE |
+| Executor bloqueado após review do plano | **REVISE** no review do plano (`plan_verdict`) | Corrigir o plano; o segundo olho opcional não substitui o **APPROVE** principal |
 | Push / PR bloqueado: captura | Falta hand-record DONE + `capture-verified` numa task terminada | A mão precisa terminar de verdade; prosa “pronto” não conta |
 | Push bloqueado: task do plano sem evidência | **Uma writing task do plano nunca foi despachada** (nem hand-record, nem captura) — feature ia subir pela metade | Despachar a mão de cada task que falta antes de entregar. Não bloqueia `DONE_WITH_CONCERNS` (shippable) nem se o plano não puder ser lido (fail-open) |
 | Push bloqueado: regate | Correção grave (sniper-high) sem re-auditoria | Rodar adversary de regate + `regate-passed` |
-| Push FULL bloqueado: final / demo | Falta review final (ou demo no interativo) | Completar dual final; no interativo, demo quando pedido |
+| Push FULL bloqueado: final / demo | Falta review final (ou demo no interativo) | Completar review final; no interativo, demo quando pedido |
 | Harvester bloqueado | `findings.md` ausente | Garantir que o loop gravou findings antes do harvest |
 | Comportamento “meio velho” | Update/routing sem restart | Reiniciar sessão OpenCode |
 
-**Avaliador único** por padrão. Segundo olho (`secondEyeModel`) é opt-in e fail-open (se o 2º provider cair, segue com aviso — não inventa dual completo).
+**Avaliador único** por padrão. Segundo olho (`secondEyeModel`) é opt-in e fail-open (se o 2º provider cair, segue com aviso — não finge que o segundo olho rodou).
 
 **Por que um olho falhou (forense):** quando um review/eye falha, o gate-state registra a causa **classificada** em `last_provider_diagnostic` (e conta em `review_failure_counts`) — `rate_limited`, `credit`, `unauthenticated`, `timeout`, `upstream_5xx` (5xx do provider), `provider_error` (desconhecido) ou `gate_blocked` (um portão **interno** do harness barrou, não é falha de provider). Assim dá pra distinguir “o xAI/Ollama caiu” de “bati num gate meu” sem caçar no log. O diagnóstico é sanitizado (sem segredos).
 
@@ -325,7 +325,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 |---|---|
 | `classify` | Grava modo + feature no gate-state (fim do triage) |
 | `validate-plan` | Valida o JSON do plano |
-| `mark` | Carimbos privilegiados (hand-finished, capture-verified, dual, regate, final-review…) — **não** use Bash pra isso |
+| `mark` | Carimbos privilegiados (hand-finished, capture-verified, regate, final-review…) — **não** use Bash pra isso |
 | `ceremony-next` | Próximo passo allowlisted após denial de cerimônia |
 | `verify` | Roda teste pinado da task (hand ativa) |
 | `complexity-scorer` | Banda low/medium/high de um path |
@@ -337,10 +337,10 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 1. **Uma intenção por sessão** quando possível (feature vs “só atualizar harness”).  
 2. **Decisões de produto** no brainstorm — não deixe o modelo escolher sozinho o “o quê”.  
 3. **Tab `plan`** quando ainda não sabe o desenho; **`build`** quando quer entrega.  
-4. Se OpenAI falhar: skill **`oc-configuring-model-routing`** → preset dual com outro provider (ex. Grok + Ollama).  
+4. Se OpenAI falhar: skill **`oc-configuring-model-routing`** → configure outro provider ou um segundo olho opcional.
 5. Depois de update ou routing: **restart**.  
 6. Leia denials de portão como **mensagem de produto** (“falta prova da mão”), não como “bug aleatório” — a menos que o smoke diga o contrário.  
-7. **Nunca** peça pra afrouxar dual / capture / regate “só pra passar” — isso é o valor do harness.
+7. **Nunca** peça pra afrouxar review / capture / regate “só pra passar” — isso é o valor do harness.
 
 ---
 

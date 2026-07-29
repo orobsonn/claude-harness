@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @description Headless probe for OC gates post-fix (entry-gate/plan-gate/dual-enforcement).
+ * @description Headless probe for OC gates post-fix (entry-gate/plan-gate/review-guard).
  * Creates temp project via vendor-core --runtime opencode, runs DENY scenario via real opencode,
  * validates oracle on tool_use error (NOT exit code), runs hermetic in-process ALLOW oracle.
  * Documents that exit code of opencode alone is not the oracle.
@@ -19,11 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  enforceDualFromDiskOrThrow,
-  DUAL_STATUS,
-  dualStatusGatePatch,
-} from "../core/opencode/plugin/lib/dual-enforcement.mjs";
+import { createPlanGateHooks } from "../core/opencode/plugin/plan-gate.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -68,10 +64,13 @@ async function main() {
     }
     const ocJson = JSON.parse(readFileSync(ocJsonPath, "utf8"));
     const pluginList = ocJson.plugin || ocJson.plugins;
-    if (!pluginList || !Array.isArray(pluginList) || pluginList.length === 0) {
+    if (!Array.isArray(pluginList)) {
       fail("opencode.json missing plugin list after vendor");
     }
-    pass("opencode.json has plugin list from vendor");
+    if (pluginList.some((entry) => String(entry).includes(".opencode/plugin/"))) {
+      fail("opencode.json must not list auto-globbed harness plugins");
+    }
+    pass("opencode.json leaves harness plugins to auto-glob");
 
     // 3. DENY scenario: prompt that forces task→executor-low once
     const denyPrompt = `You MUST call the task tool exactly once with:
@@ -94,12 +93,12 @@ After the task returns (success or error), reply GATE_PROBE_DONE.`;
     const combined = denyStderr + "\n" + denyStdout;
     if (/failed to load plugin/i.test(combined)) {
       // only fail if critical gates
-      if (/entry-gate|plan-gate|loop-guard/i.test(combined)) {
+      if (/entry-gate|plan-gate|review-guard/i.test(combined)) {
         pluginLoadFail = true;
       }
     }
     if (pluginLoadFail) {
-      fail("plugin load error for entry-gate|plan-gate|loop-guard: " + combined.slice(0, 500));
+      fail("plugin load error for entry-gate|plan-gate|review-guard: " + combined.slice(0, 500));
     }
     for (const line of denyStdout.split("\n")) {
       if (!line.trim().startsWith("{")) continue;
@@ -144,19 +143,15 @@ After the task returns (success or error), reply GATE_PROBE_DONE.`;
     // 6. Hermetic ALLOW oracle (in-process, pre-seeded gate-state)
     const allowStateDir = join(tempRoot, ".opencode", "plans", ".state", "ses_probe_allow");
     mkdirSync(allowStateDir, { recursive: true });
-    const allowState = dualStatusGatePatch(DUAL_STATUS.BOTH);
+    const allowState = { session_id: "ses_probe_allow", feature_id: "probe-allow" };
     writeFileSync(join(allowStateDir, "gate-state.json"), JSON.stringify(allowState, null, 2));
 
-    const allowDecision = enforceDualFromDiskOrThrow("[entry-gate]", {
-      projectRoot: tempRoot,
-      toolName: "task",
-      toolArgs: { subagent_type: "executor-low" },
-      sessionId: "ses_probe_allow",
-    });
-    if (!allowDecision.ok || allowDecision.decision !== "allow") {
-      fail(`ALLOW oracle failed: ${allowDecision.reason}`);
-    }
-    pass("AC-3 ALLOW: hermetic in-process enforceDualFromDiskOrThrow with dual_status=both");
+    const allowHooks = await createPlanGateHooks(tempRoot);
+    await allowHooks["tool.execute.before"](
+      { tool: "task", sessionID: "ses_probe_allow", callID: "probe-allow" },
+      { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"probe"}[/HARNESS_TASK_CONTEXT]' } },
+    );
+    pass("AC-3 ALLOW: hermetic plan-gate permits a session with no planner binding");
 
     log("All checks passed.");
     process.exit(0);

@@ -1,5 +1,5 @@
 /**
- * @description Locked tests for T6 OC agents/skills manifest (routing-aligned models, dual eyes, shared hand agents, skills).
+ * @description Locked tests for T6 OC agents/skills manifest (routing-aligned models, optional second eyes, shared hand agents, skills).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -152,9 +152,28 @@ test("t6-single-evaluator-files: canonical eyes + compatibility alias stubs", ()
   assert.equal(fmField(ad, "model"), "openai/gpt-5.6-sol");
 });
 
-test("t6-build-prose: build.md still documents dual_status / secondary failure fields", () => {
+test("t6-build-prose: build.md keeps the optional eye advisory and primary-authoritative", () => {
   const body = read(join(AGENTS_DIR, "build.md"));
-  assert.match(body, /primary_only|dual_status|secondary_status/i);
+  assert.match(body, /optional second eye/i);
+  assert.match(body, /primary result remains authoritative/i);
+  assert.doesNotMatch(body, /dual-runtime|dual_status|dual_completed/i);
+});
+
+test("t6-active-prose: retired dual-review instructions are absent", () => {
+  const paths = [
+    join(AGENTS_DIR, "build.md"),
+    join(AGENTS_DIR, "adversary.md"),
+    join(AGENTS_DIR, "adversary-family-1.md"),
+    join(AGENTS_DIR, "adversary-family-2.md"),
+    join(AGENTS_DIR, "adversary-openai.md"),
+    join(AGENTS_DIR, "harvester.md"),
+    join(SKILLS_DIR, "orchestrating-delivery", "SKILL.md"),
+    join(SKILLS_DIR, "recording-findings", "SKILL.md"),
+    join(SKILLS_DIR, "proposing-improvements", "SKILL.md"),
+    join(OC_ROOT, "docs", "OPERATOR-GUIDE.md"),
+  ];
+  const body = paths.map(read).join("\n");
+  assert.doesNotMatch(body, /final dual review|final dual-review|dual final|plan-reviewer dual|dual both/i);
 });
 
 test("t6-skills: required loop skills exist under core/opencode/skills", () => {

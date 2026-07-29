@@ -11,7 +11,7 @@
  *
  * #ac-2.1 (issue #488) / #ac-3 (issue #513): the OTHER half of fix-mode — whether the sniper TASK
  * DISPATCH composed above actually survives the real 5-plugin OpenCode gate chain
- * (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate,
+ * (review-guard → planner-recovery → plan-gate → obs-hand → entry-gate,
  * docs/OC-CC-PARITY-REPORT.md §2). The tests above never exercised this: they only assert what
  * cron-a-dispatch.mjs COMPOSES for tmux, never what the OpenCode plugin chain does with it once
  * dispatched. Three tests below cover the shapes that matter:
@@ -53,7 +53,7 @@ import { dispatch } from "./cron-a-dispatch.mjs";
 import { createPlannerRecoveryHooks } from "../opencode/plugin/planner-recovery.ts";
 import { createPlanGateHooks } from "../opencode/plugin/plan-gate.ts";
 import { createObsHandHooks } from "../opencode/plugin/obs-hand.ts";
-import { createLoopGuardHooks } from "../opencode/plugin/loop-guard.ts";
+import { createReviewGuardHooks } from "../opencode/plugin/review-guard.ts";
 import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
 import { sealedMarkerRecord } from "../opencode/plugin/lib/marker-seal.mjs";
 import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
@@ -301,12 +301,12 @@ test("fail-CLOSED: findings file with an EMPTY changedFiles scope → NORMAL mod
 
 // ---------------------------------------------------------------------------
 // #ac-3.1 (issue #485): the sniper Task dispatch that fix-mode actually issues must survive the
-// REAL 5-plugin chain (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate, the
+// REAL 5-plugin chain (review-guard → planner-recovery → plan-gate → obs-hand → entry-gate, the
 // documented order from plugin-dispatch-order.test.mjs) against a REALISTIC fresh fix-mode
 // session's gate-state: classified/mode present (triaging-requests always runs at session start
 // per core/CLAUDE.md — the FIX_MODE_TRIGGER only skips planner/plan-reviewer, not classify) and
 // dual_status/plan_verdict recorded+sealed (the plan WAS already dual-reviewed and APPROVEd by
-// the original pre-rejection pipeline this branch resumes — dual-enforcement.mjs's
+// the original pre-rejection pipeline this branch resumes — the former review-classification gate's
 // requireDualOn-by-default check, out of THIS issue's scope, would otherwise deny any executor/
 // sniper dispatch missing it, unrelated to what #485 fixes). NO planner_plan_binding, NO
 // brainstormed/adversary_fired, NO regate, NO fidelity_pass — a resumed branch's session never
@@ -397,10 +397,10 @@ test("stale hygiene: a NON-resume (fresh-branch) dispatch prunes any leftover fi
 // descending on the parity report's environment) — DISPATCH_CHAIN_ORDER is the documented/asserted
 // contract, not a live re-measurement of the raw glob order on whatever host runs this test.
 const DISPATCH_CHAIN = [
+  ["review-guard", createReviewGuardHooks],
   ["planner-recovery", createPlannerRecoveryHooks],
   ["plan-gate", createPlanGateHooks],
   ["obs-hand", createObsHandHooks],
-  ["loop-guard", createLoopGuardHooks],
   ["entry-gate", createEntryGateHooks],
 ];
 
@@ -431,7 +431,7 @@ test("chain: sniper Task dispatch with a TRULY COLD/EMPTY gate-state (no gate-st
   //     (#476/#500) — absent → skip entirely. dual/plan_verdict classification is record-only
   //     (#483/#511) — it never denies, regardless of harness.routing.json being present on disk.
   //   - obs-hand: shadow-records only (#488's own T17 half, PR #508/#509) — never denies dispatch.
-  //   - loop-guard: no counters seeded → allow.
+  //   - review-guard: no counters seeded → allow.
   // But entry-gate's Gate 1 (entry-decide.mjs:88-109, CC parity #485/#509) requires EVERY delivery
   // role — sniper included, no per-role exemption, exactly like Claude Code's entry-gate.mjs — to
   // be dispatched under a classified mode of LIGHT or FULL. A literally empty gate-state has

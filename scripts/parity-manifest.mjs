@@ -1,4 +1,4 @@
-/** @description Parity manifesto CI checker: verifies both runtime targets have required agents, dual config, gates, oracle, no token reads; used by parity-manifest.test.mjs and CI. */
+/** @description Parity manifesto CI checker: verifies both runtime targets have required agents, routing, gates, oracle, no token reads; used by parity-manifest.test.mjs and CI. */
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { validateRouting } from "../core/shared/lib/routing-validate.mjs";
@@ -171,7 +171,7 @@ export function checkGatesAndOracle(targetDir) {
   const kind = detectTargetKind(targetDir);
   const missing = [];
   if (kind === "opencode") {
-    for (const rel of ["plugin/entry-gate.ts", "plugin/plan-gate.ts", "plugin/loop-guard.ts"]) {
+    for (const rel of ["plugin/entry-gate.ts", "plugin/plan-gate.ts", "plugin/review-guard.ts"]) {
       if (!existsSync(join(targetDir, rel))) missing.push(rel);
     }
     const oracleCandidates = [
