@@ -1,8 +1,10 @@
 ---
 description: Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Ollama Cloud cheap hand (gemma4:31b).
-mode: subagent
+mode: all
 model: ollama-cloud/gemma4:31b
 temperature: 0.1
+tools:
+  task: false
 permission:
   classify: deny
   edit: allow

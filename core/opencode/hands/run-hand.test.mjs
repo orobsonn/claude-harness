@@ -1,6 +1,6 @@
 /**
  * @description Locked tests for OC cheap-hand adapter (T7): worktree policy, quarantine,
- * CONFIG_ERROR, preUntracked restore, session-scoped run-record, mode-primary spawn only.
+ * CONFIG_ERROR, preUntracked restore, session-scoped run-record, shared mode-all agents.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -54,9 +54,9 @@ function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]
   }));
 }
 
-const PRIMARY_SPAWN_FM = `---
+const ALL_HAND_FM = `---
 description: "test spawn"
-mode: primary
+mode: all
 model: openai/gpt-5.6-terra
 tools:
   task: false
@@ -76,8 +76,8 @@ tools:
 # body
 `;
 
-const PRIMARY_WITH_TASK_TRUE = `---
-mode: primary
+const ALL_WITH_TASK_TRUE = `---
+mode: all
 model: openai/gpt-5.6-terra
 tools:
   task: true
@@ -85,52 +85,56 @@ tools:
 # body
 `;
 
-// ---- t7-spawn-primary ----
+// ---- t7-shared-hand-agent ----
 
-test("t7-spawn-primary: adapter only uses agents with mode primary and tools.task false; refuses subagent-mode agent files", () => {
-  assert.equal(spawnAgentName("executor-high"), "executor-high-spawn");
-  assert.equal(spawnAgentName("executor-high-spawn"), "executor-high-spawn");
-  assert.equal(spawnAgentName("test-author"), "test-author-spawn");
+test("t7-shared-hand-agent: adapter uses the role itself, accepts mode all, and refuses subagent mode", () => {
+  assert.equal(spawnAgentName("executor-high"), "executor-high");
+  assert.equal(spawnAgentName("test-author"), "test-author");
 
-  const ok = validateSpawnAgent(PRIMARY_SPAWN_FM, "executor-high-spawn");
+  const ok = validateSpawnAgent(ALL_HAND_FM, "executor-high");
   assert.equal(ok.ok, true);
+  assert.equal(ok.model, "openai/gpt-5.6-terra");
 
   const sub = validateSpawnAgent(SUBAGENT_FM, "executor-high");
   assert.equal(sub.ok, false);
   assert.equal(sub.outcome, OUTCOME.CONFIG_ERROR);
   assert.match(sub.reason, /subagent/i);
 
-  const taskTrue = validateSpawnAgent(PRIMARY_WITH_TASK_TRUE, "executor-high-spawn");
+  const taskTrue = validateSpawnAgent(ALL_WITH_TASK_TRUE, "executor-high");
   assert.equal(taskTrue.ok, false);
   assert.match(taskTrue.reason, /tools\.task/);
 
   const dir = mkdtempSync(join(tmpdir(), "t7-agents-"));
   try {
     writeFileSync(join(dir, "executor-high.md"), SUBAGENT_FM);
-    writeFileSync(join(dir, "executor-high-spawn.md"), PRIMARY_SPAWN_FM);
+    const refuseSubagent = loadAndValidateSpawnAgent(dir, "executor-high");
+    assert.equal(refuseSubagent.ok, false);
+    assert.match(refuseSubagent.reason, /subagent/i);
 
-    const refuseBare = loadAndValidateSpawnAgent(dir, "executor-high");
-    assert.equal(refuseBare.ok, false);
-    assert.match(refuseBare.reason, /refuse subagent|use executor-high-spawn/i);
-
-    const acceptSpawn = loadAndValidateSpawnAgent(dir, "executor-high-spawn");
-    assert.equal(acceptSpawn.ok, true);
+    writeFileSync(join(dir, "executor-high.md"), ALL_HAND_FM);
+    const acceptAll = loadAndValidateSpawnAgent(dir, "executor-high");
+    assert.equal(acceptAll.ok, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 
   const args = buildOpencodeRunArgs({
     projectDir: "/proj",
-    agent: "executor-high-spawn",
+    agent: "executor-high",
+    model: "ollama-cloud/kimi-k2.7-code",
     title: "hand:feat:task-1",
     prompt: "implement",
   });
   assert.ok(args.includes("--agent"));
-  assert.ok(args.includes("executor-high-spawn"));
+  assert.ok(args.includes("executor-high"));
+  assert.deepEqual(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2), [
+    "--model",
+    "ollama-cloud/kimi-k2.7-code",
+  ]);
   assert.ok(args.includes("--format"));
   assert.ok(args.includes("json"));
   // token never in argv
-  assert.ok(!args.some((a) => /token|secret|OLLAMA|AUTH/i.test(a)));
+  assert.ok(!args.some((a) => /token|secret|auth/i.test(a)));
 });
 
 // ---- helpers for worktree tests ----
@@ -330,7 +334,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
         frozenViolations: [],
         reasons: ["locked tests exited 1"],
       },
-      agent: "executor-medium-spawn",
+      agent: "executor-medium",
     });
     assert.equal(record.writtenBy, "run-hand-adapter");
     assert.equal(record.featureId, "oc-port-phase-1");
@@ -383,7 +387,7 @@ test("buildHandRunRecord: DONE must NOT set capturedVerifiedAt (mark-gate only)"
     sessionId: "ses_1",
     freezeCommitSha: "abc",
     outcome: OUTCOME.DONE,
-    agent: "executor-medium-spawn",
+    agent: "executor-medium",
   });
   assert.equal(record.capturedVerifiedAt, undefined);
   assert.equal("capturedVerifiedAt" in record, false);
@@ -402,7 +406,7 @@ test("buildHandRunRecord: non-DONE outcomes never stamp capturedVerifiedAt", () 
       sessionId: "ses_1",
       freezeCommitSha: "abc",
       outcome,
-      agent: "executor-medium-spawn",
+      agent: "executor-medium",
     });
     assert.equal(
       record.capturedVerifiedAt,
@@ -504,14 +508,13 @@ test("captureHandResult: vacuous green forces non-zero locked exit → FAILED", 
 
 // ---- runHand end-to-end with fakes ----
 
-test("runHand: FAILED path resets, writes session-scoped record, refuses subagent agent", async () => {
+test("runHand: FAILED path resets and writes a session-scoped record with the shared agent", async () => {
   const root = mkdtempSync(join(tmpdir(), "t7-runhand-"));
   try {
     seedBoundTask(root, "ses_run1", "feat-x", "task-1");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
-    writeFileSync(join(agentsDir, "executor-medium-spawn.md"), PRIMARY_SPAWN_FM);
-    writeFileSync(join(agentsDir, "executor-medium.md"), SUBAGENT_FM);
+    writeFileSync(join(agentsDir, "executor-medium.md"), ALL_HAND_FM);
 
     const deleted = [];
     let resetSha = null;
@@ -539,7 +542,9 @@ test("runHand: FAILED path resets, writes session-scoped record, refuses subagen
       {
         agentsDir,
         checkFidelityPass: () => true,
-        spawn: async () => {
+        spawn: async ({ agent, model }) => {
+          assert.equal(agent, "executor-medium");
+          assert.equal(model, "openai/gpt-5.6-terra");
           const active = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch;
           assert.equal(active.session_id, "ses_run1");
           assert.equal(active.feature_id, "feat-x");
@@ -581,47 +586,11 @@ test("runHand: FAILED path resets, writes session-scoped record, refuses subagen
       result.recordPath.includes(join("hand-records", "feat-x", "ses_run1", "task-1.json"))
     );
     assert.equal(result.record.writtenBy, "run-hand-adapter");
-    assert.equal(result.record.agent, "executor-medium-spawn");
+    assert.equal(result.record.agent, "executor-medium");
     // process exit was 0 but outcome is FAILED — exit is not oracle
     assert.equal(result.processExitCode, 0);
     assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch, undefined);
 
-    // Refuse bare subagent
-    const refused = await runHand(
-      {
-        feature_id: "feat-x",
-        task_id: "task-2",
-        session_id: "ses_run1",
-        project_root: root,
-        freeze_commit_sha: "freeze99",
-        role: "executor-medium",
-        agent_file: "executor-medium",
-        no_tests: true,
-        scope_paths: ["src/"],
-        brief: "x",
-      },
-      {
-        agentsDir,
-        checkFidelityPass: () => true,
-        spawn: async () => {
-          throw new Error("must not spawn");
-        },
-        git: {
-          headSha: () => "freeze99",
-          diffNameOnly: () => [],
-          lsFilesOthers: () => [],
-        },
-        lsUntracked: () => [],
-        gitResetHard: () => ({ ok: true }),
-        removePath: () => ({ ok: true }),
-        writePath: () => ({ ok: true }),
-        isDirtyVsFreeze: () => false,
-      }
-    );
-    // loadAndValidateSpawnAgent with executor-medium-spawn still works; agent_file bare is checked
-    // When agent_file is executor-medium (subagent), failConfig
-    assert.equal(refused.outcome, OUTCOME.CONFIG_ERROR);
-    assert.match(refused.reason, /refuse subagent|use executor-medium-spawn/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -633,7 +602,7 @@ test("runHand: CAPTURE_ERROR sets quarantine when reset fails", async () => {
     seedBoundTask(root, "ses_q", "feat-q", "task-q");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
-    writeFileSync(join(agentsDir, "executor-low-spawn.md"), PRIMARY_SPAWN_FM);
+    writeFileSync(join(agentsDir, "executor-low.md"), ALL_HAND_FM);
 
     const result = await runHand(
       {
@@ -679,7 +648,7 @@ test("runHand: cleanup failure is verified and fails closed instead of returning
     seedBoundTask(root, "ses_cleanup", "feat-cleanup", "task-cleanup");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
-    writeFileSync(join(agentsDir, "test-author-spawn.md"), PRIMARY_SPAWN_FM);
+    writeFileSync(join(agentsDir, "test-author.md"), ALL_HAND_FM);
     const result = await runHand({
       feature_id: "feat-cleanup",
       task_id: "task-cleanup",
@@ -777,7 +746,7 @@ test("runHand: executor with fidelity_pass proceeds past fidelity gate", async (
     seedBoundTask(root, "ses_fidok", "feat-fid", "task-ok");
     const agentsDir = join(root, "agents");
     mkdirSync(agentsDir);
-    writeFileSync(join(agentsDir, "executor-low-spawn.md"), PRIMARY_SPAWN_FM);
+    writeFileSync(join(agentsDir, "executor-low.md"), ALL_HAND_FM);
 
     const result = await runHand(
       {
@@ -818,14 +787,14 @@ test("runHand: executor with fidelity_pass proceeds past fidelity gate", async (
   }
 });
 
-test("runHand: test-author does not require fidelity_pass (producer exempt)", async () => {
+test("runHand: default vendored agent is authoritative for model and test-author stays fidelity-exempt", async () => {
   let spawned = false;
   const root = mkdtempSync(join(tmpdir(), "t7-fid-ta-"));
   try {
     seedBoundTask(root, "ses_fidta", "feat-fid", "task-ta");
-    const agentsDir = join(root, "agents");
-    mkdirSync(agentsDir);
-    writeFileSync(join(agentsDir, "test-author-spawn.md"), PRIMARY_SPAWN_FM);
+    const agentsDir = join(root, ".opencode", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(agentsDir, "test-author.md"), ALL_HAND_FM);
 
     const result = await runHand(
       {
@@ -835,17 +804,19 @@ test("runHand: test-author does not require fidelity_pass (producer exempt)", as
         project_root: root,
         freeze_commit_sha: "freeze1",
         role: "test-author",
+        model: "attacker/forged-model",
         no_tests: true,
         scope_paths: ["src/"],
         allowed_writes: ["src/"],
         brief: "write locked test",
       },
       {
-        agentsDir,
         checkFidelityPass: () => {
           throw new Error("test-author must not consult fidelity-pass");
         },
-        spawn: async () => {
+        spawn: async ({ agent, model }) => {
+          assert.equal(agent, "test-author");
+          assert.equal(model, "openai/gpt-5.6-terra");
           spawned = true;
           return { exitCode: 0, stdout: "", stderr: "" };
         },

@@ -150,7 +150,7 @@ oc-triaging-requests
 
 **Mãos** = escrevem código/testes (modelos mais baratos).  
 **Olhos** = leem e julgam (modelos mais fortes).  
-**Spawn** (`*-spawn`): gêmeos `mode: primary` só para CLI `opencode run` — ver `.opencode/docs/SPAWN-PATTERN.md`.
+**Spawn CLI:** usa os mesmos agentes `mode: all`; o adapter fixa o modelo do tier via `--model` — ver `.opencode/docs/SPAWN-PATTERN.md`.
 
 ---
 
@@ -350,7 +350,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 |---|---|
 | `AGENTS.md` (raiz, bloco harness) | Entry policy, routing, paths, security |
 | `.opencode/docs/OPERATOR-GUIDE.md` | **Este guia** |
-| `.opencode/docs/SPAWN-PATTERN.md` | Por que existem `*-spawn` |
+| `.opencode/docs/SPAWN-PATTERN.md` | Como a mesma mão serve Task e CLI |
 | `.opencode/skills/*/SKILL.md` | Contrato de cada skill |
 | `.opencode/harness.routing.json` | Modelos atuais |
 | `.opencode/agents/*.md` | Prompt e permissões de cada papel |

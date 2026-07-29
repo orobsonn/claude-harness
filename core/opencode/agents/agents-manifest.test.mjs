@@ -1,5 +1,5 @@
 /**
- * @description Locked tests for T6 OC agents/skills manifest (routing-aligned models, dual eyes, spawn primary, skills).
+ * @description Locked tests for T6 OC agents/skills manifest (routing-aligned models, dual eyes, shared hand agents, skills).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -171,16 +171,32 @@ test("t6-skills: required loop skills exist under core/opencode/skills", () => {
   }
 });
 
-test("t6-spawn-primary: every *-spawn.md agent used by hands has mode primary and tools.task false", () => {
+test("t6-shared-hands: no spawn twins exist and each shared hand preserves its full contract", () => {
   const files = readdirSync(AGENTS_DIR).filter((f) => f.endsWith("-spawn.md"));
-  assert.ok(files.length >= 1, "at least one *-spawn.md hand agent");
-  assert.ok(
-    files.includes("executor-medium-spawn.md"),
-    "executor-medium-spawn.md present (scope contract)",
-  );
-  for (const f of files) {
+  assert.deepEqual(files, [], "retired *-spawn.md twins must not exist");
+  for (const name of [
+    "executor-low",
+    "executor-medium",
+    "executor-high",
+    "sniper-low",
+    "sniper-medium",
+    "sniper-high",
+    "test-author",
+  ]) {
+    const f = `${name}.md`;
     const fm = frontmatter(read(join(AGENTS_DIR, f)));
-    assert.equal(fmField(fm, "mode"), "primary", `${f} mode must be primary`);
+    assert.equal(fmField(fm, "mode"), "all", `${f} mode must be all`);
+    assert.equal(fmField(fm, "model"), expectedModels(JSON.parse(read(ROUTING_PATH)))[name]);
+    assert.equal(fmNestedBool(fm, "permission", "edit"), "allow", `${f} permission.edit must stay allow`);
+    assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
+  }
+});
+
+test("t6-mode-all-lockdown: every writable mode-all agent explicitly disables task dispatch", () => {
+  for (const f of readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".md"))) {
+    const fm = frontmatter(read(join(AGENTS_DIR, f)));
+    if (fmField(fm, "mode") !== "all") continue;
+    if (fmNestedBool(fm, "permission", "edit") !== "allow") continue;
     assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
   }
 });
@@ -195,22 +211,6 @@ test("t6-models-match-routing: agent frontmatter models match harness.routing.js
       model,
       `${name}.md model must be ${model}`,
     );
-  }
-  // Spawn twins share models with base hands
-  const spawnMap = {
-    "executor-low-spawn": expected["executor-low"],
-    "executor-medium-spawn": expected["executor-medium"],
-    "executor-high-spawn": expected["executor-high"],
-    "sniper-low-spawn": expected["sniper-low"],
-    "sniper-medium-spawn": expected["sniper-medium"],
-    "sniper-high-spawn": expected["sniper-high"],
-    "test-author-spawn": expected["test-author"],
-  };
-  for (const [name, model] of Object.entries(spawnMap)) {
-    const path = join(AGENTS_DIR, `${name}.md`);
-    if (!existsSync(path)) continue;
-    const fm = frontmatter(read(path));
-    assert.equal(fmField(fm, "model"), model, `${name}.md model must be ${model}`);
   }
 });
 
@@ -230,16 +230,4 @@ test("executor and sniper tiers use the Ollama Cloud default ladder", () => {
   }
   assert.match(read(join(DECISIONS_DIR, "ADR-001-no-ollama-default.md")), /superseded by ADR-004/i);
   assert.match(read(join(DECISIONS_DIR, "ADR-004-ollama-cloud-default-hands.md")), /Ollama Cloud/i);
-});
-
-test("sniper-low spawn twin preserves model, temperature, and role contract", () => {
-  const base = read(join(AGENTS_DIR, "sniper-low.md"));
-  const spawn = read(join(AGENTS_DIR, "sniper-low-spawn.md"));
-  const baseFm = frontmatter(base);
-  const spawnFm = frontmatter(spawn);
-  assert.equal(fmField(baseFm, "model"), fmField(spawnFm, "model"));
-  assert.equal(fmField(baseFm, "temperature"), fmField(spawnFm, "temperature"));
-  assert.ok(spawn.includes(base.slice(base.indexOf("# Sniper"), base.indexOf("## Output format"))));
-  assert.equal(fmField(spawnFm, "mode"), "primary");
-  assert.equal(fmNestedBool(spawnFm, "tools", "task"), false);
 });

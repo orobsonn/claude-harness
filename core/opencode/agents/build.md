@@ -29,7 +29,7 @@ All internal reasoning, JSON, and identifiers stay in **English**. **Every opera
 
 There is **NO** single `executor` or `sniper` agent — tiered names only. Tier is chosen by **you** at dispatch from complexity/severity; it is never hardcoded in the plan. Complexity bands: low 0–10 → `executor-low`; medium 11–30 → `executor-medium`; high/max 31–60 → `executor-high`; 61+ → planner must split.
 
-CLI cheap-hand spawn uses **`*-spawn`** twins (`mode: primary`, `tools.task: false`) — see `docs/SPAWN-PATTERN.md`. Never `opencode run --agent executor-high` (subagent mode falls back — probe P2).
+CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each shared hand is `mode: all`, keeps its routed `model:` for in-session dispatch, and declares `tools.task: false`; the adapter passes that model explicitly to `opencode run` — see `docs/SPAWN-PATTERN.md`.
 
 ## Dual-always protocol (plan-reviewer + adversary)
 

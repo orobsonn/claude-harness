@@ -50,9 +50,9 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 | `adversary.md`, `adversary-family-1.md` | `adversary.families.family-1` |
 | `adversary-family-2.md`, `adversary-openai.md` | `adversary.families.family-2` |
 | `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*.model` |
-| `executor-{low,medium,high}.md` + `*-spawn` | `executor.tiers.*` |
-| `sniper-{low,medium,high}.md` + `*-spawn` | `sniper.tiers.*` |
-| `test-author.md` + `test-author-spawn.md` | `roles.test-author.model` |
+| `executor-{low,medium,high}.md` | `executor.tiers.*` |
+| `sniper-{low,medium,high}.md` | `sniper.tiers.*` |
+| `test-author.md` | `roles.test-author.model` |
 | `discussion-adversary.md` | sem `model:` (herda host) — **não** reescrever |
 
 `listRoutingTouchpoints()` no módulo devolve a lista estável pra o operador.

@@ -150,7 +150,7 @@ Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuri
 
 - **Eyes** (read-only): planner, plan-reviewer*, adversary*, compliance, security.
 - **Hands** (write): executor-*, sniper-*, test-author.
-- CLI cheap hands use `*-spawn` agents (`mode: primary`, `tools.task: false`) — see `docs/SPAWN-PATTERN.md`.
+- CLI cheap hands use the same `mode: all` agents as in-session dispatch, with `tools.task: false` — see `docs/SPAWN-PATTERN.md`.
 - test-author is **fidelity-exempt** (creates the locked test); executor is blocked until fidelity-pass.
 
 ---

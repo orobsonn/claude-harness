@@ -20,7 +20,6 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
   harvester: (r) => r.harvester?.model,
   shipper: (r) => r.shipper?.model,
   "test-author": (r) => r["test-author"]?.model,
-  "test-author-spawn": (r) => r["test-author"]?.model,
   "plan-reviewer": (r) => r["plan-reviewer"]?.families?.["family-1"]?.model,
   "plan-reviewer-family-1": (r) => r["plan-reviewer"]?.families?.["family-1"]?.model,
   "plan-reviewer-family-2": (r) => r["plan-reviewer"]?.families?.["family-2"]?.model,
@@ -30,17 +29,11 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
   "adversary-family-2": (r) => r.adversary?.families?.["family-2"]?.model,
   "adversary-openai": (r) => r.adversary?.families?.["family-2"]?.model,
   "executor-low": (r) => r.executor?.tiers?.low?.model,
-  "executor-low-spawn": (r) => r.executor?.tiers?.low?.model,
   "executor-medium": (r) => r.executor?.tiers?.medium?.model,
-  "executor-medium-spawn": (r) => r.executor?.tiers?.medium?.model,
   "executor-high": (r) => r.executor?.tiers?.high?.model,
-  "executor-high-spawn": (r) => r.executor?.tiers?.high?.model,
   "sniper-low": (r) => r.sniper?.tiers?.low?.model,
-  "sniper-low-spawn": (r) => r.sniper?.tiers?.low?.model,
   "sniper-medium": (r) => r.sniper?.tiers?.medium?.model,
-  "sniper-medium-spawn": (r) => r.sniper?.tiers?.medium?.model,
   "sniper-high": (r) => r.sniper?.tiers?.high?.model,
-  "sniper-high-spawn": (r) => r.sniper?.tiers?.high?.model,
 });
 
 /**

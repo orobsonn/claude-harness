@@ -1,36 +1,31 @@
 # Hand spawn pattern (P2) — OC port
 
-**Chosen pattern:** `mode-primary-spawn-agents` (resolved_judgment `hand_spawn_pattern`).
+**Chosen pattern:** one `mode: all` agent per hand role.
 
 ## Why
 
-Probe P2 (OC 1.17.18): `opencode run --agent X` requires agent `mode: primary`.  
-If X is `mode: subagent`, OpenCode falls back to the default primary — wrong model and wrong prompt.
+OpenCode 1.18.8 rejects only `mode: subagent` for `opencode run`; `mode: all` works for both
+CLI and in-session Task dispatch. The CLI `--model` option overrides the frontmatter model, while
+the Task tool has no model override. A shared agent therefore keeps `model:` as the in-session
+source of truth, and the adapter passes the same model explicitly on the CLI path.
 
-## Twin files
+## Shared files
 
-| In-session loop (`task` tool) | CLI cheap-hand (`opencode run`) |
-|---|---|
-| `executor-low.md` `mode: subagent` | `executor-low-spawn.md` `mode: primary` |
-| `executor-medium.md` | `executor-medium-spawn.md` |
-| `executor-high.md` | `executor-high-spawn.md` |
-| `sniper-low.md` | `sniper-low-spawn.md` |
-| `sniper-medium.md` | `sniper-medium-spawn.md` |
-| `sniper-high.md` | `sniper-high-spawn.md` |
-| `test-author.md` | `test-author-spawn.md` |
+`executor-{low,medium,high}.md`, `sniper-{low,medium,high}.md`, and `test-author.md` each serve both
+the in-session loop (`task(subagent_type: ...)`) and CLI cheap-hand execution (`opencode run`).
 
-Every `*-spawn.md` MUST have:
+Every shared hand agent MUST have:
 
-- `mode: primary`
+- `mode: all`
 - `tools.task: false` (hands must not nest task)
-- same `model` as the subagent twin (from `harness.routing.json`)
-- same body / role contract as the twin
+- `model:` matching its role/tier in `harness.routing.json`
+- the hand's `permission:` lockdown
 
 ## Rules
 
-1. **Never** call `opencode run --agent executor-high` (or any subagent-only hand).
-2. Always use the `*-spawn` name for CLI spawn (T7 adapter).
-3. In-session loop continues to use exact subagent names via `task(subagent_type: ...)`.
+1. Use the exact hand role for both paths, for example `executor-high`.
+2. The CLI adapter reads the model from that vendored agent and passes `--model <model>`.
+3. In-session dispatch reads the same agent's `model:` because Task has no model override.
 4. Eyes (`plan-reviewer*`, `adversary*`, `compliance`, `security`, `planner`) are subagent-only — not CLI-spawned as hands.
 
-T7 implements the spawn adapter + capture oracle against these primary agents.
+T7 implements the spawn adapter + capture oracle against these shared hand agents.
