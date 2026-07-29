@@ -89,20 +89,39 @@ export function reviewAgentIdentity(name) {
 }
 
 /**
+ * @description True when routing opts into a second eye for this role.
+ * Honors flat `secondEyeModel` and legacy v2 `families.family-2.model` (vendored projects
+ * still on the dual shape must not lose the second eye silently on re-vendor).
+ * @param {unknown} roleConfig
+ * @returns {boolean}
+ */
+export function roleHasSecondEye(roleConfig) {
+  if (!roleConfig || typeof roleConfig !== "object" || Array.isArray(roleConfig)) return false;
+  if (typeof roleConfig.secondEyeModel === "string" && roleConfig.secondEyeModel.includes("/")) {
+    return true;
+  }
+  const secondary = roleConfig.families?.["family-2"];
+  return Boolean(
+    secondary &&
+      typeof secondary === "object" &&
+      typeof secondary.model === "string" &&
+      secondary.model.includes("/"),
+  );
+}
+
+/**
  * @description Return dispatch names for one logical review role.
- * Secondary is null unless routing declares `secondEyeModel` (opt-in second eye).
+ * Secondary is null unless routing declares a second eye (`secondEyeModel` or legacy families.family-2).
  * @param {string} logicalRole
- * @param {{ roles?: Record<string, { secondEyeModel?: string }> } | null} [routing]
+ * @param {{ roles?: Record<string, unknown> } | null} [routing]
  */
 export function reviewDispatchFor(logicalRole, routing = null) {
   if (!Object.hasOwn(REVIEW_AGENT_CATALOG, logicalRole)) {
     return Object.freeze({ primary: null, secondary: null });
   }
-  const secondEyeModel = routing?.roles?.[logicalRole]?.secondEyeModel;
-  const secondEye =
-    typeof secondEyeModel === "string" && secondEyeModel.includes("/")
-      ? `${logicalRole}-family-2`
-      : null;
+  const secondEye = roleHasSecondEye(routing?.roles?.[logicalRole])
+    ? `${logicalRole}-family-2`
+    : null;
   return Object.freeze({
     primary: logicalRole,
     secondary: secondEye,

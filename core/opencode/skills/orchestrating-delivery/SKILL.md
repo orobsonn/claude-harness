@@ -77,20 +77,20 @@ There is **NO** single `executor` or `sniper` agent — tiered names only. Tier 
 
 ### Single evaluator (plan-reviewer + adversary)
 
-Always dispatch mandatory family 1 and attempt optional family 2 for plan-reviewer and adversary (ADR-003). Task tool has no model field — dual = two canonical agent files.
+**One required evaluator** by default (`plan-reviewer` / `adversary`). Optional second eye is opt-in and fail-open — dispatch `*-family-2` **only when** routing declares `secondEyeModel` (or a legacy `families.family-2` model). Never require dual on the default path. Task tool has no model field — second eye = second agent file when configured.
 
-**Runtime module:** `dual-runtime.mjs` in this skill folder — `driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `virginSecondaryBrief`, `isFullDualCoverage`, `dualStatusGatePatch`.
+**Runtime module:** `dual-runtime.mjs` in this skill folder — `driveDualEye`, `dualPostsFor`, `mergeDualFindings`, `mergeDualVerdicts`, `virginSecondaryBrief`, `isFullDualCoverage`, `dualStatusGatePatch`.
 
 | Step | Action |
 |---|---|
 | 1 | Dispatch primary (`plan-reviewer` / `adversary`) |
-| 2 | Dispatch secondary (`plan-reviewer-family-2` / `adversary-family-2`) **only when** routing declares `secondEyeModel` — virgin brief, fail-open, never blocking |
+| 2 | Dispatch secondary (`plan-reviewer-family-2` / `adversary-family-2`) **only when** routing declares a second eye — virgin brief, fail-open, never blocking. If unset → skip; single-evaluator APPROVE is enough |
 | 3 | On secondary auth/unavailable → `dual_status: "primary_only"`; record the reason separately; keep primary findings only; **never invent** secondary findings; warn operator (pt-br) |
 | 4 | On secondary infra error (rate limit / 5xx / crash) → retry secondary once (K=1); if retry ok → upgrade to `both` + merge; if retry fails → `dual_status: "primary_only"`, record failure separately, keep primary only + warn |
 | 5 | On both ok → merge via policy B (shared `finalizeFindings` / `mergeVerdicts`); `dual_status: "both"` |
 | 6 | Active gate-state records **enum only**: `both` \| `primary_only` \| `pending` — never bare boolean. `primary_only` is **not** full dual coverage; legacy fail-open/error values are read-only compatibility |
 
-Never skip the second family when configured. Never treat fail-open as cross-family coverage for metrics.
+Never invent a second family when routing has no second eye. Never treat fail-open as cross-family coverage for metrics.
 
 ---
 
@@ -160,7 +160,7 @@ result — do not pre-empt that with a manual write.
    **ANY match FORCES FULL**, overriding triage. Determinism on the plan; judgment on entry.
 
 **HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.**  
-**HEADLESS:** plan-reviewer dual **APPROVE** is the gate. On REVISE the next action is always the same pair, whatever the round number: re-dispatch `planner` with the findings, then re-dispatch both plan-reviewer families exactly as in Phase 1 (dual is the gate — a single-family review never satisfies it). The `revise_nudge` returned by every review states the remaining `plan_review_count` budget and is the sole authority on when this loop ends — follow what it says, and do not ship without APPROVE.
+**HEADLESS:** plan-reviewer **APPROVE** is the gate (single evaluator by default). On REVISE the next action is always the same, whatever the round number: re-dispatch `planner` with the findings, then re-dispatch `plan-reviewer` exactly as in Phase 1 — and the optional second eye only when routing declares one. A single-evaluator APPROVE **satisfies** the gate when no second eye is configured. The `revise_nudge` returned by every review states the remaining `plan_review_count` budget and is the sole authority on when this loop ends — follow what it says, and do not ship without APPROVE.
 
 **Primary failure cap (`primary_failure_cap_reached`):** after **3 consecutive** unusable returns from the **same family-1 eye** (provider error, empty, malformed, denied, timeout — every failure class except `gate_blocked`, the harness's own pre-dispatch deny, which never counts), **stop delivery**. The counter is `primary_review_failure_streak` and its cap is `LOOP_THRESHOLDS.primary_failure_streak.deny` (`loop-decide.mjs`, today `AGENT_RETRY_K`); **the number here is a courtesy copy of that rail and can go stale** — when the two disagree, the rail wins. It is **not** the `Cap 2 loops` of step 3: that one bounds `validate-plan` structural re-plans on its own counter, so a second consecutive eye failure here is **not**, on its own, a stop — though the rail refuses a new reservation once the streak plus any *open* family-1 reservations reach the cap, so serialize family-1 dispatches and your count matches its. It is not the escalation ladder's `Same-agent retry K=3` either: that one bounds re-dispatch of any role and ends in a critical exception, while this one is a gate-state status that blocks delivery until a ceremony restart — they share the value only because both derive from `AGENT_RETRY_K`. A *different* family-1 role failing starts its own streak — the streak belongs to the role that produced it. **Spec-phase exemption:** the Phase 0 spec-`adversary` (no task, spec pass not yet stamped) never writes this status — its streak stops that broken eye from being re-dispatched, but nothing is frozen: report it to the operator in product language and follow the Phase 0 rule (headless: record under "Open risks" and proceed). Do **not** reclassify to QUICK, do **not** `git push` / `gh pr` — host rails still deny delivery (`bash-decide.mjs`) until a canonical ceremony restart (new generation + bound plan). **Writing hands (executor/sniper/test-author) are NOT blocked by this status anymore** (#482: `decideReviewCapBeforeWriting` was removed) — but their work cannot ship until the restart clears delivery, so re-dispatching them without a restart plan just burns cost. Comment the issue/PR in pt-br with the blocked reason (and any `last_provider_diagnostic` on gate-state). **Scope:** this cap governs only consecutive family-1 dispatches that came back with no usable report — the eye never delivered a verdict. A REVISE is a review that ran successfully and never counts here; it never bounds the plan-reviewer APPROVE/REVISE loop, whose only budget is `plan_review_count` (see HARD-GATE 2), nor the adversary re-dispatch stop-rule.
 

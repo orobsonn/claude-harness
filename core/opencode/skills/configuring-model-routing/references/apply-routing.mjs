@@ -314,9 +314,10 @@ function remapOpenAIEyesTo(routing, target) {
 }
 
 /**
- * @description Deep-clone a routing object, setting or clearing secondEyeModel on review roles.
+ * @description Deep-clone routing, setting/clearing second-eye slots (flat + legacy families).
+ * Used to strip optional second-eye models before the required-slot Grok ban.
  * @param {object} routing
- * @param {string} model  provider/model slug for the optional second eye; empty clears it
+ * @param {string} model  provider/model slug; empty clears second eye
  * @returns {object}
  */
 function withSecondEyeModel(routing, model) {
@@ -328,6 +329,10 @@ function withSecondEyeModel(routing, model) {
       role.secondEyeModel = model;
     } else {
       delete role.secondEyeModel;
+      // Legacy families shape: blank family-2 so collectRoutingModels skips the optional eye.
+      if (role.families?.["family-2"] && typeof role.families["family-2"] === "object") {
+        delete role.families["family-2"].model;
+      }
     }
   }
   return clone;

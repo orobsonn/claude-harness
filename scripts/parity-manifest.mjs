@@ -3,7 +3,12 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { validateRouting } from "../core/shared/lib/routing-validate.mjs";
 
-/** OC-canonical agent files (tiered executor/sniper; single evaluator + alias stubs). */
+/**
+ * OC-canonical agent files.
+ * Single-evaluator eyes (`plan-reviewer`, `adversary`) are required; the six family/openai
+ * names stay required as **2-release alias + optional second-eye stubs** (bound plans and
+ * Task dispatch still resolve those filenames). Not "instead of" the six names — both.
+ */
 export const OC_REQUIRED_AGENTS = [
   "build",
   "planner",

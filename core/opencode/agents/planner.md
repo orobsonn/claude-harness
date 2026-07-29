@@ -151,7 +151,7 @@ Canonical object shape (shared `validatePlan` source of truth) — **not** a bar
   "planner": "planner",
   "plan_reviewer": "plan-reviewer",
   "compliance": "compliance",
-   "adversary": "adversary",
+"adversary": "adversary",
   "security": "security",
   "harvester": "harvester",
   "shipper": "shipper"

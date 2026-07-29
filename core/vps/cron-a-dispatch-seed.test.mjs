@@ -516,7 +516,8 @@ test("seedOpencodeRootConfig: never promotes an unmerged sidecar and materialize
     assert.equal(cfg.small_model, "openai/gpt-5.5");
     assert.equal(cfg.custom, undefined);
     assert.equal(routing.version, 2);
-    assert.equal(routing.roles.adversary.families["family-1"].primary, true);
+    assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(typeof routing.roles.adversary.secondEyeModel, "string");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

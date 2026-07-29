@@ -142,7 +142,7 @@ oc-triaging-requests
 | Implementador | `executor-low` / `medium` / `high` | **mão** |
 | Autor do teste travado | `test-author` | mão |
 | Fiscal de critérios | `compliance` | olho |
-| Advogado do diabo | `adversary` (+ optional family-2 when secondEyeModel) | olho dual |
+| Advogado do diabo | `adversary` (+ optional family-2 when secondEyeModel) | olho |
 | Corretor cirúrgico | `sniper-*` | mão |
 | Segurança | `security` | olho |
 | Colheita de aprendizado | `harvester` | mão (docs) |
@@ -226,7 +226,7 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 2. Mostra o mapa atual (quem é olho / mão).  
 3. Presets **dual-safe** (dois providers):
    - `openai-ollama-default` — default shippado  
-   - `xai-ollama-dual` — olhos Grok + family-2/hands Ollama  
+   - `xai-ollama-dual` — olhos Grok + second eye opt-in/hands Ollama  
 4. Aplica em **todos** os pontos:  
    `harness.routing.json` · frontmatter de **todos** os agents · `AGENTS.md` §8 · `opencode.json`  
 5. **Reinicia a sessão.**
@@ -234,7 +234,7 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 **Regras duras (não são “dica”):**
 
 - Dual exige **providers diferentes** (não existe preset “tudo Grok”).  
-- Aplicar Grok num slot obrigatório do **source** do monorepo do harness exige flag explícita (CI bloqueia). O segundo par de olhos (family-2) já é Grok por default.  
+- Aplicar Grok num slot obrigatório do **source** do monorepo do harness exige flag explícita (CI bloqueia). O segundo olho (`secondEyeModel`) é **opt-in** (ausente por padrão); quando ligado, o stub `*-family-2` usa o modelo configurado.  
 - Preferir aplicar no **projeto** (`.opencode/`).
 
 Engine determinístico:  
@@ -301,7 +301,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Harvester bloqueado | `findings.md` ausente | Garantir que o loop gravou findings antes do harvest |
 | Comportamento “meio velho” | Update/routing sem restart | Reiniciar sessão OpenCode |
 
-**Dual de olho:** family-1 obrigatória; family-2 opcional e fail-open (se o 2º provider cair, segue com aviso — não inventa dual completo).
+**Avaliador único** por padrão. Segundo olho (`secondEyeModel`) é opt-in e fail-open (se o 2º provider cair, segue com aviso — não inventa dual completo).
 
 **Por que um olho falhou (forense):** quando um review/eye falha, o gate-state registra a causa **classificada** em `last_provider_diagnostic` (e conta em `review_failure_counts`) — `rate_limited`, `credit`, `unauthenticated`, `timeout`, `upstream_5xx` (5xx do provider), `provider_error` (desconhecido) ou `gate_blocked` (um portão **interno** do harness barrou, não é falha de provider). Assim dá pra distinguir “o xAI/Ollama caiu” de “bati num gate meu” sem caçar no log. O diagnóstico é sanitizado (sem segredos).
 

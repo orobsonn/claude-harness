@@ -212,7 +212,7 @@ describe("routing-validate", () => {
     }
   });
 
-  it("t1-v1-adapter: legacy dual routing becomes canonical v2 families", () => {
+  it("t1-v1-adapter: legacy dual routing becomes flat single evaluator + secondEyeModel", () => {
     const legacy = {
       ...structuredClone(defaultRouting),
       version: 1,
@@ -229,14 +229,13 @@ describe("routing-validate", () => {
     legacy.modelCapabilities["xai/grok-build-0.1"] = { supportsReasoningEffort: false };
     const adapted = adaptRoutingV1(legacy);
     assert.equal(adapted.version, 2);
-    assert.deepEqual(adapted.roles.adversary.families["family-1"], {
-      model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true,
-    });
-    assert.deepEqual(adapted.roles.adversary.families["family-2"], {
-      model: "ollama-cloud/kimi-k2.7-code", primary: false, optional: true, countsLoop: false,
+    assert.deepEqual(adapted.roles.adversary, {
+      model: "openai/gpt-5.6-sol",
+      secondEyeModel: "ollama-cloud/kimi-k2.7-code",
     });
     assert.equal(adapted.roles.build.model, "openai/gpt-5.6-sol");
     assert.equal(adapted.roles["test-author"].model, "ollama-cloud/glm-5.2");
+    assert.equal(adapted.constraints, undefined);
     assert.equal(Object.keys(adapted.modelCapabilities).some((model) => model.startsWith("xai/grok")), false);
     assert.equal(validateRouting(adapted).ok, true);
   });
@@ -252,7 +251,6 @@ describe("routing-validate", () => {
     for (const role of ["plan-reviewer", "adversary"]) {
       legacy.roles[role] = {
         model: "xai/grok-4.5",
-        timeout: 12_000,
         dual: [
           { model: "acme/not-grok-small", label: "custom-secondary" },
           { model: "xai/grok-4.3", label: "legacy-alternate" },
@@ -271,63 +269,21 @@ describe("routing-validate", () => {
       ["low", "medium", "high"].map((tier) => adapted.roles.executor.tiers[tier].model),
       ["ollama-cloud/gemma4:31b", "ollama-cloud/glm-5.2", "ollama-cloud/kimi-k2.7-code"],
     );
-    assert.equal(adapted.roles.adversary.families["family-1"].model, "openai/gpt-5.6-sol");
-    assert.equal(adapted.roles.adversary.families["family-1"].timeout, 12_000);
-    assert.equal(adapted.roles.adversary.families["family-2"].model, "acme/not-grok-small");
-    assert.equal(
-      adapted.roles.adversary.families["family-2"].alternates[0].model,
-      "ollama-cloud/kimi-k2.7-code",
-    );
+    assert.equal(adapted.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(adapted.roles.adversary.secondEyeModel, "acme/not-grok-small");
     assert.equal(validateRouting(adapted).ok, true);
   });
 
-  it("t1-v1-adapter-preserves: route extensions, labels, and additional dual entries survive deterministically", () => {
+  it("t1-v1-adapter: dual primary without secondary becomes single evaluator without secondEye", () => {
     const legacy = structuredClone(defaultRouting);
     legacy.version = 1;
-    legacy.modelCapabilities["third/model"] = { supportsReasoningEffort: false };
     for (const role of ["plan-reviewer", "adversary"]) {
-      legacy.roles[role] = {
-        model: "openai/gpt-5.6-sol",
-        reasoningEffort: "high",
-        timeout: 45_000,
-        extension: { trace: true },
-        label: "primary-label",
-        dual: [
-          { model: "ollama-cloud/kimi-k2.7-code", label: "secondary-label", timeout: 30_000 },
-          { model: "third/model", label: "fallback-label", custom: "kept" },
-        ],
-      };
+      legacy.roles[role] = { model: "openai/gpt-5.6-sol" };
     }
     const adapted = adaptRoutingV1(legacy);
-    const primary = adapted.roles.adversary.families["family-1"];
-    const secondary = adapted.roles.adversary.families["family-2"];
-    assert.equal(primary.reasoningEffort, "high");
-    assert.equal(primary.timeout, 45_000);
-    assert.deepEqual(primary.extension, { trace: true });
-    assert.equal(primary.label, "primary-label");
-    assert.equal(secondary.label, "secondary-label");
-    assert.equal(secondary.timeout, 30_000);
-    assert.deepEqual(secondary.alternates, [
-      { model: "third/model", label: "fallback-label", custom: "kept" },
-    ]);
-    assert.equal(primary.primary, true);
-    assert.equal(secondary.primary, false);
+    assert.deepEqual(adapted.roles.adversary, { model: "openai/gpt-5.6-sol" });
+    assert.equal(adapted.roles.adversary.secondEyeModel, undefined);
+    assert.equal(adapted.constraints, undefined);
     assert.equal(validateRouting(adapted).ok, true);
-  });
-
-  it("t1-v1-adapter-invalid: malformed additional dual entries remain visible to validation", () => {
-    const legacy = structuredClone(defaultRouting);
-    legacy.version = 1;
-    for (const role of ["plan-reviewer", "adversary"]) {
-      legacy.roles[role] = {
-        model: "openai/gpt-5.6-sol",
-        dual: [{ model: "ollama-cloud/kimi-k2.7-code" }, { label: "missing-model" }],
-      };
-    }
-    const adapted = adaptRoutingV1(legacy);
-    assert.deepEqual(adapted.roles.adversary.families["family-2"].alternates, [{ label: "missing-model" }]);
-    const result = validateRouting(adapted);
-    assert.equal(result.ok, false);
-    assert.match(result.reason, /invalid family-2 alternate/);
   });
 });

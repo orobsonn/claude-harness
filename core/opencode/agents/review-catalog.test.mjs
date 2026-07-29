@@ -87,6 +87,20 @@ test("internal review dispatch emits single primary; secondary only with secondE
     }),
     { primary: "adversary", secondary: "adversary-family-2" },
   );
+  // Legacy v2 families shape (vendored projects) must not lose the second eye silently.
+  assert.deepEqual(
+    reviewDispatchFor("adversary", {
+      roles: {
+        adversary: {
+          families: {
+            "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+            "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
+          },
+        },
+      },
+    }),
+    { primary: "adversary", secondary: "adversary-family-2" },
+  );
   for (const role of ["plan-reviewer", "adversary"]) {
     const dispatch = reviewDispatchFor(role);
     assert.doesNotMatch(`${dispatch.primary}`, /openai|anthropic|xai|ollama/i);
