@@ -439,6 +439,15 @@ export function harnessOcPluginFiles() {
   ];
 }
 
+/** @description Required harness plugins that exist in source but are absent after vendoring. */
+export function missingHarnessOcPluginFiles(openCodeDir, targetDir) {
+  return harnessOcPluginFiles().filter((entry) => {
+    const rel = entry.replace(/^\.\/\.opencode\//, "");
+    const absentRetiredSource = OC_RETIRED_FILES.includes(rel) && !existsSync(join(openCodeDir, rel));
+    return !absentRetiredSource && !existsSync(join(targetDir, entry.replace(/^\.\//, "")));
+  });
+}
+
 /**
  * @description Paths that belong in opencode.json plugin[] — empty for harness.
  * @returns {string[]}
@@ -837,7 +846,7 @@ function existsWithExactCase(dir, name) {
  * @param {string} ocDir
  * @param {string} sourceOcDir
  */
-function pruneOcRetiredFiles(ocDir, sourceOcDir) {
+export function pruneOcRetiredFiles(ocDir, sourceOcDir) {
   for (const rel of OC_RETIRED_FILES) {
     const source = join(sourceOcDir, rel);
     if (existsWithExactCase(dirname(source), rel.split("/").pop())) continue;
@@ -885,10 +894,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     ? join(targetDir, "opencode.harness.json")
     : join(targetDir, "opencode.json");
   // Harness plugins are auto-loaded from disk (.opencode/plugin/*) — not listed in plugin[].
-  const missingHarness = harnessOcPluginFiles().filter((entry) => {
-    const rel = entry.replace(/^\.\//, "");
-    return !existsSync(join(targetDir, rel));
-  });
+  const missingHarness = missingHarnessOcPluginFiles(openCodeDir, targetDir);
   if (missingHarness.length > 0) {
     fail(`FATAL — harness plugin files missing on disk (OC auto-load): ${missingHarness[0]}`);
   }

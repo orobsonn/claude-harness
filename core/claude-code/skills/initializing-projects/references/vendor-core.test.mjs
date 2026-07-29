@@ -36,6 +36,7 @@ import {
   pluginsAreRelative,
   defaultOcPluginPaths,
   harnessOcPluginFiles,
+  missingHarnessOcPluginFiles,
   isHarnessAutoloadPluginPath,
   normalizeRuntimeTarget,
   resolveProjectTarget,
@@ -44,6 +45,7 @@ import {
   installRepoFiles,
   assertFreshNativeInstall,
   OC_RETIRED_FILES,
+  pruneOcRetiredFiles,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -668,6 +670,38 @@ test("predeclared retired files remain vendored while their source still exists 
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a pruned source removes vendored zombies, tolerates absent targets, and no longer requires retired plugins (#576 ac-1.1/ac-1.3)", () => {
+  const root = mkdtempSync(join(tmpdir(), "vendor-oc-pruned-source-"));
+  const source = join(root, "core/opencode");
+  const target = join(root, "project");
+  const ocDir = join(target, ".opencode");
+  try {
+    mkdirSync(join(source, "plugin/lib"), { recursive: true });
+    mkdirSync(join(ocDir, "plugin/lib"), { recursive: true });
+    for (const entry of harnessOcPluginFiles()) {
+      const rel = entry.replace(/^\.\/\.opencode\//, "");
+      if (rel === "plugin/loop-guard.ts") continue;
+      mkdirSync(dirname(join(source, rel)), { recursive: true });
+      mkdirSync(dirname(join(target, entry.replace(/^\.\//, ""))), { recursive: true });
+      writeFileSync(join(source, rel), "// live\n", "utf8");
+      writeFileSync(join(target, entry.replace(/^\.\//, "")), "// live\n", "utf8");
+    }
+    writeFileSync(join(ocDir, "plugin/loop-guard.ts"), "// stale\n", "utf8");
+    writeFileSync(join(ocDir, "plugin/lib/dual-merge.mjs"), "// stale\n", "utf8");
+
+    assert.deepEqual(missingHarnessOcPluginFiles(source, target), []);
+    assert.doesNotThrow(() => pruneOcRetiredFiles(ocDir, source));
+    assert.ok(!existsSync(join(ocDir, "plugin/loop-guard.ts")));
+    assert.ok(!existsSync(join(ocDir, "plugin/lib/dual-merge.mjs")));
+    assert.doesNotThrow(() => pruneOcRetiredFiles(ocDir, source));
+
+    rmSync(join(ocDir, "plugin/entry-gate.ts"));
+    assert.deepEqual(missingHarnessOcPluginFiles(source, target), ["./.opencode/plugin/entry-gate.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -20,7 +20,7 @@ export function validateRouting(config) {
       return { ok: false, reason: "config must be object" };
     }
 
-    const required = ["version", "roles", "constraints", "modelCapabilities"];
+    const required = ["version", "roles", "modelCapabilities"];
     for (const k of required) {
       if (!(k in config)) return { ok: false, reason: `missing ${k}` };
     }
@@ -32,7 +32,7 @@ export function validateRouting(config) {
     }
 
     const constraints = config.constraints;
-    if (typeof constraints !== "object" || constraints === null || Array.isArray(constraints)) {
+    if (constraints !== undefined && (typeof constraints !== "object" || constraints === null || Array.isArray(constraints))) {
       return { ok: false, reason: "constraints must be object" };
     }
 
@@ -61,15 +61,19 @@ export function validateRouting(config) {
       }
     }
 
+    const usesFamilies = REVIEW_ROLES.some((role) => roles[role]?.families !== undefined);
     for (const key of ["requireDualOn", "crossFamilyRoles"]) {
-      if (!isExactReviewRoleList(constraints[key])) {
+      if ((usesFamilies || constraints?.[key] !== undefined) && !isExactReviewRoleList(constraints?.[key])) {
         return { ok: false, reason: `${key} must contain exactly plan-reviewer and adversary` };
       }
     }
 
     for (const role of REVIEW_ROLES) {
       const r = roles[role];
-      if (isModelRoute(r)) continue;
+      if (isModelRoute(r)) {
+        if (r.families !== undefined) return { ok: false, reason: `mixed review route on ${role}` };
+        continue;
+      }
       const families = r.families;
       if (!families || typeof families !== "object" || Array.isArray(families)) {
         return { ok: false, reason: `missing families on ${role}` };

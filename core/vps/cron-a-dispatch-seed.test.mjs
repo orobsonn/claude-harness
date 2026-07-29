@@ -547,6 +547,7 @@ test("seedOpencodeRootConfig: accepts routing v2 with single evaluators and no f
     const routing = structuredClone(CANONICAL_ROUTING);
     routing.roles["plan-reviewer"] = { model: "openai/gpt-5.6-sol" };
     routing.roles.adversary = { model: "openai/gpt-5.6-sol" };
+    delete routing.constraints;
     writeFileSync(
       join(projectRoot, "core", "opencode", "harness.routing.json"),
       JSON.stringify(routing),
@@ -1279,10 +1280,12 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-", { bare: true });
   try {
     writeVendoredOcRuntime(projectRoot);
+    rmSync(join(projectRoot, ".opencode", "plugin", "loop-guard.ts"));
     writeFileSync(join(projectRoot, ".opencode", "plugin", "entry-gate.ts"), "// source-of-truth\n", "utf8");
     writeFileSync(join(projectRoot, ".opencode", "plugin", "local-extra.ts"), "// project-local\n", "utf8");
     // Worktree has stale framework file + a non-framework extra that must survive merge-copy
     writeVendoredOcRuntime(worktree);
+    writeFileSync(join(worktree, ".opencode", "plugin", "loop-guard.ts"), "// retired zombie\n", "utf8");
     writeFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "// stale-worktree\n", "utf8");
     writeFileSync(join(worktree, ".opencode", "plugin", "local-extra.ts"), "// project-local\n", "utf8");
     writeFileSync(
@@ -1303,6 +1306,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
     assert.deepEqual(cfg.plugin, ["my-external-package"]);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/loop-guard.ts")), false);
     assertCriticalRuntime(worktree);
     assert.equal(
       readFileSync(join(worktree, ".opencode", "plugin", "entry-gate.ts"), "utf8"),
