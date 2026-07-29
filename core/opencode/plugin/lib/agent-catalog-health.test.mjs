@@ -22,6 +22,7 @@ test("EXPECTED_HARNESS_AGENTS includes core delivery roles", () => {
     "adversary-family-1",
     "adversary-family-2",
     "planner",
+    "plan-reviewer",
     "plan-reviewer-family-1",
     "plan-reviewer-family-2",
     "executor-low",

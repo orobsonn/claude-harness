@@ -46,17 +46,13 @@ function asLegacyRouting(routing) {
   legacy.modelCapabilities["xai/grok-4.3"] = { supportsReasoningEffort: true };
   legacy.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: true };
   legacy.modelCapabilities["xai/grok-build-0.1"] = { supportsReasoningEffort: false };
+  legacy.modelCapabilities["ollama-cloud/kimi-k2.7-code"] = { supportsReasoningEffort: false };
   for (const role of ["plan-reviewer", "adversary"]) {
-    const primary = { ...legacy.roles[role].families["family-1"] };
-    const secondary = { ...legacy.roles[role].families["family-2"] };
-    delete primary.primary;
-    delete primary.optional;
-    delete primary.countsLoop;
-    delete secondary.primary;
-    delete secondary.optional;
-    delete secondary.countsLoop;
-    primary.model = "xai/grok-4.5";
-    legacy.roles[role] = { ...primary, dual: [secondary] };
+    // v1 dual shape — adapter still emits families regardless of the current single-evaluator default
+    legacy.roles[role] = {
+      model: "xai/grok-4.5",
+      dual: [{ model: "ollama-cloud/kimi-k2.7-code" }],
+    };
   }
   return legacy;
 }
@@ -516,6 +512,7 @@ test("loadRoutingFromDisk adapts v1 and warns exactly once per path", () => {
     assert.equal(first.routing.roles.adversary.families["family-1"].model, "openai/gpt-5.6-sol");
     assert.equal(first.routing.roles.build.model, "openai/gpt-5.6-sol");
     assert.equal(first.routing.roles["test-author"].model, "ollama-cloud/glm-5.2");
+    assert.equal(first.routing.roles.adversary.families["family-2"].model, "ollama-cloud/kimi-k2.7-code");
     assert.equal(Object.keys(first.routing.modelCapabilities).some((model) => model.startsWith("xai/grok")), false);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /routing v1 compatibility adapter used/);

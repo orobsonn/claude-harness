@@ -20,6 +20,7 @@ function seedMiniOcRoot(root) {
     "build.md", "planner.md", "compliance.md", "security.md", "harvester.md", "shipper.md",
     "test-author.md", "executor-low.md", "executor-medium.md", "executor-high.md",
     "sniper-low.md", "sniper-medium.md", "sniper-high.md",
+    "plan-reviewer.md", "adversary.md",
     "plan-reviewer-family-1.md", "plan-reviewer-family-2.md",
     "adversary-family-1.md", "adversary-family-2.md",
   ]) {

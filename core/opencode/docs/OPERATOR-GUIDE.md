@@ -138,11 +138,11 @@ oc-triaging-requests
 | Maestro da sessão | `build` | coordenador |
 | Descoberta conversacional | `plan` | primary read-only |
 | Arquiteto do plano | `planner` | olho |
-| Revisor de plano | `plan-reviewer-family-1` (+ family-2) | olho dual |
+| Revisor de plano | `plan-reviewer` (+ optional family-2 when secondEyeModel) | olho |
 | Implementador | `executor-low` / `medium` / `high` | **mão** |
 | Autor do teste travado | `test-author` | mão |
 | Fiscal de critérios | `compliance` | olho |
-| Advogado do diabo | `adversary-family-1` (+ family-2) | olho dual |
+| Advogado do diabo | `adversary` (+ optional family-2 when secondEyeModel) | olho dual |
 | Corretor cirúrgico | `sniper-*` | mão |
 | Segurança | `security` | olho |
 | Colheita de aprendizado | `harvester` | mão (docs) |

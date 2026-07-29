@@ -72,6 +72,14 @@ export function validateRouting(config) {
       const r = roles[role];
       if (isModelRoute(r)) {
         if (r.families !== undefined) return { ok: false, reason: `mixed review route on ${role}` };
+        if (r.secondEyeModel !== undefined) {
+          if (typeof r.secondEyeModel !== "string" || !/^[^/\s]+\/\S+$/.test(r.secondEyeModel)) {
+            return { ok: false, reason: `invalid secondEyeModel on ${role}` };
+          }
+          if (r.secondEyeModel.split("/")[0] === r.model.split("/")[0]) {
+            return { ok: false, reason: `secondEyeModel provider must differ from model on ${role}` };
+          }
+        }
         continue;
       }
       const families = r.families;

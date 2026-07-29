@@ -20,14 +20,18 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
   harvester: (r) => r.harvester?.model,
   shipper: (r) => r.shipper?.model,
   "test-author": (r) => r["test-author"]?.model,
-  "plan-reviewer": (r) => r["plan-reviewer"]?.families?.["family-1"]?.model,
-  "plan-reviewer-family-1": (r) => r["plan-reviewer"]?.families?.["family-1"]?.model,
-  "plan-reviewer-family-2": (r) => r["plan-reviewer"]?.families?.["family-2"]?.model,
-  "plan-reviewer-openai": (r) => r["plan-reviewer"]?.families?.["family-2"]?.model,
-  adversary: (r) => r.adversary?.families?.["family-1"]?.model,
-  "adversary-family-1": (r) => r.adversary?.families?.["family-1"]?.model,
-  "adversary-family-2": (r) => r.adversary?.families?.["family-2"]?.model,
-  "adversary-openai": (r) => r.adversary?.families?.["family-2"]?.model,
+  "plan-reviewer": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
+  "plan-reviewer-family-1": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
+  "plan-reviewer-family-2": (r) =>
+    r["plan-reviewer"]?.secondEyeModel ?? r["plan-reviewer"]?.families?.["family-2"]?.model,
+  "plan-reviewer-openai": (r) =>
+    r["plan-reviewer"]?.secondEyeModel ?? r["plan-reviewer"]?.families?.["family-2"]?.model,
+  adversary: (r) => r.adversary?.model ?? r.adversary?.families?.["family-1"]?.model,
+  "adversary-family-1": (r) => r.adversary?.model ?? r.adversary?.families?.["family-1"]?.model,
+  "adversary-family-2": (r) =>
+    r.adversary?.secondEyeModel ?? r.adversary?.families?.["family-2"]?.model,
+  "adversary-openai": (r) =>
+    r.adversary?.secondEyeModel ?? r.adversary?.families?.["family-2"]?.model,
   "executor-low": (r) => r.executor?.tiers?.low?.model,
   "executor-medium": (r) => r.executor?.tiers?.medium?.model,
   "executor-high": (r) => r.executor?.tiers?.high?.model,
@@ -42,7 +46,7 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
  */
 export function listRoutingTouchpoints() {
   return Object.freeze([
-    "harness.routing.json (roles + modelCapabilities + constraints)",
+    "harness.routing.json (roles + modelCapabilities; optional secondEyeModel)",
     "agents/*.md frontmatter model: (all agents with model field — see AGENT_MODEL_RESOLVERS)",
     "AGENTS.md §8 Model routing table",
     "opencode.json / opencode.json.example model + small_model (when present next to root)",
@@ -77,6 +81,8 @@ export function collectRoutingModels(routing) {
     if (typeof roles.sniper?.tiers?.[tier]?.model === "string") out.push(roles.sniper.tiers[tier].model);
   }
   for (const review of ["plan-reviewer", "adversary"]) {
+    if (typeof roles[review]?.model === "string") out.push(roles[review].model);
+    if (typeof roles[review]?.secondEyeModel === "string") out.push(roles[review].secondEyeModel);
     for (const fam of ["family-1", "family-2"]) {
       if (typeof roles[review]?.families?.[fam]?.model === "string") {
         out.push(roles[review].families[fam].model);
@@ -111,11 +117,11 @@ export function withCapabilitiesForModels(routing, defaults = {}) {
 }
 
 /**
- * @description Build a valid dual-safe routing config from product slots.
- * family-1 and family-2 MUST be different providers (validator requirement).
+ * @description Build a single-evaluator routing config from product slots.
+ * secondaryEye is optional (maps to secondEyeModel); absent → no second eye.
  * @param {{
  *   primaryEye: string,
- *   secondaryEye: string,
+ *   secondaryEye?: string,
  *   supportEye?: string,
  *   hands?: { low: string, medium: string, high: string },
  *   testAuthor?: string,
@@ -159,15 +165,22 @@ export function buildRoutingFromSlots(slots) {
       }
     }
     const primaryEye = String(slots?.primaryEye ?? "").trim();
-    const secondaryEye = String(slots?.secondaryEye ?? "").trim();
+    const secondaryEyeRaw = slots?.secondaryEye;
+    const secondaryEye =
+      secondaryEyeRaw === undefined || secondaryEyeRaw === null || secondaryEyeRaw === ""
+        ? ""
+        : String(secondaryEyeRaw).trim();
     const supportEye = String(slots?.supportEye ?? primaryEye).trim();
-    if (!primaryEye.includes("/") || !secondaryEye.includes("/")) {
-      return { ok: false, reason: "primaryEye and secondaryEye must be provider/model slugs" };
+    if (!primaryEye.includes("/")) {
+      return { ok: false, reason: "primaryEye must be a provider/model slug" };
     }
-    if (providerOf(primaryEye) === providerOf(secondaryEye)) {
+    if (secondaryEye && !secondaryEye.includes("/")) {
+      return { ok: false, reason: "secondaryEye must be a provider/model slug when set" };
+    }
+    if (secondaryEye && providerOf(primaryEye) === providerOf(secondaryEye)) {
       return {
         ok: false,
-        reason: "dual exige providers diferentes (family-1 ≠ family-2). Escolha um secondaryEye de outro provider.",
+        reason: "second eye exige provider diferente do avaliador único. Escolha um secondaryEye de outro provider.",
       };
     }
     const hands = slots?.hands ?? {
@@ -180,12 +193,17 @@ export function buildRoutingFromSlots(slots) {
         return { ok: false, reason: `hands.${t} must be provider/model slug` };
       }
     }
-    const testAuthor = String(slots?.testAuthor ?? hands.medium).trim();
+    // test-author rides the eyes tier by default (oracle that makes cheap hands safe).
+    const testAuthor = String(slots?.testAuthor ?? primaryEye).trim();
     // Planner is primary-only by default (no model ladder). Opt-in via plannerFallback slug.
     const fallback =
       typeof slots?.plannerFallback === "string" && slots.plannerFallback.includes("/")
         ? { model: slots.plannerFallback }
         : undefined;
+
+    const reviewRole = secondaryEye
+      ? { model: primaryEye, secondEyeModel: secondaryEye }
+      : { model: primaryEye };
 
     /** @type {object} */
     const routing = {
@@ -193,38 +211,8 @@ export function buildRoutingFromSlots(slots) {
       roles: {
         build: { model: primaryEye },
         planner: fallback ? { model: primaryEye, fallback } : { model: primaryEye },
-        "plan-reviewer": {
-          families: {
-            "family-1": {
-              model: primaryEye,
-              primary: true,
-              optional: false,
-              countsLoop: true,
-            },
-            "family-2": {
-              model: secondaryEye,
-              primary: false,
-              optional: true,
-              countsLoop: false,
-            },
-          },
-        },
-        adversary: {
-          families: {
-            "family-1": {
-              model: primaryEye,
-              primary: true,
-              optional: false,
-              countsLoop: true,
-            },
-            "family-2": {
-              model: secondaryEye,
-              primary: false,
-              optional: true,
-              countsLoop: false,
-            },
-          },
-        },
+        "plan-reviewer": { ...reviewRole },
+        adversary: { ...reviewRole },
         compliance: { model: supportEye },
         security: { model: supportEye },
         executor: {
@@ -244,10 +232,6 @@ export function buildRoutingFromSlots(slots) {
         "test-author": { model: testAuthor },
         harvester: { model: supportEye },
         shipper: { model: supportEye },
-      },
-      constraints: {
-        crossFamilyRoles: ["plan-reviewer", "adversary"],
-        requireDualOn: ["plan-reviewer", "adversary"],
       },
       modelCapabilities: {},
     };
@@ -278,18 +262,8 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
   roles: {
     build: { model: "openai/gpt-5.6-terra" },
     planner: { model: "openai/gpt-5.6-sol" },
-    "plan-reviewer": {
-      families: {
-        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
-        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
-      },
-    },
-    adversary: {
-      families: {
-        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
-        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
-      },
-    },
+    "plan-reviewer": { model: "openai/gpt-5.6-sol" },
+    adversary: { model: "openai/gpt-5.6-sol" },
     compliance: { model: "openai/gpt-5.6-terra" },
     security: { model: "openai/gpt-5.6-sol" },
     executor: {
@@ -306,13 +280,9 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
         high: { model: "ollama-cloud/kimi-k2.7-code" },
       },
     },
-    "test-author": { model: "ollama-cloud/glm-5.2" },
+    "test-author": { model: "openai/gpt-5.6-sol" },
     harvester: { model: "openai/gpt-5.6-luna" },
     shipper: { model: "openai/gpt-5.6-luna" },
-  },
-  constraints: {
-    crossFamilyRoles: ["plan-reviewer", "adversary"],
-    requireDualOn: ["plan-reviewer", "adversary"],
   },
 });
 
@@ -342,43 +312,44 @@ function remapOpenAIEyesTo(routing, target) {
 }
 
 /**
- * @description Deep-clone a routing object, replacing the family-2 eye of every cross-family role.
- * Used to keep a derived preset dual-valid when its family-1 remap would otherwise collide with
- * the canonical family-2 provider.
+ * @description Deep-clone a routing object, setting or clearing secondEyeModel on review roles.
  * @param {object} routing
- * @param {string} model  provider/model slug for the secondary eye
+ * @param {string} model  provider/model slug for the optional second eye; empty clears it
  * @returns {object}
  */
-function withSecondaryEye(routing, model) {
+function withSecondEyeModel(routing, model) {
   const clone = structuredClone(routing);
-  for (const role of Object.values(clone.roles ?? {})) {
-    const secondary = role?.families?.["family-2"];
-    if (secondary && typeof secondary === "object") secondary.model = model;
+  for (const roleName of ["plan-reviewer", "adversary"]) {
+    const role = clone.roles?.[roleName];
+    if (!role || typeof role !== "object") continue;
+    if (typeof model === "string" && model.includes("/")) {
+      role.secondEyeModel = model;
+    } else {
+      delete role.secondEyeModel;
+    }
   }
   return clone;
 }
 
-/** @description Shipped dual-safe presets (all pass validateRouting), derived from the canonical layout. */
+/** @description Shipped single-evaluator presets (all pass validateRouting), derived from the canonical layout. */
 export function listPresets() {
   const openai = withCapabilitiesForModels(structuredClone(CANONICAL_DEFAULT_ROUTING), {
     perProvider: { openai: true },
   });
-  // The canonical family-2 eye is xAI, so remapping the family-1 eyes to xAI would collapse both
-  // families onto one provider (validator: "same provider across families"). Push family-2 back to
-  // the Ollama ladder — which is exactly what this preset's label promises.
+  // Grok eyes + optional Ollama second eye (fail-open) + Ollama hands.
   const xai = withCapabilitiesForModels(
-    withSecondaryEye(remapOpenAIEyesTo(CANONICAL_DEFAULT_ROUTING, "xai/grok-4.5"), "ollama-cloud/kimi-k2.7-code"),
+    withSecondEyeModel(remapOpenAIEyesTo(CANONICAL_DEFAULT_ROUTING, "xai/grok-4.5"), "ollama-cloud/kimi-k2.7-code"),
     { perProvider: { xai: true } },
   );
   return Object.freeze([
     {
       id: "openai-ollama-default",
-      label_pt: "Padrão dual — olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama",
+      label_pt: "Padrão — olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama",
       routing: openai,
     },
     {
       id: "xai-ollama-dual",
-      label_pt: "Olhos Grok (xAI, camadas colapsadas em grok-4.5) + family-2/hands Ollama (dual válido)",
+      label_pt: "Olhos Grok (xAI) + second eye/hands Ollama (segundo olho opt-in)",
       routing: xai,
     },
   ]);
@@ -440,10 +411,18 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
   if (typeof agentsMd !== "string") return { ok: false, reason: "AGENTS.md missing" };
   const roles = routing?.roles;
   if (!roles) return { ok: false, reason: "routing.roles missing" };
-  const f1 = roles["plan-reviewer"]?.families?.["family-1"]?.model;
-  const f2 = roles["plan-reviewer"]?.families?.["family-2"]?.model;
-  const a1 = roles.adversary?.families?.["family-1"]?.model;
-  const a2 = roles.adversary?.families?.["family-2"]?.model;
+  const planReviewer =
+    roles["plan-reviewer"]?.model ?? roles["plan-reviewer"]?.families?.["family-1"]?.model;
+  const adversary =
+    roles.adversary?.model ?? roles.adversary?.families?.["family-1"]?.model;
+  const secondEye =
+    roles.adversary?.secondEyeModel ??
+    roles["plan-reviewer"]?.secondEyeModel ??
+    roles.adversary?.families?.["family-2"]?.model ??
+    roles["plan-reviewer"]?.families?.["family-2"]?.model;
+  const secondEyeLine = secondEye
+    ? `Optional \`secondEyeModel\` \`${secondEye}\` is fail-open — never blocks delivery.`
+    : "Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.";
   const table = [
     "## 8. Model routing (operator default)",
     "",
@@ -451,8 +430,8 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
     "|---|---|",
     `| build | \`${roles.build?.model}\` |`,
     `| planner | \`${roles.planner?.model}\` |`,
-    `| plan-reviewer | required family 1 \`${f1}\` + optional family 2 \`${f2}\` |`,
-    `| adversary | required family 1 \`${a1}\` + optional family 2 \`${a2}\` |`,
+    `| plan-reviewer | \`${planReviewer}\` |`,
+    `| adversary | \`${adversary}\` |`,
     `| compliance | \`${roles.compliance?.model}\` |`,
     `| security | \`${roles.security?.model}\` |`,
     `| executor/sniper low | \`${roles.executor?.tiers?.low?.model}\` |`,
@@ -461,7 +440,7 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
     `| test-author | \`${roles["test-author"]?.model}\` |`,
     `| harvester / shipper | \`${roles.harvester?.model}\` |`,
     "",
-    "**Family 1 is mandatory; family 2 is optional and fail-open** on plan-reviewer and adversary (two `task` dispatches + shared merge when available).",
+    `**Single evaluator** on plan-reviewer and adversary. ${secondEyeLine}`,
     "Default hands use the Ollama Cloud ladder. Reconfigure via skill `oc-configuring-model-routing`.",
   ].join("\n");
 
@@ -620,15 +599,14 @@ export function applyRoutingToDisk(args) {
     const v2 = validateRouting(routing);
     if (!v2.ok) return { ok: false, reason: `validateRouting after caps: ${v2.reason}` };
 
-    // The optional family-2 eye is exempt — it is the shipped default there, and CI
-    // (model-routing.test) bans xAI/Grok only in the slots the harness requires.
-    const requiredSlotRouting = withSecondaryEye(routing, "");
+    // Optional secondEyeModel is exempt — CI bans xAI/Grok only in required slots.
+    const requiredSlotRouting = withSecondEyeModel(routing, "");
     const models = collectRoutingModels(requiredSlotRouting).filter(Boolean);
     if (mode === "source" && models.some(isXaiOrGrokModel) && args.forceCoreGrok !== true) {
       return {
         ok: false,
         reason:
-          "xAI/Grok models blocked on harness source outside the optional family-2 eye (CI model-routing.test). " +
+          "xAI/Grok models blocked on harness source outside the optional secondEyeModel (CI model-routing.test). " +
           "Apply to project .opencode/ or pass forceCoreGrok:true.",
       };
     }
@@ -648,19 +626,19 @@ export function applyRoutingToDisk(args) {
       };
     }
 
-    // Judgment eyes (required family-1 of plan-reviewer + adversary) are the harness
-    // safety net (strong-eyes-cheap-hands). A cheap model here silently downgrades the
+    // Judgment eyes (plan-reviewer + adversary) are the harness safety net
+    // (strong-eyes-cheap-hands). A cheap model here silently downgrades the
     // gate to a rubber stamp — floor them behind a dedicated confirm, never confirmWeakEyes.
     const judgmentModels = [
-      routing.roles?.["plan-reviewer"]?.families?.["family-1"]?.model,
-      routing.roles?.adversary?.families?.["family-1"]?.model,
+      routing.roles?.["plan-reviewer"]?.model ?? routing.roles?.["plan-reviewer"]?.families?.["family-1"]?.model,
+      routing.roles?.adversary?.model ?? routing.roles?.adversary?.families?.["family-1"]?.model,
     ].filter((m) => typeof m === "string");
     const weakJudgment = judgmentModels.filter((m) => !isStrongEyeModel(m));
     if (weakJudgment.length > 0 && args.confirmWeakJudgmentEyes !== true) {
       return {
         ok: false,
         reason:
-          `judgment eyes fracos (family-1 de plan-reviewer/adversary: ${weakJudgment.join(", ")}) — rebaixa o safety net do harness a carimbo; confirme com confirmWeakJudgmentEyes:true.`,
+          `judgment eyes fracos (plan-reviewer/adversary: ${weakJudgment.join(", ")}) — rebaixa o safety net do harness a carimbo; confirme com confirmWeakJudgmentEyes:true.`,
       };
     }
 

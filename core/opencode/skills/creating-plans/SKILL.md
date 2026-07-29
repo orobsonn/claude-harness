@@ -235,9 +235,9 @@ Read the harness routing (`harness.routing.json` / AGENTS.md). Freeze **abstract
 "model_strategy": {
   "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
   "planner": "planner",
-  "plan_reviewer": "plan-reviewer-family-1",
+  "plan_reviewer": "plan-reviewer",
   "compliance": "compliance",
-  "adversary": "adversary-family-1",
+  "adversary": "adversary",
   "security": "security",
   "shipper": "shipper",
   "harvester": "harvester"

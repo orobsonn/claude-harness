@@ -12,10 +12,8 @@ const ocRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(ocRoot, "../..");
 
 /**
- * The xAI/Grok ban covers every slot the harness REQUIRES: family-1 eyes, support eyes, hands,
- * build/planner. The optional `family-2` cross-family eye is exempt — it is fail-open (an
- * unauthenticated provider degrades the checkpoint to primary_only instead of breaking it), and a
- * second family that shares the first one's provider is worthless as an independent judgment.
+ * The xAI/Grok ban covers every required slot. Optional `secondEyeModel` is exempt —
+ * it is fail-open and absent by default.
  */
 function activeJsonModels(value, models = [], path = "") {
   if (Array.isArray(value)) {
@@ -24,23 +22,28 @@ function activeJsonModels(value, models = [], path = "") {
   }
   if (value == null || typeof value !== "object") return models;
   for (const [key, nested] of Object.entries(value)) {
-    if ((key === "model" || key === "small_model") && typeof nested === "string") {
-      models.push({ model: nested, path });
+    if ((key === "model" || key === "small_model" || key === "secondEyeModel") && typeof nested === "string") {
+      models.push({ model: nested, path: `${path}/${key}` });
     }
     activeJsonModels(nested, models, `${path}/${key}`);
   }
   return models;
 }
 
-/** Compatibility aliases that ARE the family-2 eye under a legacy filename. */
-const SECOND_FAMILY_ALIASES = new Set(["adversary-openai.md", "plan-reviewer-openai.md"]);
+/** Optional second-eye agent files (dispatched only when secondEyeModel is set). */
+const SECOND_EYE_AGENT_FILES = new Set([
+  "adversary-family-2.md",
+  "plan-reviewer-family-2.md",
+]);
 
-/** @description Model slugs in slots where xAI/Grok is banned (everything but the optional family-2 eye). */
+/** @description Model slugs in slots where xAI/Grok is banned (everything but optional second eye). */
 function requiredSlotModels(entries) {
   return entries
     .filter((entry) => {
+      if (entry.path.endsWith("/secondEyeModel") || entry.path.includes("secondEyeModel")) return false;
       if (entry.path.includes("family-2")) return false;
-      return !SECOND_FAMILY_ALIASES.has(entry.path.split("/").pop());
+      const base = entry.path.split("/").pop();
+      return !SECOND_EYE_AGENT_FILES.has(base);
     })
     .map((entry) => entry.model);
 }
@@ -61,18 +64,18 @@ test("active runtime model fields contain no xAI or Grok model", () => {
   assert.deepEqual(requiredSlotModels(active).filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
 });
 
-test("the optional family-2 cross-family eye is the only slot allowed to be xAI/Grok", () => {
+test("single evaluator eyes use Sol; secondEyeModel is absent by default", () => {
   const routing = JSON.parse(readFileSync(join(ocRoot, "harness.routing.json"), "utf8"));
-  for (const role of routing.constraints.crossFamilyRoles) {
-    const families = routing.roles[role].families;
-    assert.equal(families["family-2"].model, "xai/grok-4.5", `${role} family-2 must be the Grok eye`);
-    assert.equal(families["family-2"].optional, true, `${role} family-2 must stay fail-open`);
-    assert.notEqual(
-      families["family-1"].model.split("/")[0],
-      families["family-2"].model.split("/")[0],
-      `${role} families must stay on different providers`,
-    );
-  }
+  assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
+  assert.equal(routing.roles["plan-reviewer"].model, "openai/gpt-5.6-sol");
+  assert.equal(routing.roles.adversary.families, undefined);
+  assert.equal(routing.roles["plan-reviewer"].families, undefined);
+  assert.equal(routing.roles.adversary.secondEyeModel, undefined);
+  assert.equal(routing.roles["plan-reviewer"].secondEyeModel, undefined);
+  assert.equal(routing.constraints?.requireDualOn, undefined);
+  assert.equal(routing.constraints?.crossFamilyRoles, undefined);
+  // Evaluator may match planner — same as the Claude Code lane.
+  assert.equal(routing.roles.adversary.model, routing.roles.planner.model);
 });
 
 test("generated sidecar, vendored runtime, and VPS output expose only approved active models", () => {
@@ -109,26 +112,26 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
     }
     assert.deepEqual(requiredSlotModels(active).filter((model) => /(?:^xai\/|grok)/i.test(model)), []);
 
-    // OC auto-globs `.opencode/plugin/*.{ts,js}`, so vendoring strips harness paths from
-    // plugin[] (#402 — listing them too registered every hook factory twice). Delivery is
-    // proven by the file on disk; the empty array pins the no-double-load invariant.
     const merged = JSON.parse(readFileSync(join(vendored, "opencode.json"), "utf8"));
     assert.deepEqual(merged.plugin, []);
     assert.equal(existsSync(join(vendored, ".opencode", "plugin", "planner-recovery.ts")), true);
     for (const routingPath of [jsonPaths[1], jsonPaths[3]]) {
-      assert.equal(JSON.parse(readFileSync(routingPath, "utf8")).version, 2);
+      const routing = JSON.parse(readFileSync(routingPath, "utf8"));
+      assert.equal(routing.version, 2);
+      assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
+      assert.equal(routing.roles["test-author"].model, "openai/gpt-5.6-sol");
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("approved defaults and the shared test-author agent are active", () => {
+test("approved defaults and the shared test-author agent rides the eyes tier", () => {
   for (const relative of ["opencode.json", "core/opencode/opencode.json.example"]) {
     const config = JSON.parse(readFileSync(join(repoRoot, relative), "utf8"));
     assert.equal(config.model, "openai/gpt-5.6-terra");
     assert.equal(config.small_model, "openai/gpt-5.6-terra");
   }
   const body = readFileSync(join(ocRoot, "agents", "test-author.md"), "utf8");
-  assert.match(body, /^model: ollama-cloud\/glm-5\.2$/m);
+  assert.match(body, /^model: openai\/gpt-5\.6-sol$/m);
 });

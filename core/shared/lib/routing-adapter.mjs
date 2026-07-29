@@ -112,7 +112,15 @@ export function adaptRoutingV1(config) {
     }
   }
 
-  return { ...config, version: 2, roles: adaptedRoles, modelCapabilities };
+  const constraints = {
+    ...(config.constraints && typeof config.constraints === "object" && !Array.isArray(config.constraints)
+      ? config.constraints
+      : {}),
+    crossFamilyRoles: ["plan-reviewer", "adversary"],
+    requireDualOn: ["plan-reviewer", "adversary"],
+  };
+
+  return { ...config, version: 2, roles: adaptedRoles, modelCapabilities, constraints };
 }
 
 export default { adaptRoutingV1, migrateLegacyDefaultModel };

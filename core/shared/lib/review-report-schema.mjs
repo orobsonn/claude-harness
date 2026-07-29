@@ -114,31 +114,35 @@ export function validateAdversaryFinding(value) {
   return ADVERSARY_CATEGORIES.has(finding.category) && REVIEW_SEVERITIES.has(finding.severity);
 }
 
+/** @description Strip legacy dual-family marker before canonical key checks (ignored, never required). */
+function withoutLegacyFamily(report) {
+  if (!Object.hasOwn(report, "family")) return report;
+  const { family: _legacy, ...rest } = report;
+  return rest;
+}
+
 /** @description Validate one strict report against its logical role contract. */
-export function validateReviewReport(logicalRole, value, expectedFamily) {
+export function validateReviewReport(logicalRole, value) {
   const report = plain(value);
   if (!report) return { ok: false, reason: "report must be an object" };
+  const body = withoutLegacyFamily(report);
   if (logicalRole === "plan-reviewer") {
-    const allowedKeys = expectedFamily === 2 ? ["verdict", "family", "findings"] : ["verdict", "findings"];
-    if (!exactKeys(report, allowedKeys)) return { ok: false, reason: "plan-reviewer report keys are not canonical" };
-    if (!PLAN_REVIEW_VERDICTS.has(report.verdict)) return { ok: false, reason: "plan-reviewer verdict is not canonical" };
-    if (expectedFamily === 2 && report.family !== "family-2") return { ok: false, reason: "plan-reviewer family marker mismatch" };
-    if (!Array.isArray(report.findings) || !report.findings.every(validatePlanReviewFinding)) {
+    if (!exactKeys(body, ["verdict", "findings"])) return { ok: false, reason: "plan-reviewer report keys are not canonical" };
+    if (!PLAN_REVIEW_VERDICTS.has(body.verdict)) return { ok: false, reason: "plan-reviewer verdict is not canonical" };
+    if (!Array.isArray(body.findings) || !body.findings.every(validatePlanReviewFinding)) {
       return { ok: false, reason: "plan-reviewer finding is not canonical" };
     }
-    if (report.verdict === "REVISE" && report.findings.length === 0) return { ok: false, reason: "REVISE requires findings" };
-    return { ok: true, report, findings: report.findings };
+    if (body.verdict === "REVISE" && body.findings.length === 0) return { ok: false, reason: "REVISE requires findings" };
+    return { ok: true, report: body, findings: body.findings };
   }
   if (logicalRole === "adversary") {
-    const allowedKeys = expectedFamily === 2 ? ["family", "issues"] : ["issues"];
-    if (!exactKeys(report, allowedKeys)) return { ok: false, reason: "adversary report keys are not canonical" };
-    if (expectedFamily === 2 && report.family !== "family-2") return { ok: false, reason: "adversary family marker mismatch" };
-    if (!Array.isArray(report.issues) || !report.issues.every(validateAdversaryFinding)) {
+    if (!exactKeys(body, ["issues"])) return { ok: false, reason: "adversary report keys are not canonical" };
+    if (!Array.isArray(body.issues) || !body.issues.every(validateAdversaryFinding)) {
       return { ok: false, reason: "adversary finding is not canonical" };
     }
     // Normalize the derived field so the dispatch tier always matches severity, whatever the eye wrote.
-    const issues = report.issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) }));
-    const normalized = { ...report, issues };
+    const issues = body.issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) }));
+    const normalized = { ...body, issues };
     return { ok: true, report: normalized, findings: issues };
   }
   return { ok: false, reason: "unknown review role" };

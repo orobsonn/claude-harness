@@ -30,38 +30,76 @@ describe("routing-validate", () => {
     assert.match(result.reason, /invalid fallback model route on planner/);
   });
 
-  it("t1-family-missing: missing required family on adversary → error", () => {
-    const cfg = structuredClone(defaultRouting);
-    delete cfg.roles.adversary.families["family-1"];
-    const res = validateRouting(cfg);
-    assert.equal(res.ok, false);
-    assert.match(res.reason, /invalid required family-1 on adversary/);
+  it("t1-single-evaluator: default routing is flat { model } without families/constraints", () => {
+    assert.equal(defaultRouting.roles.adversary.model, "openai/gpt-5.6-sol");
+    assert.equal(defaultRouting.roles["plan-reviewer"].model, "openai/gpt-5.6-sol");
+    assert.equal(defaultRouting.roles.adversary.families, undefined);
+    assert.equal(defaultRouting.constraints, undefined);
+    assert.deepEqual(validateRouting(defaultRouting), { ok: true });
   });
 
-  it("#576: v2 review roles accept the new single-evaluator shape without families", () => {
+  it("#582: secondEyeModel is optional and must be a provider/model slug", () => {
+    const ok = structuredClone(defaultRouting);
+    ok.roles.adversary.secondEyeModel = "xai/grok-4.5";
+    ok.roles["plan-reviewer"].secondEyeModel = "xai/grok-4.5";
+    ok.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: false };
+    assert.deepEqual(validateRouting(ok), { ok: true });
+
+    const bad = structuredClone(defaultRouting);
+    bad.roles.adversary.secondEyeModel = "not-a-slug";
+    const result = validateRouting(bad);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /invalid secondEyeModel on adversary/);
+  });
+
+  it("#576: legacy families shape still validates when fully formed", () => {
     const cfg = structuredClone(defaultRouting);
-    cfg.roles["plan-reviewer"] = { model: "openai/gpt-5.6-sol" };
-    cfg.roles.adversary = { model: "openai/gpt-5.6-sol" };
-    delete cfg.constraints;
+    cfg.roles["plan-reviewer"] = {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
+      },
+    };
+    cfg.roles.adversary = {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
+      },
+    };
+    cfg.constraints = {
+      requireDualOn: ["plan-reviewer", "adversary"],
+      crossFamilyRoles: ["plan-reviewer", "adversary"],
+    };
+    cfg.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: false };
     assert.deepEqual(validateRouting(cfg), { ok: true });
   });
 
   it("#576: review roles cannot mix the simple and families shapes", () => {
     const cfg = structuredClone(defaultRouting);
-    cfg.roles.adversary.model = "openai/gpt-5.6-sol";
+    cfg.roles.adversary = {
+      model: "openai/gpt-5.6-sol",
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
+      },
+    };
+    cfg.constraints = {
+      requireDualOn: ["plan-reviewer", "adversary"],
+      crossFamilyRoles: ["plan-reviewer", "adversary"],
+    };
+    cfg.modelCapabilities["xai/grok-4.5"] = { supportsReasoningEffort: false };
     const result = validateRouting(cfg);
     assert.equal(result.ok, false);
     assert.match(result.reason, /mixed review route on adversary/);
   });
 
-  it("t1-required-shape: empty roles and input-controlled constraints cannot bypass canonical validation", () => {
+  it("t1-required-shape: empty roles cannot bypass canonical validation", () => {
     for (const mutate of [
       (cfg) => { cfg.roles = {}; },
-      (cfg) => { cfg.constraints.requireDualOn = []; },
-      (cfg) => { cfg.constraints.crossFamilyRoles = ["adversary"]; },
-      (cfg) => { delete cfg.roles["plan-reviewer"]; cfg.constraints.requireDualOn = ["adversary", "adversary"]; },
+      (cfg) => { delete cfg.roles["plan-reviewer"]; },
       (cfg) => { delete cfg.roles.build; },
       (cfg) => { delete cfg.roles.executor.tiers.high; },
+      (cfg) => { cfg.constraints = { requireDualOn: [] }; },
     ]) {
       const cfg = structuredClone(defaultRouting);
       mutate(cfg);
@@ -69,9 +107,25 @@ describe("routing-validate", () => {
     }
   });
 
-  it("t1-same-provider: same provider on dual pair → error", () => {
+  it("t1-same-provider: same provider on legacy dual pair → error", () => {
     const cfg = structuredClone(defaultRouting);
-    cfg.roles.adversary.families["family-2"].model = "openai/gpt-5.5";
+    cfg.roles.adversary = {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "openai/gpt-5.5", primary: false, optional: true, countsLoop: false },
+      },
+    };
+    cfg.roles["plan-reviewer"] = {
+      families: {
+        "family-1": { model: "openai/gpt-5.6-sol", primary: true, optional: false, countsLoop: true },
+        "family-2": { model: "xai/grok-4.5", primary: false, optional: true, countsLoop: false },
+      },
+    };
+    cfg.constraints = {
+      requireDualOn: ["plan-reviewer", "adversary"],
+      crossFamilyRoles: ["plan-reviewer", "adversary"],
+    };
+    cfg.modelCapabilities["openai/gpt-5.5"] = { supportsReasoningEffort: true };
     const res = validateRouting(cfg);
     assert.equal(res.ok, false);
     assert.match(res.reason, /same provider across families for adversary/);

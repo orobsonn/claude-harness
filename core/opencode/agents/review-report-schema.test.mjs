@@ -1,4 +1,4 @@
-/** @description Locks executable review schemas and active build-agent dual-status prose together. */
+/** @description Locks executable review schemas without dual-family markers. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -14,7 +14,7 @@ test("canonical schemas reject NOT_IN_SCHEMA enum values", () => {
       problem: "bad enum",
       planner_instruction: "do not count",
     }],
-  }, 1);
+  });
   assert.equal(plan.ok, false);
 
   const adversary = validateReviewReport("adversary", {
@@ -27,15 +27,11 @@ test("canonical schemas reject NOT_IN_SCHEMA enum values", () => {
       suggested_sniper_tier: "sniper-high",
       fix_hint: "src/file.ts:fn:change",
     }],
-  }, 1);
+  });
   assert.equal(adversary.ok, false);
 });
 
 test("a derived tier that disagrees with severity is NORMALIZED, never a reason to lose the report", () => {
-  // Live loss: a canonical adversary report with two real findings was thrown away whole because one
-  // said severity high with suggested_sniper_tier sniper-medium. The tier carries no information the
-  // report does not already state — asking the eye to restate it correctly only created a way to
-  // lose judgment. It is now derived from severity on the way in.
   const result = validateReviewReport("adversary", {
     issues: [
       {
@@ -57,13 +53,11 @@ test("a derived tier that disagrees with severity is NORMALIZED, never a reason 
         fix_hint: "src/db/leads.ts:update:rename",
       },
     ],
-  }, 1);
+  });
   assert.equal(result.ok, true, result.reason);
   assert.equal(result.findings[0].suggested_sniper_tier, "sniper-high", "high routes to sniper-high");
   assert.equal(result.findings[1].suggested_sniper_tier, "sniper-low", "low routes to sniper-low");
-  // Severity remains the gate axis and is untouched.
   assert.equal(result.findings[0].severity, "high");
-  // A genuinely broken enum still fails — the shape contract did not get looser.
   assert.equal(validateReviewReport("adversary", {
     issues: [{
       description: "bad severity",
@@ -74,7 +68,24 @@ test("a derived tier that disagrees with severity is NORMALIZED, never a reason 
       suggested_sniper_tier: "sniper-high",
       fix_hint: "src/a.ts:f:x",
     }],
-  }, 1).ok, false);
+  }).ok, false);
+});
+
+test("legacy family marker on a report is ignored, never required", () => {
+  const plan = validateReviewReport("plan-reviewer", {
+    verdict: "APPROVE",
+    family: "family-2",
+    findings: [],
+  });
+  assert.equal(plan.ok, true, plan.reason);
+  assert.equal(Object.hasOwn(plan.report, "family"), false);
+
+  const adversary = validateReviewReport("adversary", {
+    family: "family-2",
+    issues: [],
+  });
+  assert.equal(adversary.ok, true, adversary.reason);
+  assert.equal(Object.hasOwn(adversary.report, "family"), false);
 });
 
 test("build active dual contract uses primary_only and separate secondary failure fields", () => {

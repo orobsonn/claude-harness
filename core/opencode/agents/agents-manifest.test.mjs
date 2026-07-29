@@ -55,13 +55,7 @@ const REQUIRED_AGENTS = [
   "planner",
   "planner-fallback",
   "plan-reviewer",
-  "plan-reviewer-openai",
-  "plan-reviewer-family-1",
-  "plan-reviewer-family-2",
   "adversary",
-  "adversary-openai",
-  "adversary-family-1",
-  "adversary-family-2",
   "compliance",
   "security",
   "executor-low",
@@ -106,14 +100,8 @@ function expectedModels(routing) {
     plan: r.build.model,
     "harness-config": r.build.model,
     planner: r.planner.model,
-    "plan-reviewer": r["plan-reviewer"].families["family-1"].model,
-    "plan-reviewer-openai": r["plan-reviewer"].families["family-2"].model,
-    "plan-reviewer-family-1": r["plan-reviewer"].families["family-1"].model,
-    "plan-reviewer-family-2": r["plan-reviewer"].families["family-2"].model,
-    adversary: r.adversary.families["family-1"].model,
-    "adversary-openai": r.adversary.families["family-2"].model,
-    "adversary-family-1": r.adversary.families["family-1"].model,
-    "adversary-family-2": r.adversary.families["family-2"].model,
+    "plan-reviewer": r["plan-reviewer"].model,
+    adversary: r.adversary.model,
     compliance: r.compliance.model,
     security: r.security.model,
     "executor-low": r.executor.tiers.low.model,
@@ -144,28 +132,29 @@ test("t6-agents: required agent files exist including test-author.md", () => {
   );
 });
 
-/** The second-family eye is read from routing, not restated — the routing file is the single source. */
-const SECOND_FAMILY_EYE = JSON.parse(read(ROUTING_PATH)).roles["plan-reviewer"].families["family-2"].model;
-
-test("t6-dual-files: canonical family files and compatibility aliases exist", () => {
-  assert.ok(existsSync(join(AGENTS_DIR, "plan-reviewer-openai.md")));
-  assert.ok(existsSync(join(AGENTS_DIR, "adversary-openai.md")));
-  const pr = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-1.md")));
-  const pro = frontmatter(read(join(AGENTS_DIR, "plan-reviewer-family-2.md")));
-  const ad = frontmatter(read(join(AGENTS_DIR, "adversary-family-1.md")));
-  const ado = frontmatter(read(join(AGENTS_DIR, "adversary-family-2.md")));
+test("t6-single-evaluator-files: canonical eyes + compatibility alias stubs", () => {
+  assert.ok(existsSync(join(AGENTS_DIR, "plan-reviewer.md")));
+  assert.ok(existsSync(join(AGENTS_DIR, "adversary.md")));
+  for (const alias of [
+    "plan-reviewer-openai.md",
+    "adversary-openai.md",
+    "plan-reviewer-family-1.md",
+    "adversary-family-1.md",
+  ]) {
+    assert.ok(existsSync(join(AGENTS_DIR, alias)), `${alias} alias stub`);
+  }
+  // Optional second-eye agents exist for opt-in secondEyeModel dispatch
+  assert.ok(existsSync(join(AGENTS_DIR, "plan-reviewer-family-2.md")));
+  assert.ok(existsSync(join(AGENTS_DIR, "adversary-family-2.md")));
+  const pr = frontmatter(read(join(AGENTS_DIR, "plan-reviewer.md")));
+  const ad = frontmatter(read(join(AGENTS_DIR, "adversary.md")));
   assert.equal(fmField(pr, "model"), "openai/gpt-5.6-sol");
-  assert.equal(fmField(pro, "model"), SECOND_FAMILY_EYE);
   assert.equal(fmField(ad, "model"), "openai/gpt-5.6-sol");
-  assert.equal(fmField(ado, "model"), SECOND_FAMILY_EYE);
 });
 
-test("t6-build-prose: build.md contains dual-always protocol text", () => {
+test("t6-build-prose: build.md still documents dual_status / secondary failure fields", () => {
   const body = read(join(AGENTS_DIR, "build.md"));
-  assert.match(body, /dual-always|Dual-always|Always dual/i);
-  assert.match(body, /plan-reviewer-family-2/);
-  assert.match(body, /adversary-family-2/);
-  assert.match(body, /requireDualOn|ADR-003|policy B/i);
+  assert.match(body, /primary_only|dual_status|secondary_status/i);
 });
 
 test("t6-skills: required loop skills exist under core/opencode/skills", () => {

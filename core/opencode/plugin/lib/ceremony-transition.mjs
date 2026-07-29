@@ -7,6 +7,12 @@ import { ceremonyMarkerPatch } from "./ceremony-binding.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 import { gateStateDir, planDir } from "../../../shared/lib/path-helpers.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
+import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
+
+function isPrimaryAdversaryRole(role) {
+  const identity = reviewAgentIdentity(role);
+  return Boolean(identity && identity.logicalRole === "adversary" && identity.family === 1);
+}
 
 const PHASES = Object.freeze([
   { marker: "brainstormed", phase: "brainstorming", proof: "brainstorming_completion_evidence" },
@@ -55,11 +61,11 @@ function atomicJsonWrite(file, value) {
 /** @description Persist the trusted Task boundary result used by a later accepted adversary transition. */
 export function captureSpecAdversaryResult(root, { sessionId, featureId, generation, callId, role, output }) {
   if (![sessionId, featureId, generation, callId].every((value) => typeof value === "string" && value.length > 0)) return false;
-  if (role !== "adversary-family-1") return false;
+  if (!isPrimaryAdversaryRole(role)) return false;
   const result = typeof output === "string" ? output : JSON.stringify(output ?? "");
   if (!result.trim() || deniedReport(result)) return false;
   const report = parseReviewReportText(result);
-  if (!validateReviewReport("adversary", report, 1).ok) return false;
+  if (!validateReviewReport("adversary", report).ok) return false;
   const file = canonicalAdversaryPath(root, sessionId);
   if (!file) return false;
   return atomicJsonWrite(file, {
@@ -100,10 +106,10 @@ export function completionEvidence(root, state, marker) {
       if (
         !receipt || receipt.version !== 1 || receipt.session_id !== sessionId || receipt.feature_id !== featureId ||
         receipt.ceremony_generation !== generation ||
-        receipt.phase !== "spec-adversary" || receipt.role !== "adversary-family-1" ||
+        receipt.phase !== "spec-adversary" || !isPrimaryAdversaryRole(receipt.role) ||
         typeof receipt.call_id !== "string" || !receipt.call_id || typeof receipt.result !== "string" ||
         !receipt.result.trim() || deniedReport(receipt.result) || receipt.result_sha256 !== hash(receipt.result) ||
-        !validateReviewReport("adversary", parseReviewReportText(receipt.result), 1).ok
+        !validateReviewReport("adversary", parseReviewReportText(receipt.result)).ok
       ) return { ok: false, reason: "canonical spec-adversary result is invalid or identity-mismatched" };
       return { ok: true, evidence: {
         version: 1, session_id: sessionId, feature_id: featureId, ceremony_generation: generation, phase: "spec-adversary",

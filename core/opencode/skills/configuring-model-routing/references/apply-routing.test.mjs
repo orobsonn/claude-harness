@@ -91,13 +91,24 @@ test("every preset passes validateRouting", () => {
   }
 });
 
-test("buildRoutingFromSlots rejects same-provider dual", () => {
+test("buildRoutingFromSlots rejects same-provider second eye", () => {
   const bad = buildRoutingFromSlots({
     primaryEye: "openai/gpt-5.6-sol",
     secondaryEye: "openai/gpt-5.5",
   });
   assert.equal(bad.ok, false);
-  assert.match(bad.reason, /providers diferentes|dual/i);
+  assert.match(bad.reason, /providers diferentes|second eye|dual/i);
+});
+
+test("buildRoutingFromSlots accepts single evaluator without secondaryEye", () => {
+  const ok = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    supportEye: "openai/gpt-5.6-luna",
+  });
+  assert.equal(ok.ok, true, ok.reason);
+  assert.equal(ok.routing.roles.adversary.model, "openai/gpt-5.6-sol");
+  assert.equal(ok.routing.roles.adversary.secondEyeModel, undefined);
+  assert.equal(ok.routing.roles["test-author"].model, "openai/gpt-5.6-sol");
 });
 
 test("replaceFrontmatterModel updates model line only", () => {
@@ -204,7 +215,7 @@ function seedMiniOcRoot(root) {
   const agentsSrc = path.join(ocSource, "agents");
   const agentsDst = path.join(root, "agents");
   fs.mkdirSync(agentsDst, { recursive: true });
-  for (const f of ["build.md", "planner.md", "compliance.md", "security.md", "harvester.md", "shipper.md", "test-author.md", "executor-low.md", "executor-medium.md", "executor-high.md", "sniper-low.md", "sniper-medium.md", "sniper-high.md", "plan-reviewer-family-1.md", "plan-reviewer-family-2.md", "adversary-family-1.md", "adversary-family-2.md"]) {
+  for (const f of ["build.md", "planner.md", "compliance.md", "security.md", "harvester.md", "shipper.md", "test-author.md", "executor-low.md", "executor-medium.md", "executor-high.md", "sniper-low.md", "sniper-medium.md", "sniper-high.md", "plan-reviewer.md", "adversary.md", "plan-reviewer-family-1.md", "plan-reviewer-family-2.md", "adversary-family-1.md", "adversary-family-2.md"]) {
     fs.copyFileSync(path.join(agentsSrc, f), path.join(agentsDst, f));
   }
   // minimal routing + AGENTS for path resolve

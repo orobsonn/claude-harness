@@ -3,18 +3,18 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { validateRouting } from "../core/shared/lib/routing-validate.mjs";
 
-/** OC-canonical agent files (tiered executor/sniper). */
+/** OC-canonical agent files (tiered executor/sniper; single evaluator + alias stubs). */
 export const OC_REQUIRED_AGENTS = [
   "build",
   "planner",
   "plan-reviewer",
-  "plan-reviewer-openai",
   "plan-reviewer-family-1",
   "plan-reviewer-family-2",
+  "plan-reviewer-openai",
   "adversary",
-  "adversary-openai",
   "adversary-family-1",
   "adversary-family-2",
+  "adversary-openai",
   "compliance",
   "security",
   "executor-low",

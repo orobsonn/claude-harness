@@ -390,7 +390,7 @@ export function driveDualEye(opts) {
     } = opts ?? {};
 
     const postCfg = DUAL_POSTS[post] || null;
-    const primaryValidation = validateReviewReport(post, primaryResult, 1);
+    const primaryValidation = validateReviewReport(post, primaryResult);
     if (!postCfg || !primaryValidation.ok) {
       return {
         ok: false,
@@ -458,7 +458,7 @@ export function driveDualEye(opts) {
       };
 
       if (last.ok === true && last.result != null && typeof last.result === "object") {
-        const secondaryValidation = validateReviewReport(post, last.result, 2);
+        const secondaryValidation = validateReviewReport(post, last.result);
         if (!secondaryValidation.ok) {
           return primaryOnlyResult({
             dual_status: DUAL_STATUS.PRIMARY_ONLY,

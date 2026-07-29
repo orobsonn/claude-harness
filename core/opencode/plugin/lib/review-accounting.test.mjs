@@ -860,8 +860,10 @@ test("dual dispatch with official Task command/task_id does not deny reservation
     ));
     const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.review_inflight.length, 2);
-    assert.equal(persisted.review_inflight[0].canonical_identity, "plan-reviewer-family-1");
-    assert.equal(persisted.review_inflight[1].canonical_identity, "plan-reviewer-family-2");
+    assert.equal(persisted.review_inflight[0].canonical_identity, "plan-reviewer");
+    assert.equal(persisted.review_inflight[1].canonical_identity, "plan-reviewer");
+    assert.equal(persisted.review_inflight[0].family, 1);
+    assert.equal(persisted.review_inflight[1].family, 2);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

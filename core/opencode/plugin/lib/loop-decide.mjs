@@ -406,7 +406,7 @@ function reportClassification(response, logicalRole, family) {
   if (/\b(?:permission denied|access denied|tool denied|request denied)\b/i.test(source)) return { kind: "failure", failureClass: "denied" };
   const report = parseReviewReportText(source);
   if (!report) return { kind: "failure", failureClass: "malformed" };
-  const validated = validateReviewReport(logicalRole, report, family);
+  const validated = validateReviewReport(logicalRole, report);
   if (!validated.ok) return { kind: "failure", failureClass: "malformed", reason: validated.reason };
   return { kind: "useful", report, reportHash: digest(report), materialUnresolved: hasMaterialUnresolved(validated.findings) };
 }
