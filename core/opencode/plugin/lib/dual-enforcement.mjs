@@ -1,19 +1,17 @@
 /**
- * @description ADR-003 dual/plan_verdict classification for OC entry-gate / plan-gate.
- * Record-only (#483): the dual/plan_verdict gate left the Task dispatch surface entirely —
- * decideDualBeforeDelivery never denies a delivery hand (executor/sniper) anymore, mirroring
- * Claude Code, whose entry-gate has no dual_status concept in any dispatch decision at all.
- * A pending/missing dual_status, a non-APPROVE plan_verdict, or an unreadable/corrupt
- * gate-state all now behave identically: dispatch is allowed. `details` still reports
- * dual_status / plan_verdict / isFullDualCoverage / requireDualOn for observability, and
- * never invents secondary findings or leaks secondary verdicts.
+ * @description ADR-003 dual/plan_verdict classification helpers (record-only since #483).
+ * Generic utils (isTaskTool, extractSubagentType, extractHookTaskContext,
+ * isSafeSessionIdSegment, loadGateStateFromDisk) live in task-dispatch-identity /
+ * hook-identity / gate-state and are re-exported here (#580). plan-gate still calls
+ * enforceDualFromDiskOrThrow until #583 removes the dual block; entry-gate does not.
+ * decideDualBeforeDelivery never denies a delivery hand (executor/sniper), mirroring Claude
+ * Code. A pending/missing dual_status, a non-APPROVE plan_verdict, or an unreadable/corrupt
+ * gate-state all resolve to allow. `details` still reports dual_status / plan_verdict /
+ * isFullDualCoverage / requireDualOn for observability (incl. routing-v1 + unreadable warns).
  * Discipline around waiting for plan-review APPROVE before dispatching a writing hand is
- * prose + orchestration now, exactly like Claude Code (see lib/revise-nudge.mjs) — not a
- * runtime gate. The actual recording of dual_status/plan_verdict into gate-state is a
- * separate writer path (dual-merge.mjs / dual-nudge.mjs), untouched by this change.
- * Pure Decision returns — never throws. Disk loaders return Result (never throw).
- * Role matching is case-insensitive.
- * Production shells load gate-state from .opencode/plans/.state and routing from disk.
+ * prose + orchestration (see lib/revise-nudge.mjs). Recording dual_status/plan_verdict is a
+ * separate writer path (dual-merge.mjs / dual-nudge.mjs).
+ * Pure Decision returns — never throws. Role matching is case-insensitive.
  * dualStatusGatePatch / dualStatusGatePatchForPhase are the only allowed dual_status
  * writer shapes (enum only). No Map-only state.
  */
@@ -34,6 +32,23 @@ import {
 } from "../../../shared/lib/gate-state-shape.mjs";
 import { adaptRoutingV1 } from "../../../shared/lib/routing-adapter.mjs";
 import { validateRouting } from "../../../shared/lib/routing-validate.mjs";
+import {
+  isTaskTool,
+  extractSubagentType,
+} from "./task-dispatch-identity.mjs";
+import { extractHookTaskContext } from "./hook-identity.mjs";
+import {
+  isSafeSessionIdSegment,
+  loadGateStateFromDisk,
+} from "./gate-state.mjs";
+
+export {
+  isTaskTool,
+  extractSubagentType,
+  extractHookTaskContext,
+  isSafeSessionIdSegment,
+  loadGateStateFromDisk,
+};
 
 const warnedLegacyRoutingPaths = new Set();
 
@@ -52,9 +67,6 @@ export const DEFAULT_REQUIRE_DUAL_ON = Object.freeze([
 /** Matched against bareSubagentType() which is already lowercased. */
 const DELIVERY_HAND_PATTERN =
   /^(executor|sniper)(-low|-medium|-high|-max)?(-spawn)?$/;
-
-/** Session id safe for path segment (no traversal). Aligned with OC session ids (ses_…). */
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
 /**
  * @description Normalize subagent_type to bare role (strip namespace prefix, lowercase).
@@ -81,22 +93,6 @@ export function bareSubagentType(subagentType) {
 export function isDeliveryHandRequiringDual(subagentType) {
   const bare = bareSubagentType(subagentType);
   return bare.length > 0 && DELIVERY_HAND_PATTERN.test(bare);
-}
-
-/**
- * @description True when session id is safe as a single path segment.
- * @param {unknown} value
- * @returns {boolean}
- */
-export function isSafeSessionIdSegment(value) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
-    return false;
-  }
-  // Reject path traversal and separators before regex.
-  if (value.includes("..") || value.includes("/") || value.includes("\\")) {
-    return false;
-  }
-  return SAFE_SESSION_ID.test(value);
 }
 
 /**
@@ -395,94 +391,13 @@ export function decideDualBeforeDelivery(input = {}) {
 /**
  * @description Shell helper: classify dual state for logging. Record-only (#483) — never
  * throws, since decideDualBeforeDelivery never returns "deny" anymore. Kept as a thin,
- * stably-named wrapper (rather than inlining decideDualBeforeDelivery at call sites) so
- * entry-gate/plan-gate/the headless probe keep one unchanged import surface across this
- * change.
- * @param {string} prefix - e.g. "[entry-gate]" or "[plan-gate]"
+ * stably-named wrapper for dual tests and remaining dual callers until #583.
+ * @param {string} prefix - e.g. "[entry-gate]" or "[plan-gate]" (observability only)
  * @param {Parameters<typeof decideDualBeforeDelivery>[0]} input
  * @returns {ReturnType<typeof decideDualBeforeDelivery>}
  */
 export function enforceDualOrThrow(prefix, input = {}) {
   return decideDualBeforeDelivery(input);
-}
-
-/**
- * @description Extract subagent_type from OC task tool args (best-effort).
- * Role sources only: subagent_type / agent* aliases (flat + nested input).
- * Never reads official Task `command` or `task_id` — those are host resume fields.
- * Never throws.
- * @param {unknown} toolArgs
- * @returns {string}
- */
-export function extractSubagentType(toolArgs) {
-  try {
-    if (
-      toolArgs == null ||
-      typeof toolArgs !== "object" ||
-      Array.isArray(toolArgs)
-    ) {
-      return "";
-    }
-    const a = /** @type {Record<string, unknown>} */ (toolArgs);
-    const nested =
-      a.input != null && typeof a.input === "object" && !Array.isArray(a.input)
-        ? /** @type {Record<string, unknown>} */ (a.input)
-        : null;
-    const candidates = [
-      a.subagent_type,
-      a.subagentType,
-      a.agent,
-      a.agent_type,
-      a.subagent,
-      nested?.subagent_type,
-      nested?.subagentType,
-      nested?.agent,
-      nested?.agent_type,
-      nested?.subagent,
-    ];
-    for (const raw of candidates) {
-      if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
-    }
-    return "";
-  } catch {
-    return "";
-  }
-}
-
-/**
- * @description Whether tool name is the OC Task/agent dispatch family.
- * Canonical rule (shared with loop-guard, obs-hand, obs-eye): task | agent |
- * endsWith .task | .agent (case-insensitive).
- * @param {unknown} toolName
- * @returns {boolean}
- */
-export function isTaskTool(toolName) {
-  if (typeof toolName !== "string") return false;
-  const n = toolName.toLowerCase();
-  return (
-    n === "task" ||
-    n === "agent" ||
-    n.endsWith(".task") ||
-    n.endsWith(".agent")
-  );
-}
-
-/**
- * @description Extract task context from OC hook (input, output) shape for entry/plan gates.
- * tool from input?.tool; args from output?.args (NOT input.args as primary);
- * sessionID from input?.sessionID; subagentType via extractSubagentType(args).
- * If args only on first arg and second empty → subagentType empty (documents wrong shape).
- * @param {unknown} input
- * @param {unknown} output
- * @returns {{ toolName: string, toolArgs: unknown, sessionId: string | null, subagentType: string }}
- */
-export function extractHookTaskContext(input, output) {
-  const toolName = input?.tool ?? "";
-  // Belt: OC may put task args on output.args (primary) or input.args.
-  const toolArgs = output?.args ?? input?.args ?? null;
-  const sessionId = input?.sessionID ?? input?.sessionId ?? null;
-  const subagentType = extractSubagentType(toolArgs);
-  return { toolName, toolArgs, sessionId, subagentType };
 }
 
 /**
@@ -572,79 +487,11 @@ export function loadRoutingFromDisk(projectRoot) {
 }
 
 /**
- * @description Load gate-state.json from disk under `.opencode/plans/.state/`.
- * Requires explicit safe sessionId; explicit fail when missing (no cross-session mtime).
- * Fail-closed Result when unreadable. Never throws.
- * @param {string} projectRoot
- * @param {{ sessionId?: string | null }} [opts]
- * @returns {{ ok: true, state: unknown, path: string } | { ok: false, reason: string }}
- */
-export function loadGateStateFromDisk(projectRoot, opts = {}) {
-  try {
-    const root =
-      typeof projectRoot === "string" && projectRoot.length > 0
-        ? projectRoot
-        : process.cwd();
-    if (typeof root !== "string" || root.length === 0) {
-      return { ok: false, reason: "projectRoot missing" };
-    }
-    const stateRoot = path.join(root, ".opencode", "plans", ".state");
-    const sessionId = opts.sessionId;
-
-    /** @param {string} p */
-    function readStateFile(p) {
-      try {
-        if (!fs.existsSync(p)) {
-          // Missing file = empty ceremony (not yet classified), not infra failure.
-          // Fail-closed on dual/plan still applies via empty dual_status / missing plan.
-          return { ok: true, state: {}, path: p };
-        }
-        const raw = fs.readFileSync(p, "utf8");
-        const state = JSON.parse(raw);
-        if (state == null || typeof state !== "object" || Array.isArray(state)) {
-          return {
-            ok: false,
-            reason: `gate-state invalid JSON object at ${p}`,
-          };
-        }
-        return { ok: true, state, path: p };
-      } catch (err) {
-        return {
-          ok: false,
-          reason:
-            err instanceof Error
-              ? `gate-state-unreadable: ${err.message}`
-              : "gate-state-unreadable",
-        };
-      }
-    }
-
-    if (sessionId != null && sessionId !== "") {
-      if (!isSafeSessionIdSegment(sessionId)) {
-        return { ok: false, reason: "unsafe sessionId" };
-      }
-      const p = path.join(
-        stateRoot,
-        /** @type {string} */ (sessionId),
-        "gate-state.json",
-      );
-      return readStateFile(p);
-    }
-    return { ok: false, reason: "sessionId required for deterministic gate-state load" };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : "loadGateStateFromDisk failed",
-    };
-  }
-}
-
-/**
  * @description Load disk state for a delivery-hand task and classify dual state. Record-only
  * (#483) — never throws. An unreadable gate-state (missing sessionId, corrupt JSON, any
  * other disk-load fault) is shadow-recorded (logged) and treated identically to an absent
- * ceremony (#ac-1.3): classification proceeds against an empty state instead of failing
- * closed. Used by entry-gate / plan-gate shells.
+ * ceremony: classification proceeds against an empty state instead of failing closed.
+ * plan-gate still calls this until #583; entry-gate does not (#580 utils extracted).
  * @param {string} prefix
  * @param {{
  *   projectRoot: string,

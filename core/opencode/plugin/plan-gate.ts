@@ -2,7 +2,9 @@
  * @description OC plan-gate plugin — full plan required + ADR-003 dual classification.
  * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
  * Dual/plan_verdict classification (enforceDualFromDiskOrThrow) is record-only as of #483 — it
- * never denies dispatch; it only logs and reports dual_status/plan_verdict for observability.
+ * never denies dispatch; it only logs and reports dual_status/plan_verdict for observability
+ * (including routing-v1 migration warn + gate-state-unreadable warn). Generic utils no longer
+ * live in dual-enforcement (#580); the dual call itself is removed only in #583.
  * Discipline around waiting for plan-review APPROVE is prose + orchestration now (see
  * lib/revise-nudge.mjs), exactly like Claude Code, which has no dual gate on dispatch at all.
  * Deny throws [plan-gate] (from the plan-require block above; never from dual). Conditional on
@@ -43,7 +45,7 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
 }
 
 /**
- * @description Builds plan-gate hooks (async load of pure plan-decide + dual-enforcement mjs).
+ * @description Builds plan-gate hooks (async load of pure plan-decide + identity + dual mjs).
  */
 export async function createPlanGateHooks(
   projectRoot: string,
@@ -54,16 +56,14 @@ export async function createPlanGateHooks(
       : process.cwd()
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs")
   registerScopeComponent(root, "plan-gate")
-  const {
-    enforceDualFromDiskOrThrow,
-    extractHookTaskContext,
-    extractSubagentType,
-    isTaskTool,
-  } = await import("./lib/dual-enforcement.mjs")
+  const { extractSubagentType, isTaskTool, parseTaskDispatchIdentity } = await import(
+    "./lib/task-dispatch-identity.mjs",
+  )
+  const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
+  // Dual call retained until #583 — only the dual-specific surface stays here (#580 utils moved).
+  const { enforceDualFromDiskOrThrow } = await import("./lib/dual-enforcement.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
   const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs")
-  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
-  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const {
     bareRole,

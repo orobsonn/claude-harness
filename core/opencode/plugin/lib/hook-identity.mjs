@@ -1,5 +1,7 @@
 /** @description Resolve trusted runtime-envelope identity ahead of untrusted tool aliases. */
 
+import { extractSubagentType } from "./task-dispatch-identity.mjs";
+
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function records(value) {
@@ -95,4 +97,22 @@ export function resolveHookIdentity({ input, toolArgs, promptTaskId = "" } = {})
   return { ok: true, ...result };
 }
 
-export default { resolveIdentityAliases, resolveHookIdentity };
+/**
+ * @description Extract task context from OC hook (input, output) shape for entry/plan gates.
+ * tool from input?.tool; args from output?.args (NOT input.args as primary);
+ * sessionID from input?.sessionID; subagentType via extractSubagentType(args).
+ * If args only on first arg and second empty → subagentType empty (documents wrong shape).
+ * @param {unknown} input
+ * @param {unknown} output
+ * @returns {{ toolName: string, toolArgs: unknown, sessionId: string | null, subagentType: string }}
+ */
+export function extractHookTaskContext(input, output) {
+  const toolName = input?.tool ?? "";
+  // Belt: OC may put task args on output.args (primary) or input.args.
+  const toolArgs = output?.args ?? input?.args ?? null;
+  const sessionId = input?.sessionID ?? input?.sessionId ?? null;
+  const subagentType = extractSubagentType(toolArgs);
+  return { toolName, toolArgs, sessionId, subagentType };
+}
+
+export default { resolveIdentityAliases, resolveHookIdentity, extractHookTaskContext };

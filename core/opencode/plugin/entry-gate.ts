@@ -1,12 +1,14 @@
 /**
- * @description OC entry-gate plugin — ceremony + bash delivery/forge + ADR-003 dual.
+ * @description OC entry-gate plugin — ceremony + bash delivery/forge.
  * On tool.execute.before:
  * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
- *   (gate-state from disk)
+ *   (gate-state from disk via lib/gate-state.mjs)
  * - task: decideEntryTask for executor/sniper. Dual/plan_verdict classification (ADR-003) is
  *   record-only as of #483 and lives entirely in plan-gate.ts, which runs earlier in the
  *   plugin chain (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate) — a
- *   second call here would be dead code, never reached first.
+ *   second call here would be dead code, never reached first. Shared utils used by this
+ *   gate (isTaskTool, extractHookTaskContext, loadGateStateFromDisk) live outside
+ *   dual-enforcement (#580); #583 removes the dual block from plan-gate.
  * Deny throws [entry-gate]. Bash delivery is fail-OPEN on unreadable/missing gate-state and
  * on a missing/unsafe sessionId (Claude Code parity) — decideBashDelivery's own rails
  * (branch/zero-commits, regate, capture, real-file) still apply against the resulting {}.
@@ -178,17 +180,12 @@ export async function createEntryGateHooks(
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd()
-  const {
-    extractHookTaskContext,
-    isTaskTool,
-    loadGateStateFromDisk,
-  } = await import("./lib/dual-enforcement.mjs")
-  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
-  const { resolveHookIdentity } = await import("./lib/hook-identity.mjs")
+  const { isTaskTool, parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { withGateStateLock } = await import("./lib/gate-state.mjs")
+  const { loadGateStateFromDisk, withGateStateLock } = await import("./lib/gate-state.mjs")
   const {
     decideBashAdvisory,
     applyAdvisory,

@@ -16,17 +16,12 @@ import {
   isDeliveryHandRequiringDual,
   isFullDualCoverage,
   isRecordedDualAttempt,
-  isTaskTool,
-  extractSubagentType,
-  extractHookTaskContext,
   readRequireDualOn,
   readPlanVerdict,
   readDualStatus,
   dualStatusGatePatch,
-  loadGateStateFromDisk,
   loadRoutingFromDisk,
   enforceDualFromDiskOrThrow,
-  isSafeSessionIdSegment,
   DUAL_STATUS,
 } from "./dual-enforcement.mjs";
 import fs from "node:fs";
@@ -450,42 +445,7 @@ test("readRequireDualOn reads harness.routing constraints.requireDualOn", () => 
   assert.deepEqual(roles, ["plan-reviewer", "adversary"]);
 });
 
-test("extractSubagentType and isTaskTool parse OC task args including nested input", () => {
-  assert.equal(isTaskTool("task"), true);
-  assert.equal(isTaskTool("agent"), true);
-  assert.equal(isTaskTool("foo.task"), true);
-  assert.equal(isTaskTool("foo.agent"), true);
-  assert.equal(isTaskTool("Task"), true);
-  assert.equal(isTaskTool("bash"), false);
-  assert.equal(isTaskTool("my_task"), false);
-  assert.equal(
-    extractSubagentType({ subagent_type: "executor-high" }),
-    "executor-high",
-  );
-  assert.equal(
-    extractSubagentType({ input: { subagent_type: "sniper-low" } }),
-    "sniper-low",
-  );
-  assert.equal(
-    extractSubagentType({ subagent: "executor-medium" }),
-    "executor-medium",
-  );
-  // Official Task `command` is resume/host field — never harness role.
-  assert.equal(extractSubagentType({ command: "executor-high" }), "");
-  assert.equal(
-    extractSubagentType({
-      subagent_type: "plan-reviewer-family-1",
-      command: "resume-or-skill-command",
-      task_id: "official-resume-id",
-    }),
-    "plan-reviewer-family-1",
-  );
-});
-
-test("loadGateStateFromDisk and loadRoutingFromDisk read real files under project root", () => {
-  assert.equal(isSafeSessionIdSegment("ses_testDual123"), true);
-  assert.equal(isSafeSessionIdSegment("../evil"), false);
-
+test("enforceDualFromDiskOrThrow + loadRoutingFromDisk read real files under project root", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-enf-disk-"));
   try {
     const sessionId = "ses_testDual123";
@@ -506,27 +466,8 @@ test("loadGateStateFromDisk and loadRoutingFromDisk read real files under projec
       "utf8",
     );
 
-    const gsScan = loadGateStateFromDisk(root, {});
-    assert.equal(gsScan.ok, false, "missing sessionId must fail-closed");
-
-    const gs = loadGateStateFromDisk(root, { sessionId });
-    assert.equal(gs.ok, true, !gs.ok ? String(gs.reason) : "session ok");
-    if (gs.ok) {
-      assert.equal(
-        /** @type {{ dual_status: string }} */ (gs.state).dual_status,
-        "primary_only_failopen",
-      );
-    }
-
     const rt = loadRoutingFromDisk(root);
     assert.equal(rt.ok, true, !rt.ok ? String(rt.reason) : "routing ok");
-
-    const missing = loadGateStateFromDisk(root, {
-      sessionId: "ses_doesNotExist999",
-    });
-    // Missing file = empty ceremony state (not infra unreadable)
-    assert.equal(missing.ok, true);
-    assert.deepEqual(missing.state, {});
 
     const allowed = enforceDualFromDiskOrThrow("[plan-gate]", {
       projectRoot: root,
@@ -584,50 +525,13 @@ test("loadRoutingFromDisk adapts v1 and warns exactly once per path", () => {
   }
 });
 
-// ---- extractHookTaskContext (OC hook shape: input.tool + output.args) ----
-
-test("extractHookTaskContext({tool:'task',sessionID:'ses_x'},{args:{subagent_type:'executor-low'}}) returns toolName, subagentType, sessionId", () => {
-  const ctx = extractHookTaskContext(
-    { tool: "task", sessionID: "ses_x" },
-    { args: { subagent_type: "executor-low" } },
-  );
-  assert.equal(ctx.toolName, "task");
-  assert.equal(ctx.subagentType, "executor-low");
-  assert.equal(ctx.sessionId, "ses_x");
-  assert.deepEqual(ctx.toolArgs, { subagent_type: "executor-low" });
-});
-
-test("extractHookTaskContext belt-reads input.args when output.args missing", () => {
-  const ctx1 = extractHookTaskContext(
-    { tool: "task", args: { subagent_type: "executor-low" } },
-    {},
-  );
-  assert.equal(ctx1.subagentType, "executor-low");
-  assert.equal(ctx1.toolName, "task");
-
-  const ctx2 = extractHookTaskContext(
-    { tool: "task", args: { subagent_type: "adversary" } },
-    null,
-  );
-  assert.equal(ctx2.subagentType, "adversary");
-
-  const ctx3 = extractHookTaskContext({ tool: "task" }, {});
-  assert.equal(ctx3.subagentType, "");
-});
-
-test("loadGateStateFromDisk / loadRoutingFromDisk fall back to cwd when projectRoot empty", () => {
+test("loadRoutingFromDisk falls back to cwd when projectRoot empty", () => {
   const routing = loadRoutingFromDisk("");
   // cwd is this repo during tests — routing file may or may not exist under cwd;
   // critical: never fail with projectRoot missing when cwd is available.
   assert.notEqual(routing.ok === false && routing.reason === "projectRoot missing", true);
   if (!routing.ok) {
     assert.equal(/projectRoot missing/.test(routing.reason), false);
-  }
-
-  const gate = loadGateStateFromDisk("", { sessionId: "ses_testfallback01" });
-  assert.notEqual(gate.ok === false && gate.reason === "projectRoot missing", true);
-  if (!gate.ok) {
-    assert.equal(/projectRoot missing/.test(gate.reason), false);
   }
 });
 
@@ -644,90 +548,7 @@ test("enforceDualOrThrow with missing dual + executor-low is record-only allow, 
   assert.match(r.reason, /missing|dual_status/i);
 });
 
-// ---- task-1 locked tests: sessionId ceremony for load / extract / dual bind (no toolArgs rebind) ----
-
-test("lt-load-missing-sessionid — loadGateStateFromDisk without sessionId / null / empty → ok===false, reason matches /sessionId/", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-missing-sid-"));
-  try {
-    const r1 = loadGateStateFromDisk(root);
-    assert.equal(r1.ok, false);
-    assert.match(String(r1.reason || ""), /sessionId/);
-
-    const r2 = loadGateStateFromDisk(root, {});
-    assert.equal(r2.ok, false);
-    assert.match(String(r2.reason || ""), /sessionId/);
-
-    const r3 = loadGateStateFromDisk(root, { sessionId: null });
-    assert.equal(r3.ok, false);
-    assert.match(String(r3.reason || ""), /sessionId/);
-
-    const r4 = loadGateStateFromDisk(root, { sessionId: "" });
-    assert.equal(r4.ok, false);
-    assert.match(String(r4.reason || ""), /sessionId/);
-  } finally {
-    try {
-      fs.rmSync(root, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup
-    }
-  }
-});
-
-test("lt-load-unsafe-sessionid — unsafe sessionId like '../evil' → ok===false, reason matches /sessionId/ (contiguous token — current code says \"unsafe session id\" with space and WILL FAIL until production fix)", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-unsafe-sid-"));
-  try {
-    const r = loadGateStateFromDisk(root, { sessionId: "../evil" });
-    assert.equal(r.ok, false);
-    assert.match(String(r.reason || ""), /sessionId/);
-
-    assert.equal(isSafeSessionIdSegment("../evil"), false);
-  } finally {
-    try {
-      fs.rmSync(root, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup
-    }
-  }
-});
-
-test("lt-load-missing-file-empty-ceremony — safe S1 no file → ok===true, state {}", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-missingfile-"));
-  try {
-    const S1 = "ses_safeNoFile123";
-    // intentionally do not create dir or gate-state.json
-    const r = loadGateStateFromDisk(root, { sessionId: S1 });
-    assert.equal(r.ok, true);
-    assert.deepEqual(r.state, {});
-  } finally {
-    try {
-      fs.rmSync(root, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup
-    }
-  }
-});
-
-test("lt-extract-hook-sessionid-alias — extractHookTaskContext accepts sessionId camelCase AND sessionID; toolArgs.session_id alone does NOT set sessionId from extractHookTaskContext", () => {
-  const ctxUpper = extractHookTaskContext(
-    { tool: "task", sessionID: "ses_upperID" },
-    { args: { subagent_type: "executor-low" } },
-  );
-  assert.equal(ctxUpper.sessionId, "ses_upperID");
-
-  const ctxCamel = extractHookTaskContext(
-    { tool: "task", sessionId: "ses_camelId" },
-    { args: { subagent_type: "executor-low" } },
-  );
-  assert.equal(ctxCamel.sessionId, "ses_camelId");
-
-  // toolArgs must never populate sessionId in this extractor (hook input only)
-  const ctxArgs = extractHookTaskContext(
-    { tool: "task" },
-    { args: { session_id: "ses_fromToolArgsOnly" } },
-  );
-  assert.equal(ctxArgs.sessionId, null);
-  assert.equal(ctxArgs.toolName, "task");
-});
+// ---- task-1 locked tests: dual bind (no toolArgs rebind); util load/extract tests live in destination modules (#580) ----
 
 test("lt-dual-caller-bind-no-toolargs-rebind — enforceDualFromDiskOrThrow always allows now (#483), but still classifies against the CALLER's sessionId (S1), never rebinding to toolArgs.session_id (S2). When sessionId is explicitly null (unbound), gate-state load fails closed on sessionId (a separate, still-enforced identity concern) — shadow-recorded and classified against an empty state, never S2's favorable one", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dual-lt-callerbind-"));

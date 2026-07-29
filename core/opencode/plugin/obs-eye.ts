@@ -41,7 +41,7 @@ function extractResponse(input: any, output: any): string {
 export async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
-  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
+  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
   const {
     eventForEyeRole,
     isEyeRole,

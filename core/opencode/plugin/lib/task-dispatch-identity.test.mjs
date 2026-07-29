@@ -1,8 +1,12 @@
-/** @description Strict delimiter and JSON tests for official Task prompt identity. */
+/** @description Strict delimiter and JSON tests for official Task prompt identity + task tool identity. */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseTaskDispatchIdentity } from "./task-dispatch-identity.mjs";
+import {
+  parseTaskDispatchIdentity,
+  isTaskTool,
+  extractSubagentType,
+} from "./task-dispatch-identity.mjs";
 
 const OPEN = "[HARNESS_TASK_CONTEXT]";
 const CLOSE = "[/HARNESS_TASK_CONTEXT]";
@@ -36,4 +40,36 @@ test("task marker rejects malformed JSON and non-exact payload shape", () => {
     '{"task_id":"task-1","feature_id":"foreign"}',
     '{"task_id":"bad task"}',
   ]) assert.equal(parseTaskDispatchIdentity(`${OPEN}${body}${CLOSE}`).ok, false);
+});
+
+test("extractSubagentType and isTaskTool parse OC task args including nested input", () => {
+  assert.equal(isTaskTool("task"), true);
+  assert.equal(isTaskTool("agent"), true);
+  assert.equal(isTaskTool("foo.task"), true);
+  assert.equal(isTaskTool("foo.agent"), true);
+  assert.equal(isTaskTool("Task"), true);
+  assert.equal(isTaskTool("bash"), false);
+  assert.equal(isTaskTool("my_task"), false);
+  assert.equal(
+    extractSubagentType({ subagent_type: "executor-high" }),
+    "executor-high",
+  );
+  assert.equal(
+    extractSubagentType({ input: { subagent_type: "sniper-low" } }),
+    "sniper-low",
+  );
+  assert.equal(
+    extractSubagentType({ subagent: "executor-medium" }),
+    "executor-medium",
+  );
+  // Official Task `command` is resume/host field — never harness role.
+  assert.equal(extractSubagentType({ command: "executor-high" }), "");
+  assert.equal(
+    extractSubagentType({
+      subagent_type: "plan-reviewer-family-1",
+      command: "resume-or-skill-command",
+      task_id: "official-resume-id",
+    }),
+    "plan-reviewer-family-1",
+  );
 });

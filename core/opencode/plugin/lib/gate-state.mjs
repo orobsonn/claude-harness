@@ -5,6 +5,93 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 
+/** Session id safe for path segment (no traversal). Aligned with OC session ids (ses_…). */
+const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+/**
+ * @description True when session id is safe as a single path segment.
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isSafeSessionIdSegment(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
+    return false;
+  }
+  // Reject path traversal and separators before regex.
+  if (value.includes("..") || value.includes("/") || value.includes("\\")) {
+    return false;
+  }
+  return SAFE_SESSION_ID.test(value);
+}
+
+/**
+ * @description Load gate-state.json from disk under `.opencode/plans/.state/`.
+ * Requires explicit safe sessionId; explicit fail when missing (no cross-session mtime).
+ * Fail-closed Result when unreadable. Never throws.
+ * @param {string} projectRoot
+ * @param {{ sessionId?: string | null }} [opts]
+ * @returns {{ ok: true, state: unknown, path: string } | { ok: false, reason: string }}
+ */
+export function loadGateStateFromDisk(projectRoot, opts = {}) {
+  try {
+    const root =
+      typeof projectRoot === "string" && projectRoot.length > 0
+        ? projectRoot
+        : process.cwd();
+    if (typeof root !== "string" || root.length === 0) {
+      return { ok: false, reason: "projectRoot missing" };
+    }
+    const stateRoot = path.join(root, ".opencode", "plans", ".state");
+    const sessionId = opts.sessionId;
+
+    /** @param {string} p */
+    function readStateFile(p) {
+      try {
+        if (!fs.existsSync(p)) {
+          // Missing file = empty ceremony (not yet classified), not infra failure.
+          // Fail-closed on dual/plan still applies via empty dual_status / missing plan.
+          return { ok: true, state: {}, path: p };
+        }
+        const raw = fs.readFileSync(p, "utf8");
+        const state = JSON.parse(raw);
+        if (state == null || typeof state !== "object" || Array.isArray(state)) {
+          return {
+            ok: false,
+            reason: `gate-state invalid JSON object at ${p}`,
+          };
+        }
+        return { ok: true, state, path: p };
+      } catch (err) {
+        return {
+          ok: false,
+          reason:
+            err instanceof Error
+              ? `gate-state-unreadable: ${err.message}`
+              : "gate-state-unreadable",
+        };
+      }
+    }
+
+    if (sessionId != null && sessionId !== "") {
+      if (!isSafeSessionIdSegment(sessionId)) {
+        return { ok: false, reason: "unsafe sessionId" };
+      }
+      const p = path.join(
+        stateRoot,
+        /** @type {string} */ (sessionId),
+        "gate-state.json",
+      );
+      return readStateFile(p);
+    }
+    return { ok: false, reason: "sessionId required for deterministic gate-state load" };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "loadGateStateFromDisk failed",
+    };
+  }
+}
+
 /** @type {number} stale lock age (resolved_judgments.lock_stale_seconds) */
 export const LOCK_STALE_MS = 30_000;
 

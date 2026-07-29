@@ -52,7 +52,7 @@ export async function createObsHandHooks(
     isRegateArmingOutcome,
     armRegatePending,
   } = await import("./lib/regate-arm.mjs");
-  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
+  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
   registerScopeComponent(cwd, "obs-hand");

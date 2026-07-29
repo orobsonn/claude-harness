@@ -12,7 +12,7 @@ export async function createAgentIdleNudgeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { decide } = await import("./lib/agent-idle-nudge.mjs");
-  const { isTaskTool } = await import("./lib/dual-enforcement.mjs");
+  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
