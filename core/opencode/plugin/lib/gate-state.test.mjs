@@ -17,6 +17,8 @@ import {
   LOCK_STALE_MS,
   LOCK_TIMEOUT_MS,
   withGateStateLock,
+  isSafeSessionIdSegment,
+  loadGateStateFromDisk,
 } from "./gate-state.mjs";
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
 import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
@@ -626,4 +628,127 @@ test("lt-quick-no-ceremony-denies-executor-too: QUICK + classified + fidelity_pa
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /LIGHT or FULL/);
+});
+
+// ---------------------------------------------------------------------------
+// loadGateStateFromDisk / isSafeSessionIdSegment (moved from dual-enforcement #580)
+// ---------------------------------------------------------------------------
+
+test("isSafeSessionIdSegment accepts OC session ids and rejects traversal", () => {
+  assert.equal(isSafeSessionIdSegment("ses_testDual123"), true);
+  assert.equal(isSafeSessionIdSegment("../evil"), false);
+  assert.equal(isSafeSessionIdSegment("a/b"), false);
+  assert.equal(isSafeSessionIdSegment(""), false);
+});
+
+test("loadGateStateFromDisk reads real files under project root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-state-disk-"));
+  try {
+    const sessionId = "ses_testDual123";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "gate-state.json"),
+      JSON.stringify({
+        dual_status: "primary_only_failopen",
+        plan_verdict: "APPROVE",
+        feature_id: "oc-port-phase-2",
+      }),
+      "utf8",
+    );
+
+    const gsScan = loadGateStateFromDisk(root, {});
+    assert.equal(gsScan.ok, false, "missing sessionId must fail-closed");
+
+    const gs = loadGateStateFromDisk(root, { sessionId });
+    assert.equal(gs.ok, true, !gs.ok ? String(gs.reason) : "session ok");
+    if (gs.ok) {
+      assert.equal(
+        /** @type {{ dual_status: string }} */ (gs.state).dual_status,
+        "primary_only_failopen",
+      );
+    }
+
+    const missing = loadGateStateFromDisk(root, {
+      sessionId: "ses_doesNotExist999",
+    });
+    // Missing file = empty ceremony state (not infra unreadable)
+    assert.equal(missing.ok, true);
+    assert.deepEqual(missing.state, {});
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors on some FS
+    }
+  }
+});
+
+test("loadGateStateFromDisk falls back to cwd when projectRoot empty", () => {
+  const gate = loadGateStateFromDisk("", { sessionId: "ses_testfallback01" });
+  assert.notEqual(gate.ok === false && gate.reason === "projectRoot missing", true);
+  if (!gate.ok) {
+    assert.equal(/projectRoot missing/.test(gate.reason), false);
+  }
+});
+
+test("lt-load-missing-sessionid — loadGateStateFromDisk without sessionId / null / empty → ok===false, reason matches /sessionId/", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-lt-missing-sid-"));
+  try {
+    const r1 = loadGateStateFromDisk(root);
+    assert.equal(r1.ok, false);
+    assert.match(String(r1.reason || ""), /sessionId/);
+
+    const r2 = loadGateStateFromDisk(root, {});
+    assert.equal(r2.ok, false);
+    assert.match(String(r2.reason || ""), /sessionId/);
+
+    const r3 = loadGateStateFromDisk(root, { sessionId: null });
+    assert.equal(r3.ok, false);
+    assert.match(String(r3.reason || ""), /sessionId/);
+
+    const r4 = loadGateStateFromDisk(root, { sessionId: "" });
+    assert.equal(r4.ok, false);
+    assert.match(String(r4.reason || ""), /sessionId/);
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
+});
+
+test("lt-load-unsafe-sessionid — unsafe sessionId like '../evil' → ok===false, reason matches /sessionId/", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-lt-unsafe-sid-"));
+  try {
+    const r = loadGateStateFromDisk(root, { sessionId: "../evil" });
+    assert.equal(r.ok, false);
+    assert.match(String(r.reason || ""), /sessionId/);
+
+    assert.equal(isSafeSessionIdSegment("../evil"), false);
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
+});
+
+test("lt-load-missing-file-empty-ceremony — safe S1 no file → ok===true, state {}", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-lt-missingfile-"));
+  try {
+    const S1 = "ses_safeNoFile123";
+    // intentionally do not create dir or gate-state.json
+    const r = loadGateStateFromDisk(root, { sessionId: S1 });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.state, {});
+  } finally {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup
+    }
+  }
 });

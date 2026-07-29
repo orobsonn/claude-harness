@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveHookIdentity } from "./hook-identity.mjs";
+import { resolveHookIdentity, extractHookTaskContext } from "./hook-identity.mjs";
 
 test("conflicting untrusted task aliases resolve tolerantly to the first alias in priority order (#484)", () => {
   const result = resolveHookIdentity({
@@ -80,4 +80,57 @@ test("official Task.task_id alone does not become plan task without HARNESS_TASK
   assert.equal(result.ok, true);
   assert.equal(result.taskId, "");
   assert.equal(result.taskIdSource, "missing");
+});
+
+// ---- extractHookTaskContext (OC hook shape: input.tool + output.args) ----
+
+test("extractHookTaskContext({tool:'task',sessionID:'ses_x'},{args:{subagent_type:'executor-low'}}) returns toolName, subagentType, sessionId", () => {
+  const ctx = extractHookTaskContext(
+    { tool: "task", sessionID: "ses_x" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctx.toolName, "task");
+  assert.equal(ctx.subagentType, "executor-low");
+  assert.equal(ctx.sessionId, "ses_x");
+  assert.deepEqual(ctx.toolArgs, { subagent_type: "executor-low" });
+});
+
+test("extractHookTaskContext belt-reads input.args when output.args missing", () => {
+  const ctx1 = extractHookTaskContext(
+    { tool: "task", args: { subagent_type: "executor-low" } },
+    {},
+  );
+  assert.equal(ctx1.subagentType, "executor-low");
+  assert.equal(ctx1.toolName, "task");
+
+  const ctx2 = extractHookTaskContext(
+    { tool: "task", args: { subagent_type: "adversary" } },
+    null,
+  );
+  assert.equal(ctx2.subagentType, "adversary");
+
+  const ctx3 = extractHookTaskContext({ tool: "task" }, {});
+  assert.equal(ctx3.subagentType, "");
+});
+
+test("lt-extract-hook-sessionid-alias — extractHookTaskContext accepts sessionId camelCase AND sessionID; toolArgs.session_id alone does NOT set sessionId from extractHookTaskContext", () => {
+  const ctxUpper = extractHookTaskContext(
+    { tool: "task", sessionID: "ses_upperID" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctxUpper.sessionId, "ses_upperID");
+
+  const ctxCamel = extractHookTaskContext(
+    { tool: "task", sessionId: "ses_camelId" },
+    { args: { subagent_type: "executor-low" } },
+  );
+  assert.equal(ctxCamel.sessionId, "ses_camelId");
+
+  // toolArgs must never populate sessionId in this extractor (hook input only)
+  const ctxArgs = extractHookTaskContext(
+    { tool: "task" },
+    { args: { session_id: "ses_fromToolArgsOnly" } },
+  );
+  assert.equal(ctxArgs.sessionId, null);
+  assert.equal(ctxArgs.toolName, "task");
 });

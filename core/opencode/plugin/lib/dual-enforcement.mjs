@@ -1,11 +1,13 @@
 /**
  * @description ADR-003 dual/plan_verdict classification helpers (record-only since #483).
- * Dispatch shells (entry-gate / plan-gate) no longer import this module (#580) — generic
- * utils live in task-dispatch-identity / hook-identity / gate-state; dual block removal is #583.
+ * Generic utils (isTaskTool, extractSubagentType, extractHookTaskContext,
+ * isSafeSessionIdSegment, loadGateStateFromDisk) live in task-dispatch-identity /
+ * hook-identity / gate-state and are re-exported here (#580). plan-gate still calls
+ * enforceDualFromDiskOrThrow until #583 removes the dual block; entry-gate does not.
  * decideDualBeforeDelivery never denies a delivery hand (executor/sniper), mirroring Claude
  * Code. A pending/missing dual_status, a non-APPROVE plan_verdict, or an unreadable/corrupt
  * gate-state all resolve to allow. `details` still reports dual_status / plan_verdict /
- * isFullDualCoverage / requireDualOn for observability.
+ * isFullDualCoverage / requireDualOn for observability (incl. routing-v1 + unreadable warns).
  * Discipline around waiting for plan-review APPROVE before dispatching a writing hand is
  * prose + orchestration (see lib/revise-nudge.mjs). Recording dual_status/plan_verdict is a
  * separate writer path (dual-merge.mjs / dual-nudge.mjs).
@@ -489,7 +491,7 @@ export function loadRoutingFromDisk(projectRoot) {
  * (#483) — never throws. An unreadable gate-state (missing sessionId, corrupt JSON, any
  * other disk-load fault) is shadow-recorded (logged) and treated identically to an absent
  * ceremony: classification proceeds against an empty state instead of failing closed.
- * Dispatch shells no longer call this (#580); retained for dual tests until #583.
+ * plan-gate still calls this until #583; entry-gate does not (#580 utils extracted).
  * @param {string} prefix
  * @param {{
  *   projectRoot: string,
