@@ -203,7 +203,7 @@ test("OC orchestrating-delivery: the ceiling never outranks the stronger hand (#
 });
 
 test("OC orchestrating-delivery: the terminal is defined in Phase 3 too (#565 #ac-1.1)", () => {
-  // Phase 3's final dual review has no task and no `task_id`; a terminal written purely in terms of
+  // Phase 3's final review has no task and no `task_id`; a terminal written purely in terms of
   // "ends the task" / "that `task_id`'s rail" is undefined exactly in the phase whose surface is
   // the whole feature.
   assert.match(

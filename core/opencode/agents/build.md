@@ -40,26 +40,14 @@ CLI cheap-hand spawn uses the same exact tiered names as Task dispatch. Each sha
 | plan-reviewer | `plan-reviewer` (`openai/gpt-5.6-sol`) | `plan-reviewer-family-2` only when `secondEyeModel` set |
 | adversary | `adversary` (`openai/gpt-5.6-sol`) | `adversary-family-2` only when `secondEyeModel` set |
 
-**Runtime wiring:** pure module `skills/orchestrating-delivery/dual-runtime.mjs` (`driveDualEye`, `mergeDualFindings`, `mergeDualVerdicts`, `isFullDualCoverage`). Shared policy B via `core/shared/lib/merge-findings.mjs` + `merge-verdicts.mjs`.
-
 **Protocol (mandatory):**
 
 1. Dispatch **primary** eye (`plan-reviewer` / `adversary`).
-2. Dispatch **secondary** only when `roles.<post>.secondEyeModel` is set — virgin brief, fail-open, never blocking.
-3. When secondary ran, merge via `driveDualEye({ post, primaryResult, runSecondary, originalBrief })`.
-4. **Merge** via policy B: keep a finding unless the other family **explicitly refutes** it (`refutes` object). Never invent secondary findings.
-5. Record gate-state **`dual_status` enum only** — never a bare boolean `dual_completed: true`:
-   | Value | Meaning |
-   |---|---|
-   | `both` | primary + secondary ran; merge applied; **only this counts as full dual coverage** |
-   | `primary_only` | primary report is useful; secondary absent/disabled/failed; primary findings only |
-   | `pending` | dual required but not yet attempted |
-6. Auth/unavailable secondary → keep `primary_only` and record `secondary_status` + `secondary_failure_class` separately (no retry storm). Infra error → retry secondary once; if still failing keep `primary_only` with the failure fields. Continue unless primary itself failed.
-7. **`primary_only` must NOT count as full dual coverage** for metrics (`isFullDualCoverage` is true only for `both`).
-8. Surface operator warning in **pt-br product language** when fail-open (do not fake dual).
-9. Every review Task prompt must defer to the selected agent's exact output schema. Never request extra fields such as `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, or `blockers`; schema-invalid prose cannot become canonical evidence.
+2. Dispatch the optional second eye only when `roles.<post>.secondEyeModel` is set — virgin brief, advisory, fail-open, never blocking.
+3. The primary result remains authoritative. Route an adopted optional finding through the phase's normal remediation (plan-review finding → planner; adversary finding → sniper); never invent findings or wait on a failed optional eye.
+4. Every review Task prompt must defer to the selected agent's exact output schema. Never request extra fields such as `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, or `blockers`; schema-invalid prose cannot become canonical evidence.
 
-Compliance and security are **single-eye** by default (OpenAI evaluator family) unless routing enables dual later.
+Compliance and security are **single-eye**.
 
 ## Tools you run yourself (not via Task)
 
@@ -105,7 +93,7 @@ On the **first request of every session**, **load and follow the `oc-triaging-re
 
 Your **FIRST action of the top-level session is the tool call `skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
-**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap, provider error, dual failure). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
+**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap or provider error). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
 
 **Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models.
 
@@ -134,7 +122,7 @@ For **LIGHT** and **FULL**, the full delivery loop lives in the `oc-orchestratin
 skill({ name: "oc-orchestrating-delivery" })
 ```
 
-The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final dual review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and file writes. Plan files are written to `.opencode/plans/<sessionID>-<feature_id>/` — the `<sessionID>-` prefix is **mandatory**. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
+The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and file writes. Plan files are written to `.opencode/plans/<sessionID>-<feature_id>/` — the `<sessionID>-` prefix is **mandatory**. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
 
 **Mode mapping:** triage `LIGHT`/`FULL` → full plan `mode` is lowercase `light`/`full`. Never write uppercase triage modes into a full plan.
 
@@ -145,10 +133,10 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
 - [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
-- [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final dual review, both modes).
+- [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final review, both modes).
 - [ ] **adversary** — `adversary` (and optional `adversary-family-2` only when `secondEyeModel` is set) entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.
-- [ ] **Dual review** (compliance + dual adversary, feature-wide) completed; findings routed to tiered sniper; gates re-run after every fix.
+- [ ] **Final review** (compliance + adversary, feature-wide) completed; findings routed to tiered sniper; gates re-run after every fix.
 - [ ] **test-author** wrote locked tests before executor when the rail requires freeze; fidelity-pass stamped after compliance fidelity check.
 - [ ] **harvest** ran once at the end; ephemeral buffers deleted.
 - [ ] All tasks' gates green, or a product-level decision recorded for any accepted risk.

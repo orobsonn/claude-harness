@@ -18,7 +18,7 @@
  *
  * The third branch is the one the incident lacked: a spec-refinement loop must terminate in a
  * decision, never in a freeze. There is no deterministic cap any more — this instruction IS the
- * stop mechanism, and loop-guard records the escalation in gate-state plus the observability feed so
+ * stop mechanism, and review-guard records the escalation in gate-state plus the observability feed so
  * an ignored one is visible rather than silent. Emitted on `output.metadata` — the only prose channel the OC runtime
  * actually delivers (`decideLoopGuard`'s warn string has no consumer and must never be used).
  */
@@ -64,9 +64,8 @@ function currentSpecLoop(state, surfaceHash) {
 }
 
 /**
- * @description Decide the spec-adversary continuation instruction after a primary outcome.
- * Only the primary (loop-counting) family drives it — family 2 is optional and fail-open. Only the
- * SPEC pass qualifies: a per-task adversary (non-empty task_id) belongs to the implementation loop,
+ * @description Decide the spec-adversary continuation instruction after an adversary outcome.
+ * Only the SPEC pass qualifies: a per-task adversary (non-empty task_id) belongs to the implementation loop,
  * whose findings route to a sniper, not to a spec rewrite.
  * @param {{ state?: unknown, subagentType?: unknown, taskId?: unknown, surfaceHash?: unknown, overrides?: object }} input
  * @returns {{ action: "inject", kind: "accept" | "revise" | "escalate", round: number,
@@ -77,7 +76,6 @@ export function decideAdversaryNudge(input = {}) {
   const identity = reviewAgentIdentity(input.subagentType);
   if (!identity) return { action: "skip", reason: "not-a-review-agent" };
   if (identity.logicalRole !== "adversary") return { action: "skip", reason: "not-adversary" };
-  if (identity.primary !== true) return { action: "skip", reason: "secondary-family-never-drives-the-loop" };
   const taskId = typeof input.taskId === "string" ? input.taskId.trim() : "";
   if (taskId) return { action: "skip", reason: "per-task-adversary-is-not-the-spec-loop" };
 

@@ -34,8 +34,34 @@ async function assertNoHarnessPluginPaths(cfgPath) {
 }
 
 test("core/opencode/plugin files auto-glob cleanly and stay unlisted in opencode.json.example", async () => {
-  await assertPluginDir(join(root, "core/opencode/plugin"));
+  const pluginDir = join(root, "core/opencode/plugin");
+  await assertPluginDir(pluginDir);
+  assert.equal(existsSync(join(pluginDir, "review-guard.ts")), true, "review guard must remain auto-loaded");
+  assert.equal(existsSync(join(pluginDir, "loop-guard.ts")), false, "retired loop-guard path must be absent");
   await assertNoHarnessPluginPaths(join(root, "core/opencode/opencode.json.example"));
+});
+
+test("retired dual modules are absent while review accounting modules remain", () => {
+  const ocRoot = join(root, "core/opencode");
+  for (const relativePath of [
+    "plugin/lib/dual-merge.mjs",
+    "plugin/lib/dual-merge.test.mjs",
+    "plugin/lib/dual-nudge.mjs",
+    "plugin/lib/dual-enforcement.mjs",
+    "plugin/lib/dual-enforcement.test.mjs",
+    "skills/orchestrating-delivery/dual-runtime.mjs",
+    "skills/orchestrating-delivery/dual-runtime.test.mjs",
+  ]) {
+    assert.equal(existsSync(join(ocRoot, relativePath)), false, `retired path remains: ${relativePath}`);
+  }
+  for (const relativePath of [
+    "plugin/review-guard.ts",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/marker-seal.mjs",
+  ]) {
+    assert.equal(existsSync(join(ocRoot, relativePath)), true, `required path missing: ${relativePath}`);
+  }
 });
 
 test("dogfood .opencode/plugin auto-globs cleanly and stays unlisted in root opencode.json", async () => {

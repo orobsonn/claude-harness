@@ -399,13 +399,13 @@ test("a dead call's claim on disk does not block a fresh dispatch, and its plan 
   });
 });
 
-test("chain: a spec-adversary open risk recorded by loop-guard reaches the planner's PROMPT", async () => {
+test("chain: a spec-adversary open risk recorded by review-guard reaches the planner's PROMPT", async () => {
   // Three links were tested separately (the snapshot write, the brief render, the nonce wiring) but
   // never composed. This is the mechanism that keeps an ACCEPTED risk alive; if the chain breaks
   // anywhere, accepting a risk silently means losing it.
   await tempRun(false, async ({ root, stateFile }) => {
-    const { createLoopGuardHooks } = await import("./loop-guard.ts");
-    const loop = await createLoopGuardHooks(root);
+    const { createReviewGuardHooks } = await import("./review-guard.ts");
+    const review = await createReviewGuardHooks(root);
     // The spec pass runs BEFORE the ceremony marker is stamped.
     const pre = JSON.parse(fs.readFileSync(stateFile, "utf8"));
     fs.writeFileSync(stateFile, JSON.stringify({ ...pre, adversary_fired: false }));
@@ -422,8 +422,8 @@ test("chain: a spec-adversary open risk recorded by loop-guard reaches the plann
         fix_hint: "src/db/vault.ts:writeToTable:reject non-integer timestamps",
       }] }),
     };
-    await loop["tool.execute.before"](advInput, advOutput);
-    await loop["tool.execute.after"](advInput, advOutput);
+    await review["tool.execute.before"](advInput, advOutput);
+    await review["tool.execute.after"](advInput, advOutput);
     const persisted = JSON.parse(fs.readFileSync(stateFile, "utf8"));
     assert.equal(persisted.spec_adversary_open_risks[0].scope, "src/db/vault.ts");
 

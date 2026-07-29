@@ -1,12 +1,12 @@
-/** @description OC loop guard: useful family-1 reports count only after execution. */
+/** @description OC review guard: useful primary reports count only after execution. */
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
 import crypto from "node:crypto"
 import fs from "node:fs"
 
 /**
- * @description Builds loop-guard hooks (async load of pure mjs).
+ * @description Builds review-guard hooks (async load of pure mjs).
  */
-export async function createLoopGuardHooks(
+export async function createReviewGuardHooks(
   directory: string,
 ): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const dirSafe =
@@ -27,11 +27,6 @@ export async function createLoopGuardHooks(
   const { withGateStateLock } = await import("./lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath, planDir } = await import("../../shared/lib/path-helpers.mjs")
-  // Host dual-merge path (#384): finalizeHostDualMerge → driveDualEye (dual-runtime) — not skill-only.
-  const {
-    dualMergeIntentFromOutcome,
-    finalizeHostDualMerge,
-  } = await import("./lib/dual-merge.mjs")
   const { extractSubagentType, isTaskTool, parseTaskDispatchIdentity } = await import(
     "./lib/task-dispatch-identity.mjs",
   )
@@ -153,8 +148,6 @@ export async function createLoopGuardHooks(
     } else if (sub) {
       recordAgentRetry(sessionID, callID, sub, taskId, "success")
     }
-    /** @type {ReturnType<typeof dualMergeIntentFromOutcome>} */
-    let mergeIntent: ReturnType<typeof dualMergeIntentFromOutcome> = null
     const model =
       typeof args?.model === "string"
         ? args.model
@@ -176,9 +169,6 @@ export async function createLoopGuardHooks(
         error: rawError,
         model,
       })
-      if (outcome.dualBecameBoth === true) {
-        mergeIntent = dualMergeIntentFromOutcome(outcome)
-      }
       return outcome.state
     })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
@@ -235,18 +225,6 @@ export async function createLoopGuardHooks(
       }
     } catch {
       /* fail-open — a nudge never blocks review accounting */
-    }
-    // Fail-open: merge artifact is audit trail; gate dual_status / plan_verdict already sealed.
-    if (mergeIntent) {
-      try {
-        finalizeHostDualMerge({
-          projectRoot: dirSafe,
-          sessionId: sessionID,
-          ...mergeIntent,
-        })
-      } catch {
-        /* never block review accounting on merge write */
-      }
     }
   }
 
@@ -374,9 +352,9 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
   return process.cwd()
 }
 
-export const LoopGuard: Plugin = async ({ directory, worktree }: any) => {
+export const ReviewGuard: Plugin = async ({ directory, worktree }: any) => {
   if (process.env.OC_LOOP_GUARD_OFF === "1") return {}
-  return createLoopGuardHooks(resolveProjectRoot(directory, worktree))
+  return createReviewGuardHooks(resolveProjectRoot(directory, worktree))
 }
 
-export default LoopGuard
+export default ReviewGuard

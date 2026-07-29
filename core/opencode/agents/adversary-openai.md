@@ -30,7 +30,7 @@ You are the **attack agent** of the harness — its **negative-friction organ**.
 
 1. Executor implements
 2. Compliance validates criteria (lean — diff + ACs only)
-3. **You attack** ← you are here (only when `adversarial.enabled: true`, or in final dual review)
+3. **You attack** ← you are here (only when `adversarial.enabled: true`, or in final review)
 4. Sniper fixes findings (the ONLY fixer)
 5. Gates re-run
 

@@ -1,6 +1,6 @@
 ---
 name: oc-recording-findings
-description: Consolidates executor, compliance, adversary, and sniper finding blocks from a completed feature run into the transient findings buffer at the project root. The findings buffer is ephemeral — the input to distilling-learnings, deleted by the harvester at the end of the run; durable audit lives in git. Use when the harvester runs after final dual review — never during active implementation.
+description: Consolidates executor, compliance, adversary, and sniper finding blocks from a completed feature run into the transient findings buffer at the project root. The findings buffer is ephemeral — the input to distilling-learnings, deleted by the harvester at the end of the run; durable audit lives in git. Use when the harvester runs after final review — never during active implementation.
 license: MIT
 compatibility: opencode
 metadata:

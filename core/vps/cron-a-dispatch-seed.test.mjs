@@ -31,7 +31,7 @@ const CANONICAL_STUBS = [
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",
-  "loop-guard.ts",
+  "review-guard.ts",
   "reinject-state.ts",
   "version-check.ts",
   "harvest-guard.ts",
@@ -1278,7 +1278,6 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-vendored-", { bare: true });
   try {
     writeVendoredOcRuntime(projectRoot);
-    rmSync(join(projectRoot, ".opencode", "plugin", "loop-guard.ts"));
     writeFileSync(join(projectRoot, ".opencode", "plugin", "entry-gate.ts"), "// source-of-truth\n", "utf8");
     writeFileSync(join(projectRoot, ".opencode", "plugin", "local-extra.ts"), "// project-local\n", "utf8");
     // Worktree has stale framework file + a non-framework extra that must survive merge-copy
@@ -1304,6 +1303,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
     assert.deepEqual(cfg.plugin, ["my-external-package"]);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/loop-guard.ts")), false);
     assertCriticalRuntime(worktree);
     assert.equal(

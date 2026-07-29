@@ -18,8 +18,6 @@ function sealGateState(gateState) {
   const state = { session_id: SESSION, ...gateState }
   const featureId = typeof state.feature_id === "string" ? state.feature_id : FEATURE
   const markerSeals = Array.isArray(state.marker_seals) ? [...state.marker_seals] : []
-  if (typeof state.dual_status === "string") markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "dual", payload: state.dual_status }))
-  if (typeof state.plan_verdict === "string") markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "plan_verdict", payload: state.plan_verdict }))
   if (state.brainstormed === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "brainstormed", payload: true }))
   if (state.adversary_fired === true) markerSeals.push(sealedMarkerRecord({ sessionId: SESSION, featureId, operation: "adversary_fired", payload: true }))
   state.marker_seals = markerSeals
@@ -71,14 +69,6 @@ function seedProject(root, gateState, plan) {
     JSON.stringify(sealGateState(gateState)),
     "utf8",
   )
-  fs.mkdirSync(path.join(root, ".opencode"), { recursive: true })
-  fs.writeFileSync(
-    path.join(root, ".opencode", "harness.routing.json"),
-    JSON.stringify({
-      constraints: { requireDualOn: ["plan-reviewer", "adversary"] },
-    }),
-    "utf8",
-  )
   if (plan !== undefined) {
     const planDirPath = path.join(
       root,
@@ -118,7 +108,6 @@ test("lt-pg-no-binding: executor + empty gate-state (no planner binding) is perm
   await withTempRoot(async (root) => {
     seedProject(root, {
       feature_id: FEATURE,
-      dual_status: "both", plan_verdict: "APPROVE",
     })
     // Operator/fix-mode case: no planner ceremony ever ran for this session — no
     // planner_status/planner_plan_binding on gate-state. Absent binding -> skip fail-open.
@@ -130,7 +119,7 @@ test("lt-pg-stub-no-binding: sniper + stub plan file with no binding is still pe
   await withTempRoot(async (root) => {
     seedProject(
       root,
-      { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" },
+      { feature_id: FEATURE },
       { kind: "stub", mode: "LIGHT", feature_id: FEATURE, tasks: [] },
     )
     // A raw/stub plan file sitting on disk without a planner_plan_binding is not enough
@@ -143,7 +132,6 @@ test("lt-pg-explore: non-executor Explore skips plan require for missing plan", 
   await withTempRoot(async (root) => {
     seedProject(root, {
       feature_id: FEATURE,
-      dual_status: "pending",
     })
     await assert.doesNotReject(() => runHook(root, "Explore"))
   })
@@ -153,7 +141,7 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
   await withTempRoot(async (root) => {
     seedProject(
       root,
-      { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" },
+      { feature_id: FEATURE },
       GOLDEN_FULL,
     )
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
@@ -162,7 +150,6 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
     fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       feature_id: FEATURE,
-      dual_status: "both", plan_verdict: "APPROVE",
       planner_status: "usable",
       planner_plan_binding: {
         session_id: SESSION,
@@ -180,13 +167,12 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
 
 test("lt-pg-dispatch-identity: official Task shape derives feature from session and task from strict prompt marker", async () => {
   await withTempRoot(async (root) => {
-    seedProject(root, { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" }, GOLDEN_FULL)
+    seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
     const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
     fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       feature_id: FEATURE,
-      dual_status: "both", plan_verdict: "APPROVE",
       planner_status: "usable",
       planner_plan_binding: {
         session_id: SESSION,
@@ -228,7 +214,7 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
 
 test("lt-pg-legacy: structurally valid old plan without planner binding is permitted (fail-open) [#ac-1.1]", async () => {
   await withTempRoot(async (root) => {
-    seedProject(root, { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" }, GOLDEN_FULL)
+    seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
     // A plan file written outside the planner-binding flow (e.g. an older run, or hand-edited)
     // no longer fails closed — without a planner_plan_binding there is nothing to validate.
     await assert.doesNotReject(() => runHook(root, "plan-reviewer-family-1"))
@@ -237,13 +223,12 @@ test("lt-pg-legacy: structurally valid old plan without planner binding is permi
 
 test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies with mismatch reason [#ac-1.2]", async () => {
   await withTempRoot(async (root) => {
-    seedProject(root, { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" }, GOLDEN_FULL)
+    seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
     const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
     fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       feature_id: FEATURE,
-      dual_status: "both", plan_verdict: "APPROVE",
       planner_status: "usable",
       planner_plan_binding: {
         // Snapshot integrity (semantic hash/feature) matches the real artifact, so disk
@@ -262,7 +247,7 @@ test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies wi
 
 test("lt-pg-conflict-no-binding: conflicting featureId with no bound plan artifact still permits [#ac-1.3]", async () => {
   await withTempRoot(async (root) => {
-    seedProject(root, { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" })
+    seedProject(root, { feature_id: FEATURE })
     const hooks = await createPlanGateHooks(root)
     // Trusted runtime envelope carries a feature_id that conflicts with gate-state's — with
     // no planner_plan_binding to conflict against, the dispatch is not denied for it.
@@ -285,9 +270,8 @@ test("lt-pg-unreadable: illegible gate-state reconciliation logs and fails open 
     console.warn = (message) => warnings.push(message)
     try {
       // Unsafe sessionId (space) fails gateStatePath resolution inside
-      // reconcilePlannerStateFromDisk -> reconciled.ok === false. test-author is not a
-      // dual-enforcement delivery hand, so this exercises the plan-gate fail-open path in
-      // isolation from dual-enforcement's own gate-state read.
+      // reconcilePlannerStateFromDisk -> reconciled.ok === false, exercising plan-gate's
+      // unreadable-state fail-open path directly.
       await assert.doesNotReject(() => hooks["tool.execute.before"](
         { tool: "task", sessionID: "ses bad id" },
         { args: {
@@ -314,7 +298,6 @@ test("lt-pg-terminal-blocked: planner attempt ended plan_invalid with no binding
     // (lib/dispatch-scope.mjs:readCanonicalTaskFromSnapshot).
     seedProject(root, {
       feature_id: FEATURE,
-      dual_status: "both", plan_verdict: "APPROVE",
       planner_status: "plan_invalid",
       delivery_status: "delivery-blocked",
       planner_primary_attempts: 3,
@@ -340,7 +323,7 @@ test("lt-pg-lock-contention: gate-state lock contention denies rather than fail-
 
 test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony marker", async () => {
   await withTempRoot(async (root) => {
-    seedProject(root, { feature_id: FEATURE, dual_status: "both", plan_verdict: "APPROVE" }, GOLDEN_FULL)
+    seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
     const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
     const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
@@ -356,7 +339,6 @@ test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony m
           seal: sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true }).seal,
         },
       },
-      dual_status: "both", plan_verdict: "APPROVE",
       planner_status: "usable",
       planner_plan_binding: {
         session_id: SESSION,

@@ -1,6 +1,6 @@
 /**
  * @description Permanent regression pin for #490. Any test under core/opencode/plugin that drives
- * a real emitter-capable hook (loop-guard.ts, obs-eye.ts, obs-hand.ts, obs-plan-write.ts,
+ * a real emitter-capable hook (review-guard.ts, obs-eye.ts, obs-hand.ts, obs-plan-write.ts,
  * mark-gate.mjs's CLI, plan-write-gate.ts, planner-recovery.ts) without isolating
  * HARNESS_OBSERVABILITY_RUN_PATH inherits whatever real run outbox the test process's environment
  * carries — inside an actual harness session that var points at a live run, so fixture events

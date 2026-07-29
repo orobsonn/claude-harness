@@ -5,7 +5,7 @@
  *   (gate-state from disk via lib/gate-state.mjs)
  * - task: decideEntryTask for executor/sniper. Dual/plan_verdict classification (ADR-003) is
  *   record-only as of #483 and lives entirely in plan-gate.ts, which runs earlier in the
- *   plugin chain (planner-recovery → plan-gate → obs-hand → loop-guard → entry-gate) — a
+ *   plugin chain (review-guard → planner-recovery → plan-gate → obs-hand → entry-gate) — a
  *   second call here would be dead code, never reached first. Shared utils used by this
  *   gate (isTaskTool, extractHookTaskContext, loadGateStateFromDisk) live outside
  *   dual-enforcement (#580); #583 removes the dual block from plan-gate.
@@ -22,7 +22,7 @@
  * closures; decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
  * dispatches, and the freeze-commit early trigger); gitState (a real git probe) is injected
  * only for delivery commands.
- * Load shape matches loop-guard: dynamic import of pure mjs inside factory
+ * Load shape matches review-guard: dynamic import of pure mjs inside factory
  * (static import of mjs breaks OC plugin loader — "export is not a function").
  */
 

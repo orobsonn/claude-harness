@@ -12,7 +12,7 @@ metadata:
 
 **Announce at the start (in pt-br):** "Usando proposing-improvements para detectar padrões sistêmicos e propor melhorias ao harness em kaizen.md."
 
-**When you run:** at harvest time, AFTER the final dual review passes and AFTER `skill({ name: "oc-distilling-learnings" })` has routed durable learnings. This is the harvester's last knowledge step (`build.md` Phase 5). Never during active implementation.
+**When you run:** at harvest time, AFTER the final review passes and AFTER `skill({ name: "oc-distilling-learnings" })` has routed durable learnings. This is the harvester's last knowledge step (`build.md` Phase 5). Never during active implementation.
 
 **Input:** the current transient findings buffer (consolidated by `skill({ name: "oc-recording-findings" })`, deleted by the harvester at the end of the run) plus the durable **`kaizen.md`** at the project root (cross-run memory). Since the findings buffer does not survive the run, `kaizen.md` is where cross-run precedent lives — a second occurrence of a signal is detected by matching against existing `kaizen.md` entries, not against an old findings buffer.
 

@@ -9,7 +9,7 @@ import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
 import { withGateStateLock } from "./lib/gate-state.mjs"
-import { mergeGateStatePatch, dualStatusGatePatchForPhase } from "../../shared/lib/gate-state-shape.mjs"
+import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
 import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
@@ -24,7 +24,6 @@ function isPrimaryAdversaryRole(role: unknown): boolean {
 type MarkerArgs = {
   action?: string
   task_id?: string
-  status?: string
   sha?: string
   feature_id?: string
 }
@@ -40,7 +39,6 @@ const ACTIONS = new Set([
   "brainstormed",
   "adversary_fired",
   "fidelity",
-  "dual",
   "regate-pending",
   "regate-passed",
   "hand-finished",
@@ -86,14 +84,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         const transitioned = transitionCeremony(projectRoot, previous, action)
         if (!transitioned.ok) return transitioned
         return transitioned.state
-      } else if (action === "dual") {
-        if (args.status !== "both" && args.status !== "primary_only" && args.status !== "pending") {
-          return { ok: false, reason: "active dual transition requires both | primary_only | pending" }
-        }
-        // Manual mark dual defaults to plan_review axis (#383); adversary dual is host-accounted.
-        const dual = dualStatusGatePatchForPhase("plan_review", args.status)
-        if ("ok" in dual && dual.ok === false) return dual
-        patch = dual as Record<string, unknown>
       } else if (action === "final-review" || action === "demo-done") {
         // Feature-scoped ship preconditions (#385) — no task_id; boolean on gate-state.
         const field = action === "final-review" ? "final_review_done" : "demo_done"
@@ -172,9 +162,8 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   const mark = tool({
     description: "Persist a runtime-bound privileged harness marker. Bash is observability-only.",
     args: {
-      action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | dual | regate-pending | regate-passed | hand-finished | capture-verified | final-review | demo-done"),
+      action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | regate-pending | regate-passed | hand-finished | capture-verified | final-review | demo-done"),
       task_id: tool.schema.string().optional().describe("Task id for task-scoped markers"),
-      status: tool.schema.string().optional().describe("dual_status value for the dual marker"),
       sha: tool.schema.string().optional().describe("Commit SHA for SHA-qualified markers"),
       feature_id: tool.schema.string().optional().describe("Untrusted hint; classified runtime identity wins"),
     },

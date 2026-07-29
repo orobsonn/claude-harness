@@ -535,7 +535,7 @@ export const CANONICAL_OC_PLUGINS = Object.freeze([
   "./.opencode/plugin/plan-gate.ts",
   "./.opencode/plugin/planner-recovery.ts",
   "./.opencode/plugin/plan-write-gate.ts",
-  "./.opencode/plugin/loop-guard.ts",
+  "./.opencode/plugin/review-guard.ts",
   "./.opencode/plugin/reinject-state.ts",
   "./.opencode/plugin/version-check.ts",
   "./.opencode/plugin/harvest-guard.ts",

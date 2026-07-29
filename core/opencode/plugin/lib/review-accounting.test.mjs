@@ -1,4 +1,4 @@
-/** @description Focused review reservation, terminal outcome, signed dual, and epoch restart tests. */
+/** @description Single-evaluator review reservations, terminal outcomes, hook wiring, and epoch restart tests. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,11 +15,9 @@ import {
   reopenReviewEpoch,
   reserveReviewAttempt,
 } from "./loop-decide.mjs";
-import { createLoopGuardHooks } from "../loop-guard.ts";
+import { createReviewGuardHooks } from "../review-guard.ts";
 import { createEntryGateHooks } from "../entry-gate.ts";
 import { sealedMarkerRecord } from "./marker-seal.mjs";
-import { decideDualBeforeDelivery } from "./dual-enforcement.mjs";
-import { isRecordedDualAttempt } from "../../../shared/lib/gate-state-shape.mjs";
 import {
   AGENT_RETRY_K,
   applyAgentDispatchOutcome,
@@ -50,15 +48,14 @@ function report(verdict = "APPROVE", findings = []) {
 }
 
 function input(overrides = {}) {
-  const family2 = overrides.subagentType === "plan-reviewer-family-2";
   return {
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     sessionId: SESSION,
     featureId: FEATURE,
     callId: "call-1",
     taskId: "task-1",
     phase: "plan",
-    response: family2 ? JSON.stringify({ verdict: "APPROVE", family: "family-2", findings: [] }) : report(),
+    response: report(),
     ...overrides,
   };
 }
@@ -83,7 +80,7 @@ function canonicalRestartState(root, capped) {
     featureId: FEATURE,
     generation: GENERATION_2,
     callId: "successor-adversary",
-    role: "adversary-family-1",
+    role: "adversary",
     output: '{"issues":[]}',
   }), true);
   const brainstormEvidence = completionEvidence(root, next, "brainstormed");
@@ -108,14 +105,13 @@ function canonicalRestartState(root, capped) {
   const hash = semanticPlanHash(plan);
   const bound = writeBoundPlanSnapshot(root, SESSION, { valid: true, semanticHash: hash, plan });
   assert.equal(bound.ok, true);
-  const oldSeals = Array.isArray(capped.marker_seals) ? capped.marker_seals.filter((item) => item.operation === "dual") : [];
   return {
     ...next,
     brainstormed: true,
     adversary_fired: true,
     brainstormed_binding: { session_id: SESSION, feature_id: FEATURE, operation: "brainstormed", seal: brainstorm.seal },
     adversary_fired_binding: { session_id: SESSION, feature_id: FEATURE, operation: "adversary_fired", seal: adversary.seal },
-    marker_seals: [...oldSeals, brainstorm, adversary],
+    marker_seals: [brainstorm, adversary],
     ceremony_evidence: { brainstormed: brainstormEvidence.evidence, adversary_fired: adversaryEvidence.evidence },
     planner_plan_binding: {
       session_id: SESSION,
@@ -133,11 +129,9 @@ function complete(previous, values = {}) {
   return applyReviewOutcome(reserved.state, args);
 }
 
-test("usable family-1 terminal increments exactly once; failures are separate and replay is inert", () => {
+test("usable primary terminal increments exactly once; failures are separate and replay is inert", () => {
   const first = complete(state());
   assert.equal(first.state.plan_review_count, 1);
-  assert.equal(first.state.dual_status?.plan_review, "primary_only");
-  assert.equal(first.state.dual_status?.adversary, undefined);
 
   const replay = applyReviewOutcome(first.state, input());
   assert.equal(replay.accepted, false);
@@ -206,56 +200,6 @@ test("primary failure cap counts family-1 inflight so concurrent fan-out cannot 
   assert.match(fourth.reason, /inflight_family1=3/);
 });
 
-test("valid primary review signs primary_only and permits hand progression; useful secondary signs both", () => {
-  const primary = complete(state()).state;
-  assert.equal(primary.plan_verdict, "APPROVE");
-  assert.equal(decideDualBeforeDelivery({
-    subagentType: "executor-high",
-    gateState: primary,
-    routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
-    toolName: "task",
-  }).decision, "allow");
-
-  const secondary = complete(primary, { subagentType: "plan-reviewer-family-2", callId: "secondary" }).state;
-  assert.equal(secondary.dual_status?.plan_review, "both");
-  assert.equal(secondary.dual_status?.adversary, undefined);
-  assert.equal(secondary.plan_verdict, "APPROVE");
-
-  const failedSecondary = complete(primary, {
-    subagentType: "plan-reviewer-family-2",
-    callId: "secondary-failed",
-    failureClass: "provider_error",
-  }).state;
-  assert.equal(failedSecondary.dual_status?.plan_review, "primary_only");
-  assert.equal(failedSecondary.dual_secondary_status, "failed");
-  assert.equal(failedSecondary.dual_secondary_failure_class, "provider_error");
-});
-
-test("a harness-gate deny on the secondary eye does not degrade the dual to primary_only", () => {
-  // The eye never ran — the deny is evidence about the dispatch, not about the second family.
-  // A real run lost its cross-family plan review to two self-inflicted plan-gate denials.
-  const primary = complete(state()).state;
-  assert.equal(primary.dual_status?.plan_review, "primary_only");
-
-  const gateDenied = complete(primary, {
-    subagentType: "plan-reviewer-family-2",
-    callId: "secondary-gate-blocked",
-    failureClass: "gate_blocked",
-    error: "[plan-gate] delivery-blocked: planner usable bound artifact required",
-  }).state;
-
-  assert.equal(gateDenied.dual_secondary_status, undefined);
-  assert.equal(gateDenied.dual_secondary_failure_class, undefined);
-  assert.equal(gateDenied.secondary_review_failure_streak ?? 0, 0);
-  assert.equal(gateDenied.review_failure_counts.gate_blocked, 1);
-  assert.equal(gateDenied.last_provider_diagnostic, undefined);
-  assert.ok(gateDenied.last_gate_diagnostic);
-
-  // The second family stays dispatchable and can still sign both.
-  const secondary = complete(gateDenied, { subagentType: "plan-reviewer-family-2", callId: "secondary-ok" }).state;
-  assert.equal(secondary.dual_status?.plan_review, "both");
-});
-
 test("a harness-gate deny on the primary eye never trips the primary failure cap", () => {
   let next = state();
   for (const callId of ["gate-1", "gate-2", "gate-3", "gate-4"]) {
@@ -273,14 +217,6 @@ test("applyReviewOutcome plan-reviewer useful REVISE → plan_verdict REVISE on 
   assert.equal(result.accepted, true);
   assert.equal(result.classified.kind, "useful");
   assert.equal(result.state.plan_verdict, "REVISE");
-  assert.equal(result.state.dual_status?.plan_review, "primary_only");
-  // #483: dual/plan_verdict is record-only on the dispatch surface — REVISE no longer denies.
-  assert.equal(decideDualBeforeDelivery({
-    subagentType: "executor-high",
-    gateState: result.state,
-    routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
-    toolName: "task",
-  }).decision, "allow");
 });
 
 test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE", () => {
@@ -290,99 +226,7 @@ test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE",
   assert.equal(result.state.plan_verdict, "APPROVE");
 });
 
-test("REVISE + dual_status both → record-only allow, no longer blocks hand (#483 supersedes money-preflight deny)", () => {
-  const revised = complete(state(), {
-    callId: "r1",
-    response: report("REVISE", [finding]),
-  }).state;
-  const both = complete(revised, {
-    subagentType: "plan-reviewer-family-2",
-    callId: "r1-f2",
-    response: JSON.stringify({
-      verdict: "APPROVE",
-      family: "family-2",
-      findings: [],
-    }),
-  }).state;
-  assert.equal(both.dual_status?.plan_review, "both");
-  assert.equal(both.plan_verdict, "REVISE");
-  const d = decideDualBeforeDelivery({
-    subagentType: "executor-high",
-    gateState: both,
-    routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
-    toolName: "task",
-  });
-  assert.equal(d.decision, "allow");
-  assert.match(d.reason, /REVISE/);
-});
-
-test("dual pair both APPROVE after either-REVISE → plan_verdict APPROVE unlocks hand", () => {
-  // Simulate a fixed plan re-reviewed by both families APPROVE on the same scope.
-  const f1Rev = complete(state(), {
-    callId: "pair-r1",
-    response: report("REVISE", [finding]),
-  }).state;
-  assert.equal(f1Rev.plan_verdict, "REVISE");
-  // Fresh primary APPROVE (new call) + secondary APPROVE on same scope → either-REVISE-wins
-  // uses current pair reports, not forever-sticky prior REVISE alone.
-  const f1Ok = complete(f1Rev, {
-    callId: "pair-a1",
-    response: report("APPROVE"),
-  }).state;
-  const bothOk = complete(f1Ok, {
-    subagentType: "plan-reviewer-family-2",
-    callId: "pair-a2",
-    response: JSON.stringify({
-      verdict: "APPROVE",
-      family: "family-2",
-      findings: [],
-    }),
-  }).state;
-  assert.equal(bothOk.dual_status?.plan_review, "both");
-  assert.equal(bothOk.plan_verdict, "APPROVE");
-  assert.equal(
-    decideDualBeforeDelivery({
-      subagentType: "executor-high",
-      gateState: bothOk,
-      routing: { constraints: { requireDualOn: ["plan-reviewer"] } },
-      toolName: "task",
-    }).decision,
-    "allow",
-  );
-});
-
-test("#383 applyReviewOutcome plan-reviewer writes dual_status.plan_review not adversary", () => {
-  const result = complete(state(), { callId: "pr-axis", response: report("APPROVE") });
-  assert.equal(result.state.dual_status?.plan_review, "primary_only");
-  assert.equal(result.state.dual_status?.adversary, undefined);
-  assert.equal(isRecordedDualAttempt(result.state.dual_status?.adversary), false);
-});
-
-test("#383 applyReviewOutcome adversary writes dual_status.adversary not plan_review", () => {
-  const result = complete(state(), {
-    callId: "adv-axis",
-    subagentType: "adversary-family-1",
-    phase: "task-adversary",
-    response: JSON.stringify({ issues: [] }),
-  });
-  assert.equal(result.accepted, true, result.classified?.reason ?? result.classified?.kind);
-  assert.equal(result.state.dual_status?.adversary, "primary_only");
-  assert.equal(result.state.dual_status?.plan_review, undefined);
-  assert.equal(result.state.plan_verdict, undefined);
-});
-
-test("#383 plan_review dual both does not record adversary axis", () => {
-  const primary = complete(state()).state;
-  const both = complete(primary, {
-    subagentType: "plan-reviewer-family-2",
-    callId: "pr-f2",
-  }).state;
-  assert.equal(both.dual_status?.plan_review, "both");
-  assert.equal(both.dual_status?.adversary, undefined);
-  assert.equal(isRecordedDualAttempt(both.dual_status?.adversary), false);
-});
-
-test("integrated primary completion produces a host-valid primary_only accepted by entry-gate", async () => {
+test("integrated primary completion remains accepted by entry-gate", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-entry-integration-"));
   try {
     const brainstorm = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true });
@@ -460,7 +304,7 @@ test("#ac-2.4 an adversary reservation in a cold repo (no session_id/feature_id 
   // classify has stamped session_id/feature_id on disk) — "not yet bound" must bind to whatever
   // THIS reservation supplies, not read as a mismatch.
   const cold = reserveReviewAttempt({}, input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "",
     phase: "",
     featureId: FEATURE,
@@ -471,7 +315,7 @@ test("#ac-2.4 an adversary reservation in a cold repo (no session_id/feature_id 
 
   // A REAL mismatch (state already bound to something else) must still refuse.
   const stillMismatches = reserveReviewAttempt({ session_id: "other-session" }, input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "",
     phase: "",
     featureId: FEATURE,
@@ -482,7 +326,7 @@ test("#ac-2.4 an adversary reservation in a cold repo (no session_id/feature_id 
 
   // Cold state with no featureId supplied either has no safe identity to bind — still refused.
   const noFeatureAtAll = reserveReviewAttempt({}, input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "",
     phase: "",
     featureId: undefined,
@@ -512,12 +356,13 @@ test("current epoch keeps more than 64 receipts and old calls cannot replay", ()
   let current = state();
   for (let index = 0; index < 80; index += 1) {
     current = complete(current, {
-      subagentType: "plan-reviewer-family-2",
-      callId: `secondary-${index}`,
+      callId: `gate-blocked-${index}`,
+      failureClass: "gate_blocked",
+      error: "[plan-gate] fixture deny",
     }).state;
   }
   assert.equal(current.review_outcomes.length, 80);
-  assert.equal(applyReviewOutcome(current, input({ subagentType: "plan-reviewer-family-2", callId: "secondary-0" })).accepted, false);
+  assert.equal(applyReviewOutcome(current, input({ callId: "gate-blocked-0" })).accepted, false);
 });
 
 test("APPROVE findings remain useful; medium/high unresolved is independently material", () => {
@@ -528,7 +373,7 @@ test("APPROVE findings remain useful; medium/high unresolved is independently ma
   assert.equal(approved.state.plan_review_count, 1);
 });
 
-test("NOT_IN_SCHEMA enums and ref fields are malformed for both canonical contracts", () => {
+test("NOT_IN_SCHEMA enums are malformed for both canonical contracts", () => {
   const badPlan = complete(state(), {
     callId: "bad-plan-enum",
     response: report("APPROVE", [{ ...finding, area: "NOT_IN_SCHEMA" }]),
@@ -536,14 +381,8 @@ test("NOT_IN_SCHEMA enums and ref fields are malformed for both canonical contra
   assert.equal(badPlan.classified.failureClass, "malformed");
   assert.equal(badPlan.state.plan_review_count, undefined);
 
-  const extraRef = complete(badPlan.state, {
-    callId: "bad-plan-ref",
-    response: report("APPROVE", [{ ...finding, refutes: { target_id: "x", target_family: "family-2", reason: "no" } }]),
-  });
-  assert.equal(extraRef.classified.failureClass, "malformed");
-
-  const adversary = complete(extraRef.state, {
-    subagentType: "adversary-family-1",
+  const adversary = complete(badPlan.state, {
+    subagentType: "adversary",
     callId: "bad-adversary-enum",
     response: JSON.stringify({ issues: [{
       description: "trigger",
@@ -579,7 +418,7 @@ test("cap cannot reopen from a new report hash; explicit newer generation plus n
       featureId: FEATURE,
       generation: GENERATION_2,
       callId: "denied-adversary",
-      role: "adversary-family-1",
+      role: "adversary",
       output: "Permission denied by runtime",
     }), false);
     assert.equal(completionEvidence(root, { ...capped, ceremony_generation: GENERATION_2 }, "adversary_fired").ok, false);
@@ -613,19 +452,19 @@ test("boundary taxonomy is bounded and does not consume useful cap", () => {
   assert.equal(result.state.plan_review_count, undefined);
 });
 
-test("hook persists reservations before dispatch and consumes them after completion", async () => {
+test("review-guard hook preserves reservations, counters, outcomes, and the K=3 failure cap", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-hook-"));
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(state()));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     const runtimeInput = { tool: "task", sessionID: SESSION, callID: "hook-call" };
     const output = {
       args: {
         description: "Review the plan",
         prompt: "Review the canonical plan without prior verdicts.",
-        subagent_type: "plan-reviewer-family-1",
+        subagent_type: "plan-reviewer",
       },
       output: report(),
     };
@@ -638,6 +477,36 @@ test("hook persists reservations before dispatch and consumes them after complet
     persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.review_inflight.length, 0);
     assert.equal(persisted.plan_review_count, 1);
+    assert.equal(persisted.review_outcomes.length, 1);
+
+    const adversaryInput = { tool: "task", sessionID: SESSION, callID: "hook-adversary" };
+    const adversaryOutput = {
+      args: { subagent_type: "adversary", task_id: "task-1" },
+      output: JSON.stringify({ issues: [] }),
+    };
+    await hooks["tool.execute.before"](adversaryInput, adversaryOutput);
+    await hooks["tool.execute.after"](adversaryInput, adversaryOutput);
+    persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(persisted.adversary_loop_count, 1);
+    assert.equal(persisted.review_outcomes.length, 2);
+
+    for (let attempt = 1; attempt <= AGENT_RETRY_K; attempt += 1) {
+      const failedInput = { tool: "task", sessionID: SESSION, callID: `hook-malformed-${attempt}` };
+      const failedOutput = { args: output.args, output: "not a review report" };
+      await hooks["tool.execute.before"](failedInput, failedOutput);
+      await hooks["tool.execute.after"](failedInput, failedOutput);
+    }
+    persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(persisted.primary_review_failure_streak, AGENT_RETRY_K);
+    assert.equal(persisted.review_status, "primary_failure_cap_reached");
+    assert.equal(persisted.review_outcomes.length, 2 + AGENT_RETRY_K);
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION, callID: "hook-malformed-over-cap" },
+        { args: output.args },
+      ),
+      /primary_failure_cap_reached|primary failure-cap/,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -652,7 +521,7 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
     const args = {
       description: "Review the plan",
       prompt: "Review the canonical plan without prior verdicts.",
-      subagent_type: "plan-reviewer-family-1",
+      subagent_type: "plan-reviewer",
     };
 
     // Resolve each dispatch as a harness-gate-blocked failure via BOTH the event path AND
@@ -691,7 +560,7 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
       return output;
     }
 
-    const interactiveHooks = await createLoopGuardHooks(root);
+    const interactiveHooks = await createReviewGuardHooks(root);
     let lastOutput;
     for (let round = 1; round <= 3; round += 1) {
       lastOutput = await dispatchOnce(interactiveHooks, `rr-${round}`);
@@ -720,7 +589,7 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
     const originalRemote = process.env.CLAUDE_CODE_REMOTE;
     process.env.CLAUDE_CODE_REMOTE = "1";
     try {
-      const headlessHooks = await createLoopGuardHooks(root);
+      const headlessHooks = await createReviewGuardHooks(root);
       for (let round = 1; round <= PLAN_REVIEW_ROUND_CEILING; round += 1) {
         await dispatchOnce(headlessHooks, `hl-${round}`);
       }
@@ -736,7 +605,7 @@ test("#482 hook round-rail: real dispatches warn past the documented cap and har
     const originalNotify = process.env.HARNESS_NOTIFY_PROJECT;
     process.env.HARNESS_NOTIFY_PROJECT = "/tmp/notify";
     try {
-      const fleetLookAlikeHooks = await createLoopGuardHooks(root);
+      const fleetLookAlikeHooks = await createReviewGuardHooks(root);
       for (let round = 1; round <= PLAN_REVIEW_ROUND_CEILING; round += 1) {
         await dispatchOnce(fleetLookAlikeHooks, `fl-${round}`);
       }
@@ -773,10 +642,10 @@ test("hook leaves a durable escalation trace when the spec-adversary loop stops 
         identity_hash: `prior-spec-${index + 1}`,
       })),
     })));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     const runtimeInput = { tool: "task", sessionID: SESSION, callID: "escalate-call" };
     const output = {
-      args: { description: "Attack the spec", prompt: "Attack the spec.", subagent_type: "adversary-family-1" },
+      args: { description: "Attack the spec", prompt: "Attack the spec.", subagent_type: "adversary" },
       output: JSON.stringify({ issues: [{
         description: "The vault boundary accepts ISO text.",
         category: "boundary",
@@ -815,13 +684,13 @@ test("hook rejects a gate-state whose embedded session differs from its runtime 
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const mismatched = state({ session_id: "other-session" });
     fs.writeFileSync(file, JSON.stringify(mismatched));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     await assert.rejects(() => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION, callID: "mismatched-session-call" },
       { args: {
         description: "Review the plan",
         prompt: "Review the canonical plan without prior verdicts.",
-        subagent_type: "plan-reviewer-family-1",
+        subagent_type: "plan-reviewer",
       } },
     ), /review reservation identity mismatch/);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), mismatched);
@@ -830,40 +699,28 @@ test("hook rejects a gate-state whose embedded session differs from its runtime 
   }
 });
 
-test("dual dispatch with official Task command/task_id does not deny reservation identity", async () => {
+test("official Task command/task_id does not deny review reservation identity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-command-hygiene-"));
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(state()));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     // Official OC Task schema may carry command/task_id for resume — not harness role.
     await assert.doesNotReject(() => hooks["tool.execute.before"](
-      { tool: "task", sessionID: SESSION, callID: "dual-f1-call" },
+      { tool: "task", sessionID: SESSION, callID: "official-fields-call" },
       { args: {
         description: "Review the plan",
         prompt: "Review the canonical plan without prior verdicts.",
-        subagent_type: "plan-reviewer-family-1",
+        subagent_type: "plan-reviewer",
         command: "resume-or-skill-command",
         task_id: "official-host-resume-id",
       } },
     ));
-    await assert.doesNotReject(() => hooks["tool.execute.before"](
-      { tool: "agent", sessionID: SESSION, callID: "dual-f2-call" },
-      { args: {
-        description: "Secondary family review",
-        prompt: "Review without prior verdicts.",
-        subagent_type: "plan-reviewer-family-2",
-        command: "another-host-command",
-        task_id: "other-official-resume-id",
-      } },
-    ));
     const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.equal(persisted.review_inflight.length, 2);
+    assert.equal(persisted.review_inflight.length, 1);
     assert.equal(persisted.review_inflight[0].canonical_identity, "plan-reviewer");
-    assert.equal(persisted.review_inflight[1].canonical_identity, "plan-reviewer");
     assert.equal(persisted.review_inflight[0].family, 1);
-    assert.equal(persisted.review_inflight[1].family, 2);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -875,10 +732,10 @@ test("concurrent before-hooks compete for the final primary reservation slot", a
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(state({ plan_review_count: LOOP_THRESHOLDS.plan_review.deny - 1 })));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     const dispatch = (callID) => hooks["tool.execute.before"](
       { tool: "task", sessionID: SESSION, callID },
-      { args: { subagent_type: "plan-reviewer-family-1", feature_id: FEATURE, task_id: "task-1", phase: "plan" } },
+      { args: { subagent_type: "plan-reviewer", feature_id: FEATURE, task_id: "task-1", phase: "plan" } },
     );
     const results = await Promise.allSettled([dispatch("slot-a"), dispatch("slot-b")]);
     assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
@@ -897,9 +754,9 @@ test("a persisted REVISE verdict carries the continuation nudge back to the orch
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(state()));
-    const hooks = await createLoopGuardHooks(root);
+    const hooks = await createReviewGuardHooks(root);
     const args = {
-      subagent_type: "plan-reviewer-family-1",
+      subagent_type: "plan-reviewer",
       feature_id: FEATURE,
       task_id: "task-1",
       phase: "plan",
@@ -999,7 +856,7 @@ test("a persisted REVISE credits a fresh planner round budget, exactly once, and
 
   // An adversary round never touches the planner budget.
   const adversary = complete(state({ planner_primary_attempts: 3 }), {
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     callId: "adv",
     response: JSON.stringify({ issues: [] }),
   });
@@ -1010,7 +867,7 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
   // The live incident's round 1 came back malformed. Two more and `primary_failure_cap_reached`
   // would have denied every writing hand and the delivery for the rest of the run — in a phase
   // where nothing had been written and the planner had not run once.
-  const broken = (callId) => input({ subagentType: "adversary-family-1", taskId: "", phase: "", callId, response: "not json at all" });
+  const broken = (callId) => input({ subagentType: "adversary", taskId: "", phase: "", callId, response: "not json at all" });
   let current = state();
   for (let round = 1; round <= LOOP_THRESHOLDS.primary_failure_streak.deny; round += 1) {
     const args = broken(`broken-${round}`);
@@ -1053,7 +910,7 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
 
 test("the spec pass snapshots its material issues so an accepted risk survives the plan-review overwrite", () => {
   const advInput = (callId) => input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "",
     phase: "",
     callId,
@@ -1074,7 +931,7 @@ test("the spec pass snapshots its material issues so an accepted risk survives t
   // Once the ceremony marker is stamped the spec pass is over: later adversary rounds (per-task
   // attacks during implementation) must not overwrite the accepted spec risks.
   const taskAttack = input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "task-1",
     phase: "task",
     callId: "task-adv",
@@ -1090,7 +947,7 @@ test("the spec-adversary loop is never refused and never freezes the run", () =>
   // The incident: a spec-REFINEMENT loop hit its cap, wrote review_cap_reached, and froze every
   // writing hand for the rest of the run — in a phase where the planner had not run once.
   const advInput = (overrides = {}) => input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "",
     phase: "",
     response: JSON.stringify({ issues: [{
@@ -1121,14 +978,14 @@ test("the spec-adversary loop is never refused and never freezes the run", () =>
   // by the escalation nudge. A deterministic refusal here is exactly what stranded two live runs.
   const beyond = reserveReviewAttempt(current, advInput({ callId: "adv-beyond" }));
   assert.equal(beyond.ok, true, beyond.reason);
-  assert.equal(decideLoopGuard({ subagentType: "adversary-family-1", count: LOOP_THRESHOLDS.adversary.deny + 5 }).decision, "warn");
+  assert.equal(decideLoopGuard({ subagentType: "adversary", count: LOOP_THRESHOLDS.adversary.deny + 5 }).decision, "warn");
   // The plan-review loop is untouched by any of this.
   assert.equal(reserveReviewAttempt(current, input({ callId: "pr-after-spec-rounds" })).ok, true);
 });
 
 test("no adversary loop freezes the run — only the plan-review verdict loop does", () => {
   const taskAdv = (callId) => input({
-    subagentType: "adversary-family-1",
+    subagentType: "adversary",
     taskId: "task-1",
     phase: "task",
     callId,
@@ -1150,10 +1007,8 @@ test("no adversary loop freezes the run — only the plan-review verdict loop do
   // no deterministic cap either: no status, no refusal, no frozen hand.
   assert.equal(current.review_status, undefined);
   assert.equal(reserveReviewAttempt(current, taskAdv("t-beyond")).ok, true);
-  // The plan-review verdict loop is the ONE that still caps the REVIEW RESERVATION itself: REVISE
-  // means no further plan-review round without a verified restart. It no longer blocks writing
-  // hands either (#ac-1.2, decideReviewCapBeforeWriting removed) — dual/plan_verdict REVISE
-  // (dual-enforcement.mjs) is the mechanism that still blocks a hand pending plan-review APPROVE.
+  // The plan-review verdict loop is the ONE that still caps the REVIEW RESERVATION itself. Writing
+  // hands are held by orchestration discipline and the authoritative revise-nudge, not another gate.
   let planLoop = state();
   for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
     planLoop = complete(planLoop, { callId: `pr-${round}`, response: report("REVISE", [finding]) }).state;
@@ -1227,45 +1082,18 @@ test("reopening a capped review epoch resets the round stamp with the counter it
   }
 });
 
-test("plan-review scope follows the bound plan: a stale peer REVISE from an earlier round cannot pin the verdict", () => {
-  const PLAN_A = "a".repeat(64);
-  const PLAN_B = "b".repeat(64);
-  const revise = JSON.stringify({ verdict: "REVISE", findings: [finding] });
-  const reviseFamily2 = JSON.stringify({ verdict: "REVISE", family: "family-2", findings: [finding] });
-
-  // Round 1 on plan A — both families REVISE.
-  let current = state({ planner_plan_binding: { snapshot_hash: PLAN_A } });
-  current = complete(current, { callId: "r1-f1", response: revise }).state;
-  current = complete(current, { callId: "r1-f2", subagentType: "plan-reviewer-family-2", response: reviseFamily2 }).state;
-  assert.equal(current.plan_verdict, "REVISE");
-  assert.equal(current.dual_status?.plan_review, "both");
-
-  // Same bound plan: either-REVISE-wins must still hold. Nothing was re-planned, so the peer's
-  // REVISE is still live evidence about THIS artifact.
-  const samePlan = complete(current, { callId: "r1-f1-again", response: report("APPROVE") });
-  assert.equal(samePlan.state.plan_verdict, "REVISE", "peer REVISE on the same bound plan still wins");
-
-  // Round 2 after a real re-plan — family-1 APPROVE must NOT be overridden by the plan-A REVISE,
-  // even though family-2 never returned on plan B (it malformed live at a 1-in-2 rate). Without
-  // this, APPROVE is unreachable and every writing hand stays blocked for the rest of the run.
-  const replanned = { ...current, planner_plan_binding: { snapshot_hash: PLAN_B } };
-  const round2 = complete(replanned, { callId: "r2-f1", response: report("APPROVE") });
-  assert.equal(round2.state.plan_verdict, "APPROVE");
-  assert.equal(round2.state.dual_status?.plan_review, "primary_only");
-});
-
 test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn threshold, denies past the runaway ceiling — interactive only", () => {
   const pastCeiling = PLAN_REVIEW_ROUND_CEILING + 1;
 
   // Below the churn-warning threshold: allow, no warning.
   assert.equal(
-    decidePlanReviewRoundRail({ subagentType: "plan-reviewer-family-1", count: PLAN_REVIEW_ROUND_WARN_AT - 1 }).decision,
+    decidePlanReviewRoundRail({ subagentType: "plan-reviewer", count: PLAN_REVIEW_ROUND_WARN_AT - 1 }).decision,
     "allow",
   );
 
   // #ac-2.1: past the churn-warning threshold → visible warning, still permits.
   const warned = decidePlanReviewRoundRail({
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     count: PLAN_REVIEW_ROUND_WARN_AT + 1,
   });
   assert.equal(warned.ok, true);
@@ -1280,7 +1108,7 @@ test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn thres
 
   // #ac-2.2: past the runaway ceiling, interactive (no CLAUDE_CODE_REMOTE) → hard deny.
   const interactivePastCeiling = decidePlanReviewRoundRail({
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     count: pastCeiling,
     env: {},
   });
@@ -1290,7 +1118,7 @@ test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn thres
 
   // #ac-2.2: past the runaway ceiling, headless (CLAUDE_CODE_REMOTE present) → warns only.
   const headlessPastCeiling = decidePlanReviewRoundRail({
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     count: pastCeiling,
     env: { CLAUDE_CODE_REMOTE: "1" },
   });
@@ -1301,7 +1129,7 @@ test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn thres
   // NOT bypass the interactive hard-stop — the signal is exactly Boolean(env.CLAUDE_CODE_REMOTE),
   // mirroring Claude Code entry-gate.mjs:116-118, never another variable.
   const fleetLookAlikePastCeiling = decidePlanReviewRoundRail({
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     count: pastCeiling,
     env: { HARNESS_NOTIFY_PROJECT: "/tmp/notify" },
   });
@@ -1309,7 +1137,7 @@ test("#ac-2.1/#ac-2.2/#ac-2.3 plan-review round-rail: warns past the churn thres
   assert.equal(fleetLookAlikePastCeiling.decision, "deny");
 
   // The adversary counter is untouched by this round-rail (only plan_review_count is gated).
-  assert.equal(decidePlanReviewRoundRail({ subagentType: "adversary-family-1", count: 99 }).decision, "allow");
+  assert.equal(decidePlanReviewRoundRail({ subagentType: "adversary", count: 99 }).decision, "allow");
 });
 
 /**
@@ -1328,7 +1156,7 @@ test("#529 the plan-review runaway ceiling clears the full review budget plus on
   const lastRoundAfterRetries = LOOP_THRESHOLDS.plan_review.deny + AGENT_RETRY_K;
   assert.notEqual(
     decidePlanReviewRoundRail({
-      subagentType: "plan-reviewer-family-1",
+      subagentType: "plan-reviewer",
       count: lastRoundAfterRetries,
       env: {},
     }).decision,
@@ -1338,7 +1166,7 @@ test("#529 the plan-review runaway ceiling clears the full review budget plus on
 
 test("applyReviewOutcome stores sanitized provider diagnostic on failure", () => {
   const reserved = reserveReviewAttempt(state(), {
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     sessionId: SESSION,
     featureId: FEATURE,
     taskId: "",
@@ -1347,7 +1175,7 @@ test("applyReviewOutcome stores sanitized provider diagnostic on failure", () =>
   });
   assert.equal(reserved.ok, true);
   const result = applyReviewOutcome(reserved.state, {
-    subagentType: "plan-reviewer-family-1",
+    subagentType: "plan-reviewer",
     sessionId: SESSION,
     featureId: FEATURE,
     callId: "diag-1",

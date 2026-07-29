@@ -88,10 +88,9 @@ test("legacy family marker on a report is ignored, never required", () => {
   assert.equal(Object.hasOwn(adversary.report, "family"), false);
 });
 
-test("build active dual contract uses primary_only and separate secondary failure fields", () => {
+test("build contract keeps optional eyes advisory and primary-authoritative", () => {
   const source = fs.readFileSync(new URL("./build.md", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /primary_only_failopen|primary_only_error/);
-  assert.match(source, /`primary_only`/);
-  assert.match(source, /secondary_status/);
-  assert.match(source, /secondary_failure_class/);
+  assert.match(source, /optional second eye/i);
+  assert.match(source, /primary result remains authoritative/i);
+  assert.doesNotMatch(source, /dual_status|dual-runtime|secondary_failure_class/);
 });
