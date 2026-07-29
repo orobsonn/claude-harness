@@ -70,7 +70,7 @@ Also consult the operator's `mp` MCP through retrieval-only `code` for relevant 
 6. **Classify severity** (blast radius → review posture: drives adversarial/security flags and sniper tier). `low` = config/types/trivial wiring. `medium` = CRUD/business logic. `high` = auth/payment/data-integrity/concurrency/external-input/secrets.
 7. **Classify complexity** (residual reasoning → executor model) from the scorer. Bias DOWN: a rich plan plus the strong review net (compliance + adversary + sniper) means a cheaper executor usually suffices.
 8. **Decide `adversarial.enabled`** — `true` ONLY for auth, payment, data-integrity, concurrency, external-input-reaching-storage, or secrets. When `true`, `focus` MUST be non-empty. `false` for config/types/trivial wiring.
-9. **Set `scope_paths`** — specific globs, prefer `src/handlers/foo.ts` over `src/**`. This is the write boundary.
+9. **Set `scope_paths`** — specific globs, prefer `src/handlers/foo.ts` over `src/**`. This is the write boundary. Base it on codebase exploration, not guessed filenames: identify the real implementation entry point and its relevant call sites before fixing the boundary, so the plan-reviewer can confront the plan against executable code rather than prose alone.
 10. **Set `resolved_judgments`** — scalar key→value pairs (string/number/boolean). No prose sentences, no objects, no arrays, no "TBD". Every one of those keys you resolved **yourself** (HEADLESS: no operator to ask) also goes into the optional `resolved_judgments_model_resolved` array on the same task — that is what reaches the PR body as an engine-made decision.
 11. **Set `criterion_refs`** — every AC owned by at least one task; no unowned AC.
 12. **Assemble `model_strategy`** snapshot, `final_review` (both true), and `demo` config.
@@ -118,7 +118,7 @@ Use THIS harness's tier and agent names. NEVER use haiku/sonnet/opus or model sl
 
 - `severity` = BLAST RADIUS → drives review posture (adversarial/security/sniper tier), NOT the executor model.
 - `complexity` = RESIDUAL REASONING → drives the executor model (`low`→executor-low, `medium`→executor-medium, `high`/`max`→executor-high). OPTIONAL; if absent, `build` falls back to `severity`. Bands (the `complexity-scorer` tool computes them; bias DOWN): low ≤10, medium ≤30, high ≤45, **max** 46-60 (still `executor-high`), x-high/split >60 (MUST be split — never ship an x-high task).
-- `scope_paths` ≥1, specific globs — the write boundary.
+- `scope_paths` ≥1, specific globs — the write boundary, grounded in the real implementation entry point and call sites inspected during planning.
 - `resolved_judgments` ≥1 entry; all values scalar.
 - `resolved_judgments_model_resolved` — **OPTIONAL** array of strings; each string MUST be a key of the **same task's** `resolved_judgments`. It marks the decisions **you resolved on your own** (HEADLESS, with no operator input) so the PR review can tell an engine-made call from an operator-given one — the `shipper` reads it into the PR body. Omit the field, or emit `[]`, when the operator resolved everything. A key that the task does not resolve is an orphan and the `validate-plan` tool rejects the plan.
 - `criterion_refs` ≥1, each matches `/#ac-\d+/` (flat anchor — the spec's AC numbering).

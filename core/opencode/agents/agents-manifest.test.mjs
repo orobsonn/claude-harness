@@ -154,7 +154,30 @@ test("t6-single-evaluator-files: canonical eyes + compatibility alias stubs", ()
 
 test("t6-build-prose: build.md still documents dual_status / secondary failure fields", () => {
   const body = read(join(AGENTS_DIR, "build.md"));
+  const skill = read(join(SKILLS_DIR, "orchestrating-delivery", "SKILL.md"));
   assert.match(body, /primary_only|dual_status|secondary_status/i);
+  assert.match(body, /dualPostsFor\(routing\)\[post\]\.secondary/i);
+  assert.match(body, /secondEyeModel.*legacy `families\.family-2`/i);
+  assert.match(skill, /dualPostsFor\(routing\).*secondary/i);
+  for (const name of [
+    "plan-reviewer-openai", "plan-reviewer-family-2",
+    "adversary-openai", "adversary-family-2",
+  ]) {
+    const optionalPrompt = read(join(AGENTS_DIR, `${name}.md`));
+    assert.match(optionalPrompt, /dualPostsFor\(routing\).*secondary/i, `${name} must use routing-resolved opt-in`);
+    assert.match(optionalPrompt, /secondEyeModel.*legacy `families\.family-2`/i, `${name} must preserve legacy opt-in`);
+  }
+  assert.match(body, /two separate passes/i);
+  assert.match(body, /file:function/i);
+  for (const name of [
+    "plan-reviewer", "plan-reviewer-family-1", "plan-reviewer-openai", "plan-reviewer-family-2",
+    "adversary", "adversary-family-1", "adversary-openai", "adversary-family-2",
+  ]) {
+    const prompt = read(join(AGENTS_DIR, `${name}.md`));
+    assert.match(prompt, /Artifact-consistency pass/i, `${name} must require artifact consistency`);
+    assert.match(prompt, /Code-reality pass/i, `${name} must require code reality`);
+    assert.match(prompt, /file:function/i, `${name} must require anchored evidence`);
+  }
 });
 
 test("t6-skills: required loop skills exist under core/opencode/skills", () => {

@@ -88,10 +88,10 @@ test("legacy family marker on a report is ignored, never required", () => {
   assert.equal(Object.hasOwn(adversary.report, "family"), false);
 });
 
-test("build active dual contract uses primary_only and separate secondary failure fields", () => {
+test("build single-evaluator contract maps primary_only to fail-open advancement", () => {
   const source = fs.readFileSync(new URL("./build.md", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /primary_only_failopen|primary_only_error/);
-  assert.match(source, /`primary_only`/);
-  assert.match(source, /secondary_status/);
-  assert.match(source, /secondary_failure_class/);
+  assert.match(source, /records `primary_only`/);
+  assert.match(source, /`primary_only_failopen`/);
+  assert.match(source, /advances normally and never blocks, triggers a secondary retry, or requires an operator warning/i);
+  assert.match(source, /evidence.*file:function/i);
 });
