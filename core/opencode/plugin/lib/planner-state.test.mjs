@@ -3,7 +3,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   MAX_PRIMARY_ATTEMPTS,
-  PLANNER_SESSION_DISPATCH_CEILING,
   claimPlannerAttempt,
   completePlannerAttempt,
   failPlannerAttempt,
@@ -125,32 +124,29 @@ test("round-budget deny escalates in product language instead of dying on an eng
   assert.match(spent.reason, /report the blocking finding to the operator/i);
 });
 
-test("session dispatch ceiling is absolute: no reset path clears it", () => {
-  const atCeiling = { ...BASE, planner_dispatches_total: PLANNER_SESSION_DISPATCH_CEILING };
-  const denied = claim(atCeiling);
-  assert.equal(denied.ok, false);
-  assert.match(denied.reason, /session ceiling/i);
-  assert.match(denied.reason, /new session/i);
+test("legacy gate-state with high planner_dispatches_total does not deny claim", () => {
+  // #602 removed the session ceiling rail. Disk state written before the cut may still carry
+  // planner_dispatches_total; the field is ignored — never a deny reason, never corruption.
+  const legacy = { ...BASE, planner_dispatches_total: 999, planner_primary_attempts: 0 };
+  const allowed = claim(legacy);
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.state.planner_primary_attempts, 1);
+  // Field may remain on the object (ignored legacy), but must not be incremented as a live counter.
+  assert.equal(allowed.state.planner_dispatches_total, 999);
 
-  // The per-round credit clears planner_primary_attempts; it must NOT buy past the ceiling.
-  assert.equal(claim({ ...atCeiling, planner_primary_attempts: 0 }).ok, false);
-  // Neither may the verified cycle reset.
-  const reset = { ...atCeiling, ...plannerCycleResetPatch() };
-  assert.equal(reset.planner_dispatches_total, PLANNER_SESSION_DISPATCH_CEILING);
-  assert.equal(claim(reset).ok, false);
+  const reset = { ...legacy, ...plannerCycleResetPatch() };
+  assert.equal(claim(reset).ok, true);
 });
 
 test("cycle reset clears the round stamp so a restarted cycle still earns its round credit", () => {
   const patch = plannerCycleResetPatch();
   assert.equal(patch.planner_attempts_round, 0);
   assert.equal(patch.planner_primary_attempts, 0);
-  assert.equal("planner_dispatches_total" in patch, false);
 });
 
-test("a claim counts against both the round budget and the session ceiling", () => {
+test("a claim counts against the per-round planner budget", () => {
   const first = claim(BASE);
   assert.equal(first.state.planner_primary_attempts, 1);
-  assert.equal(first.state.planner_dispatches_total, 1);
 });
 
 test("a claim bound to a prior process instance is dead: reconciled under lock, not blocked forever", () => {
