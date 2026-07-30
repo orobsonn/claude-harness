@@ -1,0 +1,103 @@
+{
+  "session_id": "ses_fixture_both_phases",
+  "feature_id": "fixture-completed-reviews",
+  "mode": "LIGHT",
+  "peak_mode": "LIGHT",
+  "classified": true,
+  "triaged": true,
+  "brainstormed": true,
+  "adversary_fired": true,
+  "planner_status": "usable",
+  "planner_retry_outcome": "not_needed",
+  "planner_primary_attempts": 1,
+  "planner_fallback_attempts": 0,
+  "planner_plan_binding": {
+    "call_id": "call_fixture_planner",
+    "session_id": "ses_fixture_both_phases",
+    "feature_id": "fixture-completed-reviews",
+    "model": "fixture/model",
+    "semantic_hash": "fixture-plan-hash",
+    "file_hash": "fixture-file-hash",
+    "snapshot_path": ".opencode/plans/.state/ses_fixture_both_phases/bound-plans/fixture-plan.json",
+    "snapshot_hash": "fixture-plan-hash"
+  },
+  "delivery_status": "planning",
+  "classify_status": "ready",
+  "review_epoch": 1,
+  "review_inflight": [],
+  "review_outcomes": [
+    {
+      "canonical_identity": "adversary-family-1",
+      "session_id": "ses_fixture_both_phases",
+      "feature_id": "fixture-completed-reviews",
+      "logical_role": "adversary",
+      "family": 1,
+      "call_id": "call_fixture_adversary_primary",
+      "epoch": 1,
+      "task_id": "",
+      "phase": "",
+      "identity_hash": "fixture-adversary-primary",
+      "outcome": "useful",
+      "report_hash": "fixture-adversary-report",
+      "material_unresolved": false
+    },
+    {
+      "canonical_identity": "plan-reviewer-family-1",
+      "session_id": "ses_fixture_both_phases",
+      "feature_id": "fixture-completed-reviews",
+      "logical_role": "plan-reviewer",
+      "family": 1,
+      "call_id": "call_fixture_plan_primary",
+      "epoch": 1,
+      "task_id": "",
+      "phase": "",
+      "identity_hash": "fixture-plan-primary",
+      "outcome": "useful",
+      "report_hash": "fixture-plan-report",
+      "material_unresolved": false
+    },
+    {
+      "canonical_identity": "plan-reviewer-family-2",
+      "session_id": "ses_fixture_both_phases",
+      "feature_id": "fixture-completed-reviews",
+      "logical_role": "plan-reviewer",
+      "family": 2,
+      "call_id": "call_fixture_plan_secondary",
+      "epoch": 1,
+      "task_id": "",
+      "phase": "",
+      "identity_hash": "fixture-plan-secondary",
+      "outcome": "useful",
+      "report_hash": "fixture-plan-secondary-report",
+      "material_unresolved": false
+    }
+  ],
+  "primary_review_failure_streak": 0,
+  "adversary_loop_count": 1,
+  "plan_review_count": 1,
+  "plan_verdict": "APPROVE",
+  "primary_review_last_report_hash": "fixture-adversary-report",
+  "primary_review_last_scope_hash": "fixture-adversary-scope",
+  "primary_review_last_report": {
+    "issues": []
+  },
+  "primary_review_last_material_unresolved": false,
+  "secondary_review_failure_streak": 0,
+  "secondary_review_last_report_hash": "fixture-secondary-report",
+  "secondary_review_last_scope_hash": "fixture-adversary-scope",
+  "secondary_review_last_report": {
+    "family": "family-2",
+    "issues": []
+  },
+  "dual_status": {
+    "plan_review": "both",
+    "adversary": "both"
+  },
+  "dual_secondary_status": "useful",
+  "fidelity_pass": [
+    "fixture-completed-reviews/task-1@fixture-commit"
+  ],
+  "final_review_done": true,
+  "demo_done": true,
+  "session_status": "active"
+}

@@ -11,7 +11,6 @@ import {
   armRegatePending,
 } from "./regate-arm.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
 import { decideBashDelivery } from "./bash-decide.mjs";
 
 const SESSION = "ses_regate_arm";
@@ -77,7 +76,7 @@ test("armRegatePending: writes regate_pending feature/task", () => {
   }
 });
 
-test("armRegatePending: idempotent union + re-seal", () => {
+test("armRegatePending: idempotent union", () => {
   const f = withSeededRoot();
   try {
     const first = armRegatePending({
@@ -121,24 +120,6 @@ test("armRegatePending: identity mismatch → deny", () => {
 });
 
 test("#ac-1.2: armRegatePending then bash-decide git push → deny unmatched", () => {
-  const brainstorm = sealedMarkerRecord({
-    sessionId: SESSION,
-    featureId: FEATURE,
-    operation: "brainstormed",
-    payload: true,
-  });
-  const adversary = sealedMarkerRecord({
-    sessionId: SESSION,
-    featureId: FEATURE,
-    operation: "adversary_fired",
-    payload: true,
-  });
-  const dual = sealedMarkerRecord({
-    sessionId: SESSION,
-    featureId: FEATURE,
-    operation: "dual",
-    payload: "both",
-  });
   const f = withSeededRoot({
     classified: true,
     mode: "FULL",
@@ -147,8 +128,7 @@ test("#ac-1.2: armRegatePending then bash-decide git push → deny unmatched", (
     planner_status: "usable",
     brainstormed: true,
     adversary_fired: true,
-    dual_status: "both",
-    marker_seals: [brainstorm, adversary, dual],
+    dual_status: "done",
   });
   try {
     const armed = armRegatePending({

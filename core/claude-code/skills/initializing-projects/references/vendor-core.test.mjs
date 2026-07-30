@@ -684,7 +684,7 @@ test("retired dual files are pruned while review-guard and review budgets remain
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -331,6 +331,22 @@ export function readGateState(statePath) {
   }
 }
 
+function readGateStateForMutation(statePath) {
+  try {
+    const raw = fs.readFileSync(statePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, reason: "gate-state-invalid-object" };
+    }
+    return { ok: true, state: parsed };
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return { ok: true, state: {} };
+    }
+    return { ok: false, reason: "gate-state-unreadable" };
+  }
+}
+
 /**
  * @description Atomic write (temp + rename). Never throws; returns boolean.
  * @param {string} statePath
@@ -365,7 +381,9 @@ export function mergeGateState(statePath, patch, opts = {}) {
   }
   const token = acquired.token;
   try {
-    const prev = readGateState(statePath);
+    const loaded = readGateStateForMutation(statePath);
+    if (!loaded.ok) return { ok: false, decision: "deny", reason: loaded.reason };
+    const prev = loaded.state;
     const applied = mergeGateStatePatch(prev, patch);
     if (!applied.ok) {
       return { ok: false, decision: "deny", reason: applied.reason ?? "patch-failed" };
@@ -393,7 +411,9 @@ export function withGateStateLock(statePath, fn, opts = {}) {
   }
   const token = acquired.token;
   try {
-    const prev = readGateState(statePath);
+    const loaded = readGateStateForMutation(statePath);
+    if (!loaded.ok) return { ok: false, decision: "deny", reason: loaded.reason };
+    const prev = loaded.state;
     let next;
     try {
       next = fn(prev);

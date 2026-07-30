@@ -7,8 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { validateCeremonyBinding } from "./ceremony-binding.mjs";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
+import { ceremonyMarkerPatch, validateCeremonyBinding } from "./ceremony-binding.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const markerPath = path.join(here, "mark-gate.mjs");
@@ -17,18 +16,10 @@ const removedNativePath = path.join(here, "..", "..", "tools", "lib", "mark-nati
 const authorityPath = path.join(here, "..", "marker-authority.ts");
 
 test("ceremony marker for another session or feature is rejected", () => {
-  const record = sealedMarkerRecord({
-    sessionId: "ses-a",
-    featureId: "feature-a",
-    operation: "brainstormed",
-    payload: true,
-  });
   const base = {
     session_id: "ses-a",
     feature_id: "feature-a",
-    brainstormed: true,
-    marker_seals: [record],
-    brainstormed_binding: { session_id: "ses-a", feature_id: "feature-a", operation: "brainstormed", seal: record.seal },
+    ...ceremonyMarkerPatch("brainstormed", "ses-a", "feature-a"),
   };
   assert.equal(validateCeremonyBinding(base, { sessionId: "ses-a", featureId: "feature-a", required: ["brainstormed"] }).ok, true);
   assert.match(validateCeremonyBinding(base, { sessionId: "ses-b", featureId: "feature-a", required: ["brainstormed"] }).reason, /session/);

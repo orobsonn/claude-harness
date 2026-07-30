@@ -17,7 +17,7 @@ import {
 } from "./loop-decide.mjs";
 import { createReviewGuardHooks } from "../review-guard.ts";
 import { createEntryGateHooks } from "../entry-gate.ts";
-import { sealedMarkerRecord } from "./marker-seal.mjs";
+import { ceremonyMarkerPatch } from "./ceremony-binding.mjs";
 import {
   AGENT_RETRY_K,
   applyAgentDispatchOutcome,
@@ -87,8 +87,8 @@ function canonicalRestartState(root, capped) {
   const adversaryEvidence = completionEvidence(root, next, "adversary_fired");
   assert.equal(brainstormEvidence.ok, true);
   assert.equal(adversaryEvidence.ok, true);
-  const brainstorm = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true });
-  const adversary = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "adversary_fired", payload: true });
+  const brainstorm = ceremonyMarkerPatch("brainstormed", SESSION, FEATURE);
+  const adversary = ceremonyMarkerPatch("adversary_fired", SESSION, FEATURE);
   const plan = {
     feature_id: FEATURE,
     kind: "full",
@@ -107,11 +107,8 @@ function canonicalRestartState(root, capped) {
   assert.equal(bound.ok, true);
   return {
     ...next,
-    brainstormed: true,
-    adversary_fired: true,
-    brainstormed_binding: { session_id: SESSION, feature_id: FEATURE, operation: "brainstormed", seal: brainstorm.seal },
-    adversary_fired_binding: { session_id: SESSION, feature_id: FEATURE, operation: "adversary_fired", seal: adversary.seal },
-    marker_seals: [brainstorm, adversary],
+    ...brainstorm,
+    ...adversary,
     ceremony_evidence: { brainstormed: brainstormEvidence.evidence, adversary_fired: adversaryEvidence.evidence },
     planner_plan_binding: {
       session_id: SESSION,
@@ -129,7 +126,7 @@ function complete(previous, values = {}) {
   return applyReviewOutcome(reserved.state, args);
 }
 
-test("usable primary terminal increments exactly once; failures are separate and replay is inert", () => {
+test("usable evaluator terminal increments exactly once; failures are separate and replay is inert", () => {
   const first = complete(state());
   assert.equal(first.state.plan_review_count, 1);
 
@@ -158,7 +155,7 @@ test("usable primary terminal increments exactly once; failures are separate and
   assert.equal(current.review_status, "primary_failure_cap_reached");
 });
 
-test("primary failure streak cap default 3 denies the 4th dispatch; useful resets streak", () => {
+test("evaluator failure streak cap default 3 denies the 4th dispatch; useful resets streak", () => {
   let current = state();
   for (let index = 0; index < 3; index += 1) {
     const result = complete(current, { callId: `malformed-${index}`, response: "not-json" });
@@ -186,7 +183,7 @@ test("primary failure streak cap default 3 denies the 4th dispatch; useful reset
   assert.equal(afterUseful.state.plan_review_count, 1);
 });
 
-test("primary failure cap counts family-1 inflight so concurrent fan-out cannot exceed budget", () => {
+test("failure cap counts same-evaluator inflight reservations so concurrent fan-out cannot exceed budget", () => {
   let current = state();
   for (let index = 0; index < 3; index += 1) {
     const reserved = reserveReviewAttempt(current, input({ callId: `inflight-${index}` }));
@@ -197,10 +194,10 @@ test("primary failure cap counts family-1 inflight so concurrent fan-out cannot 
   const fourth = reserveReviewAttempt(current, input({ callId: "inflight-3" }));
   assert.equal(fourth.ok, false);
   assert.match(fourth.reason, /primary failure-cap/);
-  assert.match(fourth.reason, /inflight_family1=3/);
+  assert.match(fourth.reason, /inflight_evaluator=3/);
 });
 
-test("a harness-gate deny on the primary eye never trips the primary failure cap", () => {
+test("a harness-gate deny never trips the evaluator failure cap", () => {
   let next = state();
   for (const callId of ["gate-1", "gate-2", "gate-3", "gate-4"]) {
     next = complete(next, { callId, failureClass: "gate_blocked", error: "[plan-gate] delivery-blocked: x" }).state;
@@ -219,20 +216,28 @@ test("applyReviewOutcome plan-reviewer useful REVISE → plan_verdict REVISE on 
   assert.equal(result.state.plan_verdict, "REVISE");
 });
 
-test("applyReviewOutcome plan-reviewer useful APPROVE → plan_verdict APPROVE", () => {
-  const result = complete(state(), { callId: "approve-1", response: report("APPROVE") });
+test("#584 one useful APPROVE closes the single-evaluator review", () => {
+  const args = input({ callId: "approve-1", response: report("APPROVE") });
+  const reserved = reserveReviewAttempt(state(), args);
+  assert.equal(reserved.ok, true, reserved.reason);
+  assert.equal(reserved.state.dual_status, "pending");
+  assert.equal("family" in reserved.reservation, false);
+  const result = applyReviewOutcome(reserved.state, args);
   assert.equal(result.accepted, true);
   assert.equal(result.classified.kind, "useful");
   assert.equal(result.state.plan_verdict, "APPROVE");
+  assert.equal(result.state.dual_status, "done");
+  assert.equal(result.state.plan_review_count, 1);
+  assert.equal(result.state.review_outcomes.length, 1);
+  assert.equal(result.state.review_outcomes[0].epoch, 1);
 });
 
-test("integrated primary completion remains accepted by entry-gate", async () => {
+test("integrated evaluator completion remains accepted by entry-gate", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-entry-integration-"));
   try {
-    const brainstorm = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "brainstormed", payload: true });
-    const adversary = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "adversary_fired", payload: true });
+    const brainstorm = ceremonyMarkerPatch("brainstormed", SESSION, FEATURE);
+    const adversary = ceremonyMarkerPatch("adversary_fired", SESSION, FEATURE);
     const fidelity = `${FEATURE}/task-1`;
-    const fidelitySeal = sealedMarkerRecord({ sessionId: SESSION, featureId: FEATURE, operation: "fidelity", payload: fidelity });
     const ceremony = state({
       mode: "FULL",
       classified: true,
@@ -243,9 +248,8 @@ test("integrated primary completion remains accepted by entry-gate", async () =>
       regate_passed: [],
       hand_finished: [],
       capture_verified: [],
-      marker_seals: [brainstorm, adversary, fidelitySeal],
-      brainstormed_binding: { session_id: SESSION, feature_id: FEATURE, operation: "brainstormed", seal: brainstorm.seal },
-      adversary_fired_binding: { session_id: SESSION, feature_id: FEATURE, operation: "adversary_fired", seal: adversary.seal },
+      ...brainstorm,
+      ...adversary,
     });
     const completed = complete(ceremony).state;
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
@@ -266,7 +270,7 @@ test("integrated primary completion remains accepted by entry-gate", async () =>
   }
 });
 
-test("primary reservations consume remaining slots atomically without incrementing useful count", () => {
+test("evaluator reservations consume remaining slots atomically without incrementing useful count", () => {
   const lastSlot = LOOP_THRESHOLDS.plan_review.deny - 1;
   const base = state({ plan_review_count: lastSlot });
   const winner = reserveReviewAttempt(base, input({ callId: "winner" }));
@@ -297,6 +301,104 @@ test("reservation derives feature from session-bound state and rejects conflicti
   const unsafeFeature = reserveReviewAttempt(state({ feature_id: "../other-feature" }), input({ featureId: undefined }));
   assert.equal(unsafeFeature.ok, false);
   assert.equal(unsafeFeature.reason, "review reservation identity mismatch");
+});
+
+test("optional second-eye aliases remain advisory and never reserve or count", () => {
+  const advisory = reserveReviewAttempt(state(), input({
+    subagentType: "plan-reviewer-family-2",
+    callId: "advisory-eye",
+  }));
+  assert.equal(advisory.ok, true);
+  assert.equal(advisory.accepted, false);
+  assert.equal(advisory.reservation, null);
+  assert.equal(advisory.state.review_inflight, undefined);
+  assert.equal(advisory.state.plan_review_count, undefined);
+});
+
+test("persisted legacy receipts remain replay-safe and primary inflight aliases are consumable", () => {
+  const legacy = JSON.parse(fs.readFileSync(
+    new URL("../../../shared/lib/fixtures/oc-gate-state/both-phases-both/gate-state.json", import.meta.url),
+    "utf8",
+  ));
+  const prior = legacy.review_outcomes.find((item) => item.call_id === "call_fixture_plan_primary");
+  assert.ok(prior);
+  const args = {
+    subagentType: "plan-reviewer",
+    sessionId: legacy.session_id,
+    featureId: legacy.feature_id,
+    callId: prior.call_id,
+    taskId: "",
+    phase: "",
+    response: report("APPROVE"),
+  };
+  const replay = reserveReviewAttempt(legacy, args);
+  assert.equal(replay.ok, false);
+  assert.match(replay.reason, /terminal outcome/);
+
+  const inflightState = {
+    ...state(),
+    review_epoch: 1,
+    review_inflight: [{
+      canonical_identity: "plan-reviewer-family-1",
+      session_id: SESSION,
+      feature_id: FEATURE,
+      logical_role: "plan-reviewer",
+      family: 1,
+      call_id: "legacy-inflight",
+      epoch: 1,
+      task_id: "task-1",
+      phase: "plan",
+      identity_hash: "legacy-family-aware-hash",
+    }],
+  };
+  const consumed = applyReviewOutcome(inflightState, input({ callId: "legacy-inflight" }));
+  assert.equal(consumed.accepted, true);
+  assert.equal(consumed.state.review_inflight.length, 0);
+  assert.equal(consumed.state.plan_review_count, 1);
+});
+
+test("persisted second-eye inflight entries neither consume slots nor become authoritative", () => {
+  const legacySecondary = {
+    // b404538 persisted the canonical name and kept the family discriminator separately.
+    canonical_identity: "plan-reviewer",
+    session_id: SESSION,
+    feature_id: FEATURE,
+    logical_role: "plan-reviewer",
+    family: 2,
+    call_id: "legacy-secondary",
+    epoch: 1,
+    task_id: "task-1",
+    phase: "plan",
+    identity_hash: "legacy-secondary-hash",
+  };
+  const legacyState = state({
+    review_epoch: 1,
+    plan_review_count: LOOP_THRESHOLDS.plan_review.deny - 1,
+    review_inflight: [legacySecondary],
+  });
+  const finalPrimary = reserveReviewAttempt(legacyState, input({ callId: "final-primary" }));
+  assert.equal(finalPrimary.ok, true, finalPrimary.reason);
+  assert.equal(finalPrimary.accepted, true);
+
+  const ignoredSecondary = applyReviewOutcome(legacyState, input({
+    subagentType: "plan-reviewer-family-2",
+    callId: "legacy-secondary",
+  }));
+  assert.equal(ignoredSecondary.accepted, false);
+  assert.equal(ignoredSecondary.state.plan_review_count, LOOP_THRESHOLDS.plan_review.deny - 1);
+});
+
+test("one concurrent approval stays pending until every authoritative reservation settles", () => {
+  const first = reserveReviewAttempt(state(), input({ callId: "concurrent-first" }));
+  const second = reserveReviewAttempt(first.state, input({ callId: "concurrent-second" }));
+  const approved = applyReviewOutcome(second.state, input({ callId: "concurrent-first", response: report("APPROVE") }));
+  assert.equal(approved.accepted, true);
+  assert.equal(approved.state.review_inflight.length, 1);
+  assert.equal(approved.state.dual_status, "pending");
+
+  const settled = applyReviewOutcome(approved.state, input({ callId: "concurrent-second", response: report("APPROVE") }));
+  assert.equal(settled.state.review_inflight.length, 0);
+  assert.equal(settled.state.dual_status, "done");
 });
 
 test("#ac-2.4 an adversary reservation in a cold repo (no session_id/feature_id stamped yet) does not die on identity-mismatch", () => {
@@ -512,6 +614,132 @@ test("review-guard hook preserves reservations, counters, outcomes, and the K=3 
   }
 });
 
+test("review-guard never emits authoritative nudges for an unreserved second eye", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-hook-advisory-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const initial = state({
+      primary_review_last_report_hash: "a".repeat(64),
+      primary_review_last_material_unresolved: false,
+    });
+    fs.writeFileSync(file, JSON.stringify(initial));
+    const hooks = await createReviewGuardHooks(root);
+    const runtimeInput = { tool: "task", sessionID: SESSION, callID: "advisory-second-eye" };
+    const output = {
+      args: { subagent_type: "adversary-family-2" },
+      output: JSON.stringify({ issues: [] }),
+      metadata: {},
+    };
+    await hooks["tool.execute.before"](runtimeInput, output);
+    await hooks["tool.execute.after"](runtimeInput, output);
+    assert.equal(output.metadata.adversary_nudge, undefined);
+    await hooks.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            type: "tool",
+            tool: "task",
+            sessionID: SESSION,
+            callID: "advisory-second-eye-failure",
+            state: {
+              status: "error",
+              input: output.args,
+              error: "provider failed",
+            },
+          },
+        },
+      },
+    });
+    const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(persisted.review_outcomes, undefined);
+    assert.equal(persisted.agent_dispatch_failures, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("review-guard refuses corrupt persisted state without erasing accounting", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-hook-corrupt-state-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = "{broken";
+    fs.writeFileSync(file, bytes);
+    const hooks = await createReviewGuardHooks(root);
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION, callID: "corrupt-state-call" },
+        { args: { subagent_type: "plan-reviewer", feature_id: FEATURE } },
+      ),
+      /gate-state-unreadable/,
+    );
+    const advisoryInput = { tool: "task", sessionID: SESSION, callID: "corrupt-advisory" };
+    const advisoryOutput = {
+      args: { subagent_type: "plan-reviewer-family-2", feature_id: FEATURE },
+      output: report("APPROVE"),
+      metadata: {},
+    };
+    await assert.doesNotReject(() => hooks["tool.execute.before"](advisoryInput, advisoryOutput));
+    await assert.doesNotReject(() => hooks["tool.execute.after"](advisoryInput, advisoryOutput));
+    assert.equal(fs.readFileSync(file, "utf8"), bytes);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("#584 N useful REVISE rounds reach terminal review accounting through the hook", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-hook-terminal-"));
+  try {
+    const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state()));
+    const hooks = await createReviewGuardHooks(root);
+    const args = {
+      description: "Review the plan",
+      prompt: "Review the canonical plan without prior verdicts.",
+      subagent_type: "plan-reviewer",
+      feature_id: FEATURE,
+      task_id: "task-1",
+      phase: "plan",
+    };
+
+    for (let round = 1; round <= LOOP_THRESHOLDS.plan_review.deny; round += 1) {
+      const runtimeInput = { tool: "task", sessionID: SESSION, callID: `hook-cap-${round}` };
+      await hooks["tool.execute.before"](runtimeInput, { args });
+      const reserved = JSON.parse(fs.readFileSync(file, "utf8"));
+      assert.equal(reserved.dual_status, "pending");
+      assert.equal(reserved.review_inflight.length, 1);
+      assert.equal("family" in reserved.review_inflight[0], false);
+
+      await hooks["tool.execute.after"](runtimeInput, {
+        args,
+        output: report("REVISE", [{ ...finding, severity: "low" }]),
+        metadata: {},
+      });
+      const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
+      assert.equal(persisted.plan_review_count, round);
+      assert.equal(persisted.review_inflight.length, 0);
+      assert.equal(persisted.dual_status, "done");
+    }
+
+    const terminal = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(terminal.review_status, "review_cap_reached");
+    assert.equal(terminal.review_cap_receipt.epoch, 1);
+    assert.equal(terminal.review_outcomes.length, LOOP_THRESHOLDS.plan_review.deny);
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION, callID: "hook-cap-over-terminal" },
+        { args },
+      ),
+      /review_cap_reached/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("#482 hook round-rail: real dispatches warn past the documented cap and hard-deny past the runaway ceiling — interactive only", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-round-rail-"));
   try {
@@ -636,6 +864,7 @@ test("hook leaves a durable escalation trace when the spec-adversary loop stops 
       adversary_loop_count: LOOP_THRESHOLDS.adversary.deny,
       review_outcomes: Array.from({ length: LOOP_THRESHOLDS.adversary.deny }, (_, index) => ({
         logical_role: "adversary",
+        // Fixed compatibility marker consumed by unchanged adversary-nudge.mjs.
         family: 1,
         task_id: "",
         outcome: "useful",
@@ -720,13 +949,13 @@ test("official Task command/task_id does not deny review reservation identity", 
     const persisted = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(persisted.review_inflight.length, 1);
     assert.equal(persisted.review_inflight[0].canonical_identity, "plan-reviewer");
-    assert.equal(persisted.review_inflight[0].family, 1);
+    assert.equal("family" in persisted.review_inflight[0], false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("concurrent before-hooks compete for the final primary reservation slot", async () => {
+test("concurrent before-hooks compete for the final evaluator reservation slot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-slot-concurrency-"));
   try {
     const file = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
@@ -888,9 +1117,9 @@ test("a broken spec-adversary eye stops being dispatched WITHOUT freezing the ru
   assert.match(again.reason, /report this to the operator/);
 
   // Crossing the phase boundary: the broken spec eye must NOT bar the next phase's eye. The streak
-  // is global to family 1 and its only resets are a family-1 useful outcome or an epoch reopen that
+  // is evaluator-wide and its only resets are a useful outcome or an epoch reopen that
   // needs a cap status the spec carve-out never writes — so a stale streak would refuse every later
-  // family-1 eye (plan-reviewer, per-task adversary, final review) before dispatch, permanently, and
+  // evaluator role (plan-reviewer, per-task adversary, final review) before dispatch, permanently, and
   // the "goes to the plan unattacked" instruction would be unfulfillable.
   const stamped = { ...current, adversary_fired: true };
   const planReviewer = reserveReviewAttempt(stamped, input({ callId: "pr-after-broken-spec" }));
