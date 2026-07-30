@@ -56,6 +56,20 @@ test("run-wide adversary outcomes from earlier phases do not spend a fresh spec 
   assert.match(res.context, /round 1\/4/);
 });
 
+test("second-eye refute receipts never count as primary spec-adversary rounds", () => {
+  const res = decideAdversaryNudge({
+    subagentType: PRIMARY,
+    state: state({
+      review_outcomes: [
+        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful", review_kind: "second_eye_refute" },
+        { logical_role: "adversary", family: 1, task_id: "", outcome: "useful" },
+      ],
+    }),
+  });
+  assert.equal(res.kind, "revise");
+  assert.match(res.context, /round 1\/4/);
+});
+
 test("the nudge reflects useful rounds from the current spec loop, not the run total", () => {
   const reviewOutcomes = Array.from({ length: DENY }, (_, index) => ({
     logical_role: "adversary",

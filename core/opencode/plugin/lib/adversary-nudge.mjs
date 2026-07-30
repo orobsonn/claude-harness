@@ -37,7 +37,8 @@ function currentSpecLoop(state, surfaceHash) {
   const usefulSpecOutcomes = outcomes.filter((value) => {
     const outcome = object(value);
     const taskId = typeof outcome.task_id === "string" ? outcome.task_id.trim() : "";
-    return outcome.logical_role === "adversary" && outcome.family === 1 && outcome.outcome === "useful" && !taskId;
+    return outcome.logical_role === "adversary" && outcome.family === 1 && outcome.outcome === "useful" &&
+      outcome.review_kind !== "second_eye_refute" && !taskId;
   });
   const escalation = object(state.spec_adversary_escalation);
   const storedSurfaceHash = typeof escalation.surface_hash === "string" ? escalation.surface_hash : "";

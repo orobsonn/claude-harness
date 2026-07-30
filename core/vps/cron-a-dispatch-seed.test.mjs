@@ -28,6 +28,7 @@ const CANONICAL_STUBS = [
   "entry-gate.ts",
   "marker-authority.ts",
   "ceremony-coordinator.ts",
+  "second-eye-coordinator.ts",
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",

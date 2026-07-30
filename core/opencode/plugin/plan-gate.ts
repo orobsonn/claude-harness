@@ -13,7 +13,15 @@
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
+import { resealRefutePrompt } from "./lib/second-eye-authority.mjs"
 const PREFIX = "[plan-gate]"
+
+/** @description Keep untrusted bound-plan text from creating extra refute authority markers. */
+export function escapeRefuteSentinels(value: string): string {
+  return value
+    .replaceAll("[HARNESS_REFUTE_PASS]", "\\u005bHARNESS_REFUTE_PASS]")
+    .replaceAll("[/HARNESS_REFUTE_PASS]", "\\u005b/HARNESS_REFUTE_PASS]")
+}
 
 // lib/gate-state.mjs reason strings for lock/write infra faults (as opposed to a genuinely
 // missing/unreadable gate-state) — see withGateStateLock / acquireLock.
@@ -170,8 +178,18 @@ export async function createPlanGateHooks(
               if (toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)) {
                 const args = toolArgs as Record<string, unknown>
                 const existingPrompt = typeof args.prompt === "string" ? args.prompt : ""
-                const boundPlan = JSON.stringify(artifact.plan)
-                args.prompt = `${existingPrompt}\n\n[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${boundPlan}\n[/HARNESS_BOUND_PLAN]`.trim()
+                const refuteMarker = existingPrompt.endsWith("[/HARNESS_REFUTE_PASS]")
+                  ? existingPrompt.lastIndexOf("[HARNESS_REFUTE_PASS]")
+                  : -1
+                const serializedPlan = JSON.stringify(artifact.plan)
+                const boundPlan = refuteMarker >= 0 ? escapeRefuteSentinels(serializedPlan) : serializedPlan
+                const planBlock = `[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${boundPlan}\n[/HARNESS_BOUND_PLAN]`
+                const nextPrompt = refuteMarker >= 0
+                  ? `${existingPrompt.slice(0, refuteMarker).trim()}\n\n${planBlock}\n\n${existingPrompt.slice(refuteMarker)}`
+                  : `${existingPrompt}\n\n${planBlock}`.trim()
+                args.prompt = refuteMarker >= 0
+                  ? resealRefutePrompt(nextPrompt, { sessionId: sid, role })
+                  : nextPrompt
               }
             }
           }
