@@ -5,18 +5,8 @@
  * goes straight to CRITICAL EXCEPTION with no retry, and a `DONE_WITH_CONCERNS` record — non-DONE
  * with nothing having failed — is neither.
  *
- * Why this exists (#558): § Post-hand capture path step 2 used to order a retry for every
- * `ok:false`. Step 1 only auto-stamps on a DONE outcome, so "record is not DONE" also covers the
- * hand that ran and refused — and for that class the same file says the opposite twice (§ Per-task
- * steps step b and "Hand CONFIG_ERROR → critical exception"). The retry order was the most emphatic
- * and the closest to the decision point, so it won: three dispatches of a hand that should have gone
- * straight to critical exception. The § Escalation ladder had to answer the same question from its
- * own side — its trigger is `on provider/transient Task failure`, and it never said whether a
- * never-DONE capture record is inside it.
- *
- * The unconditional order is pinned as ABSENT from the step's own line, not merely contradicted
- * further down: an adversarial mutation restoring it while keeping the branches intact reproduces
- * the exact defect — two opposite rules in force, the retry one closest to the decision point.
+ * After #585 the Post-hand capture path is collapsed to one cause-split (no Axis vocabulary), but
+ * the three outlets remain load-bearing.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,7 +21,6 @@ const lines = skill.split("\n");
 /**
  * Step 2 of § Post-hand capture path — the numbered item plus every sub-bullet indented under it,
  * up to the next top-level numbered item.
- * @returns {string[]} The step-2 block, line by line.
  */
 function captureStepTwoLines() {
   const start = lines.findIndex((line) => /^2\. .*`mark`/.test(line));
@@ -47,7 +36,6 @@ function captureStepTwoLines() {
 
 /**
  * The § Escalation ladder section, heading to next heading of the same or higher level.
- * @returns {string[]} The section, line by line.
  */
 function escalationLadderLines() {
   const start = lines.findIndex((line) => /^### Escalation ladder/.test(line));
@@ -58,11 +46,7 @@ function escalationLadderLines() {
 }
 
 /**
- * Group a block into bullets: each `- ` line joined with the continuation lines under it. Matching
- * on the joined bullet instead of the physical line keeps an innocent markdown reflow from
- * reddening a rule that did not change.
- * @param {string[]} blockLines
- * @returns {string[]} One string per bullet.
+ * Group a block into bullets: each `- ` line joined with the continuation lines under it.
  */
 function bullets(blockLines) {
   const grouped = [];
@@ -78,6 +62,7 @@ const stepTwo = stepTwoLines.join("\n");
 const stepTwoHeader = stepTwoLines[0];
 const stepTwoBullets = bullets(stepTwoLines);
 const ladderBullets = bullets(escalationLadderLines());
+const ladderText = escalationLadderLines().join("\n");
 
 /** The read-backs that mean the hand never delivered by its own verdict. */
 const REFUSAL_VERDICTS = ["BLOCKED", "NEEDS_CONTEXT", "CONFIG_ERROR"];
@@ -90,56 +75,37 @@ const refusalBullets = stepTwoBullets.filter((bullet) =>
 test("#ac-1.1 — capture step 2 splits `ok:false` into causes instead of one retry order", () => {
   assert.ok(
     stepTwoBullets.length >= 2,
-    "step 2 must present the causes as distinct branches — a single paragraph is what let the " +
-      "retry order swallow the refusal class (#558).",
+    "step 2 must present the causes as distinct branches.",
   );
-  assert.match(
-    stepTwo,
-    /transient/i,
-    "step 2 must name the transient branch — the cause that legitimately retries.",
-  );
-  assert.match(
-    stepTwo,
-    /refus|deliver/i,
-    "step 2 must name the other causes: the hand that ran without delivering.",
-  );
+  assert.match(stepTwo, /transient/i, "step 2 must name the transient branch.");
+  assert.match(stepTwo, /refus|deliver/i, "step 2 must name the hand that ran without delivering.");
 });
 
 test("#ac-1.1 — step 2's own line carries no unconditional retry order", () => {
   assert.doesNotMatch(
     stepTwoHeader,
     /(?:re-?dispatch|retry)[^.]{0,40}\bhand\b|treat as hand failure/i,
-    "the retry order may live ONLY on the transient branch. An unconditional order on the step's " +
-      "own line is the #558 defect and the added branches do not neutralise it — that line is the " +
-      "most emphatic text at the decision point, so it wins the reading.",
+    "the retry order may live ONLY on the transient branch.",
   );
   assert.doesNotMatch(
     stepTwoHeader,
     /\balways\b/i,
-    "the step's line must not make a blanket claim about what `ok:false` means — the causes have " +
-      "opposite outlets and one of them (`DONE_WITH_CONCERNS`) is not a failure at all.",
+    "the step's line must not make a blanket claim about what `ok:false` means.",
   );
 });
 
 test("#ac-1.1 — every bullet naming the refusal class routes to CRITICAL EXCEPTION, no retry", () => {
   assert.ok(
     refusalBullets.length >= 1,
-    "step 2 must carry a branch naming all three non-delivering read-backs " +
-      `(${REFUSAL_VERDICTS.join(", ")}) — the class that must never be re-dispatched.`,
+    "step 2 must carry a branch naming all three non-delivering read-backs.",
   );
 
   for (const bullet of refusalBullets) {
-    assert.match(
-      bullet,
-      /CRITICAL EXCEPTION/,
-      "a bullet that speaks for the refusal class must state its outlet; 'do not retry' alone " +
-        "leaves the orchestrator with no next move.",
-    );
+    assert.match(bullet, /CRITICAL EXCEPTION/, "refusal class must state its outlet.");
     assert.match(
       bullet,
       /\b(?:no retry|not\b[^.]{0,40}\bre-?dispatch|never\b[^.]{0,40}\bre-?dispatch|do not retry)/i,
-      "the refusal class must have the re-dispatch forbidden in words — naming the outlet without " +
-        "denying the retry leaves both rules in force, which is the #558 defect.",
+      "the refusal class must have the re-dispatch forbidden in words.",
     );
   }
 });
@@ -148,20 +114,14 @@ test("#ac-1.1 — the refusal branch agrees with the two rules that already gove
   const branch = refusalBullets.find((bullet) => /Per-task steps/.test(bullet));
   assert.ok(
     branch,
-    "the refusal branch must point at § Per-task steps step b by SECTION NAME — the contradicting " +
-      "rule is there, and line numbers drift (#556).",
+    "the refusal branch must point at § Per-task steps step b by SECTION NAME.",
   );
   assert.match(
     branch,
     /Hand CONFIG_ERROR/,
-    "the refusal branch must point at the § Escalation ladder rule 'Hand CONFIG_ERROR → critical " +
-      "exception', the other rule this step used to contradict.",
+    "the refusal branch must point at the § Escalation ladder rule 'Hand CONFIG_ERROR'.",
   );
-  assert.doesNotMatch(
-    branch,
-    /:\d{2,}/,
-    "cross-references must be by section name, never by line number (#556).",
-  );
+  assert.doesNotMatch(branch, /:\d{2,}/, "cross-references must be by section name, never line number.");
 });
 
 test("#ac-1.1 — the transient branch keeps the same-agent K=3 budget", () => {
@@ -170,100 +130,69 @@ test("#ac-1.1 — the transient branch keeps the same-agent K=3 budget", () => {
   );
   assert.ok(
     branch,
-    "step 2 must keep a branch granting the same-agent K=3 to a genuinely transient failure — " +
-      "#uj-2 says that hand still gets its 3 attempts.",
+    "step 2 must keep a branch granting the same-agent K=3 to a genuinely transient failure.",
   );
 
-  assert.match(
-    branch,
-    /Escalation ladder/,
-    "the transient branch must keep naming § Escalation ladder as the budget's home (#538).",
-  );
-  assert.match(
-    branch,
-    /existing/i,
-    "the transient branch must keep saying the counter is the role's EXISTING one, not a fresh 3 (#538).",
-  );
+  assert.match(branch, /Escalation ladder/, "transient branch must name § Escalation ladder.");
+  assert.match(branch, /existing/i, "transient branch must say the counter is the role's EXISTING one.");
   assert.ok(
     !REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)),
-    "the transient branch must not claim the refusal verdicts — that merge is the defect.",
+    "the transient branch must not claim the refusal verdicts.",
   );
 });
 
 test("#ac-1.1 — a `DONE_WITH_CONCERNS` record is routed, not left in the gap the split opened", () => {
   const branch = stepTwoBullets.find((bullet) => bullet.includes("DONE_WITH_CONCERNS"));
-  assert.ok(
-    branch,
-    "`DONE_WITH_CONCERNS` also answers `ok:false` (the rail stamps on the exact `DONE`), so step 2 " +
-      "must say what happens to it — splitting the old blanket rule in two must not leave a third " +
-      "reachable outcome with no rule at all.",
-  );
+  assert.ok(branch, "`DONE_WITH_CONCERNS` must have an explicit outlet.");
 
   assert.match(
     branch,
     /\b(?:not|never)\b[^.]{0,40}\bre-?dispatch/i,
-    "a hand that delivered with reservations must not be re-dispatched — nothing failed.",
+    "a hand that delivered with reservations must not be re-dispatched.",
   );
   assert.match(
     branch,
-    /Axis 2/,
-    "the concern's verdict belongs to § Escalation ladder Axis 2 (confirmed by a compliance " +
-      "fail/partial or a red gate), not to this capture step.",
+    /tier|escalation ladder|compliance/i,
+    "the concern's verdict belongs to the tier-escalation path / compliance+gates.",
   );
 });
 
 test("#ac-1.1 — step 2 says how to tell the causes apart, including the pre-dispatch deny", () => {
-  // The tie-break bullet is the one that rules on the ABSENCE of a read-back — the ambiguous case
-  // the other bullets do not decide.
   const tieBreak = stepTwoBullets.find(
-    (bullet) => /read-?back/i.test(bullet) && /absen(?:ce|t)|no read-?back|without a read-?back/i.test(bullet),
+    (bullet) =>
+      /read-?back/i.test(bullet) &&
+      /absen(?:ce|t)|no read-?back|without a read-?back/i.test(bullet),
   );
   assert.ok(
     tieBreak,
-    "step 2 must say what evidence distinguishes the causes when there is no read-back to read; " +
-      "without that tie-break the orchestrator picks a branch by feel.",
+    "step 2 must say what evidence distinguishes the causes when there is no read-back.",
   );
 
   assert.match(
     tieBreak,
     /entry-gate|pre-?dispatch|denied/i,
-    "the tie-break must exempt the dispatch the harness itself refused before it ran: it leaves no " +
-      "read-back AND no record, so 'no read-back → transient' would send a `CONFIG_ERROR` back to " +
-      "the retry branch the bullet above just forbade.",
+    "the tie-break must exempt the dispatch the harness itself refused before it ran.",
   );
-  assert.match(
-    tieBreak,
-    /CONFIG_ERROR/,
-    "the tie-break must name the verdict that exemption belongs to.",
-  );
+  assert.match(tieBreak, /CONFIG_ERROR/, "the tie-break must name the CONFIG_ERROR verdict.");
   assert.match(
     tieBreak,
     /missing or unreadable/,
-    "the tie-break must name the distinguishing `mark` reason — 'hand-record missing or unreadable' " +
-      "(never ran) vs 'hand-record is not DONE' (ran, did not deliver) — so the split keys on an " +
-      "observable, not on the orchestrator's guess.",
+    "the tie-break must name the distinguishing `mark` reason.",
   );
   assert.match(
     stepTwo,
     /(?:never infer|record's state alone)/i,
-    "step 2 must deny the record's state as the discriminator — the cause decides, and the record " +
-      "is non-DONE in every branch.",
+    "step 2 must deny the record's state as the discriminator.",
   );
 });
 
 test("#ac-1.1 — the refusal is read off the Task read-back, not off the record", () => {
   const branch = refusalBullets.find((bullet) => /Per-task steps/.test(bullet));
-  assert.match(
-    branch,
-    /read-?back/i,
-    "the refusal branch must name the Task read-back as the source of the verdict.",
-  );
+  assert.match(branch, /read-?back/i, "refusal branch must name the Task read-back.");
   assert.match(
     branch,
     /promote[sd]?\b[^.]{0,60}DONE|never records `?CONFIG_ERROR|record can hide/i,
-    "the branch must warn that the record is not a second source: the host writes no " +
-      "`CONFIG_ERROR` status and promotes a `BLOCKED` hand to `DONE` when git shows touched paths, " +
-      "so a record can hide a refusal (host-hand-capture.mjs: resolveOcHandOutcome).",
+    "the branch must warn that the record is not a second source.",
   );
 });
 
@@ -273,23 +202,13 @@ test("#ac-2.1 — the Escalation ladder declares whether a never-DONE capture re
   );
   assert.ok(
     declaration,
-    "§ Escalation ladder must answer, on its own side, whether 'the capture record never reached " +
-      "DONE' falls under `on provider/transient Task failure` — leaving it implicit at the point of " +
-      "use is the #558 defect.",
+    "§ Escalation ladder must answer whether 'the capture record never reached DONE' is inside " +
+      "provider/transient failure.",
   );
 
-  assert.match(declaration, /\binside\b/i, "the declaration must say when the class IS inside the trigger.");
-  assert.match(
-    declaration,
-    /\boutside\b/i,
-    "the declaration must say when the class is NOT inside the trigger — half an answer still lets " +
-      "the retry rule capture a refusal.",
-  );
-  assert.match(
-    declaration,
-    /provider\/transient/,
-    "the declaration must quote the trigger it is ruling on.",
-  );
+  assert.match(declaration, /\binside\b/i, "must say when the class IS inside the trigger.");
+  assert.match(declaration, /\boutside\b/i, "must say when the class is NOT inside the trigger.");
+  assert.match(declaration, /provider\/transient/, "must quote the trigger it is ruling on.");
 });
 
 test("#ac-2.1 — the ladder's declaration keys on the cause, not on the record's state", () => {
@@ -300,24 +219,23 @@ test("#ac-2.1 — the ladder's declaration keys on the cause, not on the record'
   for (const verdict of REFUSAL_VERDICTS) {
     assert.ok(
       declaration.includes(verdict),
-      `the declaration must name ${verdict} as an excluded cause — the exclusion is per verdict, ` +
-        "and an unnamed one reads as still retryable.",
+      `the declaration must name ${verdict} as an excluded cause.`,
     );
   }
-  assert.match(
-    declaration,
-    /CRITICAL EXCEPTION/,
-    "the excluded branch must name where it goes instead of this axis.",
-  );
+  assert.match(declaration, /CRITICAL EXCEPTION/, "excluded branch must name where it goes.");
   assert.match(
     declaration,
     /Post-hand capture path/,
-    "the declaration must reference the point of use by SECTION NAME, so the two sides stay linked " +
-      "when lines drift (#556).",
+    "declaration must reference the point of use by SECTION NAME.",
   );
-  assert.doesNotMatch(
-    declaration,
-    /:\d{2,}/,
-    "cross-references must be by section name, never by line number (#556).",
+  assert.doesNotMatch(declaration, /:\d{2,}/, "cross-references must be by section name.");
+});
+
+test("#ac-2.1 — escalation ladder has no Axis vocabulary (#585)", () => {
+  assert.doesNotMatch(ladderText, /\bAxis 1\b|\bAxis 2\b/, "Axis naming is dual-lane vocabulary.");
+  assert.match(
+    ladderText,
+    /one tier up|one tier above/i,
+    "ladder must state the CC form: one tier up, once.",
   );
 });
