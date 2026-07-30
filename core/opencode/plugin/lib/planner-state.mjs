@@ -30,22 +30,6 @@ export const PLAN_WRITE_LEASE_MS = Number.POSITIVE_INFINITY;
  */
 export const MAX_PRIMARY_ATTEMPTS = AGENT_RETRY_K;
 
-/**
- * Session-lifetime ceiling on planner dispatches. Deliberately reset by NOTHING — not the round
- * credit, not `plannerCycleResetPatch`, not a review-epoch reopen. Without it the round credit
- * multiplies the worst case (rounds × K) on every reopen, and this engine auto-merges PRs with an
- * Opus-tier planner whose cost driver is context volume. A run that needs more than this is a
- * product problem for the operator, not something to retry into.
- *
- * The number is derived, not picked: `LOOP_THRESHOLDS.plan_review.deny` (10) one re-plan per review
- * round, plus `AGENT_RETRY_K` (3) one round's worth of failure retries. Pinned by a test in
- * review-accounting.test.mjs — NOT by importing LOOP_THRESHOLDS, which would close the existing
- * loop-decide → review-restart → planner-artifact → planner-state import cycle. It must move
- * whenever the review cap moves: a ceiling below the review budget makes the later rounds
- * unreachable, which is the same deadlock class this file already documents above.
- */
-export const PLANNER_SESSION_DISPATCH_CEILING = 13;
-
 /** @description Trusted reset applied only by a successful explicit classify cycle. */
 export function plannerCycleResetPatch() {
   return {
@@ -55,7 +39,6 @@ export function plannerCycleResetPatch() {
     planner_primary_attempts: 0,
     // Cleared so a verified restart cannot inherit a stale round stamp and skip its round credit
     // (a stamp of 2 would silently refuse the credit for rounds 1 and 2 of the restarted cycle).
-    // `planner_dispatches_total` is intentionally NOT listed: the session ceiling resets nowhere.
     planner_attempts_round: 0,
     planner_fallback_attempts: 0,
     planner_fallback_result: null,
@@ -133,16 +116,6 @@ export function claimPlannerAttempt(previous, input = {}) {
       state,
     };
   }
-  if (Number(state.planner_dispatches_total ?? 0) >= PLANNER_SESSION_DISPATCH_CEILING) {
-    return {
-      ok: false,
-      reason:
-        `planner session ceiling reached (${PLANNER_SESSION_DISPATCH_CEILING} dispatches). Do NOT re-dispatch the planner: ` +
-        "nothing in this session clears this ceiling. Report to the operator, in product language, what the plan-reviewer " +
-        "keeps rejecting and why the plan cannot satisfy it, then stop. A new session is required to plan this feature again.",
-      state,
-    };
-  }
   if (Number(state.planner_primary_attempts ?? 0) >= MAX_PRIMARY_ATTEMPTS) {
     return {
       ok: false,
@@ -156,7 +129,6 @@ export function claimPlannerAttempt(previous, input = {}) {
     };
   }
   state.planner_primary_attempts = Number(state.planner_primary_attempts ?? 0) + 1;
-  state.planner_dispatches_total = Number(state.planner_dispatches_total ?? 0) + 1;
   state.planner_primary_model = input.model;
   state.planner_status = "running";
   state.delivery_status = "planning";

@@ -24,7 +24,6 @@ import {
   applyGateBlockedDispatch,
   decideGateBlockedDispatchAllowed,
 } from "../../../shared/lib/agent-retry.mjs";
-import { PLANNER_SESSION_DISPATCH_CEILING } from "./planner-state.mjs";
 import { captureSpecAdversaryResult, completionEvidence } from "./ceremony-transition.mjs";
 import { semanticPlanHash, writeBoundPlanSnapshot } from "./planner-artifact.mjs";
 import { isolateObservabilityRunPath } from "./obs-test-isolation.mjs";
@@ -1255,12 +1254,6 @@ test("no round credit at the cap: a budget nobody can review is never advertised
   assert.equal(atCap.state.review_status, "review_cap_reached");
   assert.equal(atCap.state.planner_primary_attempts, 3, "the capped round must not credit a planner budget");
   assert.equal(reserveReviewAttempt(atCap.state, input({ callId: "after-cap" })).ok, false);
-});
-
-test("the planner session ceiling stays derived from the review cap plus one round of retries", () => {
-  // Pinned here (not by importing LOOP_THRESHOLDS into planner-state) because that import would
-  // close the loop-decide → review-restart → planner-artifact → planner-state cycle.
-  assert.equal(PLANNER_SESSION_DISPATCH_CEILING, LOOP_THRESHOLDS.plan_review.deny + AGENT_RETRY_K);
 });
 
 test("a satisfied precondition clears the gate-blocked counter, so K non-consecutive denies cannot ban forever", () => {

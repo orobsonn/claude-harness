@@ -198,7 +198,7 @@ export function reopenReviewEpoch(stateValue, options = {}) {
       adversary_loop_count: 0,
       // The round stamp must fall with the counter it indexes. Left stale, a stamp of N would
       // refuse the round credit for rounds 1..N of the reopened epoch and the restarted run would
-      // deadlock EARLIER than an unfixed one. The session dispatch ceiling is not reset here.
+      // deadlock EARLIER than an unfixed one.
       planner_attempts_round: 0,
       primary_review_failure_streak: 0,
       review_status: "active",
@@ -468,8 +468,8 @@ export function applyReviewOutcome(stateValue, input = {}) {
   // A REVISE is an instruction to re-plan — progress, not a planner failure. Credit a fresh
   // planner failure-retry budget for the new round, so the advertised review budget is actually
   // reachable instead of being consumed by the planner's K=3. Stamped with the round number: the
-  // credit is idempotent under a replayed outcome and cannot fire twice for one round. The
-  // session-lifetime ceiling in planner-state is what still bounds the total spend, and
+  // credit is idempotent under a replayed outcome and cannot fire twice for one round. Total
+  // planner spend is bounded by plan_review.deny rounds × K per round (per review epoch);
   // `agent_dispatch_failures` is deliberately left alone (clearing it would mask a real
   // precondition failure and destroy forensics for an agent with no fallback ladder).
   const { deny } = thresholdsFor(key, input);

@@ -48,7 +48,7 @@ export function getAgentFailureCount(state, key) {
  * agent retry brake that consumed this was removed and is not replaced (the real per-issue
  * ceiling lives in core/vps/cron-a-exit.mjs, outside the session). Kept for
  * applyAgentDispatchOutcome/applyGateBlockedDispatch (still active bookkeeping in review-guard.ts)
- * and for AGENT_RETRY_K (still used by primary_failure_streak and PLANNER_SESSION_DISPATCH_CEILING)
+ * and for AGENT_RETRY_K (still used by primary_failure_streak and the planner per-round budget)
  * — this specific decision function itself is exercised only by agent-retry.test.mjs now.
  * @param {unknown} state
  * @param {{ role?: unknown, taskId?: unknown, k?: number }} input
