@@ -5,6 +5,32 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.52.0](https://github.com/orobsonn/claude-harness/compare/v0.51.0...v0.52.0) (2026-07-30)
+
+
+### Features
+
+* **oc:** avaliador único + second eye opt-in ([#582](https://github.com/orobsonn/claude-harness/issues/582)) ([#595](https://github.com/orobsonn/claude-harness/issues/595)) ([828efda](https://github.com/orobsonn/claude-harness/commit/828efda4dfdb61aa9b9197741292bfd8b96d73ea))
+* **oc:** endurece avaliador único ([#598](https://github.com/orobsonn/claude-harness/issues/598)) ([85fc8b4](https://github.com/orobsonn/claude-harness/commit/85fc8b4e609fa2489fbd447371c8e368344c53fd))
+
+
+### Bug Fixes
+
+* **oc:** commita a migração de permissão e desacopla o teste do arquivo real ([#593](https://github.com/orobsonn/claude-harness/issues/593)) ([831fff2](https://github.com/orobsonn/claude-harness/commit/831fff2996435f5b7eeb25f95408aa6c07756248))
+* **oc:** conta rodadas do loop atual do adversary ([#588](https://github.com/orobsonn/claude-harness/issues/588)) ([2c981ae](https://github.com/orobsonn/claude-harness/commit/2c981aea985980e2e0441e8464ae7d679aa5ee3a))
+* **oc:** fecha lacunas apontadas nas revisões ([#592](https://github.com/orobsonn/claude-harness/issues/592)) ([8851864](https://github.com/orobsonn/claude-harness/commit/88518640dc39637d2611f7d1d0eb187654a1d9af))
+* **oc:** prepara vendoring e routing para poda ([#587](https://github.com/orobsonn/claude-harness/issues/587)) ([89c8ffd](https://github.com/orobsonn/claude-harness/commit/89c8ffd4d4438dbc48017465317da30d0a25b4d2))
+* **oc:** restaura baseline de testes no macOS ([#589](https://github.com/orobsonn/claude-harness/issues/589)) ([d369f62](https://github.com/orobsonn/claude-harness/commit/d369f62315bd5d96dd94461ec2bab581623ec7e0))
+
+
+### Refactors
+
+* **oc:** elimina agentes spawn duplicados ([#596](https://github.com/orobsonn/claude-harness/issues/596)) ([03bda40](https://github.com/orobsonn/claude-harness/commit/03bda4088ca4c4accbddf14c0517e4e1599a00ee))
+* **oc:** extrai utilitários genéricos de dual-enforcement ([#580](https://github.com/orobsonn/claude-harness/issues/580)) ([#594](https://github.com/orobsonn/claude-harness/issues/594)) ([29322b2](https://github.com/orobsonn/claude-harness/commit/29322b2173dc64907b29d15c4a80884b0f70b873))
+* **oc:** remove bloco dual do plugin ([#597](https://github.com/orobsonn/claude-harness/issues/597)) ([b404538](https://github.com/orobsonn/claude-harness/commit/b40453869a45d4b64023a2980147241e53d297f1))
+* **oc:** simplifica accounting para avaliador único ([#599](https://github.com/orobsonn/claude-harness/issues/599)) ([547230d](https://github.com/orobsonn/claude-harness/commit/547230da65c732db418fbd46cd96f3255f9e6f4d))
+* **oc:** volta SKILL orchestrating-delivery ao formato CC ([#585](https://github.com/orobsonn/claude-harness/issues/585)) ([#601](https://github.com/orobsonn/claude-harness/issues/601)) ([19d20a3](https://github.com/orobsonn/claude-harness/commit/19d20a3ce1ae0eafba76d3bdf2230afb90c6f40b))
+
 ## [0.51.0](https://github.com/orobsonn/claude-harness/compare/v0.50.1...v0.51.0) (2026-07-28)
 
 
