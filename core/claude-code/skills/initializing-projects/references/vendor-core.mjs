@@ -425,6 +425,7 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/ceremony-coordinator.ts",
+    "./.opencode/plugin/second-eye-coordinator.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
