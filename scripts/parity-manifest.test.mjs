@@ -23,7 +23,10 @@ import {
   checkImportsResolve,
   OC_REQUIRED_AGENTS,
 } from "./parity-manifest.mjs";
-import { harnessOcPluginFiles } from "../core/claude-code/skills/initializing-projects/references/vendor-core.mjs";
+import {
+  harnessOcPluginFiles,
+  vendorOpenCode,
+} from "../core/claude-code/skills/initializing-projects/references/vendor-core.mjs";
 
 /** @description ESM fixture root so `.js`/`.ts` plugins under it load as modules, not CJS. */
 function makeModuleFixture(prefix) {
@@ -430,6 +433,47 @@ describe("parity-manifest", () => {
     const res = checkImportsResolve("core/opencode");
     assert.equal(res.ok, true, `unresolved: ${JSON.stringify(res.unresolved)}`);
     assert.ok(res.scanned > 0, "scanner walked no files");
+  });
+
+  it("t11-vendored-positive-load: a fresh real vendoring resolves imports and calls every plugin factory", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-vendored-load-"));
+    const project = join(tmp, "project");
+    const isolatedHome = join(tmp, "home");
+    const previousHome = process.env.HOME;
+    const previousStdoutWrite = process.stdout.write;
+    const previousWarn = console.warn;
+    try {
+      mkdirSync(project, { recursive: true });
+      mkdirSync(isolatedHome, { recursive: true });
+      process.env.HOME = isolatedHome;
+      process.stdout.write = () => true;
+      console.warn = () => {};
+
+      vendorOpenCode({
+        coreDir: join(process.cwd(), "core"),
+        targetDir: project,
+        version: "test",
+        stampDate: "2026-07-31",
+      });
+
+      const vendored = join(project, ".opencode");
+      const imports = checkImportsResolve(vendored);
+      assert.equal(imports.ok, true, `unresolved: ${JSON.stringify(imports.unresolved)} read errors: ${JSON.stringify(imports.readErrors)}`);
+
+      const load = await checkPluginLoad(vendored);
+      const expected = harnessOcPluginFiles().map((entry) => entry.split("/").pop()).sort();
+      assert.equal(load.ok, true, `failures: ${JSON.stringify(load.failures)} missing: ${load.missing.join(", ")}`);
+      assert.deepEqual(load.files, expected);
+      assert.deepEqual(load.failures, []);
+      assert.deepEqual(load.missing, []);
+      assert.equal(existsSync(join(isolatedHome, ".config", "opencode")), false);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      process.stdout.write = previousStdoutWrite;
+      console.warn = previousWarn;
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("t11-smoke: new-clone / project-vendored smoke proves harness works without relying on global ~/.config/opencode (#ac-5.3)", () => {
