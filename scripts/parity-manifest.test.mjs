@@ -37,15 +37,22 @@ function makeModuleFixture(prefix) {
   return tmp;
 }
 
+/** @description Mirrors the production relative-import scanner, including legal comment trivia. */
+const LIB_IMPORT_TRIVIA_PATTERN = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
+const LIB_RELATIVE_IMPORT_PATTERNS = [
+  new RegExp(String.raw`\bfrom${LIB_IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']`, "g"),
+  new RegExp(
+    String.raw`\bimport${LIB_IMPORT_TRIVIA_PATTERN}\(${LIB_IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']${LIB_IMPORT_TRIVIA_PATTERN}(?=[,)])`,
+    "g",
+  ),
+  new RegExp(String.raw`\bimport${LIB_IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']`, "g"),
+];
+
 /** @description Lists static and literal-dynamic imports from lib/** that resolve into plugin/lib/. */
 function findLibBackImports(root) {
   const libRoot = join(root, "lib");
   const pluginLibRoot = resolve(root, "plugin", "lib");
   const found = [];
-  const patterns = [
-    /\b(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["'](?:\s*,|\s*\))/g,
-  ];
   const walk = (dir) => {
     if (!existsSync(dir)) return;
     for (const name of readdirSync(dir)) {
@@ -56,7 +63,7 @@ function findLibBackImports(root) {
       }
       if (!/\.(?:mjs|cjs|js|ts|tsx|jsx)$/.test(name)) continue;
       const text = readFileSync(abs, "utf8");
-      for (const pattern of patterns) {
+      for (const pattern of LIB_RELATIVE_IMPORT_PATTERNS) {
         pattern.lastIndex = 0;
         let match;
         while ((match = pattern.exec(text)) !== null) {
@@ -64,7 +71,7 @@ function findLibBackImports(root) {
           if (!specifier.startsWith(".")) continue;
           const target = resolve(dirname(abs), specifier);
           const fromPluginLib = relative(pluginLibRoot, target);
-        if (fromPluginLib === "" || (fromPluginLib !== ".." && !fromPluginLib.startsWith(`..${sep}`))) {
+          if (fromPluginLib === "" || (fromPluginLib !== ".." && !fromPluginLib.startsWith(`..${sep}`))) {
             found.push({ file: relative(root, abs), specifier });
           }
         }
@@ -474,14 +481,19 @@ describe("parity-manifest", () => {
     assert.ok(res.scanned > 0, "scanner walked no files");
   });
 
-  it("t11-lib-back-import-mutation: detects a literal dynamic import from a lib test into plugin/lib", () => {
+  it("t11-lib-back-import-mutation: detects static comment-trivia and literal dynamic imports from a lib test into plugin/lib", () => {
     const tmp = mkdtempSync(join(tmpdir(), "parity-lib-back-import-"));
     try {
       mkdirSync(join(tmp, "lib"), { recursive: true });
       mkdirSync(join(tmp, "plugin", "lib"), { recursive: true });
-      writeFileSync(join(tmp, "lib", "back-import.test.mjs"), 'await import("../plugin/lib/legacy.mjs");\n');
+      writeFileSync(
+        join(tmp, "lib", "back-import.test.mjs"),
+        'import x from /* legal */ "../plugin/lib/static-legacy.mjs";\nawait import("../plugin/lib/legacy.mjs");\n',
+      );
       writeFileSync(join(tmp, "plugin", "lib", "legacy.mjs"), "export {};\n");
+      writeFileSync(join(tmp, "plugin", "lib", "static-legacy.mjs"), "export default {};\n");
       assert.deepEqual(findLibBackImports(tmp), [
+        { file: join("lib", "back-import.test.mjs"), specifier: "../plugin/lib/static-legacy.mjs" },
         { file: join("lib", "back-import.test.mjs"), specifier: "../plugin/lib/legacy.mjs" },
       ]);
     } finally {
