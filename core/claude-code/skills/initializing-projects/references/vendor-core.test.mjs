@@ -668,6 +668,21 @@ test("re-vendoring removes every retired second-eye path and preserves per-direc
     "plugin/second-eye-coordinator.test.mjs",
     "skills/orchestrating-delivery/second-eye-runtime.mjs",
     "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+    "shared/lib/agent-retry.mjs",
+    "shared/lib/agent-retry.test.mjs",
+    "shared/lib/agent-retry-call.mjs",
+    "shared/lib/agent-retry-call.test.mjs",
   ];
   try {
     const siblings = [
@@ -705,6 +720,53 @@ test("re-vendoring removes every retired second-eye path and preserves per-direc
     for (const sibling of siblings) {
       assert.ok(existsSync(sibling), "exact-path sweep must preserve a project-owned second-eye sibling");
     }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes retired review-engine paths and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-review-engine-"));
+  const retired = [
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+  ];
+  const siblings = [
+    join(tempDir, ".opencode", "plugin", "project-owned-review-sibling.ts"),
+    join(tempDir, ".opencode", "plugin", "lib", "project-owned-review-sibling.mjs"),
+    join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-review-sibling.mjs"),
+    join(tempDir, ".opencode", "shared", "lib", "project-owned-sibling.mjs"),
+  ];
+  try {
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale OC-only review engine\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -748,6 +810,21 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/second-eye-coordinator.test.mjs",
     "skills/orchestrating-delivery/second-eye-runtime.mjs",
     "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+    "shared/lib/agent-retry.mjs",
+    "shared/lib/agent-retry.test.mjs",
+    "shared/lib/agent-retry-call.mjs",
+    "shared/lib/agent-retry-call.test.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",
@@ -765,22 +842,9 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
   }
   assert.equal(new Set(OC_RETIRED_FILES).size, OC_RETIRED_FILES.length, "retired paths must be unique");
 
-  // The pruning keeps these modules alive on purpose (docs/prd/oc-parity-pruning.md § Passo 5,
-  // #583): adversary-nudge is the spec loop's only brake — the Claude Code lane has no adversary
-  // cap to replace it — and revise-nudge is the authoritative round budget. Listing either as
-  // retired would delete it from every vendored project the day its path changes.
-  const keptOnPurpose = [
-    "plugin/lib/adversary-nudge.mjs",
-    "plugin/lib/adversary-nudge.test.mjs",
-    "plugin/lib/revise-nudge.mjs",
-    "plugin/lib/revise-nudge.test.mjs",
-  ];
-  for (const path of keptOnPurpose) {
-    assert.ok(!OC_RETIRED_FILES.includes(path), `retired path must not include a module kept on purpose: ${path}`);
-  }
 });
 
-test("retired dual files are pruned while review-guard and review budgets remain vendored (#583)", () => {
+test("retired review-engine files are pruned from a fresh vendor", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-predeclared-retired-"));
   try {
     const result = spawnSync(
@@ -789,11 +853,11 @@ test("retired dual files are pruned while review-guard and review budgets remain
       { encoding: "utf8", stdio: "pipe" },
     );
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/review-guard.ts")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/loop-guard.ts")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/review-guard.ts")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -1121,9 +1185,9 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     assert.match(entry, /import\("\.\/lib\/hook-identity\.mjs"\)/);
     assert.match(entry, /import\("\.\.\/lib\/gate-state\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
-    const reviewGuard = readFileSync(join(tempDir, ".opencode/plugin/review-guard.ts"), "utf8");
-    assert.match(reviewGuard, /import\("\.\.\/shared\/lib\/path-helpers\.mjs"\)/);
-    assert.ok(!reviewGuard.includes("/Users/"), "vendored shared import must be relative, not home path");
+    const plannerRecovery = readFileSync(join(tempDir, ".opencode/plugin/planner-recovery.ts"), "utf8");
+    assert.match(plannerRecovery, /import\("\.\.\/lib\/planner-artifact\.mjs"\)/);
+    assert.ok(!plannerRecovery.includes("/Users/"), "vendored planner import must be relative, not home path");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

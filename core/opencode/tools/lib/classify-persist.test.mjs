@@ -84,7 +84,7 @@ test("state success followed by stub failure remains fail-closed", () => {
     assert.match(result.reason, /plan write failed/);
     assert.equal(state.classified, false);
     assert.equal(state.classify_status, "stub_pending");
-    assert.equal(state.delivery_status, "delivery-blocked");
+    assert.equal(state.delivery_status, "planning");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

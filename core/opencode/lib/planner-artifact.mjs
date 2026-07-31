@@ -7,8 +7,7 @@ import { gateStatePath, planDir } from "../../shared/lib/path-helpers.mjs";
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
 import { semanticPlanHash } from "./plan-hash.mjs";
-import { bindPlannerArtifact, reconcilePlannerLease } from "./planner-state.mjs";
-import { resolvePlannerFallbackConfig } from "./planner-fallback-config.mjs";
+import { bindPlannerArtifact } from "./planner-state.mjs";
 
 export { semanticPlanHash };
 
@@ -131,18 +130,13 @@ export function readBoundPlanSnapshot(snapshotPath) {
   }
 }
 
-/** @description Reconcile expired claims and bind/verify a canonical plan under the gate-state lock. */
-export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date.now(), options = {}) {
+/** @description Bind and verify the canonical plan under the gate-state lock. */
+export function reconcilePlannerStateFromDisk(projectRoot, sessionId, _now = Date.now(), options = {}) {
   const statePath = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
   if (!statePath.ok) return { ok: false, reason: statePath.reason };
-  const fallback = resolvePlannerFallbackConfig(projectRoot);
   let snapshot = null;
   const persisted = withGateStateLock(statePath.path, (previous) => {
-    let state = reconcilePlannerLease(previous, {
-      now,
-      hasFallback: fallback.available,
-      fallbackDiagnostic: fallback.diagnostic,
-    }).state;
+    let state = { ...previous };
     const featureId = typeof state.feature_id === "string" ? state.feature_id : "";
     let newlyBound = false;
     if (state.planner_status === "plan_pending_write") {
@@ -168,8 +162,6 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
         state = {
           ...state,
           planner_status: "plan_invalid",
-          planner_retry_outcome: "not_applicable",
-          delivery_status: "delivery-blocked",
           planner_binding_error: "canonical plan changed after attempt binding",
         };
       }
@@ -181,8 +173,6 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
         state = {
           ...state,
           planner_status: "plan_invalid",
-          planner_retry_outcome: "not_applicable",
-          delivery_status: "delivery-blocked",
           planner_binding_error: "canonical plan changed during gate decision",
         };
       }
@@ -194,7 +184,6 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
         state = {
           ...state,
           planner_status: "plan_invalid",
-          delivery_status: "delivery-blocked",
           planner_binding_error: written.reason,
         };
       } else {
@@ -212,7 +201,7 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
       const snapshotPath = path.resolve(projectRoot, state.planner_plan_binding.snapshot_path);
       const expectedRoot = path.resolve(projectRoot, ".opencode", "plans", ".state", sessionId, "bound-plans");
       if (!snapshotPath.startsWith(`${expectedRoot}${path.sep}`)) {
-        state = { ...state, planner_status: "plan_invalid", delivery_status: "delivery-blocked", planner_binding_error: "snapshot path escaped state root" };
+        state = { ...state, planner_status: "plan_invalid", planner_binding_error: "snapshot path escaped state root" };
       } else {
         snapshot = readBoundPlanSnapshot(snapshotPath);
         if (
@@ -221,7 +210,7 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, now = Date
           snapshot.semanticHash !== state.planner_plan_binding.snapshot_hash ||
           snapshot.semanticHash !== state.planner_plan_binding.semantic_hash
         ) {
-          state = { ...state, planner_status: "plan_invalid", delivery_status: "delivery-blocked", planner_binding_error: "bound snapshot integrity failed" };
+          state = { ...state, planner_status: "plan_invalid", planner_binding_error: "bound snapshot integrity failed" };
         }
       }
     }

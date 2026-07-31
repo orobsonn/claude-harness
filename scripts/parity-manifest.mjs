@@ -423,7 +423,7 @@ export function checkGatesAndOracle(targetDir) {
   const kind = detectTargetKind(targetDir);
   const missing = [];
   if (kind === "opencode") {
-    for (const rel of ["plugin/entry-gate.ts", "plugin/plan-gate.ts", "plugin/review-guard.ts"]) {
+    for (const rel of ["plugin/entry-gate.ts", "plugin/plan-gate.ts"]) {
       if (!existsSync(join(targetDir, rel))) missing.push(rel);
     }
     const oracleCandidates = [

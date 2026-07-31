@@ -5,7 +5,7 @@
  *   (gate-state from disk via lib/gate-state.mjs)
  * - task: decideEntryTask for executor/sniper. Dual/plan_verdict classification (ADR-003) is
  *   record-only as of #483 and lives entirely in plan-gate.ts, which runs earlier in the
- *   plugin chain (review-guard → planner-recovery → plan-gate → obs-hand → entry-gate) — a
+ *   plugin chain (planner-recovery → plan-gate → obs-hand → entry-gate) — a
  *   second call here would be dead code, never reached first. Shared utils used by this
  *   gate (isTaskTool, extractHookTaskContext, loadGateStateFromDisk) live outside
  *   dual-enforcement (#580); #583 removes the dual block from plan-gate.
@@ -22,7 +22,7 @@
  * closures; decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
  * dispatches, and the freeze-commit early trigger); gitState (a real git probe) is injected
  * only for delivery commands.
- * Load shape matches review-guard: dynamic import of pure mjs inside factory
+ * Load shape uses dynamic imports of pure mjs inside the factory.
  * (static import of mjs breaks OC plugin loader — "export is not a function").
  */
 
@@ -440,11 +440,6 @@ export async function createEntryGateHooks(
         required: isDeliveryRole(subagentType) ? ["brainstormed", "adversary_fired"] : [],
       })
       if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
-
-      // review_cap_reached / primary_failure_cap_reached no longer freeze writing hands (#482):
-      // decideReviewCapBeforeWriting is removed. The review reservation budget itself (reserved
-      // in loop-decide.mjs) still requires a verified restart before another review round — that
-      // is a separate, still-enforced concern — but executor/sniper/test-author dispatch proceeds.
 
       throwIfEntryDenied(
         decideEntryTask({

@@ -850,23 +850,6 @@ test("classify allowed for top-level build", async () => {
   )
 })
 
-test("#ac-1.3 task permitted on the 4th dispatch after 3 same-agent failures — the in-session K=3 retry brake was removed", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({
-      agent_dispatch_failures: { "planner": 3 },
-    }))
-    const before = hooks["tool.execute.before"]
-    // The real per-issue ceiling now lives outside the session (core/vps cron-a-exit.mjs:116) —
-    // a 4th same-agent dispatch is no longer refused by the entry-gate itself. fullCeremony()
-    // satisfies every OTHER planner precondition, so a genuine doesNotReject actually proves the
-    // K=3 brake is gone (not just "denied for some other reason").
-    await assert.doesNotReject(() => before(
-      { tool: "task", sessionID: SID },
-      { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
-    ))
-  })
-})
-
 test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged warning, and a transient hiccup self-heals on retry", async () => {
   await withHooks(async (hooks, root) => {
     const dir = path.join(root, ".opencode", "plans", ".state", SID)
@@ -905,50 +888,6 @@ test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged
       { tool: "task", sessionID: SID },
       { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
     ))
-  })
-})
-
-test("#ac-1.2 review_cap_reached no longer blocks executor/sniper/test-author dispatch", async () => {
-  await withHooks(async (hooks, root) => {
-    for (const status of ["review_cap_reached", "primary_failure_cap_reached"]) {
-      for (const subagent of ["executor-high", "sniper-high", "test-author"]) {
-        // test-author is fidelity-exempt (decideEntryTask); executor/sniper need fidelity_pass —
-        // a state missing it would deny for THAT reason, proving nothing about the review cap.
-        const needsFidelity = subagent !== "test-author"
-        writeGateState(root, SID, fullCeremony({
-          review_status: status,
-          ...(needsFidelity ? { fidelity_pass: ["feat/task-1"] } : {}),
-        }))
-        const before = hooks["tool.execute.before"]
-        await assert.doesNotReject(
-          () => before(
-            { tool: "task", sessionID: SID },
-            { args: { subagent_type: subagent, feature_id: "feat", task_id: "task-1" } },
-          ),
-          `${subagent} under ${status} must be permitted now that the review-cap writing-hand block is removed`,
-        )
-      }
-    }
-  })
-})
-
-test("task allowed when failures under K=3", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({
-      agent_dispatch_failures: { "planner": 2 },
-      planner_status: "usable",
-    }))
-    const before = hooks["tool.execute.before"]
-    // may still deny on dual/plan for planner dispatch depending on gates — only check retry not exhausted
-    try {
-      await before(
-        { tool: "task", sessionID: SID },
-        { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
-      )
-    } catch (err) {
-      assert.ok(err instanceof Error)
-      assert.doesNotMatch(err.message, /agent retry exhausted/)
-    }
   })
 })
 

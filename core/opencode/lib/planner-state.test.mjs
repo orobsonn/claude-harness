@@ -1,16 +1,15 @@
-/** @description Pure concurrency and claim probes for planner attempt state (primary-only, no lease kill). */
-import test from "node:test";
+/** @description Planner identity lifecycle probes without retry or review budgets. */
 import assert from "node:assert/strict";
+import test from "node:test";
 import {
-  MAX_PRIMARY_ATTEMPTS,
+  bindPlannerArtifact,
   claimPlannerAttempt,
   completePlannerAttempt,
   failPlannerAttempt,
   plannerCycleResetPatch,
-  reconcilePlannerLease,
 } from "./planner-state.mjs";
 
-const BASE = { feature_id: "feature", classified: true };
+const base = { feature_id: "feature", classified: true };
 const claim = (state, overrides = {}) => claimPlannerAttempt(state, {
   role: "planner",
   callId: "call-1",
@@ -19,194 +18,41 @@ const claim = (state, overrides = {}) => claimPlannerAttempt(state, {
   featureId: "feature",
   model: "openai/model",
   baselinePlan: { fingerprint: "old" },
-  hasFallback: true,
-  now: 1_000,
   ...overrides,
 });
 
-test("one active atomic claim excludes concurrent/replayed primary claims", () => {
-  const first = claim(BASE);
+test("one planner call identity excludes a different concurrent call and repeats idempotently", () => {
+  const first = claim(base);
   assert.equal(first.ok, true);
   assert.equal(claim(first.state, { callId: "call-2", token: "token-2" }).ok, false);
-  assert.equal(first.state.planner_primary_attempts, 1);
+  assert.equal(claim(first.state).idempotent, true);
 });
 
-test("same callID re-claim is idempotent (double tool.execute.before / dual plugin load)", () => {
-  const first = claim(BASE);
-  assert.equal(first.ok, true);
-  const again = claim(first.state, { callId: "call-1", token: "token-DIFFERENT" });
-  assert.equal(again.ok, true);
-  assert.equal(again.idempotent, true);
-  assert.equal(again.state.planner_primary_attempts, 1);
-  assert.equal(again.state.planner_active_attempt.call_id, "call-1");
-  assert.equal(again.state.planner_active_attempt.token, "token-1");
-  assert.equal(claim(first.state, { callId: "call-other", token: "token-x" }).ok, false);
-});
-
-test("late output and rejection cannot overwrite a newer active attempt", () => {
-  const first = claim(BASE);
-  const failed = failPlannerAttempt(first.state, {
-    callId: "call-1",
-    token: "token-1",
-    failureClass: "timeout",
-    providerUnavailable: true,
-    hasFallback: true,
-    now: 2_000,
-  });
-  // Primary-only: after provider blip, may re-claim primary (not fallback).
-  assert.equal(failed.state.delivery_status, "planning_revision");
-  const second = claim(failed.state, { callId: "call-2", token: "token-2", now: 3_000 });
-  assert.equal(second.ok, true);
-  const lateOutput = completePlannerAttempt(second.state, {
-    callId: "call-1",
-    token: "token-1",
-    resultKind: "usable_plan",
-    planHash: "late",
-    now: 4_000,
-  });
-  const lateError = failPlannerAttempt(lateOutput.state, {
-    callId: "call-1",
-    token: "token-1",
-    failureClass: "auth",
-    hasFallback: true,
-    now: 4_000,
-  });
-  assert.equal(lateOutput.accepted, false);
-  assert.equal(lateError.accepted, false);
-  assert.equal(lateError.state.planner_active_attempt.call_id, "call-2");
-});
-
-test("wall-clock does not kill active planner claim (no lease expiry)", () => {
-  const first = claim(BASE);
-  const later = reconcilePlannerLease(first.state, { now: 1_000 + 60 * 60_000, hasFallback: true });
-  assert.equal(later.reconciled, false);
-  assert.equal(later.state.planner_active_attempt?.call_id, "call-1");
-  assert.equal(later.state.planner_status, "running");
-});
-
-test("planner-fallback claims are rejected (primary-only)", () => {
-  const denied = claimPlannerAttempt(BASE, {
-    role: "planner-fallback",
-    callId: "fb",
-    token: "t",
-    sessionId: "session-1",
-    featureId: "feature",
-    model: "other/model",
-    hasFallback: true,
-    now: 1_000,
-  });
-  assert.equal(denied.ok, false);
-  assert.match(denied.reason, /fallback disabled/);
-});
-
-test("terminal planner states reject claims until explicit reset", () => {
-  for (const terminal of [
-    { planner_status: "planner_failed", delivery_status: "delivery-blocked" },
-    { planner_status: "planner_unavailable", delivery_status: "delivery-blocked" },
-  ]) {
-    assert.equal(claim({ ...BASE, ...terminal }).ok, false);
-  }
-  const reset = {
-    ...BASE,
-    planner_status: "planner_failed",
-    delivery_status: "delivery-blocked",
-    ...plannerCycleResetPatch(),
-  };
-  assert.equal(claim(reset).ok, true);
-});
-
-test("round-budget deny escalates in product language instead of dying on an engineering string", () => {
-  const spent = claim({ ...BASE, planner_primary_attempts: MAX_PRIMARY_ATTEMPTS });
-  assert.equal(spent.ok, false);
-  // The live deadlock ended the turn on "planner primary attempt bound reached" — no instruction,
-  // no product framing, so the orchestrator stopped silently with the operator none the wiser.
-  assert.match(spent.reason, /do NOT re-dispatch/i);
-  assert.match(spent.reason, /report the blocking finding to the operator/i);
-});
-
-test("legacy gate-state with high planner_dispatches_total does not deny claim", () => {
-  // #602 removed the session ceiling rail. Disk state written before the cut may still carry
-  // planner_dispatches_total; the field is ignored — never a deny reason, never corruption.
-  const legacy = { ...BASE, planner_dispatches_total: 999, planner_primary_attempts: 0 };
-  const allowed = claim(legacy);
-  assert.equal(allowed.ok, true);
-  assert.equal(allowed.state.planner_primary_attempts, 1);
-  // Field may remain on the object (ignored legacy), but must not be incremented as a live counter.
-  assert.equal(allowed.state.planner_dispatches_total, 999);
-
-  const reset = { ...legacy, ...plannerCycleResetPatch() };
-  assert.equal(claim(reset).ok, true);
-});
-
-test("cycle reset clears the round stamp so a restarted cycle still earns its round credit", () => {
-  const patch = plannerCycleResetPatch();
-  assert.equal(patch.planner_attempts_round, 0);
-  assert.equal(patch.planner_primary_attempts, 0);
-});
-
-test("a claim counts against the per-round planner budget", () => {
-  const first = claim(BASE);
-  assert.equal(first.state.planner_primary_attempts, 1);
-});
-
-test("a claim bound to a prior process instance is dead: reconciled under lock, not blocked forever", () => {
-  const deadClaim = {
-    ...BASE,
-    planner_status: "running",
-    delivery_status: "planning",
-    planner_primary_attempts: 1,
-    planner_dispatches_total: 1,
-    planner_active_attempt: {
-      call_id: "dead-call",
-      token: "dead-token",
-      role: "planner",
-      session_id: "session-1",
-      feature_id: "feature",
-      model: "openai/model",
-      started_at: 1_000,
-      expires_at: null,
-      baseline_plan: null,
-      // Not this test process's real PROCESS_INSTANCE — simulates a claim that survived
-      // a restart, so the Task that owned it can never complete or fail it.
-      process_instance: "prior-process-instance",
-    },
-  };
-  const claimed = claim(deadClaim, { callId: "call-fresh", token: "token-fresh", now: 5_000 });
-  assert.equal(claimed.ok, true);
-  assert.equal(claimed.state.planner_active_attempt.call_id, "call-fresh");
-  assert.equal(claimed.state.planner_last_attempt.call_id, "dead-call");
-  assert.equal(claimed.state.planner_last_attempt.reconciled_reason, "dead claim: prior process instance");
-  // A late result for the dead call must stay rejected as stale, not overwrite the fresh claim.
-  const late = completePlannerAttempt(claimed.state, {
-    callId: "dead-call",
-    token: "dead-token",
-    resultKind: "usable_plan",
-    planHash: "late",
-    now: 6_000,
-  });
+test("a stale result cannot replace the active planner identity", () => {
+  const first = claim(base);
+  const failed = failPlannerAttempt(first.state, { callId: "call-1", token: "token-1", failureClass: "timeout" });
+  const second = claim(failed.state, { callId: "call-2", token: "token-2" });
+  const late = completePlannerAttempt(second.state, { callId: "call-1", token: "token-1", resultKind: "usable_plan" });
   assert.equal(late.accepted, false);
-  assert.equal(late.state.planner_active_attempt.call_id, "call-fresh");
+  assert.equal(late.state.planner_active_attempt.call_id, "call-2");
 });
 
-test("a claim owned by THIS process instance is still genuinely active and blocks a concurrent claim", () => {
-  const first = claim(BASE);
-  assert.equal(first.ok, true);
-  assert.equal(first.state.planner_active_attempt.process_instance !== "prior-process-instance", true);
-  const concurrent = claim(first.state, { callId: "call-2", token: "token-2" });
-  assert.equal(concurrent.ok, false);
-  assert.match(concurrent.reason, /already active/);
-});
-
-test("invalid plan from primary opens revision not fallback", () => {
-  const first = claim(BASE);
-  const done = completePlannerAttempt(first.state, {
-    callId: "call-1",
-    token: "token-1",
-    resultKind: "invalid_plan",
-    errors: ["bad"],
-    now: 2_000,
+test("a canonical plan binds only to its matching planner identity", () => {
+  const first = claim(base);
+  const returned = completePlannerAttempt(first.state, {
+    callId: "call-1", token: "token-1", resultKind: "usable_plan", planHash: "hash",
   });
-  assert.equal(done.state.planner_status, "plan_invalid");
-  assert.equal(done.state.delivery_status, "planning_revision");
-  assert.equal(claim(done.state, { callId: "call-2", token: "token-2", now: 3_000 }).ok, true);
+  const bound = bindPlannerArtifact(returned.state, {
+    sessionId: "session-1", featureId: "feature",
+    artifact: { valid: true, semanticHash: "hash", fileHash: "file", fingerprint: "new", plan: { feature_id: "feature" } },
+  });
+  assert.equal(bound.ok, true);
+  assert.equal(bound.state.planner_status, "usable");
+});
+
+test("classify reset contains identity fields, not runtime budgets", () => {
+  const reset = plannerCycleResetPatch();
+  assert.deepEqual(Object.keys(reset).sort(), [
+    "planner_active_attempt", "planner_binding_error", "planner_last_attempt", "planner_plan_binding", "planner_status",
+  ]);
 });

@@ -182,8 +182,8 @@ test("heartbeat extends only before expiry and never revives an expired claim", 
   } finally { f.close(); }
 });
 
-test("claim rejects non-usable planner and delivery-blocked state", () => {
-  for (const patch of [{ planner_status: "plan_invalid" }, { delivery_status: "delivery-blocked" }]) {
+test("claim rejects a non-usable planner state", () => {
+  for (const patch of [{ planner_status: "plan_invalid" }]) {
     const f = fixture();
     try {
       fs.writeFileSync(f.statePath, JSON.stringify({ ...f.read(), ...patch }));

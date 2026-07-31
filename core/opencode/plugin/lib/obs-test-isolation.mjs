@@ -2,7 +2,7 @@
  * @description Test-only isolation for HARNESS_OBSERVABILITY_RUN_PATH. Production code
  * (obs-emit.mjs's obsAppend) resolves this env var straight from process.env by default — a test
  * that drives a real emitter-capable hook (obs-eye.ts, obs-hand.ts, obs-plan-write.ts,
- * review-guard.ts, mark-gate.mjs's CLI, plan-write-gate.ts, planner-recovery.ts) without isolating
+ * mark-gate.mjs's CLI, plan-write-gate.ts, planner-recovery.ts) without isolating
  * it inherits whatever real run outbox the test process's environment carries — inside an actual
  * harness session that env var points at a live run, so fixture events land in the real feed
  * (#490). Call `isolateObservabilityRunPath()` once at module scope, before any `test(...)`

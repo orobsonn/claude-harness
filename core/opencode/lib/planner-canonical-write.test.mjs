@@ -132,7 +132,6 @@ test("a paraphrased plan cannot bind — the hash gate still holds against hand-
     session_id: SESSION,
     feature_id: FEATURE,
     planner_status: "plan_pending_write",
-    planner_primary_attempts: 1,
     planner_active_attempt: {
       call_id: "call-1",
       token: "token-1",

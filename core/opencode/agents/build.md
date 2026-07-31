@@ -99,11 +99,11 @@ On the **first request of every session**, **load and follow the `oc-triaging-re
 
 Your **FIRST action of the top-level session is the tool call `skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
-**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap or provider error). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
+**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
 
 **Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models.
 
-**Retry K=3 (every Task agent — all of them):** planner, plan-reviewer-*, adversary-*, executor-*, sniper-*, test-author, compliance, security, harvester, shipper. On failure, retry the **same** `subagent_type` up to **3** times. After 3 → stop (product error). Never ladder models. **The host does NOT enforce this cap** (#482: the in-session same-agent retry brake was removed and is not replaced — the real per-issue ceiling lives in the fleet engine, `core/vps/cron-a-exit.mjs`, outside this session). You are the only enforcement in an interactive session: count failures yourself and stop at 3.
+**Dispatch failures:** report provider or tool failures in product language. Any decision to continue, change scope, or stop is an explicit operator/orchestrator decision; OpenCode keeps no retry budget for it.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
@@ -138,7 +138,7 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
-- [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
+- [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review; escalate only for an explicit product decision.
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final review, both modes).
 - [ ] **adversary** — `adversary` (and optional `adversary-family-2` only when `secondEyeModel` is set) entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.

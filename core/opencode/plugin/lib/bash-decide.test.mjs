@@ -720,10 +720,10 @@ test("FULL ceremony fields present but incomplete (no dual_status/final_review/d
   assert.equal(d.decision, "allow");
 });
 
-test("review_status=primary_failure_cap_reached no longer blocks the bash gate (moved out of scope; not one of the 4 kept rails)", () => {
+test("a legacy review status does not block the bash gate", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: { feature_id: "feat", review_status: "primary_failure_cap_reached" },
+    gateState: { feature_id: "feat", review_status: "legacy-review-status" },
     ...cleanDepsWithCapture(),
   });
   assert.equal(d.decision, "allow");

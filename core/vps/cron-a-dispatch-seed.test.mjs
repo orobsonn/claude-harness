@@ -32,7 +32,6 @@ const CANONICAL_STUBS = [
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",
-  "review-guard.ts",
   "reinject-state.ts",
   "version-check.ts",
   "harvest-guard.ts",
@@ -1374,7 +1373,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
     assert.deepEqual(cfg.plugin, ["my-external-package"]);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
-    assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), false, "retired review plugin must stay absent");
     assert.equal(existsSync(join(worktree, ".opencode/plugin/loop-guard.ts")), false);
     assertCriticalRuntime(worktree);
     assert.equal(

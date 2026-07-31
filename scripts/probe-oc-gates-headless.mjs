@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @description Headless probe for OC gates post-fix (entry-gate/plan-gate/review-guard).
+ * @description Headless probe for OC gates post-fix (entry-gate/plan-gate).
  * Creates temp project via vendor-core --runtime opencode, runs DENY scenario via real opencode,
  * validates oracle on tool_use error (NOT exit code), runs hermetic in-process ALLOW oracle.
  * Documents that exit code of opencode alone is not the oracle.
@@ -93,12 +93,12 @@ After the task returns (success or error), reply GATE_PROBE_DONE.`;
     const combined = denyStderr + "\n" + denyStdout;
     if (/failed to load plugin/i.test(combined)) {
       // only fail if critical gates
-      if (/entry-gate|plan-gate|review-guard/i.test(combined)) {
+      if (/entry-gate|plan-gate/i.test(combined)) {
         pluginLoadFail = true;
       }
     }
     if (pluginLoadFail) {
-      fail("plugin load error for entry-gate|plan-gate|review-guard: " + combined.slice(0, 500));
+      fail("plugin load error for entry-gate|plan-gate: " + combined.slice(0, 500));
     }
     for (const line of denyStdout.split("\n")) {
       if (!line.trim().startsWith("{")) continue;

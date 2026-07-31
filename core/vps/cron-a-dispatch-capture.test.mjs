@@ -185,7 +185,7 @@ function plantMonorepoOcPlugins(root) {
   const dir = join(oc, "plugin");
   mkdirSync(dir, { recursive: true });
   for (const name of [
-    "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts", "review-guard.ts",
+    "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts",
     "reinject-state.ts", "version-check.ts", "harvest-guard.ts", "obs-plan-write.ts",
     "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts", "marker-authority.ts", "ceremony-coordinator.ts",
   ]) {

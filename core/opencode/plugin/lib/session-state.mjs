@@ -231,7 +231,7 @@ export function isPendingReviewState(state) {
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
   if (state.session_id !== sessionId || state.active_dispatch != null) return false;
   if (hasCleanupPending(projectRoot, sessionId) || hasOwnedChildIndex(projectRoot, sessionId)) return false;
-  if (state.planner_status !== "usable" || state.delivery_status === "delivery-blocked" || state.planner_binding_error != null ||
+  if (state.planner_status !== "usable" || state.planner_binding_error != null ||
       state.classified === false || isPendingReviewState(state)) return false;
   const featureId = state.feature_id;
   if (!isSafeFeatureId(featureId)) return false;

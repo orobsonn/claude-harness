@@ -17,7 +17,7 @@ function atomicWrite(file, content) {
   }
 }
 
-/** @description Persist blocked reset, replace stub, then mark classify ready; no failure path rewrites the plan. */
+/** @description Persist reset, replace stub, then mark classify ready; no failure path rewrites the plan. */
 export function persistClassifyArtifacts(input, deps = {}) {
   const mergeGateState = deps.mergeGateState ?? defaultMergeGateState;
   const writePlan = deps.writePlan ?? atomicWrite;
@@ -25,7 +25,6 @@ export function persistClassifyArtifacts(input, deps = {}) {
     ...input.statePatch,
     classified: false,
     classify_status: "stub_pending",
-    delivery_status: "delivery-blocked",
   });
   if (!pending?.ok) {
     return { ok: false, reason: `gate-state persistence failed: ${String(pending?.reason ?? "unknown")}` };

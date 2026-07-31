@@ -79,7 +79,7 @@ Also consult `mp` through retrieval-only `code` for relevant durable memories th
 | APPROVE | No high findings. Plan sound enough to execute. |
 | REVISE | One+ high findings or structural gap (missing task, wrong dependency, weak locked_test, unowned AC) |
 
-On REVISE, be precise — one planner pass should fix it. The `revise_nudge` is the sole authority on the revision budget.
+On REVISE, be precise — one planner pass should fix it. Runtime counters never decide whether the plan is reviewed again.
 
 ---
 

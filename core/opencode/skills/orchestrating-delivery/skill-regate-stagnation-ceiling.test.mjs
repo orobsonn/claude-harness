@@ -37,7 +37,7 @@ const stopSection = (() => {
 
 const iterationCap = blockStartingWith("- **Re-gate→sniper iteration cap");
 const noStepLeft = blockStartingWith("- **When there is no step left to spend**");
-const capRule = blockStartingWith("- **CAP = 3 rounds");
+const capRule = blockStartingWith("- **Open material finding");
 const disarmRule = blockStartingWith("- **Accepted risk after the CAP escalation");
 const advanceSignal = blockStartingWith("- **Stopping with a blocking finding still open");
 
@@ -77,8 +77,8 @@ test("OC orchestrating-delivery: dual-lane stagnation vocabulary is absent (#585
   );
   assert.doesNotMatch(
     skill,
-    /adversary_loop_count/,
-    "adversary_loop_count disambiguation prose is dual-lane invented vocabulary.",
+    /legacy-review-counter/,
+    "legacy review-counter prose is forbidden.",
   );
   assert.doesNotMatch(
     skill,
@@ -101,10 +101,10 @@ test("OC orchestrating-delivery: exhausted stronger-hand is terminal, not more s
   );
 });
 
-test("OC orchestrating-delivery: CAP=3 still escalates with ≥ medium open (#565)", () => {
-  assert.ok(capRule, "the CAP = 3 bullet must survive.");
-  assert.match(capRule, /≥ medium|blocking/i, "CAP fires on open ≥ medium findings.");
-  assert.match(capRule, /pt-br|operator/i, "CAP escalates to the operator in product language.");
+test("OC orchestrating-delivery: an open material finding is a human product checkpoint", () => {
+  assert.ok(capRule, "the product checkpoint must be explicit.");
+  assert.match(capRule, /product|operator|pt-br/i, "the finding is escalated in product language.");
+  assert.match(capRule, /not a runtime count/i, "the checkpoint cannot become a persisted count rail.");
 });
 
 test("OC orchestrating-delivery: CRITICAL EXCEPTION / accept terminals stamp correctly (#565)", () => {

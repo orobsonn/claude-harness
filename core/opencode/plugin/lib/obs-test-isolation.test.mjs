@@ -1,6 +1,6 @@
 /**
  * @description Permanent regression pin for #490. Any test under core/opencode/plugin that drives
- * a real emitter-capable hook (review-guard.ts, obs-eye.ts, obs-hand.ts, obs-plan-write.ts,
+ * a real emitter-capable hook (obs-eye.ts, obs-hand.ts, obs-plan-write.ts,
  * mark-gate.mjs's CLI, plan-write-gate.ts, planner-recovery.ts) without isolating
  * HARNESS_OBSERVABILITY_RUN_PATH inherits whatever real run outbox the test process's environment
  * carries — inside an actual harness session that var points at a live run, so fixture events
@@ -75,8 +75,8 @@ test(
       const stdout = child.stdout ?? "";
       const ranCount = /^# tests (\d+)$/m.exec(stdout);
       assert.ok(
-        ranCount && Number(ranCount[1]) > 400,
-        `sanity: the spawned corpus must actually run (expected 400+ subtests) — got stdout tail:\n${stdout.slice(-500)}\nstderr:\n${child.stderr ?? ""}`,
+        ranCount && Number(ranCount[1]) > 300,
+        `sanity: the spawned corpus must actually run (expected 300+ subtests) — got stdout tail:\n${stdout.slice(-500)}\nstderr:\n${child.stderr ?? ""}`,
       );
 
       // A file that throws at import/parse time is counted as exactly ONE failed subtest instead

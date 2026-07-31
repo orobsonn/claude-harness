@@ -148,7 +148,6 @@ function activeExpired(active, now) {
 /** @description Read one exact task from the content-addressed immutable planner snapshot. */
 export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   if (state?.planner_status !== "usable") return { ok: false, reason: "planner_status usable required" };
-  if (state?.delivery_status === "delivery-blocked") return { ok: false, reason: "delivery is blocked" };
   const binding = state?.planner_plan_binding;
   if (!binding || typeof binding !== "object") return { ok: false, reason: "bound planner snapshot required" };
   if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string") {

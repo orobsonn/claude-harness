@@ -118,7 +118,7 @@ export function decideBashAdvisory(input = {}) {
 
 /**
  * @description Writes a Decision's advisory (if any) to the plugin's only prose channel back
- * to the model -- `output.metadata` -- mirroring revise_nudge / adversary_nudge /
+ * to the model -- `output.metadata` -- without becoming runtime authority.
  * agent_idle_nudge. Fail-open: any error while writing is swallowed, never a new block.
  * @param {Decision} decision
  * @param {{ metadata?: Record<string, unknown> } | null | undefined} output

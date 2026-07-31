@@ -593,7 +593,6 @@ describe("parity-manifest", () => {
         }
         writeFileSync(join(tgt, ".opencode/plugin/entry-gate.ts"), "export {}\n");
         writeFileSync(join(tgt, ".opencode/plugin/plan-gate.ts"), "export {}\n");
-        writeFileSync(join(tgt, ".opencode/plugin/review-guard.ts"), "export {}\n");
         writeFileSync(join(tgt, ".opencode/shared/lib/capture-oracle.mjs"), "export {}\n");
         writeFileSync(
           join(tgt, ".opencode/harness.routing.json"),

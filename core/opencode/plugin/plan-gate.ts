@@ -1,15 +1,15 @@
 /**
  * @description OC plan-gate plugin — full bound plan required before writing roles dispatch.
  * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
- * Discipline around waiting for plan-review APPROVE is prose + orchestration now (see
- * lib/revise-nudge.mjs), exactly like Claude Code. Deny throws [plan-gate]. Conditional on
+ * Discipline around waiting for plan-review APPROVE is prose + orchestration, exactly like
+ * Claude Code. Deny throws [plan-gate]. Conditional on
  * planner_plan_binding: absent (no ceremony ever ran for this session, or a terminated/failed
  * attempt with no binding) -> fail-open, no plan required (operator no-ceremony branch, fleet
  * fix-mode); present -> validated for real, unchanged from before. Gate-state reconciliation
  * failure fails open only for genuinely missing/unreadable state — lock contention or a write
  * failure still denies.
  * Roles outside the guarded downstream set skip plan require.
- * Load shape matches review-guard: dynamic import of pure mjs inside Plugin factory.
+ * Load shape uses dynamic imports of pure mjs inside the Plugin factory.
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
@@ -78,7 +78,7 @@ export async function createPlanGateHooks(
         toolArgs,
         promptTaskId: marker.ok ? marker.taskId : "",
       })
-      if (!identity.ok) throw new Error(`${PREFIX} delivery-blocked: ${identity.reason}`)
+      if (!identity.ok) throw new Error(`${PREFIX} denied: ${identity.reason}`)
       const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractSubagentType(toolArgs)
       const role = bareRole(subagentType)
@@ -100,7 +100,7 @@ export async function createPlanGateHooks(
             // contention or a write failure is an infra fault, not "no ceremony ran", and
             // must keep denying (a squatted lock must never disable plan validation).
             if (GATE_STATE_INFRA_FAILURE_REASONS.has(String(reconciled.reason))) {
-              throw new Error(`${PREFIX} delivery-blocked: gate-state contention (${reconciled.reason})`)
+              throw new Error(`${PREFIX} denied: gate-state contention (${reconciled.reason})`)
             }
             console.warn(`${PREFIX} planner-state-unreadable (fail-open, plan validation skipped): ${reconciled.reason}`)
           } else {
@@ -112,17 +112,9 @@ export async function createPlanGateHooks(
                 : {}
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined
             if (!binding) {
-              // A planner attempt that really ran and ended terminally-blocked (invalid plan,
-              // failed/unavailable provider, delivery-blocked) never produces a binding either
-              // — but it is NOT "no ceremony ran" and must not be treated as the fail-open case.
-              // Mirrors the invariant lib/dispatch-scope.mjs:readCanonicalTaskFromSnapshot already
-              // enforces (refuses delivery_status === "delivery-blocked").
-              const terminalPlannerStatus = new Set(["plan_invalid", "planner_failed", "planner_unavailable"])
-              if (
-                state.delivery_status === "delivery-blocked" ||
-                terminalPlannerStatus.has(String(state.planner_status ?? ""))
-              ) {
-                throw new Error(`${PREFIX} delivery-blocked: planner attempt ended in a non-usable state; status=${String(state.planner_status ?? "missing")}`)
+              const terminalPlannerStatus = new Set(["plan_invalid", "planner_failed"])
+              if (terminalPlannerStatus.has(String(state.planner_status ?? ""))) {
+                throw new Error(`${PREFIX} denied: planner attempt ended in a non-usable state; status=${String(state.planner_status ?? "missing")}`)
               }
             }
             if (binding) {
@@ -132,10 +124,10 @@ export async function createPlanGateHooks(
                 required: ["brainstormed", "adversary_fired"],
               })
               if (!ceremonyBinding.ok) {
-                throw new Error(`${PREFIX} delivery-blocked: ${ceremonyBinding.reason}`)
+                throw new Error(`${PREFIX} denied: ${ceremonyBinding.reason}`)
               }
               if (state.planner_status !== "usable") {
-                throw new Error(`${PREFIX} delivery-blocked: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
+                throw new Error(`${PREFIX} denied: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
               }
               const artifact = reconciled.artifact as Record<string, unknown> | null
               if (
@@ -144,27 +136,27 @@ export async function createPlanGateHooks(
                 binding.feature_id !== state.feature_id ||
                 artifact.semanticHash !== binding.snapshot_hash
               ) {
-                throw new Error(`${PREFIX} delivery-blocked: current plan snapshot does not match planner binding`)
+                throw new Error(`${PREFIX} denied: current plan snapshot does not match planner binding`)
               }
               throwIfPlanDenied(decidePlanGate({ plan: artifact.plan, expect: "full" }))
               const ids = dispatchIds(toolArgs)
               const featureId = identity.featureId || ids.featureId
               if (featureId && identity.featureIdSource === "runtime-envelope" && featureId !== binding.feature_id) {
-                throw new Error(`${PREFIX} delivery-blocked: trusted runtime feature_id conflicts with bound planner feature`)
+                throw new Error(`${PREFIX} denied: trusted runtime feature_id conflicts with bound planner feature`)
               }
               if (ids.featureId && identity.featureIdSource !== "runtime-envelope" && ids.featureId !== binding.feature_id) {
-                throw new Error(`${PREFIX} delivery-blocked: optional dispatch feature_id conflicts with bound planner feature`)
+                throw new Error(`${PREFIX} denied: optional dispatch feature_id conflicts with bound planner feature`)
               }
               const tasks = Array.isArray((artifact.plan as Record<string, unknown>)?.tasks)
                 ? (artifact.plan as { tasks: Array<Record<string, unknown>> }).tasks
                 : []
               const requiresTaskId = isTestAuthorRole(role) || isExecutorRole(role) || isSniperRole(role)
               if (requiresTaskId && !marker.ok && identity.taskIdSource !== "runtime-envelope") {
-                throw new Error(`${PREFIX} delivery-blocked: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
+                throw new Error(`${PREFIX} denied: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
               }
               const trustedTaskId = identity.taskId || ids.taskId
               if (trustedTaskId && !tasks.some((task) => task?.id === trustedTaskId)) {
-                throw new Error(`${PREFIX} delivery-blocked: dispatch task_id does not exist in bound plan`)
+                throw new Error(`${PREFIX} denied: dispatch task_id does not exist in bound plan`)
               }
 
               if (toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)) {

@@ -292,13 +292,11 @@ test("lt-pg-terminal-blocked: planner attempt ended plan_invalid with no binding
   await withTempRoot(async (root) => {
     // A real planner attempt that ran and terminated in a non-usable state never produces a
     // planner_plan_binding either — but this is NOT "no ceremony ran" (the #ac-1.1 fail-open
-    // case). Mirrors the delivery_status === "delivery-blocked" invariant enforced elsewhere
+    // case). A terminal planner state must still reject a downstream writing dispatch.
     // (lib/dispatch-scope.mjs:readCanonicalTaskFromSnapshot).
     seedProject(root, {
       feature_id: FEATURE,
       planner_status: "plan_invalid",
-      delivery_status: "delivery-blocked",
-      planner_primary_attempts: 3,
     })
     await assert.rejects(() => runHook(root, "executor-low"), /non-usable state/)
   })
