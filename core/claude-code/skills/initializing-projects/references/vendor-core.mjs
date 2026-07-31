@@ -358,7 +358,7 @@ export function pinTargetRoot(targetDir) {
  * @description Rewrite monorepo `core/opencode/** → core/shared` imports to vendored
  * `.opencode/** → .opencode/shared` relative paths. Depth-aware; never produces absolute home paths.
  * @param {string} content
- * @param {string} relFromOpencodeRoot - e.g. `plugin/entry-gate.ts` or `plugin/lib/gate-state.mjs`
+ * @param {string} relFromOpencodeRoot - e.g. `plugin/entry-gate.ts` or `lib/gate-state.mjs`
  * @returns {string}
  */
 export function rewriteSharedImportsForVendor(content, relFromOpencodeRoot) {

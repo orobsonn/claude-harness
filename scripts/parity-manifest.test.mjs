@@ -10,8 +10,9 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   runParity,
@@ -34,6 +35,44 @@ function makeModuleFixture(prefix) {
   writeFileSync(join(tmp, "package.json"), JSON.stringify({ type: "module" }));
   mkdirSync(join(tmp, "plugin"), { recursive: true });
   return tmp;
+}
+
+/** @description Lists static and literal-dynamic imports from lib/** that resolve into plugin/lib/. */
+function findLibBackImports(root) {
+  const libRoot = join(root, "lib");
+  const pluginLibRoot = resolve(root, "plugin", "lib");
+  const found = [];
+  const patterns = [
+    /\b(?:import|export)\s+(?:[\s\S]*?\sfrom\s*)?["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["'](?:\s*,|\s*\))/g,
+  ];
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      if (statSync(abs).isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (!/\.(?:mjs|cjs|js|ts|tsx|jsx)$/.test(name)) continue;
+      const text = readFileSync(abs, "utf8");
+      for (const pattern of patterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          const specifier = match[1];
+          if (!specifier.startsWith(".")) continue;
+          const target = resolve(dirname(abs), specifier);
+          const fromPluginLib = relative(pluginLibRoot, target);
+        if (fromPluginLib === "" || (fromPluginLib !== ".." && !fromPluginLib.startsWith(`..${sep}`))) {
+            found.push({ file: relative(root, abs), specifier });
+          }
+        }
+      }
+    }
+  };
+  walk(libRoot);
+  return found;
 }
 
 describe("parity-manifest", () => {
@@ -435,7 +474,22 @@ describe("parity-manifest", () => {
     assert.ok(res.scanned > 0, "scanner walked no files");
   });
 
-  it("t11-closure-11: source and fresh vendored lib have no plugin/lib back-imports", () => {
+  it("t11-lib-back-import-mutation: detects a literal dynamic import from a lib test into plugin/lib", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-lib-back-import-"));
+    try {
+      mkdirSync(join(tmp, "lib"), { recursive: true });
+      mkdirSync(join(tmp, "plugin", "lib"), { recursive: true });
+      writeFileSync(join(tmp, "lib", "back-import.test.mjs"), 'await import("../plugin/lib/legacy.mjs");\n');
+      writeFileSync(join(tmp, "plugin", "lib", "legacy.mjs"), "export {};\n");
+      assert.deepEqual(findLibBackImports(tmp), [
+        { file: join("lib", "back-import.test.mjs"), specifier: "../plugin/lib/legacy.mjs" },
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-closure-11: source and fresh vendored lib tree have no plugin/lib back-imports", () => {
     const closure = [
       "gate-state.mjs",
       "entry-decide.mjs",
@@ -453,8 +507,8 @@ describe("parity-manifest", () => {
       for (const name of closure) {
         const current = join(root, "lib", name);
         assert.ok(existsSync(current), `closure source must live at lib/${name}`);
-        assert.doesNotMatch(readFileSync(current, "utf8"), /(?:from|import)\s*[('"].*plugin\/lib\//, `lib/${name} must not import back into plugin/lib`);
       }
+      assert.deepEqual(findLibBackImports(root), [], "no source or test under lib/ may import back into plugin/lib");
     };
 
     assertClosure("core/opencode");

@@ -769,8 +769,15 @@ const OC_RUNTIME_CRITICAL = Object.freeze([
   "agents/build.md",
   "lib/gate-state.mjs",
   "lib/entry-decide.mjs",
-  "lib/hand-records.mjs",
   "lib/dispatch-scope.mjs",
+  "lib/hand-records.mjs",
+  "lib/planner-state.mjs",
+  "lib/obs-emit.mjs",
+  "lib/plan-hash.mjs",
+  "lib/planner-artifact.mjs",
+  "lib/planner-fallback-config.mjs",
+  "lib/roles.mjs",
+  "lib/task-dispatch-identity.mjs",
 ]);
 
 /**

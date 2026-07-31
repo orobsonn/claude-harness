@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkPluginLoad } from "../../scripts/parity-manifest.mjs";
 
 import {
   seedOpencodeRootConfig,
@@ -40,6 +41,20 @@ const CANONICAL_STUBS = [
   "obs-eye.ts",
   "obs-hand.ts",
   "agent-idle-nudge.ts",
+];
+
+const CLOSURE_LIBS = [
+  "gate-state.mjs",
+  "entry-decide.mjs",
+  "dispatch-scope.mjs",
+  "hand-records.mjs",
+  "planner-state.mjs",
+  "obs-emit.mjs",
+  "plan-hash.mjs",
+  "planner-artifact.mjs",
+  "planner-fallback-config.mjs",
+  "roles.mjs",
+  "task-dispatch-identity.mjs",
 ];
 
 /** @description The 8 canonical secret-path deny patterns permission.read/edit must always carry. */
@@ -264,7 +279,7 @@ function legacyRouting() {
 /**
  * @description Minimal complete monorepo OC runtime under root/core/opencode (+ optional shared).
  * @param {string} root
- * @param {{ withSharedImport?: boolean }} [opts]
+ * @param {{ withSharedImport?: boolean, omitLib?: string }} [opts]
  */
 function writeMinimalOcRuntime(root, opts = {}) {
   const oc = join(root, "core", "opencode");
@@ -292,7 +307,8 @@ function writeMinimalOcRuntime(root, opts = {}) {
   mkdirSync(join(oc, "rules"), { recursive: true });
   const lib = join(oc, "lib");
   mkdirSync(lib, { recursive: true });
-  for (const name of ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"]) {
+  for (const name of CLOSURE_LIBS) {
+    if (name === opts.omitLib) continue;
     writeFileSync(join(lib, name), `// critical lib ${name}\n`, "utf8");
   }
   writeFileSync(join(oc, "harness.routing.json"), `${JSON.stringify(CANONICAL_ROUTING)}\n`, "utf8");
@@ -335,7 +351,7 @@ function writeVendoredOcRuntime(root) {
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
   const lib = join(oc, "lib");
   mkdirSync(lib, { recursive: true });
-  for (const name of ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"]) {
+  for (const name of CLOSURE_LIBS) {
     writeFileSync(join(lib, name), `// vendored critical lib ${name}\n`, "utf8");
   }
 }
@@ -1254,19 +1270,48 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
   }
 });
 
-test("materializeOpencodeRuntime: closure-11 critical libs are required and copied into the headless runtime", () => {
+test("materializeOpencodeRuntime: every closure-11 lib is required and copied into the headless runtime", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-11-");
-  const criticalLibs = ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"];
   try {
     const mat = materializeOpencodeRuntime(worktree, projectRoot);
     assert.equal(mat.source, "monorepo");
-    for (const name of criticalLibs) {
+    for (const name of CLOSURE_LIBS) {
       assert.ok(existsSync(join(worktree, ".opencode", "lib", name)), `runtime must copy lib/${name}`);
     }
-    rmSync(join(worktree, ".opencode", "lib", "gate-state.mjs"));
-    assert.equal(isOpencodeRuntimeComplete(join(worktree, ".opencode")), false, "missing critical lib must make runtime incomplete");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: a real materialized runtime loads every plugin factory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-factory-load-"));
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(worktree, { recursive: true });
+    const mat = materializeOpencodeRuntime(worktree, process.cwd());
+    assert.equal(mat.source, "monorepo");
+
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: each missing closure-11 lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
+  for (const name of CLOSURE_LIBS) {
+    const { root, projectRoot, worktree } = makeSeedDirs(`oc-seed-missing-${name}-`, { bare: true });
+    try {
+      writeMinimalOcRuntime(projectRoot, { withSharedImport: true, omitLib: name });
+      assert.equal(isOpencodeRuntimeComplete(join(projectRoot, "core", "opencode")), false, `source missing lib/${name} must be incomplete`);
+      assert.throws(
+        () => materializeOpencodeRuntime(worktree, projectRoot),
+        new RegExp(`lib/${name.replace(".", "\\.")}|materialize failed|incomplete`, "i"),
+        `materialize must reject source missing lib/${name}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

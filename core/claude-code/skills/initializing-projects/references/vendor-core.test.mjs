@@ -633,7 +633,7 @@ test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only ol
     "task-dispatch-identity.mjs",
   ];
   try {
-    const projectSibling = join(tempDir, ".opencode", "lib", "project-owned-sibling.mjs");
+    const projectSibling = join(tempDir, ".opencode", "plugin", "lib", "project-owned-sibling.mjs");
     mkdirSync(dirname(projectSibling), { recursive: true });
     writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
     for (const name of closure) {
@@ -653,7 +653,7 @@ test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only ol
       assert.ok(existsSync(join(tempDir, ".opencode", "lib", name)), `framework-owned lib must vendor ${name}`);
       assert.ok(!existsSync(join(tempDir, ".opencode", "plugin", "lib", name)), `retired old path must be swept: ${name}`);
     }
-    assert.ok(existsSync(projectSibling), "exact-path sweep must preserve a project-owned lib sibling");
+    assert.ok(existsSync(projectSibling), "exact-path sweep must preserve a project-owned sibling in the retired-path directory");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
