@@ -426,7 +426,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/lavish-command-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/ceremony-coordinator.ts",
-    "./.opencode/plugin/second-eye-coordinator.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
@@ -831,6 +830,12 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/planner-fallback-config.mjs",
   "plugin/lib/roles.mjs",
   "plugin/lib/task-dispatch-identity.mjs",
+  "plugin/lib/second-eye-authority.mjs",
+  "plugin/lib/second-eye-authority.test.mjs",
+  "plugin/second-eye-coordinator.ts",
+  "plugin/second-eye-coordinator.test.mjs",
+  "skills/orchestrating-delivery/second-eye-runtime.mjs",
+  "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
 ];
 
 /**

@@ -659,6 +659,57 @@ test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only ol
   }
 });
 
+test("re-vendoring removes every retired second-eye path and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-second-eye-"));
+  const retired = [
+    "plugin/lib/second-eye-authority.mjs",
+    "plugin/lib/second-eye-authority.test.mjs",
+    "plugin/second-eye-coordinator.ts",
+    "plugin/second-eye-coordinator.test.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+  ];
+  try {
+    const siblings = [
+      join(tempDir, ".opencode", "plugin", "lib", "project-owned-second-eye-sibling.mjs"),
+      join(tempDir, ".opencode", "plugin", "project-owned-second-eye-sibling.ts"),
+      join(
+        tempDir,
+        ".opencode",
+        "skills",
+        "orchestrating-delivery",
+        "project-owned-second-eye-sibling.mjs",
+      ),
+    ];
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const rel of retired) {
+      const stale = join(tempDir, ".opencode", rel);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale second-eye runtime\n", "utf8");
+    }
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const rel of retired) {
+      assert.ok(!existsSync(join(tempDir, ".opencode", rel)), `retired second-eye path must be swept: ${rel}`);
+      assert.ok(OC_RETIRED_FILES.includes(rel), `retired path must be declared: ${rel}`);
+    }
+    for (const sibling of siblings) {
+      assert.ok(existsSync(sibling), "exact-path sweep must preserve a project-owned second-eye sibling");
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
   // Review alias / second-eye agent files stay in source for the two-release compatibility
   // window (#582) — they are NOT retired. Spawn hands and dual plugin modules remain scheduled.
@@ -691,6 +742,12 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/planner-fallback-config.mjs",
     "plugin/lib/roles.mjs",
     "plugin/lib/task-dispatch-identity.mjs",
+    "plugin/lib/second-eye-authority.mjs",
+    "plugin/lib/second-eye-authority.test.mjs",
+    "plugin/second-eye-coordinator.ts",
+    "plugin/second-eye-coordinator.test.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",

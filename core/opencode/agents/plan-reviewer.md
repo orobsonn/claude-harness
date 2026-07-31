@@ -22,8 +22,6 @@ You are the **engineering reviewer** eye. The planner produced an execution-plan
 
 > **Virgin entry:** you receive the approved spec, the execution-plan JSON, and read access to the codebase. No prior verdicts.
 
-> **Budgeted refute-pass exception:** only when the prompt ends with a complete signed `[HARNESS_REFUTE_PASS]...[/HARNESS_REFUTE_PASS]` marker, do not run a new plan verdict and do not use the normal output schema. Inspect each supplied second-eye-only finding against the repository, then return exactly the `refutations` JSON requested by that prompt. Refute only with a concrete contradiction; uncertainty means `refuted: false`.
-
 ---
 
 ## What to audit

@@ -188,7 +188,6 @@ function plantMonorepoOcPlugins(root) {
     "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts", "review-guard.ts",
     "reinject-state.ts", "version-check.ts", "harvest-guard.ts", "obs-plan-write.ts",
     "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts", "marker-authority.ts", "ceremony-coordinator.ts",
-    "second-eye-coordinator.ts",
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }

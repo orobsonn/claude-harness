@@ -8,10 +8,6 @@ import { deriveCanonicalReviewRestart } from "./review-restart.mjs";
 import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
 
 import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
-import {
-  REFUTE_PASS_BUDGET,
-  validateRefutePassResult,
-} from "../../skills/orchestrating-delivery/second-eye-runtime.mjs";
 
 export const LOOP_THRESHOLDS = Object.freeze({
   plan_review: Object.freeze({ warn: 2, deny: 10 }),
@@ -280,11 +276,6 @@ export function reserveReviewAttempt(stateValue, input = {}) {
     task_id: typeof input.taskId === "string" ? input.taskId : "",
     phase: typeof input.phase === "string" ? input.phase : "",
   };
-  const refutePassId = typeof input.refutePassId === "string" ? input.refutePassId : "";
-  if (refutePassId) {
-    reservation.review_kind = "second_eye_refute";
-    reservation.refute_pass_id = refutePassId;
-  }
   // The plan-review scope moves with the artifact so receipts remain auditable across revisions.
   if (identity.logicalRole === "plan-reviewer") {
     const binding = object(state.planner_plan_binding);
@@ -308,61 +299,6 @@ export function reserveReviewAttempt(stateValue, input = {}) {
   }
   if (inflight.some((item) => item?.identity_hash === reservation.identity_hash || sameReviewCall(item, reservation))) {
     return { ok: true, accepted: false, reservation, state };
-  }
-  if (refutePassId) {
-    const refuteIdentityMatches =
-      input.refuteFeatureId === featureId &&
-      input.refuteEpoch === epoch &&
-      input.refutePrimaryReportHash === state.primary_review_last_report_hash;
-    if (!refuteIdentityMatches) {
-      return {
-        ok: false,
-        reason: "refute-pass primary receipt is stale; adopt the finding by default",
-        state: {
-          ...state,
-          last_refute_identity_event: {
-            refute_pass_id: refutePassId,
-            outcome: "adopt_by_default",
-            reason: "primary_receipt_stale",
-          },
-        },
-      };
-    }
-    const history = Array.isArray(state.review_epoch_history) ? state.review_epoch_history : [];
-    const archived = history.flatMap((entry) => [
-      ...(Array.isArray(entry?.outcomes) ? entry.outcomes : []),
-      ...(Array.isArray(entry?.inflight) ? entry.inflight : []),
-    ]);
-    const attemptCount = [...archived, ...outcomes, ...inflight].filter(
-      (item) => item?.review_kind === "second_eye_refute" && item?.refute_pass_id === refutePassId,
-    ).length;
-    if (attemptCount >= REFUTE_PASS_BUDGET) {
-      return {
-        ok: false,
-        reason: `refute-pass budget exhausted: refute_pass_attempt_count=${attemptCount}/${REFUTE_PASS_BUDGET}; adopt the finding by default`,
-        state: {
-          ...state,
-          refute_budget_exhausted_count: bounded(state.refute_budget_exhausted_count, 1),
-          last_refute_budget_event: {
-            refute_pass_id: refutePassId,
-            refute_pass_attempt_count: attemptCount,
-            budget: REFUTE_PASS_BUDGET,
-            outcome: "adopt_by_default",
-          },
-        },
-      };
-    }
-    return {
-      ok: true,
-      accepted: true,
-      reservation,
-      state: {
-        ...state,
-        review_epoch: epoch,
-        review_inflight: [...inflight, { ...reservation, refute_pass_attempt_count: attemptCount + 1 }],
-        refute_pass_attempt_count: bounded(state.refute_pass_attempt_count, 1),
-      },
-    };
   }
   const failureCap = primaryFailureStreakCap(input);
   const streakRole = typeof state.primary_review_failure_streak_role === "string" ? state.primary_review_failure_streak_role : "";
@@ -437,15 +373,7 @@ export function applyReviewOutcome(stateValue, input = {}) {
     : input.error != null
       ? sanitizeProviderDiagnostic(input.error, { model: input.model, callId: input.callId })
       : null;
-  const classified = reservation.review_kind === "second_eye_refute"
-    ? (() => {
-        if (input.failureClass) return { kind: "failure", failureClass: FAILURE_CLASSES.has(input.failureClass) ? input.failureClass : "provider_error" };
-        const result = validateRefutePassResult(input.response);
-        return result.ok
-          ? { kind: "useful", report: result, reportHash: digest(result.verdicts), materialUnresolved: false }
-          : { kind: "failure", failureClass: "malformed", reason: result.reason };
-      })()
-    : input.failureClass
+  const classified = input.failureClass
       ? { kind: "failure", failureClass: FAILURE_CLASSES.has(input.failureClass) ? input.failureClass : "provider_error" }
       : reportClassification(input.response, reservation.logical_role);
   const outcome = {
@@ -467,20 +395,6 @@ export function applyReviewOutcome(stateValue, input = {}) {
     review_inflight: currentInflight(state).filter((item) => item?.identity_hash !== reservation.identity_hash),
     review_outcomes: [...outcomes, outcome],
   };
-  if (reservation.review_kind === "second_eye_refute") {
-    if (classified.kind === "failure") {
-      next.refute_pass_failure_count = bounded(state.refute_pass_failure_count, 1);
-      next.last_refute_pass_failure = {
-        refute_pass_id: reservation.refute_pass_id,
-        failure_class: classified.failureClass,
-        reason: classified.reason,
-        outcome: "adopt_by_default",
-      };
-    } else {
-      next.last_refute_pass_result_hash = classified.reportHash;
-    }
-    return { state: next, accepted: true, classified };
-  }
   if (classified.kind === "failure") {
     // A harness-internal deny means this eye never ran. It is evidence about the DISPATCH, not
     // about the evaluator — so it is recorded for forensics but must not consume the failure streak.

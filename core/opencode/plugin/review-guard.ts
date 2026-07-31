@@ -33,14 +33,6 @@ export async function createReviewGuardHooks(
   const { applyAgentDispatchOutcome, applyGateBlockedDispatch } = await import("../../shared/lib/agent-retry.mjs")
   const { decideCallOutcomeOnce } = await import("../../shared/lib/agent-retry-call.mjs")
   const { isDeliveryRole } = await import("../lib/roles.mjs")
-  const {
-    hasRefutePassMarker,
-    beginSecondEyeDispatch,
-    markRefuteBudgetExhausted,
-    recordRefuteDispatchResult,
-    recordSecondEyeDispatchResult,
-    verifyRefutePassIdentity,
-  } = await import("./lib/second-eye-authority.mjs")
 
   /** Every harness Task agent: planner, eyes, hands, close roles. */
   function isHarnessTaskRole(role: string): boolean {
@@ -148,21 +140,13 @@ export async function createReviewGuardHooks(
     const sub = extractSubagentType(args)
     const identity = reviewAgentIdentity(sub)
     if (!sessionID || !callID) return
-    if (identity && !identity.countsLoop) {
-      recordSecondEyeDispatchResult({
-        sessionId: sessionID,
-        callId: callID,
-        result: failureClass || rawError ? textForRefuteFailure(failureClass, rawError) : responseOf(input, output),
-      })
-      return
-    }
+    // Optional second-eye output is advisory and carried by the current orchestrator turn;
+    // it never enters native runtime accounting or a persisted gate.
+    if (identity && !identity.countsLoop) return
     const sp = statePathFor(sessionID)
     if (!sp) return
     const taskId = taskIdOf(args)
-    const prompt = typeof args.prompt === "string" ? args.prompt : ""
-    const refuteIdentity = verifyRefutePassIdentity(prompt, { sessionId: sessionID, role: sub })
-    const refuteDispatch = refuteIdentity.ok
-    const countsRetry = (!identity || identity.countsLoop) && !refuteDispatch
+    const countsRetry = !identity || identity.countsLoop
     // Unified K=3: count once per callId (error event and after-hook may both fire).
     if (countsRetry && (failureClass || rawError)) {
       recordAgentRetry(sessionID, callID, sub, taskId, "failure", failureClass, rawError)
@@ -195,13 +179,6 @@ export async function createReviewGuardHooks(
     })
     if (!result.ok) throw new Error(`[loop-guard] ${result.reason}`)
     if (!reviewAccepted) return
-    if (refuteDispatch) {
-      recordRefuteDispatchResult(
-        refuteIdentity.adjudicationId,
-        failureClass || rawError ? textForRefuteFailure(failureClass, rawError) : responseOf(input, output),
-      )
-      return
-    }
     // Deterministic continuation nudge: a REVISE verdict is supposed to keep every writing hand
     // waiting (prose + orchestration discipline as of #483 — nothing in the dispatch gate itself
     // blocks on it anymore), so the loop only advances if the orchestrator re-dispatches the
@@ -292,34 +269,14 @@ export async function createReviewGuardHooks(
       if (!sessionID) return
       const args = argsOf(input, output)
       const sub = extractSubagentType(args)
-      const prompt = typeof args.prompt === "string" ? args.prompt : ""
-      const refuteIdentity = verifyRefutePassIdentity(prompt, { sessionId: sessionID, role: sub })
-      if (hasRefutePassMarker(prompt) && !refuteIdentity.ok) {
-        throw new Error(`[loop-guard] invalid refute-pass authority; adopt the finding by default (${refuteIdentity.reason})`)
-      }
       const identity = reviewAgentIdentity(sub)
       if (!identity) return
       const sp = statePathFor(sessionID)
       if (!sp) return
-      if (!identity.countsLoop) {
-        const callId = input?.callID ?? input?.callId ?? ""
-        const captured = withGateStateLock(sp, (state) => {
-          beginSecondEyeDispatch({
-            sessionId: sessionID,
-            callId,
-            role: identity.logicalRole,
-            featureId: typeof state.feature_id === "string" ? state.feature_id : "",
-            epoch: Number.isInteger(state.review_epoch) && state.review_epoch > 0 ? state.review_epoch : 1,
-            primaryReportHash: typeof state.primary_review_last_report_hash === "string" ? state.primary_review_last_report_hash : "",
-          })
-          return state
-        })
-        if (!captured.ok) return
-        return
-      }
+      if (!identity.countsLoop) return
       const key = loopCounterKey(sub)
 
-      if (!refuteIdentity.ok && key === "plan_review_count") {
+      if (key === "plan_review_count") {
         // Orchestrator-facing round-rail (#482): counts EVERY plan-reviewer dispatch ATTEMPT,
         // decoupled from reserveReviewAttempt's own reservation-slot accounting below (a separate,
         // already-enforced review-budget concern this issue does not touch — reclassifying a round
@@ -347,10 +304,6 @@ export async function createReviewGuardHooks(
           phase: stringArg(args, "phase", "phase"),
           callId: input?.callID ?? input?.callId ?? "",
           projectRoot: dirSafe,
-          refutePassId: refuteIdentity.ok ? refuteIdentity.refutePassId : "",
-          refuteFeatureId: refuteIdentity.ok ? refuteIdentity.featureId : "",
-          refuteEpoch: refuteIdentity.ok ? refuteIdentity.epoch : 0,
-          refutePrimaryReportHash: refuteIdentity.ok ? refuteIdentity.primaryReportHash : "",
         })
         if (!transition.ok && transition.state !== state) {
           reservationFailure = transition.reason
@@ -359,16 +312,7 @@ export async function createReviewGuardHooks(
         return transition.ok ? transition.state : { ok: false, reason: transition.reason }
       })
       if (!reserved.ok) throw new Error(`[loop-guard] ${reserved.reason}`)
-      if (reservationFailure) {
-        if (refuteIdentity.ok) {
-          if (/refute-pass budget exhausted/.test(reservationFailure)) {
-            markRefuteBudgetExhausted(refuteIdentity.adjudicationId)
-          } else {
-            recordRefuteDispatchResult(refuteIdentity.adjudicationId, reservationFailure)
-          }
-        }
-        throw new Error(`[loop-guard] ${reservationFailure}`)
-      }
+      if (reservationFailure) throw new Error(`[loop-guard] ${reservationFailure}`)
     },
 
     "tool.execute.after": async (input: any, output: any) => {
@@ -376,12 +320,10 @@ export async function createReviewGuardHooks(
       const sessionID = input?.sessionID ?? input?.sessionId ?? ""
       const args = argsOf(input, output)
       const sub = extractSubagentType(args)
-      const prompt = typeof args.prompt === "string" ? args.prompt : ""
-      const refuteIdentity = verifyRefutePassIdentity(prompt, { sessionId: sessionID, role: sub })
       // Round-rail warn (#482): the counter was already incremented in "tool.execute.before"
       // above (same process-local Map, peeked here — never incremented twice); this hook is
       // where `output.metadata` is a real, delivered field, unlike before's `{ args }`-only shape.
-      if (sessionID && !refuteIdentity.ok && loopCounterKey(sub) === "plan_review_count") {
+      if (sessionID && loopCounterKey(sub) === "plan_review_count") {
         const dispatchCount = planReviewDispatchCounts.get(sessionID) ?? 0
         const roundRail = decidePlanReviewRoundRail({ subagentType: sub, count: dispatchCount })
         if (roundRail.decision === "warn" && output != null && typeof output === "object") {
@@ -404,11 +346,6 @@ export async function createReviewGuardHooks(
       )
     },
   }
-}
-
-function textForRefuteFailure(failureClass: unknown, rawError: unknown): string {
-  const error = rawError instanceof Error ? rawError.message : typeof rawError === "string" ? rawError : ""
-  return `${typeof failureClass === "string" ? failureClass : "refute-pass-failure"}: ${error}`.trim()
 }
 
 /**
