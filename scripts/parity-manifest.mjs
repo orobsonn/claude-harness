@@ -198,10 +198,15 @@ const SOURCE_FILE_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
  * concatenation, or a variable. Zero occurrences in this repo today; a future one resolves
  * silently here and only explodes at runtime.
  */
+const IMPORT_TRIVIA_PATTERN = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
+
 const RELATIVE_IMPORT_PATTERNS = [
-  /\bfrom\s*["'](\.[^"']+)["']/g,
-  /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
-  /\bimport\s+["'](\.[^"']+)["']/g,
+  new RegExp(String.raw`\bfrom${IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']`, "g"),
+  new RegExp(
+    String.raw`\bimport${IMPORT_TRIVIA_PATTERN}\(${IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']${IMPORT_TRIVIA_PATTERN}(?=[,)])`,
+    "g",
+  ),
+  new RegExp(String.raw`\bimport${IMPORT_TRIVIA_PATTERN}["'](\.[^"']+)["']`, "g"),
 ];
 
 /**
@@ -357,13 +362,20 @@ export async function checkPluginLoad(targetDir) {
  * scanned" and "everything resolves" are indistinguishable in the return value otherwise, and a
  * vacuous green is the exact failure mode this net exists to remove.
  * @param {string} targetDir
- * @returns {{ok: boolean, unresolved: {file: string, specifier: string}[], scanned: number, reason?: string}}
+ * @returns {{ok: boolean, unresolved: {file: string, specifier: string}[], readErrors: {file: string, reason: string}[], scanned: number, reason?: string}}
  */
 export function checkImportsResolve(targetDir) {
   if (!existsSync(targetDir)) {
-    return { ok: false, unresolved: [], scanned: 0, reason: `target does not exist: ${targetDir}` };
+    return {
+      ok: false,
+      unresolved: [],
+      readErrors: [],
+      scanned: 0,
+      reason: `target does not exist: ${targetDir}`,
+    };
   }
   const unresolved = [];
+  const readErrors = [];
   let scanned = 0;
   walkFiles(targetDir, (abs, rel) => {
     if (!SOURCE_FILE_RE.test(abs)) return;
@@ -371,7 +383,8 @@ export function checkImportsResolve(targetDir) {
     let raw;
     try {
       raw = readFileSync(abs, "utf8");
-    } catch {
+    } catch (err) {
+      readErrors.push({ file: rel, reason: err?.message ?? String(err) });
       return;
     }
     const text = raw.replace(BLOCK_COMMENT_RE, "").replace(WHOLE_LINE_COMMENT_RE, "");
@@ -389,9 +402,17 @@ export function checkImportsResolve(targetDir) {
     }
   });
   if (scanned === 0) {
-    return { ok: false, unresolved, scanned, reason: `no source file under ${targetDir}` };
+    return {
+      ok: false,
+      unresolved,
+      readErrors,
+      scanned,
+      reason: readErrors.length > 0
+        ? `no readable source file under ${targetDir}`
+        : `no source file under ${targetDir}`,
+    };
   }
-  return { ok: unresolved.length === 0, unresolved, scanned };
+  return { ok: unresolved.length === 0 && readErrors.length === 0, unresolved, readErrors, scanned };
 }
 
 /**

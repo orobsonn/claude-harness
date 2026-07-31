@@ -1,7 +1,16 @@
 /** @description Parity manifesto tests: agents presence, no token reads, single-evaluator routing, vendored smoke. */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  mkdtempSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -363,6 +372,56 @@ describe("parity-manifest", () => {
         { file: join("tools", "classify.ts"), specifier: "../plugin/lib/planner-state.mjs" },
       ]);
     } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-imports-static-comment-trivia: a broken static import with legal comment trivia fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-imports-static-comment-"));
+    try {
+      writeFileSync(
+        join(tmp, "entry.ts"),
+        'import value from /* legal trivia */ "./missing-static.mjs";\nvoid value;\n',
+      );
+      const res = checkImportsResolve(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.unresolved, [
+        { file: "entry.ts", specifier: "./missing-static.mjs" },
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-imports-dynamic-options: a broken literal import with options fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-imports-dynamic-options-"));
+    try {
+      writeFileSync(
+        join(tmp, "entry.mjs"),
+        'await import("./missing-dynamic.json", { with: { type: "json" } });\n',
+      );
+      const res = checkImportsResolve(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.unresolved, [
+        { file: "entry.mjs", specifier: "./missing-dynamic.json" },
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-imports-read-error: an unreadable source fails instead of disappearing from a partial scan", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-imports-read-error-"));
+    const unreadable = join(tmp, "unreadable.mjs");
+    try {
+      writeFileSync(join(tmp, "readable.mjs"), "export {};\n");
+      writeFileSync(unreadable, 'import "./missing.mjs";\n');
+      chmodSync(unreadable, 0o000);
+      const res = checkImportsResolve(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.readErrors.map(({ file }) => file), ["unreadable.mjs"]);
+    } finally {
+      if (existsSync(unreadable)) chmodSync(unreadable, 0o600);
       rmSync(tmp, { recursive: true, force: true });
     }
   });
