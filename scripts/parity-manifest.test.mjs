@@ -1,7 +1,7 @@
 /** @description Parity manifesto tests: agents presence, no token reads, single-evaluator routing, vendored smoke. */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -10,8 +10,19 @@ import {
   checkDualConfig,
   checkNoTokenReads,
   checkGatesAndOracle,
+  checkPluginLoad,
+  checkImportsResolve,
   OC_REQUIRED_AGENTS,
 } from "./parity-manifest.mjs";
+import { harnessOcPluginFiles } from "../core/claude-code/skills/initializing-projects/references/vendor-core.mjs";
+
+/** @description ESM fixture root so `.js`/`.ts` plugins under it load as modules, not CJS. */
+function makeModuleFixture(prefix) {
+  const tmp = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(tmp, "package.json"), JSON.stringify({ type: "module" }));
+  mkdirSync(join(tmp, "plugin"), { recursive: true });
+  return tmp;
+}
 
 describe("parity-manifest", () => {
   const canonicalRouting = JSON.parse(
@@ -110,6 +121,256 @@ describe("parity-manifest", () => {
         rmSync(tmp, { recursive: true, force: true });
       }
     }
+  });
+
+  it("t11-real-gates: gates + oracle and full parity run against the real repo, not a fixture", () => {
+    for (const target of ["core/opencode", "core/claude-code"]) {
+      const res = checkGatesAndOracle(target);
+      assert.equal(res.ok, true, `${target} missing gates/oracle: ${res.missing.join(", ")}`);
+    }
+    const parity = runParity();
+    const broken = Object.entries(parity.results)
+      .flatMap(([target, r]) =>
+        Object.entries(r)
+          .filter(([, check]) => check && check.ok === false)
+          .map(([name, check]) => `${target}.${name}: ${JSON.stringify(check)}`),
+      );
+    assert.deepEqual(broken, []);
+    assert.equal(parity.ok, true);
+  });
+
+  it("t11-tokens-missing-root: an OC target with no plugin/ fails instead of passing vacuously", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-opencode-empty-"));
+    try {
+      const res = checkNoTokenReads(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.missingRoots, ["plugin"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load: every auto-globbed plugin of core/opencode imports, default-exports a function, and that factory returns hooks when called", async () => {
+    const res = await checkPluginLoad("core/opencode");
+    assert.equal(
+      res.ok,
+      true,
+      `failures: ${JSON.stringify(res.failures)} missing: ${res.missing.join(", ")}`,
+    );
+    assert.ok(res.files.length >= 8, `expected auto-globbed plugins, got ${res.files.length}`);
+  });
+
+  it("t11-plugin-load-broken-import: a plugin importing a missing module fails the check (P0 — OC skips it in silence)", async () => {
+    const tmp = makeModuleFixture("parity-plugin-broken-");
+    try {
+      writeFileSync(
+        join(tmp, "plugin", "entry-gate.ts"),
+        'import "./lib/does-not-exist.mjs";\nexport default function plugin() {}\n',
+      );
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false);
+      const failure = res.failures.find((f) => f.file === "entry-gate.ts");
+      assert.ok(failure, `expected entry-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /import failed/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-no-default: a plugin without a function default export fails the check", async () => {
+    const tmp = makeModuleFixture("parity-plugin-nodefault-");
+    try {
+      writeFileSync(join(tmp, "plugin", "entry-gate.ts"), "export const notAPlugin = 1;\n");
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false);
+      const failure = res.failures.find((f) => f.file === "entry-gate.ts");
+      assert.ok(failure, `expected entry-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /default export is undefined/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-host-value-import-no-default: M1 value host imports cannot skip default-export validation", async () => {
+    const tmp = makeModuleFixture("parity-plugin-host-value-nodefault-");
+    try {
+      for (const entry of harnessOcPluginFiles()) {
+        const name = entry.split("/").pop();
+        const source = name === "plan-gate.ts"
+          ? 'import { Plugin } from "@opencode-ai/plugin";\nexport const notAPlugin = Plugin;\n'
+          : 'import { Plugin } from "@opencode-ai/plugin";\nexport default function plugin() { return { Plugin }; }\n';
+        writeFileSync(join(tmp, "plugin", name), source);
+      }
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false, `M1 silently passed: ${JSON.stringify(res)}`);
+      const failure = res.failures.find((f) => f.file === "plan-gate.ts");
+      assert.ok(failure, `expected plan-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /default export is undefined/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-host-value-import-factory: M2 value host imports cannot skip factory validation", async () => {
+    const tmp = makeModuleFixture("parity-plugin-host-value-factory-");
+    try {
+      for (const entry of harnessOcPluginFiles()) {
+        const name = entry.split("/").pop();
+        const source = name === "plan-gate.ts"
+          ? 'import { Plugin } from "@opencode-ai/plugin";\nexport default function plugin() { return Plugin ? 1 : 0; }\n'
+          : 'import { Plugin } from "@opencode-ai/plugin";\nexport default function plugin() { return { Plugin }; }\n';
+        writeFileSync(join(tmp, "plugin", name), source);
+      }
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false, `M2 silently passed: ${JSON.stringify(res)}`);
+      const failure = res.failures.find((f) => f.file === "plan-gate.ts");
+      assert.ok(failure, `expected plan-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /factory returned number/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-missing: an expected harness plugin absent from the auto-glob is reported", async () => {
+    const tmp = makeModuleFixture("parity-plugin-missing-");
+    try {
+      writeFileSync(join(tmp, "plugin", "entry-gate.ts"), "export default function plugin() { return {}; }\n");
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.failures, []);
+      assert.ok(res.missing.includes("plan-gate.ts"));
+      assert.equal(res.missing.includes("entry-gate.ts"), false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-broken-dynamic-import: a factory whose dynamic import is missing fails — the shape a plain module import cannot see", async () => {
+    const tmp = makeModuleFixture("parity-plugin-dyn-");
+    try {
+      writeFileSync(
+        join(tmp, "plugin", "entry-gate.ts"),
+        "export default async function plugin() {\n" +
+          '  await import("./lib/nao-existe.mjs");\n' +
+          "  return {};\n}\n",
+      );
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false);
+      const failure = res.failures.find((f) => f.file === "entry-gate.ts");
+      assert.ok(failure, `expected entry-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /factory call failed/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-host-package: OpenCode host imports use the deterministic stub and still run factories", async () => {
+    const tmp = makeModuleFixture("parity-plugin-host-");
+    const names = harnessOcPluginFiles().map((entry) => entry.split("/").pop());
+    try {
+      for (const name of names) {
+        writeFileSync(
+          join(tmp, "plugin", name),
+          'import { Plugin } from "@opencode-ai/plugin";\n' +
+            "export default async function plugin() {\n" +
+            '  const { tool } = await import("@opencode-ai/plugin/tool");\n' +
+            "  return { Plugin, tool };\n}\n",
+        );
+      }
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, true, `failures: ${JSON.stringify(res.failures)}`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-host-package-typo: a package that merely shares the @opencode-ai scope is NOT tolerated", async () => {
+    const tmp = makeModuleFixture("parity-plugin-typo-");
+    try {
+      for (const entry of harnessOcPluginFiles()) {
+        writeFileSync(
+          join(tmp, "plugin", entry.split("/").pop()),
+          "export default async function plugin() {\n" +
+            '  await import("@opencode-ai/plgin/tool");\n' +
+            "  return {};\n}\n",
+        );
+      }
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false, "a typo'd package name must not pass as host-provided");
+      assert.equal(res.failures.length, harnessOcPluginFiles().length);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-load-non-object-factory: a factory returning a non-object fails", async () => {
+    const tmp = makeModuleFixture("parity-plugin-nonobj-");
+    try {
+      writeFileSync(join(tmp, "plugin", "entry-gate.ts"), "export default function plugin() { return 1; }\n");
+      const res = await checkPluginLoad(tmp);
+      assert.equal(res.ok, false);
+      const failure = res.failures.find((f) => f.file === "entry-gate.ts");
+      assert.ok(failure, `expected entry-gate.ts failure, got ${JSON.stringify(res.failures)}`);
+      assert.match(failure.reason, /factory returned number/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-plugin-manifest-drift: harnessOcPluginFiles() equals the auto-globbed set on disk, so deleting a plugin is deliberate", () => {
+    const declared = harnessOcPluginFiles()
+      .map((entry) => entry.split("/").pop())
+      .sort();
+    const onDisk = readdirSync("core/opencode/plugin")
+      .filter((name) => /\.(ts|js)$/.test(name) && !/\.test\.(ts|js)$/.test(name))
+      .sort();
+    assert.deepEqual(
+      declared,
+      onDisk,
+      "harnessOcPluginFiles() drifted from core/opencode/plugin/: a plugin OpenCode auto-loads is absent from the vendoring manifest (or vice-versa)",
+    );
+  });
+
+  it("t11-imports-empty-target: a target with no source file fails instead of passing vacuously", () => {
+    const missing = checkImportsResolve(join(tmpdir(), "parity-imports-absent-does-not-exist"));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.scanned, 0);
+
+    const tmp = mkdtempSync(join(tmpdir(), "parity-imports-empty-"));
+    try {
+      const empty = checkImportsResolve(tmp);
+      assert.equal(empty.ok, false);
+      assert.equal(empty.scanned, 0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-imports-dynamic: a literal dynamic import to a missing file is caught (tools/classify.ts shape)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "parity-imports-"));
+    try {
+      mkdirSync(join(tmp, "tools"), { recursive: true });
+      mkdirSync(join(tmp, "plugin", "lib"), { recursive: true });
+      writeFileSync(join(tmp, "plugin", "lib", "obs-emit.mjs"), "export const emit = () => {};\n");
+      writeFileSync(
+        join(tmp, "tools", "classify.ts"),
+        'const ok = await import("../plugin/lib/obs-emit.mjs");\n' +
+          'const gone = await import("../plugin/lib/planner-state.mjs");\n',
+      );
+      const res = checkImportsResolve(tmp);
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.unresolved, [
+        { file: join("tools", "classify.ts"), specifier: "../plugin/lib/planner-state.mjs" },
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t11-imports-real: every relative import under core/opencode resolves on disk", () => {
+    const res = checkImportsResolve("core/opencode");
+    assert.equal(res.ok, true, `unresolved: ${JSON.stringify(res.unresolved)}`);
+    assert.ok(res.scanned > 0, "scanner walked no files");
   });
 
   it("t11-smoke: new-clone / project-vendored smoke proves harness works without relying on global ~/.config/opencode (#ac-5.3)", () => {

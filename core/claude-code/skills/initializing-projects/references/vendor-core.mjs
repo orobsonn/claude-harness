@@ -423,6 +423,7 @@ function copyOcTree(srcDir, destDir, relPrefix = "") {
 export function harnessOcPluginFiles() {
   return [
     "./.opencode/plugin/entry-gate.ts",
+    "./.opencode/plugin/lavish-command-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
     "./.opencode/plugin/ceremony-coordinator.ts",
     "./.opencode/plugin/second-eye-coordinator.ts",
