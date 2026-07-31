@@ -752,7 +752,7 @@ function migrateLegacyOpencodeModels(config) {
  */
 
 /** OpenCode framework-owned dirs (materialized into worktree `.opencode/`). */
-const OC_RUNTIME_DIRS = Object.freeze(["agents", "skills", "plugin", "tools", "hands", "rules"]);
+const OC_RUNTIME_DIRS = Object.freeze(["agents", "skills", "plugin", "tools", "hands", "rules", "lib"]);
 /** OpenCode framework files copied next to those dirs. */
 const OC_RUNTIME_FILES = Object.freeze(["harness.routing.json", "AGENTS.md"]);
 /**
@@ -767,6 +767,10 @@ const OC_RUNTIME_CRITICAL = Object.freeze([
   "plugin/planner-recovery.ts",
   "tools/classify.ts",
   "agents/build.md",
+  "lib/gate-state.mjs",
+  "lib/entry-decide.mjs",
+  "lib/hand-records.mjs",
+  "lib/dispatch-scope.mjs",
 ]);
 
 /**

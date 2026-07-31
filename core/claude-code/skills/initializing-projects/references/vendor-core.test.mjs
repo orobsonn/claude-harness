@@ -617,6 +617,48 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
   }
 });
 
+test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-closure-11-"));
+  const closure = [
+    "gate-state.mjs",
+    "entry-decide.mjs",
+    "dispatch-scope.mjs",
+    "hand-records.mjs",
+    "planner-state.mjs",
+    "obs-emit.mjs",
+    "plan-hash.mjs",
+    "planner-artifact.mjs",
+    "planner-fallback-config.mjs",
+    "roles.mjs",
+    "task-dispatch-identity.mjs",
+  ];
+  try {
+    const projectSibling = join(tempDir, ".opencode", "lib", "project-owned-sibling.mjs");
+    mkdirSync(dirname(projectSibling), { recursive: true });
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
+    for (const name of closure) {
+      const stale = join(tempDir, ".opencode", "plugin", "lib", name);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale pre-move closure module\n", "utf8");
+    }
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const name of closure) {
+      assert.ok(existsSync(join(tempDir, ".opencode", "lib", name)), `framework-owned lib must vendor ${name}`);
+      assert.ok(!existsSync(join(tempDir, ".opencode", "plugin", "lib", name)), `retired old path must be swept: ${name}`);
+    }
+    assert.ok(existsSync(projectSibling), "exact-path sweep must preserve a project-owned lib sibling");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
   // Review alias / second-eye agent files stay in source for the two-release compatibility
   // window (#582) — they are NOT retired. Spawn hands and dual plugin modules remain scheduled.
@@ -638,6 +680,17 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/marker-security.test.mjs",
     "skills/orchestrating-delivery/dual-runtime.mjs",
     "skills/orchestrating-delivery/dual-runtime.test.mjs",
+    "plugin/lib/gate-state.mjs",
+    "plugin/lib/entry-decide.mjs",
+    "plugin/lib/dispatch-scope.mjs",
+    "plugin/lib/hand-records.mjs",
+    "plugin/lib/planner-state.mjs",
+    "plugin/lib/obs-emit.mjs",
+    "plugin/lib/plan-hash.mjs",
+    "plugin/lib/planner-artifact.mjs",
+    "plugin/lib/planner-fallback-config.mjs",
+    "plugin/lib/roles.mjs",
+    "plugin/lib/task-dispatch-identity.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",
@@ -1007,9 +1060,9 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     // entry-gate pulls shared utils from task-dispatch-identity / hook-identity / gate-state
     // (#580); imports must stay relative, never absolute home.
     const entry = readFileSync(join(tempDir, ".opencode/plugin/entry-gate.ts"), "utf8");
-    assert.match(entry, /import\("\.\/lib\/task-dispatch-identity\.mjs"\)/);
+    assert.match(entry, /import\("\.\.\/lib\/task-dispatch-identity\.mjs"\)/);
     assert.match(entry, /import\("\.\/lib\/hook-identity\.mjs"\)/);
-    assert.match(entry, /import\("\.\/lib\/gate-state\.mjs"\)/);
+    assert.match(entry, /import\("\.\.\/lib\/gate-state\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
     const reviewGuard = readFileSync(join(tempDir, ".opencode/plugin/review-guard.ts"), "utf8");
     assert.match(reviewGuard, /import\("\.\.\/shared\/lib\/path-helpers\.mjs"\)/);
@@ -1067,10 +1120,10 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
   );
   assert.equal(
     rewriteSharedImportsForVendor(
-      'import { x } from "../../../shared/lib/gate-state-shape.mjs";',
-      "plugin/lib/gate-state.mjs",
+      'import { x } from "../../shared/lib/gate-state-shape.mjs";',
+      "lib/gate-state.mjs",
     ),
-    'import { x } from "../../shared/lib/gate-state-shape.mjs";',
+    'import { x } from "../shared/lib/gate-state-shape.mjs";',
   );
   assert.equal(
     rewriteSharedImportsForVendor(

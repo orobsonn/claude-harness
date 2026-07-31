@@ -91,8 +91,8 @@ export async function createPlanWriteGateHooks(
   const { decide, throwIfDenied, extractWritePath } = await import(
     "./lib/plan-write-decide.mjs"
   );
-  const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
-  const { loadGateStateFromDisk } = await import("./lib/gate-state.mjs");
+  const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
+  const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs");
   const { invalidateScopeRuntimeIdentity, resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
 
   const root =
@@ -115,7 +115,7 @@ export async function createPlanWriteGateHooks(
         heartbeatActiveDispatch,
         normalizeProjectPath,
         reconcileExpiredDispatch,
-      } = await import("./lib/dispatch-scope.mjs");
+      } = await import("../lib/dispatch-scope.mjs");
       const rawPaths = bashTool
         ? []
         : patchTool

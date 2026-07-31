@@ -3,7 +3,7 @@
 import path from "node:path";
 import { verifyCompletionEvidence } from "./ceremony-transition.mjs";
 import { validateCeremonyBinding } from "./ceremony-binding.mjs";
-import { readBoundPlanSnapshot } from "./planner-artifact.mjs";
+import { readBoundPlanSnapshot } from "../../lib/planner-artifact.mjs";
 
 const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

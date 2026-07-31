@@ -14,7 +14,7 @@ import {
   recoverCeremony,
   transitionCeremony,
 } from "./lib/ceremony-transition.mjs";
-import { withGateStateLock } from "./lib/gate-state.mjs";
+import { withGateStateLock } from "../lib/gate-state.mjs";
 
 const SESSION = "ses-ceremony-recovery";
 const FEATURE = "deterministic-resume";

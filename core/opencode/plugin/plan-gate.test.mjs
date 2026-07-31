@@ -8,7 +8,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createPlanGateHooks, escapeRefuteSentinels } from "./plan-gate.ts"
-import { readPlannerArtifact, writeBoundPlanSnapshot } from "./lib/planner-artifact.mjs"
+import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
 import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
 
 const SESSION = "ses_planGateTest01"

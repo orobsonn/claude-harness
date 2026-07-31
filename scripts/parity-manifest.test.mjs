@@ -362,17 +362,17 @@ describe("parity-manifest", () => {
     const tmp = mkdtempSync(join(tmpdir(), "parity-imports-"));
     try {
       mkdirSync(join(tmp, "tools"), { recursive: true });
-      mkdirSync(join(tmp, "plugin", "lib"), { recursive: true });
-      writeFileSync(join(tmp, "plugin", "lib", "obs-emit.mjs"), "export const emit = () => {};\n");
+      mkdirSync(join(tmp, "lib"), { recursive: true });
+      writeFileSync(join(tmp, "lib", "obs-emit.mjs"), "export const emit = () => {};\n");
       writeFileSync(
         join(tmp, "tools", "classify.ts"),
-        'const ok = await import("../plugin/lib/obs-emit.mjs");\n' +
-          'const gone = await import("../plugin/lib/planner-state.mjs");\n',
+        'const ok = await import("../lib/obs-emit.mjs");\n' +
+          'const gone = await import("../lib/planner-state.mjs");\n',
       );
       const res = checkImportsResolve(tmp);
       assert.equal(res.ok, false);
       assert.deepEqual(res.unresolved, [
-        { file: join("tools", "classify.ts"), specifier: "../plugin/lib/planner-state.mjs" },
+        { file: join("tools", "classify.ts"), specifier: "../lib/planner-state.mjs" },
       ]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -433,6 +433,40 @@ describe("parity-manifest", () => {
     const res = checkImportsResolve("core/opencode");
     assert.equal(res.ok, true, `unresolved: ${JSON.stringify(res.unresolved)}`);
     assert.ok(res.scanned > 0, "scanner walked no files");
+  });
+
+  it("t11-closure-11: source and fresh vendored lib have no plugin/lib back-imports", () => {
+    const closure = [
+      "gate-state.mjs",
+      "entry-decide.mjs",
+      "dispatch-scope.mjs",
+      "hand-records.mjs",
+      "planner-state.mjs",
+      "obs-emit.mjs",
+      "plan-hash.mjs",
+      "planner-artifact.mjs",
+      "planner-fallback-config.mjs",
+      "roles.mjs",
+      "task-dispatch-identity.mjs",
+    ];
+    const assertClosure = (root) => {
+      for (const name of closure) {
+        const current = join(root, "lib", name);
+        assert.ok(existsSync(current), `closure source must live at lib/${name}`);
+        assert.doesNotMatch(readFileSync(current, "utf8"), /(?:from|import)\s*[('"].*plugin\/lib\//, `lib/${name} must not import back into plugin/lib`);
+      }
+    };
+
+    assertClosure("core/opencode");
+    const tmp = mkdtempSync(join(tmpdir(), "parity-closure-11-vendored-"));
+    try {
+      const project = join(tmp, "project");
+      mkdirSync(project, { recursive: true });
+      vendorOpenCode({ coreDir: join(process.cwd(), "core"), targetDir: project, version: "test", stampDate: "2026-07-31" });
+      assertClosure(join(project, ".opencode"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("t11-vendored-positive-load: a fresh real vendoring resolves imports and calls every plugin factory", async () => {

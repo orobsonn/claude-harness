@@ -25,7 +25,7 @@ registerHooks({
 });
 
 const { default: MarkerAuthority } = await import("./marker-authority.ts");
-const { writeHandRecord, buildTaskHandRecord } = await import("./lib/hand-records.mjs");
+const { writeHandRecord, buildTaskHandRecord } = await import("../lib/hand-records.mjs");
 const { fidelityPassEntry } = await import("./lib/mark-gate.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
 

@@ -8,7 +8,7 @@ import test from "node:test"
 import { Worker } from "node:worker_threads"
 import { createReinjectStateHooks } from "./reinject-state.ts"
 import { buildSessionRecovery, cleanupRetainedCompletedSession, encodeRecoveryPayload, sweepRetainedSessions } from "./lib/session-state.mjs"
-import { semanticPlanHash } from "./lib/planner-artifact.mjs"
+import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 
 function fixture(sessionID = "ses-own", featureID = "restore-own-session") {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-reinject-")))

@@ -2,8 +2,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { isSafeFeatureId } from "../../../shared/lib/feature-id.mjs";
-import { handRecordPath } from "../../../shared/lib/path-helpers.mjs";
+import { isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
+import { handRecordPath } from "../../shared/lib/path-helpers.mjs";
 
 /** @description Match last Status: line from Task output. Order: DONE_WITH before DONE. */
 const HAND_STATUS_RE =

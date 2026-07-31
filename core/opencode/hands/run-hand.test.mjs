@@ -23,8 +23,8 @@ import {
   isExecutorHandRole,
   defaultHasFidelityPass,
 } from "./run-hand.mjs";
-import { mergeGateState } from "../plugin/lib/gate-state.mjs";
-import { semanticPlanHash } from "../plugin/lib/planner-artifact.mjs";
+import { mergeGateState } from "../lib/gate-state.mjs";
+import { semanticPlanHash } from "../lib/planner-artifact.mjs";
 
 function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]) {
   const plan = {

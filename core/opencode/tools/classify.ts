@@ -44,7 +44,7 @@ export async function executeClassify(
   const { isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
   const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { persistClassifyArtifacts } = await import("./lib/classify-persist.mjs")
-  const { plannerCycleResetPatch } = await import("../plugin/lib/planner-state.mjs")
+  const { plannerCycleResetPatch } = await import("../lib/planner-state.mjs")
 
   const featureId = typeof args.feature_id === "string" ? args.feature_id.trim() : ""
   const mode = typeof args.mode === "string" ? args.mode.trim() : ""
@@ -227,7 +227,7 @@ export async function executeClassify(
 
   // Mid-run observability (#284): pipeline-type only on real transition.
   try {
-    const { eventForPipelineType, obsAppend } = await import("../plugin/lib/obs-emit.mjs")
+    const { eventForPipelineType, obsAppend } = await import("../lib/obs-emit.mjs")
     const ev = eventForPipelineType(finalMode)
     if (ev) obsAppend(ev)
   } catch {

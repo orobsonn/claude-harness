@@ -3,8 +3,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { gateStatePath, planDir } from "../../../shared/lib/path-helpers.mjs";
-import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
+import { gateStatePath, planDir } from "../../shared/lib/path-helpers.mjs";
+import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
 import { semanticPlanHash } from "./plan-hash.mjs";
 import { bindPlannerArtifact, reconcilePlannerLease } from "./planner-state.mjs";

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { decideEntryTask } from "../plugin/lib/entry-decide.mjs";
+import { decideEntryTask } from "../lib/entry-decide.mjs";
 
 const AGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 const OC_ROOT = join(AGENTS_DIR, "..");

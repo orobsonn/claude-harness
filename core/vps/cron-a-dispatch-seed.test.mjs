@@ -290,6 +290,11 @@ function writeMinimalOcRuntime(root, opts = {}) {
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
   mkdirSync(join(oc, "hands"), { recursive: true });
   mkdirSync(join(oc, "rules"), { recursive: true });
+  const lib = join(oc, "lib");
+  mkdirSync(lib, { recursive: true });
+  for (const name of ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"]) {
+    writeFileSync(join(lib, name), `// critical lib ${name}\n`, "utf8");
+  }
   writeFileSync(join(oc, "harness.routing.json"), `${JSON.stringify(CANONICAL_ROUTING)}\n`, "utf8");
 
   if (opts.withSharedImport) {
@@ -328,6 +333,11 @@ function writeVendoredOcRuntime(root) {
   writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
   mkdirSync(join(oc, "agents"), { recursive: true });
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  const lib = join(oc, "lib");
+  mkdirSync(lib, { recursive: true });
+  for (const name of ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"]) {
+    writeFileSync(join(lib, name), `// vendored critical lib ${name}\n`, "utf8");
+  }
 }
 
 /** @description Fresh temp root with projectRoot + worktree dirs. */
@@ -1239,6 +1249,22 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
     assert.equal(cfg.plugin.length, 0, "harness paths stripped from plugin[] (OC auto-load)");
     assert.equal(ocPluginFilesExist(worktree, [...CANONICAL_OC_PLUGINS]), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: closure-11 critical libs are required and copied into the headless runtime", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-11-");
+  const criticalLibs = ["gate-state.mjs", "entry-decide.mjs", "hand-records.mjs", "dispatch-scope.mjs"];
+  try {
+    const mat = materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(mat.source, "monorepo");
+    for (const name of criticalLibs) {
+      assert.ok(existsSync(join(worktree, ".opencode", "lib", name)), `runtime must copy lib/${name}`);
+    }
+    rmSync(join(worktree, ".opencode", "lib", "gate-state.mjs"));
+    assert.equal(isOpencodeRuntimeComplete(join(worktree, ".opencode")), false, "missing critical lib must make runtime incomplete");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

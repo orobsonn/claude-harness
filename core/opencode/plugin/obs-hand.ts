@@ -31,16 +31,16 @@ export async function createObsHandHooks(
     dedupeByType,
     taskIndexFromPlan,
     planDirForRun,
-  } = await import("./lib/obs-emit.mjs");
-  const { parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs");
-  const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("./lib/roles.mjs");
-  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBindingByChild } = await import("./lib/dispatch-scope.mjs");
+  } = await import("../lib/obs-emit.mjs");
+  const { parseTaskDispatchIdentity } = await import("../lib/task-dispatch-identity.mjs");
+  const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs");
+  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBindingByChild } = await import("../lib/dispatch-scope.mjs");
   const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
   const {
     writeHandRecord,
     parseHandStatusFromOutput,
     buildTaskHandRecord,
-  } = await import("./lib/hand-records.mjs");
+  } = await import("../lib/hand-records.mjs");
   const { defaultHeadSha } = await import("./lib/mark-gate.mjs");
   const {
     gitTouchedPaths,
@@ -52,7 +52,7 @@ export async function createObsHandHooks(
     isRegateArmingOutcome,
     armRegatePending,
   } = await import("./lib/regate-arm.mjs");
-  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
+  const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
   registerScopeComponent(cwd, "obs-hand");

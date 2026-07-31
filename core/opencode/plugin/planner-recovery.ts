@@ -50,18 +50,18 @@ export async function createPlannerRecoveryHooks(
     reconcilePlannerStateFromDisk,
     semanticPlanHash,
     writeCanonicalPlan,
-  } = await import("./lib/planner-artifact.mjs")
+  } = await import("../lib/planner-artifact.mjs")
   const {
     claimPlannerAttempt,
     completePlannerAttempt,
     failPlannerAttempt,
     MAX_PRIMARY_ATTEMPTS,
-  } = await import("./lib/planner-state.mjs")
+  } = await import("../lib/planner-state.mjs")
   const { buildPlannerBriefAppendix } = await import("./lib/planner-brief.mjs")
-  const { dedupeByType, eventForPlanPath, obsAppend } = await import("./lib/obs-emit.mjs")
+  const { dedupeByType, eventForPlanPath, obsAppend } = await import("../lib/obs-emit.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { withGateStateLock } = await import("./lib/gate-state.mjs")
-  const { resolvePlannerFallbackConfig, validProviderModel } = await import("./lib/planner-fallback-config.mjs")
+  const { withGateStateLock } = await import("../lib/gate-state.mjs")
+  const { resolvePlannerFallbackConfig, validProviderModel } = await import("../lib/planner-fallback-config.mjs")
 
   function statePath(sessionId: unknown): string | null {
     if (typeof sessionId !== "string" || !sessionId) return null

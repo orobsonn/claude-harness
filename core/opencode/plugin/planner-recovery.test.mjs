@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createPlannerRecoveryHooks } from "./planner-recovery.ts";
 import { createPlanGateHooks } from "./plan-gate.ts";
-import { reconcilePlannerStateFromDisk, semanticPlanHash } from "./lib/planner-artifact.mjs";
+import { reconcilePlannerStateFromDisk, semanticPlanHash } from "../lib/planner-artifact.mjs";
 import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs";
 import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs";
 

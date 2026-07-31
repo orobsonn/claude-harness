@@ -80,7 +80,7 @@ const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks", "docs"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 
 /** OpenCode framework-owned dirs (overwritten on every vendor). */
-const OC_FRAMEWORK_OWNED = ["agents", "command", "docs", "skills", "plugin", "tools", "hands", "rules"];
+const OC_FRAMEWORK_OWNED = ["agents", "command", "docs", "skills", "plugin", "tools", "hands", "rules", "lib"];
 const OC_FRAMEWORK_FILES = ["harness.routing.json", "AGENTS.md"];
 
 // Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
@@ -820,6 +820,17 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/marker-security.test.mjs",
   "skills/orchestrating-delivery/dual-runtime.mjs",
   "skills/orchestrating-delivery/dual-runtime.test.mjs",
+  "plugin/lib/gate-state.mjs",
+  "plugin/lib/entry-decide.mjs",
+  "plugin/lib/dispatch-scope.mjs",
+  "plugin/lib/hand-records.mjs",
+  "plugin/lib/planner-state.mjs",
+  "plugin/lib/obs-emit.mjs",
+  "plugin/lib/plan-hash.mjs",
+  "plugin/lib/planner-artifact.mjs",
+  "plugin/lib/planner-fallback-config.mjs",
+  "plugin/lib/roles.mjs",
+  "plugin/lib/task-dispatch-identity.mjs",
 ];
 
 /**

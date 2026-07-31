@@ -1,7 +1,7 @@
 /** @description Pure classification of planner task results into usable plans, provider failures, or invalid plans. */
 
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
-import { semanticPlanHash } from "./plan-hash.mjs";
+import { semanticPlanHash } from "../../lib/plan-hash.mjs";
 
 function responseText(value) {
   try {

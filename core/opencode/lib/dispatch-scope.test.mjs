@@ -21,11 +21,11 @@ import {
   reconcilePendingChildBindingByChild,
 } from "./dispatch-scope.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
-import { scopeRuntimeCompositionMode } from "./scope-runtime-composition.mjs";
-import { createPlanGateHooks } from "../plan-gate.ts";
-import { createObsHandHooks } from "../obs-hand.ts";
-import { createPlanWriteGateHooks } from "../plan-write-gate.ts";
-import { resolveScopeRuntimeIdentity } from "./scope-runtime-identity.mjs";
+import { scopeRuntimeCompositionMode } from "../plugin/lib/scope-runtime-composition.mjs";
+import { createPlanGateHooks } from "../plugin/plan-gate.ts";
+import { createObsHandHooks } from "../plugin/obs-hand.ts";
+import { createPlanWriteGateHooks } from "../plugin/plan-write-gate.ts";
+import { resolveScopeRuntimeIdentity } from "../plugin/lib/scope-runtime-identity.mjs";
 
 function fixture(scopePaths = ["src/a.ts"]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-scope-"));

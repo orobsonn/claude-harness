@@ -13,7 +13,7 @@ import {
   writeCanonicalPlan,
 } from "./planner-artifact.mjs";
 import { claimPlannerAttempt, completePlannerAttempt } from "./planner-state.mjs";
-import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
+import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 
 const SESSION = "ses-canonical-write";
 const FEATURE = "canonical-write";

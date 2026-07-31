@@ -4,9 +4,9 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
-import { withGateStateLock } from "./gate-state.mjs";
+import { withGateStateLock } from "../../lib/gate-state.mjs";
 import { fidelityPassEntry, defaultHeadSha } from "./mark-gate.mjs";
-import { writeHandRecord } from "./hand-records.mjs";
+import { writeHandRecord } from "../../lib/hand-records.mjs";
 
 /**
  * @description Git paths changed since merge-base or last N commits (best-effort).

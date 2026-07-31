@@ -7,8 +7,8 @@ import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../../shared/
 import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
 import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/path-helpers.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
-import { semanticPlanHash } from "./planner-artifact.mjs";
-import { acquireLock, releaseLock, writeGateStateAtomic } from "./gate-state.mjs";
+import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
+import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
 import { readDualStatus } from "../../../shared/lib/gate-state-shape.mjs";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;

@@ -24,10 +24,10 @@ import {
   subtractUnchanged,
 } from "../../shared/lib/capture-oracle.mjs";
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
-import { mergeGateState } from "../plugin/lib/gate-state.mjs";
-import { hasFidelityPass } from "../plugin/lib/entry-decide.mjs";
-import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../plugin/lib/dispatch-scope.mjs";
-import { writeHandRecord } from "../plugin/lib/hand-records.mjs";
+import { mergeGateState } from "../lib/gate-state.mjs";
+import { hasFidelityPass } from "../lib/entry-decide.mjs";
+import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../lib/dispatch-scope.mjs";
+import { writeHandRecord } from "../lib/hand-records.mjs";
 
 export { writeHandRecord };
 

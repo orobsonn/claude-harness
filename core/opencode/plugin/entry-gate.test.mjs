@@ -566,7 +566,7 @@ test("#ac-2.2: an ordinary git commit message through the real hook → PERMITID
 })
 
 test("lt-pure-planner-full-ceremony-allow — decideEntryTask planner + full ceremony → allow (import decideEntryTask from entry-decide.mjs)", async () => {
-  const { decideEntryTask } = await import("./lib/entry-decide.mjs")
+  const { decideEntryTask } = await import("../lib/entry-decide.mjs")
   const decision = decideEntryTask({
     subagentType: "planner",
     gateState: fullCeremony(),

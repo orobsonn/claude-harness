@@ -59,11 +59,11 @@ export async function createPlanGateHooks(
   const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs")
   registerScopeComponent(root, "plan-gate")
   const { extractSubagentType, isTaskTool, parseTaskDispatchIdentity } = await import(
-    "./lib/task-dispatch-identity.mjs",
+    "../lib/task-dispatch-identity.mjs",
   )
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
-  const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs")
+  const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const {
     bareRole,
@@ -71,7 +71,7 @@ export async function createPlanGateHooks(
     isPlanReviewerRole,
     isSniperRole,
     isTestAuthorRole,
-  } = await import("./lib/roles.mjs")
+  } = await import("../lib/roles.mjs")
   return {
     "tool.execute.before": async (input: any, output: any) => {
       const { toolName, toolArgs } = extractHookTaskContext(input, output)

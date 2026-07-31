@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { mergeGateState as defaultMergeGateState } from "../../plugin/lib/gate-state.mjs";
+import { mergeGateState as defaultMergeGateState } from "../../lib/gate-state.mjs";
 
 function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

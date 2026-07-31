@@ -5,7 +5,7 @@
  */
 
 import crypto from "node:crypto";
-import { AGENT_RETRY_K } from "../../../shared/lib/agent-retry.mjs";
+import { AGENT_RETRY_K } from "../../shared/lib/agent-retry.mjs";
 
 /**
  * Per-process instance tag (mirrors marker-seal.mjs's per-process secret). This plugin's

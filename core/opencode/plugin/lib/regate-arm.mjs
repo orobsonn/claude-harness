@@ -3,8 +3,8 @@
  * Mirrors marker-authority regate-pending mutation (sealed entry) without Bash.
  * Fail-open on I/O / identity errors so after-hooks never break cleanup.
  */
-import { bareRole } from "./roles.mjs";
-import { withGateStateLock as defaultWithGateStateLock } from "./gate-state.mjs";
+import { bareRole } from "../../lib/roles.mjs";
+import { withGateStateLock as defaultWithGateStateLock } from "../../lib/gate-state.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 import { gateStatePath as defaultGateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { fidelityPassEntry } from "./mark-gate.mjs";

@@ -11,7 +11,7 @@ import {
   parseHandStatusFromOutput,
   buildTaskHandRecord,
 } from "./hand-records.mjs";
-import { handRecordPath } from "../../../shared/lib/path-helpers.mjs";
+import { handRecordPath } from "../../shared/lib/path-helpers.mjs";
 
 /**
  * @param {(projectRoot: string) => void | Promise<void>} fn

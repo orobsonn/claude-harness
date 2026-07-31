@@ -1,7 +1,7 @@
 /** @description Resolve writing-hand parent authority and role from trusted OpenCode SDK metadata. */
 
-import { bindAdapterSession, getChildSessionBinding } from "./dispatch-scope.mjs";
-import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
+import { bindAdapterSession, getChildSessionBinding } from "../../lib/dispatch-scope.mjs";
+import { isExecutorRole, isSniperRole, isTestAuthorRole } from "../../lib/roles.mjs";
 
 const resolvedCalls = new Map();
 

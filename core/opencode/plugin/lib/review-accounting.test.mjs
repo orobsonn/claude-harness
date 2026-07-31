@@ -25,7 +25,7 @@ import {
   decideGateBlockedDispatchAllowed,
 } from "../../../shared/lib/agent-retry.mjs";
 import { captureSpecAdversaryResult, completionEvidence } from "./ceremony-transition.mjs";
-import { semanticPlanHash, writeBoundPlanSnapshot } from "./planner-artifact.mjs";
+import { semanticPlanHash, writeBoundPlanSnapshot } from "../../lib/planner-artifact.mjs";
 import { isolateObservabilityRunPath } from "./obs-test-isolation.mjs";
 import { sealPreparedAdjudication } from "./second-eye-authority.mjs";
 

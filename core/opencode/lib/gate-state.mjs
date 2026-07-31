@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
+import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
 
 /** Session id safe for path segment (no traversal). Aligned with OC session ids (ses_…). */
 const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;

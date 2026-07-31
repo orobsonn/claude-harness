@@ -28,7 +28,7 @@ function isBashTool(name: unknown): boolean {
  */
 export async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute.before">> {
   const { lavishDenyReason } = await import("./lib/lavish-command-decide.mjs");
-  const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
+  const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
 
   return {
     "tool.execute.before": async (input: any, output: any) => {

@@ -9,8 +9,8 @@ import {
   isTestAuthorRole,
   isAdversaryRole,
 } from "./roles.mjs";
-import { absolutionPrefix, matchesAbsolution } from "../../../shared/lib/absolution.mjs";
-import { classifyRegatePending, corruptRegatePendingReason } from "../../../shared/lib/regate-classify.mjs";
+import { absolutionPrefix, matchesAbsolution } from "../../shared/lib/absolution.mjs";
+import { classifyRegatePending, corruptRegatePendingReason } from "../../shared/lib/regate-classify.mjs";
 
 /**
  * @typedef {{ ok: boolean, decision: "allow"|"deny"|"warn", reason: string, details?: unknown }} Decision

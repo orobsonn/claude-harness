@@ -1,7 +1,7 @@
 /** @description Pure marker helpers plus an observability-only CLI. No privileged mutation API. */
 
 import { spawnSync } from "node:child_process";
-import { eventForTaskExecuting, obsAppend, dedupeByType } from "./obs-emit.mjs";
+import { eventForTaskExecuting, obsAppend, dedupeByType } from "../../lib/obs-emit.mjs";
 
 /** @description Build feature/task or feature/task@sha marker identity. */
 export function fidelityPassEntry(featureId, taskId, sha) {

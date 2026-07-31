@@ -68,7 +68,7 @@ export function decidePlanGate(input = {}) {
 }
 
 /**
- * @param {import("./entry-decide.mjs").Decision | Decision} decision
+ * @param {import("../../lib/entry-decide.mjs").Decision | Decision} decision
  * @returns {void}
  */
 export function throwIfPlanDenied(decision) {

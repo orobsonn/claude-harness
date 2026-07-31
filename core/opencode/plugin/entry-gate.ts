@@ -180,12 +180,12 @@ export async function createEntryGateHooks(
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd()
-  const { isTaskTool, parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { isTaskTool, parseTaskDispatchIdentity } = await import("../lib/task-dispatch-identity.mjs")
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { loadGateStateFromDisk, withGateStateLock } = await import("./lib/gate-state.mjs")
+  const { loadGateStateFromDisk, withGateStateLock } = await import("../lib/gate-state.mjs")
   const {
     decideBashAdvisory,
     applyAdvisory,
@@ -196,10 +196,10 @@ export async function createEntryGateHooks(
   const {
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
-  } = await import("./lib/entry-decide.mjs")
-  const { isDeliveryRole, isPlannerRole } = await import("./lib/roles.mjs")
+  } = await import("../lib/entry-decide.mjs")
+  const { isDeliveryRole, isPlannerRole } = await import("../lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
-  const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
+  const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
   const gitStateFn =
     deps.gitStateFn ?? (() => defaultGitState(computeGitState))

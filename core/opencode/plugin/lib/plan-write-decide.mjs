@@ -12,7 +12,7 @@
  */
 
 import path from "node:path";
-import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
+import { isExecutorRole, isSniperRole, isTestAuthorRole } from "../../lib/roles.mjs";
 
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 /** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */

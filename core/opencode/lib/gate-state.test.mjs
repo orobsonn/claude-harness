@@ -21,10 +21,10 @@ import {
   loadGateStateFromDisk,
 } from "./gate-state.mjs";
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
-import { decidePlanGate, throwIfPlanDenied } from "./plan-decide.mjs";
-import { LOOP_THRESHOLDS, decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "./loop-decide.mjs";
+import { decidePlanGate, throwIfPlanDenied } from "../plugin/lib/plan-decide.mjs";
+import { LOOP_THRESHOLDS, decideLoopGuard, loopCounterKey, nextLoopCount, throwIfLoopDenied } from "../plugin/lib/loop-decide.mjs";
 import { bareRole, isDeliveryRole, isExecutorRole, isSniperRole } from "./roles.mjs";
-import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
+import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

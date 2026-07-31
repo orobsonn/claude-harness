@@ -33,7 +33,7 @@ async function maybeAutoBindPlan(projectRoot: string, filePath: string) {
     const ids = sessionFeatureFromPlanPath(filePath);
     if (!ids) return;
     if (!/execution-plan\.json$/i.test(filePath.replace(/\\/g, "/"))) return;
-    const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs");
+    const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs");
     reconcilePlannerStateFromDisk(projectRoot, ids.sessionId);
   } catch {
     /* fail-open */
@@ -47,7 +47,7 @@ export async function createObsPlanWriteHooks(
   projectRoot?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { eventForPlanPath, obsAppend, dedupeByType, resolveHookArgs } = await import(
-    "./lib/obs-emit.mjs"
+    "../lib/obs-emit.mjs"
   );
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0 ? projectRoot : process.cwd();

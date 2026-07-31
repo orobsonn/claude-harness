@@ -26,7 +26,7 @@ function extractResponse(input: any, output: any): string {
 export async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
-  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
+  const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
   const {
     eventForEyeRole,
     isEyeRole,
@@ -36,7 +36,7 @@ export async function createObsEyeHooks(
     fullPlanExistsForRun,
     resolveHookArgs,
     extractTaskIds,
-  } = await import("./lib/obs-emit.mjs");
+  } = await import("../lib/obs-emit.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   return {
     "tool.execute.after": async (input: any, output: any) => {

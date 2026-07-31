@@ -1,7 +1,7 @@
 /** @description Atomic single-evaluator review reservations, terminal accounting, and review-cap epochs. */
 
 import crypto from "node:crypto";
-import { bareRole } from "./roles.mjs";
+import { bareRole } from "../../lib/roles.mjs";
 import { reviewAgentIdentity } from "../../agents/review-catalog.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../../shared/lib/review-report-schema.mjs";
 import { deriveCanonicalReviewRestart } from "./review-restart.mjs";

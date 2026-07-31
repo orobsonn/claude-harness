@@ -10,12 +10,12 @@ import {
   appendEvent as defaultAppendEvent,
   metaExists as defaultMetaExists,
   readEvents as defaultReadEvents,
-} from "../../../shared/lib/obs-append.mjs";
+} from "../../shared/lib/obs-append.mjs";
 import {
   REVIEW_AGENT_ALIASES,
   REVIEW_AGENT_CATALOG,
   reviewAgentIdentity,
-} from "../../agents/review-catalog.mjs";
+} from "../agents/review-catalog.mjs";
 
 const EYE_ROLES = new Set([
   "compliance",

@@ -10,7 +10,7 @@ import { createObsPlanWriteHooks } from "./obs-plan-write.ts";
 import { createObsEyeHooks } from "./obs-eye.ts";
 import { createObsHandHooks } from "./obs-hand.ts";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
-import { semanticPlanHash } from "./lib/planner-artifact.mjs";
+import { semanticPlanHash } from "../lib/planner-artifact.mjs";
 import { fidelityPassEntry } from "./lib/mark-gate.mjs";
 
 /** @param {() => Promise<void>} fn */

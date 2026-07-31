@@ -59,7 +59,7 @@ import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
 import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
 import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
 import { persistClassifyArtifacts } from "../opencode/tools/lib/classify-persist.mjs";
-import { plannerCycleResetPatch } from "../opencode/plugin/lib/planner-state.mjs";
+import { plannerCycleResetPatch } from "../opencode/lib/planner-state.mjs";
 
 /**
  * Reconstructs, from its real pure sub-functions, exactly what `core/opencode/tools/classify.ts`'s

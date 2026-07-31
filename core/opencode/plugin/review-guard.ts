@@ -23,16 +23,16 @@ export async function createReviewGuardHooks(
   } = await import("./lib/loop-decide.mjs")
   const { decideReviseNudge } = await import("./lib/revise-nudge.mjs")
   const { decideAdversaryNudge } = await import("./lib/adversary-nudge.mjs")
-  const { dedupeByType, obsAppend } = await import("./lib/obs-emit.mjs")
-  const { withGateStateLock } = await import("./lib/gate-state.mjs")
+  const { dedupeByType, obsAppend } = await import("../lib/obs-emit.mjs")
+  const { withGateStateLock } = await import("../lib/gate-state.mjs")
   const { reviewAgentIdentity } = await import("../agents/review-catalog.mjs")
   const { gateStatePath, planDir } = await import("../../shared/lib/path-helpers.mjs")
   const { extractSubagentType, isTaskTool, parseTaskDispatchIdentity } = await import(
-    "./lib/task-dispatch-identity.mjs",
+    "../lib/task-dispatch-identity.mjs",
   )
   const { applyAgentDispatchOutcome, applyGateBlockedDispatch } = await import("../../shared/lib/agent-retry.mjs")
   const { decideCallOutcomeOnce } = await import("../../shared/lib/agent-retry-call.mjs")
-  const { isDeliveryRole } = await import("./lib/roles.mjs")
+  const { isDeliveryRole } = await import("../lib/roles.mjs")
   const {
     hasRefutePassMarker,
     beginSecondEyeDispatch,
