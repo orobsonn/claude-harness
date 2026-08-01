@@ -9,7 +9,6 @@ import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/p
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
 import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
-import { readDualStatus } from "../../../shared/lib/gate-state-shape.mjs";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_REINJECT_BYTES = 8 * 1024;
@@ -230,28 +229,27 @@ export function buildSessionRecovery(projectRoot, sessionId, options = {}) {
   return { ok: true, context, statePath: loaded.path };
 }
 
-function hasOwnedChildIndex(projectRoot, sessionId) {
-  const childRoot = path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children");
+function hasExactDispatchRecords(projectRoot, sessionId) {
+  const records = path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "dispatch-records");
+  let stat;
   try {
-    for (const entry of fs.readdirSync(childRoot, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const loaded = readSafeJson(projectRoot, path.join(childRoot, entry.name), 64 * 1024);
-      if (loaded.ok && loaded.value.parentSessionId === sessionId) return true;
-    }
-  } catch { /* absent index */ }
-  return false;
-}
-
-/** @description Whether current or persisted legacy review state blocks terminal retention. */
-export function isPendingReviewState(state) {
-  return readDualStatus(state) === "pending";
+    stat = fs.lstatSync(records);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return false;
+    return true;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
+  try {
+    return fs.readdirSync(records).length > 0;
+  } catch {
+    return true;
+  }
 }
 
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
-  if (state.session_id !== sessionId || Object.keys(state.dispatch_records ?? {}).length > 0) return false;
-  if (hasOwnedChildIndex(projectRoot, sessionId)) return false;
+  if (state.session_id !== sessionId || hasExactDispatchRecords(projectRoot, sessionId)) return false;
   if (state.planner_status !== "usable" || state.planner_binding_error != null ||
-      state.classified === false || isPendingReviewState(state)) return false;
+      state.classified === false) return false;
   const featureId = state.feature_id;
   if (!isSafeFeatureId(featureId)) return false;
   const resolved = currentPlan(projectRoot, sessionId, featureId, state);
@@ -330,37 +328,6 @@ export function recordSessionCompletion(projectRoot, sessionId, options = {}) {
   }
 }
 
-function claimOwnedChildIndexes(projectRoot, sessionId) {
-  const root = path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children");
-  const claimed = [];
-  try {
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const target = path.join(root, entry.name);
-      const before = readSafeJson(projectRoot, target, 64 * 1024);
-      if (!before.ok) continue;
-      const binding = before.value;
-      const expectedName = typeof binding.childSessionId === "string"
-        ? `${crypto.createHash("sha256").update(binding.childSessionId).digest("hex")}.json`
-        : "";
-      if (binding.parentSessionId !== sessionId || !isSafeSessionId(binding.childSessionId) ||
-          typeof binding.callId !== "string" || binding.callId.length === 0 ||
-          typeof binding.token !== "string" || binding.token.length === 0 || entry.name !== expectedName) continue;
-      const tombstone = `${target}.${crypto.randomUUID()}.retained`;
-      try {
-        fs.renameSync(target, tombstone);
-        const loaded = readSafeJson(projectRoot, tombstone, 64 * 1024);
-        if (loaded.ok && loaded.raw === before.raw && loaded.value.parentSessionId === sessionId) {
-          claimed.push({ target, tombstone });
-        } else if (!fs.existsSync(target)) {
-          fs.renameSync(tombstone, target);
-        }
-      } catch { /* retain on uncertainty */ }
-    }
-  } catch { /* absent index */ }
-  return claimed;
-}
-
 function restoreClaims(claims) {
   for (const claim of claims) {
     try {
@@ -397,15 +364,13 @@ export function cleanupRetainedCompletedSession(projectRoot, sessionId, options 
   }
   let tombstone = null;
   let tombstoneStatePath = null;
-  let childClaims = [];
   let handRecordClaim = null;
   const sessionDir = path.dirname(stateResult.path);
   try {
     const loaded = readSafeJson(projectRoot, stateResult.path);
-    if (!eligible(loaded) || Object.keys(loaded.value.dispatch_records ?? {}).length > 0) {
+    if (!eligible(loaded) || hasExactDispatchRecords(projectRoot, sessionId)) {
       return { ok: true, cleaned: false };
     }
-    childClaims = claimOwnedChildIndexes(projectRoot, sessionId);
     if (isSafeFeatureId(loaded.value.feature_id)) {
       const records = path.join(projectRoot, ".opencode", "plans", ".state", "hand-records", loaded.value.feature_id, sessionId);
       if (fs.existsSync(records)) {
@@ -431,15 +396,11 @@ export function cleanupRetainedCompletedSession(projectRoot, sessionId, options 
         tombstoneStatePath = null;
       } catch { /* fail closed with claimed session tombstone retained */ }
     }
-    restoreClaims(childClaims);
     if (handRecordClaim) restoreClaims([handRecordClaim]);
     return { ok: false, cleaned: false, reason: "completed session cleanup failed" };
   } finally {
     releaseLock(tombstoneStatePath ?? stateResult.path, acquired.token);
     releaseLock(lifecyclePath, lifecycle.token);
-  }
-  for (const claim of childClaims) {
-    try { fs.rmSync(claim.tombstone, { force: true }); } catch { /* tombstone is inert */ }
   }
   if (handRecordClaim) {
     try { fs.rmSync(handRecordClaim.tombstone, { recursive: true, force: true }); } catch { /* tombstone is inert */ }

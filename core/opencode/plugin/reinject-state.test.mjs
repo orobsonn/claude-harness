@@ -432,8 +432,8 @@ test("active and completed-inside-retention sessions are retained", () => {
   } finally { cleanup(f) }
 })
 
-test("cleanup never renames a foreign child index and preserves its bytes", () => {
-  const f = fixture("ses-clean-target", "clean-target")
+test("expired cleanup retains the session while any exact dispatch record is present", () => {
+  const f = fixture("ses-exact-active", "exact-active")
   try {
     fs.writeFileSync(f.statePath, JSON.stringify({
       session_id: f.sessionID,
@@ -441,28 +441,58 @@ test("cleanup never renames a foreign child index and preserves its bytes", () =
       session_status: "completed",
       session_completed_at: "2026-01-01T00:00:00.000Z",
     }))
-    const indexRoot = path.join(f.root, ".opencode", "plans", ".state", "active-dispatch-children")
-    fs.mkdirSync(indexRoot, { recursive: true })
-    const child = "ses-foreign-child"
-    const foreign = path.join(indexRoot, `${crypto.createHash("sha256").update(child).digest("hex")}.json`)
-    const bytes = Buffer.from(JSON.stringify({ parentSessionId: "ses-foreign", childSessionId: child, callId: "call", token: "token" }))
-    fs.writeFileSync(foreign, bytes)
-    const originalRename = fs.renameSync
-    let foreignRenames = 0
-    fs.renameSync = function(source, target) {
-      if (source === foreign) foreignRenames += 1
-      return originalRename.call(fs, source, target)
-    }
-    try {
-      assert.equal(cleanupRetainedCompletedSession(f.root, f.sessionID, { retentionMs: 0, now: Date.parse("2026-01-02T00:00:00Z") }).cleaned, true)
-    } finally { fs.renameSync = originalRename }
-    assert.equal(foreignRenames, 0)
-    assert.deepEqual(fs.readFileSync(foreign), bytes)
+    const records = path.join(path.dirname(f.statePath), "dispatch-records")
+    fs.mkdirSync(records, { recursive: true })
+    fs.writeFileSync(path.join(records, `${"a".repeat(64)}.json`), "not-json")
+    assert.equal(cleanupRetainedCompletedSession(f.root, f.sessionID, { retentionMs: 0, now: Date.parse("2026-01-02T00:00:00Z") }).cleaned, false)
+    assert.equal(fs.existsSync(f.statePath), true)
   } finally { cleanup(f) }
 })
 
-test("cleanup discards claimed old own index but preserves concurrent recreation", () => {
-  const f = fixture("ses-own-index", "own-index")
+test("expired cleanup fails closed on symlinked, dangling, or unreadable exact-record directories", () => {
+  for (const shape of ["symlink", "dangling", "unreadable"]) {
+    const f = fixture(`ses-exact-${shape}`, `exact-${shape}`)
+    const records = path.join(path.dirname(f.statePath), "dispatch-records")
+    const originalReaddir = fs.readdirSync
+    try {
+      fs.writeFileSync(f.statePath, JSON.stringify({
+        session_id: f.sessionID,
+        feature_id: f.featureID,
+        session_status: "completed",
+        session_completed_at: "2026-01-01T00:00:00.000Z",
+      }))
+      if (shape === "symlink") {
+        const foreign = path.join(f.root, "empty-foreign-records")
+        fs.mkdirSync(foreign)
+        fs.symlinkSync(foreign, records)
+      } else if (shape === "dangling") {
+        fs.symlinkSync(path.join(f.root, "missing-records"), records)
+      } else {
+        fs.mkdirSync(records)
+        fs.readdirSync = function(target, ...args) {
+          if (path.resolve(String(target)) === path.resolve(records)) {
+            const error = new Error("unreadable")
+            error.code = "EACCES"
+            throw error
+          }
+          return originalReaddir.call(fs, target, ...args)
+        }
+      }
+      const result = cleanupRetainedCompletedSession(f.root, f.sessionID, {
+        retentionMs: 0,
+        now: Date.parse("2026-01-02T00:00:00Z"),
+      })
+      assert.equal(result.cleaned, false, shape)
+      assert.equal(fs.existsSync(f.statePath), true, shape)
+    } finally {
+      fs.readdirSync = originalReaddir
+      cleanup(f)
+    }
+  }
+})
+
+test("expired cleanup removes an empty exact-record directory with its owned session", () => {
+  const f = fixture("ses-exact-expired", "exact-expired")
   try {
     fs.writeFileSync(f.statePath, JSON.stringify({
       session_id: f.sessionID,
@@ -470,22 +500,13 @@ test("cleanup discards claimed old own index but preserves concurrent recreation
       session_status: "completed",
       session_completed_at: "2026-01-01T00:00:00.000Z",
     }))
-    const indexRoot = path.join(f.root, ".opencode", "plans", ".state", "active-dispatch-children")
-    fs.mkdirSync(indexRoot, { recursive: true })
-    const child = "ses-own-child"
-    const own = path.join(indexRoot, `${crypto.createHash("sha256").update(child).digest("hex")}.json`)
-    fs.writeFileSync(own, JSON.stringify({ parentSessionId: f.sessionID, childSessionId: child, callId: "old-call", token: "old-token" }))
-    const replacement = JSON.stringify({ parentSessionId: f.sessionID, childSessionId: child, callId: "new-call", token: "new-token" })
-    const originalRename = fs.renameSync
-    fs.renameSync = function(source, target) {
-      const result = originalRename.call(fs, source, target)
-      if (source === own && String(target).endsWith(".retained")) fs.writeFileSync(own, replacement)
-      return result
-    }
-    try {
-      assert.equal(cleanupRetainedCompletedSession(f.root, f.sessionID, { retentionMs: 0, now: Date.parse("2026-01-02T00:00:00Z") }).cleaned, true)
-    } finally { fs.renameSync = originalRename }
-    assert.equal(fs.readFileSync(own, "utf8"), replacement)
+    const records = path.join(path.dirname(f.statePath), "dispatch-records")
+    fs.mkdirSync(records, { recursive: true })
+    const record = path.join(records, `${"b".repeat(64)}.json`)
+    fs.writeFileSync(record, "{}")
+    fs.rmSync(record)
+    assert.equal(cleanupRetainedCompletedSession(f.root, f.sessionID, { retentionMs: 0, now: Date.parse("2026-01-02T00:00:00Z") }).cleaned, true)
+    assert.equal(fs.existsSync(records), false)
   } finally { cleanup(f) }
 })
 
@@ -567,13 +588,14 @@ test("idle mid-run does not start retention", async () => {
   } finally { cleanup(f) }
 })
 
-test("idle can retain a completed legacy session with orphaned inflight receipts", async () => {
+test("retention ignores retired review-engine fields and uses factual completion only", async () => {
   const f = fixture("ses-review-inflight", "review-inflight-feature")
   try {
     const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
     state.hand_finished = [`${f.featureID}/task-one`, `${f.featureID}/task-two`]
     state.capture_verified = [`${f.featureID}/task-one@aaa1111`, `${f.featureID}/task-two@bbb2222`]
     state.regate_passed = [`${f.featureID}/task-two@bbb2222`]
+    state.dual_status = "pending"
     state.review_inflight = [{ canonical_identity: "plan-reviewer", family: 1 }]
     fs.writeFileSync(f.statePath, JSON.stringify(state))
     const hooks = await createReinjectStateHooks(f.root, f.root, {
@@ -585,7 +607,7 @@ test("idle can retain a completed legacy session with orphaned inflight receipts
     const persisted = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
     assert.equal(persisted.session_status, "completed")
     assert.equal(Number.isFinite(Date.parse(persisted.session_completed_at)), true)
-    assert.equal(persisted.review_inflight.length, 1)
+    assert.equal(persisted.dual_status, "pending")
   } finally { cleanup(f) }
 })
 
@@ -625,9 +647,9 @@ test("idle complete starts retention, updated activity reopens, and timer later 
     const handRecords = path.join(f.root, ".opencode", "plans", ".state", "hand-records", f.featureID, f.sessionID)
     fs.mkdirSync(handRecords, { recursive: true })
     fs.writeFileSync(path.join(handRecords, "task-one.json"), "{}")
-    const childIndexes = path.join(f.root, ".opencode", "plans", ".state", "active-dispatch-children")
-    fs.mkdirSync(childIndexes, { recursive: true })
-    fs.writeFileSync(path.join(childIndexes, "other.json"), JSON.stringify({ parentSessionId: other.sessionID, childSessionId: "other-child" }))
+    const otherDispatchRecords = path.join(path.dirname(other.statePath), "dispatch-records")
+    fs.mkdirSync(otherDispatchRecords, { recursive: true })
+    fs.writeFileSync(path.join(otherDispatchRecords, `${"c".repeat(64)}.json`), "{}")
 
     const hooks = await createReinjectStateHooks(f.root, f.root, {
       retentionMs: 1_000,
@@ -648,7 +670,7 @@ test("idle complete starts retention, updated activity reopens, and timer later 
     timerCallback()
     assert.equal(fs.existsSync(path.dirname(f.statePath)), false)
     assert.equal(fs.existsSync(handRecords), false)
-    assert.equal(fs.existsSync(path.join(childIndexes, "other.json")), true)
+    assert.equal(fs.existsSync(path.join(otherDispatchRecords, `${"c".repeat(64)}.json`)), true)
     assert.equal(fs.existsSync(path.join(f.planDir, "execution-plan.json")), true)
     assert.equal(fs.existsSync(other.statePath), true)
   } finally {

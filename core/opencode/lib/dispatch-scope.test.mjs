@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { bindChildSession, claimActiveDispatch, normalizeProjectPath, readDispatchRecord, removeDispatchRecord } from "./dispatch-scope.mjs";
+import { acquireLock, releaseLock } from "./gate-state.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
 
 const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
@@ -85,6 +86,28 @@ test("claim stores the exact required record outside shared gate-state", () => {
     const state = JSON.parse(fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "gate-state.json"), "utf8"));
     assert.equal(state.dispatch_records, undefined);
   } finally { f.close(); }
+});
+
+test("claim shares the session lifecycle lock with retention cleanup", () => {
+  const f = fixture();
+  const lifecycle = path.join(f.root, ".opencode", "plans", ".state", ".session-lifecycle", f.sessionId);
+  const acquired = acquireLock(lifecycle);
+  try {
+    assert.equal(acquired.ok, true);
+    const claim = claimActiveDispatch(f.root, {
+      sessionId: f.sessionId,
+      callId: "lifecycle-blocked",
+      role: "executor-low",
+      taskId: "task-1",
+      lockOptions: { timeoutMs: 5, retryMs: 1, staleMs: 60_000 },
+    });
+    assert.equal(claim.ok, false);
+    assert.match(claim.reason, /lock-timeout/);
+    assert.equal(fs.existsSync(recordPath(f, "lifecycle-blocked")), false);
+  } finally {
+    if (acquired.ok) releaseLock(lifecycle, acquired.token);
+    f.close();
+  }
 });
 
 test("present exact records fail as conflicts unless their complete schema is canonical", () => {

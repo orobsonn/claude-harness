@@ -218,29 +218,43 @@ function sameDispatch(left, right) {
 }
 
 /** @description Atomically create one immutable canonical scope record for this exact Task call. */
-export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now() }) {
+export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}) {
   if (![sessionId, callId, role, taskId].every((value) => typeof value === "string" && value)) return { ok: false, reason: "runtime session, call, role, and task required" };
-  const loaded = loadCanonicalState(projectRoot, sessionId);
-  if (!loaded.ok) return loaded;
-  if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
-  const canonical = canonicalDispatchFromSnapshot(projectRoot, loaded.state, taskId, role);
-  if (!canonical.ok) return canonical;
-  const record = {
-    parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
-    feature_id: canonical.featureId, task_id: canonical.taskId, role,
-    scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
-    snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
-  };
-  const resolved = dispatchRecordPath(projectRoot, sessionId, callId);
-  if (!resolved.ok) return resolved;
-  const written = mutateExactRecord(resolved.path, (current) => {
-    if (current.ok && !validDispatchRecord(projectRoot, current.value)) return { ok: false, conflict: true, reason: "same dispatch call record schema conflict" };
-    if (current.ok && sameDispatch(current.value, record)) return { record: current.value };
-    if (current.ok) return { ok: false, conflict: true, reason: "same dispatch call replay conflicts with canonical scope" };
-    if (!current.absent) return current;
-    return { record };
-  });
-  return written.ok ? { ok: true, claim: written.record } : written;
+  let realRoot;
+  try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
+  const lifecycleTarget = canonicalTarget(
+    realRoot,
+    path.join(realRoot, ".opencode", "plans", ".state", ".session-lifecycle", sessionId),
+    "dispatch lifecycle lock path escapes project root",
+  );
+  if (!lifecycleTarget.ok) return lifecycleTarget;
+  const lifecycle = acquireLock(lifecycleTarget.path, lockOptions);
+  if (!lifecycle.ok) return lifecycle;
+  try {
+    const loaded = loadCanonicalState(realRoot, sessionId);
+    if (!loaded.ok) return loaded;
+    if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
+    const canonical = canonicalDispatchFromSnapshot(realRoot, loaded.state, taskId, role);
+    if (!canonical.ok) return canonical;
+    const record = {
+      parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
+      feature_id: canonical.featureId, task_id: canonical.taskId, role,
+      scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
+      snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
+    };
+    const resolved = dispatchRecordPath(realRoot, sessionId, callId);
+    if (!resolved.ok) return resolved;
+    const written = mutateExactRecord(resolved.path, (current) => {
+      if (current.ok && !validDispatchRecord(realRoot, current.value)) return { ok: false, conflict: true, reason: "same dispatch call record schema conflict" };
+      if (current.ok && sameDispatch(current.value, record)) return { record: current.value };
+      if (current.ok) return { ok: false, conflict: true, reason: "same dispatch call replay conflicts with canonical scope" };
+      if (!current.absent) return current;
+      return { record };
+    });
+    return written.ok ? { ok: true, claim: written.record } : written;
+  } finally {
+    releaseLock(lifecycleTarget.path, lifecycle.token);
+  }
 }
 
 function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
