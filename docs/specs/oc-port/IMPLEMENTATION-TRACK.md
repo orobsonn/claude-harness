@@ -40,7 +40,7 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 | T4 | shared severity + merge-findings/verdicts | 03, 07 | done | 2026-07-10 | Family-agnostic; severity + merge-findings + merge-verdicts per 03 contract; tests green |
 | T5 | Gates MVP: entry + plan + classify + disk + fidelity rail + loop-guard counters | 05, 03 | done | 2026-07-10 | shared classify-stub + gate-state-shape; OC disk gate-state ownership-token RMW (stale 30s, timeout 5s); entry/plan/loop decide pure; fidelity test-author exempt; loop warn=2 deny=4; relative plugin paths in opencode.json.example; locked tests green |
 | T5b | complexity-scorer shared + OC tool | 03 | done | 2026-07-10 | tests green; OC tool wraps shared; bands per contract |
-| T5c | Optional polish: reinject, version-check, harvest-guard | 05 | done | 2026-07-10 | included in phase 1 gate polish; no new files (matrix only); T5 MVP covered the rail |
+| T5c | Optional polish: reinject, version-check | 05 | done | 2026-07-10 | included in phase 1 gate polish; no new files (matrix only); T5 MVP covered the rail |
 | T6 | OC agents + skills + build dual **prose** | 04, 02 | done | 2026-07-10 | Agents+skills under core/opencode; test-author restored; dual eyes plan-reviewer-openai + adversary-openai; build dual-always prose; mode-primary *-spawn hands (tools.task false); configuring-model-routing skill; agents-manifest.test.mjs green; dual runtime merge = T8 |
 | T7 | Cheap hand OC spawn + capture oracle | 06, 03 | done | 2026-07-10 | capture-oracle pure (closed OUTCOME enum, no_tests DONE, never prose/exit); run-hand.mjs mode-primary spawn + worktree policy (FAILED/NOT_DONE reset+set-diff+preUntracked restore; CAPTURE_ERROR quarantine; CONFIG_ERROR reset if dirty); session-scoped hand records; locked tests green |
 | T8 | Cross-family dual **runtime** wiring + merge | 07, 03 | done | 2026-07-10 | dual-runtime.mjs: dual_status enum (both\|primary_only_failopen\|pending\|primary_only_error); driveDualEye fail-open auth→primary_only_failopen (no retry); infra→primary_only_error K=1 retry then fail-open; never invent secondary findings; isFullDualCoverage only for both; policy B via shared merge-findings/verdicts; build+SKILL protocol wired; locked tests t8-enum/failopen/retry/not-full-dual/merge green |
@@ -108,7 +108,7 @@ M2 review closed.
 ## M3 Review (T5-T5c) — 2026-07-10
 Virgin openai/gpt-5.5 review: code contracts clean after fixes (gate-state disk RMW, fidelity, loop counters, complexity bands, arg schema). 
 Gaps noted (accepted per T5c DoD "no new files beyond T5 MVP"):
-- T5c polish plugins (reinject-state, harvest-guard, version-check) and locked tests not created (phase-1 MVP only; full polish in later scope).
+- T5c polish plugins (reinject-state, version-check) and locked tests not created (phase-1 MVP only; full polish in later scope).
 - colocated complexity-scorer.test.mjs not created (implementation only in M3; test coverage deferred).
 M3 review closed with gaps recorded.
 

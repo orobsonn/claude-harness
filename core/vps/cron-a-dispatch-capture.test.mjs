@@ -186,7 +186,7 @@ function plantMonorepoOcPlugins(root) {
   mkdirSync(dir, { recursive: true });
   for (const name of [
     "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts",
-    "reinject-state.ts", "version-check.ts", "harvest-guard.ts", "obs-plan-write.ts",
+    "reinject-state.ts", "version-check.ts", "obs-plan-write.ts",
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }

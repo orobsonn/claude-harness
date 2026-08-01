@@ -87,11 +87,9 @@ const OC_MODULE_FIELDS = ["cc_evidence", "consumers", "current_path", "failure_p
 const OC_RULE_IDS = ["A1", ...Array.from({ length: 15 }, (_, index) => `R${index + 1}`)];
 const OC_MODULE_VERDICTS = new Set(["KEEP", "KEEP (MOVE)", "REWRITE", "DELETE"]);
 const OC_PENDING_DELETE_PATHS = [
-  "plugin/harvest-guard.ts",
   "plugin/lib/agent-catalog-health.mjs",
   "plugin/lib/ceremony-binding.mjs",
   "plugin/lib/ceremony-transition.mjs",
-  "plugin/lib/harvest-findings.mjs",
   "plugin/lib/mark-gate.mjs",
   "lib/planner-fallback-config.mjs",
 ];
@@ -1616,6 +1614,16 @@ describe("parity-manifest", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("t12-roadmap: active backlog never prescribes rebuilding the deleted harvest guard", () => {
+    const roadmap = readFileSync(new URL("../docs/opencode-closure-roadmap.md", import.meta.url), "utf8");
+    const activeStart = roadmap.indexOf("## AINDA FAZ SENTIDO — backlog ativo");
+    const historyStart = roadmap.indexOf("## Histórico");
+    assert.ok(activeStart >= 0 && historyStart > activeStart, "roadmap active/history boundaries must remain explicit");
+    const activeBacklog = roadmap.slice(activeStart, historyStart);
+    const deletedHarvestPrescription = /(?:\bharvest-(?:guard|findings)\b[\s\S]{0,100}\b(?:tool\s+real|implementar?|implementação|rewrite|reescrev\w*)\b|\b(?:tool\s+real|implementar?|implementação|rewrite|reescrev\w*)\b[\s\S]{0,100}\bharvest-(?:guard|findings)\b)/iu;
+    assert.doesNotMatch(activeBacklog, deletedHarvestPrescription);
   });
 
   it("t12-module-manifest: importer scanner catches global, extensionless and trivia-heavy callers", () => {

@@ -103,12 +103,13 @@ Ordenado por **impacto em custo/$ ou risco de merge sujo**, não por nostalgia d
 | **Fix** | Se só prosa: gate determinístico em LIGHT também |
 | **Aceite** | LIGHT sem final-review receipt → push deny |
 
-### A7 — Regate / harvest-guard / harvester path · **P2**
+### A7 — Regate / harvester path · **P2**
 
 | | |
 |---|---|
-| **Por quê** | Vistoria: regate raro; harvest-guard tool nome morto; harvester path sem sessionID |
-| **Fix** | Armar regate na skill+host pós-sniper HIGH; harvest-guard no tool real; path canônico `sessionId-featureId` |
+| **Por quê** | Vistoria: regate raro; harvester path sem identidade canônica da run |
+| **Fix** | Armar regate na skill+host pós-sniper HIGH; usar o path canônico `.opencode/plans/<sessionID>-<feature_id>/` no harvester |
+| **Estado PR4.2** | A cerimônia OpenCode-only `harvest-guard` foi removida. O lifecycle factual de `findings.md` continua na skill `orchestrating-delivery` e no agent `harvester` |
 | **Aceite** | 1 teste host + 1 run com sniper HIGH gera regate_pending→passed |
 
 ### A8 — Docs históricos · **P2 chore**

@@ -298,7 +298,6 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Push bloqueado: task do plano sem evidência | **Uma writing task do plano nunca foi despachada** (nem hand-record, nem captura) — feature ia subir pela metade | Despachar a mão de cada task que falta antes de entregar. Não bloqueia `DONE_WITH_CONCERNS` (shippable) nem se o plano não puder ser lido (fail-open) |
 | Push bloqueado: regate | Correção grave (sniper-high) sem re-auditoria | Rodar adversary de regate + `regate-passed` |
 | Push FULL bloqueado: final / demo | Falta review final (ou demo no interativo) | Completar review final; no interativo, demo quando pedido |
-| Harvester bloqueado | `findings.md` ausente | Garantir que o loop gravou findings antes do harvest |
 | Comportamento “meio velho” | Update/routing sem restart | Reiniciar sessão OpenCode |
 
 **Avaliador único** por padrão. Segundo olho (`secondEyeModel`) é opt-in e fail-open (se o 2º provider cair, segue com aviso — não finge que o segundo olho rodou).

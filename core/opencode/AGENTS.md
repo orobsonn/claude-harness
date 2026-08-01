@@ -174,9 +174,8 @@ Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuri
 
 - Plans, gate-state, hand-records under `.opencode/plans/` and `.opencode/plans/.state/` are run-ephemeral (deleted at harvest); only execution-plan.json and shared_context.md (pre-delete) live in the feature subdir.
 - Edit source under `core/opencode/` (agents, skills, AGENTS.md); `.opencode/` at project root is the vendored runtime copy (do not edit directly in a vendored project).
-- Harvest-guard checks for presence of root `findings.md` before allowing harvest step.
 
-See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths), core/opencode/plugin/harvest-guard.ts
+See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths)
 
 
 ### Folder router (law of one folder)

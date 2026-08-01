@@ -578,6 +578,8 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
     for (const rel of required) {
       assert.ok(existsSync(join(tempDir, rel)), `missing ${rel}`);
     }
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/harvest-findings.mjs")), false);
     // default runtime remains claude-only — OC path must NOT create .claude
     assert.ok(!existsSync(join(tempDir, ".claude/agents")), "opencode-only must not vendor .claude agents");
     assert.ok(!existsSync(join(tempDir, ".opencode/agents/SPAWN-PATTERN.md")), "documentation must not be callable as an agent");
@@ -612,6 +614,35 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes the retired harvest guard closure and preserves plugin siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-harvest-"));
+  const retired = ["plugin/harvest-guard.ts", "plugin/lib/harvest-findings.mjs"];
+  const sibling = join(tempDir, ".opencode/plugin/project-owned-harvest-sibling.ts");
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale harvest ceremony\n", "utf8");
+    }
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned siblings");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

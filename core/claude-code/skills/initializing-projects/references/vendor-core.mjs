@@ -431,7 +431,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/plan-write-gate.ts",
     "./.opencode/plugin/reinject-state.ts",
     "./.opencode/plugin/version-check.ts",
-    "./.opencode/plugin/harvest-guard.ts",
     "./.opencode/plugin/obs-plan-write.ts",
     "./.opencode/plugin/obs-eye.ts",
     "./.opencode/plugin/obs-hand.ts",
@@ -863,6 +862,8 @@ export const OC_RETIRED_FILES = [
   "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
   "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
   "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
+  "plugin/harvest-guard.ts",
+  "plugin/lib/harvest-findings.mjs",
 ];
 
 /**

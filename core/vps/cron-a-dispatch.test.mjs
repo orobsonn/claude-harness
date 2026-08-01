@@ -348,7 +348,6 @@ function plantMonorepoOcPlugins(root) {
     "plan-write-gate.ts",
     "reinject-state.ts",
     "version-check.ts",
-    "harvest-guard.ts",
     "obs-plan-write.ts",
     "obs-eye.ts",
     "obs-hand.ts",
