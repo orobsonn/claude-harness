@@ -1,6 +1,13 @@
 # Paridade OpenCode ↔ Claude Code — Relatório final de auditoria
 
 **Data:** 2026-07-26
+
+> **Decisão PR4.2 (2026-07-31) supera as prescrições de R10 abaixo.** Referências a
+> `ceremony-binding.mjs`, `ceremony-transition.mjs`, sidecars, receipts, hashes e recovery são
+> registro histórico, não instrução vigente. R10 agora usa somente os fatos host-owned
+> `brainstormed` / `adversary_fired`, nessa ordem, e o match da feature classificada; os dois
+> helpers e `ceremony-recovery.test.mjs` foram removidos.
+
 **Decisão que este relatório executa (operador):**
 
 > "o claude code ele tanto funciona eu no loop como sem eu no loop, seja headless ou nao,

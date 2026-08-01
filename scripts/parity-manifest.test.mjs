@@ -87,8 +87,6 @@ const OC_MODULE_FIELDS = ["cc_evidence", "consumers", "current_path", "failure_p
 const OC_RULE_IDS = ["A1", ...Array.from({ length: 15 }, (_, index) => `R${index + 1}`)];
 const OC_MODULE_VERDICTS = new Set(["KEEP", "KEEP (MOVE)", "REWRITE", "DELETE"]);
 const OC_PENDING_DELETE_PATHS = [
-  "plugin/lib/ceremony-binding.mjs",
-  "plugin/lib/ceremony-transition.mjs",
   "plugin/lib/mark-gate.mjs",
   "lib/planner-fallback-config.mjs",
 ];
@@ -198,7 +196,7 @@ const OC_MODULE_NORMATIVE_REASONS = {
   "plugin/lib/agent-idle-nudge.mjs": "Pure operational decision mirrors Claude behavior.",
   "plugin/lib/bash-decide.mjs": "Reduce Bash judgment to the factual delivery boundary.",
   "plugin/lib/ceremony-binding.mjs": "R10 is represented by plain booleans and feature match.",
-  "plugin/lib/ceremony-transition.mjs": "Host marker writes R10 facts directly without recovery receipts.",
+  "plugin/lib/ceremony-transition.mjs": "Host marker writes ordered R10 facts directly with no sidecar.",
   "plugin/lib/dispatch-scope.mjs": "Call-keyed scope records prevent concurrent sibling borrowing.",
   "plugin/lib/entry-decide.mjs": "Pure decision retains only triage, fidelity, re-gate and planner facts.",
   "plugin/lib/gate-state.mjs": "Framework-owned atomic primitive belongs outside plugin/lib.",
@@ -1631,6 +1629,40 @@ describe("parity-manifest", () => {
     assert.ok(catalogMention >= 0, "historical pruning decision must remain auditable");
     const localDecisionContext = pruningPrd.slice(catalogMention, catalogMention + 500);
     assert.match(localDecisionContext, /decisão superada[^\n]*PR4\.2/iu);
+  });
+
+  it("t12-docs: R10 active prose and normative fixtures contain no ceremony sidecar contract", () => {
+    for (const relativePath of [
+      "../core/opencode/AGENTS.md",
+      "../core/opencode/agents/build.md",
+      "../core/opencode/skills/orchestrating-delivery/SKILL.md",
+    ]) {
+      const active = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+      assert.doesNotMatch(
+        active,
+        /brainstormed_binding|adversary_fired_binding|ceremony_generation|ceremony_evidence|unsigned boolean|fingerprints the canonical|binds the runtime-captured/,
+        relativePath,
+      );
+    }
+    for (const fixturePath of [
+      "../docs/prd/fixtures/gate-state-exemplo-a-adversary-both.json",
+      "../docs/prd/fixtures/gate-state-exemplo-b-plan-review-both.json",
+    ]) {
+      const fixture = JSON.parse(readFileSync(new URL(fixturePath, import.meta.url), "utf8"));
+      assert.equal(fixture.brainstormed, true, fixturePath);
+      assert.equal(fixture.adversary_fired, true, fixturePath);
+      for (const retired of ["brainstormed_binding", "adversary_fired_binding", "ceremony_generation", "ceremony_evidence"]) {
+        assert.equal(Object.hasOwn(fixture, retired), false, `${fixturePath}: ${retired}`);
+      }
+    }
+    for (const historyPath of [
+      "../docs/OC-CC-PARITY-REPORT.md",
+      "../docs/OC-CC-PARITY-ROADMAP-INPUT.md",
+      "../docs/opencode-runtime-gaps-2026-07-17-final.md",
+    ]) {
+      const history = readFileSync(new URL(historyPath, import.meta.url), "utf8");
+      assert.match(history.slice(0, 1_500), /PR4\.2[\s\S]*(?:superad|históric)/iu, historyPath);
+    }
   });
 
   it("t12-module-manifest: importer scanner catches global, extensionless and trivia-heavy callers", () => {

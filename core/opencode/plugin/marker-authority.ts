@@ -1,7 +1,9 @@
 /**
  * @description Runtime marker tool and its before-hook share one private args-identity authority.
- * Threat boundary: prevents model Bash/import/replay/clone paths enforced by this harness. It does
- * not protect against a compromised OpenCode host/plugin or arbitrary same-user filesystem writes.
+ * Threat boundary: WeakMap identity and ordering protect only the native mark invocation, blocking
+ * direct execute, clones, replay, concurrent reuse, and runtime-binding mismatches before mutation.
+ * Persisted booleans are plain workflow state, not provenance or OS isolation; same-user filesystem
+ * writes and a compromised OpenCode host/plugin can forge them.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
@@ -12,14 +14,7 @@ import { withGateStateLock } from "../lib/gate-state.mjs"
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
-import { captureSpecAdversaryResult, transitionCeremony } from "./lib/ceremony-transition.mjs"
 import { fidelityPassEntry, defaultHeadSha } from "./lib/mark-gate.mjs"
-import { reviewAgentIdentity } from "../agents/review-catalog.mjs"
-
-function isAdversaryRole(role: unknown): boolean {
-  const identity = reviewAgentIdentity(role)
-  return Boolean(identity && identity.logicalRole === "adversary" && identity.countsLoop)
-}
 
 type MarkerArgs = {
   action?: string
@@ -80,10 +75,13 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       const action = authorization.action
       let patch: Record<string, unknown>
       let payload: unknown
-      if (action === "brainstormed" || action === "adversary_fired") {
-        const transitioned = transitionCeremony(projectRoot, previous, action)
-        if (!transitioned.ok) return transitioned
-        return transitioned.state
+      if (action === "brainstormed") {
+        patch = { brainstormed: true }
+      } else if (action === "adversary_fired") {
+        if (previous.brainstormed !== true) {
+          return { ok: false, reason: "adversary_fired requires brainstormed first" }
+        }
+        patch = { adversary_fired: true }
       } else if (action === "final-review" || action === "demo-done") {
         // Feature-scoped ship preconditions (#385) — no task_id; boolean on gate-state.
         const field = action === "final-review" ? "final_review_done" : "demo_done"
@@ -213,26 +211,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         throw new Error("[marker-authority] classified runtime identity required")
       }
       authorizedArgs.set(args, { sessionID, callID, featureID, action })
-    },
-    "tool.execute.after": async (input: any, output: any) => {
-      const args = output?.args ?? input?.args
-      const role = args && typeof args === "object" ? args.subagent_type ?? args.subagentType : ""
-      if (input?.tool !== "task" || !isAdversaryRole(role)) return
-      const sessionID = typeof input.sessionID === "string" ? input.sessionID : ""
-      const callID = typeof input.callID === "string" ? input.callID : ""
-      const statePath = gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })
-      if (!statePath.ok) return
-      let state: Record<string, unknown>
-      try { state = JSON.parse(fs.readFileSync(statePath.path, "utf8")) } catch { return }
-      if ((state.planner_status && state.planner_status !== "not_started") || state.session_id !== sessionID || typeof state.feature_id !== "string" || typeof state.ceremony_generation !== "string") return
-      captureSpecAdversaryResult(projectRoot, {
-        sessionId: sessionID,
-        featureId: state.feature_id,
-        generation: state.ceremony_generation,
-        callId: callID,
-        role,
-        output: output?.output ?? output?.content ?? output?.result ?? "",
-      })
     },
   }
 }

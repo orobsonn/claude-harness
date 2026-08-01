@@ -46,8 +46,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
 import { createPlannerRecoveryHooks } from "../opencode/plugin/planner-recovery.ts";
@@ -57,7 +55,10 @@ import { createEntryGateHooks } from "../opencode/plugin/entry-gate.ts";
 import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
 import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
 import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
-import { persistClassifyArtifacts } from "../opencode/tools/lib/classify-persist.mjs";
+import {
+  FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE,
+  persistClassifyArtifacts,
+} from "../opencode/tools/lib/classify-persist.mjs";
 import { plannerCycleResetPatch } from "../opencode/lib/planner-state.mjs";
 
 /**
@@ -71,12 +72,16 @@ import { plannerCycleResetPatch } from "../opencode/lib/planner-state.mjs";
  * (authority check → transition decision → stub build → persist), calling the real production
  * functions unmodified — not a hand-crafted gate-state fixture.
  */
-function runRealClassify({ root, sessionId, featureId, mode }) {
+function runRealClassify({ root, sessionId, featureId, mode, priorState }) {
   const auth = decideClassifyAuthority({ agent: "", parentSessionId: null, sessionId });
   if (!auth.ok) throw new Error(`classify authority denied: ${auth.reason}`);
 
   const gsPath = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId });
   if (!gsPath.ok) throw new Error(`invalid gate-state path: ${gsPath.reason}`);
+  if (priorState !== undefined) {
+    fs.mkdirSync(path.dirname(gsPath.path), { recursive: true });
+    fs.writeFileSync(gsPath.path, `${JSON.stringify(priorState)}\n`, "utf8");
+  }
 
   const transition = decideClassifyTransition({
     requestedMode: mode,
@@ -109,16 +114,18 @@ function runRealClassify({ root, sessionId, featureId, mode }) {
     classified: true,
     triaged: true,
     brainstormed: false,
-    brainstormed_binding: null,
     adversary_fired: false,
-    adversary_fired_binding: null,
-    ceremony_generation: crypto.randomUUID(),
-    ceremony_evidence: {},
     marker_seals: null,
     ...plannerCycleResetPatch(),
   };
 
-  const persisted = persistClassifyArtifacts({ planPath, stub: built.stub, statePath: gsPath.path, statePatch });
+  const persisted = persistClassifyArtifacts({
+    planPath,
+    stub: built.stub,
+    statePath: gsPath.path,
+    statePatch,
+    removeStateKeys: FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE,
+  });
   if (!persisted.ok) throw new Error(`classify persistence failed: ${persisted.reason}`);
   return persisted.state;
 }
@@ -517,35 +524,30 @@ test("#ac-3 (issue #513): once classify has genuinely run first (mode LIGHT), a 
   }
 });
 
-// Drift guard (adversarial finding on #513): `runRealClassify` above hand-writes the "fresh" branch
-// of classify.ts's statePatch instead of calling it (see runRealClassify's docstring for why the
-// tool wrapper can't be imported here). That duplication has no lock-step tie to classify.ts — if a
-// future change adds/renames a field there, this test file could keep passing while silently
-// modeling a state the real system no longer produces. This test fails loudly instead: every literal
-// key the helper writes must still appear in classify.ts's own "fresh" statePatch block.
-test("drift guard: runRealClassify's hand-written statePatch keys all still appear in classify.ts's real 'fresh' branch", () => {
-  const classifyTsPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../opencode/tools/classify.ts");
-  const src = fs.readFileSync(classifyTsPath, "utf8");
-  const freshKeys = [
-    "session_id",
-    "feature_id",
-    "mode",
-    "peak_mode",
-    "classified",
-    "triaged",
-    "brainstormed",
-    "brainstormed_binding",
-    "adversary_fired",
-    "adversary_fired_binding",
-    "ceremony_generation",
-    "ceremony_evidence",
-    "marker_seals",
-    "plannerCycleResetPatch",
-  ];
-  for (const key of freshKeys) {
-    assert.ok(
-      src.includes(key),
-      `runRealClassify hand-writes "${key}" as part of classify.ts's fresh statePatch, but classify.ts no longer mentions it — the test helper has drifted from production`,
-    );
+test("drift guard: fresh classify removes legacy ceremony sidecars from persisted state", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-classify-migration-"));
+  try {
+    const persistedState = runRealClassify({
+      root,
+      sessionId: "ses_fixmode_migration",
+      featureId: "feat-fixmode-migration",
+      mode: "LIGHT",
+      priorState: {
+        brainstormed_binding: { session_id: "stale" },
+        adversary_fired_binding: { session_id: "stale" },
+        ceremony_generation: 9,
+        ceremony_evidence: { digest: "stale" },
+        unrelated_fact: "preserve-me",
+      },
+    });
+
+    for (const retiredKey of FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE) {
+      assert.equal(Object.hasOwn(persistedState, retiredKey), false, `${retiredKey} survived fresh classify`);
+    }
+    assert.equal(persistedState.classified, true);
+    assert.equal(persistedState.classify_status, "ready");
+    assert.equal(persistedState.unrelated_fact, "preserve-me");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

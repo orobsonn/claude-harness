@@ -383,18 +383,29 @@ function makeSeedDirs(prefix, opts = {}) {
   return { root, projectRoot, worktree };
 }
 
-test("materialize sweeps the retired cleanup sentinel only in its ephemeral worktree", () => {
+test("materialize sweeps retired state artifacts only in its ephemeral worktree", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-cleanup-sweep-");
   const projectSentinel = join(projectRoot, ".opencode", "plans", ".state", "ses-primary", "active-dispatch-cleanup-pending.json");
   const worktreeSentinel = join(worktree, ".opencode", "plans", ".state", "ses-run", "active-dispatch-cleanup-pending.json");
+  const projectReceipt = join(projectRoot, ".opencode", "plans", ".state", "ses-primary", "ceremony", "spec-adversary-primary.json");
+  const worktreeReceipt = join(worktree, ".opencode", "plans", ".state", "ses-run", "ceremony", "spec-adversary-primary.json");
+  const worktreeSibling = join(dirname(worktreeReceipt), "keep.json");
   try {
     mkdirSync(join(projectSentinel, ".."), { recursive: true });
     mkdirSync(join(worktreeSentinel, ".."), { recursive: true });
+    mkdirSync(dirname(projectReceipt), { recursive: true });
+    mkdirSync(dirname(worktreeReceipt), { recursive: true });
     writeFileSync(projectSentinel, "primary-bytes");
     writeFileSync(worktreeSentinel, "worktree-bytes");
+    writeFileSync(projectReceipt, "primary-receipt-bytes");
+    writeFileSync(worktreeReceipt, "worktree-receipt-bytes");
+    writeFileSync(worktreeSibling, "sibling-bytes");
+    const primaryBefore = snapshotTree(projectRoot);
     materializeOpencodeRuntime(worktree, projectRoot);
     assert.equal(existsSync(worktreeSentinel), false);
-    assert.equal(readFileSync(projectSentinel, "utf8"), "primary-bytes");
+    assert.equal(existsSync(worktreeReceipt), false);
+    assert.equal(readFileSync(worktreeSibling, "utf8"), "sibling-bytes");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "primary project must remain byte-identical");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -1336,13 +1347,24 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     const stale = join(worktree, ".opencode", "plugin", "harvest-guard.ts");
     const staleHelper = join(worktree, ".opencode", "plugin", "lib", "harvest-findings.mjs");
     const staleCatalogHealth = join(worktree, ".opencode", "plugin", "lib", "agent-catalog-health.mjs");
+    const staleCeremonyBinding = join(worktree, ".opencode", "plugin", "lib", "ceremony-binding.mjs");
+    const staleCeremonyTransition = join(worktree, ".opencode", "plugin", "lib", "ceremony-transition.mjs");
+    const projectSibling = join(worktree, ".opencode", "plugin", "lib", "project-owned-ceremony-facts.mjs");
     const cleanup = join(worktree, ".opencode", "plans", ".state", "ses-stale", "active-dispatch-cleanup-pending.json");
+    const receipt = join(worktree, ".opencode", "plans", ".state", "ses-stale", "ceremony", "spec-adversary-primary.json");
+    const receiptSibling = join(dirname(receipt), "keep.json");
     mkdirSync(dirname(cleanup), { recursive: true });
+    mkdirSync(dirname(receipt), { recursive: true });
     writeFileSync(stale, "// retired zombie\n", "utf8");
     mkdirSync(dirname(staleHelper), { recursive: true });
     writeFileSync(staleHelper, "// retired harvest helper\n", "utf8");
     writeFileSync(staleCatalogHealth, "// retired catalog-health helper\n", "utf8");
+    writeFileSync(staleCeremonyBinding, "// retired ceremony binding helper\n", "utf8");
+    writeFileSync(staleCeremonyTransition, "// retired ceremony transition helper\n", "utf8");
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
     writeFileSync(cleanup, "{}\n", "utf8");
+    writeFileSync(receipt, '{"result":"legacy"}\n', "utf8");
+    writeFileSync(receiptSibling, "{}\n", "utf8");
 
     const materialized = materializeOpencodeRuntime(worktree, emptyPrimary);
 
@@ -1350,7 +1372,12 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     assert.equal(existsSync(stale), false, "complete worktree must prune retired plugin zombie");
     assert.equal(existsSync(staleHelper), false, "complete worktree must prune retired helper zombie");
     assert.equal(existsSync(staleCatalogHealth), false, "complete worktree must prune retired catalog-health zombie");
+    assert.equal(existsSync(staleCeremonyBinding), false, "complete worktree must prune retired ceremony binding zombie");
+    assert.equal(existsSync(staleCeremonyTransition), false, "complete worktree must prune retired ceremony transition zombie");
+    assert.equal(existsSync(projectSibling), true, "exact-path worktree pruning must preserve project-owned lib siblings");
     assert.equal(existsSync(cleanup), false, "complete worktree must sweep retired run cleanup only inside worktree");
+    assert.equal(existsSync(receipt), false, "complete worktree must sweep the retired ceremony receipt");
+    assert.equal(existsSync(receiptSibling), true, "complete worktree must preserve ceremony siblings");
     const load = await checkPluginLoad(join(worktree, ".opencode"));
     assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
   } finally {

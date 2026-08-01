@@ -129,7 +129,7 @@ test("planner: stale input.featureId alone (no dispatchFeatureId) never triggers
   assert.equal(decision.ok, true);
 });
 
-test("adversary role allowed once ceremony present (caller stamps adversary_fired)", () => {
+test("adversary role is allowed after LIGHT/FULL classification before adversary_fired", () => {
   const decision = decideEntryTask({ subagentType: "adversary-family-1", gateState: { mode: "FULL" } });
   assert.equal(decision.ok, true);
   assert.equal(decision.reason, "adversary-allowed");

@@ -581,6 +581,8 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/harvest-findings.mjs")), false);
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/agent-catalog-health.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/ceremony-binding.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/ceremony-transition.mjs")), false);
     // default runtime remains claude-only — OC path must NOT create .claude
     assert.ok(!existsSync(join(tempDir, ".claude/agents")), "opencode-only must not vendor .claude agents");
     assert.ok(!existsSync(join(tempDir, ".opencode/agents/SPAWN-PATTERN.md")), "documentation must not be callable as an agent");
@@ -667,6 +669,37 @@ test("re-vendoring removes the retired catalog-health helper and preserves lib s
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
     assert.equal(existsSync(stale), false, "retired catalog-health helper remains vendored");
     assert.ok(OC_RETIRED_FILES.includes(retired), "retired catalog-health helper must be declared");
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned lib siblings");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes ceremony sidecar helpers and preserves lib siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-ceremony-sidecars-"));
+  const retired = [
+    "plugin/lib/ceremony-binding.mjs",
+    "plugin/lib/ceremony-transition.mjs",
+  ];
+  const sibling = join(tempDir, ".opencode/plugin/lib/project-owned-ceremony-facts.mjs");
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale ceremony sidecar helper\n", "utf8");
+    }
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
     assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned lib siblings");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -887,19 +920,26 @@ test("re-vendoring removes the retired scope composition module and preserves it
   } finally { rmSync(tempDir, { recursive: true, force: true }); }
 });
 
-test("re-vendoring sweeps only the legacy cleanup sentinel from local vendored state", () => {
+test("re-vendoring sweeps retired local state artifacts and preserves siblings", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-cleanup-sweep-"));
   const stateDir = join(tempDir, ".opencode", "plans", ".state", "ses-local");
   const sentinel = join(stateDir, "active-dispatch-cleanup-pending.json");
   const sibling = join(stateDir, "keep.json");
+  const receipt = join(stateDir, "ceremony", "spec-adversary-primary.json");
+  const ceremonySibling = join(stateDir, "ceremony", "keep.json");
   try {
     mkdirSync(stateDir, { recursive: true });
+    mkdirSync(dirname(receipt), { recursive: true });
     writeFileSync(sentinel, "{}");
     writeFileSync(sibling, "{}");
+    writeFileSync(receipt, '{"result":"legacy"}');
+    writeFileSync(ceremonySibling, "{}");
     const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
     assert.equal(existsSync(sentinel), false);
+    assert.equal(existsSync(receipt), false);
     assert.equal(existsSync(sibling), true);
+    assert.equal(existsSync(ceremonySibling), true);
   } finally { rmSync(tempDir, { recursive: true, force: true }); }
 });
 
@@ -977,6 +1017,8 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
     "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
     "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
+    "plugin/lib/ceremony-binding.mjs",
+    "plugin/lib/ceremony-transition.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",

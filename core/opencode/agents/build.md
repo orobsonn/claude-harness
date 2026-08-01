@@ -76,16 +76,16 @@ Under OpenCode, **gate-state lives only under `.opencode/`**. Never run Claude-C
 | Wrong (CC — does NOT stamp OC) | Right (OC) |
 |---|---|
 | `node .claude/hooks/classify.mjs …` | native tool **`classify({ mode, feature_id })`** |
-| `node .claude/hooks/mark.mjs …` | `node .opencode/plugin/lib/mark-gate.mjs … --session <sessionID>` |
+| `node .claude/hooks/mark.mjs …` | native tool **`mark({ action })`** |
 | plans under `.claude/plans/…` | `.opencode/plans/<sessionID>-<feature_id>/` |
 
 The entry-gate **denies** CC marker CLIs. If you see that deny, switch to the OC row — do not retry the CC path.
 
-### Deterministic ceremony transition before planner
+### Ordered planner entry facts
 
 For LIGHT/FULL, the approved spec is canonical at `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Immediately after brainstorming approval, call native `mark({ action: "brainstormed" })`. Immediately after the required spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Both transitions MUST complete, in that order, before the first planner Task call.
 
-Planner dispatch remains denied until both facts are recorded for the classified feature. If `brainstormed` is missing, execute `oc-brainstorming` and then let the host mark `brainstormed`. If `adversary_fired` is missing, dispatch the primary `adversary` and then let the host mark `adversary_fired`. Do not infer completion from prose, an old marker, or an unsigned boolean; resume only the missing factual phase.
+Planner dispatch remains denied until both facts are recorded for the classified feature. If `brainstormed` is missing, execute `oc-brainstorming` and then call the native mark action. If `adversary_fired` is missing, dispatch the primary `adversary` and then call the native mark action. Downstream these are plain booleans, not provenance proof; do not infer completion from prose or direct filesystem edits, and resume only the missing factual phase.
 
 ---
 

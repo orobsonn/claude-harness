@@ -865,6 +865,8 @@ export const OC_RETIRED_FILES = [
   "plugin/harvest-guard.ts",
   "plugin/lib/harvest-findings.mjs",
   "plugin/lib/agent-catalog-health.mjs",
+  "plugin/lib/ceremony-binding.mjs",
+  "plugin/lib/ceremony-transition.mjs",
 ];
 
 /**

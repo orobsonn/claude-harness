@@ -328,7 +328,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | `verify` | Roda teste pinado da task (hand ativa) |
 | `complexity-scorer` | Banda low/medium/high de um path |
 
-Quando o planner estiver bloqueado por cerimônia, complete somente o fato ausente para a feature classificada: `brainstormed` ausente → execute o brainstorming e deixe o host marcar `brainstormed`; `adversary_fired` ausente → despache o adversary primário e deixe o host marcar `adversary_fired`. O planner só libera depois dos dois fatos — nunca por texto, marca antiga ou booleano sem assinatura.
+Quando o planner estiver bloqueado por cerimônia, complete somente o fato ausente para a feature classificada: `brainstormed` ausente → execute o brainstorming e chame a ação nativa `mark`; `adversary_fired` ausente → despache o adversary primário e chame a ação nativa `mark`. O planner libera quando encontra os dois booleans crus e a feature correspondente no gate-state; isso não prova proveniência on-disk. O caminho oficial continua sendo a tool nativa, e edição direta é proibida por convenção/permissões.
 
 ---
 

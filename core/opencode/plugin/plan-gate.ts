@@ -3,8 +3,8 @@
  * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
  * Discipline around waiting for plan-review APPROVE is prose + orchestration, exactly like
  * Claude Code. Deny throws [plan-gate]. Conditional on
- * planner_plan_binding: absent (no ceremony ever ran for this session, or a terminated/failed
- * attempt with no binding) -> fail-open, no plan required (operator no-ceremony branch, fleet
+ * planner_plan_binding: absent (no planner attempt ran for this session, or a terminated/failed
+ * attempt with no binding) -> fail-open, no plan required (operator/fix-mode branch, fleet
  * fix-mode); present -> validated for real, unchanged from before. Gate-state reconciliation
  * failure fails open only for genuinely missing/unreadable state — lock contention or a write
  * failure still denies.
@@ -54,7 +54,6 @@ export async function createPlanGateHooks(
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
   const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs")
-  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
   const {
     bareRole,
     isExecutorRole,
@@ -85,8 +84,8 @@ export async function createPlanGateHooks(
         isTestAuthorRole(role) ||
         isExecutorRole(role) ||
         isSniperRole(role)
-      // Conditional on binding existence: absent (no planner ceremony ever ran for this
-      // session — the operator's no-ceremony branch, or a fix-mode dispatch reusing a
+      // Conditional on binding existence: absent (no planner attempt ran for this
+      // session — the operator branch, or a fix-mode dispatch reusing a
       // branch) -> skip fail-open, no plan required. Present -> validate for real; nothing
       // below this point is relaxed once a real planner attempt is on the table (#ac-1.2, #ac-1.3).
       if (requiresFullPlan) {
@@ -95,7 +94,7 @@ export async function createPlanGateHooks(
           const reconciled = reconcilePlannerStateFromDisk(root, sid)
           if (!reconciled.ok) {
             // #ac-1.4 fail-open is scoped to genuinely missing/unreadable state — lock
-            // contention or a write failure is an infra fault, not "no ceremony ran", and
+            // contention or a write failure is an infra fault, not "no planner attempt ran", and
             // must keep denying (a squatted lock must never disable plan validation).
             if (GATE_STATE_INFRA_FAILURE_REASONS.has(String(reconciled.reason))) {
               throw new Error(`${PREFIX} denied: gate-state contention (${reconciled.reason})`)
@@ -116,14 +115,6 @@ export async function createPlanGateHooks(
               }
             }
             if (binding) {
-              const ceremonyBinding = validateCeremonyBinding(state, {
-                sessionId: sid,
-                featureId: typeof state.feature_id === "string" ? state.feature_id : "",
-                required: ["brainstormed", "adversary_fired"],
-              })
-              if (!ceremonyBinding.ok) {
-                throw new Error(`${PREFIX} denied: ${ceremonyBinding.reason}`)
-              }
               if (state.planner_status !== "usable") {
                 throw new Error(`${PREFIX} denied: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
               }

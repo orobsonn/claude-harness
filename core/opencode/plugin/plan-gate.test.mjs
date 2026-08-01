@@ -9,17 +9,12 @@ import os from "node:os"
 import path from "node:path"
 import { createPlanGateHooks } from "./plan-gate.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
-import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
 
 const SESSION = "ses_planGateTest01"
 const FEATURE = "feat-plan-gate"
 
 function sealGateState(gateState) {
-  const state = { session_id: SESSION, ...gateState }
-  const featureId = typeof state.feature_id === "string" ? state.feature_id : FEATURE
-  if (state.brainstormed === true && !("brainstormed_binding" in state)) Object.assign(state, ceremonyMarkerPatch("brainstormed", SESSION, featureId))
-  if (state.adversary_fired === true && !("adversary_fired_binding" in state)) Object.assign(state, ceremonyMarkerPatch("adversary_fired", SESSION, featureId))
-  return state
+  return { session_id: SESSION, ...gateState }
 }
 
 const GOLDEN_FULL = {
@@ -107,7 +102,7 @@ test("lt-pg-no-binding: executor + empty gate-state (no planner binding) is perm
     seedProject(root, {
       feature_id: FEATURE,
     })
-    // Operator/fix-mode case: no planner ceremony ever ran for this session — no
+    // Operator/fix-mode case: no planner attempt ran for this session — no
     // planner_status/planner_plan_binding on gate-state. Absent binding -> skip fail-open.
     await assert.doesNotReject(() => runHook(root, "executor-high"))
   })
@@ -291,7 +286,7 @@ test("lt-pg-unreadable: illegible gate-state reconciliation logs and fails open 
 test("lt-pg-terminal-blocked: planner attempt ended plan_invalid with no binding still denies", async () => {
   await withTempRoot(async (root) => {
     // A real planner attempt that ran and terminated in a non-usable state never produces a
-    // planner_plan_binding either — but this is NOT "no ceremony ran" (the #ac-1.1 fail-open
+    // planner_plan_binding either — but this is not "no planner attempt ran" (the #ac-1.1 fail-open
     // case). A terminal planner state must still reject a downstream writing dispatch.
     // (lib/dispatch-scope.mjs:readCanonicalTaskFromSnapshot).
     seedProject(root, {
@@ -317,7 +312,7 @@ test("lt-pg-lock-contention: gate-state lock contention denies rather than fail-
   })
 })
 
-test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony marker", async () => {
+test("lt-pg-r10-not-owned: bound plan validation does not require ceremony facts", async () => {
   await withTempRoot(async (root) => {
     seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
     const artifact = readPlannerArtifact(root, SESSION, FEATURE)
@@ -326,20 +321,17 @@ test("lt-pg-ceremony-binding: bound plan cannot progress with foreign ceremony m
     fs.writeFileSync(statePath, JSON.stringify(sealGateState({
       session_id: SESSION,
       feature_id: FEATURE,
-      brainstormed: true,
-      brainstormed_binding: {
-        session_id: "ses-foreign",
-        feature_id: FEATURE,
-        operation: "brainstormed",
-      },
       planner_status: "usable",
       planner_plan_binding: {
         session_id: SESSION,
         feature_id: FEATURE,
+        semantic_hash: artifact.semanticHash,
+        file_hash: artifact.fileHash,
+        fingerprint: artifact.fingerprint,
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
       },
     })))
-    await assert.rejects(() => runHook(root, "executor-low"), /ceremony|not bound/)
+    await assert.doesNotReject(() => runHook(root, "executor-low"))
   })
 })

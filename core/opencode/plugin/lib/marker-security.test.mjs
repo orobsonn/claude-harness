@@ -7,25 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ceremonyMarkerPatch, validateCeremonyBinding } from "./ceremony-binding.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const markerPath = path.join(here, "mark-gate.mjs");
 const removedIssuerPath = path.join(here, "marker-capability.mjs");
 const removedNativePath = path.join(here, "..", "..", "tools", "lib", "mark-native.mjs");
 const authorityPath = path.join(here, "..", "marker-authority.ts");
-
-test("ceremony marker for another session or feature is rejected", () => {
-  const base = {
-    session_id: "ses-a",
-    feature_id: "feature-a",
-    ...ceremonyMarkerPatch("brainstormed", "ses-a", "feature-a"),
-  };
-  assert.equal(validateCeremonyBinding(base, { sessionId: "ses-a", featureId: "feature-a", required: ["brainstormed"] }).ok, true);
-  assert.match(validateCeremonyBinding(base, { sessionId: "ses-b", featureId: "feature-a", required: ["brainstormed"] }).reason, /session/);
-  const foreign = { ...base, brainstormed_binding: { ...base.brainstormed_binding, feature_id: "feature-b" } };
-  assert.match(validateCeremonyBinding(foreign, { sessionId: "ses-a", featureId: "feature-a", required: ["brainstormed"] }).reason, /not bound/);
-});
 
 test("separate shell cannot import an issuer or privileged mutator and state stays byte-identical", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-import-"));
@@ -78,9 +65,10 @@ test("observability-only CLI leaves privileged state byte and semantically uncha
 // #475: the bash-decide.mjs regex layer that used to deny `node <marker-authority.ts>` /
 // import one-liners is gone (decideBashForge removed). The real boundary was always host-side:
 // marker-authority.ts's `mark.execute()` only accepts args that went through the args-identity
-// WeakMap populated by its own `tool.execute.before` closure, which only the OpenCode host can
-// invoke (`tool`/`tool.schema` are ambient globals the host provides — a bare `node`/import
-// subprocess never has them, so it can only load declarations, never run the privileged path).
+// WeakMap populated by its own `tool.execute.before` closure. A bare `node`/import subprocess does
+// not share that process-local identity, so it can only load declarations, never invoke the native
+// path. A compromised same-process host/plugin and direct on-disk writes remain outside this test's
+// boundary and can forge downstream state.
 // This test asserts that invariant directly: importing marker-authority.ts standalone is inert
 // and never mutates gate-state, independent of any bash-layer pattern-match.
 test("importing marker-authority.ts standalone is inert and never mutates gate-state (#475)", () => {

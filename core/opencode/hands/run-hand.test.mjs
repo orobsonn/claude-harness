@@ -840,7 +840,7 @@ test("runHand: default vendored agent is authoritative for model and test-author
   }
 });
 
-test("defaultHasFidelityPass: true after a host-authorized fidelity marker reaches disk", () => {
+test("defaultHasFidelityPass: true after a native mark fidelity fact reaches disk", () => {
   const root = mkdtempSync(join(tmpdir(), "t7-fid-disk-"));
   const sessionId = "ses_fiddisk";
   try {

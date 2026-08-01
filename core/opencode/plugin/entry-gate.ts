@@ -1,5 +1,5 @@
 /**
- * @description OC entry-gate plugin — ceremony + bash delivery/forge.
+ * @description OC entry-gate plugin — plain persisted planner facts + bash delivery/forge.
  * On tool.execute.before:
  * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
  *   (gate-state from disk via lib/gate-state.mjs)
@@ -42,7 +42,6 @@ export type EntryGateDeps = {
   } | null
   isAncestorFn?: (sha: string) => boolean | null
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
-  ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
@@ -65,7 +64,7 @@ function isBashOrShellTool(toolName: unknown): boolean {
   )
 }
 
-/** @description Native classify tool (ceremony stamp) — top-level build only. */
+/** @description Native classify tool — top-level build only. */
 function isClassifyTool(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false
   const n = toolName.toLowerCase()
@@ -182,10 +181,7 @@ export async function createEntryGateHooks(
       : process.cwd()
   const { isTaskTool, parseTaskDispatchIdentity } = await import("../lib/task-dispatch-identity.mjs")
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
-  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
-  const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
-  const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { loadGateStateFromDisk, withGateStateLock } = await import("../lib/gate-state.mjs")
+  const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs")
   const {
     decideBashAdvisory,
     applyAdvisory,
@@ -197,7 +193,7 @@ export async function createEntryGateHooks(
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
   } = await import("../lib/entry-decide.mjs")
-  const { isDeliveryRole, isPlannerRole } = await import("../lib/roles.mjs")
+  const { isDeliveryRole } = await import("../lib/roles.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
@@ -238,7 +234,7 @@ export async function createEntryGateHooks(
       const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractHookTaskContext(input, output).subagentType
 
-      // classify: top-level build only — hands/eyes/child sessions never start ceremony
+      // classify: top-level build only — hands/eyes/child sessions never classify
       if (isClassifyTool(toolName)) {
         const { decideClassifyAuthority } = await import(
           "../../shared/lib/classify-authority.mjs"
@@ -387,7 +383,7 @@ export async function createEntryGateHooks(
       // dispatch itself is unsafe, and the real cost ceiling lives in the fleet engine
       // (cron-a-exit.mjs/cron-review.mjs), outside the session. A missing/unsafe SESSION
       // IDENTITY ("sessionId required…", "unsafe sessionId") is a different, foundational
-      // problem — we cannot know whose ceremony to even check — and stays fail-closed.
+      // problem — we cannot know whose state to check — and stays fail-closed.
       const gateStateUnreadable =
         !loaded.ok && typeof loaded.reason === "string" && loaded.reason.startsWith("gate-state")
       if (!loaded.ok && isDeliveryRole(subagentType)) {
@@ -397,29 +393,7 @@ export async function createEntryGateHooks(
           throw new Error(`${PREFIX} ${loaded.reason}`)
         }
       }
-      let gateState = loaded.ok ? loaded.state : {}
-
-      if (loaded.ok && isPlannerRole(subagentType) && sid) {
-        const stateFile = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId: sid })
-        if (!stateFile.ok) throw new Error(`${PREFIX} ${stateFile.reason}`)
-        const persist = deps.ceremonyPersistFn ?? ((file, mutate) => withGateStateLock(file, mutate))
-        // One atomic recovery pass (no cross-call retry loop): recoverCeremony already advances
-        // every provable phase in one in-memory pass, so a single lock round-trip persists whatever
-        // recovered before the first missing/invalid proof, then reports that proof — instead of the
-        // old per-phase while(true) that re-acquired the lock once per phase and left the planner's
-        // own gate CEREMONY_PROOF_REQUIRED denial unreachable in decideEntryTask.
-        let recoveryError: Record<string, unknown> | null = null
-        const persisted = persist(stateFile.path, (previous) => {
-          const recovery = recoverCeremony(root, previous)
-          if (!recovery.ok) recoveryError = recovery.error
-          return recovery.changed ? recovery.state : previous
-        })
-        if (!persisted.ok) {
-          throw new Error(`${PREFIX} ${JSON.stringify({ code: "CEREMONY_PERSIST_FAILED", missing_proof: null, next_transition: null, reason: persisted.reason ?? "gate-state persistence failed" })}`)
-        }
-        if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
-        gateState = persisted.state ?? gateState
-      }
+      const gateState = loaded.ok ? loaded.state : {}
       const optionalIds = extractFeatureTaskIds(toolArgs)
       const featureId = identity.featureIdSource === "runtime-envelope"
         ? identity.featureId
@@ -429,18 +403,11 @@ export async function createEntryGateHooks(
       // (possibly stale) feature_id. `featureId` above always collapses to gateState.feature_id
       // once one exists, which would make decideEntryTask's planner featureMismatch check a
       // tautology (always comparing gateState.feature_id to itself); this stays independent so a
-      // genuine mismatch — a planner Task declaring a DIFFERENT feature than the one whose
-      // ceremony gate-state already carries — is actually reachable.
+      // genuine mismatch — a planner Task declaring a DIFFERENT feature than gate-state —
+      // is actually reachable.
       const dispatchFeatureId = identity.featureIdSource === "runtime-envelope"
         ? identity.featureId
         : optionalIds.featureId
-      const binding = validateCeremonyBinding(gateState, {
-        sessionId: sid,
-        featureId,
-        required: isDeliveryRole(subagentType) ? ["brainstormed", "adversary_fired"] : [],
-      })
-      if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
-
       throwIfEntryDenied(
         decideEntryTask({
           subagentType,

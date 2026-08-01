@@ -119,7 +119,7 @@ result — do not pre-empt that with a manual write.
    - **Cold-start check:** if this is a non-trivial existing codebase and the index is cold (no entries in MEMORY.md, root router unfilled), dispatch the `oc-surveying-codebase` skill **first** to seed durable knowledge from the code, then read the now-populated index before shaping the spec.
 2. **Load and follow the `oc-brainstorming` skill** (INTERACTIVE or HEADLESS branch). Spec must include `#uj-N`, `#ac-N.M`, constraints, and locked decisions (operator-owned in interactive; trigger-derived + explicit open risks in headless).
 3. Write the spec file directly with the **edit** tool (`build`'s `edit` is allowed — `agents/build.md`).
-   - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This session+feature-bound artifact is the durable brainstorming completion evidence source; a docs copy alone is not restart evidence.
+   - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This is the spec passed to the planner; the plain persisted `brainstormed` workflow fact records completion separately.
 4. **Upfront spec-adversary (mandatory LIGHT/FULL):** identify the existing paths implicated by the spec and pass them as `scope_paths` (empty is valid only when no existing file is implicated). Dispatch `adversary` (+ optional `adversary-family-2` only when `roles.adversary.secondEyeModel` is set). The Task prompt MUST require both passes and `evidence: "file:anchor"`; use a function/exported symbol for code or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Only a greenfield surface with no existing file is narrative N/A. It MUST follow the exact JSON schema and MUST NOT request `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, `blockers`, or any extra field. Primary returns only `{ "issues": [...] }`.
 
    **Acceptance is defined, and "clean" is not the only way out.** No unresolved medium/high finding → the pass is accepted: stamp the marker and go to the plan. A material finding → revise `spec.md` so it is answered (a criterion that pins the behaviour, or an explicit locked decision that accepts it), then re-attack. The orchestrator decides whether another pass will add product value; if not, stop and escalate to the operator in product language (accept these risks, or change the spec). Headless records unresolved risks in `spec.md` under "Open risks", proceeds only by explicit orchestrator judgment, and includes them in the PR body for the human gate.
@@ -127,13 +127,13 @@ result — do not pre-empt that with a manual write.
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
 **HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the PR body.
 
-**Ordered official transition (all modes):** after spec approval/validation, call native `mark({ action: "brainstormed" })`; after the required primary spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Persist both before attempting planner dispatch. The first transition fingerprints the canonical `spec.md`; the second binds the runtime-captured primary adversary Task result. These are ordered and idempotent; never substitute Bash markers or prose claims.
+**Ordered official facts (all modes):** after spec approval/validation, call native `mark({ action: "brainstormed" })`; after the required primary spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Persist both booleans before attempting planner dispatch. WeakMap identity and ordering bind only each native invocation's exact args, session, call, feature, and action; they block direct execute, clones, replay, concurrent reuse, and binding mismatch before mutation. Once persisted, these booleans are plain factual workflow state with no provenance or OS isolation: same-user filesystem/Bash writes or a compromised host/plugin can forge them. The official path is still the native `mark` tool, and direct gate-state edits are prohibited by convention and permission friction; never substitute them or prose claims.
 
 ---
 
 ## Phase 1 — Plan
 
-0. **Planner preflight / resume (R10):** planner remains denied until `brainstormed` and `adversary_fired` are both factual marks for the classified feature. Missing `brainstormed` → execute `oc-brainstorming`, then let the host mark `brainstormed`. Missing `adversary_fired` → dispatch the primary `adversary`, then let the host mark `adversary_fired`. Resume only the missing phase; never infer a mark from prose, an old marker, or an unsigned boolean.
+0. **Planner preflight (R10):** planner remains denied until gate-state contains plain boolean `brainstormed: true` and `adversary_fired: true` for the classified feature. R10 checks those raw values plus feature match; it does not prove their on-disk provenance. Missing `brainstormed` → execute `oc-brainstorming`, then call the native mark action. Missing `adversary_fired` → dispatch the primary `adversary`, then call the native mark action. Resume only the missing phase; never infer a fact from prose or a direct filesystem edit.
 
 1. Dispatch `planner` via Task with the approved spec. The planner returns one `execution-plan.json` (schema in `planner.md`; the planner self-validates structure first).
 
@@ -244,8 +244,8 @@ node .opencode/plugin/lib/mark-gate.mjs final-review-done
 ```
 
 **Privileged ship markers (native `mark` only — never Bash / mark-gate CLI):**
-- After Phase 3 join (FULL): `action: final-review` → sealed `final_review_done` (push-blocking).
-- After operator demo (FULL interactive): `action: demo-done` → sealed `demo_done` (push-blocking when not headless).
+- After Phase 3 join (FULL): `action: final-review` → plain `final_review_done` workflow state (push-blocking).
+- After operator demo (FULL interactive): `action: demo-done` → plain `demo_done` workflow state (push-blocking when not headless).
 
 Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
 
@@ -260,7 +260,7 @@ Do not invent alternate event type strings — only the types in `notify-telegra
 3. Never use Bash or `mark-gate` CLI for privileged markers.
 4. **Ship on the parent `build` session only.** `shipper` may draft PR text; conductor runs push/PR bash on the parent after capture is present.
 
-**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch; Bash and direct module imports are not privileged marker surfaces.
+**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch. Bash and direct module imports cannot satisfy the native invocation's WeakMap authority; that invocation boundary does not add provenance to the persisted state.
 
 An executor hand spawn is **DENIED** (`CONFIG_ERROR`) unless `fidelity_pass` contains this feature/task (optional `@sha`). `test-author` is exempt — it creates the test that enables fidelity. Freeze-commit alone is not enough; the stamp is the on-disk signal `run-hand` and the entry-gate consume. (route to critical exception — do not retry)
 
@@ -311,7 +311,7 @@ Scope = the **whole feature**, not one task.
 
 Findings → tiered sniper (same rules as Phase 2, step g). Re-run gates after fixes. Proceed only when feature-wide gates are green.
 
-**Ship rail (FULL — privileged):** after the final review completes (every dispatched eye result collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This stamps sealed `final_review_done: true` on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). Bash and `mark-gate` CLI cannot stamp this — host-issued native mark only.
+**Ship rail (FULL — privileged):** after the final review completes (every dispatched eye result collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This records plain `final_review_done: true` workflow state on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). Bash and `mark-gate` CLI cannot invoke the native mark authority; direct same-user state writes remain forgeable under the boundary above and are prohibited.
 
 Also emit the observability-only checkpoint (fail-open, does not gate delivery):
 
@@ -328,7 +328,7 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 
 **HARD-GATE 3 — test demo (pt-br, product-language):** the operator validates the product by using the output. The human is insubstitutable here.
 
-**Ship rail (FULL interactive — privileged):** after the operator validates the demo, call the native `mark` tool with `action: demo-done`. This stamps sealed `demo_done: true` on gate-state. **Interactive FULL push is denied without it** (`denied_class=demo-missing`). Headless sessions (`gate-state.headless`, `CLAUDE_CODE_REMOTE`, or `OPENCODE_HEADLESS`) auto-validate the demo artifact against ACs and **do not** require `demo_done` for push.
+**Ship rail (FULL interactive — privileged):** after the operator validates the demo, call the native `mark` tool with `action: demo-done`. This records plain `demo_done: true` workflow state on gate-state under the marker boundary documented above. **Interactive FULL push is denied without it** (`denied_class=demo-missing`). Headless sessions (`gate-state.headless`, `CLAUDE_CODE_REMOTE`, or `OPENCODE_HEADLESS`) auto-validate the demo artifact against ACs and **do not** require `demo_done` for push.
 
 ---
 
@@ -336,7 +336,7 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 
 - Dispatch `harvester` once: consolidates `findings.md`, routes durable learnings by blast-radius (project pattern → native MEMORY.md + index · law of one folder → that folder's nested `AGENTS.md` + root router row · global convention → kaizen proposal), then **deletes the ephemeral run buffers** — `findings.md` (project root) + `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (git is the durable audit). It owns `oc-recording-findings` / `oc-distilling-learnings` / `oc-proposing-improvements`. It never auto-writes to memory.
 - Delivery (branch/commit/push/PR via `shipper`) happens **only on explicit operator authorization** — merge/deploy is irreversible (human checkpoint). `shipper` never edits code.
-- **FULL ship preconditions (bash-decide):** ceremony + regate + capture + **final-review** + **demo when interactive**. Missing final/demo → deny with explicit `denied_class`.
+- **FULL ship preconditions (bash-decide):** planner entry facts + regate + capture + **final-review** + **demo when interactive**. Missing final/demo → deny with explicit `denied_class`.
 
 ---
 

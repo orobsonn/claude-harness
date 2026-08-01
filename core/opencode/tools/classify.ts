@@ -5,7 +5,6 @@
  */
 
 import { tool } from "@opencode-ai/plugin/tool"
-import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -43,7 +42,9 @@ export async function executeClassify(
   )
   const { isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
   const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { persistClassifyArtifacts } = await import("./lib/classify-persist.mjs")
+  const { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyArtifacts } = await import(
+    "./lib/classify-persist.mjs"
+  )
   const { plannerCycleResetPatch } = await import("../lib/planner-state.mjs")
 
   const featureId = typeof args.feature_id === "string" ? args.feature_id.trim() : ""
@@ -172,7 +173,7 @@ export async function executeClassify(
     }
   }
 
-  // Replay: do not wipe ceremony, planner, or review state; do not re-emit obs.
+  // Replay: do not wipe planner facts, planner, or review state; do not re-emit obs.
   if (transition.action === "noop") {
     const metadata = {
       plan_path: planPath,
@@ -201,16 +202,12 @@ export async function executeClassify(
   if (transition.action === "fresh") {
     Object.assign(statePatch, {
       brainstormed: false,
-      brainstormed_binding: null,
       adversary_fired: false,
-      adversary_fired_binding: null,
-      ceremony_generation: crypto.randomUUID(),
-      ceremony_evidence: {},
       marker_seals: null,
       ...plannerCycleResetPatch(),
     })
   } else {
-    // escalate: keep ceremony/review/planner; only raise mode + peak
+    // escalate: keep planner facts/review/planner; only raise mode + peak
     statePatch.mode = finalMode
     statePatch.peak_mode = peakMode
   }
@@ -220,6 +217,9 @@ export async function executeClassify(
     stub: built.stub,
     statePath: gsPath.path,
     statePatch,
+    ...(transition.action === "fresh"
+      ? { removeStateKeys: FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE }
+      : {}),
   })
   if (!persisted.ok) {
     return errorResult("persistence failed", persisted.reason.slice(0, 200), planPath)

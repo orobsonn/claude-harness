@@ -137,7 +137,8 @@ export function decideEntryTask(input = {}) {
       }
     }
 
-    // Adversary dispatch is allowed once ceremony is present (caller stamps adversary_fired)
+    // Adversary dispatch is allowed after LIGHT/FULL classification so it can produce the review;
+    // adversary_fired is recorded only after that result is accepted.
     if (isAdversaryRole(sub)) {
       return { ok: true, decision: "allow", reason: "adversary-allowed" };
     }

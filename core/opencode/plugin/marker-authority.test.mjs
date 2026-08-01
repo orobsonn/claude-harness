@@ -8,7 +8,6 @@ import path from "node:path";
 import { registerHooks } from "node:module";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { validateCeremonyBinding } from "./lib/ceremony-binding.mjs";
 
 const stub = `
   const schemaValue = { describe() { return this }, optional() { return this } };
@@ -63,11 +62,8 @@ function seedDoneHandRecord(root, outcome = "DONE") {
 function seed(root) {
   const file = statePath(root);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "ceremony_generation": "generation-authority",\n  "classified": true\n}\n';
+  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "classified": true\n}\n';
   fs.writeFileSync(file, bytes);
-  const spec = path.join(root, ".opencode", "plans", "ses-authority-feature-authority", "spec.md");
-  fs.mkdirSync(path.dirname(spec), { recursive: true });
-  fs.writeFileSync(spec, "# Feature\n\n#uj-1\n\n#ac-1.1\n");
   return { file, bytes };
 }
 
@@ -83,7 +79,19 @@ function context(sessionID = "ses-authority", callID = "call-authority") {
   return { sessionID, callID, messageID: "msg-authority", agent: "build", directory: "/ignored", worktree: "/ignored" };
 }
 
-test("real before-hook object identity authorizes one bound mutation", async () => {
+test("marker authority has no ceremony transition, adversary capture, or Task after-hook", async () => {
+  const source = fs.readFileSync(new URL("marker-authority.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /ceremony-transition|transitionCeremony|captureSpecAdversaryResult/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-hooks-"));
+  try {
+    const hooks = await MarkerAuthority({ directory: root, worktree: root });
+    assert.equal(hooks["tool.execute.after"], undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("real before-hook object identity writes only the plain boolean workflow fact", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-ok-"));
   try {
     const { file } = seed(root);
@@ -93,50 +101,41 @@ test("real before-hook object identity authorizes one bound mutation", async () 
     const result = await execute(args, context());
     assert.equal(result.metadata.ok, true, result.output);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.deepEqual(state.brainstormed_binding, {
-      session_id: "ses-authority",
-      feature_id: "feature-authority",
-      operation: "brainstormed",
-    });
+    assert.equal(state.brainstormed, true);
+    assert.equal(state.brainstormed_binding, undefined);
+    assert.equal(state.ceremony_generation, undefined);
+    assert.equal(state.ceremony_evidence, undefined);
     assert.equal(state.marker_seals, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("runtime adversary result plus accepted official transition persists before planner", async () => {
+test("adversary_fired requires brainstormed first and persists only plain booleans", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-adversary-"));
   try {
     const { file } = seed(root);
-    const hooks = await MarkerAuthority({ directory: root, worktree: root });
-    const brainstormArgs = { action: "brainstormed" };
-    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "brainstorm-call" }, { args: brainstormArgs });
-    assert.equal((await hooks.tool.mark.execute(brainstormArgs, context("ses-authority", "brainstorm-call"))).metadata.ok, true);
+    const { before, execute } = await harness(root);
+    const tooEarly = await markOnce(before, execute, "adversary_fired", {}, "early-adversary-call");
+    assert.equal(tooEarly.metadata.ok, false);
+    assert.match(String(tooEarly.metadata.reason ?? tooEarly.output), /brainstormed/i);
+    assert.equal(fs.readFileSync(file, "utf8").includes("adversary_fired"), false);
 
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: "ses-authority", callID: "adversary-call" },
-      { args: { subagent_type: "adversary-family-1" }, output: '{"issues":[]}' },
-    );
-    const adversaryArgs = { action: "adversary_fired" };
-    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "accept-call" }, { args: adversaryArgs });
-    const accepted = await hooks.tool.mark.execute(adversaryArgs, context("ses-authority", "accept-call"));
-    assert.equal(accepted.metadata.ok, true, accepted.output);
+    assert.equal((await markOnce(before, execute, "brainstormed", {}, "brainstorm-call")).metadata.ok, true);
+    assert.equal((await markOnce(before, execute, "adversary_fired", {}, "adversary-call")).metadata.ok, true);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(state.brainstormed, true);
     assert.equal(state.adversary_fired, true);
-    assert.equal(state.ceremony_evidence.adversary_fired.call_id, "adversary-call");
+    assert.equal(state.brainstormed_binding, undefined);
+    assert.equal(state.adversary_fired_binding, undefined);
+    assert.equal(state.ceremony_evidence, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-// #423 / #484: a marker minted by one OS process (e.g. before an OpenCode restart) must
-// remain valid when read back in a brand-new process — the old per-process HMAC seal made
-// this permanently unverifiable and bricked delivery for any resumed session. This test
-// proves the opposite of the old behavior: a marker authorized and written entirely inside
-// a child process is structurally valid (ceremony binding intact) when re-read here, in a
-// different process, with no re-signing step required.
-test("a marker minted entirely in another process is honored here without re-signing (#423, #484)", async () => {
+// A native mark invocation in another process still persists only a durable plain fact.
+test("a marker minted entirely in another process persists as a plain boolean (#423, #484)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-process-"));
   try {
     const { file } = seed(root);
@@ -170,11 +169,8 @@ test("a marker minted entirely in another process is honored here without re-sig
     assert.equal(child.status, 0, child.stderr || child.stdout);
     const childState = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(childState.brainstormed, true);
-    assert.equal(validateCeremonyBinding(childState, {
-      sessionId: "ses-authority",
-      featureId: "feature-authority",
-      required: ["brainstormed"],
-    }).ok, true, "marker minted in a different process must still be a valid binding here");
+    assert.equal(childState.brainstormed_binding, undefined);
+    assert.equal(childState.ceremony_evidence, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -201,6 +197,33 @@ test("direct execute, structural clone, and mismatched runtime IDs fail byte-neu
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("feature change after before-hook authorization denies and preserves the replacement state", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-feature-race-"));
+  try {
+    const { file } = seed(root);
+    const { before, execute } = await harness(root);
+    const args = { action: "brainstormed" };
+    await before({ tool: "mark", sessionID: SESSION, callID: "call-authority" }, { args });
+
+    const replacement = {
+      session_id: SESSION,
+      feature_id: "feature-reclassified",
+      classified: true,
+      unrelated_fact: "preserve-me",
+    };
+    const replacementBytes = `${JSON.stringify(replacement, null, 2)}\n`;
+    fs.writeFileSync(file, replacementBytes, "utf8");
+
+    const result = await execute(args, context());
+    assert.equal(result.metadata.ok, false);
+    assert.match(String(result.metadata.reason ?? result.output), /gate-state identity changed before marker mutation/);
+    assert.equal(fs.readFileSync(file, "utf8"), replacementBytes);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), replacement);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -254,8 +277,9 @@ test("concurrent duplicate before and execute attempts have one winner with no s
     assert.equal(fs.readFileSync(file, "utf8"), bytes);
     const [a, b] = await Promise.all([execute(args, context()), execute(args, context())]);
     assert.equal([a.metadata.ok, b.metadata.ok].filter(Boolean).length, 1);
-    const after = fs.readFileSync(file, "utf8");
-    assert.match(after, /brainstormed_binding/);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(state.brainstormed, true);
+    assert.equal(state.brainstormed_binding, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

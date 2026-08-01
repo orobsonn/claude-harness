@@ -4,6 +4,10 @@
 > aceitou com draft PR #81 (LIGHT + capture). **Backlog vivo:**  
 > `docs/opencode-closure-roadmap.md`. Use este arquivo só para caçar edges (REVISE/dual,  
 > validate-plan, regate) — não como lista de implementação do zero.
+>
+> **PR4.2 (2026-07-31):** as referências abaixo a `ceremony-transition.mjs`, receipts, hashes ou
+> recovery de cerimônia também estão superadas. R10 vigente usa apenas booleans host-owned em
+> ordem e feature match; nenhum sidecar participa do gate.
 
 **Data:** 2026-07-17  
 **Repo:** `/root/dev/claude-harness`  
