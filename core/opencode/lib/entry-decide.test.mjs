@@ -207,12 +207,35 @@ test("#ac-1.3 shipper with unmatched regate_pending (no regate_passed) denies wi
   assert.match(decision.reason, /feat\/t1/);
 });
 
-test("shipper with regate_pending matched by regate_passed (any sha suffix) is allowed", () => {
+test("shipper accepts only an ancestral re-gate SHA", () => {
   const decision = decideEntryTask({
     subagentType: "shipper",
     gateState: { mode: "FULL", regate_pending: ["feat/t1"], regate_passed: ["feat/t1@abc123"] },
+    isAncestorFn: (sha) => sha === "abc123",
   });
   assert.equal(decision.ok, true);
+});
+
+test("shipper rejects a known non-ancestral re-gate SHA", () => {
+  const decision = decideEntryTask({
+    subagentType: "shipper",
+    gateState: { mode: "FULL", regate_pending: ["feat/t1"], regate_passed: ["feat/t1@old-sha"] },
+    isAncestorFn: () => false,
+  });
+  assert.equal(decision.ok, false);
+  assert.match(decision.reason, /strong-eye re-gate/);
+});
+
+test("shipper treats unverifiable re-gate ancestry as absent", () => {
+  for (const isAncestorFn of [() => null, () => { throw new Error("git unavailable"); }]) {
+    const decision = decideEntryTask({
+      subagentType: "shipper",
+      gateState: { mode: "FULL", regate_pending: ["feat/t1"], regate_passed: ["feat/t1@sha"] },
+      isAncestorFn,
+    });
+    assert.equal(decision.ok, false);
+    assert.match(decision.reason, /strong-eye re-gate/);
+  }
 });
 
 test("shipper with no regate_pending at all is allowed", () => {

@@ -54,9 +54,7 @@ export function hasFidelityPass(fidelityPass, featureId, taskId) {
  * Planner ceremony: brainstormed + adversary_fired, bound to the dispatched feature.
  * Fidelity rail: executor blocked until a feature-level fidelity_pass exists; test-author and
  * sniper are always exempt.
- * Gate 3: shipper blocked while any regate_pending has no matching regate_passed. Matching is
- * prefix-only unless `input.isAncestorFn` is supplied, in which case it upgrades to the exact
- * sha/ancestor-of-HEAD check Claude Code performs (entry-gate.ts does not currently thread this).
+ * Gate 3: shipper blocked while any regate_pending has no matching ancestral regate_passed.
  * `taskId` is accepted for caller compatibility (entry-gate.ts still threads it) but no longer
  * affects the decision — fidelity and re-gate matching are both feature-scoped.
  * @param {{
@@ -175,16 +173,9 @@ export function decideEntryTask(input = {}) {
       }
     }
 
-    // Gate 3 (CC parity, entry-gate.mjs:993-1028): shipper is the deterministic CONSUMER of the
-    // re-gate rail. A HIGH sniper fix stamps regate_pending; the mandatory strong-eye re-gate
-    // stamps regate_passed. An unmatched regate_pending denies the shipper dispatch — the same
-    // corrupt/unmatched checks the bash delivery gate (bash-decide.mjs) already runs at push time.
-    // isAncestorFn is OPTIONAL here (entry-gate.ts does not currently thread it into this call):
-    // when absent, matching falls back to PREFIX-only (ignores sha/ancestor-of-HEAD freshness) —
-    // an early, dispatch-time advisory rail to avoid spawning a shipper that would fail at push
-    // anyway, with bash-decide.mjs remaining the freshness-strict, authoritative enforcement point
-    // at push time. When a real isAncestorFn IS supplied, this upgrades to the exact same
-    // matchesAbsolution sha/ancestor check Claude Code performs, closing the gap for free.
+    // Gate 3 (CC parity, entry-gate.mjs:993-1028): shipper consumes the re-gate fact. A HIGH
+    // sniper fix stamps regate_pending; a strong-eye re-gate stamps regate_passed at a SHA.
+    // Missing, malformed, divergent, or unverifiable ancestry is an absent absolution fact.
     if (bareRole(input.subagentType) === "shipper") {
       const regate = classifyRegatePending(gs);
       if (regate.corrupt) {
@@ -194,13 +185,9 @@ export function decideEntryTask(input = {}) {
         ? gs.regate_passed.filter((entry) => typeof entry === "string")
         : [];
       const isAncestorFn = typeof input.isAncestorFn === "function" ? input.isAncestorFn : null;
-      const passedPrefixes = isAncestorFn ? null : new Set(passedArr.map(absolutionPrefix));
-      const unmatched = regate.pending.filter((t) => {
-        if (typeof t !== "string") return true;
-        return isAncestorFn
-          ? !matchesAbsolution(t, passedArr, isAncestorFn)
-          : !passedPrefixes.has(t);
-      });
+      const unmatched = regate.pending.filter((task) =>
+        typeof task !== "string" || !matchesAbsolution(task, passedArr, isAncestorFn),
+      );
       if (unmatched.length > 0) {
         return {
           ok: false,

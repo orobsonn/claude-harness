@@ -6,8 +6,7 @@
  *
  * Parity contract with Claude Code (core/claude-code/hooks/entry-gate.mjs decideBash,
  * lines 451-521 spawn-hand + 529-696 delivery-command handling): the bash gate does NOT
- * enforce ceremony (mode/classified/brainstormed/adversary_fired/planner_status/dual_status/
- * final_review/demo) — that lives on the Agent/Task dispatch gate. The bash gate only
+ * enforce ceremony — that lives on the Agent/Task dispatch gate. The bash gate only
  * enforces: branch/zero-commits, regate (regate_pending vs regate_passed), capture
  * (hand_finished vs capture_verified), and real-file (checkRealFileCaptureRail via
  * feature_id). Fail-open on infra error (unreadable gate-state, missing/unsafe sessionId) —

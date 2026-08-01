@@ -66,13 +66,9 @@ function fullDeliveryState(extra = {}, sessionId = SID) {
     classified: true,
     brainstormed: true,
     adversary_fired: true,
-    dual_status: "done",
-    plan_verdict: "APPROVE",
     feature_id: "feat",
-    final_review_done: true,
-    demo_done: true,
+    // Exact writing-hand scope is bound only to a usable planner artifact.
     planner_status: "usable",
-    delivery_status: "ready",
     regate_pending: [],
     regate_passed: [],
     hand_finished: [],
@@ -162,6 +158,45 @@ test("task executor without required delivery facts → throws [entry-gate]", as
   })
 })
 
+test("shipper Task resolves re-gate SHA ancestry through the entry hook", async () => {
+  const state = fullDeliveryState({
+    regate_pending: ["feat/task-1"],
+    regate_passed: ["feat/task-1@review-sha"],
+  })
+
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, state)
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "shipper" } },
+      ),
+      /strong-eye re-gate/,
+    )
+  }, { isAncestorFn: () => false })
+
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, state)
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SID },
+      { args: { subagent_type: "shipper" } },
+    ))
+  }, { isAncestorFn: () => true })
+
+  for (const unavailableLookup of [() => null, () => { throw new Error("git unavailable") }]) {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, state)
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "shipper" } },
+        ),
+        /strong-eye re-gate/,
+      )
+    }, { isAncestorFn: unavailableLookup })
+  }
+})
+
 test("planner accepts plain persisted boolean facts without sidecars or provenance proof", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, {
@@ -171,8 +206,6 @@ test("planner accepts plain persisted boolean facts without sidecars or provenan
       classified: true,
       brainstormed: true,
       adversary_fired: true,
-      dual_status: "done",
-      plan_verdict: "APPROVE",
     })
     await assert.doesNotReject(
       () => hooks["tool.execute.before"](
@@ -254,7 +287,7 @@ test("bash ls → does not throw", async () => {
 
 test("canonical plan Bash ownership is not duplicated in entry-gate", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullDeliveryState({ planner_status: "usable" }))
+    writeGateState(root, SID, fullDeliveryState())
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() => before(
       { tool: "bash", sessionID: SID },
@@ -338,7 +371,7 @@ test("#ac-1.1: bash git push empty delivery state on a feature branch with commi
   )
 })
 
-test("bash git push FULL dual + clear rails + gitState fixture → no throw", async () => {
+test("bash git push with clear rails + gitState fixture → no throw", async () => {
   await withHooks(
     async (hooks, root) => {
       writeGateState(root, SID, fullDeliveryState())
@@ -375,7 +408,7 @@ test("bash git push FULL dual + clear rails + gitState fixture → no throw", as
   )
 })
 
-test("bash git push FULL dual + DONE hand-record capturedVerifiedAt + freeze ancestor → no throw", async () => {
+test("bash git push with DONE hand-record capturedVerifiedAt + freeze ancestor → no throw", async () => {
   await withHooks(
     async (hooks, root) => {
       writeGateState(root, SID, fullDeliveryState())
@@ -883,7 +916,7 @@ test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged
     const logged = []
     console.error = (...args) => { logged.push(args.map(String).join(" ")) }
     try {
-      // Every harness role is a "delivery role" — a genuinely EMPTY fallback state (what an
+      // Every harness role is a "delivery role" — a genuinely empty state (what an
       // unreadable file collapses to) still fails its own planner-fact check downstream. This
       // dispatch alone cannot prove "permitted"; it only proves the unreadable FILE itself is
       // never the denial reason (never gate-state-unreadable / invalid JSON).

@@ -711,7 +711,7 @@ test("mode=no-ceremony + clean rails → allow (was a hard deny; ceremony is not
   assert.equal(d.decision, "allow");
 });
 
-test("FULL ceremony fields present but incomplete (no dual_status/final_review/demo) → allow (those rails removed from the bash gate)", () => {
+test("FULL mode with clean delivery facts → allow", () => {
   const d = decideBashDelivery({
     command: "git push",
     gateState: { mode: "FULL", classified: true, feature_id: "feat" },
