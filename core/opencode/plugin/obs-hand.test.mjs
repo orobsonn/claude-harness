@@ -1,5 +1,5 @@
 /**
- * @description Locked tests for obs-hand's writing-hand active_dispatch claim (#476).
+ * @description Locked tests for obs-hand's call-keyed writing-hand record (#476).
  * The active-dispatch claim is best-effort observability, not a gate: a missing prompt
  * marker or a rejected claim must never deny dispatch (shadow-record instead), and the
  * terminal evidence writes (hand-record, capture_verified) must still happen unconditionally.
@@ -76,7 +76,7 @@ test("lt-oh-marker-optional: writing-hand dispatch without a prompt marker is no
   })
 })
 
-test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId still arms active_dispatch [#ac-2.1 scope rail]", async () => {
+test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId still arms a call-keyed record [#ac-2.1 scope rail]", async () => {
   await withTempRoot(async (root) => {
     const sessionId = "ses_obshand_rail"
     const featureId = "feat-obshand-rail"
@@ -125,7 +125,7 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
     const args = {
       // No [HARNESS_TASK_CONTEXT] marker — #ac-2.1 says this must not be required. The
       // canonical task_id still reaches the claim via extractTaskIds' task_id/taskId/task
-      // fallback, so the active-dispatch claim (and the scope rail it arms) still succeeds.
+      // fallback, so the call-keyed record (and the scope rail it arms) still succeeds.
       prompt: "Implement the change.",
       subagent_type: "executor-low",
       feature_id: featureId,
@@ -134,10 +134,11 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
     await assert.doesNotReject(() => hooks["tool.execute.before"](input, { args }))
 
     const gateState = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"))
-    assert.equal(gateState.active_dispatch?.task_id, taskId, "active_dispatch must be armed for the markerless dispatch")
+    const record = gateState.dispatch_records?.["call-rail"]
+    assert.equal(record?.task_id, taskId, "dispatch record must be armed for the markerless dispatch")
     assert.ok(
-      Array.isArray(gateState.active_dispatch?.scope_paths) && gateState.active_dispatch.scope_paths.length > 0,
-      "active_dispatch must carry the canonical task's scope_paths (plan-write-gate's rail)",
+      Array.isArray(record?.scope_paths) && record.scope_paths.length > 0,
+      "dispatch record must carry the canonical task's scope_paths (plan-write-gate's rail)",
     )
   })
 })

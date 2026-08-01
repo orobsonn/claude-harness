@@ -545,11 +545,12 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
         spawn: async ({ agent, model }) => {
           assert.equal(agent, "executor-medium");
           assert.equal(model, "openai/gpt-5.6-terra");
-          const active = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch;
-          assert.equal(active.session_id, "ses_run1");
-          assert.equal(active.feature_id, "feat-x");
-          assert.equal(active.task_id, "task-1");
-          assert.deepEqual(active.scope_paths, ["src"]);
+          const record = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).dispatch_records;
+          const dispatch = record[Object.keys(record)[0]];
+          assert.equal(dispatch.parent_session_id, "ses_run1");
+          assert.equal(dispatch.feature_id, "feat-x");
+          assert.equal(dispatch.task_id, "task-1");
+          assert.deepEqual(dispatch.scope_paths, ["src"]);
           phase = "post";
           return {
             exitCode: 0,
@@ -589,7 +590,7 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
     assert.equal(result.record.agent, "executor-medium");
     // process exit was 0 but outcome is FAILED — exit is not oracle
     assert.equal(result.processExitCode, 0);
-    assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch, undefined);
+    assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).dispatch_records, undefined);
 
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -661,7 +662,7 @@ test("runHand: cleanup failure is verified and fails closed instead of returning
     }, {
       agentsDir,
       spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-      finishDispatch: () => ({ ok: false, cleanup_pending: true, reason: "active_dispatch cleanup pending" }),
+      finishDispatch: () => ({ ok: false, reason: "dispatch record cleanup failed" }),
       lsUntracked: () => [],
       gitResetHard: () => ({ ok: true }),
       removePath: () => ({ ok: true }),
@@ -669,7 +670,7 @@ test("runHand: cleanup failure is verified and fails closed instead of returning
       isDirtyVsFreeze: () => false,
     });
     assert.equal(result.outcome, OUTCOME.CONFIG_ERROR);
-    assert.match(result.reason, /cleanup pending/);
+    assert.match(result.reason, /dispatch record cleanup failed/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

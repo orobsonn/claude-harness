@@ -2,7 +2,7 @@
  * @description Structural mid-run obs for hand roles (executor/sniper/test-author).
  * before: task-executing (n/total from plan when possible)
  * after: hand-ran
- * The Task before/after boundary also owns writing-hand active_dispatch claims — best-effort:
+ * The Task before/after boundary also owns call-keyed writing-hand claims — best-effort:
  * a missing marker/session identity or a rejected claim never denies dispatch, it shadow-records
  * (logs) and continues. Evidence writes (hand-record, capture_verified) do not require claim
  * success — they only need a resolvable task_id/feature_id on the terminal writing-hand result.
@@ -34,7 +34,7 @@ export async function createObsHandHooks(
   } = await import("../lib/obs-emit.mjs");
   const { parseTaskDispatchIdentity } = await import("../lib/task-dispatch-identity.mjs");
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs");
-  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcileCleanupPending, reconcilePendingChildBindingByChild } = await import("../lib/dispatch-scope.mjs");
+  const { appendTerminalScopeDiagnostic, bindChildSession, claimActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, markDispatchBindingPending, reconcilePendingChildBindingByChild } = await import("../lib/dispatch-scope.mjs");
   const { sdkIdentityReader } = await import("./lib/scope-runtime-identity.mjs");
   const {
     writeHandRecord,
@@ -54,8 +54,6 @@ export async function createObsHandHooks(
   } = await import("./lib/regate-arm.mjs");
   const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
-  const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs");
-  registerScopeComponent(cwd, "obs-hand");
   const claims = new Map<string, string>();
   /** Dedupe terminal hand-record writes per parent call. */
   const writtenRecords = new Set<string>();
@@ -243,10 +241,7 @@ export async function createObsHandHooks(
         if (!sessionId || !callId) {
           console.warn(`${PREFIX} writing-hand dispatch shadow-record: runtime sessionID/callID unavailable, active-dispatch claim skipped`);
         } else {
-          const reconciled = reconcileCleanupPending(cwd, sessionId);
-          if (!reconciled.ok) {
-            console.warn(`${PREFIX} writing-hand dispatch shadow-record: cleanup_pending unresolved (${reconciled.reason}), active-dispatch claim skipped`);
-          } else {
+          {
             const key = claimKey(sessionId, callId);
             const token = claims.get(key) ?? crypto.randomUUID();
             const claimed = claimActiveDispatch(cwd, {
@@ -256,7 +251,7 @@ export async function createObsHandHooks(
               // Marker no longer required (#ac-2.1): ids.taskId already prefers the marker when
               // present (extractTaskIds), so this is identical with a marker and only changes
               // the markerless case — without it, taskId is always empty and the claim always
-              // fails, meaning active_dispatch never arms for a markerless dispatch. That claim
+              // fails, meaning the scoped dispatch record never arms for a markerless dispatch. That claim
               // is what plan-write-gate reads to scope writes and allowlist bash for the hand
               // (decideScopeRail / bashTool branches) — a markerless writing-hand would otherwise
               // run with no scope rail and unrestricted bash.
@@ -329,6 +324,7 @@ export async function createObsHandHooks(
                 parentSessionId,
                 childSessionId,
                 role: ids.role,
+                callId: input.callID,
               });
             }
           }

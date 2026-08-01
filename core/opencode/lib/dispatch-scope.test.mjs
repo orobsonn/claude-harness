@@ -13,7 +13,6 @@ import {
   clearActiveDispatch,
   finishActiveDispatch,
   getProcessChildBinding,
-  hasCleanupPending,
   heartbeatActiveDispatch,
   markDispatchBindingPending,
   normalizeProjectPath,
@@ -71,25 +70,40 @@ test("claim is atomic, snapshot-derived, and matching cleanup handles success or
     });
     assert.equal(claim.ok, true);
     assert.deepEqual(claim.claim.scope_paths, ["src/a.ts"]);
-    assert.equal(claim.claim.session_id, f.sessionId);
+    assert.equal(claim.claim.parent_session_id, f.sessionId);
     assert.equal(claim.claim.feature_id, "feat-scope");
     assert.equal(claim.claim.task_id, "task-1");
     assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-1", token: "wrong" }).cleared, false);
-    assert.equal(f.read().active_dispatch.claim_token, "token-1");
+    assert.equal(f.read().dispatch_records["call-1"].claim_token, "token-1");
     assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-1", token: "token-1" }).cleared, true);
-    assert.equal(f.read().active_dispatch, undefined);
+    assert.equal(f.read().dispatch_records, undefined);
   } finally { f.close(); }
 });
 
-test("concurrent/replayed claims cannot replace a live dispatch or clear a newer claim", () => {
+test("replayed claims are idempotent and cannot clear a different record", () => {
   const f = fixture();
   try {
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "old", role: "executor-low", taskId: "task-1", token: "old-token", now: 1_000 }).ok, true);
-    const competing = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "new", role: "executor-low", taskId: "task-1", token: "new-token", now: 2_000 });
-    assert.equal(competing.ok, false);
-    assert.match(competing.reason, /another/);
+    const competing = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "old", role: "executor-low", taskId: "task-1", token: "new-token", now: 2_000 });
+    assert.equal(competing.ok, true);
     assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "new", token: "new-token" }).cleared, false);
-    assert.equal(f.read().active_dispatch.call_id, "old");
+    assert.equal(f.read().dispatch_records.old.dispatch_call_id, "old");
+  } finally { f.close(); }
+});
+
+test("sibling dispatch calls keep disjoint records and one finish cannot clear the other", () => {
+  const f = fixture();
+  try {
+    const left = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-left", role: "executor-low", taskId: "task-1", token: "token-left" });
+    const right = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-right", role: "executor-high", taskId: "task-1", token: "token-right" });
+    assert.equal(left.ok, true, left.reason);
+    assert.equal(right.ok, true, right.reason);
+    const records = f.read().dispatch_records;
+    assert.equal(records["call-left"].dispatch_call_id, "call-left");
+    assert.equal(records["call-right"].dispatch_call_id, "call-right");
+    assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-left", token: "token-left" }).cleared, true);
+    assert.equal(f.read().dispatch_records["call-left"], undefined);
+    assert.equal(f.read().dispatch_records["call-right"].claim_token, "token-right");
   } finally { f.close(); }
 });
 
@@ -97,12 +111,12 @@ test("restart reconciliation marks expired authority stale and never deletes wit
   const f = fixture();
   try {
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "old", role: "executor", taskId: "task-1", token: "old-token", now: 1_000 }).ok, true);
-    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, 2_000).stale, false);
-    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, 31 * 60 * 1000).stale, true);
-    assert.equal(f.read().active_dispatch.status, "stale");
-    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "new", role: "executor", taskId: "task-1", token: "new-token", now: 31 * 60 * 1000 }).ok, false);
+    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, "old", 2_000).stale, false);
+    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, "old", 31 * 60 * 1000).stale, true);
+    assert.equal(f.read().dispatch_records.old.status, "stale");
+    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "new", role: "executor", taskId: "task-1", token: "new-token", now: 31 * 60 * 1000 }).ok, true);
     assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "old", token: "old-token" }).cleared, true);
-    assert.equal(f.read().active_dispatch, undefined);
+    assert.equal(f.read().dispatch_records.new.dispatch_call_id, "new");
   } finally { f.close(); }
 });
 
@@ -148,7 +162,7 @@ test("durable event is sanitized", () => {
   } finally { f.close(); }
 });
 
-test("bounded cleanup failure persists fail-closed cleanup_pending", () => {
+test("bounded cleanup failure leaves only its own record intact", () => {
   const f = fixture();
   try {
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-fail", role: "executor", taskId: "task-1", token: "token-fail" }).ok, true);
@@ -163,8 +177,7 @@ test("bounded cleanup failure persists fail-closed cleanup_pending", () => {
     });
     assert.equal(finished.ok, false);
     assert.equal(attempts, 3);
-    assert.equal(hasCleanupPending(f.root, f.sessionId), true);
-    assert.equal(f.read().active_dispatch.call_id, "call-fail");
+    assert.equal(f.read().dispatch_records["call-fail"].dispatch_call_id, "call-fail");
   } finally { f.close(); }
 });
 
@@ -174,11 +187,11 @@ test("heartbeat extends only before expiry and never revives an expired claim", 
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "long", role: "executor-high", taskId: "task-1", token: "long-token", now: 1_000 }).ok, true);
     const heartbeat = heartbeatActiveDispatch(f.root, { sessionId: f.sessionId, callId: "long", role: "executor-low", now: 29 * 60 * 1000 });
     assert.equal(heartbeat.ok, true);
-    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, 31 * 60 * 1000).stale, false);
-    assert.equal(f.read().active_dispatch.status, "active");
+    assert.equal(reconcileExpiredDispatch(f.root, f.sessionId, "long", 31 * 60 * 1000).stale, false);
+    assert.equal(f.read().dispatch_records.long.status, "active");
     const expired = heartbeatActiveDispatch(f.root, { sessionId: f.sessionId, callId: "long", role: "executor-low", now: 60 * 60 * 1000 });
     assert.equal(expired.ok, false);
-    assert.equal(f.read().active_dispatch.status, "stale");
+    assert.equal(f.read().dispatch_records.long.status, "stale");
   } finally { f.close(); }
 });
 
@@ -212,8 +225,8 @@ test("same callID re-claim is idempotent across different claim tokens (OC doubl
     });
     assert.equal(b.ok, true, b.reason);
     assert.equal(b.claim.claim_token, "token-instance-A");
-    assert.equal(f.read().active_dispatch.call_id, "call-same");
-    assert.equal(f.read().active_dispatch.claim_token, "token-instance-A");
+    assert.equal(f.read().dispatch_records["call-same"].dispatch_call_id, "call-same");
+    assert.equal(f.read().dispatch_records["call-same"].claim_token, "token-instance-A");
   } finally {
     f.close();
   }
@@ -236,15 +249,15 @@ test("#ac-1.1 binding_pending with known child reconciles without SDK parent loo
       jobId: "job-1",
     });
     assert.equal(pending.ok, true);
-    assert.equal(f.read().active_dispatch.status, "binding_pending");
-    assert.equal(f.read().active_dispatch.binding_pending.child_session_id, "child-known");
+    assert.equal(f.read().dispatch_records["call-pending"].status, "binding_pending");
+    assert.equal(f.read().dispatch_records["call-pending"].binding_pending.child_session_id, "child-known");
 
     const reconciled = reconcilePendingChildBindingByChild(f.root, "child-known");
     assert.equal(reconciled.ok, true, reconciled.reason);
     assert.equal(getProcessChildBinding(f.root, "child-known")?.parentSessionId, f.sessionId);
-    assert.equal(f.read().active_dispatch.status, "active");
-    assert.equal(f.read().active_dispatch.child_session_id, "child-known");
-    assert.equal(f.read().active_dispatch.binding_pending, undefined);
+    assert.equal(f.read().dispatch_records["call-pending"].status, "active");
+    assert.equal(f.read().dispatch_records["call-pending"].child_session_id, "child-known");
+    assert.equal(f.read().dispatch_records["call-pending"].binding_pending, undefined);
 
     const finished = finishActiveDispatch(f.root, {
       sessionId: f.sessionId,
@@ -253,7 +266,7 @@ test("#ac-1.1 binding_pending with known child reconciles without SDK parent loo
     });
     assert.equal(finished.ok, true);
     assert.equal(finished.cleared, true);
-    assert.equal(f.read().active_dispatch, undefined);
+    assert.equal(f.read().dispatch_records, undefined);
   } finally { f.close(); }
 });
 
@@ -287,7 +300,7 @@ test("#ac-1.2 real missing binding stays fail-closed", () => {
     const event = JSON.parse(raw.trim().split("\n").at(-1));
     assert.equal(event.type, "hand-scope-terminal-unbound");
     assert.equal(event.decision, "fail-closed");
-    assert.equal(f.read().active_dispatch.status, "binding_pending");
+    assert.equal(f.read().dispatch_records["call-other"].status, "binding_pending");
   } finally { f.close(); }
 });
 

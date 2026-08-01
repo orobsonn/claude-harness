@@ -26,7 +26,7 @@ import {
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { mergeGateState } from "../lib/gate-state.mjs";
 import { hasFidelityPass } from "../lib/entry-decide.mjs";
-import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../lib/dispatch-scope.mjs";
+import { claimActiveDispatch, finishActiveDispatch } from "../lib/dispatch-scope.mjs";
 import { writeHandRecord } from "../lib/hand-records.mjs";
 
 export { writeHandRecord };
@@ -932,13 +932,6 @@ export async function runHand(descriptor, deps = {}) {
 
   const callId = dispatchCallId();
   const claimToken = dispatchToken();
-  const reconciledCleanup = reconcileCleanupPending(projectRoot, sessionId);
-  if (!reconciledCleanup.ok) {
-    return failConfig(`cleanup_pending blocks dispatch: ${reconciledCleanup.reason}`, {
-      preUntracked: preSnap.paths,
-      preUntrackedContents: preSnap.contents,
-    });
-  }
   const claimed = claimActiveDispatch(projectRoot, {
     sessionId,
     callId,
@@ -947,7 +940,7 @@ export async function runHand(descriptor, deps = {}) {
     token: claimToken,
   });
   if (!claimed.ok) {
-    return failConfig(`active_dispatch claim failed: ${claimed.reason}`, {
+    return failConfig(`dispatch record claim failed: ${claimed.reason}`, {
       preUntracked: preSnap.paths,
       preUntrackedContents: preSnap.contents,
     });
@@ -1205,8 +1198,8 @@ function defaultSpawnOpencode({ projectDir, agent, model, title, prompt, dispatc
     maxBuffer: 20 * 1024 * 1024,
     env: {
       ...process.env,
-      HARNESS_ACTIVE_DISPATCH_SESSION_ID: dispatchAuthority?.sessionId ?? "",
-      HARNESS_ACTIVE_DISPATCH_CLAIM_TOKEN: dispatchAuthority?.claimToken ?? "",
+      HARNESS_DISPATCH_PARENT_SESSION_ID: dispatchAuthority?.sessionId ?? "",
+      HARNESS_DISPATCH_CLAIM_TOKEN: dispatchAuthority?.claimToken ?? "",
     },
   });
   return {

@@ -367,6 +367,21 @@ function makeSeedDirs(prefix, opts = {}) {
   return { root, projectRoot, worktree };
 }
 
+test("materialize sweeps the retired cleanup sentinel only in its ephemeral worktree", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-cleanup-sweep-");
+  const projectSentinel = join(projectRoot, ".opencode", "plans", ".state", "ses-primary", "active-dispatch-cleanup-pending.json");
+  const worktreeSentinel = join(worktree, ".opencode", "plans", ".state", "ses-run", "active-dispatch-cleanup-pending.json");
+  try {
+    mkdirSync(join(projectSentinel, ".."), { recursive: true });
+    mkdirSync(join(worktreeSentinel, ".."), { recursive: true });
+    writeFileSync(projectSentinel, "primary-bytes");
+    writeFileSync(worktreeSentinel, "worktree-bytes");
+    materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(existsSync(worktreeSentinel), false);
+    assert.equal(readFileSync(projectSentinel, "utf8"), "primary-bytes");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 /** @description Assert #ac-1.1 critical paths under worktree .opencode. */
 function assertCriticalRuntime(worktree) {
   for (const rel of [

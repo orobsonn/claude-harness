@@ -53,6 +53,7 @@ import {
   normalizeOcVersionStamp as normalizeHarnessVersionStamp,
   readHarnessVersionStamp,
 } from "../../../../shared/lib/opencode-config-migration.mjs";
+import { sweepRetiredDispatchCleanup } from "../../../../shared/lib/active-dispatch-cleanup-migration.mjs";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -853,6 +854,7 @@ export const OC_RETIRED_FILES = [
   "plugin/ceremony-coordinator.test.mjs",
   "skills/orchestrating-delivery/ceremony-runtime.mjs",
   "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
+  "plugin/lib/scope-runtime-composition.mjs",
 ];
 
 /**
@@ -908,6 +910,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
   pruneOcRetiredFiles(ocDir, openCodeDir);
+  sweepRetiredDispatchCleanup(targetDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
   if (existsSync(sharedDir)) {

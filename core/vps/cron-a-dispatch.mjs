@@ -98,6 +98,7 @@ import {
   MANIFEST_FILENAME,
 } from "../shared/lib/opencode-config-migration.mjs";
 import { DANGEROUS_BASH_DENYLIST } from "../shared/lib/dangerous-bash-denylist.mjs";
+import { sweepRetiredDispatchCleanup } from "../shared/lib/active-dispatch-cleanup-migration.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -932,6 +933,8 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
   pruneOcRetiredFiles(ocDir, openCodeSrc);
+  // Headless may retire legacy sentinels only inside this run's disposable worktree.
+  sweepRetiredDispatchCleanup(worktreePath);
 
   normalizeMaterializedRouting(ocDir);
 

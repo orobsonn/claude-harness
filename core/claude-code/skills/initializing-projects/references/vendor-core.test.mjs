@@ -814,6 +814,39 @@ test("re-vendoring removes retired ceremony paths and preserves per-directory si
   }
 });
 
+test("re-vendoring removes the retired scope composition module and preserves its lib sibling", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-scope-composition-"));
+  const retired = "plugin/lib/scope-runtime-composition.mjs";
+  const sibling = join(tempDir, ".opencode", "plugin", "lib", "project-owned-scope-sibling.mjs");
+  try {
+    const stale = join(tempDir, ".opencode", retired);
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "// stale composition registry\n", "utf8");
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(stale), false);
+    assert.equal(existsSync(sibling), true);
+    assert.ok(OC_RETIRED_FILES.includes(retired));
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
+});
+
+test("re-vendoring sweeps only the legacy cleanup sentinel from local vendored state", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-cleanup-sweep-"));
+  const stateDir = join(tempDir, ".opencode", "plans", ".state", "ses-local");
+  const sentinel = join(stateDir, "active-dispatch-cleanup-pending.json");
+  const sibling = join(stateDir, "keep.json");
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(sentinel, "{}");
+    writeFileSync(sibling, "{}");
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(sentinel), false);
+    assert.equal(existsSync(sibling), true);
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
+});
+
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
   // Review alias / second-eye agent files stay in source for the two-release compatibility
   // window (#582) — they are NOT retired. Spawn hands and dual plugin modules remain scheduled.

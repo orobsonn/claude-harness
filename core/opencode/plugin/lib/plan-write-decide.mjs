@@ -5,7 +5,7 @@
  * (orchestrator/build may author the plan via Write or bash; bash forge is separate).
  * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
  * Anti-forge is fail-closed (outside soft catch). Scope rail fail-opens when context
- * is incomplete or on rail errors; armed active_dispatch denies executor/sniper
+ * is incomplete or on rail errors; an exact dispatch record denies executor/sniper
  * subagent writes outside scope_paths ∪ allowed_writes (family match). Under an
  * armed hand dispatch, subagent writes with empty/non-hand actingRole are denied
  * (cannot verify identity — no fail-open on agent_id-only).
@@ -233,7 +233,7 @@ function sameHandFamily(actingRole, dispatchRole) {
 
 /**
  * @description Scope rail: deny out-of-scope executor/sniper subagent writes when
- * active_dispatch is armed. Returns null when rail is off / allow; Decision when deny.
+ * an exact dispatch record is armed. Returns null when rail is off / allow; Decision when deny.
  * Fail-open (null) on incomplete context. Under armed hand dispatch, empty/non-hand
  * actingRole on a subagent is DENY (identity unverifiable). Never throws to caller.
  * @param {string} filePath
@@ -251,7 +251,10 @@ function decideScopeRail(filePath, opts) {
   if (gateState == null || typeof gateState !== "object" || Array.isArray(gateState)) {
     return null;
   }
-  const ad = /** @type {Record<string, unknown>} */ (gateState).active_dispatch;
+  const records = /** @type {Record<string, unknown>} */ (gateState).dispatch_records;
+  const ad = opts.dispatchRecord ?? (records && typeof records === "object" && !Array.isArray(records) && Object.keys(records).length === 1
+    ? Object.values(records)[0]
+    : null);
   if (ad == null || typeof ad !== "object" || Array.isArray(ad)) return null;
 
   const adObj = /** @type {Record<string, unknown>} */ (ad);
@@ -323,6 +326,7 @@ function decideScopeRail(filePath, opts) {
  *   gateState?: unknown,
  *   actingRole?: unknown,
  *   isSubagent?: unknown,
+ *   dispatchRecord?: unknown,
  * }} [opts]
  * @returns {Decision}
  */
@@ -375,6 +379,7 @@ export function decide(payload, opts = {}) {
       gateState,
       actingRole: opts.actingRole,
       isSubagent: opts.isSubagent,
+      dispatchRecord: opts.dispatchRecord,
     });
     if (scopeDeny) return scopeDeny;
   } catch {

@@ -250,16 +250,16 @@ test("bound execution plan is immutable through Write/Edit until planner reclaim
 // Scope rail locked tests (A3 parity for OC plan-write-decide + hook)
 // ---------------------------------------------------------------------------
 
-test("lt-scope-out-deny: active_dispatch scope_paths=['src/a.ts'] role executor, actingRole executor-high, isSubagent true, write src/b.ts → allow false, reason includes src/b.ts and scope", () => {
+test("lt-scope-out-deny: call-keyed scope_paths=['src/a.ts'] role executor, actingRole executor-high, isSubagent true, write src/b.ts → allow false, reason includes src/b.ts and scope", () => {
   const payload = { tool_input: { file_path: "src/b.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "feat",
       task_id: "t1",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
@@ -270,13 +270,13 @@ test("lt-scope-out-deny: active_dispatch scope_paths=['src/a.ts'] role executor,
 test("lt-scope-in-allow: same, write src/a.ts → allow true", () => {
   const payload = { tool_input: { file_path: "src/a.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "feat",
       task_id: "t1",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, true);
@@ -285,13 +285,13 @@ test("lt-scope-in-allow: same, write src/a.ts → allow true", () => {
 test("lt-scope-file-not-prefix: scope ['src/a.ts'], write src/a.ts/evil.ts → allow false", () => {
   const payload = { tool_input: { file_path: "src/a.ts/evil.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
@@ -299,22 +299,22 @@ test("lt-scope-file-not-prefix: scope ['src/a.ts'], write src/a.ts/evil.ts → a
 
 test("lt-scope-dir-prefix-allow: scope ['src/lib'] or ['src/lib/'], write src/lib/foo.ts → allow true", () => {
   const gateStateDir = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/lib"],
       allowed_writes: [],
-    },
+    } },
   };
   const gateStateDirSlash = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/lib/"],
       allowed_writes: [],
-    },
+    } },
   };
   const p = { tool_input: { file_path: "src/lib/foo.ts" } };
   assert.equal(
@@ -330,13 +330,13 @@ test("lt-scope-dir-prefix-allow: scope ['src/lib'] or ['src/lib/'], write src/li
 test("lt-scope-family-match: ad.role='executor', acting executor-high, out of scope → deny", () => {
   const payload = { tool_input: { file_path: "src/b.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
@@ -345,19 +345,19 @@ test("lt-scope-family-match: ad.role='executor', acting executor-high, out of sc
 test("lt-scope-role-mismatch-failopen: ad.role sniper, acting executor, out of sniper scope → allow true", () => {
   const payload = { tool_input: { file_path: "src/b.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "sniper",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/fix.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor", isSubagent: true });
   assert.equal(r.allow, true);
 });
 
-test("lt-scope-no-dispatch-failopen: no active_dispatch → allow true for src/anywhere.ts", () => {
+test("lt-scope-no-record-failopen: no call-keyed record → allow true for src/anywhere.ts", () => {
   const payload = { tool_input: { file_path: "src/anywhere.ts" } };
   const r = decide(payload, { gateState: {}, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, true);
@@ -368,13 +368,13 @@ test("lt-anti-forge-still-denies: armed scope that includes gate-state path, wri
     tool_input: { file_path: ".opencode/plans/.state/ses/gate-state.json" },
   };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: [".opencode/plans/.state/ses/gate-state.json"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
@@ -384,13 +384,13 @@ test("lt-anti-forge-still-denies: armed scope that includes gate-state path, wri
 test("lt-allowed-writes-allow: scope src/a.ts, allowed_writes docs/x.md, write docs/x.md → allow true", () => {
   const payload = { tool_input: { file_path: "docs/x.md" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/a.ts"],
       allowed_writes: ["docs/x.md"],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, true);
@@ -399,19 +399,19 @@ test("lt-allowed-writes-allow: scope src/a.ts, allowed_writes docs/x.md, write d
 test("lt-scope-path-normalize-escape: scope ['src/lib'], write src/lib/../b.ts → allow false", () => {
   const payload = { tool_input: { file_path: "src/lib/../b.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "f",
       task_id: "t",
       scope_paths: ["src/lib"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
 });
 
-test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope/gate-state.json containing active_dispatch; createPlanWriteGateHooks(projectRoot); tool.execute.before write src/b.ts with session + role context → throws [plan-write-gate]; write src/a.ts → no throw", async () => {
+test("lt-factory-hook-scope-rail: temp dir with a call-keyed state record; out-of-scope write throws and in-scope write passes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-scope-"));
   try {
     await installComposition(root);
@@ -420,13 +420,13 @@ test("lt-factory-hook-scope-rail: temp dir with .opencode/plans/.state/ses_scope
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-scope",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -485,13 +485,13 @@ test("lt-factory-hook-input-agent-no-subagent_type: armed dispatch + Write args 
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-agent",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -537,13 +537,13 @@ test("lt-scope-role-spoof-compliance-args: input.agent=executor-high + args.suba
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-spoof",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -586,13 +586,13 @@ test("lt-scope-role-spoof-sniper-args: input.agent=executor-high + args.subagent
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-spoof-s",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -629,13 +629,13 @@ test("lt-scope-role-spoof-sniper-args: input.agent=executor-high + args.subagent
 test("lt-scope-case-sensitive-deny: scope ['src/a.ts'], write 'SRC/A.TS' → deny when rail armed", () => {
   const payload = { tool_input: { file_path: "SRC/A.TS" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "feat-case",
       task_id: "t1",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, {
     gateState,
@@ -649,13 +649,13 @@ test("lt-scope-case-sensitive-deny: scope ['src/a.ts'], write 'SRC/A.TS' → den
 test("lt-scope-agent-id-only-no-role: isSubagent true + empty actingRole + armed executor dispatch + write src/b.ts → DENY (no fail-open)", () => {
   const payload = { tool_input: { file_path: "src/b.ts" } };
   const gateState = {
-    active_dispatch: {
+    dispatch_records: { legacy: {
       role: "executor",
       feature_id: "feat-id-only",
       task_id: "t1",
       scope_paths: ["src/a.ts"],
       allowed_writes: [],
-    },
+    } },
   };
   const r = decide(payload, {
     gateState,
@@ -675,13 +675,13 @@ test("lt-factory-hook-agent-id-only: input.agent_id only (no role) + armed execu
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-id-only",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -723,13 +723,13 @@ test("lt-factory-hook-agent-id-only-spoof-args-sniper: input.agent_id only + arg
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-id-spoof",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -767,18 +767,19 @@ test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,sr
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-abs-"));
   try {
     await installComposition(root);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_abs");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
-        active_dispatch: {
+        dispatch_records: { legacy: {
           role: "executor",
           feature_id: "feat-abs",
           task_id: "t1",
           scope_paths: ["src/a.ts"],
           allowed_writes: [],
-        },
+        } },
       }),
       "utf8",
     );
@@ -845,25 +846,21 @@ test("lt-factory-hook-absolute-path-scope: scope src/a.ts; absolute join(root,sr
   }
 });
 
-test("shadow mode records out-of-scope Write without blocking", async () => {
+test("out-of-scope Write denies without a composition shadow registry", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-"));
   try {
     const session = "ses_shadow";
     const stateDir = path.join(root, ".opencode", "plans", ".state", session);
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ dispatch_records: { legacy: {
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src/a.ts"], allowed_writes: [], call_id: "task-call",
-    } }));
+    } } }));
     const before = (await createScopedHooks(root))["tool.execute.before"];
-    await assert.doesNotReject(() => before(
+    await assert.rejects(() => before(
       { tool: "write", sessionID: session, agent: "executor-high" },
       { args: { filePath: "outside/b.ts", content: "private content must not be logged" } },
-    ));
-    const event = fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8");
-    assert.match(event, /"mode":"shadow"/);
-    assert.match(event, /outside\/b\.ts/);
-    assert.doesNotMatch(event, /private content/);
+    ), /OUTSIDE/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -875,10 +872,10 @@ test("composition proof enforces Edit scope while Bash is never walled (#484)", 
     const stateDir = path.join(root, ".opencode", "plans", ".state", session);
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ dispatch_records: { legacy: {
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
-    } }));
+    } } }));
     const before = (await createScopedHooks(root))["tool.execute.before"];
     await assert.rejects(() => before(
       { tool: "edit", sessionID: session, agent: "executor-high" },
@@ -938,10 +935,10 @@ test("Bash during an active writing-hand dispatch is never shadow-recorded or bl
     const session = "ses_shadow_bash";
     const stateDir = path.join(root, ".opencode", "plans", ".state", session);
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ dispatch_records: { legacy: {
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
-    } }));
+    } } }));
     const before = (await createScopedHooks(root))["tool.execute.before"];
     await assert.doesNotReject(() => before(
       { tool: "bash", sessionID: session, agent: "executor-high" },
@@ -956,23 +953,20 @@ test("Bash during an active writing-hand dispatch is never shadow-recorded or bl
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("shadow apply_patch records the partial multi-file envelope without blocking", async () => {
+test("apply_patch denies an unsafe path without a composition shadow registry", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-shadow-patch-"));
   try {
     const session = "ses_shadow_patch";
     const stateDir = path.join(root, ".opencode", "plans", ".state", session);
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ active_dispatch: {
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ dispatch_records: { legacy: {
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
-    } }));
+    } } }));
     const before = (await createScopedHooks(root))["tool.execute.before"];
-    await assert.doesNotReject(() => before(
+    await assert.rejects(() => before(
       { tool: "apply_patch", sessionID: session, agent: "executor-high" },
       { args: { patchText: "*** Begin Patch\n*** Update File: src/in.ts\n@@\n-a\n+b\n*** Update File: ../escape.ts\n@@\n-a\n+b\n*** End Patch" } },
-    ));
-    const events = fs.readFileSync(path.join(stateDir, "scope-events.jsonl"), "utf8");
-    assert.match(events, /escape\.ts/);
-    assert.match(events, /unsafe-project-path/);
+    ), /OUTSIDE|safe project path/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

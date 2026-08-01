@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { bindChildSession, claimActiveDispatch } from "../../lib/dispatch-scope.mjs";
 import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
-import { scopeRuntimeCompositionMode } from "./scope-runtime-composition.mjs";
 import { createPlanGateHooks } from "../plan-gate.ts";
 import { createObsHandHooks } from "../obs-hand.ts";
 import { createPlanWriteGateHooks } from "../plan-write-gate.ts";
@@ -60,19 +59,12 @@ function officialMessages(sessionId, calls, agent = "executor-high") {
     })),
   ];
 }
-test("composition proof requires all three real plugin factories in this process", async () => {
+test("scope plugins load independently without a process-global composition registry", async () => {
   const f = fixture();
   try {
-    assert.equal(scopeRuntimeCompositionMode(f.root), "shadow");
-    fs.mkdirSync(path.join(f.root, ".opencode", "plugin"), { recursive: true });
-    for (const file of ["obs-hand.ts", "plan-write-gate.ts", "plan-gate.ts"]) fs.writeFileSync(path.join(f.root, ".opencode", "plugin", file), "");
-    fs.writeFileSync(path.join(f.root, "opencode.json"), JSON.stringify({ plugin: ["./.opencode/plugin/plan-gate.ts", "./.opencode/plugin/plan-write-gate.ts", "./.opencode/plugin/obs-hand.ts"] }));
-    assert.equal(scopeRuntimeCompositionMode(f.root), "shadow", "empty files/config cannot prove runtime composition");
-    await createPlanGateHooks(f.root);
-    await createObsHandHooks(f.root);
-    assert.equal(scopeRuntimeCompositionMode(f.root), "shadow");
-    await createPlanWriteGateHooks(f.root);
-    assert.equal(scopeRuntimeCompositionMode(f.root), "enforce");
+    assert.ok(await createPlanGateHooks(f.root));
+    assert.ok(await createObsHandHooks(f.root));
+    assert.ok(await createPlanWriteGateHooks(f.root));
   } finally { f.close(); }
 });
 
@@ -96,7 +88,7 @@ test("official SDK session/message shape binds child and resolves role without i
   } finally { f.close(); }
 });
 
-test("official client smoke gates child writes through parent active_dispatch", async () => {
+test("official client smoke gates child writes through the exact parent dispatch record", async () => {
   const f = fixture();
   try {
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "smoke-call", role: "executor-high", taskId: "task-1", token: "smoke-token" }).ok, true);
@@ -135,7 +127,7 @@ test("official client smoke gates child writes through parent active_dispatch", 
   } finally { f.close(); }
 });
 
-test("official client shadow records out-of-scope child write without messageID", async () => {
+test("official client denies an out-of-scope child write without a composition registry", async () => {
   const f = fixture();
   try {
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "shadow-parent-call", role: "executor-high", taskId: "task-1", token: "shadow-parent-token" }).ok, true);
@@ -145,11 +137,10 @@ test("official client shadow records out-of-scope child write without messageID"
       messages: async () => ({ data: officialMessages("ses-shadow-child", { callID: "shadow-write" }) }),
     } };
     const before = (await createPlanWriteGateHooks(f.root, { client }))["tool.execute.before"];
-    await assert.doesNotReject(() => before(
+    await assert.rejects(() => before(
       { tool: "write", sessionID: "ses-shadow-child", callID: "shadow-write" },
       { args: { filePath: "outside.ts", content: "x" } },
-    ));
-    assert.match(fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "scope-events.jsonl"), "utf8"), /outside\.ts/);
+    ), /OUTSIDE/);
   } finally { f.close(); }
 });
 

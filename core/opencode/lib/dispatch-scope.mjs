@@ -117,6 +117,11 @@ export function normalizeProjectPath(projectRoot, value) {
   try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
   const lexicalRoot = path.resolve(projectRoot);
   let absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(realRoot, raw);
+  if (path.isAbsolute(raw)) {
+    try { absolute = fs.realpathSync(absolute); } catch {
+      try { absolute = path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute)); } catch { /* nearest existing path check below */ }
+    }
+  }
   if (!inside(realRoot, absolute) && inside(lexicalRoot, absolute)) {
     absolute = path.resolve(realRoot, path.relative(lexicalRoot, absolute));
   }
@@ -143,6 +148,38 @@ function statePath(projectRoot, sessionId) {
 
 function activeExpired(active, now) {
   return Boolean(active && typeof active.expires_at === "string" && Number.isFinite(Date.parse(active.expires_at)) && Date.parse(active.expires_at) <= now);
+}
+
+/** @description Read the per-parent call records without accepting malformed state. */
+function dispatchRecords(state) {
+  const records = state?.dispatch_records;
+  return records && typeof records === "object" && !Array.isArray(records) ? records : {};
+}
+
+function dispatchRecord(state, sessionId, callId) {
+  const record = dispatchRecords(state)[callId];
+  return record && typeof record === "object" && record.parent_session_id === sessionId && record.dispatch_call_id === callId
+    ? record
+    : null;
+}
+
+function setDispatchRecord(state, callId, record) {
+  const records = { ...dispatchRecords(state), [callId]: record };
+  return { ...state, dispatch_records: records };
+}
+
+function deleteDispatchRecord(state, callId) {
+  const records = { ...dispatchRecords(state) };
+  delete records[callId];
+  return Object.keys(records).length > 0 ? { ...state, dispatch_records: records } : (() => {
+    const next = { ...state };
+    delete next.dispatch_records;
+    return next;
+  })();
+}
+
+function findDispatchRecord(state, predicate) {
+  return Object.values(dispatchRecords(state)).find((record) => record && typeof record === "object" && predicate(record)) ?? null;
 }
 
 /** @description Read one exact task from the content-addressed immutable planner snapshot. */
@@ -214,34 +251,33 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
     if (previous.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
     const canonical = canonicalDispatchFromSnapshot(projectRoot, previous, taskId, role);
     if (!canonical.ok) return canonical;
-    const current = previous.active_dispatch;
-    if (current && typeof current === "object") {
+    const current = dispatchRecord(previous, sessionId, callId);
+    if (current) {
       // Same Task callID already owns the lease.
       // OC-native: `.opencode/plugin/*.{ts,js}` is auto-globbed AND may also appear in
       // opencode.json plugin[] → two Plugin factories → two before-hooks → two tokens.
       // (Claude Code has one process-level hook registration; this path is OC-only.)
-      // Idempotent on call_id, not claim_token.
-      if (current.call_id === callId && current.status !== "stale") {
+      // Idempotent on dispatch_call_id, not claim_token.
+      if (current.dispatch_call_id === callId && current.status !== "stale") {
         claim = current;
         return previous;
       }
-      return { ok: false, reason: "another writing-hand dispatch is active" };
     }
     claim = {
-      session_id: sessionId,
+      parent_session_id: sessionId,
       feature_id: canonical.featureId,
       task_id: canonical.taskId,
       role,
       scope_paths: canonical.scopePaths,
       allowed_writes: canonical.allowedWrites,
       snapshot_hash: canonical.snapshotHash,
-      call_id: callId,
+      dispatch_call_id: callId,
       claim_token: token,
       claimed_at: new Date(now).toISOString(),
       expires_at: new Date(now + DISPATCH_LEASE_MS).toISOString(),
       status: "active",
     };
-    return { ...previous, active_dispatch: claim };
+    return setDispatchRecord(previous, callId, claim);
   });
   if (persisted.ok) {
     // Always store the authoritative disk token (idempotent re-entry may return a prior claim).
@@ -260,14 +296,12 @@ export function clearActiveDispatch(projectRoot, { sessionId, callId, token }) {
   let clearedChild = "";
   let clearedPendingChild = "";
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
-    if (!active || typeof active !== "object" || active.call_id !== callId || active.claim_token !== token) return previous;
-    const next = { ...previous };
+    const active = dispatchRecord(previous, sessionId, callId);
+    if (!active || active.claim_token !== token) return previous;
     clearedChild = typeof active.child_session_id === "string" ? active.child_session_id : "";
     clearedPendingChild = typeof active.binding_pending?.child_session_id === "string" ? active.binding_pending.child_session_id : "";
-    delete next.active_dispatch;
     cleared = true;
-    return next;
+    return deleteDispatchRecord(previous, callId);
   });
   if (persisted.ok && cleared) {
     for (const [childId, binding] of childBindings) {
@@ -298,20 +332,20 @@ export function markDispatchBindingPending(projectRoot, { sessionId, callId, tok
   if (!resolved.ok) return resolved;
   let pending;
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
-    if (!active || active.call_id !== callId || active.claim_token !== token || active.status === "stale") {
+    const active = dispatchRecord(previous, sessionId, callId);
+    if (!active || active.claim_token !== token || active.status === "stale") {
       return { ok: false, reason: "binding_pending claim mismatch" };
     }
     const child = sanitizedHostId(childSessionId);
     const existingChild = sanitizedHostId(active.binding_pending?.child_session_id);
     if (existingChild && child && existingChild !== child) return { ok: false, reason: "binding_pending child identity conflict" };
     pending = {
-      call_id: callId,
+      dispatch_call_id: callId,
       ...(existingChild || child ? { child_session_id: existingChild || child } : {}),
       ...(sanitizedHostId(jobId) ? { job_id: sanitizedHostId(jobId) } : {}),
       recorded_at: new Date().toISOString(),
     };
-    return { ...previous, active_dispatch: { ...active, status: "binding_pending", binding_pending: pending } };
+    return setDispatchRecord(previous, callId, { ...active, status: "binding_pending", binding_pending: pending });
   });
   if (!persisted.ok) return persisted;
   const knownChild = sanitizedHostId(pending?.child_session_id);
@@ -328,7 +362,7 @@ export function markDispatchBindingPending(projectRoot, { sessionId, callId, tok
 }
 
 /** @description Bind an official child-session event to the sole live parent dispatch claim. */
-export function bindChildSession(projectRoot, { parentSessionId, childSessionId, role }) {
+export function bindChildSession(projectRoot, { parentSessionId, childSessionId, role, callId }) {
   if (![parentSessionId, childSessionId, role].every((value) => typeof value === "string" && value.length > 0) || parentSessionId === childSessionId || !roleIsWritingHand(role)) {
     return { ok: false, reason: "valid parent, child, and writing role required" };
   }
@@ -336,15 +370,19 @@ export function bindChildSession(projectRoot, { parentSessionId, childSessionId,
   if (!resolved.ok) return resolved;
   let binding;
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
-    const token = active && liveClaims.get(liveClaimKey(projectRoot, parentSessionId, active.call_id));
+    const records = Object.values(dispatchRecords(previous)).filter((record) => record && typeof record === "object");
+    const active = typeof callId === "string" && callId
+      ? dispatchRecord(previous, parentSessionId, callId)
+      : findDispatchRecord(previous, (record) => record.binding_pending?.child_session_id === childSessionId || record.child_session_id === childSessionId) ??
+        (records.length === 1 ? records[0] : null);
+    const token = active && liveClaims.get(liveClaimKey(projectRoot, parentSessionId, active.dispatch_call_id));
     if (!active || !["active", "binding_pending"].includes(active.status) || token !== active.claim_token || !sameWritingHandFamily(role, active.role)) return { ok: false, reason: "live parent dispatch capability or role mismatch" };
     if (active.status === "binding_pending" && active.binding_pending?.child_session_id !== childSessionId) return { ok: false, reason: "pending child session identity mismatch" };
     if (active.child_session_id && active.child_session_id !== childSessionId) return { ok: false, reason: "dispatch already bound to another child session" };
-    binding = { parentSessionId, childSessionId, callId: active.call_id, token, role: active.role };
+    binding = { parentSessionId, childSessionId, callId: active.dispatch_call_id, token, role: active.role };
     const nextActive = { ...active, status: "active", child_session_id: childSessionId };
     delete nextActive.binding_pending;
-    return { ...previous, active_dispatch: nextActive };
+    return setDispatchRecord(previous, active.dispatch_call_id, nextActive);
   });
   if (!persisted.ok) return persisted;
   if (!persistChildBinding(projectRoot, binding)) return { ok: false, reason: "durable child dispatch binding failed" };
@@ -361,14 +399,14 @@ export function reconcilePendingChildBinding(projectRoot, { parentSessionId, chi
   const resolved = statePath(projectRoot, parentSessionId);
   if (!resolved.ok) return resolved;
   let active;
-  try { active = JSON.parse(fs.readFileSync(resolved.path, "utf8")).active_dispatch; } catch { return { ok: false, reason: "parent dispatch unreadable" }; }
-  if (!active || active.status !== "binding_pending" || active.binding_pending?.call_id !== active.call_id) {
+  try { active = findDispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), (record) => record.status === "binding_pending" && record.binding_pending?.child_session_id === childSessionId); } catch { return { ok: false, reason: "parent dispatch unreadable" }; }
+  if (!active || active.binding_pending?.dispatch_call_id !== active.dispatch_call_id) {
     return { ok: false, reason: "matching binding_pending dispatch required" };
   }
   if (active.binding_pending?.child_session_id !== childSessionId) {
     return { ok: false, reason: "pending child session identity mismatch" };
   }
-  return bindChildSession(projectRoot, { parentSessionId, childSessionId, role: active.role });
+  return bindChildSession(projectRoot, { parentSessionId, childSessionId, role: active.role, callId: active.dispatch_call_id });
 }
 
 /**
@@ -397,8 +435,8 @@ export function getChildSessionBinding(projectRoot, childSessionId, expectedPare
   try {
     const resolved = statePath(projectRoot, binding.parentSessionId);
     if (!resolved.ok) return resolved;
-    const active = JSON.parse(fs.readFileSync(resolved.path, "utf8")).active_dispatch;
-    if (!active || active.call_id !== binding.callId || active.claim_token !== binding.token || active.child_session_id !== childSessionId) {
+    const active = dispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), binding.parentSessionId, binding.callId);
+    if (!active || active.claim_token !== binding.token || active.child_session_id !== childSessionId) {
       return { ok: false, reason: "child binding no longer matches active dispatch" };
     }
     return { ok: true, binding, active };
@@ -419,10 +457,10 @@ export function bindAdapterSession(projectRoot, { parentSessionId, runtimeSessio
   if (!resolved.ok) return resolved;
   let binding;
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
-    if (!active || active.claim_token !== token || active.status !== "active") return { ok: false, reason: "adapter capability does not match active dispatch" };
-    binding = { parentSessionId, childSessionId: runtimeSessionId, callId: active.call_id, token, role: active.role, adapter: true };
-    return { ...previous, active_dispatch: { ...active, child_session_id: runtimeSessionId } };
+    const active = findDispatchRecord(previous, (record) => record.claim_token === token && record.status === "active");
+    if (!active) return { ok: false, reason: "adapter capability does not match dispatch record" };
+    binding = { parentSessionId, childSessionId: runtimeSessionId, callId: active.dispatch_call_id, token, role: active.role, adapter: true };
+    return setDispatchRecord(previous, active.dispatch_call_id, { ...active, child_session_id: runtimeSessionId });
   });
   if (!persisted.ok) return persisted;
   if (!persistChildBinding(projectRoot, binding)) return { ok: false, reason: "durable adapter dispatch binding failed" };
@@ -451,31 +489,7 @@ export function appendTerminalScopeDiagnostic(projectRoot, childSessionId, reaso
   } catch { return { ok: false, reason: "terminal scope diagnostic persistence failed" }; }
 }
 
-function cleanupPendingPath(projectRoot, sessionId) {
-  return path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "active-dispatch-cleanup-pending.json");
-}
-
-function writeCleanupPending(projectRoot, body) {
-  const target = cleanupPendingPath(projectRoot, body.session_id);
-  const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const fd = fs.openSync(temp, "wx", 0o600);
-    try {
-      fs.writeFileSync(fd, JSON.stringify(body, null, 2), "utf8");
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    fs.renameSync(temp, target);
-    const dirFd = fs.openSync(path.dirname(target), "r");
-    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
-    return true;
-  } catch {
-    try { fs.rmSync(temp, { force: true }); } catch { /* ignore */ }
-    return false;
-  }
-}
-
-/** @description Bounded CAS cleanup; durable pending proof keeps subsequent writes fail-closed. */
+/** @description Bounded CAS cleanup for one exact call-keyed record. */
 export function finishActiveDispatch(projectRoot, args, deps = {}) {
   const clearFn = deps.clearFn ?? clearActiveDispatch;
   const attempts = Number.isInteger(deps.attempts) ? Math.max(1, deps.attempts) : 3;
@@ -483,7 +497,6 @@ export function finishActiveDispatch(projectRoot, args, deps = {}) {
     const result = clearFn(projectRoot, args);
     if (result?.ok && result.cleared) {
       liveClaims.delete(liveClaimKey(projectRoot, args.sessionId, args.callId));
-      try { fs.rmSync(cleanupPendingPath(projectRoot, args.sessionId), { force: true }); } catch { /* ignore */ }
       return { ok: true, cleared: true, attempts: attempt };
     }
     const resolved = statePath(projectRoot, args.sessionId);
@@ -491,42 +504,16 @@ export function finishActiveDispatch(projectRoot, args, deps = {}) {
     let stateVerified = false;
     try {
       if (resolved.ok) {
-        active = JSON.parse(fs.readFileSync(resolved.path, "utf8")).active_dispatch;
+        active = dispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), args.sessionId, args.callId);
         stateVerified = true;
       }
     } catch { active = null; }
-    if (stateVerified && (!active || active.call_id !== args.callId || active.claim_token !== args.token)) {
+    if (stateVerified && (!active || active.claim_token !== args.token)) {
       liveClaims.delete(liveClaimKey(projectRoot, args.sessionId, args.callId));
-      try { fs.rmSync(cleanupPendingPath(projectRoot, args.sessionId), { force: true }); } catch { /* ignore */ }
       return { ok: true, cleared: false, attempts: attempt };
     }
   }
-  const persisted = writeCleanupPending(projectRoot, {
-    session_id: args.sessionId,
-    call_id: args.callId,
-    claim_token: args.token,
-    reason: "bounded cleanup retries exhausted",
-    created_at: new Date().toISOString(),
-  });
-  return { ok: false, cleanup_pending: persisted, reason: persisted ? "active_dispatch cleanup pending" : "active_dispatch cleanup failed and pending proof could not be persisted" };
-}
-
-/** @description Retry a durable termination proof before admitting another dispatch. */
-export function reconcileCleanupPending(projectRoot, sessionId) {
-  try {
-    const pending = JSON.parse(fs.readFileSync(cleanupPendingPath(projectRoot, sessionId), "utf8"));
-    if (pending.session_id !== sessionId || typeof pending.call_id !== "string" || typeof pending.claim_token !== "string") {
-      return { ok: false, reason: "invalid cleanup_pending proof" };
-    }
-    return finishActiveDispatch(projectRoot, { sessionId, callId: pending.call_id, token: pending.claim_token });
-  } catch (error) {
-    if (error?.code === "ENOENT") return { ok: true, pending: false };
-    return { ok: false, reason: "cleanup_pending unreadable" };
-  }
-}
-
-export function hasCleanupPending(projectRoot, sessionId) {
-  return fs.existsSync(cleanupPendingPath(projectRoot, sessionId));
+  return { ok: false, reason: "dispatch record cleanup failed" };
 }
 
 /** @description Authenticated heartbeat extends only the exact live claim under lock. */
@@ -537,29 +524,29 @@ export function heartbeatActiveDispatch(projectRoot, { sessionId, callId, token,
   if (!resolved.ok) return resolved;
   let heartbeat = null;
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
-    if (!active || active.call_id !== callId || active.claim_token !== runtimeToken || active.status === "stale" || !sameWritingHandFamily(role, active.role)) {
+    const active = dispatchRecord(previous, sessionId, callId);
+    if (!active || active.claim_token !== runtimeToken || active.status === "stale" || !sameWritingHandFamily(role, active.role)) {
       return { ok: false, reason: "heartbeat claim mismatch or stale" };
     }
     if (activeExpired(active, now)) {
-      return { ...previous, active_dispatch: { ...active, status: "stale", stale_at: new Date(now).toISOString() } };
+      return setDispatchRecord(previous, callId, { ...active, status: "stale", stale_at: new Date(now).toISOString() });
     }
     heartbeat = { ...active, heartbeat_at: new Date(now).toISOString(), expires_at: new Date(now + DISPATCH_LEASE_MS).toISOString() };
-    return { ...previous, active_dispatch: heartbeat };
+    return setDispatchRecord(previous, callId, heartbeat);
   });
   return persisted.ok && heartbeat ? { ok: true, claim: heartbeat } : persisted.ok ? { ok: false, reason: "dispatch lease expired and is stale" } : persisted;
 }
 
 /** @description Expiration becomes stale/fail-closed; it never removes dispatch authority. */
-export function reconcileExpiredDispatch(projectRoot, sessionId, now = Date.now()) {
+export function reconcileExpiredDispatch(projectRoot, sessionId, callId, now = Date.now()) {
   const resolved = statePath(projectRoot, sessionId);
   if (!resolved.ok) return resolved;
   let stale = false;
   const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = previous.active_dispatch;
+    const active = dispatchRecord(previous, sessionId, callId);
     if (!active || typeof active !== "object" || active.status === "stale" || !activeExpired(active, now)) return previous;
     stale = true;
-    return { ...previous, active_dispatch: { ...active, status: "stale", stale_at: new Date(now).toISOString() } };
+    return setDispatchRecord(previous, callId, { ...active, status: "stale", stale_at: new Date(now).toISOString() });
   });
   return persisted.ok ? { ok: true, stale } : persisted;
 }
@@ -571,18 +558,18 @@ export function appendScopeEvent(projectRoot, active, { tool, paths, mode, reaso
     const event = {
       at: new Date().toISOString(),
       type: "hand-scope-rejection",
-      session_id: active.session_id,
+      session_id: active.parent_session_id,
       feature_id: active.feature_id,
       task_id: active.task_id,
       role: active.role,
-      call: crypto.createHash("sha256").update(String(active.call_id)).digest("hex").slice(0, 16),
+      call: crypto.createHash("sha256").update(String(active.dispatch_call_id)).digest("hex").slice(0, 16),
       tool: String(tool).toLowerCase().slice(0, 32),
       paths: safePaths,
       mode,
       decision: mode === "enforce" ? "deny" : "observe",
       reason,
     };
-    const dir = path.join(projectRoot, ".opencode", "plans", ".state", String(active.session_id));
+    const dir = path.join(projectRoot, ".opencode", "plans", ".state", String(active.parent_session_id));
     fs.mkdirSync(dir, { recursive: true });
     const fd = fs.openSync(path.join(dir, "scope-events.jsonl"), "a", 0o600);
     try {
@@ -593,4 +580,4 @@ export function appendScopeEvent(projectRoot, active, { tool, paths, mode, reaso
   } catch { return { ok: false, reason: "scope event persistence failed" }; }
 }
 
-export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileCleanupPending, reconcileExpiredDispatch, reconcilePendingChildBinding, reconcilePendingChildBindingByChild };
+export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileExpiredDispatch, reconcilePendingChildBinding, reconcilePendingChildBindingByChild };

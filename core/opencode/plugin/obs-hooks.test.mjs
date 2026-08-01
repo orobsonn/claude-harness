@@ -147,8 +147,8 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       { tool: "task", sessionID: sid, callID: "call-background" },
       { args, metadata: { parentSessionId: sid, sessionId: "child-background", jobId: "job-background", background: true }, output: '<task id="child-background" state="running"><task_result>running</task_result></task>' },
     );
-    let active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
-    assert.equal(active.call_id, "call-background");
+    let active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-background"];
+    assert.equal(active.dispatch_call_id, "call-background");
     // #403 binds straight from the Task result metadata, so the child lands bound rather than
     // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee — the
     // id can come from a regex over model-authored output text (obs-hand.ts:266), see #420.
@@ -165,7 +165,7 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       /binding invalid|identity unavailable|dispatch binding/,
     );
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
+    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-after-background" }, { args });
     await hooks["tool.execute.after"](
       { tool: "task", sessionID: sid, callID: "call-after-background" },
@@ -175,38 +175,38 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
     // the diagnostic was dropped by #403). What still must hold: it does not disturb the
     // dispatch now in flight.
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
-    active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
-    assert.equal(active.call_id, "call-after-background");
+    active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-after-background"];
+    assert.equal(active.dispatch_call_id, "call-after-background");
     assert.equal(active.status, "active");
     assert.equal(active.child_session_id, "child-new");
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-new" } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
+    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
 
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-hand" }, { args });
-    assert.ok(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch);
+    assert.ok(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-hand"]);
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "call-hand" }, { args });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
+    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-new" }, { args });
     await hooks.event({ event: { type: "message.part.updated", properties: { part: {
       type: "tool", tool: "task", sessionID: sid, callID: "call-hand", state: { status: "error" },
     } } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch.call_id, "call-new");
+    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-new"].dispatch_call_id, "call-new");
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "call-new" }, { args });
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-rejected" }, { args });
     await hooks.event({ event: { type: "message.part.updated", properties: { part: {
       type: "tool", tool: "task", sessionID: sid, callID: "call-rejected", state: { status: "error" },
     } } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
+    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
     for (const [toolName, callID] of [["agent", "call-agent"], ["namespace.task", "call-namespaced"]]) {
       await hooks["tool.execute.before"]({ tool: toolName, sessionID: sid, callID }, { args });
       await hooks.event({ event: { type: "message.part.updated", properties: { part: {
         type: "tool", tool: toolName, sessionID: sid, callID: `${callID}-other`, state: { status: "error" },
       } } } });
-      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch.call_id, callID);
+      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records[callID].dispatch_call_id, callID);
       await hooks.event({ event: { type: "message.part.updated", properties: { part: {
         type: "tool", tool: toolName, sessionID: sid, callID, state: { status: "error" },
       } } } });
-      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch, undefined);
+      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
     }
     const raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
     assert.ok(raw.includes("task-executing"), raw);
@@ -284,7 +284,7 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
         output: '<task id="child-bg" state="running"><task_result>running</task_result></task>',
       },
     );
-    const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch;
+    const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-bg"];
     // #403 binds straight from the Task result metadata, so the child lands bound rather than
     // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee: the id
     // can fall back to a regex over model-authored output text (obs-hand.ts:266) — see #420.
@@ -295,7 +295,7 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
     // Child ends while SDK still unavailable — must clean without fail-closed
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-bg" } } });
     assert.equal(
-      JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).active_dispatch,
+      JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records,
       undefined,
     );
     const eventsPath = join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl");
@@ -319,7 +319,7 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
 // When #417 is addressed: `claims.size === 0` is NOT a sound discriminator — claims is
 // per-plugin-instance and OC may instantiate the factory twice (the very bug #402 fixed), so
 // a second instance sees an empty map while a real claim is live on disk. Read the durable
-// active_dispatch from gate-state instead.
+// the exact dispatch record from gate-state instead.
 test("#ac-1.2 obs-hand: unknown child idle is silent and cannot disturb a live dispatch", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-unbound-"));
   try {
@@ -865,7 +865,7 @@ test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the ru
     });
     const boundBefore = JSON.parse(
       readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8"),
-    ).active_dispatch;
+    ).dispatch_records["call-532-idle"];
     assert.equal(boundBefore.status, "active");
     assert.equal(boundBefore.child_session_id, "child-532-idle");
 

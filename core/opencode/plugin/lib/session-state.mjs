@@ -207,10 +207,6 @@ export function buildSessionRecovery(projectRoot, sessionId, options = {}) {
   return { ok: true, context, statePath: loaded.path };
 }
 
-function hasCleanupPending(projectRoot, sessionId) {
-  return fs.existsSync(path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "active-dispatch-cleanup-pending.json"));
-}
-
 function hasOwnedChildIndex(projectRoot, sessionId) {
   const childRoot = path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children");
   try {
@@ -229,8 +225,8 @@ export function isPendingReviewState(state) {
 }
 
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
-  if (state.session_id !== sessionId || state.active_dispatch != null) return false;
-  if (hasCleanupPending(projectRoot, sessionId) || hasOwnedChildIndex(projectRoot, sessionId)) return false;
+  if (state.session_id !== sessionId || Object.keys(state.dispatch_records ?? {}).length > 0) return false;
+  if (hasOwnedChildIndex(projectRoot, sessionId)) return false;
   if (state.planner_status !== "usable" || state.planner_binding_error != null ||
       state.classified === false || isPendingReviewState(state)) return false;
   const featureId = state.feature_id;
@@ -383,7 +379,7 @@ export function cleanupRetainedCompletedSession(projectRoot, sessionId, options 
   const sessionDir = path.dirname(stateResult.path);
   try {
     const loaded = readSafeJson(projectRoot, stateResult.path);
-    if (!eligible(loaded) || loaded.value.active_dispatch != null || hasCleanupPending(projectRoot, sessionId)) {
+    if (!eligible(loaded) || Object.keys(loaded.value.dispatch_records ?? {}).length > 0) {
       return { ok: true, cleaned: false };
     }
     childClaims = claimOwnedChildIndexes(projectRoot, sessionId);
