@@ -6,9 +6,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { checkPluginLoad } from "../../scripts/parity-manifest.mjs";
 
 import {
@@ -260,6 +260,23 @@ const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainst
 const CANONICAL_ROUTING = JSON.parse(
   readFileSync(new URL("../opencode/harness.routing.json", import.meta.url), "utf8"),
 );
+
+/** @description Deterministic test-only snapshot of every primary-tree path and file byte. */
+function snapshotTree(root, directory = root) {
+  const snapshot = [];
+  for (const name of readdirSync(directory).sort()) {
+    const absolute = join(directory, name);
+    const relative = absolute.slice(root.length + 1);
+    const info = statSync(absolute);
+    if (info.isDirectory()) {
+      snapshot.push([relative, "directory"]);
+      snapshot.push(...snapshotTree(root, absolute));
+    } else {
+      snapshot.push([relative, readFileSync(absolute).toString("base64")]);
+    }
+  }
+  return snapshot;
+}
 
 function legacyRouting() {
   const legacy = structuredClone(CANONICAL_ROUTING);
@@ -1303,6 +1320,85 @@ test("materializeOpencodeRuntime: a real materialized runtime loads every plugin
     const mat = materializeOpencodeRuntime(worktree, process.cwd());
     assert.equal(mat.source, "monorepo");
 
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and keeps factories loadable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-complete-prune-"));
+  const worktree = join(root, "worktree");
+  const emptyPrimary = join(root, "empty-primary");
+  try {
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(worktree, process.cwd());
+    const stale = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const cleanup = join(worktree, ".opencode", "plans", ".state", "ses-stale", "active-dispatch-cleanup-pending.json");
+    mkdirSync(dirname(cleanup), { recursive: true });
+    writeFileSync(stale, "// retired zombie\n", "utf8");
+    writeFileSync(cleanup, "{}\n", "utf8");
+
+    const materialized = materializeOpencodeRuntime(worktree, emptyPrimary);
+
+    assert.equal(materialized.source, "worktree-complete");
+    assert.equal(existsSync(stale), false, "complete worktree must prune retired plugin zombie");
+    assert.equal(existsSync(cleanup), false, "complete worktree must sweep retired run cleanup only inside worktree");
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: stale complete vendored source cannot preserve a retired plugin in the worktree", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-stale-vendored-prune-"));
+  const projectRoot = join(root, "primary");
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(projectRoot, process.cwd());
+    const primaryZombie = join(projectRoot, ".opencode", "plugin", "review-guard.ts");
+    const worktreeZombie = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const primaryBytes = "// stale primary review guard must survive byte-identical\n";
+    writeFileSync(primaryZombie, primaryBytes, "utf8");
+    const primaryBefore = snapshotTree(projectRoot);
+
+    const materialized = materializeOpencodeRuntime(worktree, projectRoot);
+
+    assert.equal(materialized.source, "vendored");
+    assert.equal(existsSync(worktreeZombie), false, "canonical retirement must remove the copied zombie");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "entire primary vendored tree must remain byte-identical");
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: partial stale monorepo cannot preserve a zombie in a complete worktree", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-partial-primary-prune-"));
+  const projectRoot = join(root, "primary");
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(worktree, process.cwd());
+    const primaryZombie = join(projectRoot, "core", "opencode", "plugin", "review-guard.ts");
+    const worktreeZombie = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const primaryBytes = "// partial stale primary review guard must survive byte-identical\n";
+    mkdirSync(dirname(primaryZombie), { recursive: true });
+    writeFileSync(primaryZombie, primaryBytes, "utf8");
+    writeFileSync(worktreeZombie, "// stale worktree review guard\n", "utf8");
+    const primaryBefore = snapshotTree(projectRoot);
+
+    const materialized = materializeOpencodeRuntime(worktree, projectRoot);
+
+    assert.equal(materialized.source, "worktree-complete");
+    assert.equal(existsSync(worktreeZombie), false, "canonical retirement must remove the complete-worktree zombie");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "entire partial primary tree must remain byte-identical");
     const load = await checkPluginLoad(join(worktree, ".opencode"));
     assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
   } finally {

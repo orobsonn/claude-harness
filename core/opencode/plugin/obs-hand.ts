@@ -63,7 +63,44 @@ export async function createObsHandHooks(
 
   const writingHand = (role: unknown) =>
     isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role);
+  const sameWritingHandFamily = (left: unknown, right: unknown) =>
+    (isExecutorRole(left) && isExecutorRole(right)) ||
+    (isSniperRole(left) && isSniperRole(right)) ||
+    (isTestAuthorRole(left) && isTestAuthorRole(right));
   const claimKey = (sessionId: string, callId: string) => `${sessionId}\u0000${callId}`;
+
+  /** @description Resolve a child only through its parent Task ToolPart's factual metadata. */
+  async function parentTaskCallForChild(parentSessionId: string, childSessionId: string, childRole: string) {
+    try {
+      const messages = await reader.getMessages(parentSessionId);
+      if (!Array.isArray(messages)) return { ok: false, reason: "trusted parent messages unavailable" };
+      const matches: Array<{ callId: string; role: string }> = [];
+      for (const bundle of messages) {
+        const info = bundle?.info;
+        const parts = Array.isArray(bundle?.parts) ? bundle.parts : [];
+        for (const part of parts) {
+          const taskRole = part?.state?.input?.subagent_type;
+          if (
+            info?.role === "assistant" &&
+            info?.sessionID === parentSessionId &&
+            part?.type === "tool" &&
+            isTaskTool(part?.tool) &&
+            part?.sessionID === parentSessionId &&
+            part?.messageID === info?.id &&
+            part?.state?.status === "running" &&
+            part?.state?.metadata?.sessionId === childSessionId &&
+            typeof part?.callID === "string" &&
+            writingHand(taskRole) &&
+            sameWritingHandFamily(childRole, taskRole)
+          ) matches.push({ callId: part.callID, role: taskRole });
+        }
+      }
+      if (matches.length !== 1) return { ok: false, reason: `trusted parent Task metadata must match exactly one writing-hand call (found ${matches.length})` };
+      return { ok: true, ...matches[0] };
+    } catch {
+      return { ok: false, reason: "trusted parent messages unavailable" };
+    }
+  }
 
   function resolveFeatureId(sessionId: string | null, ids: ReturnType<typeof extractTaskIds>): string {
     if (ids.featureId) return ids.featureId;
@@ -387,7 +424,12 @@ export async function createObsHandHooks(
         // Belt is fail-open (#532): a binding-accounting miss here must never crash the run —
         // warn and let the dispatch proceed unbound.
         if (typeof session?.parentID === "string") {
-          const bound = bindChildSession(cwd, { parentSessionId: session.parentID, childSessionId: info.sessionID, role: info.agent });
+          const parentTask = await parentTaskCallForChild(session.parentID, info.sessionID, info.agent);
+          if (!parentTask.ok) {
+            console.warn(`${PREFIX} message.updated bind skipped (child=${info.sessionID} parent=${session.parentID}): ${parentTask.reason}`);
+            return;
+          }
+          const bound = bindChildSession(cwd, { parentSessionId: session.parentID, childSessionId: info.sessionID, role: parentTask.role, callId: parentTask.callId });
           if (!bound.ok) {
             console.warn(`${PREFIX} message.updated bind skipped (child=${info.sessionID} parent=${session.parentID}): ${bound.reason}`);
           }

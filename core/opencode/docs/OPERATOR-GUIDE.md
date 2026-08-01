@@ -356,9 +356,6 @@ Quando o planner estiver bloqueado por cerimônia, complete somente o fato ausen
 | `.opencode/harness.routing.json` | Modelos atuais |
 | `.opencode/agents/*.md` | Prompt e permissões de cada papel |
 
-No monorepo do harness (desenvolvedores do framework):  
-`docs/opencode-implementation-playbook.md` é **engenharia de batches**, não onboarding de operador.
-
 ---
 
 ## 17. Glossário rápido

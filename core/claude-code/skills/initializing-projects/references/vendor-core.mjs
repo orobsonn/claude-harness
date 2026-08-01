@@ -860,6 +860,9 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/obs-test-isolation.mjs",
   "plugin/lib/obs-test-isolation.test.mjs",
   "plugin/eyes-permission-lockdown.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
 ];
 
 /**

@@ -107,6 +107,8 @@ import { sweepRetiredDispatchCleanup } from "../shared/lib/active-dispatch-clean
  * uncleaned) for the reaper to recover instead of the intended graceful exit.
  */
 const CRON_A_EXIT_PATH = join(dirname(fileURLToPath(import.meta.url)), "cron-a-exit.mjs");
+/** Canonical OpenCode source shipped with this cron module and its retirement ledger version. */
+const CANONICAL_OC_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "..", "opencode");
 
 /**
  * @description Write-side cap on the raw session-output log, in 512-byte blocks (the `ulimit -f`
@@ -907,6 +909,12 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     sourceKind = "vendored";
     openCodeSrc = vendoredSrc;
   } else if (isOpencodeRuntimeComplete(ocDir)) {
+    // Retirement authority belongs to this module's harness version. The project source may
+    // be partial or stale and may still contain a zombie; it is copy input, never prune law.
+    // A complete worktree still needs the same retirement migration as a copied runtime;
+    // returning first leaves zombies loaded by OpenCode's plugin autoloader.
+    pruneOcRetiredFiles(ocDir, CANONICAL_OC_SOURCE);
+    sweepRetiredDispatchCleanup(worktreePath);
     normalizeMaterializedRouting(ocDir);
     return { source: "worktree-complete", ocDir };
   } else {
@@ -932,7 +940,7 @@ export function materializeOpencodeRuntime(worktreePath, projectRoot) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
-  pruneOcRetiredFiles(ocDir, openCodeSrc);
+  pruneOcRetiredFiles(ocDir, CANONICAL_OC_SOURCE);
   // Headless may retire legacy sentinels only inside this run's disposable worktree.
   sweepRetiredDispatchCleanup(worktreePath);
 

@@ -849,7 +849,13 @@ test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the ru
     );
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
 
-    const client = { session: { get: async ({ path: p }) => ({ data: { id: p.id, parentID: sid } }) } };
+    const client = { session: {
+      get: async ({ path: p }) => ({ data: { id: p.id, parentID: sid } }),
+      messages: async ({ path: p }) => ({ data: p.id === sid ? [{
+        info: { id: "parent-assistant", sessionID: sid, role: "assistant", parentID: "parent-user", agent: "executor-medium" },
+        parts: [{ id: "task-part", sessionID: sid, messageID: "parent-assistant", type: "tool", callID: "call-532-idle", tool: "task", state: { status: "running", input: { subagent_type: "executor-medium" }, metadata: { sessionId: "child-532-idle" } } }],
+      }] : [] }),
+    } };
     const hooks = await createObsHandHooks(dir, { client });
     const args = {
       prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,

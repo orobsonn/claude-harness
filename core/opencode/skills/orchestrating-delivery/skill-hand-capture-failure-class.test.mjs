@@ -1,6 +1,6 @@
 /**
  * @description A `mark` `ok:false` on a hand-record that is not DONE must be split by CAUSE in the OC
- * orchestrating-delivery skill: a transient dispatch failure retries under the same-agent K=3, a hand
+ * orchestrating-delivery skill: a transient dispatch failure is an explicit orchestrator judgment, a hand
  * that ran and refused (`BLOCKED` / `NEEDS_CONTEXT`) or was denied before it ran (`CONFIG_ERROR`)
  * goes straight to CRITICAL EXCEPTION with no retry, and a `DONE_WITH_CONCERNS` record — non-DONE
  * with nothing having failed — is neither.
@@ -124,21 +124,12 @@ test("#ac-1.1 — the refusal branch agrees with the two rules that already gove
   assert.doesNotMatch(branch, /:\d{2,}/, "cross-references must be by section name, never line number.");
 });
 
-test("#ac-1.1 — the transient branch keeps the same-agent K=3 budget", () => {
-  const branch = stepTwoBullets.find(
-    (bullet) => /transient/i.test(bullet) && /K=3/.test(bullet),
-  );
-  assert.ok(
-    branch,
-    "step 2 must keep a branch granting the same-agent K=3 to a genuinely transient failure.",
-  );
-
-  assert.match(branch, /Escalation ladder/, "transient branch must name § Escalation ladder.");
-  assert.match(branch, /existing/i, "transient branch must say the counter is the role's EXISTING one.");
-  assert.ok(
-    !REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)),
-    "the transient branch must not claim the refusal verdicts.",
-  );
+test("#ac-1.1 — the transient branch has no global retry budget", () => {
+  const branch = stepTwoBullets.find((bullet) => /transient/i.test(bullet));
+  assert.ok(branch, "step 2 must keep a branch for a genuinely transient failure.");
+  assert.match(branch, /orchestrator|judgment/i, "transient handling must require explicit judgment.");
+  assert.doesNotMatch(branch, /K=3|same-agent|counter|retry status/i, "transient handling must not grant global retry authority.");
+  assert.ok(!REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)), "the transient branch must not claim the refusal verdicts.");
 });
 
 test("#ac-1.1 — a `DONE_WITH_CONCERNS` record is routed, not left in the gap the split opened", () => {

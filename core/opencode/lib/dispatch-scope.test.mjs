@@ -20,7 +20,7 @@ import {
   reconcilePendingChildBindingByChild,
 } from "./dispatch-scope.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
-function fixture(scopePaths = ["src/a.ts"]) {
+function fixture(scopePaths = ["src/a.ts"], tasks = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-scope-"));
   const sessionId = "ses-scope";
   const featureId = "feat-scope";
@@ -28,7 +28,7 @@ function fixture(scopePaths = ["src/a.ts"]) {
     feature_id: featureId,
     kind: "full",
     mode: "full",
-    tasks: [{
+    tasks: tasks ?? [{
       id: "task-1",
       severity: "medium",
       complexity: "medium",
@@ -92,15 +92,20 @@ test("replayed claims are idempotent and cannot clear a different record", () =>
 });
 
 test("sibling dispatch calls keep disjoint records and one finish cannot clear the other", () => {
-  const f = fixture();
+  const f = fixture(undefined, [
+    { id: "task-left", severity: "medium", complexity: "medium", scope_paths: ["src/left.ts"], criterion_refs: ["#ac-left"], locked_tests: [{ id: "lt-left", path: "tests/left.test.mjs", assertion: "left" }] },
+    { id: "task-right", severity: "medium", complexity: "medium", scope_paths: ["src/right.ts"], criterion_refs: ["#ac-right"], locked_tests: [{ id: "lt-right", path: "tests/right.test.mjs", assertion: "right" }] },
+  ]);
   try {
-    const left = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-left", role: "executor-low", taskId: "task-1", token: "token-left" });
-    const right = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-right", role: "executor-high", taskId: "task-1", token: "token-right" });
+    const left = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-left", role: "executor-low", taskId: "task-left", token: "token-left" });
+    const right = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-right", role: "executor-high", taskId: "task-right", token: "token-right" });
     assert.equal(left.ok, true, left.reason);
     assert.equal(right.ok, true, right.reason);
     const records = f.read().dispatch_records;
     assert.equal(records["call-left"].dispatch_call_id, "call-left");
     assert.equal(records["call-right"].dispatch_call_id, "call-right");
+    assert.deepEqual(records["call-left"].scope_paths, ["src/left.ts"]);
+    assert.deepEqual(records["call-right"].scope_paths, ["src/right.ts"]);
     assert.equal(clearActiveDispatch(f.root, { sessionId: f.sessionId, callId: "call-left", token: "token-left" }).cleared, true);
     assert.equal(f.read().dispatch_records["call-left"], undefined);
     assert.equal(f.read().dispatch_records["call-right"].claim_token, "token-right");

@@ -849,8 +849,8 @@ test("re-vendoring sweeps only the legacy cleanup sentinel from local vendored s
 
 test("re-vendoring sweeps retired orphan paths and preserves lib/plugin siblings", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-orphans-"));
-  const retired = ["plugin/lib/bound-plan.mjs", "plugin/lib/bound-plan.test.mjs", "plugin/lib/obs-test-isolation.mjs", "plugin/lib/obs-test-isolation.test.mjs", "plugin/eyes-permission-lockdown.test.mjs"];
-  const siblings = [join(tempDir, ".opencode", "plugin", "lib", "project-owned-lib.mjs"), join(tempDir, ".opencode", "plugin", "project-owned-plugin.ts")];
+  const retired = ["plugin/lib/bound-plan.mjs", "plugin/lib/bound-plan.test.mjs", "plugin/lib/obs-test-isolation.mjs", "plugin/lib/obs-test-isolation.test.mjs", "plugin/eyes-permission-lockdown.test.mjs", "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs", "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs", "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs"];
+  const siblings = [join(tempDir, ".opencode", "plugin", "lib", "project-owned-lib.mjs"), join(tempDir, ".opencode", "plugin", "project-owned-plugin.ts"), join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-skill.md")];
   try {
     for (const file of [...retired.map((rel) => join(tempDir, ".opencode", rel)), ...siblings]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "// stale or project sibling\n"); }
     const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
@@ -918,6 +918,9 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/obs-test-isolation.mjs",
     "plugin/lib/obs-test-isolation.test.mjs",
     "plugin/eyes-permission-lockdown.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",

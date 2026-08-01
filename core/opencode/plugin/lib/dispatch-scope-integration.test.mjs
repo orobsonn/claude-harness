@@ -11,7 +11,7 @@ import { createObsHandHooks } from "../obs-hand.ts";
 import { createPlanWriteGateHooks } from "../plan-write-gate.ts";
 import { resolveScopeRuntimeIdentity } from "./scope-runtime-identity.mjs";
 
-function fixture(scopePaths = ["src/a.ts"]) {
+function fixture(scopePaths = ["src/a.ts"], tasks = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-scope-"));
   const sessionId = "ses-scope";
   const featureId = "feat-scope";
@@ -19,7 +19,7 @@ function fixture(scopePaths = ["src/a.ts"]) {
     feature_id: featureId,
     kind: "full",
     mode: "full",
-    tasks: [{
+    tasks: tasks ?? [{
       id: "task-1",
       severity: "medium",
       complexity: "medium",
@@ -85,6 +85,44 @@ test("official SDK session/message shape binds child and resolves role without i
       reader: { ...reader, getSession: async (id) => ({ id, parentID: "ses-other-parent" }) },
     });
     assert.equal(crossParent.ok, false);
+  } finally { f.close(); }
+});
+
+test("sibling writing children bind to their factual parent Task calls and keep scopes isolated", async () => {
+  const f = fixture(undefined, [
+    { id: "task-left", severity: "medium", complexity: "medium", scope_paths: ["src/left.ts"], criterion_refs: ["#ac-left"], locked_tests: [{ id: "lt-left", path: "tests/left.test.mjs", assertion: "left" }] },
+    { id: "task-right", severity: "medium", complexity: "medium", scope_paths: ["src/right.ts"], criterion_refs: ["#ac-right"], locked_tests: [{ id: "lt-right", path: "tests/right.test.mjs", assertion: "right" }] },
+  ]);
+  try {
+    const parentParts = [
+      { callID: "call-left", child: "child-left", taskId: "task-left" },
+      { callID: "call-right", child: "child-right", taskId: "task-right" },
+    ];
+    const client = { session: {
+      get: async ({ path: sdkPath }) => ({ data: { id: sdkPath.id, parentID: f.sessionId } }),
+      messages: async ({ path: sdkPath }) => ({ data: sdkPath.id === f.sessionId
+        ? parentParts.map(({ callID, child }, index) => ({
+          info: { id: `parent-assistant-${index}`, sessionID: f.sessionId, role: "assistant", parentID: `parent-user-${index}`, agent: "build" },
+          parts: [
+            { id: `historic-part-${index}`, sessionID: f.sessionId, messageID: `parent-assistant-${index}`, type: "tool", callID: `historic-${callID}`, tool: "task", state: { status: "completed", input: { subagent_type: "executor-medium" }, metadata: { sessionId: child } } },
+            { id: `parent-part-${index}`, sessionID: f.sessionId, messageID: `parent-assistant-${index}`, type: "tool", callID, tool: "task", state: { status: "running", input: { subagent_type: "executor-medium" }, metadata: { sessionId: child } } },
+          ],
+        }))
+        : officialMessages(sdkPath.id, { callID: `write-${sdkPath.id}` }, "executor-medium") }),
+    } };
+    const obs = await createObsHandHooks(f.root, { client });
+    const writes = await createPlanWriteGateHooks(f.root, { client });
+    for (const { callID, taskId } of parentParts) {
+      await obs["tool.execute.before"]({ tool: "task", sessionID: f.sessionId, callID }, { args: { prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`, subagent_type: "executor-medium" } });
+    }
+    for (const { child } of parentParts) {
+      await obs.event({ event: { type: "message.updated", properties: { info: { sessionID: child, role: "user", agent: "executor-medium" } } } });
+    }
+    await assert.doesNotReject(() => writes["tool.execute.before"]({ tool: "write", sessionID: "child-left", callID: "write-child-left" }, { args: { filePath: "src/left.ts", content: "left" } }));
+    await assert.doesNotReject(() => writes["tool.execute.before"]({ tool: "write", sessionID: "child-right", callID: "write-child-right" }, { args: { filePath: "src/right.ts", content: "right" } }));
+    await assert.rejects(() => writes["tool.execute.before"]({ tool: "write", sessionID: "child-left", callID: "write-child-left" }, { args: { filePath: "src/right.ts", content: "cross" } }), /OUTSIDE/);
+    await obs.event({ event: { type: "session.idle", properties: { sessionID: "child-left" } } });
+    await assert.doesNotReject(() => writes["tool.execute.before"]({ tool: "write", sessionID: "child-right", callID: "write-child-right" }, { args: { filePath: "src/right.ts", content: "right-again" } }));
   } finally { f.close(); }
 });
 

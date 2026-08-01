@@ -19,6 +19,9 @@ const retiredPaths = [
   "core/opencode/plugin/lib/review-restart.mjs",
   "core/opencode/skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
   "core/opencode/skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+  "core/opencode/skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
+  "core/opencode/skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
+  "core/opencode/skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
   "core/__tests__/skills-alignment.test.mjs",
   "core/shared/lib/agent-retry.mjs",
   "core/shared/lib/agent-retry.test.mjs",
@@ -30,6 +33,13 @@ test("OC-only count/retry/review engine paths stay absent", () => {
   for (const relativePath of retiredPaths) {
     assert.equal(existsSync(join(repositoryRoot, relativePath)), false, `retired engine path remains: ${relativePath}`);
   }
+});
+
+test("obsolete OpenCode implementation playbook stays absent and the live operator guide never routes to it", () => {
+  const playbook = "docs/opencode-implementation-playbook.md";
+  assert.equal(existsSync(join(repositoryRoot, playbook)), false, `obsolete root playbook returned: ${playbook}`);
+  const operatorGuide = readFileSync(join(repositoryRoot, "core/opencode/docs/OPERATOR-GUIDE.md"), "utf8");
+  assert.equal(operatorGuide.includes(playbook), false, "live operator guide still references the obsolete playbook");
 });
 
 test("identity-based planner lifecycle carries no runtime review or retry counters", () => {
@@ -73,7 +83,9 @@ test("live OC sources have zero consumers of retired review-engine vocabulary", 
     "review-guard",
     "loop-decide",
     "adversary-nudge",
+    "adversary_nudge",
     "revise-nudge",
+    "revise_nudge",
     "review-restart",
     "agent-retry",
     "plan_review_count",
@@ -88,6 +100,15 @@ test("live OC sources have zero consumers of retired review-engine vocabulary", 
     "planner_fallback_attempts",
     "planner_fallback_result",
     "planner_fallback_diagnostic",
+    "same-agent K=3",
+    "CAP = 3",
+    "round counter",
+    "retry status",
+    "isGrave",
+    "CAP escalation",
+    "iteration cap",
+    "re-gate→sniper cycles",
+    "Adversary re-dispatch stop-rule",
   ];
   for (const root of roots) {
     for (const file of liveSourceFiles(join(repositoryRoot, root))) {
