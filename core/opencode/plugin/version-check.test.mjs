@@ -16,8 +16,8 @@ test("version-check is advisory only", () => {
   assert.ok(versionCheck) // exercises advisory no-block path
 })
 
-test("version-check factory remains advisory when the catalog is healthy", async () => {
-  const hooks = await versionCheck({ directory: process.cwd() })
+test("version-check thin default factory returns empty hooks", async () => {
+  const hooks = await versionCheck({ directory: "/project-without-version-stamp" })
   assert.deepEqual(hooks, {})
 })
 
@@ -25,15 +25,15 @@ test("version-check factory remains advisory when the catalog is healthy", async
 //
 // Bisected against a real, headless `opencode serve` process with no attached TUI: merely
 // CALLING `client.tui.showToast(...)` — awaited, fire-and-forget, any shape — crashed the server
-// hard enough to break unrelated endpoints (`/config/providers`). Removing catalog-health or
-// staleness logic never reproduced the crash; removing this one call always fixed it. The failure
+// hard enough to break unrelated endpoints (`/config/providers`). Removing staleness logic never
+// reproduced the crash; removing this one call always fixed it. The failure
 // is inside the vendored OpenCode binary's own toast/session RPC handling, not in anything on our
 // side of the call, so no promise-handling pattern here makes it safe to invoke. `deliverAdvisory`
 // no longer touches `client` at all — these tests pin that the advisory channel is `warn`-only and
 // that `client` is accepted-but-ignored by `createVersionCheck` (a plugin author cannot silently
 // reintroduce the toast without a passing-`client`-does-nothing test going red first).
 
-test("version-check delivers the catalog advisory through warn — client is accepted but never touched", async () => {
+test("version-check delivers only the staleness advisory through warn — client is accepted but never touched", async () => {
   const warnings = []
   const hooks = await createVersionCheck(
     {
@@ -48,16 +48,20 @@ test("version-check delivers the catalog advisory through warn — client is acc
       },
     },
     {
-      checkAgentCatalogHealth: (root) => {
+      readLocalVersion: (root) => {
         assert.equal(root, "/project")
-        return { missing: ["adversary"] }
+        return "v0.49.0"
       },
-      agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
+      fetchRemoteTag: () => "v0.49.8",
+      readCache: () => null,
+      writeCache: () => {},
+      nowMs: () => 0,
       warn: (message) => warnings.push(message),
     },
   )
   assert.deepEqual(hooks, {})
-  assert.deepEqual(warnings, ["re-vendorize e reabra a sessão"])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /v0\.49\.0.*v0\.49\.8/)
 })
 
 test("version-check falls back to console.warn when no warn dep is provided, and fails open end to end", async () => {
@@ -68,24 +72,30 @@ test("version-check falls back to console.warn when no warn dep is provided, and
     await assert.doesNotReject(createVersionCheck(
       { directory: "/project" },
       {
-        checkAgentCatalogHealth: () => ({ missing: ["adversary"] }),
-        agentCatalogAdvisoryMessage: () => "re-vendorize e reabra a sessão",
+        readLocalVersion: () => "v0.49.0",
+        fetchRemoteTag: () => "v0.49.8",
+        readCache: () => null,
+        writeCache: () => {},
+        nowMs: () => 0,
       },
     ))
   } finally {
     console.warn = originalWarn
   }
-  assert.deepEqual(consoleWarnings, ["re-vendorize e reabra a sessão"])
+  assert.equal(consoleWarnings.length, 1)
+  assert.match(consoleWarnings[0], /v0\.49\.0.*v0\.49\.8/)
 
-  const warnings = []
   await assert.doesNotReject(createVersionCheck(
     { directory: "/project" },
     {
-      checkAgentCatalogHealth: () => { throw new Error("filesystem unavailable") },
-      warn: (message) => warnings.push(message),
+      readLocalVersion: () => "v0.49.0",
+      fetchRemoteTag: () => "v0.49.8",
+      readCache: () => null,
+      writeCache: () => {},
+      nowMs: () => 0,
+      warn: () => { throw new Error("advisory channel unavailable") },
     },
   ))
-  assert.equal(warnings.length, 1)
 })
 
 test("resolveProjectRoot prefers a root worktree over a nested directory", () => {
@@ -222,7 +232,6 @@ test("createVersionCheck delivers the staleness advisory through the plugin's ad
   const hooks = await createVersionCheck(
     { directory: "/project" },
     {
-      checkAgentCatalogHealth: () => ({ missing: [] }),
       readLocalVersion: () => "v0.49.0",
       fetchRemoteTag: () => "v0.49.8",
       readCache: () => null,
@@ -241,7 +250,6 @@ test("createVersionCheck stays silent when the stamp is current (ac-2.2)", async
   const hooks = await createVersionCheck(
     { directory: "/project" },
     {
-      checkAgentCatalogHealth: () => ({ missing: [] }),
       readLocalVersion: () => "v0.49.8",
       fetchRemoteTag: () => "v0.49.8",
       readCache: () => null,
@@ -259,7 +267,6 @@ test("createVersionCheck never throws and never warns when gh/network is unavail
   await assert.doesNotReject(createVersionCheck(
     { directory: "/project" },
     {
-      checkAgentCatalogHealth: () => ({ missing: [] }),
       readLocalVersion: () => "v0.49.0",
       fetchRemoteTag: () => null,
       readCache: () => null,
@@ -269,4 +276,20 @@ test("createVersionCheck never throws and never warns when gh/network is unavail
     },
   ))
   assert.deepEqual(warnings, [])
+})
+
+test("createVersionCheck stays silent when the vendored stamp is missing", async () => {
+  const warnings = []
+  let fetchCalls = 0
+  const hooks = await createVersionCheck(
+    { directory: "/project" },
+    {
+      readLocalVersion: () => null,
+      fetchRemoteTag: () => { fetchCalls++; return "v0.49.8" },
+      warn: (message) => warnings.push(message),
+    },
+  )
+  assert.deepEqual(hooks, {})
+  assert.deepEqual(warnings, [])
+  assert.equal(fetchCalls, 0)
 })

@@ -1335,11 +1335,13 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     materializeOpencodeRuntime(worktree, process.cwd());
     const stale = join(worktree, ".opencode", "plugin", "harvest-guard.ts");
     const staleHelper = join(worktree, ".opencode", "plugin", "lib", "harvest-findings.mjs");
+    const staleCatalogHealth = join(worktree, ".opencode", "plugin", "lib", "agent-catalog-health.mjs");
     const cleanup = join(worktree, ".opencode", "plans", ".state", "ses-stale", "active-dispatch-cleanup-pending.json");
     mkdirSync(dirname(cleanup), { recursive: true });
     writeFileSync(stale, "// retired zombie\n", "utf8");
     mkdirSync(dirname(staleHelper), { recursive: true });
     writeFileSync(staleHelper, "// retired harvest helper\n", "utf8");
+    writeFileSync(staleCatalogHealth, "// retired catalog-health helper\n", "utf8");
     writeFileSync(cleanup, "{}\n", "utf8");
 
     const materialized = materializeOpencodeRuntime(worktree, emptyPrimary);
@@ -1347,6 +1349,7 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     assert.equal(materialized.source, "worktree-complete");
     assert.equal(existsSync(stale), false, "complete worktree must prune retired plugin zombie");
     assert.equal(existsSync(staleHelper), false, "complete worktree must prune retired helper zombie");
+    assert.equal(existsSync(staleCatalogHealth), false, "complete worktree must prune retired catalog-health zombie");
     assert.equal(existsSync(cleanup), false, "complete worktree must sweep retired run cleanup only inside worktree");
     const load = await checkPluginLoad(join(worktree, ".opencode"));
     assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));

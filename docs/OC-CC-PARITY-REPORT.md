@@ -482,12 +482,11 @@ O item que a seção 8 declarava sem desenho, agora fechado. Peças:
   frota/interativo: `bash["*"]="allow"` forçado (:591) fica **só no worktree** e entra no ledger
   (o vazamento pro root do victor-bot vira resíduo reconhecido, não intenção do operador);
   `question:"deny"` idem (com Lote 1).
-- **Sinal de projeto stale (paridade que faltava):** o CC tem
+- **Sinal de projeto stale (gap histórico, já fechado):** o CC tem
   (core/claude-code/hooks/version-check.mjs:128 lê `.claude/.harness-version` e emite
-  systemMessage); o OC **não tem nada** — core/opencode/plugin/version-check.ts tem ZERO ocorrência
-  de `harness-version` (só checa presença de catálogo de agentes, :74-78). Portar o check pro
-  plugin OC; sem ele um projeto OC-vendorizado fica stale pra sempre em silêncio (harness-361 e o
-  próprio .opencode deste repo estão em v0.40.0-3-g0167be3 desde 2026-07-12 sem sinal algum).
+  systemMessage). Na época desta auditoria, o OC não tinha o check e só checava catálogo. O check
+  de staleness foi portado depois; a PR4.2 removeu o advisory OC-only de saúde do catálogo e manteve
+  `version-check` estritamente dedicado a versão, sempre fail-open.
 - **O mesmo buraco existe do lado CLAUDE, pior:** `writeSettings` (vendor-core.mjs:1271-1281)
   NUNCA atualiza um `.claude/settings.json` existente — escreve `settings.harness.json` "pra merge
   manual" que nunca acontece (4 projetos com o órfão; ass-fin-app roda SEM os denies de secret-read

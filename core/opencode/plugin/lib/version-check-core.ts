@@ -1,6 +1,6 @@
 /**
- * @description Version-check plugin logic — advisory only, no blocking. Catalog health + harness
- * staleness. Lives OUTSIDE `../version-check.ts` on purpose: that file is loaded directly by
+ * @description Version-check plugin logic — harness staleness advisory only, no blocking. Lives
+ * OUTSIDE `../version-check.ts` on purpose: that file is loaded directly by
  * OpenCode as a plugin, and its real 1.18.7 plugin loader crashes (bisected live, 2026-07-27,
  * against a headless `opencode serve` with no attached TUI: `"failed to load plugin" ...
  * "undefined is not an object (evaluating 'b.major')"`, cascading into a broken
@@ -13,17 +13,11 @@ import { execFileSync } from "node:child_process"
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
-type CatalogHealth = {
-  missing: string[]
-}
-
 type Semver = { major: number; minor: number; patch: number }
 
 type VersionCache = { tag: string; cachedAt: number }
 
 type VersionCheckDeps = {
-  checkAgentCatalogHealth?: (projectRoot: string) => CatalogHealth
-  agentCatalogAdvisoryMessage?: (missing: string[]) => string
   readLocalVersion?: (projectRoot: string) => string | null
   fetchRemoteTag?: () => string | null
   readCache?: (projectRoot: string) => unknown
@@ -37,7 +31,7 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 
 /**
  * @description Usable project root candidate. OpenCode reports worktree "/" outside a git
- * repository, which would resolve the catalog against the filesystem root.
+ * repository, which would resolve version state against the filesystem root.
  */
 function isUsableRoot(candidate: unknown): candidate is string {
   return typeof candidate === "string" && candidate.length > 0 && candidate !== "/"
@@ -65,7 +59,7 @@ export function resolveProjectRoot(directory?: unknown, worktree?: unknown): str
  * Bisected live against a real `opencode serve` process (2026-07-27, no attached TUI): merely
  * CALLING `client.tui.showToast(...)` — resolved, never-settling, late-rejecting, awaited, or
  * fire-and-forget, every shape tried — crashed the server hard enough to break unrelated endpoints
- * (`/config/providers`); skipping catalog-health/staleness logic never reproduced it, skipping this
+ * (`/config/providers`); skipping staleness logic never reproduced it, skipping this
  * one call always fixed it. The failure lives inside the vendored OpenCode binary's toast/session
  * RPC handling for a plugin with no real TUI attached, not in anything on this side of the call —
  * there is no promise-handling pattern here that makes invoking it safe. The TUI toast is
@@ -237,7 +231,7 @@ export function checkHarnessVersionStale(projectRoot: string, deps: VersionCheck
 }
 
 /**
- * @description OpenCode plugin logic — advisory catalog + harness-staleness checks (fail-open).
+ * @description OpenCode plugin logic — harness-staleness advisory only (fail-open).
  * Called from the thin `../version-check.ts` default export; never loaded as a plugin itself.
  */
 export async function createVersionCheck(
@@ -245,28 +239,6 @@ export async function createVersionCheck(
   deps: VersionCheckDeps = {},
 ) {
   const projectRoot = resolveProjectRoot(directory, worktree)
-
-  let catalogMessage = ""
-  try {
-    const health = deps.checkAgentCatalogHealth
-      ? { checkAgentCatalogHealth: deps.checkAgentCatalogHealth, agentCatalogAdvisoryMessage: deps.agentCatalogAdvisoryMessage }
-      : await import("./agent-catalog-health.mjs")
-    const { checkAgentCatalogHealth, agentCatalogAdvisoryMessage } = health
-    const result = checkAgentCatalogHealth(projectRoot)
-    if (result.missing.length > 0) {
-      catalogMessage = agentCatalogAdvisoryMessage(result.missing) || ""
-    }
-  } catch {
-    catalogMessage = ""
-    try {
-      const fallback = "[harness] Catálogo de agents incompleto. Re-vendorize o harness (.opencode/) e reabra a sessão. Agents já carregados não são atualizados nesta sessão."
-      if (deps.warn) deps.warn(fallback)
-      else console.warn(fallback)
-    } catch {
-      // fail-open
-    }
-  }
-  if (catalogMessage) await deliverAdvisory(catalogMessage, deps)
 
   try {
     const staleMessage = checkHarnessVersionStale(projectRoot, deps)

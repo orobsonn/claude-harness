@@ -864,6 +864,7 @@ export const OC_RETIRED_FILES = [
   "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
   "plugin/harvest-guard.ts",
   "plugin/lib/harvest-findings.mjs",
+  "plugin/lib/agent-catalog-health.mjs",
 ];
 
 /**

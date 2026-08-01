@@ -580,6 +580,7 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
     }
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/harvest-findings.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/agent-catalog-health.mjs")), false);
     // default runtime remains claude-only — OC path must NOT create .claude
     assert.ok(!existsSync(join(tempDir, ".claude/agents")), "opencode-only must not vendor .claude agents");
     assert.ok(!existsSync(join(tempDir, ".opencode/agents/SPAWN-PATTERN.md")), "documentation must not be callable as an agent");
@@ -643,6 +644,30 @@ test("re-vendoring removes the retired harvest guard closure and preserves plugi
       assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
     }
     assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned siblings");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes the retired catalog-health helper and preserves lib siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-catalog-health-"));
+  const retired = "plugin/lib/agent-catalog-health.mjs";
+  const stale = join(tempDir, ".opencode", retired);
+  const sibling = join(tempDir, ".opencode/plugin/lib/project-owned-catalog-sibling.mjs");
+  try {
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "// stale catalog-health advisory\n", "utf8");
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(stale), false, "retired catalog-health helper remains vendored");
+    assert.ok(OC_RETIRED_FILES.includes(retired), "retired catalog-health helper must be declared");
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned lib siblings");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

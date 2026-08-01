@@ -207,6 +207,8 @@ e `adversary-openai` → `adversary`, com `removeIn` 2 releases à frente.
 `creating-plans/SKILL.md:238-240` e `references/example-plan.json:11-13`,
 `plugin/lib/ceremony-transition.mjs` (hardcode `role === "adversary-family-1"`),
 `plugin/lib/agent-catalog-health.mjs` (`EXPECTED_HARNESS_AGENTS`).
+**Decisão superada pela PR4.2:** esta entrada fica como registro histórico; a saúde dinâmica do
+catálogo era um advisory OC-only e foi removida, não reimplementada no `version-check`.
 **Reescrever** `model-routing.test.mjs` com o invariante novo:
 `roles.adversary.model !== roles.planner.model`.
 

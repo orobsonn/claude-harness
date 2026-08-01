@@ -87,7 +87,6 @@ const OC_MODULE_FIELDS = ["cc_evidence", "consumers", "current_path", "failure_p
 const OC_RULE_IDS = ["A1", ...Array.from({ length: 15 }, (_, index) => `R${index + 1}`)];
 const OC_MODULE_VERDICTS = new Set(["KEEP", "KEEP (MOVE)", "REWRITE", "DELETE"]);
 const OC_PENDING_DELETE_PATHS = [
-  "plugin/lib/agent-catalog-health.mjs",
   "plugin/lib/ceremony-binding.mjs",
   "plugin/lib/ceremony-transition.mjs",
   "plugin/lib/mark-gate.mjs",
@@ -148,7 +147,7 @@ const OC_MODULE_NORMATIVE_METADATA = {
   "plugin/entry-gate.ts": { failure_policy: "factual deny; infrastructure failures open and log", tests: ["core/opencode/plugin/entry-gate.test.mjs"] },
   "plugin/harvest-guard.ts": { failure_policy: "no remaining caller after atomic deletion", tests: ["scripts/parity-manifest.test.mjs"] },
   "plugin/lavish-command-gate.ts": { failure_policy: "matched fact denies; parser and adapter errors open", tests: ["core/opencode/plugin/lavish-command-gate.test.mjs"] },
-  "plugin/lib/agent-catalog-health.mjs": { failure_policy: "no remaining caller after dynamic branch removal", tests: ["core/opencode/plugin/version-check.test.mjs"] },
+  "plugin/lib/agent-catalog-health.mjs": { failure_policy: "no remaining caller after dynamic branch removal", tests: ["scripts/parity-manifest.test.mjs"] },
   "plugin/lib/agent-idle-nudge.mjs": { failure_policy: "always fail-open/advisory", tests: ["core/opencode/plugin/lib/agent-idle-nudge.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/agent-idle-nudge.mjs"] },
   "plugin/lib/bash-decide.mjs": { failure_policy: "factual deny; every other error opens and logs", tests: ["core/opencode/plugin/lib/bash-decide.test.mjs"] },
   "plugin/lib/ceremony-binding.mjs": { failure_policy: "no remaining caller after R10 simplification", tests: ["core/opencode/plugin/entry-gate.test.mjs", "core/opencode/plugin/plan-gate.test.mjs"] },
@@ -1624,6 +1623,14 @@ describe("parity-manifest", () => {
     const activeBacklog = roadmap.slice(activeStart, historyStart);
     const deletedHarvestPrescription = /(?:\bharvest-(?:guard|findings)\b[\s\S]{0,100}\b(?:tool\s+real|implementar?|implementação|rewrite|reescrev\w*)\b|\b(?:tool\s+real|implementar?|implementação|rewrite|reescrev\w*)\b[\s\S]{0,100}\bharvest-(?:guard|findings)\b)/iu;
     assert.doesNotMatch(activeBacklog, deletedHarvestPrescription);
+  });
+
+  it("t12-docs: catalog-health pruning decision is explicitly superseded by PR4.2", () => {
+    const pruningPrd = readFileSync(new URL("../docs/prd/oc-parity-pruning.md", import.meta.url), "utf8");
+    const catalogMention = pruningPrd.indexOf("plugin/lib/agent-catalog-health.mjs");
+    assert.ok(catalogMention >= 0, "historical pruning decision must remain auditable");
+    const localDecisionContext = pruningPrd.slice(catalogMention, catalogMention + 500);
+    assert.match(localDecisionContext, /decisão superada[^\n]*PR4\.2/iu);
   });
 
   it("t12-module-manifest: importer scanner catches global, extensionless and trivia-heavy callers", () => {
