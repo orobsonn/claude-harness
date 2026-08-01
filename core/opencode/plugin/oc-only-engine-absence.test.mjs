@@ -27,6 +27,8 @@ const retiredPaths = [
   "core/shared/lib/agent-retry.test.mjs",
   "core/shared/lib/agent-retry-call.mjs",
   "core/shared/lib/agent-retry-call.test.mjs",
+  "core/opencode/lib/planner-fallback-config.mjs",
+  "core/opencode/agents/planner-fallback.md",
 ];
 
 test("OC-only count/retry/review engine paths stay absent", () => {
@@ -116,6 +118,15 @@ test("live OC sources have zero consumers of retired review-engine vocabulary", 
       for (const term of retiredVocabulary) {
         assert.equal(source.includes(term), false, `live source retains ${term}: ${file}`);
       }
+    }
+  }
+});
+
+test("live OC sources retain no planner-fallback role or native resolver consumers", () => {
+  for (const root of ["core/opencode", "core/shared", "core/vps"]) {
+    for (const file of liveSourceFiles(join(repositoryRoot, root))) {
+      const source = readFileSync(file, "utf8");
+      assert.equal(source.includes("planner-fallback"), false, `live source retains retired planner fallback: ${file}`);
     }
   }
 });

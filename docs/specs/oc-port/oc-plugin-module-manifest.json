@@ -20,9 +20,7 @@
     ],
     "pr3_removed_count": 11
   },
-  "pending_delete_paths": [
-    "lib/planner-fallback-config.mjs"
-  ],
+  "pending_delete_paths": [],
   "rules": [
     { "id": "R1", "required_outcome": "ScheduleWakeup forbidden in routine/headless", "classification": "N/A platform", "failure_policy": "N/A", "implementation_targets": [], "locked_evidence": ["parity artifact records the N/A explicitly"] },
     { "id": "R2", "required_outcome": "writing hand runs foreground-only", "classification": "N/A platform", "failure_policy": "N/A", "implementation_targets": [], "locked_evidence": ["parity artifact records the N/A explicitly"] },

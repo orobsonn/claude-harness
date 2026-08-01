@@ -14,7 +14,6 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
   plan: (r) => r.build?.model,
   "harness-config": (r) => r.build?.model,
   planner: (r) => r.planner?.model,
-  "planner-fallback": (r) => r.planner?.fallback?.model,
   compliance: (r) => r.compliance?.model,
   security: (r) => r.security?.model,
   harvester: (r) => r.harvester?.model,
@@ -52,7 +51,6 @@ export function listRoutingTouchpoints() {
     "agents/*.md frontmatter model: (all agents with model field — see AGENT_MODEL_RESOLVERS)",
     "AGENTS.md §8 Model routing table",
     "opencode.json / opencode.json.example model + small_model (when present next to root)",
-    "planner-fallback.md only when roles.planner.fallback is set",
   ]);
 }
 
@@ -77,7 +75,6 @@ export function collectRoutingModels(routing) {
   for (const key of ["build", "planner", "compliance", "security", "test-author", "harvester", "shipper"]) {
     if (typeof roles[key]?.model === "string") out.push(roles[key].model);
   }
-  if (typeof roles.planner?.fallback?.model === "string") out.push(roles.planner.fallback.model);
   for (const tier of ["low", "medium", "high"]) {
     if (typeof roles.executor?.tiers?.[tier]?.model === "string") out.push(roles.executor.tiers[tier].model);
     if (typeof roles.sniper?.tiers?.[tier]?.model === "string") out.push(roles.sniper.tiers[tier].model);
@@ -127,7 +124,6 @@ export function withCapabilitiesForModels(routing, defaults = {}) {
  *   supportEye?: string,
  *   hands?: { low: string, medium: string, high: string },
  *   testAuthor?: string,
- *   plannerFallback?: string | null,
  *   supportsReasoningEffort?: Record<string, boolean>,
  * }} slots
  * @returns {{ ok: true, routing: object } | { ok: false, reason: string }}
@@ -138,7 +134,6 @@ const ALLOWED_SLOT_KEYS = Object.freeze([
   "supportEye",
   "hands",
   "testAuthor",
-  "plannerFallback",
   "supportsReasoningEffort",
 ]);
 const ALLOWED_HAND_TIERS = Object.freeze(["low", "medium", "high"]);
@@ -197,12 +192,6 @@ export function buildRoutingFromSlots(slots) {
     }
     // test-author rides the eyes tier by default (oracle that makes cheap hands safe).
     const testAuthor = String(slots?.testAuthor ?? primaryEye).trim();
-    // Planner is primary-only by default (no model ladder). Opt-in via plannerFallback slug.
-    const fallback =
-      typeof slots?.plannerFallback === "string" && slots.plannerFallback.includes("/")
-        ? { model: slots.plannerFallback }
-        : undefined;
-
     const reviewRole = secondaryEye
       ? { model: primaryEye, secondEyeModel: secondaryEye }
       : { model: primaryEye };
@@ -212,7 +201,7 @@ export function buildRoutingFromSlots(slots) {
       version: 2,
       roles: {
         build: { model: primaryEye },
-        planner: fallback ? { model: primaryEye, fallback } : { model: primaryEye },
+        planner: { model: primaryEye },
         "plan-reviewer": { ...reviewRole },
         adversary: { ...reviewRole },
         compliance: { model: supportEye },
@@ -677,7 +666,6 @@ export function applyRoutingToDisk(args) {
       if (!fs.existsSync(file)) continue;
       const model = resolveModel(routing.roles);
       if (typeof model !== "string" || !model.includes("/")) {
-        if (basename === "planner-fallback" && !routing.roles.planner?.fallback) continue;
         // Optional second-eye stubs: leave frontmatter untouched when secondEyeModel is absent.
         if (/-family-2$|-openai$/.test(basename)) continue;
         return { ok: false, reason: `no model resolved for agent ${basename}.md` };

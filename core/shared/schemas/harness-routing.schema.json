@@ -75,9 +75,7 @@
         { "$ref": "#/definitions/roleSimple" },
         {
           "type": "object",
-          "properties": {
-            "fallback": { "$ref": "#/definitions/roleSimple" }
-          }
+          "not": { "required": ["fallback"] }
         }
       ]
     },

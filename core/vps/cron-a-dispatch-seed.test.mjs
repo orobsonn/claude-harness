@@ -48,7 +48,6 @@ const CLOSURE_LIBS = [
   "obs-emit.mjs",
   "plan-hash.mjs",
   "planner-artifact.mjs",
-  "planner-fallback-config.mjs",
   "roles.mjs",
   "task-dispatch-identity.mjs",
 ];
@@ -1321,8 +1320,8 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
   }
 });
 
-test("materializeOpencodeRuntime: every closure-11 lib is required and copied into the headless runtime", () => {
-  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-11-");
+test("materializeOpencodeRuntime: every closure-10 lib is required and copied into the headless runtime", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-10-");
   try {
     const mat = materializeOpencodeRuntime(worktree, projectRoot);
     assert.equal(mat.source, "monorepo");
@@ -1458,7 +1457,7 @@ test("materializeOpencodeRuntime: partial stale monorepo cannot preserve a zombi
   }
 });
 
-test("materializeOpencodeRuntime: each missing closure-11 lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
+test("materializeOpencodeRuntime: each missing closure-10 lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
   for (const name of CLOSURE_LIBS) {
     const { root, projectRoot, worktree } = makeSeedDirs(`oc-seed-missing-${name}-`, { bare: true });
     try {

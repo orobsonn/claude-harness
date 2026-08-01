@@ -48,11 +48,17 @@ export function validateRouting(config) {
     const unknownRole = roleNames.find((role) => !REQUIRED_ROLES.includes(role));
     if (unknownRole) return { ok: false, reason: `unknown role ${unknownRole}` };
 
+    if (
+      roles.planner !== null
+      && typeof roles.planner === "object"
+      && !Array.isArray(roles.planner)
+      && Object.hasOwn(roles.planner, "fallback")
+    ) {
+      return { ok: false, reason: "planner fallback is retired; remove roles.planner.fallback and use the canonical planner" };
+    }
+
     for (const role of SIMPLE_ROLES) {
       if (!isModelRoute(roles[role])) return { ok: false, reason: `invalid model route on ${role}` };
-    }
-    if (roles.planner.fallback !== undefined && !isModelRoute(roles.planner.fallback)) {
-      return { ok: false, reason: "invalid fallback model route on planner" };
     }
     for (const role of TIERED_ROLES) {
       const tiers = roles[role]?.tiers;

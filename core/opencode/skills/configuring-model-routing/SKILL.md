@@ -36,7 +36,6 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 | 2 | `agents/*.md` frontmatter `model:` | **Todos** os agents com `model:` — catálogo em `AGENT_MODEL_RESOLVERS` |
 | 3 | `AGENTS.md` §8 | Tabela "Model routing (operator default)" |
 | 4 | `opencode.json` / `opencode.json.example` | `model` (= build) + `small_model` (= compliance/security) quando presentes |
-| 5 | `planner-fallback.md` | Só se `roles.planner.fallback` existir |
 
 ### Agents ↔ papel de routing
 
@@ -44,7 +43,6 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 |---|---|
 | `build.md`, `plan.md`, `harness-config.md` | `roles.build.model` |
 | `planner.md` | `roles.planner.model` |
-| `planner-fallback.md` | `roles.planner.fallback.model` (opcional) |
 | `plan-reviewer.md` | `roles.plan-reviewer.model` (+ optional `secondEyeModel`) |
 | `adversary.md` | `roles.adversary.model` (+ optional `secondEyeModel`) |
 | `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*.model` |
@@ -116,7 +114,7 @@ Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não
 2. `secondaryEye` — optional `secondEyeModel` on review roles (**outro provider**, fail-open)  
 3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
 4. `hands` low/medium/high (default Ollama ladder)  
-5. `testAuthor`, `plannerFallback`, `supportsReasoningEffort` (opcionais)  
+5. `testAuthor`, `supportsReasoningEffort` (opcionais)
 6. Auth: “você já autenticou provider X no OpenCode?”
 
 **Aviso de produto (sempre se eye forte → modelo fraco):**  

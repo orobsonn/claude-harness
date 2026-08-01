@@ -45,7 +45,9 @@ export function adaptRoutingV1(config) {
   for (const [roleName, target] of Object.entries(simpleTargets)) {
     const role = adaptedRoles[roleName];
     if (role && typeof role === "object" && !Array.isArray(role)) {
-      adaptedRoles[roleName] = { ...role, model: migrateLegacyDefaultModel(role.model, target) };
+      const route = { ...role };
+      if (roleName === "planner") delete route.fallback;
+      adaptedRoles[roleName] = { ...route, model: migrateLegacyDefaultModel(route.model, target) };
     }
   }
   const tierTargets = {

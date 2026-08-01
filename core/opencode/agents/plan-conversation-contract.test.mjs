@@ -13,7 +13,6 @@ const OC_ROOT = join(AGENTS_DIR, "..");
 const KNOWLEDGE_EYES = [
   "plan.md",
   "planner.md",
-  "planner-fallback.md",
   "plan-reviewer.md",
   "discussion-adversary.md",
   "adversary.md",

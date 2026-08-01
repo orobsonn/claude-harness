@@ -712,8 +712,8 @@ test("re-vendoring removes ceremony sidecar helpers and preserves lib siblings",
   }
 });
 
-test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-closure-11-"));
+test("re-vendoring moves the closure-10 into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-closure-10-"));
   const closure = [
     "gate-state.mjs",
     "entry-decide.mjs",
@@ -723,7 +723,6 @@ test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only ol
     "obs-emit.mjs",
     "plan-hash.mjs",
     "planner-artifact.mjs",
-    "planner-fallback-config.mjs",
     "roles.mjs",
     "task-dispatch-identity.mjs",
   ];
@@ -749,6 +748,39 @@ test("re-vendoring moves the closure-11 into framework-owned lib, sweeps only ol
       assert.ok(!existsSync(join(tempDir, ".opencode", "plugin", "lib", name)), `retired old path must be swept: ${name}`);
     }
     assert.ok(existsSync(projectSibling), "exact-path sweep must preserve a project-owned sibling in the retired-path directory");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring prunes the retired planner fallback module and agent without touching siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-planner-fallback-"));
+  const retired = ["lib/planner-fallback-config.mjs", "agents/planner-fallback.md"];
+  const siblings = [
+    join(tempDir, ".opencode", "lib", "project-owned-planner-sibling.mjs"),
+    join(tempDir, ".opencode", "agents", "project-owned-planner-sibling.md"),
+  ];
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale planner fallback\n", "utf8");
+    }
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "project-owned\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -993,6 +1025,8 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/plan-hash.mjs",
     "plugin/lib/planner-artifact.mjs",
     "plugin/lib/planner-fallback-config.mjs",
+    "lib/planner-fallback-config.mjs",
+    "agents/planner-fallback.md",
     "plugin/lib/roles.mjs",
     "plugin/lib/task-dispatch-identity.mjs",
     "plugin/lib/second-eye-authority.mjs",

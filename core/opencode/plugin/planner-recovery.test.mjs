@@ -61,3 +61,32 @@ test("a planner boundary failure records only the active call identity", async (
     assert.equal(state().planner_active_attempt, null);
   });
 });
+
+test("retired planner fallback cannot claim, bind, or write a canonical plan", async () => {
+  await withRun(async (root, state) => {
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
+    const args = { subagent_type: "planner-fallback", prompt: "Produce a plan." };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "retired" }, { args });
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sessionId, callID: "retired", args },
+      { output: JSON.stringify(plan), metadata: {} },
+    );
+    assert.deepEqual(state(), { session_id: sessionId, feature_id: featureId, classified: true });
+    assert.equal(fs.existsSync(path.join(root, ".opencode", "plans", `${sessionId}-${featureId}`, "execution-plan.json")), false);
+  });
+});
+
+test("canonical planner preserves the opaque model_strategy fallback namespace", async () => {
+  await withRun(async (root) => {
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
+    const args = { subagent_type: "planner" };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "canonical" }, { args });
+    const fallback = { provider: "acme", model: "opaque/model", sentinel: "preserve-exactly" };
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sessionId, callID: "canonical", args },
+      { output: JSON.stringify({ ...plan, model_strategy: { fallback } }), metadata: {} },
+    );
+    const written = JSON.parse(fs.readFileSync(path.join(root, ".opencode", "plans", `${sessionId}-${featureId}`, "execution-plan.json"), "utf8"));
+    assert.deepEqual(written.model_strategy.fallback, fallback);
+  });
+});

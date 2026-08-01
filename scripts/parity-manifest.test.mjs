@@ -86,9 +86,7 @@ const OC_MODULE_MANIFEST_PATH = "docs/specs/oc-port/oc-plugin-module-manifest.js
 const OC_MODULE_FIELDS = ["cc_evidence", "consumers", "current_path", "failure_policy", "original_path", "reason", "rule_ids", "tests", "verdict"];
 const OC_RULE_IDS = ["A1", ...Array.from({ length: 15 }, (_, index) => `R${index + 1}`)];
 const OC_MODULE_VERDICTS = new Set(["KEEP", "KEEP (MOVE)", "REWRITE", "DELETE"]);
-const OC_PENDING_DELETE_PATHS = [
-  "lib/planner-fallback-config.mjs",
-];
+const OC_PENDING_DELETE_PATHS = [];
 const OC_AUTOLOAD_PLUGIN_PATHS = new Set(
   harnessOcPluginFiles().map((entry) => entry.replace(/^\.\/\.opencode\//, "")),
 );
@@ -1261,7 +1259,7 @@ describe("parity-manifest", () => {
     }
   });
 
-  it("t11-closure-11: source and fresh vendored lib tree have no plugin/lib back-imports", () => {
+  it("t11-closure-10: source and fresh vendored lib tree have no plugin/lib back-imports", () => {
     const closure = [
       "gate-state.mjs",
       "entry-decide.mjs",
@@ -1271,7 +1269,6 @@ describe("parity-manifest", () => {
       "obs-emit.mjs",
       "plan-hash.mjs",
       "planner-artifact.mjs",
-      "planner-fallback-config.mjs",
       "roles.mjs",
       "task-dispatch-identity.mjs",
     ];
@@ -1284,7 +1281,7 @@ describe("parity-manifest", () => {
     };
 
     assertClosure("core/opencode");
-    const tmp = mkdtempSync(join(tmpdir(), "parity-closure-11-vendored-"));
+    const tmp = mkdtempSync(join(tmpdir(), "parity-closure-10-vendored-"));
     try {
       const project = join(tmp, "project");
       mkdirSync(project, { recursive: true });
@@ -1581,13 +1578,13 @@ describe("parity-manifest", () => {
     assertPendingDeleteFixture(manifest);
     assertDeleteTransitionContract(manifest);
 
-    const missingPending = structuredClone(manifest);
-    missingPending.pending_delete_paths = missingPending.pending_delete_paths.slice(1);
-    assert.throws(() => assertPendingDeleteFixture(missingPending), /pending DELETE fixture drifted/);
-    assert.throws(() => assertDeleteTransitionContract(missingPending), /present DELETE source is not pending/);
+    const unexpectedPending = structuredClone(manifest);
+    unexpectedPending.pending_delete_paths.push("lib/planner-fallback-config.mjs");
+    assert.throws(() => assertPendingDeleteFixture(unexpectedPending), /pending DELETE fixture drifted/);
+    assert.throws(() => assertDeleteTransitionContract(unexpectedPending), /pending DELETE source is absent/);
 
     const duplicatePending = structuredClone(manifest);
-    duplicatePending.pending_delete_paths.push(duplicatePending.pending_delete_paths[0]);
+    duplicatePending.pending_delete_paths.push("plugin/entry-gate.ts", "plugin/entry-gate.ts");
     assert.throws(() => assertDeleteTransitionContract(duplicatePending), /duplicate pending DELETE/);
 
     const extraPending = structuredClone(manifest);

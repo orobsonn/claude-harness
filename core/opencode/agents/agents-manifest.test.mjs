@@ -53,7 +53,6 @@ const REQUIRED_AGENTS = [
   "harness-config",
   "discussion-adversary",
   "planner",
-  "planner-fallback",
   "plan-reviewer",
   "adversary",
   "compliance",
@@ -130,6 +129,13 @@ test("t6-agents: required agent files exist including test-author.md", () => {
     existsSync(join(OC_ROOT, "docs", "SPAWN-PATTERN.md")),
     "SPAWN-PATTERN.md documents P2 under docs/",
   );
+  assert.equal(existsSync(join(AGENTS_DIR, "planner-fallback.md")), false, "retired planner fallback agent must stay absent");
+});
+
+test("t6-routing-table: AGENTS has exactly one canonical planner row", () => {
+  const table = read(join(OC_ROOT, "AGENTS.md"));
+  assert.equal((table.match(/^\| planner \|/gm) ?? []).length, 1);
+  assert.doesNotMatch(table, /planner-fallback/i);
 });
 
 test("t6-single-evaluator-files: canonical eyes + compatibility alias stubs", () => {

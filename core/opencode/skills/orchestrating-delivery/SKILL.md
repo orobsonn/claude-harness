@@ -67,7 +67,7 @@ Detect **first** (same signals as `oc-triaging-requests`):
 
 | Role | Exact `subagent_type` names |
 |---|---|
-| Plan | `planner`, optional `planner-fallback`, `plan-reviewer` (+ optional family-2 when `secondEyeModel` is set) |
+| Plan | `planner`, `plan-reviewer` (+ optional family-2 when `secondEyeModel` is set) |
 | Implement | `executor-low`, `executor-medium`, `executor-high`, `test-author` |
 | Verify | `compliance`, `adversary` (+ optional second eye when `secondEyeModel` is set), `security` |
 | Fix | `sniper-low`, `sniper-medium`, `sniper-high` |

@@ -100,7 +100,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 **Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
 
-**Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models.
+**Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never swap models.
 
 **Dispatch failures:** report provider or tool failures in product language. Any decision to continue, change scope, or stop is an explicit operator/orchestrator decision; OpenCode keeps no retry budget for it.
 

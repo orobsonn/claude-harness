@@ -774,7 +774,6 @@ const OC_RUNTIME_CRITICAL = Object.freeze([
   "lib/obs-emit.mjs",
   "lib/plan-hash.mjs",
   "lib/planner-artifact.mjs",
-  "lib/planner-fallback-config.mjs",
   "lib/roles.mjs",
   "lib/task-dispatch-identity.mjs",
 ]);

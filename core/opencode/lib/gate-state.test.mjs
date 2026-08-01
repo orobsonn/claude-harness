@@ -20,7 +20,7 @@ import {
   loadGateStateFromDisk,
 } from "./gate-state.mjs";
 import { decideEntryTask, throwIfDenied, hasFidelityPass } from "./entry-decide.mjs";
-import { bareRole, isDeliveryRole, isExecutorRole, isSniperRole } from "./roles.mjs";
+import { bareRole, isDeliveryRole, isExecutorRole, isPlannerRole, isSniperRole } from "./roles.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +70,13 @@ test("entry-gate normalizes namespaced canonical review roles and still requires
   });
   assert.equal(decision.decision, "deny");
   assert.match(decision.reason, /ceremony missing/i);
+});
+
+test("retired planner fallback aliases are neither delivery nor planner roles", () => {
+  for (const role of ["planner-fallback", "@harness/planner-fallback", "harness:planner-fallback", "planner-fallback.md"]) {
+    assert.equal(isDeliveryRole(role), false, role);
+    assert.equal(isPlannerRole(role), false, role);
+  }
 });
 
 // ---------------------------------------------------------------------------
