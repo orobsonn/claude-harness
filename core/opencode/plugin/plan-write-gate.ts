@@ -86,7 +86,7 @@ function extractOfficialWritePaths(args: Record<string, unknown> | null, extract
 export async function createPlanWriteGateHooks(
   projectRoot?: string,
   deps: { client?: any; identityReader?: any; resolveRuntimeIdentity?: any; requireHeartbeat?: boolean } = {},
-): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
+): Promise<Pick<Hooks, "tool.execute.before">> {
   const { decide, throwIfDenied, extractWritePath } = await import(
     "./lib/plan-write-decide.mjs"
   );
@@ -117,9 +117,8 @@ export async function createPlanWriteGateHooks(
           throwIfDenied(decide({ args: { filePath: rawPath } }));
         }
       }
-      const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs");
       const { resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
-      const { appendScopeEvent, heartbeatActiveDispatch, normalizeProjectPath, reconcileExpiredDispatch } = await import("../lib/dispatch-scope.mjs");
+      const { normalizeProjectPath } = await import("../lib/dispatch-scope.mjs");
       let filePath = rawPaths[0] ?? "";
 
       // Absolute paths: relativize under projectRoot so scope_paths (relative) match.
@@ -146,75 +145,21 @@ export async function createPlanWriteGateHooks(
         input != null && typeof input === "object" && !Array.isArray(input)
           ? (input as Record<string, unknown>)
           : null;
-      let gateState: unknown = undefined;
       const adapterSession = process.env.HARNESS_DISPATCH_PARENT_SESSION_ID;
-      const adapterToken = process.env.HARNESS_DISPATCH_CLAIM_TOKEN;
+      const adapterCallId = process.env.HARNESS_DISPATCH_CALL_ID;
       const resolveRuntimeIdentity = deps.resolveRuntimeIdentity ?? resolveScopeRuntimeIdentity;
       const trusted = await resolveRuntimeIdentity(root, inputRec, {
         client: deps.client,
         reader: deps.identityReader,
         adapterParentSessionId: adapterSession,
-        adapterToken,
+        adapterCallId,
       });
-      const mode = "enforce";
-      if (!trusted.ok && root && trusted.notWritingSession !== true) {
-        throw new Error(`[plan-write-gate] Blocked: trusted session/message identity unavailable (${trusted.reason}).`);
-      }
-      let sessionId = trusted.ok ? trusted.parentSessionId : inputRec?.sessionID ?? inputRec?.sessionId ?? null;
-      if (
-        root.length > 0 &&
-        typeof sessionId === "string" &&
-        sessionId.length > 0
-      ) {
-        try {
-          const loaded = loadGateStateFromDisk(root, { sessionId });
-          if (loaded.ok) gateState = loaded.state;
-        } catch {
-          // rail off on load failure; anti-forge still runs
-          gateState = undefined;
-        }
-      }
+      if (!trusted.ok && trusted.conflict === true) throw new Error(`[plan-write-gate] Blocked: trusted writing-hand identity conflicts (${trusted.reason}).`);
+      if (!trusted.ok && trusted.verifiedWritingHand === true && trusted.exactRecordMissing === true) throw new Error(`[plan-write-gate] Blocked: exact writing-hand dispatch record required (${trusted.reason}).`);
+      if (!trusted.ok && trusted.unavailable === true) console.warn(`[plan-write-gate] scope rail unavailable, allowing: ${trusted.reason}`);
       const actingRole = trusted.ok ? trusted.role : "";
       const isSubagent = trusted.ok;
-
-      const records = gateState != null && typeof gateState === "object" && !Array.isArray(gateState)
-        ? (gateState as Record<string, any>).dispatch_records
-        : null;
-      let record = trusted.ok && records && typeof records === "object"
-        ? (records as Record<string, any>)[trusted.callId] ?? (Object.keys(records).length === 1 ? Object.values(records)[0] : null)
-        : null;
-      if (record && !trusted.ok) {
-        throw new Error(`[plan-write-gate] Blocked: trusted writing-session identity required (${trusted.reason}).`);
-      }
-      if (!trusted.ok && (trusted.boundRequired === true || (adapterSession && adapterToken))) {
-        throw new Error(`[plan-write-gate] Blocked: child/adapter dispatch binding invalid (${trusted.reason}).`);
-      }
-      if (record && root && typeof sessionId === "string") {
-        const heartbeat = heartbeatActiveDispatch(root, {
-          sessionId,
-          callId: trusted.callId,
-          token: trusted.token,
-          role: actingRole,
-        });
-        if (deps.requireHeartbeat !== false && !heartbeat.ok) {
-          throw new Error(`[plan-write-gate] Blocked: active dispatch heartbeat rejected (${heartbeat.reason}).`);
-        }
-        reconcileExpiredDispatch(root, sessionId, trusted.callId);
-        const refreshed = loadGateStateFromDisk(root, { sessionId });
-        if (refreshed.ok) {
-          gateState = refreshed.state;
-          const refreshedRecords = refreshed.state && typeof refreshed.state === "object" && !Array.isArray(refreshed.state)
-            ? (refreshed.state as Record<string, any>).dispatch_records
-            : null;
-          record = refreshedRecords && typeof refreshedRecords === "object"
-            ? (refreshedRecords as Record<string, any>)[trusted.callId] ?? (Object.keys(refreshedRecords).length === 1 ? Object.values(refreshedRecords)[0] : null)
-            : null;
-        }
-      }
-
-      if (record?.status === "stale") {
-        throw new Error("[plan-write-gate] Blocked: dispatch record lease is stale; explicit termination reconciliation required.");
-      }
+      const record = trusted.ok ? trusted.record : null;
 
       // After the early canonical-path friction, ordinary Bash remains outside the scope rail —
       // Claude Code parity (#484). The removed OC-only blanket deny caused blocked hands and
@@ -229,37 +174,11 @@ export async function createPlanWriteGateHooks(
         const decision = normalized.ok
           ? decide(
               { args: { filePath: checkedPath }, tool_input: { file_path: checkedPath } },
-              { gateState, actingRole: actingRole || undefined, isSubagent, dispatchRecord: record },
+              { actingRole: actingRole || undefined, isSubagent, dispatchRecord: record },
             )
           : { allow: false, reason: `[plan-write-gate] Blocked: '${rawPath}' is not a safe project path (${normalized.reason}).` };
         const scopeViolation = !normalized.ok || /OUTSIDE|armed hand dispatch|acting role identity/i.test(decision.reason ?? "");
-        if (decision.allow === false && scopeViolation && record && typeof record === "object") {
-          const recorded = appendScopeEvent(root, record, {
-            tool: input?.tool,
-            paths: [checkedPath],
-            mode,
-            reason: normalized.ok ? "outside-approved-scope" : "unsafe-project-path",
-          });
-          if (!recorded.ok) throw new Error(`[plan-write-gate] Blocked: ${recorded.reason}; shadow evidence is mandatory.`);
-          if (mode === "shadow") continue;
-        }
         throwIfDenied(decision);
-      }
-    },
-    "tool.execute.after": async (input: any) => {
-      if (!isWriteTool(input?.tool) && !isPatchTool(input?.tool) && !isBashTool(input?.tool)) return;
-      const { invalidateScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
-      invalidateScopeRuntimeIdentity(root, input?.sessionID ?? input?.sessionId, input?.callID ?? input?.callId);
-    },
-    event: async ({ event }: any) => {
-      const { invalidateScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
-      const part = event?.properties?.part ?? event?.part;
-      if (event?.type === "message.part.updated" && part?.type === "tool" && (part?.state?.status === "completed" || part?.state?.status === "error")) {
-        invalidateScopeRuntimeIdentity(root, part.sessionID, part.callID);
-        return;
-      }
-      if (event?.type === "session.idle" || event?.type === "session.error" || event?.type === "session.deleted") {
-        invalidateScopeRuntimeIdentity(root, event?.properties?.sessionID ?? event?.properties?.info?.id);
       }
     },
   };

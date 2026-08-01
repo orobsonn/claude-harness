@@ -21,7 +21,7 @@ async function installComposition(root) {
   await createObsHandHooks(root);
 }
 
-function createScopedHooks(root) {
+function createScopedHooks(root, { scopePaths = ["src/a.ts"] } = {}) {
   return createPlanWriteGateHooks(root, {
     requireHeartbeat: false,
     resolveRuntimeIdentity: async (_projectRoot, input) => ({
@@ -29,8 +29,8 @@ function createScopedHooks(root) {
       parentSessionId: input.sessionID,
       runtimeSessionId: `child-${input.sessionID}`,
       callId: "task-call",
-      token: "test-token",
       role: "executor-high",
+      record: { parent_session_id: input.sessionID, dispatch_call_id: "task-call", child_session_id: `child-${input.sessionID}`, feature_id: "feat-scope", task_id: "t1", role: "executor", scope_paths: scopePaths, allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z" },
     }),
   });
 }
@@ -331,7 +331,7 @@ test("lt-scope-out-deny: call-keyed scope_paths=['src/a.ts'] role executor, acti
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
   assert.match(r.reason ?? "", /src\/b\.ts/);
   assert.match(r.reason ?? "", /scope/);
@@ -348,7 +348,7 @@ test("lt-scope-in-allow: same, write src/a.ts → allow true", () => {
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, true);
 });
 
@@ -363,7 +363,7 @@ test("lt-scope-file-not-prefix: scope ['src/a.ts'], write src/a.ts/evil.ts → a
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
 });
 
@@ -388,11 +388,11 @@ test("lt-scope-dir-prefix-allow: scope ['src/lib'] or ['src/lib/'], write src/li
   };
   const p = { tool_input: { file_path: "src/lib/foo.ts" } };
   assert.equal(
-    decide(p, { gateState: gateStateDir, actingRole: "executor-high", isSubagent: true }).allow,
+    decide(p, { gateState: gateStateDir, dispatchRecord: gateStateDir.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true }).allow,
     true,
   );
   assert.equal(
-    decide(p, { gateState: gateStateDirSlash, actingRole: "executor-high", isSubagent: true }).allow,
+    decide(p, { gateState: gateStateDirSlash, dispatchRecord: gateStateDirSlash.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true }).allow,
     true,
   );
 });
@@ -408,7 +408,7 @@ test("lt-scope-family-match: ad.role='executor', acting executor-high, out of sc
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
 });
 
@@ -423,7 +423,7 @@ test("lt-scope-role-mismatch-failopen: ad.role sniper, acting executor, out of s
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor", isSubagent: true });
   assert.equal(r.allow, true);
 });
 
@@ -446,7 +446,7 @@ test("lt-anti-forge-still-denies: armed scope that includes gate-state path, wri
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
   assert.match(r.reason ?? "", /gate-state|harness markers/);
 });
@@ -462,7 +462,7 @@ test("lt-allowed-writes-allow: scope src/a.ts, allowed_writes docs/x.md, write d
       allowed_writes: ["docs/x.md"],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, true);
 });
 
@@ -477,7 +477,7 @@ test("lt-scope-path-normalize-escape: scope ['src/lib'], write src/lib/../b.ts �
       allowed_writes: [],
     } },
   };
-  const r = decide(payload, { gateState, actingRole: "executor-high", isSubagent: true });
+  const r = decide(payload, { gateState, dispatchRecord: gateState.dispatch_records.legacy, actingRole: "executor-high", isSubagent: true });
   assert.equal(r.allow, false);
 });
 
@@ -709,6 +709,7 @@ test("lt-scope-case-sensitive-deny: scope ['src/a.ts'], write 'SRC/A.TS' → den
   };
   const r = decide(payload, {
     gateState,
+    dispatchRecord: gateState.dispatch_records.legacy,
     actingRole: "executor-high",
     isSubagent: true,
   });
@@ -729,6 +730,7 @@ test("lt-scope-agent-id-only-no-role: isSubagent true + empty actingRole + armed
   };
   const r = decide(payload, {
     gateState,
+    dispatchRecord: gateState.dispatch_records.legacy,
     actingRole: "",
     isSubagent: true,
   });
@@ -926,7 +928,7 @@ test("out-of-scope Write denies without a composition shadow registry", async ()
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src/a.ts"], allowed_writes: [], call_id: "task-call",
     } } }));
-    const before = (await createScopedHooks(root))["tool.execute.before"];
+    const before = (await createScopedHooks(root, { scopePaths: ["src"] }))["tool.execute.before"];
     await assert.rejects(() => before(
       { tool: "write", sessionID: session, agent: "executor-high" },
       { args: { filePath: "outside/b.ts", content: "private content must not be logged" } },
@@ -946,7 +948,7 @@ test("composition proof enforces Edit scope while Bash is never walled (#484)", 
       session_id: session, feature_id: "feat", task_id: "task", role: "executor-high",
       scope_paths: ["src"], allowed_writes: [], call_id: "task-call",
     } } }));
-    const before = (await createScopedHooks(root))["tool.execute.before"];
+    const before = (await createScopedHooks(root, { scopePaths: ["src"] }))["tool.execute.before"];
     await assert.rejects(() => before(
       { tool: "edit", sessionID: session, agent: "executor-high" },
       { args: { filePath: "outside/b.ts", oldString: "x", newString: "y" } },

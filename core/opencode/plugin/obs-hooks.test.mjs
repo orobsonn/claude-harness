@@ -1,6 +1,4 @@
-/**
- * @description Integration-shape tests: after/before hooks use output.args (OC contract).
- */
+/** @description Integration-shape tests for observation-only hand hooks. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -10,41 +8,38 @@ import { tmpdir } from "node:os";
 import { createObsPlanWriteHooks } from "./obs-plan-write.ts";
 import { createObsEyeHooks } from "./obs-eye.ts";
 import { createObsHandHooks } from "./obs-hand.ts";
-import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
-import { semanticPlanHash } from "../lib/planner-artifact.mjs";
-import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs";
 
-const MODEL_STRATEGY = {
-  hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
-  planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
-  adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
-};
-
-/** @param {() => Promise<void>} fn */
-async function captureWarnings(fn) {
-  const original = console.warn;
-  const warnings = [];
-  console.warn = (message) => warnings.push(message);
-  try {
-    await fn();
-  } finally {
-    console.warn = original;
-  }
-  return warnings;
+function taskArgs(taskId, role = "executor-medium", featureId = "feat") {
+  return {
+    feature_id: featureId,
+    subagent_type: role,
+    prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`,
+  };
 }
 
-/**
- * Replace a session's gate-state directory with a plain file so any subsequent lock/read/write
- * against it fails instantly (ENOTDIR/EEXIST) — a deterministic, fast way to force a
- * binding-accounting helper (bindChildSession, cleanupChild, cleanup/finishActiveDispatch) to
- * return `{ ok: false }` without waiting on lock timeouts.
- * @param {string} dir
- * @param {string} sessionId
- */
-function corruptGateStateDir(dir, sessionId) {
-  const stateDir = join(dir, ".opencode", "plans", ".state", sessionId);
-  rmSync(stateDir, { recursive: true, force: true });
-  writeFileSync(stateDir, "corrupted");
+function seedDispatch(dir, { sessionId, callId, featureId, taskId, role, claimedAt = "2026-08-01T12:00:00.000Z" }) {
+  const records = join(dir, ".opencode", "plans", ".state", sessionId, "dispatch-records");
+  mkdirSync(records, { recursive: true });
+  const name = crypto.createHash("sha256").update(callId).digest("hex");
+  writeFileSync(join(records, `${name}.json`), JSON.stringify({
+    parent_session_id: sessionId,
+    dispatch_call_id: callId,
+    child_session_id: null,
+    feature_id: featureId,
+    task_id: taskId,
+    role,
+    scope_paths: ["src"],
+    allowed_writes: [],
+    snapshot_hash: "a".repeat(64),
+    claimed_at: claimedAt,
+  }));
+  const state = join(dir, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+  mkdirSync(dirname(state), { recursive: true });
+  if (!existsSync(state)) writeFileSync(state, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+}
+
+function handRecordPath(dir, sessionId, featureId, taskId) {
+  return join(dir, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
 }
 
 test("obs-plan-write: canonical model-tool writes are inert and cannot emit plan-created", async () => {
@@ -55,49 +50,10 @@ test("obs-plan-write: canonical model-tool writes are inert and cannot emit plan
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
     const planRel = ".opencode/plans/feat/execution-plan.json";
     const planAbs = join(dir, planRel);
-    mkdirSync(join(dir, ".opencode/plans/feat"), { recursive: true });
+    mkdirSync(dirname(planAbs), { recursive: true });
     writeFileSync(planAbs, JSON.stringify({ tasks: [{ id: "t1" }, { id: "t2" }] }));
     const hooks = await createObsPlanWriteHooks();
-    await hooks["tool.execute.after"](
-      { tool: "write" },
-      { args: { filePath: planRel, content: JSON.stringify({ tasks: [1, 2] }) } },
-    );
-    const eventPath = join(dir, "obs.events.jsonl");
-    assert.equal(existsSync(eventPath), false);
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("obs-plan-write leaves canonical and gate-state bytes unchanged and never binds an inert plan", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-pw-inert-"));
-  try {
-    const sid = "ses_observer_inert";
-    const fid = "inert-plan";
-    const meta = join(dir, "obs.json");
-    const statePath = join(dir, ".opencode", "plans", ".state", sid, "gate-state.json");
-    const planPath = join(dir, ".opencode", "plans", `${sid}-${fid}`, "execution-plan.json");
-    const inert = {
-      feature_id: fid, kind: "full", mode: "full", model_strategy: MODEL_STRATEGY,
-      tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "Given a, When b, Then c" }] }],
-    };
-    mkdirSync(join(dir, ".opencode", "plans", ".state", sid), { recursive: true });
-    mkdirSync(dirname(planPath), { recursive: true });
-    writeFileSync(meta, "{}");
-    writeFileSync(statePath, JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "plan_pending_write" }, null, 2));
-    writeFileSync(planPath, JSON.stringify(inert, null, 2));
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const stateBefore = readFileSync(statePath);
-    const planBefore = readFileSync(planPath);
-    const hooks = await createObsPlanWriteHooks(dir);
-    await hooks["tool.execute.after"](
-      { tool: "write", sessionID: sid },
-      { args: { filePath: `.opencode/plans/${sid}-${fid}/execution-plan.json`, content: "model output" } },
-    );
-    assert.deepEqual(readFileSync(statePath), stateBefore);
-    assert.deepEqual(readFileSync(planPath), planBefore);
-    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).planner_plan_binding, undefined);
+    await hooks["tool.execute.after"]({ tool: "write" }, { args: { filePath: planRel, content: "model output" } });
     assert.equal(existsSync(join(dir, "obs.events.jsonl")), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
@@ -105,7 +61,27 @@ test("obs-plan-write leaves canonical and gate-state bytes unchanged and never b
   }
 });
 
-test("obs-eye: stub for THIS session-feature → spec-adversary; ignore other full plan", async () => {
+test("obs-plan-write leaves canonical and gate-state bytes unchanged", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-pw-inert-"));
+  try {
+    const sid = "ses_observer_inert";
+    const fid = "inert-plan";
+    const statePath = join(dir, ".opencode", "plans", ".state", sid, "gate-state.json");
+    const planPath = join(dir, ".opencode", "plans", `${sid}-${fid}`, "execution-plan.json");
+    mkdirSync(dirname(statePath), { recursive: true });
+    mkdirSync(dirname(planPath), { recursive: true });
+    writeFileSync(statePath, JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "plan_pending_write" }));
+    writeFileSync(planPath, JSON.stringify({ feature_id: fid, tasks: [{ id: "task-1" }] }));
+    const beforeState = readFileSync(statePath);
+    const beforePlan = readFileSync(planPath);
+    const hooks = await createObsPlanWriteHooks(dir);
+    await hooks["tool.execute.after"]({ tool: "write", sessionID: sid }, { args: { filePath: `.opencode/plans/${sid}-${fid}/execution-plan.json`, content: "model output" } });
+    assert.deepEqual(readFileSync(statePath), beforeState);
+    assert.deepEqual(readFileSync(planPath), beforePlan);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("obs-eye: stub for this session-feature emits spec-adversary", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-eye-"));
   try {
     const meta = join(dir, "obs.json");
@@ -113,981 +89,157 @@ test("obs-eye: stub for THIS session-feature → spec-adversary; ignore other fu
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
     const sid = "ses_test1";
     const fid = "my-feat";
-    mkdirSync(join(dir, ".opencode/plans/old-full"), { recursive: true });
-    writeFileSync(
-      join(dir, ".opencode/plans/old-full/execution-plan.json"),
-      JSON.stringify({ tasks: [{ id: "x" }] }),
-    );
     mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
     mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
     writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ feature_id: fid }));
-    writeFileSync(
-      join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`),
-      JSON.stringify({ kind: "stub", tasks: [] }),
-    );
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify({ kind: "stub", tasks: [] }));
     const hooks = await createObsEyeHooks(dir);
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid },
-      {
-        args: { subagent_type: "adversary", feature_id: fid },
-        output: "attack",
-      },
-    );
-    const raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
-    assert.ok(raw.includes("spec-adversary"), raw);
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sid }, { args: { subagent_type: "adversary", feature_id: fid }, output: "attack" });
+    assert.match(readFileSync(join(dir, "obs.events.jsonl"), "utf8"), /spec-adversary/);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("obs-hand: before task-executing + after hand-ran structural", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-"));
+test("obs-hand emits task-executing and hand-ran without dispatch mutation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-events-"));
   try {
     const meta = join(dir, "obs.json");
     writeFileSync(meta, "{}");
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_h1";
-    const fid = "feat-h";
+    const sid = "ses_obs";
+    const fid = "feat-obs";
     mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{ id: "t-a", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }] },
-        { id: "t-b", severity: "medium", complexity: "medium", scope_paths: ["src/b.ts"], criterion_refs: ["#ac-2"], locked_tests: [{ id: "lt-b", path: "src/b.test.mjs", assertion: "b" }] }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "usable", delivery_status: "ready", planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash } }));
-    writeFileSync(
-      join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`),
-      JSON.stringify(plan),
-    );
-    let sdkOutage = false;
-    const client = { session: { get: async ({ path: sdkPath }) => {
-      if (sdkOutage) throw new Error("SDK unavailable");
-      return { data: {
-        id: sdkPath.id,
-        ...(sdkPath.id.startsWith("child-") ? { parentID: sid } : {}),
-      } };
-    } } };
-    const hooks = await createObsHandHooks(dir, { client });
-    const args = {
-      description: "implement t-b",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t-b"}[/HARNESS_TASK_CONTEXT]\nImplement the task.`,
-      subagent_type: "executor-medium",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-background" }, { args });
-    sdkOutage = true;
-    await hooks.event({ event: { type: "message.updated", properties: { info: { id: "child-user", sessionID: "child-background", role: "user", agent: "executor-medium" } } } });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-background" },
-      { args, metadata: { parentSessionId: sid, sessionId: "child-background", jobId: "job-background", background: true }, output: '<task id="child-background" state="running"><task_result>running</task_result></task>' },
-    );
-    let active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-background"];
-    assert.equal(active.dispatch_call_id, "call-background");
-    // #403 binds straight from the Task result metadata, so the child lands bound rather than
-    // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee — the
-    // id can come from a regex over model-authored output text (obs-hand.ts:266), see #420.
-    assert.equal(active.status, "active");
-    assert.equal(active.child_session_id, "child-background");
-    sdkOutage = false;
-    const writeHooks = await createPlanWriteGateHooks(dir, { client });
-    // Write authority is still fail-closed for a child whose dispatch binding does not check out.
-    await assert.rejects(
-      () => writeHooks["tool.execute.before"](
-        { tool: "write", sessionID: "child-background", callID: "write-unbound" },
-        { args: { filePath: "src/b.ts", content: "blocked" } },
-      ),
-      /binding invalid|identity unavailable|dispatch binding/,
-    );
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-after-background" }, { args });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-after-background" },
-      { args, metadata: { parentSessionId: sid, sessionId: "child-new", background: true }, output: '<task id="child-new" state="running"><task_result>running</task_result></task>' },
-    );
-    // A late session.idle from the PREVIOUS dispatch's child no longer raises (see #417 —
-    // the diagnostic was dropped by #403). What still must hold: it does not disturb the
-    // dispatch now in flight.
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-background" } } });
-    active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-after-background"];
-    assert.equal(active.dispatch_call_id, "call-after-background");
-    assert.equal(active.status, "active");
-    assert.equal(active.child_session_id, "child-new");
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-new" } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
-
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-hand" }, { args });
-    assert.ok(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-hand"]);
-    await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "call-hand" }, { args });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-new" }, { args });
-    await hooks.event({ event: { type: "message.part.updated", properties: { part: {
-      type: "tool", tool: "task", sessionID: sid, callID: "call-hand", state: { status: "error" },
-    } } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-new"].dispatch_call_id, "call-new");
-    await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "call-new" }, { args });
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-rejected" }, { args });
-    await hooks.event({ event: { type: "message.part.updated", properties: { part: {
-      type: "tool", tool: "task", sessionID: sid, callID: "call-rejected", state: { status: "error" },
-    } } } });
-    assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
-    for (const [toolName, callID] of [["agent", "call-agent"], ["namespace.task", "call-namespaced"]]) {
-      await hooks["tool.execute.before"]({ tool: toolName, sessionID: sid, callID }, { args });
-      await hooks.event({ event: { type: "message.part.updated", properties: { part: {
-        type: "tool", tool: toolName, sessionID: sid, callID: `${callID}-other`, state: { status: "error" },
-      } } } });
-      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records[callID].dispatch_call_id, callID);
-      await hooks.event({ event: { type: "message.part.updated", properties: { part: {
-        type: "tool", tool: toolName, sessionID: sid, callID, state: { status: "error" },
-      } } } });
-      assert.equal(JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records, undefined);
-    }
-    const raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
-    assert.ok(raw.includes("task-executing"), raw);
-    assert.ok(raw.includes('"n":2'), raw);
-    assert.ok(raw.includes("hand-ran"), raw);
-    assert.ok(raw.includes("t-b"), raw);
+    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify({ tasks: [{ id: "t-obs", scope_paths: ["src/a.ts"] }] }));
+    const args = taskArgs("t-obs", "executor-medium", fid);
+    const hooks = await createObsHandHooks(dir);
+    assert.equal(hooks.event, undefined, "obs-hand must not own Task lifecycle events");
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-obs" }, { args });
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "call-obs" }, { args, output: "Status: DONE" });
+    const events = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
+    assert.match(events, /task-executing/);
+    assert.match(events, /hand-ran/);
+    assert.equal(existsSync(join(dir, `.opencode/plans/.state/${sid}/dispatch-records`)), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fail-closed)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-pending-"));
+test("obs-hand ignores background Task progress", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-background-"));
   try {
     const meta = join(dir, "obs.json");
     writeFileSync(meta, "{}");
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_pending1";
-    const fid = "feat-pending";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: "t-p",
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({
-      session_id: sid,
-      feature_id: fid,
-      planner_status: "usable",
-      delivery_status: "ready",
-      planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
-    }));
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const client = {
-      session: {
-        get: async () => {
-          throw new Error("SDK unavailable");
-        },
-      },
-    };
-    const hooks = await createObsHandHooks(dir, { client });
-    const args = {
-      description: "implement t-p",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t-p"}[/HARNESS_TASK_CONTEXT]\nImplement.`,
-      subagent_type: "executor-medium",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-bg" }, { args });
-    // message.updated cannot bind while SDK is down
-    await hooks.event({
-      event: {
-        type: "message.updated",
-        properties: { info: { id: "u1", sessionID: "child-bg", role: "user", agent: "executor-medium" } },
-      },
-    });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-bg" },
-      {
-        args,
-        metadata: { parentSessionId: sid, sessionId: "child-bg", jobId: "job-bg", background: true },
-        output: '<task id="child-bg" state="running"><task_result>running</task_result></task>',
-      },
-    );
-    const active = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records["call-bg"];
-    // #403 binds straight from the Task result metadata, so the child lands bound rather than
-    // merely pending; bindChildSession drops binding_pending. NOT a stronger guarantee: the id
-    // can fall back to a regex over model-authored output text (obs-hand.ts:266) — see #420.
-    assert.equal(active.status, "active");
-    assert.equal(active.child_session_id, "child-bg");
-    assert.equal(active.binding_pending, undefined);
-
-    // Child ends while SDK still unavailable — must clean without fail-closed
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-bg" } } });
-    assert.equal(
-      JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8")).dispatch_records,
-      undefined,
-    );
-    const eventsPath = join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl");
-    assert.equal(existsSync(eventsPath), false, "happy path must not emit hand-scope-terminal-unbound");
+    const hooks = await createObsHandHooks(dir);
+    const args = taskArgs("t-background", "executor-medium", "feat-background");
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: "ses_background", callID: "call-background" }, { args, metadata: { background: true }, output: '<task state="running">' });
+    assert.equal(existsSync(handRecordPath(dir, "ses_background", "feat-background", "t-background")), false);
+    assert.equal(existsSync(join(dir, "obs.events.jsonl")), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-// Re-targeted from "truly unbound child ... still fail-closed". cffe42b (#403) removed that
-// fail-closed branch to silence N1 false positives from eye/parent/explore children that
-// legitimately hold no claim; the lost diagnostic is tracked in #417. The original assertion
-// cannot be restored as written — with the SDK down and no live claim, ghost and hand are
-// physically indistinguishable.
-//
-// So the test keeps an invariant instead of retiring one: the silence must be INERT. Note the
-// diagnostic that was lost was written to scope-terminal-events.jsonl, which no code reads,
-// and thrown from an `event` handler, which blocks no tool.
-//
-// When #417 is addressed: `claims.size === 0` is NOT a sound discriminator — claims is
-// per-plugin-instance and OC may instantiate the factory twice (the very bug #402 fixed), so
-// a second instance sees an empty map while a real claim is live on disk. Read the durable
-// the exact dispatch record from gate-state instead.
-test("#ac-1.2 obs-hand: unknown child idle is silent and cannot disturb a live dispatch", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-unbound-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const client = {
-      session: {
-        get: async () => {
-          throw new Error("SDK unavailable");
-        },
-      },
-    };
-    const hooks = await createObsHandHooks(dir, { client });
-    // No claim at all and the SDK is down: ghost and hand are indistinguishable here, so
-    // #403 chose silence. What must still hold is that the silence is inert.
-    await assert.doesNotReject(
-      () => hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-ghost" } } }),
-    );
-    assert.equal(
-      existsSync(join(dir, ".opencode", "plans", ".state", "scope-terminal-events.jsonl")),
-      false,
-      "unknown child must not emit terminal diagnostics (N1 false-positive spam)",
-    );
-    assert.equal(existsSync(join(dir, ".opencode", "plans", ".state")), false, "no dispatch state may be fabricated");
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("obs-hand: without task_id does not emit hand-ran unknown", async () => {
+test("obs-hand without task id emits no unknown hand event", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-skip-"));
   try {
     const meta = join(dir, "obs.json");
     writeFileSync(meta, "{}");
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
     const hooks = await createObsHandHooks(dir);
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: "ses_x" },
-      { args: { subagent_type: "executor-high" } },
-    );
-    // no events file or empty
-    let raw = "";
-    try {
-      raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
-    } catch {
-      raw = "";
-    }
-    assert.equal(raw.includes("unknown"), false, raw);
-    assert.equal(raw.includes("hand-ran"), false, raw);
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: "ses_x", callID: "call-x" }, { args: { subagent_type: "executor-high" } });
+    assert.equal(existsSync(join(dir, "obs.events.jsonl")), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("obs-hand: writing-hand terminal Task writes hand-record once with DONE", async () => {
+test("obs-hand writes a host completion record from the exact producer claim", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-rec-"));
   try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_rec1";
+    const sid = "ses_rec";
     const fid = "feat-rec";
     const tid = "t-rec";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: {
-          session_id: sid,
-          feature_id: fid,
-          snapshot_path: snapshotRel,
-          snapshot_hash: hash,
-        },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
+    const callId = "call-rec";
+    seedDispatch(dir, { sessionId: sid, featureId: fid, taskId: tid, role: "executor-medium", callId });
     const hooks = await createObsHandHooks(dir);
-    const args = {
-      description: "implement t-rec",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nImplement the task.`,
-      subagent_type: "executor-medium",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-rec" }, { args });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-rec" },
-      { args, output: "Work complete.\nStatus: DONE\n" },
-    );
-
-    const recordPath = join(
-      dir,
-      ".opencode",
-      "plans",
-      ".state",
-      "hand-records",
-      fid,
-      sid,
-      `${tid}.json`,
-    );
-    assert.ok(existsSync(recordPath), `expected hand-record at ${recordPath}`);
-    const disk = JSON.parse(readFileSync(recordPath, "utf8"));
-    assert.equal(disk.outcome, "DONE");
-    assert.equal(disk.writtenBy, "obs-hand-task");
-    assert.equal(disk.featureId, fid);
-    assert.equal(disk.taskId, tid);
-    assert.equal(disk.sessionId, sid);
-    assert.ok(Array.isArray(disk.touchedPaths));
-
-    const mtime1 = readFileSync(recordPath, "utf8");
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-rec" },
-      { args, output: "Status: BLOCKED\n" },
-    );
-    assert.equal(readFileSync(recordPath, "utf8"), mtime1, "double after must not rewrite");
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
+    const args = taskArgs(tid, "executor-medium", fid);
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: callId }, { args, output: "Status: DONE" });
+    const disk = JSON.parse(readFileSync(handRecordPath(dir, sid, fid, tid), "utf8"));
+    const gate = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8"));
+    assert.equal(disk.writtenBy, "host-hand-finished");
+    assert.equal(disk.producerCallId, callId);
+    assert.equal(disk.capturedVerifiedAt, undefined);
+    assert.deepEqual(gate.hand_finished, [`${fid}/${tid}`]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-
-test("obs-hand: terminal after writes hand-record even when child binding fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-bind-fail-rec-"));
+test("obs-hand cannot fabricate a completion record without an exact producer claim", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-no-producer-"));
   try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_bindfail";
-    const fid = "feat-bindfail";
-    const tid = "t-bindfail";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        planner_plan_binding: {
-          session_id: sid,
-          feature_id: fid,
-          snapshot_path: snapshotRel,
-          snapshot_hash: hash,
-        },
-      }),
-    );
     const hooks = await createObsHandHooks(dir);
-    const args = {
-      description: "implement",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
-      subagent_type: "executor-medium",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-bf" }, { args });
-    // Terminal after with orphan child id (no binding) — must still write hand-record.
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-bf" },
-      {
-        args,
-        output: `Status: DONE\n<task id="ses_orphan_child" state="completed"></task>`,
-        metadata: { sessionId: "ses_orphan_child", parentSessionId: sid },
-      },
-    );
-    const recordPath = join(dir, ".opencode", "plans", ".state", "hand-records", fid, sid, `${tid}.json`);
-    assert.ok(existsSync(recordPath), `expected hand-record at ${recordPath}`);
-    const disk = JSON.parse(readFileSync(recordPath, "utf8"));
-    assert.equal(disk.outcome, "DONE");
-    assert.equal(disk.writtenBy, "obs-hand-task");
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
+    const args = taskArgs("t-none", "executor-medium", "feat-none");
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: "ses_none", callID: "call-none" }, { args, output: "Status: DONE" });
+    assert.equal(existsSync(handRecordPath(dir, "ses_none", "feat-none", "t-none")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("obs-hand: non-hand role does not write hand-record", async () => {
+test("obs-hand cannot borrow a sibling producer claim", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-sibling-"));
+  try {
+    seedDispatch(dir, { sessionId: "ses_sibling", featureId: "feat-sibling", taskId: "t-sibling", role: "executor-medium", callId: "call-owner" });
+    const hooks = await createObsHandHooks(dir);
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: "ses_sibling", callID: "call-other" }, { args: taskArgs("t-sibling", "executor-medium", "feat-sibling"), output: "Status: DONE" });
+    assert.equal(existsSync(handRecordPath(dir, "ses_sibling", "feat-sibling", "t-sibling")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("obs-hand ignores non-writing roles", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-hand-planner-"));
   try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_plan1";
-    const fid = "feat-plan";
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({ session_id: sid, feature_id: fid }),
-    );
     const hooks = await createObsHandHooks(dir);
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-plan" },
-      {
-        args: {
-          subagent_type: "planner",
-          task_id: "t-plan",
-          feature_id: fid,
-          prompt: "plan it",
-        },
-        output: "Status: DONE\n",
-      },
-    );
-    const recordsRoot = join(dir, ".opencode", "plans", ".state", "hand-records");
-    assert.equal(existsSync(recordsRoot), false);
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: "ses_plan", callID: "call-plan" }, { args: taskArgs("t-plan", "planner", "feat-plan"), output: "Status: DONE" });
+    assert.equal(existsSync(join(dir, ".opencode/plans/.state/hand-records")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("#ac-1.1 obs-hand: sniper-high DONE → sealed regate_pending for feature/task", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_reg1";
-    const fid = "feat-reg";
-    const tid = "t-reg";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "high",
-        complexity: "high",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
-    writeFileSync(
-      gatePath,
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: {
-          session_id: sid,
-          feature_id: fid,
-          snapshot_path: snapshotRel,
-          snapshot_hash: hash,
-        },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
+for (const { role, output, title } of [
+  { role: "sniper-high", output: "Status: DONE", title: "sniper-high DONE" },
+  { role: "sniper-low", output: "Status: DONE", title: "sniper-low DONE" },
+  { role: "sniper-high", output: "Status: BLOCKED", title: "sniper-high BLOCKED" },
+]) {
+  test(`obs-hand ${title} never arms regate_pending`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "obs-hand-no-regate-"));
+    try {
+      const sid = `ses-${role}-${output.includes("DONE") ? "done" : "blocked"}`;
+      const fid = "feat-reg";
+      const tid = "t-reg";
+      const callId = `call-${role}-${output.includes("DONE") ? "done" : "blocked"}`;
+      seedDispatch(dir, { sessionId: sid, featureId: fid, taskId: tid, role, callId });
+      const hooks = await createObsHandHooks(dir);
+      await hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: callId }, { args: taskArgs(tid, role, fid), output });
+      const gate = JSON.parse(readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8"));
+      assert.equal(gate.regate_pending, undefined);
+      assert.equal(output.includes("DONE") ? gate.hand_finished?.[0] : gate.hand_finished?.length, output.includes("DONE") ? `${fid}/${tid}` : 0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
 
+test("obs-hand completion remains fail-open when the producer record is malformed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-hand-malformed-"));
+  try {
+    const sid = "ses_bad";
+    const callId = "call-bad";
+    const records = join(dir, `.opencode/plans/.state/${sid}/dispatch-records`);
+    mkdirSync(records, { recursive: true });
+    writeFileSync(join(records, `${crypto.createHash("sha256").update(callId).digest("hex")}.json`), "not-json");
     const hooks = await createObsHandHooks(dir);
-    const args = {
-      description: "fix t-reg high",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nSurgical fix.`,
-      subagent_type: "sniper-high",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-reg" }, { args });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-reg" },
-      { args, output: "Fixed race.\nStatus: DONE\n" },
-    );
-
-    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
-    const expected = formatFeatureTaskEntry(fid, tid);
-    assert.ok(Array.isArray(disk.regate_pending), "regate_pending array");
-    assert.ok(disk.regate_pending.includes(expected), `expected ${expected} in ${JSON.stringify(disk.regate_pending)}`);
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("obs-hand: sniper-low DONE does not arm regate_pending", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-low-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_low1";
-    const fid = "feat-low";
-    const tid = "t-low";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "low",
-        complexity: "low",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
-    writeFileSync(
-      gatePath,
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: {
-          session_id: sid,
-          feature_id: fid,
-          snapshot_path: snapshotRel,
-          snapshot_hash: hash,
-        },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const hooks = await createObsHandHooks(dir);
-    const args = {
-      description: "fix t-low",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nTiny fix.`,
-      subagent_type: "sniper-low",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-low" }, { args });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-low" },
-      { args, output: "Status: DONE\n" },
-    );
-
-    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
-    assert.equal(disk.regate_pending == null || disk.regate_pending.length === 0, true);
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("obs-hand: sniper-high BLOCKED does not arm regate_pending", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-regate-blocked-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_blk1";
-    const fid = "feat-blk";
-    const tid = "t-blk";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "high",
-        complexity: "high",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    const gatePath = join(dir, `.opencode/plans/.state/${sid}/gate-state.json`);
-    writeFileSync(
-      gatePath,
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: {
-          session_id: sid,
-          feature_id: fid,
-          snapshot_path: snapshotRel,
-          snapshot_hash: hash,
-        },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const hooks = await createObsHandHooks(dir);
-    const args = {
-      description: "fix t-blk",
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nBlocked fix.`,
-      subagent_type: "sniper-high",
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-blk" }, { args });
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: sid, callID: "call-blk" },
-      { args, output: "Status: BLOCKED\n" },
-    );
-
-    const disk = JSON.parse(readFileSync(gatePath, "utf8"));
-    assert.equal(disk.regate_pending == null || disk.regate_pending.length === 0, true);
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// #532: the observability belt (obs-hand's event/after-hook binding accounting) is declared
-// fail-open by orchestrating-delivery's skill doc. A binding-accounting miss used to `throw`
-// from inside the plugin hook, which OpenCode surfaces as a tool-error that kills the whole
-// headless run — discarding an approved plan and already-written code for what should be, at
-// most, a missing line in the Telegram feed. These four tests pin the fail-open contract at
-// each site that used to throw.
-
-test("#532 ac-1.1: message.updated bind failure warns, never crashes the run", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-bind-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    // No claim was ever armed for "ses_no_claim_532" — bindChildSession fails with the exact
-    // reason observed in the wild (#532): "live parent dispatch capability or role mismatch".
-    const client = {
-      session: { get: async ({ path: p }) => ({ data: { id: p.id, parentID: "ses_no_claim_532" } }) },
-    };
-    const hooks = await createObsHandHooks(dir, { client });
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() =>
-        hooks.event({
-          event: {
-            type: "message.updated",
-            properties: {
-              info: { id: "u1", sessionID: "child-no-claim-532", role: "user", agent: "executor-medium" },
-            },
-          },
-        }),
-      ),
-    );
-    assert.ok(
-      warnings.some((w) => /message\.updated bind skipped/.test(String(w))),
-      `expected a bind-skip warning, got: ${JSON.stringify(warnings)}`,
-    );
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the run", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-idle-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_532_idle";
-    const fid = "feat-532-idle";
-    const tid = "t-532-idle";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const client = { session: {
-      get: async ({ path: p }) => ({ data: { id: p.id, parentID: sid } }),
-      messages: async ({ path: p }) => ({ data: p.id === sid ? [{
-        info: { id: "parent-assistant", sessionID: sid, role: "assistant", parentID: "parent-user", agent: "executor-medium" },
-        parts: [{ id: "task-part", sessionID: sid, messageID: "parent-assistant", type: "tool", callID: "call-532-idle", tool: "task", state: { status: "running", input: { subagent_type: "executor-medium" }, metadata: { sessionId: "child-532-idle" } } }],
-      }] : [] }),
-    } };
-    const hooks = await createObsHandHooks(dir, { client });
-    const args = {
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
-      subagent_type: "executor-medium",
-      feature_id: fid,
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-idle" }, { args });
-    await hooks.event({
-      event: {
-        type: "message.updated",
-        properties: { info: { id: "u1", sessionID: "child-532-idle", role: "user", agent: "executor-medium" } },
-      },
-    });
-    const boundBefore = JSON.parse(
-      readFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), "utf8"),
-    ).dispatch_records["call-532-idle"];
-    assert.equal(boundBefore.status, "active");
-    assert.equal(boundBefore.child_session_id, "child-532-idle");
-
-    // Simulate the parent's gate-state directory becoming unreadable mid-flight (disk
-    // contention, permission drift) — cleanupChild must degrade to a warning, not a crash.
-    corruptGateStateDir(dir, sid);
-
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() =>
-        hooks.event({ event: { type: "session.idle", properties: { sessionID: "child-532-idle" } } }),
-      ),
-    );
-    assert.ok(
-      warnings.some((w) => /session\.idle cleanup skipped/.test(String(w))),
-      `expected a cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
-    );
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("#532 ac-1.3: after-hook finally cleanup failure warns, never crashes the run", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-finally-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_532_finally";
-    const fid = "feat-532-finally";
-    const tid = "t-532-finally";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const hooks = await createObsHandHooks(dir);
-    const args = {
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
-      subagent_type: "executor-medium",
-      feature_id: fid,
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-finally" }, { args });
-
-    // Simulate the parent's gate-state directory becoming unreadable/unwritable mid-flight —
-    // the terminal after-hook's finally cleanup must degrade to a warning, not crash the run.
-    corruptGateStateDir(dir, sid);
-
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() =>
-        hooks["tool.execute.after"](
-          { tool: "task", sessionID: sid, callID: "call-532-finally" },
-          { args, output: "Status: DONE\n" },
-        ),
-      ),
-    );
-    assert.ok(
-      warnings.some((w) => /after-hook cleanup skipped/.test(String(w))),
-      `expected an after-hook cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
-    );
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("#532 message.part.updated tool-error cleanup failure warns, never crashes the run", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "obs-hand-532-toolerr-"));
-  try {
-    const meta = join(dir, "obs.json");
-    writeFileSync(meta, "{}");
-    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
-    const sid = "ses_532_toolerr";
-    const fid = "feat-532-toolerr";
-    const tid = "t-532-toolerr";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
-    const plan = {
-      feature_id: fid,
-      kind: "full",
-      mode: "full",
-      model_strategy: MODEL_STRATEGY,
-      tasks: [{
-        id: tid,
-        severity: "medium",
-        complexity: "medium",
-        scope_paths: ["src/a.ts"],
-        criterion_refs: ["#ac-1"],
-        locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }],
-      }],
-    };
-    const hash = semanticPlanHash(plan);
-    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
-    writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(
-      join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
-      JSON.stringify({
-        session_id: sid,
-        feature_id: fid,
-        planner_status: "usable",
-        delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
-      }),
-    );
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
-
-    const hooks = await createObsHandHooks(dir);
-    const args = {
-      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${tid}"}[/HARNESS_TASK_CONTEXT]\nGo.`,
-      subagent_type: "executor-medium",
-      feature_id: fid,
-    };
-    await hooks["tool.execute.before"]({ tool: "task", sessionID: sid, callID: "call-532-toolerr" }, { args });
-
-    corruptGateStateDir(dir, sid);
-
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() =>
-        hooks.event({
-          event: {
-            type: "message.part.updated",
-            properties: {
-              part: { type: "tool", tool: "task", sessionID: sid, callID: "call-532-toolerr", state: { status: "error" } },
-            },
-          },
-        }),
-      ),
-    );
-    assert.ok(
-      warnings.some((w) => /tool-error cleanup skipped/.test(String(w))),
-      `expected a tool-error cleanup-skip warning, got: ${JSON.stringify(warnings)}`,
-    );
-  } finally {
-    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-    rmSync(dir, { recursive: true, force: true });
-  }
+    await assert.doesNotReject(() => hooks["tool.execute.after"]({ tool: "task", sessionID: sid, callID: callId }, { args: taskArgs("t-bad", "executor-medium", "feat-bad"), output: "Status: DONE" }));
+    assert.equal(existsSync(handRecordPath(dir, sid, "feat-bad", "t-bad")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

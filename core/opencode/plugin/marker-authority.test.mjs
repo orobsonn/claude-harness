@@ -50,6 +50,7 @@ function seedDoneHandRecord(root, outcome = "DONE") {
     outcome,
     agent: "executor-medium",
   });
+  record.writtenBy = "host-hand-finished";
   const written = writeHandRecord({
     roots: { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
     taskId: TASK,

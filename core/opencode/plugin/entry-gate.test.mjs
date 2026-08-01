@@ -6,7 +6,10 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import crypto from "node:crypto"
 import { createEntryGateHooks } from "./entry-gate.ts"
+import { createObsHandHooks } from "./obs-hand.ts"
+import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 
 const SID = "ses_test1"
 
@@ -76,6 +79,47 @@ function fullDeliveryState(extra = {}, sessionId = SID) {
     capture_verified: [],
     ...extra,
   }
+}
+
+/** @description Install the immutable snapshot required for an exact writing-hand claim. */
+function writeScopeReadyState(root, sessionId = SID, taskId = "task-scope") {
+  const featureId = "feat"
+  const plan = {
+    feature_id: featureId,
+    kind: "full",
+    mode: "full",
+    model_strategy: {
+      hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+      planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
+      adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
+    },
+    tasks: [{ id: taskId, severity: "low", complexity: "low", scope_paths: ["src"], allowed_writes: [], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "a" }] }],
+  }
+  const content = JSON.stringify(plan)
+  const fileHash = crypto.createHash("sha256").update(content).digest("hex")
+  const snapshotPath = path.join(root, ".opencode", "plans", ".state", sessionId, "bound-plans", `${fileHash}.json`)
+  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true })
+  fs.mkdirSync(path.join(root, "src"), { recursive: true })
+  fs.writeFileSync(snapshotPath, content)
+  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${fileHash}.json`
+  writeGateState(root, sessionId, fullDeliveryState({
+    fidelity_pass: [`${featureId}/${taskId}`],
+    planner_plan_binding: {
+      session_id: sessionId,
+      feature_id: featureId,
+      snapshot_path: snapshotRel,
+      snapshot_hash: semanticPlanHash(plan),
+      snapshot_file_hash: fileHash,
+    },
+  }, sessionId))
+}
+
+function exactDispatchPath(root, sessionId, callId) {
+  return path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`)
+}
+
+function writingTaskArgs(taskId = "task-scope") {
+  return { subagent_type: "executor-low", taskId, feature_id: "feat", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]` }
 }
 
 test("#ac-1.1: bash gh pr create + empty gate-state on a feature branch with commits → PERMITIDO (fail-open; was denied by 'delivery requires readable gate-state')", async () => {
@@ -997,5 +1041,150 @@ test("#516: HARNESS_OC_DATA_HOME alone does NOT arm the choke-point (adversarial
         isAncestorFn: () => true,
       },
     )
+  })
+})
+
+test("entry-gate claims one exact dispatch record after allowing a writing Task", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-claim" }, { args: writingTaskArgs() })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-claim"), "utf8"))
+    assert.deepEqual(record, {
+      parent_session_id: SID,
+      dispatch_call_id: "call-claim",
+      child_session_id: null,
+      feature_id: "feat",
+      task_id: "task-scope",
+      role: "executor-low",
+      scope_paths: ["src"],
+      allowed_writes: [],
+      snapshot_hash: record.snapshot_hash,
+      claimed_at: record.claimed_at,
+    })
+    assert.match(record.claimed_at, /^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
+test("entry-gate terminal after and tool error remove only their exact parent call", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-after" }, { args })
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sibling" }, { args })
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: SID, callID: "call-after" }, { args })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-after")), false)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-sibling")), true)
+    await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "task", sessionID: SID, callID: "call-sibling", state: { status: "error" } } } } })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-sibling")), false)
+  })
+})
+
+test("entry-gate binds a child only from one official parent Task fact", async () => {
+  const childSessionId = "child-scope"
+  const client = {
+    session: {
+      get: async () => ({ data: { id: childSessionId, parentID: SID } }),
+      messages: async () => ({ data: [{
+        info: { id: "parent-message", sessionID: SID, role: "assistant" },
+        parts: [{ type: "tool", tool: "task", sessionID: SID, messageID: "parent-message", callID: "call-bind", state: { status: "running", input: { subagent_type: "executor-low" }, metadata: { sessionId: childSessionId } } }],
+      }] }),
+    },
+  }
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-bind" }, { args: writingTaskArgs() })
+    await hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-bind"), "utf8"))
+    assert.equal(record.child_session_id, childSessionId)
+  }, { client })
+})
+
+test("entry-gate leaves an exact record unbound when SDK is unavailable or parent facts are ambiguous", async () => {
+  const childSessionId = "child-unbound"
+  const ambiguousClient = {
+    session: {
+      get: async () => ({ data: { id: childSessionId, parentID: SID } }),
+      messages: async () => ({ data: ["one", "two"].map((id) => ({
+        info: { id, sessionID: SID, role: "assistant" },
+        parts: [{ type: "tool", tool: "task", sessionID: SID, messageID: id, callID: "call-unbound", state: { status: "running", input: { subagent_type: "executor-low" }, metadata: { sessionId: childSessionId } } }],
+      })) }),
+    },
+  }
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-unbound" }, { args: writingTaskArgs() })
+    await assert.doesNotReject(() => hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } }))
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-unbound"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: ambiguousClient })
+
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sdk-fault" }, { args: writingTaskArgs() })
+    await assert.doesNotReject(() => hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } }))
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-sdk-fault"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: { session: { get: async () => { throw new Error("SDK unavailable") }, messages: async () => [] } } })
+
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sdk-mismatch" }, { args: writingTaskArgs() })
+    await hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-sdk-mismatch"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: { session: { get: async () => ({ data: { id: "different-child", parentID: SID } }), messages: async () => { throw new Error("must not query foreign parent") } } } })
+})
+
+test("entry-gate terminal after records completion before exact dispatch cleanup", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-finish-first" }, { args })
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: SID, callID: "call-finish-first" }, { args, output: "Status: DONE" })
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")
+    assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).producerCallId, "call-finish-first")
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, `.opencode/plans/.state/${SID}/gate-state.json`), "utf8")).hand_finished, ["feat/task-scope"])
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-finish-first")), false)
+  })
+})
+
+test("entry-gate background running after keeps its exact dispatch record", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-background-running" }
+    await hooks["tool.execute.before"](input, { args })
+    await hooks["tool.execute.after"](input, { args, metadata: { background: true }, output: '<task state="running">' })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-background-running")), true)
+  })
+})
+
+test("entry-gate completion producer failure retains exact dispatch authority for retry", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const initialArgs = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-completion-retry" }
+    await hooks["tool.execute.before"](input, { args: initialArgs })
+    const mismatchedArgs = { ...initialArgs, subagent_type: "sniper-low" }
+    await hooks["tool.execute.after"](input, { args: mismatchedArgs, output: "Status: DONE" })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-completion-retry")), true)
+    assert.equal(fs.existsSync(path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")), false)
+  })
+})
+
+test("obs-first then entry terminal after keeps the producer record byte-stable and cleans exactly", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-obs-first" }
+    const output = { args, output: "Status: DONE" }
+    await hooks["tool.execute.before"](input, { args })
+    const obs = await createObsHandHooks(root)
+    await obs["tool.execute.after"](input, output)
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")
+    const before = fs.readFileSync(recordPath)
+    await hooks["tool.execute.after"](input, output)
+    assert.deepEqual(fs.readFileSync(recordPath), before)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-obs-first")), false)
   })
 })

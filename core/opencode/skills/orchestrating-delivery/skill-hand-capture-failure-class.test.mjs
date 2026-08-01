@@ -18,6 +18,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const lines = skill.split("\n");
 
+function captureStepOne() {
+  const start = lines.findIndex((line) => /^1\. Host /.test(line));
+  assert.notEqual(start, -1, "SKILL.md must keep § Post-hand capture path step 1 as the host completion item.");
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^2\. /.test(line));
+  return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join("\n");
+}
+
 /**
  * Step 2 of § Post-hand capture path — the numbered item plus every sub-bullet indented under it,
  * up to the next top-level numbered item.
@@ -58,6 +66,7 @@ function bullets(blockLines) {
 }
 
 const stepTwoLines = captureStepTwoLines();
+const stepOne = captureStepOne();
 const stepTwo = stepTwoLines.join("\n");
 const stepTwoHeader = stepTwoLines[0];
 const stepTwoBullets = bullets(stepTwoLines);
@@ -71,6 +80,13 @@ const REFUSAL_VERDICTS = ["BLOCKED", "NEEDS_CONTEXT", "CONFIG_ERROR"];
 const refusalBullets = stepTwoBullets.filter((bullet) =>
   REFUSAL_VERDICTS.every((verdict) => bullet.includes(verdict)),
 );
+
+test("#ac-1.1 — host completion never self-certifies independent capture", () => {
+  assert.match(stepOne, /hand_finished/, "host completion must name the factual DONE stamp it owns.");
+  assert.match(stepOne, /does\s+\**not|never/i, "step 1 must explicitly deny automatic capture certification.");
+  assert.match(stepOne, /capture_verified/, "step 1 must name the independent capture fact it does not own.");
+  assert.match(stepOne, /capturedVerifiedAt/, "step 1 must name the record evidence it does not own.");
+});
 
 test("#ac-1.1 — capture step 2 splits `ok:false` into causes instead of one retry order", () => {
   assert.ok(

@@ -116,7 +116,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           }
           if (!isDoneHandRecord(hfRecord)) return { ok: false, reason: "hand-record is not DONE" }
           const hfBy = hfRecord.writtenBy
-          if (hfBy !== "obs-hand-task" && hfBy !== "run-hand-adapter") {
+          if (hfBy !== "host-hand-finished" && hfBy !== "run-hand-adapter") {
             return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
           }
           patch = { hand_finished: [bare] }
@@ -146,7 +146,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           }
           if (!isDoneHandRecord(record)) return { ok: false, reason: "hand-record is not DONE" }
           const writtenBy = record.writtenBy
-          if (writtenBy !== "obs-hand-task" && writtenBy !== "run-hand-adapter") {
+          if (writtenBy !== "host-hand-finished" && writtenBy !== "run-hand-adapter") {
             return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
           }
           if (!atomicJsonWrite(recordPath.path, { ...record, capturedVerifiedAt: new Date().toISOString() })) {

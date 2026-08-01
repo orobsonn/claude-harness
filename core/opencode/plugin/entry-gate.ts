@@ -46,6 +46,8 @@ export type EntryGateDeps = {
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
   resolveActingAgentFn?: (input: unknown, output: unknown) => string | null
+  /** Official SDK client used only to bind factual child Task metadata. */
+  client?: any
 }
 
 /**
@@ -164,7 +166,7 @@ function defaultIsAncestor(sha: string): boolean | null {
 export async function createEntryGateHooks(
   projectRoot: string,
   deps: EntryGateDeps = {},
-): Promise<Pick<Hooks, "tool.execute.before">> {
+): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
@@ -184,6 +186,9 @@ export async function createEntryGateHooks(
     throwIfDenied: throwIfEntryDenied,
   } = await import("../lib/entry-decide.mjs")
   const { isDeliveryRole } = await import("../lib/roles.mjs")
+  const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs")
+  const { claimActiveDispatch, bindChildSession, removeDispatchRecord } = await import("../lib/dispatch-scope.mjs")
+  const { recordTaskCompletion } = await import("./lib/host-hand-capture.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
@@ -205,6 +210,9 @@ export async function createEntryGateHooks(
         null
       return typeof a === "string" && a.trim() ? a.trim() : null
     })
+
+  const writingHand = (role: unknown) => isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role)
+  const client = deps.client
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -393,6 +401,80 @@ export async function createEntryGateHooks(
           taskId,
         }),
       )
+      if (writingHand(subagentType)) {
+        const callId = typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : ""
+        if (!sid || !callId || !taskId) return
+        const claimed = claimActiveDispatch(root, { sessionId: sid, callId, role: subagentType, taskId })
+        if (!claimed.ok) throw new Error(`${PREFIX} exact dispatch record rejected: ${claimed.reason}`)
+      }
+    },
+    "tool.execute.after": async (input: any, output: any) => {
+      let sessionId = ""
+      let callId = ""
+      let cleanupExactRecord = false
+      try {
+        const { toolName, toolArgs, subagentType } = extractHookTaskContext(input, output)
+        if (!isTaskTool(toolName) || !writingHand(subagentType)) return
+        sessionId = typeof input?.sessionID === "string" ? input.sessionID : ""
+        callId = typeof input?.callID === "string" ? input.callID : ""
+        const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs) ? (toolArgs as Record<string, unknown>).prompt : undefined
+        const promptMarker = parseTaskDispatchIdentity(prompt)
+        const identity = resolveHookIdentity({ input, toolArgs, promptTaskId: promptMarker.ok ? promptMarker.taskId : "" })
+        if (!identity.ok || !sessionId || !callId) return
+        const loaded = loadGateStateFromDisk(root, { sessionId })
+        const optionalIds = extractFeatureTaskIds(toolArgs)
+        const featureId = identity.featureIdSource === "runtime-envelope"
+          ? identity.featureId
+          : loaded.ok && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : optionalIds.featureId
+        const taskId = identity.taskId || optionalIds.taskId
+        if (featureId && taskId) {
+          const completion = recordTaskCompletion({
+          projectRoot: root,
+          sessionId,
+          featureId,
+          taskId,
+          role: subagentType,
+          producerCallId: callId,
+          outputText: String(output?.output ?? output?.content ?? output?.result ?? ""),
+          background: output?.metadata?.background === true,
+          })
+          cleanupExactRecord = completion.ok === true && completion.terminal === true
+        }
+      } catch { /* terminal completion observation is best-effort */ }
+      finally {
+        if (cleanupExactRecord && sessionId && callId) removeDispatchRecord(root, { sessionId, callId })
+      }
+    },
+    event: async ({ event }: any) => {
+      try {
+        if (event?.type === "message.part.updated") {
+          const part = event?.properties?.part ?? event?.part
+          if (part?.type === "tool" && isTaskTool(part?.tool) && part?.state?.status === "error" && typeof part?.sessionID === "string" && typeof part?.callID === "string") {
+            removeDispatchRecord(root, { sessionId: part.sessionID, callId: part.callID })
+            return
+          }
+        }
+        if (event?.type !== "message.updated" || typeof client?.session?.get !== "function" || typeof client?.session?.messages !== "function") return
+        const info = event?.properties?.info
+        const childSessionId = typeof info?.sessionID === "string" ? info.sessionID : ""
+        if (!childSessionId || !writingHand(info?.agent)) return
+        const sessionResult = await client.session.get({ path: { id: childSessionId }, query: { directory: root } })
+        const session = sessionResult && typeof sessionResult === "object" && "data" in sessionResult ? (sessionResult as any).data : sessionResult
+        if (session?.id !== childSessionId) return
+        const parentSessionId = typeof session?.parentID === "string" ? session.parentID : ""
+        if (!parentSessionId) return
+        const messagesResult = await client.session.messages({ path: { id: parentSessionId }, query: { directory: root } })
+        const messages = messagesResult && typeof messagesResult === "object" && "data" in messagesResult ? (messagesResult as any).data : messagesResult
+        const matches: Array<{ callId: string, role: string }> = []
+        for (const bundle of Array.isArray(messages) ? messages : []) {
+          for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
+            const role = part?.state?.input?.subagent_type
+            if (bundle?.info?.role === "assistant" && bundle?.info?.sessionID === parentSessionId && part?.type === "tool" && isTaskTool(part?.tool) && part?.sessionID === parentSessionId && part?.messageID === bundle?.info?.id && part?.state?.status === "running" && part?.state?.metadata?.sessionId === childSessionId && typeof part?.callID === "string" && writingHand(role)) matches.push({ callId: part.callID, role })
+          }
+        }
+        if (matches.length !== 1) return
+        bindChildSession(root, { parentSessionId, childSessionId, role: matches[0].role, callId: matches[0].callId })
+      } catch { /* SDK faults leave scope unavailable; plan-write opens diagnostically */ }
     },
   }
 }
@@ -439,7 +521,7 @@ export const EntryGate: Plugin = async ({ directory, worktree, client }: any) =>
       return null
     }
   }
-  return createEntryGateHooks(root, { getSessionParentIdFn })
+  return createEntryGateHooks(root, { getSessionParentIdFn, client })
 }
 
 export default EntryGate

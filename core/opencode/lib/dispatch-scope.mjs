@@ -1,116 +1,43 @@
-/** @description Runtime-bound writing-hand dispatch claims, scope normalization, and durable violations. */
+/** @description Exact call-keyed writing-hand scope records with no shared live registry. */
 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
+import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
+import { acquireLock, releaseLock } from "./gate-state.mjs";
 import { readBoundPlanSnapshot } from "./planner-artifact.mjs";
-import { withGateStateLock } from "./gate-state.mjs";
 import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
-
-export const DISPATCH_LEASE_MS = 30 * 60 * 1000;
-const liveClaims = new Map();
-const childBindings = new Map();
-const pendingChildParents = new Map();
-
-function childBindingKey(projectRoot, childSessionId) {
-  let root = projectRoot;
-  try { root = fs.realpathSync(projectRoot); } catch { /* use provided root for fail-closed lookup */ }
-  return `${root}\0${childSessionId}`;
-}
-
-function liveClaimKey(projectRoot, sessionId, callId) {
-  return `${childBindingKey(projectRoot, sessionId)}\0${callId}`;
-}
-
-function childIndexPath(projectRoot, childSessionId) {
-  const name = crypto.createHash("sha256").update(childSessionId).digest("hex");
-  return path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children", `${name}.json`);
-}
-
-function pendingChildIndexPath(projectRoot, childSessionId) {
-  const name = crypto.createHash("sha256").update(childSessionId).digest("hex");
-  return path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-pending-children", `${name}.json`);
-}
-
-function writeJsonAtomic(target, body) {
-  const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const fd = fs.openSync(temp, "wx", 0o600);
-    try {
-      fs.writeFileSync(fd, JSON.stringify(body, null, 2), "utf8");
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    fs.renameSync(temp, target);
-    return true;
-  } catch {
-    try { fs.rmSync(temp, { force: true }); } catch { /* ignore */ }
-    return false;
-  }
-}
-
-function persistChildBinding(projectRoot, binding) {
-  return writeJsonAtomic(childIndexPath(projectRoot, binding.childSessionId), binding);
-}
-
-function readChildBinding(projectRoot, childSessionId) {
-  try {
-    const binding = JSON.parse(fs.readFileSync(childIndexPath(projectRoot, childSessionId), "utf8"));
-    return binding?.childSessionId === childSessionId && typeof binding.parentSessionId === "string" && typeof binding.callId === "string" && typeof binding.token === "string"
-      ? binding
-      : null;
-  } catch { return null; }
-}
-
-function persistPendingChildParent(projectRoot, pending) {
-  const key = childBindingKey(projectRoot, pending.childSessionId);
-  pendingChildParents.set(key, pending);
-  return writeJsonAtomic(pendingChildIndexPath(projectRoot, pending.childSessionId), pending);
-}
-
-function readPendingChildParent(projectRoot, childSessionId) {
-  const key = childBindingKey(projectRoot, childSessionId);
-  const cached = pendingChildParents.get(key);
-  if (cached?.childSessionId === childSessionId && typeof cached.parentSessionId === "string" && typeof cached.callId === "string") {
-    return cached;
-  }
-  try {
-    const pending = JSON.parse(fs.readFileSync(pendingChildIndexPath(projectRoot, childSessionId), "utf8"));
-    if (pending?.childSessionId === childSessionId && typeof pending.parentSessionId === "string" && typeof pending.callId === "string") {
-      pendingChildParents.set(key, pending);
-      return pending;
-    }
-  } catch { /* absent */ }
-  return null;
-}
-
-function clearPendingChildParent(projectRoot, childSessionId) {
-  if (typeof childSessionId !== "string" || !childSessionId) return;
-  pendingChildParents.delete(childBindingKey(projectRoot, childSessionId));
-  try { fs.rmSync(pendingChildIndexPath(projectRoot, childSessionId), { force: true }); } catch { /* ignore */ }
-}
 
 function inside(root, candidate) {
   const rel = path.relative(root, candidate);
   return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
 }
 
-function nearestRealPath(candidate) {
+function nearestExistingPath(candidate) {
   let current = candidate;
   while (!fs.existsSync(current)) {
     const parent = path.dirname(current);
     if (parent === current) return null;
     current = parent;
   }
-  try { return fs.realpathSync(current); } catch { return null; }
+  return current;
+}
+
+function canonicalTarget(realRoot, candidate, reason) {
+  const existing = nearestExistingPath(candidate);
+  if (!existing) return { ok: false, reason };
+  let realExisting;
+  try { realExisting = fs.realpathSync(existing); } catch { return { ok: false, reason }; }
+  if (!inside(realRoot, realExisting)) return { ok: false, reason };
+  const canonical = path.resolve(realExisting, path.relative(existing, candidate));
+  if (!inside(realRoot, canonical)) return { ok: false, reason };
+  return { ok: true, path: canonical };
 }
 
 /** @description Resolve a path beneath the real project root, rejecting traversal and symlink escape. */
 export function normalizeProjectPath(projectRoot, value) {
-  if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
-    return { ok: false, reason: "scope path missing or invalid" };
-  }
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) return { ok: false, reason: "scope path missing or invalid" };
   const raw = value.trim().replace(/\\/g, "/");
   if (raw.split("/").includes("..")) return { ok: false, reason: "scope path traversal rejected" };
   let realRoot;
@@ -119,20 +46,18 @@ export function normalizeProjectPath(projectRoot, value) {
   let absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(realRoot, raw);
   if (path.isAbsolute(raw)) {
     try { absolute = fs.realpathSync(absolute); } catch {
-      try { absolute = path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute)); } catch { /* nearest existing path check below */ }
+      try { absolute = path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute)); } catch { /* checked below */ }
     }
   }
-  if (!inside(realRoot, absolute) && inside(lexicalRoot, absolute)) {
-    absolute = path.resolve(realRoot, path.relative(lexicalRoot, absolute));
-  }
+  if (!inside(realRoot, absolute) && inside(lexicalRoot, absolute)) absolute = path.resolve(realRoot, path.relative(lexicalRoot, absolute));
   if (!inside(realRoot, absolute)) return { ok: false, reason: "absolute path outside project root" };
-  const existing = nearestRealPath(absolute);
-  if (!existing || !inside(realRoot, existing)) return { ok: false, reason: "scope path symlink escape rejected" };
-  const relative = path.relative(realRoot, absolute).split(path.sep).join("/");
+  const canonical = canonicalTarget(realRoot, absolute, "scope path symlink escape rejected");
+  if (!canonical.ok) return canonical;
+  const relative = path.relative(realRoot, canonical.path).split(path.sep).join("/");
   return { ok: true, path: relative || "." };
 }
 
-function roleIsWritingHand(role) {
+function writingHand(role) {
   return isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role);
 }
 
@@ -142,44 +67,98 @@ function sameWritingHandFamily(left, right) {
     (isTestAuthorRole(left) && isTestAuthorRole(right));
 }
 
+function safeSegment(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value) && !value.includes("..");
+}
+
 function statePath(projectRoot, sessionId) {
   return gateStatePath({ projectRoot, runtime: "opencode", sessionId });
 }
 
-function activeExpired(active, now) {
-  return Boolean(active && typeof active.expires_at === "string" && Number.isFinite(Date.parse(active.expires_at)) && Date.parse(active.expires_at) <= now);
+/** @description Return the one independent durable file assigned to a parent Task call. */
+export function dispatchRecordPath(projectRoot, parentSessionId, dispatchCallId) {
+  if (!safeSegment(parentSessionId) || typeof dispatchCallId !== "string" || !dispatchCallId) return { ok: false, reason: "exact parent session and dispatch call required" };
+  const digest = crypto.createHash("sha256").update(dispatchCallId).digest("hex");
+  let realRoot;
+  try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
+  const target = path.join(realRoot, ".opencode", "plans", ".state", parentSessionId, "dispatch-records", `${digest}.json`);
+  return canonicalTarget(realRoot, target, "dispatch record path escapes project root");
 }
 
-/** @description Read the per-parent call records without accepting malformed state. */
-function dispatchRecords(state) {
-  const records = state?.dispatch_records;
-  return records && typeof records === "object" && !Array.isArray(records) ? records : {};
+function readJson(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? { ok: true, value } : { ok: false, reason: "dispatch record invalid" };
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return { ok: false, absent: true, reason: "dispatch record absent" };
+    return { ok: false, reason: "dispatch record unreadable" };
+  }
 }
 
-function dispatchRecord(state, sessionId, callId) {
-  const record = dispatchRecords(state)[callId];
-  return record && typeof record === "object" && record.parent_session_id === sessionId && record.dispatch_call_id === callId
-    ? record
-    : null;
+function writeJsonAtomic(target, body) {
+  const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(temp, JSON.stringify(body, null, 2), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.renameSync(temp, target);
+    return true;
+  } catch {
+    try { fs.rmSync(temp, { force: true }); } catch { /* ignore */ }
+    return false;
+  }
 }
 
-function setDispatchRecord(state, callId, record) {
-  const records = { ...dispatchRecords(state), [callId]: record };
-  return { ...state, dispatch_records: records };
+function canonicalStringList(projectRoot, value, requireNonempty) {
+  if (!Array.isArray(value) || (requireNonempty && value.length === 0)) return false;
+  const seen = new Set();
+  for (const item of value) {
+    if (typeof item !== "string" || !item) return false;
+    const normalized = normalizeProjectPath(projectRoot, item);
+    if (!normalized.ok || normalized.path !== item || seen.has(item)) return false;
+    seen.add(item);
+  }
+  return true;
 }
 
-function deleteDispatchRecord(state, callId) {
-  const records = { ...dispatchRecords(state) };
-  delete records[callId];
-  return Object.keys(records).length > 0 ? { ...state, dispatch_records: records } : (() => {
-    const next = { ...state };
-    delete next.dispatch_records;
-    return next;
-  })();
+function validDispatchRecord(projectRoot, record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const required = [record.parent_session_id, record.dispatch_call_id, record.feature_id, record.task_id, record.role, record.snapshot_hash, record.claimed_at];
+  if (!required.every((value) => typeof value === "string" && value.length > 0)) return false;
+  if (!safeSegment(record.parent_session_id) || !isSafeFeatureId(record.feature_id) || !isSafeTaskId(record.task_id) || !writingHand(record.role)) return false;
+  if (!/^[0-9a-f]{64}$/.test(record.snapshot_hash)) return false;
+  if (record.child_session_id !== null && !safeSegment(record.child_session_id)) return false;
+  const claimedAt = Date.parse(record.claimed_at);
+  if (!Number.isFinite(claimedAt) || new Date(claimedAt).toISOString() !== record.claimed_at) return false;
+  return canonicalStringList(projectRoot, record.scope_paths, true) && canonicalStringList(projectRoot, record.allowed_writes, false);
 }
 
-function findDispatchRecord(state, predicate) {
-  return Object.values(dispatchRecords(state)).find((record) => record && typeof record === "object" && predicate(record)) ?? null;
+function mutateExactRecord(recordPath, fn) {
+  const acquired = acquireLock(recordPath);
+  if (!acquired.ok) return { ok: false, reason: acquired.reason };
+  try {
+    const current = readJson(recordPath);
+    const next = fn(current);
+    if (next?.ok === false) return next;
+    if (next?.remove) {
+      try { fs.rmSync(recordPath, { force: true }); return { ok: true, removed: true }; } catch { return { ok: false, reason: "dispatch record removal failed" }; }
+    }
+    if (!next || typeof next !== "object" || !next.record) return { ok: false, reason: "dispatch record mutation invalid" };
+    return writeJsonAtomic(recordPath, next.record) ? { ok: true, record: next.record } : { ok: false, reason: "dispatch record write failed" };
+  } finally {
+    releaseLock(recordPath, acquired.token);
+  }
+}
+
+/** @description Read one exact record; never scans or borrows a sibling. */
+export function readDispatchRecord(projectRoot, { parentSessionId, callId }) {
+  const resolved = dispatchRecordPath(projectRoot, parentSessionId, callId);
+  if (!resolved.ok) return resolved;
+  const loaded = readJson(resolved.path);
+  if (!loaded.ok) return loaded.absent ? loaded : { ...loaded, conflict: true };
+  const record = loaded.value;
+  if (!validDispatchRecord(projectRoot, record)) return { ok: false, conflict: true, reason: "dispatch record schema conflict" };
+  if (record.parent_session_id !== parentSessionId || record.dispatch_call_id !== callId) return { ok: false, conflict: true, reason: "dispatch record identity conflict" };
+  return { ok: true, record, path: resolved.path };
 }
 
 /** @description Read one exact task from the content-addressed immutable planner snapshot. */
@@ -187,397 +166,162 @@ export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   if (state?.planner_status !== "usable") return { ok: false, reason: "planner_status usable required" };
   const binding = state?.planner_plan_binding;
   if (!binding || typeof binding !== "object") return { ok: false, reason: "bound planner snapshot required" };
-  if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" || typeof binding.snapshot_file_hash !== "string") {
-    return { ok: false, reason: "bound planner snapshot identity missing" };
-  }
-  if (binding.session_id !== state.session_id || binding.feature_id !== state.feature_id) {
-    return { ok: false, reason: "bound planner snapshot identity mismatch" };
-  }
+  if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" || typeof binding.snapshot_file_hash !== "string") return { ok: false, reason: "bound planner snapshot identity missing" };
+  if (binding.session_id !== state.session_id || binding.feature_id !== state.feature_id) return { ok: false, reason: "bound planner snapshot identity mismatch" };
   const expectedDir = path.resolve(projectRoot, ".opencode", "plans", ".state", String(state.session_id), "bound-plans");
   const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
   const expectedPath = path.join(expectedDir, `${binding.snapshot_file_hash}.json`);
   const expectedRelative = path.relative(projectRoot, expectedPath).split(path.sep).join("/");
   if (snapshotPath !== expectedPath || binding.snapshot_path !== expectedRelative) return { ok: false, reason: "bound planner snapshot path is not canonical content-addressed identity" };
   const snapshot = readBoundPlanSnapshot(snapshotPath);
-  if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.fileHash !== binding.snapshot_file_hash || snapshot.plan?.feature_id !== state.feature_id) {
-    return { ok: false, reason: "bound planner snapshot integrity failed" };
-  }
-  const tasks = Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : [];
-  const matches = tasks.filter((task) => task && task.id === taskId);
+  if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.fileHash !== binding.snapshot_file_hash || snapshot.plan?.feature_id !== state.feature_id) return { ok: false, reason: "bound planner snapshot integrity failed" };
+  const matches = (Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : []).filter((task) => task && task.id === taskId);
   if (matches.length !== 1) return { ok: false, reason: "canonical task id missing or ambiguous in bound plan" };
   return { ok: true, featureId: state.feature_id, taskId, task: matches[0], snapshotHash: snapshot.semanticHash };
 }
 
 /** @description Verify the immutable planner binding and derive the canonical task scope. */
 export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) {
-  if (!roleIsWritingHand(role)) return { ok: false, reason: "role is not a writing hand" };
+  if (!writingHand(role)) return { ok: false, reason: "role is not a writing hand" };
   const bound = readCanonicalTaskFromSnapshot(projectRoot, state, taskId);
   if (!bound.ok) return bound;
-  const task = bound.task;
-  const rawScope = Array.isArray(task.scope_paths) ? task.scope_paths : [];
-  if (rawScope.length === 0) return { ok: false, reason: "canonical task scope is empty" };
   const scopePaths = [];
-  for (const item of rawScope) {
+  for (const item of Array.isArray(bound.task.scope_paths) ? bound.task.scope_paths : []) {
     const normalized = normalizeProjectPath(projectRoot, item);
     if (!normalized.ok) return normalized;
     if (!scopePaths.includes(normalized.path)) scopePaths.push(normalized.path);
   }
+  if (scopePaths.length === 0) return { ok: false, reason: "canonical task scope is empty" };
   const allowedWrites = [];
-  const rawAllowed = Array.isArray(task.allowed_writes) ? task.allowed_writes : [];
-  for (const item of rawAllowed) {
+  for (const item of Array.isArray(bound.task.allowed_writes) ? bound.task.allowed_writes : []) {
     const normalized = normalizeProjectPath(projectRoot, item);
     if (!normalized.ok) return normalized;
     if (!allowedWrites.includes(normalized.path)) allowedWrites.push(normalized.path);
   }
-  return {
-    ok: true,
-    featureId: bound.featureId,
-    taskId: task.id,
-    scopePaths,
-    allowedWrites,
-    snapshotHash: bound.snapshotHash,
+  return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, snapshotHash: bound.snapshotHash };
+}
+
+function loadCanonicalState(projectRoot, sessionId) {
+  const resolved = statePath(projectRoot, sessionId);
+  if (!resolved.ok) return resolved;
+  const loaded = readJson(resolved.path);
+  if (!loaded.ok) return { ok: false, reason: loaded.absent ? "gate-state missing" : "gate-state unreadable" };
+  return { ok: true, state: loaded.value };
+}
+
+function sameDispatch(left, right) {
+  return left.parent_session_id === right.parent_session_id &&
+    left.dispatch_call_id === right.dispatch_call_id &&
+    left.feature_id === right.feature_id && left.task_id === right.task_id && left.role === right.role &&
+    left.snapshot_hash === right.snapshot_hash && JSON.stringify(left.scope_paths) === JSON.stringify(right.scope_paths) &&
+    JSON.stringify(left.allowed_writes) === JSON.stringify(right.allowed_writes);
+}
+
+/** @description Atomically create one immutable canonical scope record for this exact Task call. */
+export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now() }) {
+  if (![sessionId, callId, role, taskId].every((value) => typeof value === "string" && value)) return { ok: false, reason: "runtime session, call, role, and task required" };
+  const loaded = loadCanonicalState(projectRoot, sessionId);
+  if (!loaded.ok) return loaded;
+  if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
+  const canonical = canonicalDispatchFromSnapshot(projectRoot, loaded.state, taskId, role);
+  if (!canonical.ok) return canonical;
+  const record = {
+    parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
+    feature_id: canonical.featureId, task_id: canonical.taskId, role,
+    scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
+    snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
   };
+  const resolved = dispatchRecordPath(projectRoot, sessionId, callId);
+  if (!resolved.ok) return resolved;
+  const written = mutateExactRecord(resolved.path, (current) => {
+    if (current.ok && !validDispatchRecord(projectRoot, current.value)) return { ok: false, conflict: true, reason: "same dispatch call record schema conflict" };
+    if (current.ok && sameDispatch(current.value, record)) return { record: current.value };
+    if (current.ok) return { ok: false, conflict: true, reason: "same dispatch call replay conflicts with canonical scope" };
+    if (!current.absent) return current;
+    return { record };
+  });
+  return written.ok ? { ok: true, claim: written.record } : written;
 }
 
-/** @description Atomically claim one live writing-hand dispatch by runtime Task callID. */
-export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), token = crypto.randomUUID() }) {
-  if (![sessionId, callId, role, taskId, token].every((v) => typeof v === "string" && v.length > 0)) {
-    return { ok: false, reason: "runtime session, call, role, task, and token required" };
-  }
-  const resolved = statePath(projectRoot, sessionId);
-  if (!resolved.ok) return resolved;
-  let claim;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    if (previous.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
-    const canonical = canonicalDispatchFromSnapshot(projectRoot, previous, taskId, role);
-    if (!canonical.ok) return canonical;
-    const current = dispatchRecord(previous, sessionId, callId);
-    if (current) {
-      // Same Task callID already owns the lease.
-      // OC-native: `.opencode/plugin/*.{ts,js}` is auto-globbed AND may also appear in
-      // opencode.json plugin[] → two Plugin factories → two before-hooks → two tokens.
-      // (Claude Code has one process-level hook registration; this path is OC-only.)
-      // Idempotent on dispatch_call_id, not claim_token.
-      if (current.dispatch_call_id === callId && current.status !== "stale") {
-        claim = current;
-        return previous;
+function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
+  let realRoot;
+  try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
+  const root = path.join(realRoot, ".opencode", "plans", ".state");
+  try {
+    for (const session of fs.readdirSync(root, { withFileTypes: true })) {
+      if (session.isSymbolicLink()) return { ok: false, reason: "dispatch sibling scan failed" };
+      if (!session.isDirectory()) continue;
+      const records = path.join(root, session.name, "dispatch-records");
+      let entries;
+      try { entries = fs.readdirSync(records); } catch (error) {
+        if (error && typeof error === "object" && error.code === "ENOENT") continue;
+        return { ok: false, reason: "dispatch sibling scan failed" };
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith(".json")) continue;
+        let file;
+        try { file = fs.realpathSync(path.join(records, entry)); } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
+        if (!inside(realRoot, file)) return { ok: false, reason: "dispatch sibling scan failed" };
+        if (file === wantedPath) continue;
+        const found = readJson(file);
+        if (!found.ok) return { ok: false, reason: "dispatch sibling scan failed" };
+        if (!validDispatchRecord(realRoot, found.value)) return { ok: false, reason: "dispatch sibling scan failed" };
+        const expectedName = `${crypto.createHash("sha256").update(found.value.dispatch_call_id).digest("hex")}.json`;
+        if (entry !== expectedName || found.value.parent_session_id !== session.name) return { ok: false, reason: "dispatch sibling scan failed" };
+        if (found.value.child_session_id === childSessionId) return { ok: true, bound: true };
       }
     }
-    claim = {
-      parent_session_id: sessionId,
-      feature_id: canonical.featureId,
-      task_id: canonical.taskId,
-      role,
-      scope_paths: canonical.scopePaths,
-      allowed_writes: canonical.allowedWrites,
-      snapshot_hash: canonical.snapshotHash,
-      dispatch_call_id: callId,
-      claim_token: token,
-      claimed_at: new Date(now).toISOString(),
-      expires_at: new Date(now + DISPATCH_LEASE_MS).toISOString(),
-      status: "active",
-    };
-    return setDispatchRecord(previous, callId, claim);
-  });
-  if (persisted.ok) {
-    // Always store the authoritative disk token (idempotent re-entry may return a prior claim).
-    const authoritative =
-      typeof claim?.claim_token === "string" && claim.claim_token ? claim.claim_token : token;
-    liveClaims.set(liveClaimKey(projectRoot, sessionId, callId), authoritative);
-  }
-  return persisted.ok ? { ok: true, claim } : persisted;
+  } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
+  return { ok: true, bound: false };
 }
 
-/** @description CAS cleanup: only the exact claim token and Task callID can remove authority. */
-export function clearActiveDispatch(projectRoot, { sessionId, callId, token }) {
-  const resolved = statePath(projectRoot, sessionId);
-  if (!resolved.ok) return resolved;
-  let cleared = false;
-  let clearedChild = "";
-  let clearedPendingChild = "";
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = dispatchRecord(previous, sessionId, callId);
-    if (!active || active.claim_token !== token) return previous;
-    clearedChild = typeof active.child_session_id === "string" ? active.child_session_id : "";
-    clearedPendingChild = typeof active.binding_pending?.child_session_id === "string" ? active.binding_pending.child_session_id : "";
-    cleared = true;
-    return deleteDispatchRecord(previous, callId);
-  });
-  if (persisted.ok && cleared) {
-    for (const [childId, binding] of childBindings) {
-      if (binding.parentSessionId === sessionId && binding.callId === callId && binding.token === token) childBindings.delete(childId);
-    }
-    for (const [childId, pending] of pendingChildParents) {
-      if (pending.parentSessionId === sessionId && pending.callId === callId) pendingChildParents.delete(childId);
-    }
-    if (clearedChild) {
-      childBindings.delete(childBindingKey(projectRoot, clearedChild));
-      try { fs.rmSync(childIndexPath(projectRoot, clearedChild), { force: true }); } catch { /* ignore */ }
-      clearPendingChildParent(projectRoot, clearedChild);
-    }
-    if (clearedPendingChild && clearedPendingChild !== clearedChild) {
-      clearPendingChildParent(projectRoot, clearedPendingChild);
-    }
-  }
-  return persisted.ok ? { ok: true, cleared } : persisted;
+function childLockTarget(projectRoot, childSessionId) {
+  let realRoot;
+  try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
+  const digest = crypto.createHash("sha256").update(childSessionId).digest("hex");
+  return canonicalTarget(realRoot, path.join(realRoot, ".opencode", "plans", ".state", ".dispatch-child-locks", digest), "dispatch child lock path escapes project root");
 }
 
-function sanitizedHostId(value) {
-  return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
-}
-
-/** @description Preserve an unresolved background dispatch until child identity can be proven. */
-export function markDispatchBindingPending(projectRoot, { sessionId, callId, token, childSessionId, jobId }) {
-  const resolved = statePath(projectRoot, sessionId);
-  if (!resolved.ok) return resolved;
-  let pending;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = dispatchRecord(previous, sessionId, callId);
-    if (!active || active.claim_token !== token || active.status === "stale") {
-      return { ok: false, reason: "binding_pending claim mismatch" };
-    }
-    const child = sanitizedHostId(childSessionId);
-    const existingChild = sanitizedHostId(active.binding_pending?.child_session_id);
-    if (existingChild && child && existingChild !== child) return { ok: false, reason: "binding_pending child identity conflict" };
-    pending = {
-      dispatch_call_id: callId,
-      ...(existingChild || child ? { child_session_id: existingChild || child } : {}),
-      ...(sanitizedHostId(jobId) ? { job_id: sanitizedHostId(jobId) } : {}),
-      recorded_at: new Date().toISOString(),
-    };
-    return setDispatchRecord(previous, callId, { ...active, status: "binding_pending", binding_pending: pending });
-  });
-  if (!persisted.ok) return persisted;
-  const knownChild = sanitizedHostId(pending?.child_session_id);
-  if (knownChild) {
-    const indexed = persistPendingChildParent(projectRoot, {
-      childSessionId: knownChild,
-      parentSessionId: sessionId,
-      callId,
-      recorded_at: pending.recorded_at,
-    });
-    if (!indexed) return { ok: false, reason: "durable pending child index failed" };
-  }
-  return { ok: true, pending };
-}
-
-/** @description Bind an official child-session event to the sole live parent dispatch claim. */
+/** @description Bind a child only to the explicitly named parent call; sibling records are never candidates. */
 export function bindChildSession(projectRoot, { parentSessionId, childSessionId, role, callId }) {
-  if (![parentSessionId, childSessionId, role].every((value) => typeof value === "string" && value.length > 0) || parentSessionId === childSessionId || !roleIsWritingHand(role)) {
-    return { ok: false, reason: "valid parent, child, and writing role required" };
-  }
-  const resolved = statePath(projectRoot, parentSessionId);
+  if (![parentSessionId, childSessionId, role, callId].every((value) => typeof value === "string" && value) || parentSessionId === childSessionId || !writingHand(role)) return { ok: false, reason: "exact parent, child, call, and writing role required" };
+  const resolved = dispatchRecordPath(projectRoot, parentSessionId, callId);
   if (!resolved.ok) return resolved;
-  let binding;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const records = Object.values(dispatchRecords(previous)).filter((record) => record && typeof record === "object");
-    const active = typeof callId === "string" && callId
-      ? dispatchRecord(previous, parentSessionId, callId)
-      : findDispatchRecord(previous, (record) => record.binding_pending?.child_session_id === childSessionId || record.child_session_id === childSessionId) ??
-        (records.length === 1 ? records[0] : null);
-    const token = active && liveClaims.get(liveClaimKey(projectRoot, parentSessionId, active.dispatch_call_id));
-    if (!active || !["active", "binding_pending"].includes(active.status) || token !== active.claim_token || !sameWritingHandFamily(role, active.role)) return { ok: false, reason: "live parent dispatch capability or role mismatch" };
-    if (active.status === "binding_pending" && active.binding_pending?.child_session_id !== childSessionId) return { ok: false, reason: "pending child session identity mismatch" };
-    if (active.child_session_id && active.child_session_id !== childSessionId) return { ok: false, reason: "dispatch already bound to another child session" };
-    binding = { parentSessionId, childSessionId, callId: active.dispatch_call_id, token, role: active.role };
-    const nextActive = { ...active, status: "active", child_session_id: childSessionId };
-    delete nextActive.binding_pending;
-    return setDispatchRecord(previous, active.dispatch_call_id, nextActive);
-  });
-  if (!persisted.ok) return persisted;
-  if (!persistChildBinding(projectRoot, binding)) return { ok: false, reason: "durable child dispatch binding failed" };
-  childBindings.set(childBindingKey(projectRoot, childSessionId), binding);
-  clearPendingChildParent(projectRoot, childSessionId);
-  return { ok: true, binding };
-}
-
-/** @description Bind a pending child when parent identity is already known (SDK or durable pending index). */
-export function reconcilePendingChildBinding(projectRoot, { parentSessionId, childSessionId }) {
-  if (![parentSessionId, childSessionId].every((value) => typeof value === "string" && value.length > 0)) {
-    return { ok: false, reason: "pending child reconciliation identity missing" };
-  }
-  const resolved = statePath(projectRoot, parentSessionId);
-  if (!resolved.ok) return resolved;
-  let active;
-  try { active = findDispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), (record) => record.status === "binding_pending" && record.binding_pending?.child_session_id === childSessionId); } catch { return { ok: false, reason: "parent dispatch unreadable" }; }
-  if (!active || active.binding_pending?.dispatch_call_id !== active.dispatch_call_id) {
-    return { ok: false, reason: "matching binding_pending dispatch required" };
-  }
-  if (active.binding_pending?.child_session_id !== childSessionId) {
-    return { ok: false, reason: "pending child session identity mismatch" };
-  }
-  return bindChildSession(projectRoot, { parentSessionId, childSessionId, role: active.role, callId: active.dispatch_call_id });
-}
-
-/**
- * @description When child id was recorded on binding_pending, verify and bind without SDK parent lookup.
- * Fail-closed unless durable pending index + live claim + gate-state child id all agree.
- */
-export function reconcilePendingChildBindingByChild(projectRoot, childSessionId) {
-  if (typeof childSessionId !== "string" || !childSessionId) {
-    return { ok: false, reason: "pending child identity missing" };
-  }
-  const pending = readPendingChildParent(projectRoot, childSessionId);
-  if (!pending) return { ok: false, reason: "no durable pending child index" };
-  if (pending.childSessionId !== childSessionId) {
-    return { ok: false, reason: "pending child index identity mismatch" };
-  }
-  return reconcilePendingChildBinding(projectRoot, {
-    parentSessionId: pending.parentSessionId,
-    childSessionId,
-  });
-}
-
-/** @description Return only a process-bound child mapping that still matches parent authority. */
-export function getChildSessionBinding(projectRoot, childSessionId, expectedParentId) {
-  const binding = childBindings.get(childBindingKey(projectRoot, childSessionId)) ?? readChildBinding(projectRoot, childSessionId);
-  if (!binding || binding.parentSessionId !== expectedParentId) return { ok: false, reason: "child session is not bound to this parent dispatch" };
+  const childTarget = childLockTarget(projectRoot, childSessionId);
+  if (!childTarget.ok) return childTarget;
+  const acquired = acquireLock(childTarget.path);
+  if (!acquired.ok) return { ok: false, reason: acquired.reason };
   try {
-    const resolved = statePath(projectRoot, binding.parentSessionId);
-    if (!resolved.ok) return resolved;
-    const active = dispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), binding.parentSessionId, binding.callId);
-    if (!active || active.claim_token !== binding.token || active.child_session_id !== childSessionId) {
-      return { ok: false, reason: "child binding no longer matches active dispatch" };
-    }
-    return { ok: true, binding, active };
-  } catch { return { ok: false, reason: "parent dispatch unreadable" }; }
-}
-
-/** @description Process-local lookup used only to decide whether a terminal event belongs to us. */
-export function getProcessChildBinding(projectRoot, childSessionId) {
-  const binding = childBindings.get(childBindingKey(projectRoot, childSessionId)) ?? readChildBinding(projectRoot, childSessionId);
-  if (binding) childBindings.set(childBindingKey(projectRoot, childSessionId), binding);
-  return binding ?? null;
-}
-
-/** @description Capability-bind the real CLI primary session to its parent adapter dispatch. */
-export function bindAdapterSession(projectRoot, { parentSessionId, runtimeSessionId, token }) {
-  if (![parentSessionId, runtimeSessionId, token].every((value) => typeof value === "string" && value.length > 0)) return { ok: false, reason: "adapter binding identity missing" };
-  const resolved = statePath(projectRoot, parentSessionId);
-  if (!resolved.ok) return resolved;
-  let binding;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = findDispatchRecord(previous, (record) => record.claim_token === token && record.status === "active");
-    if (!active) return { ok: false, reason: "adapter capability does not match dispatch record" };
-    binding = { parentSessionId, childSessionId: runtimeSessionId, callId: active.dispatch_call_id, token, role: active.role, adapter: true };
-    return setDispatchRecord(previous, active.dispatch_call_id, { ...active, child_session_id: runtimeSessionId });
-  });
-  if (!persisted.ok) return persisted;
-  if (!persistChildBinding(projectRoot, binding)) return { ok: false, reason: "durable adapter dispatch binding failed" };
-  childBindings.set(childBindingKey(projectRoot, runtimeSessionId), binding);
-  return { ok: true, binding };
-}
-
-/** @description Durable fail-closed evidence when a terminal child cannot be bound safely. */
-export function appendTerminalScopeDiagnostic(projectRoot, childSessionId, reason) {
-  try {
-    const dir = path.join(projectRoot, ".opencode", "plans", ".state");
-    fs.mkdirSync(dir, { recursive: true });
-    const event = {
-      at: new Date().toISOString(),
-      type: "hand-scope-terminal-unbound",
-      child: crypto.createHash("sha256").update(String(childSessionId)).digest("hex").slice(0, 16),
-      reason: String(reason).slice(0, 256),
-      decision: "fail-closed",
-    };
-    const fd = fs.openSync(path.join(dir, "scope-terminal-events.jsonl"), "a", 0o600);
-    try {
-      fs.writeFileSync(fd, `${JSON.stringify(event)}\n`, "utf8");
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    return { ok: true };
-  } catch { return { ok: false, reason: "terminal scope diagnostic persistence failed" }; }
-}
-
-/** @description Bounded CAS cleanup for one exact call-keyed record. */
-export function finishActiveDispatch(projectRoot, args, deps = {}) {
-  const clearFn = deps.clearFn ?? clearActiveDispatch;
-  const attempts = Number.isInteger(deps.attempts) ? Math.max(1, deps.attempts) : 3;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const result = clearFn(projectRoot, args);
-    if (result?.ok && result.cleared) {
-      liveClaims.delete(liveClaimKey(projectRoot, args.sessionId, args.callId));
-      return { ok: true, cleared: true, attempts: attempt };
-    }
-    const resolved = statePath(projectRoot, args.sessionId);
-    let active;
-    let stateVerified = false;
-    try {
-      if (resolved.ok) {
-        active = dispatchRecord(JSON.parse(fs.readFileSync(resolved.path, "utf8")), args.sessionId, args.callId);
-        stateVerified = true;
-      }
-    } catch { active = null; }
-    if (stateVerified && (!active || active.claim_token !== args.token)) {
-      liveClaims.delete(liveClaimKey(projectRoot, args.sessionId, args.callId));
-      return { ok: true, cleared: false, attempts: attempt };
-    }
+    const sibling = childBoundElsewhere(projectRoot, childSessionId, resolved.path);
+    if (!sibling.ok) return sibling;
+    if (sibling.bound) return { ok: false, reason: "child session already bound to another dispatch" };
+    const updated = mutateExactRecord(resolved.path, (current) => {
+      if (!current.ok) return current;
+      const record = current.value;
+      if (!validDispatchRecord(projectRoot, record)) return { ok: false, conflict: true, reason: "dispatch record schema conflict" };
+      if (record.parent_session_id !== parentSessionId || record.dispatch_call_id !== callId || !sameWritingHandFamily(role, record.role)) return { ok: false, reason: "exact dispatch role or identity mismatch" };
+      if (record.child_session_id != null && record.child_session_id !== childSessionId) return { ok: false, reason: "dispatch already bound to another child session" };
+      if (record.child_session_id === childSessionId) return { record };
+      return { record: { ...record, child_session_id: childSessionId } };
+    });
+    return updated.ok ? { ok: true, binding: { parentSessionId, childSessionId, callId, role } } : updated;
+  } finally {
+    releaseLock(childTarget.path, acquired.token);
   }
-  return { ok: false, reason: "dispatch record cleanup failed" };
 }
 
-/** @description Authenticated heartbeat extends only the exact live claim under lock. */
-export function heartbeatActiveDispatch(projectRoot, { sessionId, callId, token, role, now = Date.now() }) {
-  const runtimeToken = token || liveClaims.get(liveClaimKey(projectRoot, sessionId, callId));
-  if (!runtimeToken) return { ok: false, reason: "live dispatch capability missing" };
-  const resolved = statePath(projectRoot, sessionId);
+/** @description Remove only the exact parent-call record after its Task boundary terminates. */
+export function removeDispatchRecord(projectRoot, { sessionId, callId }) {
+  const resolved = dispatchRecordPath(projectRoot, sessionId, callId);
   if (!resolved.ok) return resolved;
-  let heartbeat = null;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = dispatchRecord(previous, sessionId, callId);
-    if (!active || active.claim_token !== runtimeToken || active.status === "stale" || !sameWritingHandFamily(role, active.role)) {
-      return { ok: false, reason: "heartbeat claim mismatch or stale" };
-    }
-    if (activeExpired(active, now)) {
-      return setDispatchRecord(previous, callId, { ...active, status: "stale", stale_at: new Date(now).toISOString() });
-    }
-    heartbeat = { ...active, heartbeat_at: new Date(now).toISOString(), expires_at: new Date(now + DISPATCH_LEASE_MS).toISOString() };
-    return setDispatchRecord(previous, callId, heartbeat);
+  const removed = mutateExactRecord(resolved.path, (current) => {
+    if (current.absent) return { remove: true };
+    if (!current.ok) return current;
+    if (!validDispatchRecord(projectRoot, current.value)) return { ok: false, conflict: true, reason: "dispatch record schema conflict" };
+    if (current.value.parent_session_id !== sessionId || current.value.dispatch_call_id !== callId) return { ok: false, reason: "exact dispatch record identity conflict" };
+    return { remove: true };
   });
-  return persisted.ok && heartbeat ? { ok: true, claim: heartbeat } : persisted.ok ? { ok: false, reason: "dispatch lease expired and is stale" } : persisted;
+  return removed.ok ? { ok: true, removed: Boolean(removed.removed) } : removed;
 }
 
-/** @description Expiration becomes stale/fail-closed; it never removes dispatch authority. */
-export function reconcileExpiredDispatch(projectRoot, sessionId, callId, now = Date.now()) {
-  const resolved = statePath(projectRoot, sessionId);
-  if (!resolved.ok) return resolved;
-  let stale = false;
-  const persisted = withGateStateLock(resolved.path, (previous) => {
-    const active = dispatchRecord(previous, sessionId, callId);
-    if (!active || typeof active !== "object" || active.status === "stale" || !activeExpired(active, now)) return previous;
-    stale = true;
-    return setDispatchRecord(previous, callId, { ...active, status: "stale", stale_at: new Date(now).toISOString() });
-  });
-  return persisted.ok ? { ok: true, stale } : persisted;
-}
-
-/** @description Append one sanitized, durable out-of-scope event in the session state directory. */
-export function appendScopeEvent(projectRoot, active, { tool, paths, mode, reason }) {
-  try {
-    const safePaths = [...new Set((Array.isArray(paths) ? paths : []).filter((p) => typeof p === "string").map((p) => p.slice(0, 512)))];
-    const event = {
-      at: new Date().toISOString(),
-      type: "hand-scope-rejection",
-      session_id: active.parent_session_id,
-      feature_id: active.feature_id,
-      task_id: active.task_id,
-      role: active.role,
-      call: crypto.createHash("sha256").update(String(active.dispatch_call_id)).digest("hex").slice(0, 16),
-      tool: String(tool).toLowerCase().slice(0, 32),
-      paths: safePaths,
-      mode,
-      decision: mode === "enforce" ? "deny" : "observe",
-      reason,
-    };
-    const dir = path.join(projectRoot, ".opencode", "plans", ".state", String(active.parent_session_id));
-    fs.mkdirSync(dir, { recursive: true });
-    const fd = fs.openSync(path.join(dir, "scope-events.jsonl"), "a", 0o600);
-    try {
-      fs.writeFileSync(fd, `${JSON.stringify(event)}\n`, "utf8");
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    return { ok: true };
-  } catch { return { ok: false, reason: "scope event persistence failed" }; }
-}
-
-export default { appendScopeEvent, appendTerminalScopeDiagnostic, bindAdapterSession, bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, clearActiveDispatch, finishActiveDispatch, getChildSessionBinding, getProcessChildBinding, heartbeatActiveDispatch, markDispatchBindingPending, normalizeProjectPath, readCanonicalTaskFromSnapshot, reconcileExpiredDispatch, reconcilePendingChildBinding, reconcilePendingChildBindingByChild };
+export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, dispatchRecordPath, normalizeProjectPath, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord };

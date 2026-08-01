@@ -50,6 +50,7 @@ function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]
   const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
   const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${snapshotFileHash}.json`;
   mkdirSync(join(stateDir, "bound-plans"), { recursive: true });
+  mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, snapshotRel), snapshotBytes);
   writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
     session_id: sessionId,
@@ -547,12 +548,13 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
       },
       {
         agentsDir,
+        dispatchCallId: () => "call-run",
         checkFidelityPass: () => true,
-        spawn: async ({ agent, model }) => {
+        spawn: async ({ agent, model, dispatchAuthority }) => {
           assert.equal(agent, "executor-medium");
           assert.equal(model, "openai/gpt-5.6-terra");
-          const record = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).dispatch_records;
-          const dispatch = record[Object.keys(record)[0]];
+          assert.deepEqual(dispatchAuthority, { sessionId: "ses_run1", callId: "call-run" });
+          const dispatch = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "dispatch-records", `${crypto.createHash("sha256").update("call-run").digest("hex")}.json`), "utf8"));
           assert.equal(dispatch.parent_session_id, "ses_run1");
           assert.equal(dispatch.feature_id, "feat-x");
           assert.equal(dispatch.task_id, "task-1");
@@ -596,7 +598,7 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
     assert.equal(result.record.agent, "executor-medium");
     // process exit was 0 but outcome is FAILED — exit is not oracle
     assert.equal(result.processExitCode, 0);
-    assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).dispatch_records, undefined);
+    assert.equal(existsSync(join(root, ".opencode", "plans", ".state", "ses_run1", "dispatch-records", `${crypto.createHash("sha256").update("call-run").digest("hex")}.json`)), false);
 
   } finally {
     rmSync(root, { recursive: true, force: true });

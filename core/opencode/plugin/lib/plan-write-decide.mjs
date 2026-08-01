@@ -289,14 +289,7 @@ function sameHandFamily(actingRole, dispatchRole) {
 function decideScopeRail(filePath, opts) {
   if (opts.isSubagent !== true) return null;
 
-  const gateState = opts.gateState;
-  if (gateState == null || typeof gateState !== "object" || Array.isArray(gateState)) {
-    return null;
-  }
-  const records = /** @type {Record<string, unknown>} */ (gateState).dispatch_records;
-  const ad = opts.dispatchRecord ?? (records && typeof records === "object" && !Array.isArray(records) && Object.keys(records).length === 1
-    ? Object.values(records)[0]
-    : null);
+  const ad = opts.dispatchRecord ?? null;
   if (ad == null || typeof ad !== "object" || Array.isArray(ad)) return null;
 
   const adObj = /** @type {Record<string, unknown>} */ (ad);

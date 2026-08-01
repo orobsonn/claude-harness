@@ -1,8 +1,7 @@
 /**
  * @description Locked tests for obs-hand's call-keyed writing-hand record (#476).
- * The call-keyed dispatch record is best-effort observability, not a gate: a missing prompt
- * marker or a rejected claim must never deny dispatch (shadow-record instead), and the
- * terminal evidence writes (hand-record, capture_verified) must still happen unconditionally.
+ * Observation is fail-open: entry-gate owns scope lifecycle and completion requires its exact
+ * producer record. obs-hand never claims, binds, captures, or arms re-gate state.
  */
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -71,17 +70,11 @@ test("lt-oh-marker-optional: writing-hand dispatch without a prompt marker is no
         feature_id: "feat-obshand",
       },
     }
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() => hooks["tool.execute.before"](input, output)),
-    )
-    assert.ok(
-      warnings.some((w) => /shadow-record/.test(String(w))),
-      `expected a shadow-record log, got: ${JSON.stringify(warnings)}`,
-    )
+    await assert.doesNotReject(() => hooks["tool.execute.before"](input, output))
   })
 })
 
-test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId still arms a call-keyed record [#ac-2.1 scope rail]", async () => {
+test("lt-oh-markerless-observes: markerless dispatch is observed without creating scope authority [#ac-2.1]", async () => {
   await withTempRoot(async (root) => {
     const sessionId = "ses_obshand_rail"
     const featureId = "feat-obshand-rail"
@@ -130,9 +123,7 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
     const hooks = await createObsHandHooks(root)
     const input = { tool: "task", sessionID: sessionId, callID: "call-rail" }
     const args = {
-      // No [HARNESS_TASK_CONTEXT] marker — #ac-2.1 says this must not be required. The
-      // canonical task_id still reaches the claim via extractTaskIds' task_id/taskId/task
-      // fallback, so the call-keyed record (and the scope rail it arms) still succeeds.
+    // No [HARNESS_TASK_CONTEXT] marker — observation may still emit, but cannot claim scope.
       prompt: "Implement the change.",
       subagent_type: "executor-low",
       feature_id: featureId,
@@ -141,16 +132,11 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
     await assert.doesNotReject(() => hooks["tool.execute.before"](input, { args }))
 
     const gateState = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"))
-    const record = gateState.dispatch_records?.["call-rail"]
-    assert.equal(record?.task_id, taskId, "dispatch record must be armed for the markerless dispatch")
-    assert.ok(
-      Array.isArray(record?.scope_paths) && record.scope_paths.length > 0,
-      "dispatch record must carry the canonical task's scope_paths (plan-write-gate's rail)",
-    )
+    assert.equal(gateState.dispatch_records, undefined, "obs-hand must not create dispatch authority")
   })
 })
 
-test("lt-oh-background-shadow: background dispatch without a claim does not deny on missing child identity [par_atômico]", async () => {
+test("lt-oh-background-observation: running background result stays fail-open [par_atômico]", async () => {
   await withTempRoot(async (root) => {
     const hooks = await createObsHandHooks(root)
     const input = { tool: "task", sessionID: "ses_obshand_bg", callID: "call-bg" }
@@ -163,21 +149,15 @@ test("lt-oh-background-shadow: background dispatch without a claim does not deny
     // A background result with no child identity used to always throw here; without a claim to
     // preserve, denying it would resurrect exactly the deny the before-hook's shadow-record
     // just chose not to raise — the pair must move together (par_atômico).
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() => hooks["tool.execute.after"](input, {
+    await assert.doesNotReject(() => hooks["tool.execute.after"](input, {
         args,
         output: `<task state="running"></task>`,
         metadata: { background: true },
-      })),
-    )
-    assert.ok(
-      warnings.some((w) => /background dispatch shadow-record/.test(String(w))),
-      `expected a background shadow-record log, got: ${JSON.stringify(warnings)}`,
-    )
+      }))
   })
 })
 
-test("lt-oh-claim-rejected: rejected dispatch-record claim shadow-records, does not deny, and evidence still writes [#ac-2.2]", async () => {
+test("lt-oh-unproven-completion: absent producer record leaves capture and completion absent [#ac-2.2]", async () => {
   await withTempRoot(async (root) => {
     initGitRepo(root)
     const sessionId = "ses_obshand_claim"
@@ -192,15 +172,7 @@ test("lt-oh-claim-rejected: rejected dispatch-record claim shadow-records, does 
       feature_id: featureId,
     }
 
-    // No gate-state.json seeded for this session -> claimActiveDispatch's own session-identity
-    // check ("gate-state session identity mismatch") rejects the claim deterministically.
-    const warnings = await captureWarnings(() =>
-      assert.doesNotReject(() => hooks["tool.execute.before"](input, { args })),
-    )
-    assert.ok(
-      warnings.some((w) => /shadow-record/.test(String(w)) && /claim rejected/.test(String(w))),
-      `expected a claim-rejected shadow-record log, got: ${JSON.stringify(warnings)}`,
-    )
+    await assert.doesNotReject(() => hooks["tool.execute.before"](input, { args }))
 
     await hooks["tool.execute.after"](input, {
       args,
@@ -218,16 +190,6 @@ test("lt-oh-claim-rejected: rejected dispatch-record claim shadow-records, does 
       sessionId,
       `${taskId}.json`,
     )
-    assert.ok(fs.existsSync(recordPath), "hand-record must be written even though the claim was rejected")
-    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"))
-    assert.equal(record.outcome, "DONE")
-    assert.ok(record.capturedVerifiedAt, "capture_verified must still be stamped on the hand-record")
-
-    const gateStatePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json")
-    const gateState = JSON.parse(fs.readFileSync(gateStatePath, "utf8"))
-    assert.ok(
-      gateState.capture_verified?.some((entry) => String(entry).includes(taskId)),
-      "gate-state capture_verified must include the terminal hand result",
-    )
+    assert.equal(fs.existsSync(recordPath), false, "unproven completion must not create a host record")
   })
 })

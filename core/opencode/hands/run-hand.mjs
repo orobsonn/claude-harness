@@ -26,7 +26,7 @@ import {
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { mergeGateState } from "../lib/gate-state.mjs";
 import { hasFidelityPass } from "../lib/entry-decide.mjs";
-import { claimActiveDispatch, finishActiveDispatch } from "../lib/dispatch-scope.mjs";
+import { claimActiveDispatch, removeDispatchRecord } from "../lib/dispatch-scope.mjs";
 import { writeHandRecord } from "../lib/hand-records.mjs";
 
 export { writeHandRecord };
@@ -768,9 +768,8 @@ export async function runHand(descriptor, deps = {}) {
     markHandQuarantine = null,
     checkFidelityPass = null,
     now = () => new Date().toISOString(),
-    dispatchToken = () => randomUUID(),
     dispatchCallId = () => `run-hand:${randomUUID()}`,
-    finishDispatch = finishActiveDispatch,
+    finishDispatch = removeDispatchRecord,
   } = deps;
 
   const featureId = descriptor?.feature_id ?? descriptor?.featureId;
@@ -931,13 +930,11 @@ export async function runHand(descriptor, deps = {}) {
   );
 
   const callId = dispatchCallId();
-  const claimToken = dispatchToken();
   const claimed = claimActiveDispatch(projectRoot, {
     sessionId,
     callId,
     role,
     taskId,
-    token: claimToken,
   });
   if (!claimed.ok) {
     return failConfig(`dispatch record claim failed: ${claimed.reason}`, {
@@ -960,11 +957,10 @@ export async function runHand(descriptor, deps = {}) {
       dispatchAuthority: {
         sessionId,
         callId,
-        claimToken,
       },
     });
   } catch (err) {
-    const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
     if (!finished.ok) {
       return failConfig(`spawn failed and ${finished.reason}`, {
         preUntracked: preSnap.paths,
@@ -976,7 +972,7 @@ export async function runHand(descriptor, deps = {}) {
       preUntrackedContents: preSnap.contents,
     });
   }
-  const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
+  const finished = finishDispatch(projectRoot, { sessionId, callId });
   if (!finished.ok) {
     return failConfig(finished.reason, {
       preUntracked: preSnap.paths,
@@ -1199,7 +1195,7 @@ function defaultSpawnOpencode({ projectDir, agent, model, title, prompt, dispatc
     env: {
       ...process.env,
       HARNESS_DISPATCH_PARENT_SESSION_ID: dispatchAuthority?.sessionId ?? "",
-      HARNESS_DISPATCH_CLAIM_TOKEN: dispatchAuthority?.claimToken ?? "",
+      HARNESS_DISPATCH_CALL_ID: dispatchAuthority?.callId ?? "",
     },
   });
   return {

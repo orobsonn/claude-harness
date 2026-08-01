@@ -1,151 +1,170 @@
-/** @description OC-native host hand capture unit tests. */
+/** @description Host completion producer keeps capture independent. */
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveOcHandOutcome,
-  hostStampOcHandCapture,
-} from "./host-hand-capture.mjs";
 import * as hostHandCapture from "./host-hand-capture.mjs";
 
-test("resolveHeadSha uses only the explicit project root and fails best-effort", () => {
-  assert.equal(typeof hostHandCapture.resolveHeadSha, "function");
+test("resolveHeadSha uses only its explicit project root and fails best-effort", () => {
   const calls = [];
-  const execFileSyncFn = (command, args, options) => {
+  assert.equal(hostHandCapture.resolveHeadSha("/explicit", (command, args, options) => {
     calls.push({ command, args, options });
-    return "  abc123deadbeef\n";
-  };
-  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", execFileSyncFn), "abc123deadbeef");
-  assert.deepEqual(calls, [
-    {
-      command: "git",
-      args: ["rev-parse", "HEAD"],
-      options: {
-        cwd: "/explicit/project",
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 5000,
-      },
-    },
-  ]);
-  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", () => " \n"), null);
-  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", () => { throw new Error("no git"); }), null);
+    return " abc123 \n";
+  }), "abc123");
+  assert.deepEqual(calls, [{ command: "git", args: ["rev-parse", "HEAD"], options: { cwd: "/explicit", encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 } }]);
+  assert.equal(hostHandCapture.resolveHeadSha("/explicit", () => { throw new Error("no git"); }), null);
 });
 
-test("resolveOcHandOutcome promotes BLOCKED to DONE when git touched", () => {
-  assert.equal(resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "DONE");
-  assert.equal(resolveOcHandOutcome(null, ["src/a.ts"]), "DONE");
-  assert.equal(resolveOcHandOutcome("DONE", []), "DONE");
-  assert.equal(resolveOcHandOutcome("NEEDS_CONTEXT", ["x"]), "NEEDS_CONTEXT");
-  assert.equal(resolveOcHandOutcome("BLOCKED", []), "BLOCKED");
+test("resolveOcHandOutcome promotes work evidence but preserves explicit terminal outcomes", () => {
+  assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "DONE");
+  assert.equal(hostHandCapture.resolveOcHandOutcome("NEEDS_CONTEXT", ["src/a.ts"]), "NEEDS_CONTEXT");
+  assert.equal(hostHandCapture.resolveOcHandOutcome("DONE", []), "DONE");
+  assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", []), "BLOCKED");
 });
 
-test("hostStampOcHandCapture writes DONE record + stamps gate", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-host-cap-"));
+function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claimedAt = "2026-08-01T00:00:00.000Z" }) {
+  const directory = path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = `${crypto.createHash("sha256").update(callId).digest("hex")}.json`;
+  fs.writeFileSync(path.join(directory, filename), JSON.stringify({
+    parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
+    feature_id: featureId, task_id: taskId, role, scope_paths: ["src/a.ts"],
+    allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: claimedAt,
+  }));
+}
+
+test("recordHandFinished stamps only completion and leaves capture unverified", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-finished-"));
   try {
-    const sessionId = "ses_hostcap01";
-    const featureId = "feat-cap";
+    const sessionId = "ses_finished";
+    const featureId = "feat-finished";
     const taskId = "task-1";
     const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true }),
-    );
-    // fake git HEAD via env cwd without git — pass freeze sha explicitly
-    const r = hostStampOcHandCapture({
-      projectRoot: root,
-      sessionId,
-      featureId,
-      taskId,
-      role: "executor-medium",
-      outcome: "DONE",
-      touchedPaths: ["src/policy/availability-view.ts"],
-      freezeCommitSha: "abc123deadbeef",
-    });
-    assert.equal(r.ok, true);
-    const recPath = path.join(
-      root,
-      ".opencode",
-      "plans",
-      ".state",
-      "hand-records",
-      featureId,
-      sessionId,
-      `${taskId}.json`,
-    );
-    const rec = JSON.parse(fs.readFileSync(recPath, "utf8"));
-    assert.equal(rec.outcome, "DONE");
-    assert.equal(rec.writtenBy, "obs-hand-task");
-    assert.ok(rec.capturedVerifiedAt);
-    const gs = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
-    assert.ok(gs.hand_finished?.some((x) => String(x).includes(taskId)));
-    assert.ok(gs.capture_verified?.some((x) => String(x).includes(taskId)));
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-medium", callId: "call-new" });
+    assert.equal(typeof hostHandCapture.recordHandFinished, "function");
+    const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-medium", producerCallId: "call-new", outcome: "DONE", touchedPaths: ["src/a.ts"], freezeCommitSha: "abc123" });
+    assert.deepEqual(result, { ok: true, recorded: true });
+    const record = JSON.parse(fs.readFileSync(path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`), "utf8"));
+    assert.equal(record.producerCallId, "call-new");
+    assert.equal(record.producerClaimedAt, "2026-08-01T00:00:00.000Z");
+    assert.equal(record.writtenBy, "host-hand-finished");
+    assert.equal(record.capturedVerifiedAt, undefined);
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.deepEqual(state.hand_finished, [`${featureId}/${taskId}`]);
+    assert.equal(state.capture_verified, undefined);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("re-capture at a new HEAD sha leaves no orphan capture_verified entry", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-host-recap-"));
+test("completion without the exact producer record is rejected without a gate stamp", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-unproven-"));
   try {
-    const sessionId = "ses_hostrecap01";
-    const featureId = "fup-cadence-business-hours";
+    const sessionId = "ses_unproven";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: "feat-unproven" }));
+    const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId: "feat-unproven", taskId: "task-1", role: "executor-low", producerCallId: "absent", outcome: "DONE", touchedPaths: [], freezeCommitSha: null });
+    assert.equal(result.ok, false);
+    assert.equal(result.recorded, false);
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.equal(state.hand_finished, undefined);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("newer producer replaces older producer while an older retry cannot overwrite it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-producer-order-"));
+  try {
+    const sessionId = "ses_order";
+    const featureId = "feat-order";
     const taskId = "task-1";
     const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
-    const gsPath = path.join(stateDir, "gate-state.json");
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      gsPath,
-      JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true }),
-    );
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "older", claimedAt: "2026-08-01T00:00:00.000Z" });
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "newer", claimedAt: "2026-08-01T00:01:00.000Z" });
+    assert.equal(hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "older", outcome: "DONE", touchedPaths: ["old.ts"], freezeCommitSha: "old" }).recorded, true);
+    assert.equal(hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "newer", outcome: "DONE", touchedPaths: ["new.ts"], freezeCommitSha: "new" }).recorded, true);
+    assert.equal(hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "older", outcome: "DONE", touchedPaths: ["retry.ts"], freezeCommitSha: "retry" }).recorded, false);
+    const record = JSON.parse(fs.readFileSync(path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`), "utf8"));
+    assert.equal(record.producerCallId, "newer");
+    assert.deepEqual(record.touchedPaths, ["new.ts"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
-    const shaA = "7a6fc82a12524f7619b4c7e0a813d43a2cbaf0e1";
-    const shaB = "760c23ae51d26be36346ce689346282ecc8c8d6f";
-    const otherTaskId = "task-10";
-    const common = {
-      projectRoot: root,
-      sessionId,
-      featureId,
-      taskId,
-      role: "executor-medium",
-      outcome: "DONE",
-      touchedPaths: ["src/x.ts"],
-    };
+test("a newer non-DONE producer removes an obsolete bare completion stamp", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-stamp-order-"));
+  try {
+    const sessionId = "ses_stamp";
+    const featureId = "feat-stamp";
+    const taskId = "task-1";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "done", claimedAt: "2026-08-01T00:00:00.000Z" });
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "blocked", claimedAt: "2026-08-01T00:01:00.000Z" });
+    hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "done", outcome: "DONE", touchedPaths: [], freezeCommitSha: null });
+    hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "blocked", outcome: "BLOCKED", touchedPaths: [], freezeCommitSha: null });
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
+    assert.deepEqual(state.hand_finished, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
-    // Seed a sibling task ("task-10") captured at shaA in the same session. A bare
-    // startsWith match (without the "@" delimiter) would treat this as belonging to
-    // "task-1" and wrongly prune it when task-1 is recaptured below.
-    const seedOther = hostStampOcHandCapture({
-      ...common,
-      taskId: otherTaskId,
-      freezeCommitSha: shaA,
-    });
-    assert.equal(seedOther.ok, true);
+test("same-producer contradictory replay keeps the completion record byte-stable", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-same-producer-"));
+  try {
+    const sessionId = "ses_same";
+    const featureId = "feat-same";
+    const taskId = "task-1";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "same" });
+    assert.equal(hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "same", outcome: "DONE", touchedPaths: ["src/a.ts"], freezeCommitSha: "done" }).recorded, true);
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
+    const before = fs.readFileSync(recordPath);
+    const replay = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "same", outcome: "BLOCKED", touchedPaths: ["src/other.ts"], freezeCommitSha: "blocked" });
+    assert.equal(replay.recorded, false);
+    assert.deepEqual(fs.readFileSync(recordPath), before);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8")).hand_finished, [`${featureId}/${taskId}`]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
-    // Capture the same task twice as the repo HEAD advances within one session.
-    const first = hostStampOcHandCapture({ ...common, freezeCommitSha: shaA });
-    assert.equal(first.ok, true);
-    const second = hostStampOcHandCapture({ ...common, freezeCommitSha: shaB });
-    assert.equal(second.ok, true);
+test("same-producer retry repairs a missing bare completion stamp without rewriting the record", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-repair-stamp-"));
+  try {
+    const sessionId = "ses_repair";
+    const featureId = "feat-repair";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "repair" });
+    hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "repair", outcome: "DONE", touchedPaths: [], freezeCommitSha: "done" });
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
+    const before = fs.readFileSync(recordPath);
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId, hand_finished: [] }));
+    const retry = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "repair", outcome: "BLOCKED", touchedPaths: ["src/other.ts"], freezeCommitSha: "blocked" });
+    assert.equal(retry.recorded, false);
+    assert.deepEqual(fs.readFileSync(recordPath), before);
+    assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, [`${featureId}/${taskId}`]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
-    const gs = JSON.parse(fs.readFileSync(gsPath, "utf8"));
-
-    // Array must mirror the per-task pruning policy: exactly one entry for the task, at the latest sha.
-    const taskEntries = (gs.capture_verified ?? []).filter(
-      (e) => e === `${featureId}/${taskId}` || String(e).startsWith(`${featureId}/${taskId}@`),
-    );
-    assert.deepEqual(taskEntries, [`${featureId}/${taskId}@${shaB}`]);
-
-    // Sibling task-10's entry must survive the task-1 recapture untouched — the "@"
-    // delimiter must not let "task-1" match "task-10".
-    const otherEntries = (gs.capture_verified ?? []).filter(
-      (e) => e === `${featureId}/${otherTaskId}` || String(e).startsWith(`${featureId}/${otherTaskId}@`),
-    );
-    assert.deepEqual(otherEntries, [`${featureId}/${otherTaskId}@${shaA}`]);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test("DONE_WITH_CONCERNS records completion but never stamps hand_finished", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-concerns-"));
+  try {
+    const sessionId = "ses_concerns";
+    const featureId = "feat-concerns";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "concerns" });
+    const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "concerns", outcome: "DONE_WITH_CONCERNS", touchedPaths: [], freezeCommitSha: null });
+    assert.equal(result.recorded, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
