@@ -97,7 +97,6 @@ Every evaluator brief, primary or explicitly opted-in second eye, MUST require t
 - `complexity-scorer` — scores a file path on a 0–60+ scale (0–10 low · 11–30 medium · 31–45 high · 46–60 max→`executor-high` · 61+ split). One call per path.
 - `validate-plan` — deterministic structural gate for `execution-plan.json`: per-task presence of `criterion_refs` + `locked_tests`, acyclic + topologically-ordered `depends_on`, scalar `resolved_judgments`, valid tiers (no Claude slugs), `adversarial.focus` when enabled, `demo` shape. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
 - `verify` — resolves a registered targeted-test snapshot to a concrete test path (feature/task ids in, `locked_tests[].path` out). Optional: the active hand can run the targeted test directly via bash just as well; `verify` stays available for the resolver's snapshot lookup when that is more convenient.
-- `ceremony-next` — strict runtime consumer for a planner preflight denial object. Returns only the allowlisted brainstorming/adversary coordinator descriptor valid for current sealed state; any malformed, unknown, or state-inconsistent denial is rejected.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
 ---
@@ -134,7 +133,7 @@ result — do not pre-empt that with a manual write.
 
 ## Phase 1 — Plan
 
-0. **Planner preflight / resume:** attempt planner only after the two official ceremony transitions above. A denial is stable structured JSON with `code`, `missing_proof`, and `next_transition`. Pass that exact object to native `ceremony-next({ denial })`; execute only `descriptor.coordinator_step`, and after successful completion/acceptance call `descriptor.completion_transition`. The consumer is the authority for the closed mapping (`oc-brainstorming` skill or `adversary` Task); if it rejects, stop. Never derive role/tool names from denial strings, and never dispatch `explore`, `general`, or a diagnostic subagent. Preflight may restore a marker after process restart only from session+feature+phase-bound evidence that verifies against the canonical spec/result; an old/unsigned marker is not evidence. If proof is absent or invalid, resume the exact named phase or stop and report `missing_proof` without inventing a terminal state.
+0. **Planner preflight / resume (R10):** planner remains denied until `brainstormed` and `adversary_fired` are both factual marks for the classified feature. Missing `brainstormed` → execute `oc-brainstorming`, then let the host mark `brainstormed`. Missing `adversary_fired` → dispatch the primary `adversary`, then let the host mark `adversary_fired`. Resume only the missing phase; never infer a mark from prose, an old marker, or an unsigned boolean.
 
 1. Dispatch `planner` via Task with the approved spec. The planner returns one `execution-plan.json` (schema in `planner.md`; the planner self-validates structure first).
 

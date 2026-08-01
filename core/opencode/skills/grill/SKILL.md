@@ -27,8 +27,8 @@ artifact.
 - **Before the pipeline.** It runs *before* triage, before any spec, before any plan. Its output is
   the input the pipeline later consumes.
 - **NOT the entry gate.** `oc-triaging-requests` owns the first request of every `build` session. This
-  skill never claims that slot, never says "run me first", never calls `classify`, `mark`, `verify`
-  or `ceremony-next`, and gates nothing. It is entered only when the operator asks for it or accepts
+  skill never claims that slot, never says "run me first", never calls `classify`, `mark`, or `verify`,
+  and gates nothing. It is entered only when the operator asks for it or accepts
   a suggestion to use it.
 - **NOT a source of truth.** *(the single most important line in this file)* Everything the grill
   produces enters the pipeline later as **ordinary input** — issue text. It is fully attackable and

@@ -326,9 +326,10 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | `classify` | Grava modo + feature no gate-state (fim do triage) |
 | `validate-plan` | Valida o JSON do plano |
 | `mark` | Carimbos privilegiados (hand-finished, capture-verified, regate, final-review…) — **não** use Bash pra isso |
-| `ceremony-next` | Próximo passo allowlisted após denial de cerimônia |
 | `verify` | Roda teste pinado da task (hand ativa) |
 | `complexity-scorer` | Banda low/medium/high de um path |
+
+Quando o planner estiver bloqueado por cerimônia, complete somente o fato ausente para a feature classificada: `brainstormed` ausente → execute o brainstorming e deixe o host marcar `brainstormed`; `adversary_fired` ausente → despache o adversary primário e deixe o host marcar `adversary_fired`. O planner só libera depois dos dois fatos — nunca por texto, marca antiga ou booleano sem assinatura.
 
 ---
 

@@ -74,7 +74,7 @@ test("harness-config is a primary lane that cannot open ceremony, delegate, or w
 
   assert.match(fm, /^mode: primary$/m, "the lane replaces the session agent, so it must be primary");
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["classify", "mark", "verify", "ceremony-next", "task", "edit", "external_directory"]) {
+  for (const permission of ["classify", "mark", "verify", "task", "edit", "external_directory"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   assert.match(fm, /read:\n    "\*": allow[\s\S]*"\*\*\/\.env\*": deny/);

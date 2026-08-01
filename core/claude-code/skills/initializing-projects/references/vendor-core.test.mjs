@@ -683,6 +683,10 @@ test("re-vendoring removes every retired second-eye path and preserves per-direc
     "shared/lib/agent-retry.test.mjs",
     "shared/lib/agent-retry-call.mjs",
     "shared/lib/agent-retry-call.test.mjs",
+    "plugin/ceremony-coordinator.ts",
+    "plugin/ceremony-coordinator.test.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
   ];
   try {
     const siblings = [
@@ -755,6 +759,44 @@ test("re-vendoring removes retired review-engine paths and preserves per-directo
       const stale = join(tempDir, ".opencode", relativePath);
       mkdirSync(dirname(stale), { recursive: true });
       writeFileSync(stale, "// stale OC-only review engine\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes retired ceremony paths and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-ceremony-"));
+  const retired = [
+    "plugin/ceremony-coordinator.ts",
+    "plugin/ceremony-coordinator.test.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
+  ];
+  const siblings = [
+    join(tempDir, ".opencode", "plugin", "project-owned-ceremony-sibling.ts"),
+    join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-ceremony-sibling.mjs"),
+  ];
+  try {
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale ceremony API\n", "utf8");
     }
     const result = spawnSync(
       "node",

@@ -425,7 +425,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/entry-gate.ts",
     "./.opencode/plugin/lavish-command-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
-    "./.opencode/plugin/ceremony-coordinator.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
@@ -850,6 +849,10 @@ export const OC_RETIRED_FILES = [
   "shared/lib/agent-retry.test.mjs",
   "shared/lib/agent-retry-call.mjs",
   "shared/lib/agent-retry-call.test.mjs",
+  "plugin/ceremony-coordinator.ts",
+  "plugin/ceremony-coordinator.test.mjs",
+  "skills/orchestrating-delivery/ceremony-runtime.mjs",
+  "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
 ];
 
 /**
