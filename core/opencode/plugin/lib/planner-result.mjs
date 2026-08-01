@@ -2,6 +2,7 @@
 
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { semanticPlanHash } from "../../lib/plan-hash.mjs";
+import { isCompleteExpectedModelStrategy } from "../../../shared/lib/model-strategy-projection.mjs";
 
 function responseText(value) {
   try {
@@ -63,17 +64,24 @@ function jsonObjects(text) {
  * quotes the superseded plan before the new one) is invalid, never "the first one wins". Document order
  * is not authorship, and the caller persists whatever comes back here as the canonical artifact.
  * @param {unknown} response
+ * @param {{ expectedModelStrategy?: unknown }} [options]
  * @returns {{ kind: "usable_plan", plan: Record<string, unknown> } | { kind: "invalid_plan", errors: string[] }}
  */
-export function classifyPlannerResult(response) {
+export function classifyPlannerResult(response, options = {}) {
   try {
+    if (!isCompleteExpectedModelStrategy(options?.expectedModelStrategy)) {
+      return { kind: "invalid_plan", errors: ["planner result lacks a complete expectedModelStrategy snapshot"] };
+    }
     const text = responseText(response);
     const objects = jsonObjects(text);
     let validationErrors = [];
     // Same plan may be extracted twice (fenced block + whole-text brace scan) — dedupe by semantic hash.
     const candidates = new Map();
     for (const value of objects) {
-      const validated = validatePlan(value, { expect: "full" });
+      const validated = validatePlan(value, {
+        expect: "full",
+        expectedModelStrategy: options?.expectedModelStrategy,
+      });
       if (validated.ok && Array.isArray(value.tasks) && value.tasks.length >= 1) {
         candidates.set(semanticPlanHash(value), value);
         continue;

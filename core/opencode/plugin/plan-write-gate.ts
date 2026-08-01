@@ -1,7 +1,6 @@
 /**
  * @description OC plan-write-gate — anti-forge + call-keyed dispatch scope rail for official write tools.
- * tool.execute.before: deny throws [plan-write-gate]. Does NOT block execution-plan.json
- * (orchestrator may author plans). Dynamic import of pure mjs (OC load contract).
+ * tool.execute.before: deny throws [plan-write-gate]. Canonical plans are host-written only.
  * Factory accepts projectRoot / { directory, worktree } so live gate-state load works
  * when an exact dispatch record is stamped; missing session/role/state → scope rail off, anti-forge still runs.
  */
@@ -15,8 +14,8 @@ function isWriteTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
   const n = name.toLowerCase();
   const bare = n.split(/[.:/]/).pop() ?? n;
-  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file", "delete_file"].includes(bare) ||
-    n.endsWith(".write") || n.endsWith(".edit") || n.endsWith("_write") || n.endsWith("_edit");
+  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file", "delete", "delete_file"].includes(bare) ||
+    n.endsWith(".write") || n.endsWith(".edit") || n.endsWith(".delete") || n.endsWith("_write") || n.endsWith("_edit") || n.endsWith("_delete");
 }
 
 function isPatchTool(name: unknown): boolean {
@@ -92,8 +91,6 @@ export async function createPlanWriteGateHooks(
     "./lib/plan-write-decide.mjs"
   );
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
-  const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs");
-  const { invalidateScopeRuntimeIdentity, resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
 
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
@@ -106,17 +103,23 @@ export async function createPlanWriteGateHooks(
       const bashTool = isBashTool(input?.tool);
       if (!writeTool && !patchTool && !bashTool) return;
       const args = resolveHookArgs(input, output);
-      const {
-        appendScopeEvent,
-        heartbeatActiveDispatch,
-        normalizeProjectPath,
-        reconcileExpiredDispatch,
-      } = await import("../lib/dispatch-scope.mjs");
       const rawPaths = bashTool
         ? []
         : patchTool
           ? extractPatchPaths(args)
           : extractOfficialWritePaths(args, extractWritePath);
+      // R14 is an owner fact: deny canonical model writes before resolving identity,
+      // scope, heartbeat, or gate-state. Bash matching is deliberately literal best-effort.
+      if (bashTool) {
+        throwIfDenied(decide({ args }));
+      } else {
+        for (const rawPath of rawPaths) {
+          throwIfDenied(decide({ args: { filePath: rawPath } }));
+        }
+      }
+      const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs");
+      const { resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
+      const { appendScopeEvent, heartbeatActiveDispatch, normalizeProjectPath, reconcileExpiredDispatch } = await import("../lib/dispatch-scope.mjs");
       let filePath = rawPaths[0] ?? "";
 
       // Absolute paths: relativize under projectRoot so scope_paths (relative) match.
@@ -213,19 +216,9 @@ export async function createPlanWriteGateHooks(
         throw new Error("[plan-write-gate] Blocked: dispatch record lease is stale; explicit termination reconciliation required.");
       }
 
-      if ((writeTool || patchTool) &&
-        /(?:^|[\\/])execution-plan\.json$/i.test(filePath) &&
-        gateState != null &&
-        typeof gateState === "object" &&
-        !Array.isArray(gateState) &&
-        (gateState as Record<string, unknown>).planner_status === "usable"
-      ) {
-        throw new Error("[plan-write-gate] Blocked: bound execution-plan.json is immutable until a new planner claim.")
-      }
-
-      // Bash is never walled here, active dispatch or not — Claude Code parity (#484): its
-      // plan-write-gate only rails Write/Edit, and the OC-only blanket bash deny was CC
-      // spawn-hand shaped, causing BLOCKED hands + rework on ordinary git/node commands.
+      // After the early canonical-path friction, ordinary Bash remains outside the scope rail —
+      // Claude Code parity (#484). The removed OC-only blanket deny caused blocked hands and
+      // rework on normal git/node commands.
       if (bashTool) return;
       if ((writeTool || patchTool) && rawPaths.length === 0) {
         throw new Error("[plan-write-gate] Blocked: official write/patch tool exposed no parseable target paths.");
@@ -255,9 +248,11 @@ export async function createPlanWriteGateHooks(
     },
     "tool.execute.after": async (input: any) => {
       if (!isWriteTool(input?.tool) && !isPatchTool(input?.tool) && !isBashTool(input?.tool)) return;
+      const { invalidateScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
       invalidateScopeRuntimeIdentity(root, input?.sessionID ?? input?.sessionId, input?.callID ?? input?.callId);
     },
     event: async ({ event }: any) => {
+      const { invalidateScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
       const part = event?.properties?.part ?? event?.part;
       if (event?.type === "message.part.updated" && part?.type === "tool" && (part?.state?.status === "completed" || part?.state?.status === "error")) {
         invalidateScopeRuntimeIdentity(root, part.sessionID, part.callID);

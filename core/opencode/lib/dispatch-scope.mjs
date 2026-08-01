@@ -187,7 +187,7 @@ export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   if (state?.planner_status !== "usable") return { ok: false, reason: "planner_status usable required" };
   const binding = state?.planner_plan_binding;
   if (!binding || typeof binding !== "object") return { ok: false, reason: "bound planner snapshot required" };
-  if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string") {
+  if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" || typeof binding.snapshot_file_hash !== "string") {
     return { ok: false, reason: "bound planner snapshot identity missing" };
   }
   if (binding.session_id !== state.session_id || binding.feature_id !== state.feature_id) {
@@ -195,11 +195,11 @@ export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   }
   const expectedDir = path.resolve(projectRoot, ".opencode", "plans", ".state", String(state.session_id), "bound-plans");
   const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
-  const expectedPath = path.join(expectedDir, `${binding.snapshot_hash}.json`);
+  const expectedPath = path.join(expectedDir, `${binding.snapshot_file_hash}.json`);
   const expectedRelative = path.relative(projectRoot, expectedPath).split(path.sep).join("/");
   if (snapshotPath !== expectedPath || binding.snapshot_path !== expectedRelative) return { ok: false, reason: "bound planner snapshot path is not canonical content-addressed identity" };
   const snapshot = readBoundPlanSnapshot(snapshotPath);
-  if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.plan?.feature_id !== state.feature_id) {
+  if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.fileHash !== binding.snapshot_file_hash || snapshot.plan?.feature_id !== state.feature_id) {
     return { ok: false, reason: "bound planner snapshot integrity failed" };
   }
   const tasks = Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : [];

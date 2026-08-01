@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   reconcilePendingChildBindingByChild,
 } from "./dispatch-scope.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
+const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
 function fixture(scopePaths = ["src/a.ts"], tasks = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-scope-"));
   const sessionId = "ses-scope";
@@ -28,6 +30,7 @@ function fixture(scopePaths = ["src/a.ts"], tasks = null) {
     feature_id: featureId,
     kind: "full",
     mode: "full",
+    model_strategy: MODEL_STRATEGY,
     tasks: tasks ?? [{
       id: "task-1",
       severity: "medium",
@@ -38,16 +41,18 @@ function fixture(scopePaths = ["src/a.ts"], tasks = null) {
     }],
   };
   const hash = semanticPlanHash(plan);
+  const snapshotBytes = Buffer.from(JSON.stringify(plan));
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshotBytes).digest("hex");
   const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
-  const relativeSnapshot = `.opencode/plans/.state/${sessionId}/bound-plans/${hash}.json`;
+  const relativeSnapshot = `.opencode/plans/.state/${sessionId}/bound-plans/${snapshotFileHash}.json`;
   fs.mkdirSync(path.join(stateDir, "bound-plans"), { recursive: true });
-  fs.writeFileSync(path.join(root, relativeSnapshot), JSON.stringify(plan));
+  fs.writeFileSync(path.join(root, relativeSnapshot), snapshotBytes);
   fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({
     session_id: sessionId,
     feature_id: featureId,
     planner_status: "usable",
     delivery_status: "ready",
-    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: relativeSnapshot, snapshot_hash: hash },
+    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: relativeSnapshot, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
   }));
   return {
     root,

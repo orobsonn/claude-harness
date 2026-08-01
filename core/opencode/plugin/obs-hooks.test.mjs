@@ -3,8 +3,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createObsPlanWriteHooks } from "./obs-plan-write.ts";
 import { createObsEyeHooks } from "./obs-eye.ts";
@@ -12,6 +13,12 @@ import { createObsHandHooks } from "./obs-hand.ts";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
 import { semanticPlanHash } from "../lib/planner-artifact.mjs";
 import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs";
+
+const MODEL_STRATEGY = {
+  hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+  planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
+  adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
+};
 
 /** @param {() => Promise<void>} fn */
 async function captureWarnings(fn) {
@@ -40,7 +47,7 @@ function corruptGateStateDir(dir, sessionId) {
   writeFileSync(stateDir, "corrupted");
 }
 
-test("obs-plan-write: output.args → plan-created with tasks", async () => {
+test("obs-plan-write: canonical model-tool writes are inert and cannot emit plan-created", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-pw-"));
   try {
     const meta = join(dir, "obs.json");
@@ -55,9 +62,43 @@ test("obs-plan-write: output.args → plan-created with tasks", async () => {
       { tool: "write" },
       { args: { filePath: planRel, content: JSON.stringify({ tasks: [1, 2] }) } },
     );
-    const raw = readFileSync(join(dir, "obs.events.jsonl"), "utf8");
-    assert.ok(raw.includes("plan-created"), raw);
-    assert.ok(raw.includes('"tasks":2') || raw.includes('"tasks": 2'), raw);
+    const eventPath = join(dir, "obs.events.jsonl");
+    assert.equal(existsSync(eventPath), false);
+  } finally {
+    delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("obs-plan-write leaves canonical and gate-state bytes unchanged and never binds an inert plan", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "obs-pw-inert-"));
+  try {
+    const sid = "ses_observer_inert";
+    const fid = "inert-plan";
+    const meta = join(dir, "obs.json");
+    const statePath = join(dir, ".opencode", "plans", ".state", sid, "gate-state.json");
+    const planPath = join(dir, ".opencode", "plans", `${sid}-${fid}`, "execution-plan.json");
+    const inert = {
+      feature_id: fid, kind: "full", mode: "full", model_strategy: MODEL_STRATEGY,
+      tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "src/a.test.ts", assertion: "Given a, When b, Then c" }] }],
+    };
+    mkdirSync(join(dir, ".opencode", "plans", ".state", sid), { recursive: true });
+    mkdirSync(dirname(planPath), { recursive: true });
+    writeFileSync(meta, "{}");
+    writeFileSync(statePath, JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "plan_pending_write" }, null, 2));
+    writeFileSync(planPath, JSON.stringify(inert, null, 2));
+    process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
+    const stateBefore = readFileSync(statePath);
+    const planBefore = readFileSync(planPath);
+    const hooks = await createObsPlanWriteHooks(dir);
+    await hooks["tool.execute.after"](
+      { tool: "write", sessionID: sid },
+      { args: { filePath: `.opencode/plans/${sid}-${fid}/execution-plan.json`, content: "model output" } },
+    );
+    assert.deepEqual(readFileSync(statePath), stateBefore);
+    assert.deepEqual(readFileSync(planPath), planBefore);
+    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).planner_plan_binding, undefined);
+    assert.equal(existsSync(join(dir, "obs.events.jsonl")), false);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
@@ -114,14 +155,16 @@ test("obs-hand: before task-executing + after hand-ran structural", async () => 
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{ id: "t-a", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-a", path: "src/a.test.mjs", assertion: "a" }] },
         { id: "t-b", severity: "medium", complexity: "medium", scope_paths: ["src/b.ts"], criterion_refs: ["#ac-2"], locked_tests: [{ id: "lt-b", path: "src/b.test.mjs", assertion: "b" }] }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
-    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "usable", delivery_status: "ready", planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash } }));
+    writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "usable", delivery_status: "ready", planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash } }));
     writeFileSync(
       join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`),
       JSON.stringify(plan),
@@ -233,6 +276,7 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: "t-p",
         severity: "medium",
@@ -243,7 +287,8 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(join(dir, `.opencode/plans/.state/${sid}/gate-state.json`), JSON.stringify({
@@ -251,7 +296,7 @@ test("#ac-1.1 obs-hand: binding_pending child terminal cleans without SDK (no fa
       feature_id: fid,
       planner_status: "usable",
       delivery_status: "ready",
-      planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+      planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
     }));
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
 
@@ -392,6 +437,7 @@ test("obs-hand: writing-hand terminal Task writes hand-record once with DONE", a
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "medium",
@@ -402,7 +448,8 @@ test("obs-hand: writing-hand terminal Task writes hand-record once with DONE", a
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     mkdirSync(join(dir, `.opencode/plans/.state/${sid}/bound-plans`), { recursive: true });
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(
@@ -481,6 +528,7 @@ test("obs-hand: terminal after writes hand-record even when child binding fails"
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "medium",
@@ -491,7 +539,8 @@ test("obs-hand: terminal after writes hand-record even when child binding fails"
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
     writeFileSync(
@@ -584,6 +633,7 @@ test("#ac-1.1 obs-hand: sniper-high DONE → sealed regate_pending for feature/t
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "high",
@@ -652,6 +702,7 @@ test("obs-hand: sniper-low DONE does not arm regate_pending", async () => {
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "low",
@@ -718,6 +769,7 @@ test("obs-hand: sniper-high BLOCKED does not arm regate_pending", async () => {
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "high",
@@ -825,6 +877,7 @@ test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the ru
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "medium",
@@ -835,7 +888,8 @@ test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the ru
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(
       join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
@@ -844,7 +898,7 @@ test("#532 ac-1.2: session.idle cleanupChild failure warns, never crashes the ru
         feature_id: fid,
         planner_status: "usable",
         delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
       }),
     );
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
@@ -909,6 +963,7 @@ test("#532 ac-1.3: after-hook finally cleanup failure warns, never crashes the r
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "medium",
@@ -919,7 +974,8 @@ test("#532 ac-1.3: after-hook finally cleanup failure warns, never crashes the r
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(
       join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
@@ -928,7 +984,7 @@ test("#532 ac-1.3: after-hook finally cleanup failure warns, never crashes the r
         feature_id: fid,
         planner_status: "usable",
         delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
       }),
     );
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));
@@ -978,6 +1034,7 @@ test("#532 message.part.updated tool-error cleanup failure warns, never crashes 
       feature_id: fid,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [{
         id: tid,
         severity: "medium",
@@ -988,7 +1045,8 @@ test("#532 message.part.updated tool-error cleanup failure warns, never crashes 
       }],
     };
     const hash = semanticPlanHash(plan);
-    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${hash}.json`;
+    const snapshotFileHash = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+    const snapshotRel = `.opencode/plans/.state/${sid}/bound-plans/${snapshotFileHash}.json`;
     writeFileSync(join(dir, snapshotRel), JSON.stringify(plan));
     writeFileSync(
       join(dir, `.opencode/plans/.state/${sid}/gate-state.json`),
@@ -997,7 +1055,7 @@ test("#532 message.part.updated tool-error cleanup failure warns, never crashes 
         feature_id: fid,
         planner_status: "usable",
         delivery_status: "ready",
-        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash },
+        planner_plan_binding: { session_id: sid, feature_id: fid, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
       }),
     );
     writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify(plan));

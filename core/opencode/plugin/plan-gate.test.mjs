@@ -4,6 +4,7 @@
  */
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -21,6 +22,11 @@ const GOLDEN_FULL = {
   feature_id: FEATURE,
   kind: "full",
   mode: "full",
+  model_strategy: {
+    hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+    planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
+    adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
+  },
   tasks: [
     {
       id: "t0-skeleton",
@@ -76,6 +82,33 @@ function seedProject(root, gateState, plan) {
       "utf8",
     )
   }
+}
+
+/**
+ * @param {string} root
+ * @returns {{ statePath: string, stateBytes: Buffer }}
+ */
+function seedUsableBoundProject(root) {
+  seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
+  const artifact = readPlannerArtifact(root, SESSION, FEATURE)
+  const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+  assert.equal(snapshot.ok, true)
+  const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
+  fs.writeFileSync(statePath, JSON.stringify(sealGateState({
+    feature_id: FEATURE,
+    planner_status: "usable",
+    planner_plan_binding: {
+      session_id: SESSION,
+      feature_id: FEATURE,
+      semantic_hash: artifact.semanticHash,
+      file_hash: artifact.fileHash,
+      fingerprint: artifact.fingerprint,
+      snapshot_path: snapshot.relativePath,
+      snapshot_hash: artifact.semanticHash,
+      snapshot_file_hash: snapshot.snapshot.fileHash,
+    },
+  })), "utf8")
+  return { statePath, stateBytes: fs.readFileSync(statePath) }
 }
 
 /**
@@ -152,6 +185,7 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
         fingerprint: artifact.fingerprint,
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
+        snapshot_file_hash: snapshot.snapshot.fileHash,
       },
     })))
     await assert.doesNotReject(() => runHook(root, "executor-low"))
@@ -171,8 +205,11 @@ test("lt-pg-dispatch-identity: official Task shape derives feature from session 
         session_id: SESSION,
         feature_id: FEATURE,
         semantic_hash: artifact.semanticHash,
+        file_hash: artifact.fileHash,
+        fingerprint: artifact.fingerprint,
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
+        snapshot_file_hash: snapshot.snapshot.fileHash,
       },
     })))
     const hooks = await createPlanGateHooks(root)
@@ -214,6 +251,44 @@ test("lt-pg-legacy: structurally valid old plan without planner binding is permi
   })
 })
 
+test("bound-plan prompt injection is idempotent across duplicate hook instances and rejects conflicts", async () => {
+  await withTempRoot(async (root) => {
+    seedUsableBoundProject(root)
+    const firstHooks = await createPlanGateHooks(root)
+    const secondHooks = await createPlanGateHooks(root)
+    const input = { tool: "task", sessionID: SESSION }
+    const output = {
+      args: {
+        description: "review",
+        prompt: "Review the bound plan.",
+        subagent_type: "plan-reviewer",
+      },
+    }
+
+    await firstHooks["tool.execute.before"](input, output)
+    const once = output.args.prompt
+    assert.equal(once.split("[HARNESS_BOUND_PLAN sha256=").length - 1, 1)
+    assert.equal(once.split("[/HARNESS_BOUND_PLAN]").length - 1, 1)
+
+    await firstHooks["tool.execute.before"](input, output)
+    assert.equal(output.args.prompt, once, "same hook instance duplicated the bound plan")
+    await secondHooks["tool.execute.before"](input, output)
+    assert.equal(output.args.prompt, once, "second hook instance duplicated the bound plan")
+
+    const conflicting = {
+      args: {
+        description: "review",
+        prompt: "Review.\n\n[HARNESS_BOUND_PLAN sha256=deadbeef]\n{}\n[/HARNESS_BOUND_PLAN]",
+        subagent_type: "plan-reviewer",
+      },
+    }
+    await assert.rejects(
+      () => firstHooks["tool.execute.before"](input, conflicting),
+      /conflicting bound-plan prompt marker/,
+    )
+  })
+})
+
 test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies with mismatch reason [#ac-1.2]", async () => {
   await withTempRoot(async (root) => {
     seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
@@ -231,7 +306,10 @@ test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies wi
         feature_id: FEATURE,
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
+        snapshot_file_hash: snapshot.snapshot.fileHash,
         semantic_hash: artifact.semanticHash,
+        file_hash: artifact.fileHash,
+        fingerprint: artifact.fingerprint,
       },
     })))
     await assert.rejects(() => runHook(root, "executor-low"), /does not match/)
@@ -255,29 +333,46 @@ test("lt-pg-conflict-no-binding: conflicting featureId with no bound plan artifa
   })
 })
 
-test("lt-pg-unreadable: illegible gate-state reconciliation logs and fails open [#ac-1.4]", async () => {
+test("lt-pg-invalid-object: present non-object gate-state denies every downstream role", async () => {
+  for (const role of ["plan-reviewer-family-1", "test-author", "executor-low", "sniper-low"]) {
+    await withTempRoot(async (root) => {
+      const stateDir = path.join(root, ".opencode", "plans", ".state", SESSION)
+      fs.mkdirSync(stateDir, { recursive: true })
+      fs.writeFileSync(path.join(stateDir, "gate-state.json"), "[]", "utf8")
+      await assert.rejects(() => runHook(root, role), /gate-state-invalid-object/, role)
+    })
+  }
+})
+
+test("lt-pg-invalid-session: structural gate-state path failures deny downstream roles", async () => {
   await withTempRoot(async (root) => {
     const hooks = await createPlanGateHooks(root)
+    await assert.rejects(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: "ses bad id" },
+      { args: {
+        description: "dispatch test-author",
+        prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nWrite tests.`,
+        subagent_type: "test-author",
+      } },
+    ), /invalid sessionId/)
+  })
+})
+
+test("lt-pg-unreadable: illegible gate-state reconciliation logs and fails open [#ac-1.4]", async () => {
+  await withTempRoot(async (root) => {
+    const stateDir = path.join(root, ".opencode", "plans", ".state", SESSION)
+    fs.mkdirSync(stateDir, { recursive: true })
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), "{", "utf8")
     const originalWarn = console.warn
     const warnings = []
     console.warn = (message) => warnings.push(message)
     try {
-      // Unsafe sessionId (space) fails gateStatePath resolution inside
-      // reconcilePlannerStateFromDisk -> reconciled.ok === false, exercising plan-gate's
-      // unreadable-state fail-open path directly.
-      await assert.doesNotReject(() => hooks["tool.execute.before"](
-        { tool: "task", sessionID: "ses bad id" },
-        { args: {
-          description: "dispatch test-author",
-          prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nWrite tests.`,
-          subagent_type: "test-author",
-        } },
-      ))
+      await assert.doesNotReject(() => runHook(root, "test-author"))
     } finally {
       console.warn = originalWarn
     }
     assert.ok(
-      warnings.some((w) => /planner-state-unreadable/.test(w)),
+      warnings.some((w) => /planner-state-unreadable.*gate-state-unreadable/.test(w)),
       `expected a fail-open log, got: ${JSON.stringify(warnings)}`,
     )
   })
@@ -293,8 +388,17 @@ test("lt-pg-terminal-blocked: planner attempt ended plan_invalid with no binding
       feature_id: FEATURE,
       planner_status: "plan_invalid",
     })
-    await assert.rejects(() => runHook(root, "executor-low"), /non-usable state/)
+    await assert.rejects(() => runHook(root, "executor-low"), /no usable binding/)
   })
+})
+
+test("planner lifecycle states without a binding deny every downstream writing role", async () => {
+  for (const planner_status of ["running", "plan_pending_write", "usable"]) {
+    await withTempRoot(async (root) => {
+      seedProject(root, { feature_id: FEATURE, planner_status })
+      await assert.rejects(() => runHook(root, "executor-low"), /no usable binding/, planner_status)
+    })
+  }
 })
 
 test("lt-pg-lock-contention: gate-state lock contention denies rather than fail-open", { timeout: 10_000 }, async () => {
@@ -330,8 +434,158 @@ test("lt-pg-r10-not-owned: bound plan validation does not require ceremony facts
         fingerprint: artifact.fingerprint,
         snapshot_path: snapshot.relativePath,
         snapshot_hash: artifact.semanticHash,
+        snapshot_file_hash: snapshot.snapshot.fileHash,
       },
     })))
     await assert.doesNotReject(() => runHook(root, "executor-low"))
+  })
+})
+
+test("validator internals warn-open only after an intact bound snapshot, while invalid content and hashes deny", async () => {
+  await withTempRoot(async (root) => {
+    seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
+    const artifact = readPlannerArtifact(root, SESSION, FEATURE)
+    const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+    const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
+    const intactState = sealGateState({
+      feature_id: FEATURE,
+      planner_status: "usable",
+      planner_plan_binding: {
+        session_id: SESSION,
+        feature_id: FEATURE,
+        semantic_hash: artifact.semanticHash,
+        file_hash: artifact.fileHash,
+        fingerprint: artifact.fingerprint,
+        snapshot_path: snapshot.relativePath,
+        snapshot_hash: artifact.semanticHash,
+        snapshot_file_hash: snapshot.snapshot.fileHash,
+      },
+    })
+    fs.writeFileSync(statePath, JSON.stringify(intactState), "utf8")
+    const stateBytesBeforeValidatorWarning = fs.readFileSync(statePath)
+
+    const warnings = []
+    const originalWarn = console.warn
+    console.warn = (message) => warnings.push(message)
+    try {
+      const hooks = await createPlanGateHooks(root, {
+        validatePlanFn: () => { throw new Error("validator seam") },
+      })
+      await assert.doesNotReject(() => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION },
+        { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+      ))
+    } finally {
+      console.warn = originalWarn
+    }
+    assert.ok(warnings.some((warning) => /validator failed internally/.test(warning)))
+    assert.deepEqual(fs.readFileSync(statePath), stateBytesBeforeValidatorWarning)
+
+    const malformedValidatorWarnings = []
+    console.warn = (message) => malformedValidatorWarnings.push(message)
+    try {
+      const malformedHooks = await createPlanGateHooks(root, { validatePlanFn: () => null })
+      await assert.doesNotReject(() => malformedHooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION },
+        { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+      ))
+    } finally {
+      console.warn = originalWarn
+    }
+    assert.ok(malformedValidatorWarnings.some((warning) => /validator failed internally/.test(warning)))
+    assert.deepEqual(fs.readFileSync(statePath), stateBytesBeforeValidatorWarning)
+
+    const invalidPlan = { ...GOLDEN_FULL, model_strategy: { ...GOLDEN_FULL.model_strategy, hand_tiers: { low: "gemma4" } } }
+    seedProject(root, { feature_id: FEATURE }, invalidPlan)
+    const invalidArtifact = readPlannerArtifact(root, SESSION, FEATURE)
+    const invalidSnapshotBytes = fs.readFileSync(path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`, "execution-plan.json"))
+    const invalidSnapshotHash = crypto.createHash("sha256").update(invalidSnapshotBytes).digest("hex")
+    const invalidSnapshotPath = path.join(root, ".opencode", "plans", ".state", SESSION, "bound-plans", `${invalidSnapshotHash}.json`)
+    fs.mkdirSync(path.dirname(invalidSnapshotPath), { recursive: true })
+    fs.writeFileSync(invalidSnapshotPath, invalidSnapshotBytes)
+    fs.writeFileSync(statePath, JSON.stringify(sealGateState({
+      feature_id: FEATURE,
+      planner_status: "usable",
+      planner_plan_binding: {
+        session_id: SESSION,
+        feature_id: FEATURE,
+        semantic_hash: invalidArtifact.semanticHash,
+        file_hash: invalidArtifact.fileHash,
+        fingerprint: invalidArtifact.fingerprint,
+        snapshot_path: path.relative(root, invalidSnapshotPath),
+        snapshot_hash: invalidArtifact.semanticHash,
+        snapshot_file_hash: invalidSnapshotHash,
+      },
+    })))
+    const normalHooks = await createPlanGateHooks(root)
+    await assert.rejects(() => normalHooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION },
+      { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+    ))
+
+    fs.writeFileSync(statePath, JSON.stringify({
+      ...intactState,
+      planner_plan_binding: { ...intactState.planner_plan_binding, snapshot_file_hash: "f".repeat(64) },
+    }))
+    const failingHooks = await createPlanGateHooks(root, { validatePlanFn: () => { throw new Error("validator seam") } })
+    await assert.rejects(() => failingHooks["tool.execute.before"](
+      { tool: "task", sessionID: SESSION },
+      { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+    ))
+  })
+})
+
+test("snapshot validator failure stays warn-open when a contradictory third validation would deny", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath, stateBytes } = seedUsableBoundProject(root)
+    let validationCalls = 0
+    const validatePlanFn = () => {
+      validationCalls += 1
+      if (validationCalls === 1) throw new Error("snapshot validator seam")
+      if (validationCalls === 2) return { ok: true, errors: [] }
+      return { ok: false, errors: ["contradictory late invalid result"] }
+    }
+    const warnings = []
+    const originalWarn = console.warn
+    console.warn = (message) => warnings.push(message)
+    try {
+      const hooks = await createPlanGateHooks(root, { validatePlanFn })
+      await assert.doesNotReject(() => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION },
+        { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+      ))
+    } finally {
+      console.warn = originalWarn
+    }
+    assert.equal(validationCalls, 2, "the gate must not revalidate after reconciliation reports an internal failure")
+    assert.ok(warnings.some((warning) => /validator failed internally/.test(warning)))
+    assert.deepEqual(fs.readFileSync(statePath), stateBytes)
+  })
+})
+
+test("snapshot validator failure emits a warning even when a contradictory third validation would allow", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath, stateBytes } = seedUsableBoundProject(root)
+    let validationCalls = 0
+    const validatePlanFn = () => {
+      validationCalls += 1
+      if (validationCalls === 1) throw new Error("snapshot validator seam")
+      return { ok: true, errors: [] }
+    }
+    const warnings = []
+    const originalWarn = console.warn
+    console.warn = (message) => warnings.push(message)
+    try {
+      const hooks = await createPlanGateHooks(root, { validatePlanFn })
+      await assert.doesNotReject(() => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SESSION },
+        { args: { subagent_type: "executor-low", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]' } },
+      ))
+    } finally {
+      console.warn = originalWarn
+    }
+    assert.equal(validationCalls, 2, "the gate must honor the reconciler's validator result")
+    assert.ok(warnings.some((warning) => /validator failed internally/.test(warning)))
+    assert.deepEqual(fs.readFileSync(statePath), stateBytes)
   })
 })

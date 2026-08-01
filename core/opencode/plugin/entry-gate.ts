@@ -82,16 +82,6 @@ function extractBashCommand(toolArgs: unknown): unknown {
   return a.command ?? a.cmd
 }
 
-/** @description Detect shell forms that can replace or mutate execution-plan.json. */
-function mutatesExecutionPlan(command: unknown): boolean {
-  if (typeof command !== "string" || !/execution-plan\.json/i.test(command)) return false
-  return (
-    /(?:>|>>)\s*["']?[^\s"']*execution-plan\.json/i.test(command) ||
-    /\b(?:cp|mv|rsync|tee|rm|truncate)\b[^\n]*execution-plan\.json/i.test(command) ||
-    /\bsed\b[^\n]*\s-i(?:\s|$)[^\n]*execution-plan\.json/i.test(command)
-  )
-}
-
 /**
  * @description Best-effort feature/task ids from task tool args.
  */
@@ -329,20 +319,6 @@ export async function createEntryGateHooks(
         // unreadable gate-state is not itself grounds to block delivery — decideBashDelivery's
         // own rails (branch/commits, regate, capture, real-file) still apply against {}.
         const gateState = loaded.ok ? loaded.state : {}
-        // Marker-seal validation is not applied anywhere on the Task or bash branches (#484):
-        // the seal secret was per-process-instance (marker-seal.mjs), so validating it bricked
-        // every marker sealed before an OpenCode restart, permanently (incident #423). Claude
-        // Code has no marker-seal concept at all (grep marker-seal core/claude-code = 0).
-        if (
-          gateState != null &&
-          typeof gateState === "object" &&
-          !Array.isArray(gateState) &&
-          (gateState as Record<string, unknown>).planner_status === "usable" &&
-          mutatesExecutionPlan(command)
-        ) {
-          throw new Error(`${PREFIX} Blocked: bound execution-plan.json is immutable until a new planner claim.`)
-        }
-
         /** git branch/commit probe is delivery-only (a real git shellout, fail-open on throw);
          * isAncestorFn and listHandRecordsForFeatureFn are cheap lazy closures always safe to
          * pass — decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs

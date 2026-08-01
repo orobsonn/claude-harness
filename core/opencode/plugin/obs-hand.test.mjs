@@ -12,6 +12,7 @@ import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { createObsHandHooks } from "./obs-hand.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
+const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }
 const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH
 const hadObservabilityRunPath = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_OBSERVABILITY_RUN_PATH")
 before(() => { delete process.env.HARNESS_OBSERVABILITY_RUN_PATH })
@@ -91,6 +92,7 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
       feature_id: featureId,
       kind: "full",
       mode: "full",
+      model_strategy: MODEL_STRATEGY,
       tasks: [
         {
           id: taskId,
@@ -118,6 +120,7 @@ test("lt-oh-markerless-arms-rail: markerless dispatch with a fallback taskId sti
           feature_id: featureId,
           snapshot_path: snapshot.relativePath,
           snapshot_hash: artifact.semanticHash,
+          snapshot_file_hash: snapshot.snapshot.fileHash,
           semantic_hash: artifact.semanticHash,
         },
       }),

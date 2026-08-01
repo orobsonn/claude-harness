@@ -1,13 +1,102 @@
 /** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. Canonical locked_tests shape: {id, path, assertion, fixture_paths?}. Complexity allowlist: low|medium|high|max. Optional per-task audit marker: resolved_judgments_model_resolved (array of that task's resolved_judgments keys) — OpenCode lane only; the claude-code copy under skills/creating-plans/references does not implement it. */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isSafeFeatureId } from "./feature-id.mjs";
+import { APPROVED_HAND_LADDER } from "./hand-model-ladder.mjs";
+import { validateRouting } from "./routing-validate.mjs";
+import { isCompleteExpectedModelStrategy, projectExpectedModelStrategy } from "./model-strategy-projection.mjs";
 
 /** Shell metacharacters / control chars — free-form shell text is never a locked_tests.command. */
 const SHELL_META = /[;&|`$(){}<>\n\r\0]/;
 
 /** Task + plan complexity bands (max maps to executor-high at dispatch). */
 const COMPLEXITY_BANDS = ["low", "medium", "high", "max"];
+const MODEL_STRATEGY_EYE_KEYS = Object.freeze([
+  "planner",
+  "plan-reviewer",
+  "compliance",
+  "adversary",
+  "security",
+  "shipper",
+  "harvester",
+]);
+const MODEL_STRATEGY_KEYS = new Set(["hand_tiers", ...MODEL_STRATEGY_EYE_KEYS, "fallback"]);
+
+/**
+ * @description Validates the frozen R15 strategy shape. This deliberately does not interpret
+ * `fallback`: it is recorded plan data, not an executable route.
+ * @param {unknown} strategy
+ * @param {unknown} expectedStrategy
+ * @param {string[]} errors
+ */
+function validateModelStrategy(strategy, expectedStrategy, errors, expectedSupplied = false) {
+  if (!strategy || typeof strategy !== "object" || Array.isArray(strategy)) {
+    errors.push("model_strategy must be an object for a full plan");
+    return;
+  }
+  const value = /** @type {Record<string, unknown>} */ (strategy);
+  for (const key of Object.keys(value)) {
+    if (!MODEL_STRATEGY_KEYS.has(key)) errors.push(`model_strategy.${key} is not allowed`);
+  }
+  const handTiers = value.hand_tiers;
+  if (!handTiers || typeof handTiers !== "object" || Array.isArray(handTiers)) {
+    errors.push("model_strategy.hand_tiers must be an object with low, medium, high");
+  } else {
+    const tiers = /** @type {Record<string, unknown>} */ (handTiers);
+    for (const key of Object.keys(tiers)) {
+      if (!Object.hasOwn(APPROVED_HAND_LADDER, key)) errors.push(`model_strategy.hand_tiers.${key} is not allowed`);
+    }
+    for (const [key, model] of Object.entries(APPROVED_HAND_LADDER)) {
+      if (!Object.hasOwn(tiers, key) || tiers[key] !== model) errors.push(`model_strategy.hand_tiers.${key} must equal ${model}`);
+    }
+  }
+  for (const key of MODEL_STRATEGY_EYE_KEYS) {
+    if (typeof value[key] !== "string" || value[key].trim().length === 0) {
+      errors.push(`model_strategy.${key} must be a non-empty string`);
+    }
+  }
+
+  if (expectedSupplied) {
+    if (!isCompleteExpectedModelStrategy(expectedStrategy)) {
+      errors.push("expectedModelStrategy must be a complete authoritative projection");
+      return;
+    }
+    const expected = /** @type {Record<string, unknown>} */ (expectedStrategy);
+    const expectedHands = expected.hand_tiers;
+    if (!expectedHands || typeof expectedHands !== "object" || Array.isArray(expectedHands)) {
+      errors.push("expectedModelStrategy must contain approved hand_tiers");
+    } else {
+      for (const [key, model] of Object.entries(APPROVED_HAND_LADDER)) {
+        if ((/** @type {Record<string, unknown>} */ (expectedHands))[key] !== model) {
+          errors.push(`expectedModelStrategy.hand_tiers.${key} must equal ${model}`);
+        }
+      }
+    }
+    for (const key of MODEL_STRATEGY_EYE_KEYS) {
+      if (typeof expected[key] !== "string" || expected[key].trim().length === 0) {
+        errors.push(`expectedModelStrategy.${key} must be a non-empty string`);
+      } else if (value[key] !== expected[key]) {
+        errors.push(`model_strategy.${key} does not match expectedModelStrategy`);
+      }
+    }
+  }
+}
+
+/** @description First-existing runtime routing projection for the standalone CLI. */
+function runtimeExpectedModelStrategy(root) {
+  const vendored = resolve(root, ".opencode", "harness.routing.json");
+  const selected = existsSync(vendored) ? vendored : resolve(root, "harness.routing.json");
+  if (!existsSync(selected)) return {};
+  try {
+    const routing = JSON.parse(readFileSync(selected, "utf8"));
+    const valid = validateRouting(routing);
+    if (!valid.ok) return { error: `selected routing invalid: ${valid.reason}` };
+    const projected = projectExpectedModelStrategy(routing);
+    return projected.ok ? { expectedModelStrategy: projected.strategy } : { error: projected.reason };
+  } catch (error) {
+    return { error: `selected routing unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
 
 /**
  * @description Repo-relative path hygiene: no absolute, no drive letter, no `..`.
@@ -109,7 +198,7 @@ function isAllowlistedLockedTestCommand(command) {
 
 /**
  * @param {unknown} plan
- * @param {{ expect?: "stub"|"full"|"any" }} [opts]
+ * @param {{ expect?: "stub"|"full"|"any", expectedModelStrategy?: unknown }} [opts]
  * @returns {{ ok: boolean; errors: string[] }}
  */
 export function validatePlan(plan, opts = {}) {
@@ -334,14 +423,9 @@ export function validatePlan(plan, opts = {}) {
     errors.push("complexity must be low|medium|high|max");
   }
 
-  // model_strategy
-  if (p.model_strategy) {
-    const ms = p.model_strategy;
-    const bad = (v) => typeof v === "string" && ["haiku","sonnet","opus"].includes(v.toLowerCase());
-    const check = (o) => o && typeof o === "object" && Object.values(o).some(bad);
-    if (check(ms.tiers) || check(ms.hand_tiers)) errors.push("model_strategy must not contain haiku/sonnet/opus");
-    if (ms.low || ms.medium || ms.high) errors.push("model_strategy must not use legacy tiers");
-    if (ms.executor || ms.sniper) errors.push("model_strategy must not contain executor/sniper keys");
+  // R15: every effective full plan has one complete, frozen strategy. Stub plans do not.
+  if (effectiveKind === "full") {
+    validateModelStrategy(p.model_strategy, safeOpts.expectedModelStrategy, errors, Object.hasOwn(safeOpts, "expectedModelStrategy"));
   }
 
   // demo shape optional
@@ -383,7 +467,14 @@ if (isMain) {
     );
     process.exit(1);
   }
-  const result = validatePlan(data, { expect: "full" });
+  const runtimeRouting = runtimeExpectedModelStrategy(process.cwd());
+  if (runtimeRouting.error) {
+    process.stderr.write(`[validate-plan] INVALID — ${runtimeRouting.error}\n`);
+    process.exit(1);
+  }
+  const result = validatePlan(data, runtimeRouting.expectedModelStrategy
+    ? { expect: "full", expectedModelStrategy: runtimeRouting.expectedModelStrategy }
+    : { expect: "full" });
   if (result.ok) {
     process.stdout.write("OK\n");
     process.exit(0);

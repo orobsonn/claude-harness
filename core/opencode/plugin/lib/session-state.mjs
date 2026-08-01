@@ -140,14 +140,32 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
 
   const binding = state.planner_plan_binding;
   const canonicalRelativePath = `.opencode/plans/${sessionId}-${featureId}/execution-plan.json`;
-  if (binding == null) return { ok: true, plan: canonical.value, canonicalPath, canonicalRelativePath };
+  if (binding == null) {
+    const tasks = canonical.value.tasks;
+    if (Array.isArray(tasks) && tasks.length > 0) {
+      const full = validatePlan(canonical.value, { expect: "full" });
+      if (!full.ok) return { ok: false, reason: "canonical full plan failed validation" };
+      return { ok: false, reason: "full plan recovery requires planner snapshot binding" };
+    }
+    const stub = validatePlan(canonical.value, { expect: "stub" });
+    if (!stub.ok || canonical.value.kind !== "stub" || canonical.value.session_id !== sessionId ||
+        !Array.isArray(tasks) || tasks.length !== 0) {
+      return { ok: false, reason: "canonical classify stub failed validation" };
+    }
+    return { ok: true, plan: canonical.value, canonicalPath, canonicalRelativePath };
+  }
   if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+      state.planner_status !== "usable" ||
       binding.session_id !== sessionId || binding.feature_id !== featureId ||
-      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string") {
+      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" ||
+      typeof binding.snapshot_file_hash !== "string" || typeof binding.semantic_hash !== "string" ||
+      typeof binding.file_hash !== "string") {
     return { ok: false, reason: "planner snapshot identity mismatch" };
   }
-  const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_hash}.json`;
-  if (!/^[0-9a-f]{64}$/.test(binding.snapshot_hash) || binding.snapshot_path !== expectedSnapshotPath ||
+  const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_file_hash}.json`;
+  if (!/^[0-9a-f]{64}$/.test(binding.snapshot_hash) || !/^[0-9a-f]{64}$/.test(binding.snapshot_file_hash) ||
+      !/^[0-9a-f]{64}$/.test(binding.semantic_hash) || !/^[0-9a-f]{64}$/.test(binding.file_hash) ||
+      binding.snapshot_path !== expectedSnapshotPath ||
       binding.snapshot_path.includes("\\") || path.isAbsolute(binding.snapshot_path)) {
     return { ok: false, reason: "planner snapshot path is not canonical repo-relative form" };
   }
@@ -155,12 +173,17 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
   const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
   if (!inside(snapshotRoot, snapshotPath)) return { ok: false, reason: "planner snapshot escaped session" };
   const snapshot = readSafeJson(projectRoot, snapshotPath);
-  if (!snapshot.ok || snapshot.value.feature_id !== featureId ||
-      semanticPlanHash(snapshot.value) !== binding.snapshot_hash ||
-      semanticPlanHash(canonical.value) !== binding.snapshot_hash ||
-      (typeof binding.semantic_hash === "string" && binding.semantic_hash !== binding.snapshot_hash)) {
+  if (!snapshot.ok) return { ok: false, reason: "planner snapshot integrity mismatch" };
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshot.raw, "utf8").digest("hex");
+  const canonicalFileHash = crypto.createHash("sha256").update(canonical.raw, "utf8").digest("hex");
+  if (snapshot.value.feature_id !== featureId || snapshot.raw !== canonical.raw ||
+      snapshotFileHash !== binding.snapshot_file_hash || canonicalFileHash !== binding.file_hash ||
+      canonicalFileHash !== binding.snapshot_file_hash || semanticPlanHash(snapshot.value) !== binding.snapshot_hash ||
+      semanticPlanHash(canonical.value) !== binding.snapshot_hash || binding.semantic_hash !== binding.snapshot_hash) {
     return { ok: false, reason: "planner snapshot integrity mismatch" };
   }
+  const full = validatePlan(snapshot.value, { expect: "full" });
+  if (!full.ok) return { ok: false, reason: "planner snapshot full plan failed validation" };
   return { ok: true, plan: snapshot.value, canonicalPath, canonicalRelativePath };
 }
 

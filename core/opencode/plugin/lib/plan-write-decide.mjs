@@ -1,8 +1,8 @@
 /**
  * @description Pure decide for OC plan-write-gate: anti-forge + optional scope rail.
  * Denies Write/Edit to gate-state.json, triage.json, and any JSON under
- * .opencode/plans/.state/ — absolute or relative. Does NOT deny execution-plan.json
- * (orchestrator/build may author the plan via Write or bash; bash forge is separate).
+ * .opencode/plans/.state/ — absolute or relative — and every feature canonical
+ * execution-plan.json. Canonical persistence belongs exclusively to planner-recovery.
  * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
  * Anti-forge is fail-closed (outside soft catch). Scope rail fail-opens when context
  * is incomplete or on rail errors; an exact dispatch record denies executor/sniper
@@ -99,6 +99,52 @@ function isStateFilePath(filePath) {
     }
   }
   return false;
+}
+
+/**
+ * @description True only for a feature's canonical plan, never for .state artifacts.
+ * This is a path fact, not a shell parser or process-isolation claim.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+export function isCanonicalPlanPath(filePath) {
+  const segs = pathSegments(filePath);
+  if (segs.length < 4 || segs.at(-1) !== "execution-plan.json") return false;
+  for (let index = 0; index <= segs.length - 4; index++) {
+    if (segs[index] === ".opencode" && segs[index + 1] === "plans") {
+      if (segs[index + 2] === ".state") continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @description Best-effort literal Bash friction for known mutation forms. Reads are deliberately
+ * untouched; variables, substitutions and split paths are outside this path-level protection.
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isLiteralCanonicalPlanMutation(command) {
+  if (typeof command !== "string") return false;
+  // Deliberately lexical, not a shell parser: splitting operators keeps one harmless `tee`
+  // mention from changing the meaning of a later command segment.
+  return command.split(/(?:;|\r?\n|&&|\|\||\|)/).some((segment) => {
+    const paths = segment.match(/(?:\/?[^\s'"`]*\/)?\.opencode\/plans\/(?!\.state(?:\/|$))[^\s'"`]+\/execution-plan\.json/gi) ?? [];
+    return paths.some((literal) => {
+      const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const targetEnd = `(?:[\\s'\"\`]*$)`;
+      const tee = segment.search(/\btee\b/i);
+      const literalAt = segment.indexOf(literal);
+      const teeTargetsLiteral = tee >= 0 && tee < literalAt && segment.slice(tee, literalAt).indexOf("<") === -1;
+      return new RegExp(`(?:>|>>)\\s*["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || teeTargetsLiteral
+        || new RegExp(`\\b(?:cp|rsync)\\b[^\\n]*\\s["']?${escaped}${targetEnd}`, "i").test(segment)
+        || new RegExp(`\\bmv\\b[^\\n]*["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || new RegExp(`\\b(?:rm|truncate)\\b[^\\n]*\\s["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || new RegExp(`\\bsed\\s+-i\\b[^\\n]*\\s["']?${escaped}${targetEnd}`, "i").test(segment);
+    });
+  });
 }
 
 /**
@@ -331,6 +377,17 @@ export function decide(payload, opts = {}) {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { allow: true };
   }
+  const raw = /** @type {Record<string, unknown>} */ (payload);
+  const args = raw.args && typeof raw.args === "object" && !Array.isArray(raw.args)
+    ? /** @type {Record<string, unknown>} */ (raw.args)
+    : {};
+  const command = typeof args.command === "string" ? args.command : typeof raw.command === "string" ? raw.command : "";
+  if (command) {
+    if (isLiteralCanonicalPlanMutation(command)) {
+      return { allow: false, reason: `${PREFIX} Blocked: literal Bash mutation of canonical plan is denied (best-effort friction).` };
+    }
+    return { allow: true };
+  }
   const filePath = extractWritePath(payload);
   // Fail-closed: write/edit with unparseable path must not silently forge.
   if (!filePath) {
@@ -344,6 +401,12 @@ export function decide(payload, opts = {}) {
     return {
       allow: false,
       reason: `${PREFIX} Blocked: gate-state/triage written ONLY by harness markers, never Write/Edit.`,
+    };
+  }
+  if (isCanonicalPlanPath(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: canonical plan is written only by planner-recovery, never by a model tool.`,
     };
   }
   if (!carved && isStateFilePath(filePath)) {
@@ -383,7 +446,6 @@ export function decide(payload, opts = {}) {
     return { allow: true };
   }
 
-  // execution-plan.json is allowed (LIGHT model C — orchestrator may author plan)
   return { allow: true };
 }
 

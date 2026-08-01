@@ -21,10 +21,12 @@ const claim = (state, overrides = {}) => claimPlannerAttempt(state, {
   ...overrides,
 });
 
-test("one planner call identity excludes a different concurrent call and repeats idempotently", () => {
+test("a new planner call supersedes an unfinished claim while duplicate before is idempotent", () => {
   const first = claim(base);
   assert.equal(first.ok, true);
-  assert.equal(claim(first.state, { callId: "call-2", token: "token-2" }).ok, false);
+  const next = claim(first.state, { callId: "call-2", token: "token-2" });
+  assert.equal(next.ok, true);
+  assert.equal(next.state.planner_active_attempt.call_id, "call-2");
   assert.equal(claim(first.state).idempotent, true);
 });
 

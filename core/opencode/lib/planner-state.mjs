@@ -26,13 +26,10 @@ export function claimPlannerAttempt(previous, input = {}) {
     if (active.call_id === input.callId && active.session_id === input.sessionId) {
       return { ok: true, state, idempotent: true };
     }
-    if (active.process_instance === PROCESS_INSTANCE) {
-      return { ok: false, reason: "planner call already active", state };
-    }
     state = {
       ...state,
       planner_active_attempt: null,
-      planner_last_attempt: { ...active, ended_reason: "prior host process ended" },
+      planner_last_attempt: { ...active, ended_reason: "superseded by a later planner call" },
     };
   }
   if (input.role && input.role !== "planner") {
@@ -52,6 +49,7 @@ export function claimPlannerAttempt(previous, input = {}) {
       feature_id: input.featureId,
       model: input.model,
       baseline_plan: input.baselinePlan ?? null,
+      expected_model_strategy: input.expectedModelStrategy,
       process_instance: PROCESS_INSTANCE,
     },
   };

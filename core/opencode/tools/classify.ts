@@ -254,7 +254,7 @@ export default tool({
     "The model passes { mode, feature_id } where mode ∈ { no-ceremony, QUICK, LIGHT, FULL }. " +
     "The stub is written to <directory>/.opencode/plans/<sessionID>-<feature_id>/execution-plan.json. " +
     "Returns the canonical plan path and echoed { mode, feature_id } in metadata. " +
-    "The stub is a PRE-PLAN artifact (empty tasks) — the planner overwrites it with a full plan later.",
+    "The stub is a PRE-PLAN artifact (empty tasks) — the planner returns JSON only; planner-recovery (the host adapter) overwrites the stub with the validated full plan.",
   args: {
     mode: tool.schema
       .string()

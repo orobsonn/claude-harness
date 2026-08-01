@@ -3,10 +3,10 @@
  * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
  * Discipline around waiting for plan-review APPROVE is prose + orchestration, exactly like
  * Claude Code. Deny throws [plan-gate]. Conditional on
- * planner_plan_binding: absent (no planner attempt ran for this session, or a terminated/failed
- * attempt with no binding) -> fail-open, no plan required (operator/fix-mode branch, fleet
- * fix-mode); present -> validated for real, unchanged from before. Gate-state reconciliation
- * failure fails open only for genuinely missing/unreadable state — lock contention or a write
+ * planner_plan_binding: absent with no planner lifecycle -> fail-open, no plan required
+ * (operator/fix-mode branch, fleet fix-mode); any started lifecycle without a usable binding
+ * denies. A present binding is validated for real. Gate-state reconciliation
+ * failure fails open only for genuinely unreadable state — lock contention or a write
  * failure still denies.
  * Roles outside the guarded downstream set skip plan require.
  * Load shape uses dynamic imports of pure mjs inside the Plugin factory.
@@ -43,6 +43,7 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
  */
 export async function createPlanGateHooks(
   projectRoot: string,
+  deps: { validatePlanFn?: (plan: unknown, options: unknown) => { ok: boolean; errors: string[] } } = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
@@ -84,22 +85,24 @@ export async function createPlanGateHooks(
         isTestAuthorRole(role) ||
         isExecutorRole(role) ||
         isSniperRole(role)
-      // Conditional on binding existence: absent (no planner attempt ran for this
-      // session — the operator branch, or a fix-mode dispatch reusing a
-      // branch) -> skip fail-open, no plan required. Present -> validate for real; nothing
-      // below this point is relaxed once a real planner attempt is on the table (#ac-1.2, #ac-1.3).
+      // No planner lifecycle means operator/fix-mode and remains the narrow fail-open branch.
+      // Once a planner attempt exists, only a usable bound snapshot may pass.
       if (requiresFullPlan) {
         const sid = sessionId ?? undefined
         if (sid) {
-          const reconciled = reconcilePlannerStateFromDisk(root, sid)
+          const reconciled = reconcilePlannerStateFromDisk(root, sid, Date.now(), { validatePlanFn: deps.validatePlanFn })
           if (!reconciled.ok) {
-            // #ac-1.4 fail-open is scoped to genuinely missing/unreadable state — lock
+            // #ac-1.4 fail-open is scoped to genuinely unreadable state — lock
             // contention or a write failure is an infra fault, not "no planner attempt ran", and
             // must keep denying (a squatted lock must never disable plan validation).
             if (GATE_STATE_INFRA_FAILURE_REASONS.has(String(reconciled.reason))) {
               throw new Error(`${PREFIX} denied: gate-state contention (${reconciled.reason})`)
             }
-            console.warn(`${PREFIX} planner-state-unreadable (fail-open, plan validation skipped): ${reconciled.reason}`)
+            if (reconciled.reason === "gate-state-unreadable") {
+              console.warn(`${PREFIX} planner-state-unreadable (fail-open, plan validation skipped): ${reconciled.reason}`)
+            } else {
+              throw new Error(`${PREFIX} denied: planner state unavailable (${String(reconciled.reason ?? "unknown")})`)
+            }
           } else {
             const state =
               reconciled.state != null &&
@@ -109,9 +112,9 @@ export async function createPlanGateHooks(
                 : {}
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined
             if (!binding) {
-              const terminalPlannerStatus = new Set(["plan_invalid", "planner_failed"])
-              if (terminalPlannerStatus.has(String(state.planner_status ?? ""))) {
-                throw new Error(`${PREFIX} denied: planner attempt ended in a non-usable state; status=${String(state.planner_status ?? "missing")}`)
+              const plannerStatus = String(state.planner_status ?? "")
+              if (plannerStatus && plannerStatus !== "not_started") {
+                throw new Error(`${PREFIX} denied: planner lifecycle has no usable binding; status=${plannerStatus}`)
               }
             }
             if (binding) {
@@ -127,7 +130,13 @@ export async function createPlanGateHooks(
               ) {
                 throw new Error(`${PREFIX} denied: current plan snapshot does not match planner binding`)
               }
-              throwIfPlanDenied(decidePlanGate({ plan: artifact.plan, expect: "full" }))
+              if (reconciled.validatorFailed === true) {
+                console.warn(`${PREFIX} Warning: validator failed internally; opening without a validation decision.`)
+              } else {
+                const planDecision = decidePlanGate({ plan: artifact.plan, expect: "full" }, { validatePlanFn: deps.validatePlanFn })
+                if (planDecision.decision === "warn") console.warn(`${PREFIX} ${planDecision.reason}`)
+                throwIfPlanDenied(planDecision)
+              }
               const ids = dispatchIds(toolArgs)
               const featureId = identity.featureId || ids.featureId
               if (featureId && identity.featureIdSource === "runtime-envelope" && featureId !== binding.feature_id) {
@@ -153,7 +162,17 @@ export async function createPlanGateHooks(
                 const existingPrompt = typeof args.prompt === "string" ? args.prompt : ""
                 const serializedPlan = JSON.stringify(artifact.plan)
                 const planBlock = `[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
-                args.prompt = `${existingPrompt}\n\n${planBlock}`.trim()
+                const openCount = existingPrompt.split("[HARNESS_BOUND_PLAN").length - 1
+                const closeCount = existingPrompt.split("[/HARNESS_BOUND_PLAN]").length - 1
+                if (openCount === 0 && closeCount === 0) {
+                  args.prompt = `${existingPrompt}\n\n${planBlock}`.trim()
+                } else if (
+                  openCount !== 1 ||
+                  closeCount !== 1 ||
+                  !existingPrompt.endsWith(planBlock)
+                ) {
+                  throw new Error(`${PREFIX} denied: conflicting bound-plan prompt marker`)
+                }
               }
             }
           }

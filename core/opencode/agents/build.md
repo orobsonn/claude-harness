@@ -106,7 +106,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
-**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround (or its `$`-escaping caveat) for it.
+**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Specs may be edited only where the active lane permits it. The canonical execution plan is never a direct model edit: planner returns JSON and `planner-recovery` alone persists it. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, the canonical `execution-plan.json`, and the harness marker scripts (`mark.mjs`, `classify.mjs`) — those stay host/marker-only, never a direct edit.
 </HARD-GATE>
 
 Route on its result:
@@ -127,7 +127,7 @@ For **LIGHT** and **FULL**, the full delivery loop lives in the `oc-orchestratin
 skill({ name: "oc-orchestrating-delivery" })
 ```
 
-The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and file writes. Plan files are written to `.opencode/plans/<sessionID>-<feature_id>/` — the `<sessionID>-` prefix is **mandatory**. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
+The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and permitted file writes. The canonical plan path is `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json` — the `<sessionID>-` prefix is **mandatory** — and only `planner-recovery` persists the planner's returned JSON there. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
 
 **Mode mapping:** triage `LIGHT`/`FULL` → full plan `mode` is lowercase `light`/`full`. Never write uppercase triage modes into a full plan.
 

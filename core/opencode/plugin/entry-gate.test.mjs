@@ -208,17 +208,14 @@ test("bash ls → does not throw", async () => {
   })
 })
 
-test("bound execution plan blocks bash mutation but permits read", async () => {
+test("canonical plan Bash ownership is not duplicated in entry-gate", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, fullDeliveryState({ planner_status: "usable" }))
     const before = hooks["tool.execute.before"]
-    await assert.rejects(
-      () => before(
-        { tool: "bash", sessionID: SID },
-        { args: { command: "cat > .opencode/plans/ses-feat/execution-plan.json <<'EOF'\n{}\nEOF" } },
-      ),
-      /immutable/,
-    )
+    await assert.doesNotReject(() => before(
+      { tool: "bash", sessionID: SID },
+      { args: { command: "cat > .opencode/plans/ses-feat/execution-plan.json <<'EOF'\n{}\nEOF" } },
+    ))
     await assert.doesNotReject(() => before(
       { tool: "bash", sessionID: SID },
       { args: { command: "cat .opencode/plans/ses-feat/execution-plan.json" } },

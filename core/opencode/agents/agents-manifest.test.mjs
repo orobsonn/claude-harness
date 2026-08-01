@@ -202,6 +202,18 @@ test("t6-skills: required loop skills exist under core/opencode/skills", () => {
   }
 });
 
+test("planner agent and creating-plans skill expose one canonical terminal summary", () => {
+  const canonical = "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs].";
+  for (const path of [
+    join(AGENTS_DIR, "planner.md"),
+    join(SKILLS_DIR, "creating-plans", "SKILL.md"),
+  ]) {
+    const body = read(path);
+    assert.equal(body.includes(canonical), true, `${path} lacks the canonical summary`);
+    assert.doesNotMatch(body, /Tasks com adversarial: \[IDs\]\. Próximo passo:/, `${path} extends the terminal summary`);
+  }
+});
+
 test("t6-shared-hands: no spawn twins exist and each shared hand preserves its full contract", () => {
   const files = readdirSync(AGENTS_DIR).filter((f) => f.endsWith("-spawn.md"));
   assert.deepEqual(files, [], "retired *-spawn.md twins must not exist");

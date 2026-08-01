@@ -11,6 +11,26 @@ export interface ValidatePlanContext {
   directory: string
 }
 
+/** @description Read, validate, and project one selected routing file exactly once. */
+function expectedModelStrategyFromRuntimeRouting(
+  directory: string,
+  validateRouting: (routing: unknown) => { ok: boolean; reason?: string },
+  projectExpectedModelStrategy: (routing: unknown) => { ok: boolean; strategy?: Record<string, unknown>; reason?: string },
+): { strategy?: Record<string, unknown>; error?: string } {
+  const vendored = path.join(directory, ".opencode", "harness.routing.json")
+  const selected = fs.existsSync(vendored) ? vendored : path.join(directory, "harness.routing.json")
+  if (!fs.existsSync(selected)) return {}
+  try {
+    const routing = JSON.parse(fs.readFileSync(selected, "utf8"))
+    const valid = validateRouting(routing)
+    if (!valid.ok) return { error: `selected routing invalid: ${valid.reason ?? "schema rejection"}` }
+    const projected = projectExpectedModelStrategy(routing)
+    return projected.ok && projected.strategy ? { strategy: projected.strategy } : { error: `routing projection failed: ${projected.reason ?? "missing model"}` }
+  } catch (error) {
+    return { error: `failed to read/parse selected routing: ${error instanceof Error ? error.message : String(error)}` }
+  }
+}
+
 /**
  * @description Core execute logic — load plan from path and/or args.plan, run shared validatePlan.
  */
@@ -19,6 +39,8 @@ export async function executeValidatePlan(
   context: ValidatePlanContext,
 ): Promise<{ title: string; output: string; metadata: Record<string, unknown> }> {
   const { validatePlan } = await import("../../shared/lib/validate-plan.mjs")
+  const { validateRouting } = await import("../../shared/lib/routing-validate.mjs")
+  const { projectExpectedModelStrategy } = await import("../../shared/lib/model-strategy-projection.mjs")
 
   const expectRaw = typeof args.expect === "string" ? args.expect.trim() : "full"
   const expect =
@@ -76,7 +98,15 @@ export async function executeValidatePlan(
     }
   }
 
-  const result = validatePlan(plan, { expect })
+  const routingProjection = expectedModelStrategyFromRuntimeRouting(context.directory, validateRouting, projectExpectedModelStrategy)
+  if (routingProjection.error) {
+    const payload = { ok: false, errors: [routingProjection.error], expect, ...(planPath ? { path: planPath } : {}) }
+    return { title: "validate-plan: routing error", output: JSON.stringify(payload, null, 2), metadata: payload }
+  }
+  const validationOptions = routingProjection.strategy
+    ? { expect, expectedModelStrategy: routingProjection.strategy }
+    : { expect }
+  const result = validatePlan(plan, validationOptions)
   const metadata = {
     ok: result.ok,
     errors: result.errors,

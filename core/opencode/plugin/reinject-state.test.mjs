@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads"
 import { createReinjectStateHooks } from "./reinject-state.ts"
 import { buildSessionRecovery, cleanupRetainedCompletedSession, encodeRecoveryPayload, sweepRetainedSessions } from "./lib/session-state.mjs"
 import { semanticPlanHash } from "../lib/planner-artifact.mjs"
+const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }
 
 function fixture(sessionID = "ses-own", featureID = "restore-own-session") {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-reinject-")))
@@ -26,11 +27,13 @@ function fixture(sessionID = "ses-own", featureID = "restore-own-session") {
     locked_tests: [],
     depends_on: [],
   })
-  const plan = { feature_id: featureID, mode: "full", tasks: [task("task-one"), task("task-two")] }
+  const plan = { feature_id: featureID, kind: "full", mode: "full", model_strategy: MODEL_STRATEGY, tasks: [task("task-one"), task("task-two")] }
   const hash = semanticPlanHash(plan)
-  const snapshotPath = path.join(snapshotDir, `${hash}.json`)
-  fs.writeFileSync(snapshotPath, JSON.stringify(plan))
-  fs.writeFileSync(path.join(planDir, "execution-plan.json"), JSON.stringify(plan))
+  const snapshotBytes = Buffer.from(JSON.stringify(plan))
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshotBytes).digest("hex")
+  const snapshotPath = path.join(snapshotDir, `${snapshotFileHash}.json`)
+  fs.writeFileSync(snapshotPath, snapshotBytes)
+  fs.writeFileSync(path.join(planDir, "execution-plan.json"), snapshotBytes)
   const statePath = path.join(stateDir, "gate-state.json")
   fs.writeFileSync(statePath, JSON.stringify({
     session_id: sessionID,
@@ -42,12 +45,33 @@ function fixture(sessionID = "ses-own", featureID = "restore-own-session") {
       feature_id: featureID,
       snapshot_path: path.relative(root, snapshotPath),
       snapshot_hash: hash,
+      snapshot_file_hash: snapshotFileHash,
+      semantic_hash: hash,
+      file_hash: snapshotFileHash,
     },
     capture_verified: [`${featureID}/task-one@abc1234`],
     regate_pending: [`${featureID}/task-two`],
     regate_passed: [],
   }))
   return { root, sessionID, featureID, statePath, planDir, snapshotPath }
+}
+
+function seedUnboundPlan(f, plan) {
+  const canonicalPath = path.join(f.planDir, "execution-plan.json")
+  fs.writeFileSync(canonicalPath, JSON.stringify(plan))
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
+  state.planner_status = "not_started"
+  state.planner_plan_binding = null
+  state.capture_verified = []
+  state.regate_pending = []
+  state.regate_passed = []
+  fs.writeFileSync(f.statePath, JSON.stringify(state))
+  return {
+    canonicalPath,
+    stateBytes: fs.readFileSync(f.statePath),
+    canonicalBytes: fs.readFileSync(canonicalPath),
+    snapshotBytes: fs.readFileSync(f.snapshotPath),
+  }
 }
 
 function cleanup(value) {
@@ -94,7 +118,7 @@ test("JSON envelope escapes newline and control characters from every path value
     const stateDir = path.join(root, ".opencode", "plans", ".state", original.sessionID)
     const statePath = path.join(stateDir, "gate-state.json")
     const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
-    state.planner_plan_binding.snapshot_path = path.relative(root, path.join(stateDir, "bound-plans", `${state.planner_plan_binding.snapshot_hash}.json`))
+    state.planner_plan_binding.snapshot_path = path.relative(root, path.join(stateDir, "bound-plans", `${state.planner_plan_binding.snapshot_file_hash}.json`))
     fs.writeFileSync(statePath, JSON.stringify(state))
     const recovered = buildSessionRecovery(root, original.sessionID, { isAncestor: () => false })
     assert.equal(recovered.ok, true)
@@ -191,7 +215,7 @@ test("snapshot binding accepts only the exact canonical repo-relative path", () 
     (_f, state) => { state.planner_plan_binding.snapshot_path = state.planner_plan_binding.snapshot_path.replace("bound-plans/", "bound-plans/./") },
     (_f, state) => { state.planner_plan_binding.snapshot_path = state.planner_plan_binding.snapshot_path.replace("bound-plans/", "bound-plans/x/../") },
     (_f, state) => { state.planner_plan_binding.snapshot_path = state.planner_plan_binding.snapshot_path.replaceAll("/", "\\") },
-    (_f, state) => { state.planner_plan_binding.snapshot_path = `.opencode/plans/.state/ses-other/bound-plans/${state.planner_plan_binding.snapshot_hash}.json` },
+    (_f, state) => { state.planner_plan_binding.snapshot_path = `.opencode/plans/.state/ses-other/bound-plans/${state.planner_plan_binding.snapshot_file_hash}.json` },
   ]) {
     const f = fixture()
     try {
@@ -201,6 +225,148 @@ test("snapshot binding accepts only the exact canonical repo-relative path", () 
       assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
     } finally { cleanup(f) }
   }
+})
+
+test("official unbound classify stub with empty tasks is reinjected", () => {
+  const f = fixture()
+  try {
+    seedUnboundPlan(f, {
+      kind: "stub",
+      mode: "FULL",
+      feature_id: f.featureID,
+      session_id: f.sessionID,
+      tasks: [],
+    })
+    const recovered = buildSessionRecovery(f.root, f.sessionID)
+    assert.equal(recovered.ok, true)
+    assert.deepEqual(JSON.parse(recovered.context.split("\n")[1]).progress, {
+      capture_verified: 0,
+      total_tasks: 0,
+    })
+  } finally { cleanup(f) }
+})
+
+test("unbound stub without the owning session identity is rejected byte-neutral", () => {
+  const f = fixture()
+  try {
+    const before = seedUnboundPlan(f, {
+      kind: "stub",
+      mode: "FULL",
+      feature_id: f.featureID,
+      tasks: [],
+    })
+
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+    assert.deepEqual(fs.readFileSync(f.statePath), before.stateBytes)
+    assert.deepEqual(fs.readFileSync(before.canonicalPath), before.canonicalBytes)
+    assert.deepEqual(fs.readFileSync(f.snapshotPath), before.snapshotBytes)
+  } finally { cleanup(f) }
+})
+
+test("unbound stub with tasks cannot launder a full plan and remains byte-neutral", () => {
+  const f = fixture()
+  try {
+    const plan = JSON.parse(fs.readFileSync(path.join(f.planDir, "execution-plan.json"), "utf8"))
+    plan.kind = "stub"
+    delete plan.model_strategy
+    const before = seedUnboundPlan(f, plan)
+
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+    assert.deepEqual(fs.readFileSync(f.statePath), before.stateBytes)
+    assert.deepEqual(fs.readFileSync(before.canonicalPath), before.canonicalBytes)
+    assert.deepEqual(fs.readFileSync(f.snapshotPath), before.snapshotBytes)
+  } finally { cleanup(f) }
+})
+
+test("structurally invalid unbound empty stub is denied byte-neutral", () => {
+  const f = fixture()
+  try {
+    const before = seedUnboundPlan(f, {
+      kind: "stub",
+      mode: "invalid-mode",
+      feature_id: f.featureID,
+      session_id: f.sessionID,
+      tasks: [],
+    })
+
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+    assert.deepEqual(fs.readFileSync(f.statePath), before.stateBytes)
+    assert.deepEqual(fs.readFileSync(before.canonicalPath), before.canonicalBytes)
+    assert.deepEqual(fs.readFileSync(f.snapshotPath), before.snapshotBytes)
+  } finally { cleanup(f) }
+})
+
+test("full canonical plan without planner binding cannot be reinjected", () => {
+  const f = fixture()
+  try {
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
+    state.planner_plan_binding = null
+    fs.writeFileSync(f.statePath, JSON.stringify(state))
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+  } finally { cleanup(f) }
+})
+
+test("bound recovery rejects a semantically equal canonical reserialization", () => {
+  const f = fixture()
+  try {
+    const canonicalPath = path.join(f.planDir, "execution-plan.json")
+    const plan = JSON.parse(fs.readFileSync(canonicalPath, "utf8"))
+    fs.writeFileSync(canonicalPath, `${JSON.stringify(plan, null, 2)}\n`)
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+  } finally { cleanup(f) }
+})
+
+test("self-consistent bound full plan with invalid R15 is not reinjected or mutated", () => {
+  const f = fixture()
+  try {
+    const canonicalPath = path.join(f.planDir, "execution-plan.json")
+    const plan = JSON.parse(fs.readFileSync(canonicalPath, "utf8"))
+    plan.model_strategy.hand_tiers = { low: "gemma4", medium: "glm-5.2" }
+    const planBytes = Buffer.from(JSON.stringify(plan))
+    const semanticHash = semanticPlanHash(plan)
+    const fileHash = crypto.createHash("sha256").update(planBytes).digest("hex")
+    const snapshotPath = path.join(path.dirname(f.snapshotPath), `${fileHash}.json`)
+    fs.writeFileSync(canonicalPath, planBytes)
+    fs.writeFileSync(snapshotPath, planBytes)
+
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
+    state.planner_plan_binding = {
+      ...state.planner_plan_binding,
+      semantic_hash: semanticHash,
+      file_hash: fileHash,
+      snapshot_path: path.relative(f.root, snapshotPath),
+      snapshot_hash: semanticHash,
+      snapshot_file_hash: fileHash,
+    }
+    fs.writeFileSync(f.statePath, JSON.stringify(state))
+    const stateBytes = fs.readFileSync(f.statePath)
+    const canonicalBytes = fs.readFileSync(canonicalPath)
+    const snapshotBytes = fs.readFileSync(snapshotPath)
+
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+    assert.deepEqual(fs.readFileSync(f.statePath), stateBytes)
+    assert.deepEqual(fs.readFileSync(canonicalPath), canonicalBytes)
+    assert.deepEqual(fs.readFileSync(snapshotPath), snapshotBytes)
+  } finally { cleanup(f) }
+})
+
+test("unbound full-intent plan with invalid R15 is not reinjected or mutated", () => {
+  const f = fixture()
+  try {
+    const canonicalPath = path.join(f.planDir, "execution-plan.json")
+    const plan = JSON.parse(fs.readFileSync(canonicalPath, "utf8"))
+    plan.model_strategy.hand_tiers = { low: "gemma4", medium: "glm-5.2" }
+    fs.writeFileSync(canonicalPath, JSON.stringify(plan))
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"))
+    state.planner_plan_binding = null
+    fs.writeFileSync(f.statePath, JSON.stringify(state))
+    const stateBytes = fs.readFileSync(f.statePath)
+    const canonicalBytes = fs.readFileSync(canonicalPath)
+
+    assert.equal(buildSessionRecovery(f.root, f.sessionID).ok, false)
+    assert.deepEqual(fs.readFileSync(f.statePath), stateBytes)
+    assert.deepEqual(fs.readFileSync(canonicalPath), canonicalBytes)
+  } finally { cleanup(f) }
 })
 
 test("expired completed session cleanup removes only its stale marker", () => {

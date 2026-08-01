@@ -6,14 +6,15 @@
   "mode": "full",
 
   "model_strategy": {
-    "tiers": { "low": "low", "medium": "medium", "high": "high", "max": "max" },
-    "planner": "planner",
-    "plan_reviewer": "plan-reviewer",
-    "compliance": "compliance",
-    "adversary": "adversary",
-    "security": "security",
-    "shipper": "shipper",
-    "harvester": "harvester"
+    "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
+    "planner": "openai/gpt-5.6-sol",
+    "plan-reviewer": "openai/gpt-5.6-sol",
+    "compliance": "openai/gpt-5.6-terra",
+    "adversary": "openai/gpt-5.6-sol",
+    "security": "openai/gpt-5.6-sol",
+    "shipper": "openai/gpt-5.6-luna",
+    "harvester": "openai/gpt-5.6-luna",
+    "fallback": null
   },
 
   "tasks": [

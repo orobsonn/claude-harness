@@ -23,17 +23,15 @@ function roleOf(args: Record<string, unknown>): string {
   return typeof value === "string" ? value.trim().toLowerCase() : ""
 }
 
-function readJson(file: string): Record<string, any> | null {
+function routingAt(root: string): { routing: Record<string, any> | null; selected: string } {
+  const vendored = path.join(root, ".opencode", "harness.routing.json")
+  const selected = fs.existsSync(vendored) ? vendored : path.join(root, "harness.routing.json")
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"))
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null
+    const routing = JSON.parse(fs.readFileSync(selected, "utf8"))
+    return { routing: routing && typeof routing === "object" && !Array.isArray(routing) ? routing : null, selected }
   } catch {
-    return null
+    return { routing: null, selected }
   }
-}
-
-function routingAt(root: string): Record<string, any> | null {
-  return readJson(path.join(root, ".opencode", "harness.routing.json")) ?? readJson(path.join(root, "harness.routing.json"))
 }
 
 /** @description Build durable planner hooks, including the documented OpenCode ToolStateError event boundary. */
@@ -47,15 +45,19 @@ export async function createPlannerRecoveryHooks(
   const { classifyPlannerBoundaryError, classifyPlannerResult } = await import("./lib/planner-result.mjs")
   const {
     readPlannerArtifact,
-    reconcilePlannerStateFromDisk,
+    prepareCanonicalPlan,
+    preparedPlanMatchesArtifacts,
     semanticPlanHash,
-    writeCanonicalPlan,
+    writeBoundPlanSnapshot,
+    writePreparedCanonicalPlan,
   } = await import("../lib/planner-artifact.mjs")
-  const { claimPlannerAttempt, completePlannerAttempt, failPlannerAttempt } = await import("../lib/planner-state.mjs")
+  const { bindPlannerArtifact, claimPlannerAttempt, completePlannerAttempt, failPlannerAttempt } = await import("../lib/planner-state.mjs")
   const { buildPlannerBriefAppendix } = await import("./lib/planner-brief.mjs")
   const { dedupeByType, eventForPlanPath, obsAppend } = await import("../lib/obs-emit.mjs")
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { withGateStateLock } = await import("../lib/gate-state.mjs")
+  const { validateRouting } = await import("../../shared/lib/routing-validate.mjs")
+  const { isCompleteExpectedModelStrategy, projectExpectedModelStrategy } = await import("../../shared/lib/model-strategy-projection.mjs")
 
   function statePath(sessionId: unknown): string | null {
     if (typeof sessionId !== "string" || !sessionId) return null
@@ -64,11 +66,14 @@ export async function createPlannerRecoveryHooks(
   }
 
   function providerConfig() {
-    const routing = routingAt(root)
-    const primaryModel = routing?.roles?.planner?.model
-    return {
-      model: primaryModel,
-    }
+    const { routing } = routingAt(root)
+    if (!routing) return null
+    const valid = validateRouting(routing)
+    if (!valid.ok) return null
+    const projected = projectExpectedModelStrategy(routing)
+    if (!projected.ok) return null
+    const model = projected.strategy.planner
+    return typeof model === "string" ? { model, expectedModelStrategy: projected.strategy } : null
   }
 
   function persistBoundaryFailure(partSessionId: string, callId: string, error: unknown) {
@@ -108,15 +113,39 @@ export async function createPlannerRecoveryHooks(
       if (!sp || typeof callId !== "string" || !callId) {
         throw new Error("[planner-recovery] planner dispatch requires sessionID and callID")
       }
-      const config = providerConfig()
-      if (typeof config.model !== "string" || !config.model.includes("/")) {
-        throw new Error("[planner-recovery] planner model is not configured")
-      }
-
       const attemptToken = token()
+      let claimError = ""
       const claimed = withGateStateLock(sp, (previous: Record<string, unknown>) => {
+        const active = previous.planner_active_attempt as Record<string, unknown> | undefined
+        // OC may invoke before twice for one Task. The first claim freezes the strategy;
+        // duplicate delivery must never reread or revalidate routing from disk.
+        if (active?.call_id === callId && active?.session_id === sessionId) {
+          if (!isCompleteExpectedModelStrategy(active.expected_model_strategy) || typeof active.model !== "string" || !active.model) {
+            claimError = "active planner attempt has no complete expected model strategy"
+            return previous
+          }
+          return claimPlannerAttempt(previous, {
+            role,
+            callId,
+            token: active.token,
+            sessionId,
+            featureId: active.feature_id,
+            model: active.model,
+            expectedModelStrategy: active.expected_model_strategy,
+          }).state
+        }
+        const config = providerConfig()
+        if (!config || typeof config.model !== "string" || !config.model.includes("/")) {
+          claimError = "routing is missing or invalid"
+          return previous
+        }
         const featureId = typeof previous.feature_id === "string" ? previous.feature_id : ""
         const baselinePlan = readPlannerArtifact(root, sessionId, featureId)
+        const binding = previous.planner_plan_binding as Record<string, unknown> | undefined
+        const bound = previous.planner_status === "usable" &&
+          binding?.semantic_hash === baselinePlan.semanticHash &&
+          binding?.file_hash === baselinePlan.fileHash &&
+          binding?.fingerprint === baselinePlan.fingerprint
         const transition = claimPlannerAttempt(previous, {
           role,
           callId,
@@ -124,10 +153,12 @@ export async function createPlannerRecoveryHooks(
           sessionId,
           featureId,
           model: config.model,
+          expectedModelStrategy: config.expectedModelStrategy,
           baselinePlan: {
             exists: baselinePlan.exists,
             fingerprint: baselinePlan.fingerprint,
             semanticHash: baselinePlan.semanticHash,
+            bound,
           },
           now: now(),
         })
@@ -135,16 +166,19 @@ export async function createPlannerRecoveryHooks(
         return transition.state
       })
       if (!claimed.ok) throw new Error(`[planner-recovery] ${claimed.reason}`)
+      if (claimError) throw new Error(`[planner-recovery] ${claimError}`)
 
       // The brief is the ONLY channel into the planner's input. `output.metadata` is an after-hook
       // channel — it informs the orchestrator once the agent already returned — so a revision round
       // would otherwise re-plan blind, and the locked feature identity would stay a guess. Same
       // mechanism plan-gate uses to hand the bound plan to a hand: mutate the dispatch args in place.
       const claimedState = (claimed as { state?: Record<string, unknown> }).state ?? {}
+      const claimedAttempt = claimedState.planner_active_attempt as Record<string, unknown> | undefined
       const appendix = buildPlannerBriefAppendix({
         featureId: typeof claimedState.feature_id === "string" ? claimedState.feature_id : "",
         state: claimedState,
-        nonce: attemptToken,
+        nonce: typeof claimedAttempt?.token === "string" ? claimedAttempt.token : "",
+        expectedModelStrategy: claimedAttempt?.expected_model_strategy,
       })
       const args = argsOf(input, output)
       const existing = typeof args.prompt === "string" ? args.prompt : ""
@@ -169,20 +203,40 @@ export async function createPlannerRecoveryHooks(
         throw new Error("[planner-recovery] planner result requires sessionID and callID")
       }
       const response = output?.output ?? output?.content ?? output?.result ?? output?.tool_output ?? ""
-      const classified = classifyPlannerResult(response)
-      const planHash = classified.kind === "usable_plan" ? semanticPlanHash(classified.plan) : undefined
+      let classified: ReturnType<typeof classifyPlannerResult> = { kind: "invalid_plan", errors: ["planner call has no active strategy"] }
+      let planHash: string | undefined
       let accepted = false
       let unchanged = false
       let writeError = ""
       let canonicalPath = ""
       const persisted = withGateStateLock(sp, (previous: Record<string, unknown>) => {
         const active = previous.planner_active_attempt as Record<string, unknown> | undefined
+        const stateFeatureId = typeof previous.feature_id === "string" ? previous.feature_id : ""
+        if (
+          !active ||
+          active.call_id !== callId ||
+          typeof active.token !== "string" || !active.token ||
+          active.session_id !== sessionId ||
+          active.feature_id !== stateFeatureId ||
+          !isCompleteExpectedModelStrategy(active.expected_model_strategy)
+        ) {
+          accepted = false
+          classified = { kind: "invalid_plan", errors: ["planner active attempt identity or strategy is invalid"] }
+          return previous
+        }
         const baseline = (active?.baseline_plan ?? {}) as Record<string, unknown>
+        const existingBinding = previous.planner_plan_binding as Record<string, unknown> | undefined
+        const expectedModelStrategy = active?.expected_model_strategy
+        classified = classifyPlannerResult(response, { expectedModelStrategy })
+        planHash = classified.kind === "usable_plan" ? semanticPlanHash(classified.plan) : undefined
         // With the plugin authoring the file, a fresh mtime no longer proves the attempt did work.
         // What must still hold: a re-dispatch that returns the plan it was asked to revise, verbatim,
         // has addressed nothing — reject it into the revision loop instead of binding a no-op.
         unchanged =
           classified.kind === "usable_plan" &&
+          baseline.bound === true &&
+          existingBinding?.semantic_hash === baseline.semanticHash &&
+          existingBinding?.fingerprint === baseline.fingerprint &&
           typeof baseline.semanticHash === "string" &&
           baseline.semanticHash === planHash
         const transition = completePlannerAttempt(previous, {
@@ -204,31 +258,53 @@ export async function createPlannerRecoveryHooks(
         // — the failure mode that stranded a run at plan_pending_write with every dispatch gated.
         const state = transition.state as Record<string, unknown>
         const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
-        const binding = state.planner_plan_binding as Record<string, unknown> | null | undefined
-        // OC 1.18 can fire this hook twice for one Task — never rewrite an already-bound identical plan.
-        if (state.planner_status === "usable" && binding?.semantic_hash === planHash) return state
-        const written = writeCanonicalPlan(root, sessionId, featureId, classified.plan)
-        if (written.ok) {
-          canonicalPath = written.path
-          return state
+        const prepared = prepareCanonicalPlan(root, sessionId, featureId, classified.plan, {
+          expectedModelStrategy,
+          requireExpectedModelStrategy: true,
+        })
+        if (!prepared.ok) {
+          writeError = prepared.reason
+          return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
         }
-        writeError = written.reason
+        const stagedSnapshot = writeBoundPlanSnapshot(root, sessionId, {
+          valid: true,
+          semanticHash: prepared.semanticHash,
+          plan: classified.plan,
+          raw: prepared.raw,
+        })
+        if (!stagedSnapshot.ok) {
+          writeError = stagedSnapshot.reason
+          return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
+        }
+        const written = writePreparedCanonicalPlan(prepared)
+        if (!written.ok) {
+          writeError = written.reason
+          return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
+        }
+        const artifact = readPlannerArtifact(root, sessionId, featureId)
+        if (!preparedPlanMatchesArtifacts(prepared, artifact, stagedSnapshot.snapshot)) {
+          writeError = "canonical artifact bytes differ from the staged bound snapshot"
+          return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
+        }
+        const bound = bindPlannerArtifact(state, { artifact, sessionId, featureId })
+        if (!bound.ok) {
+          writeError = bound.reason
+          return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
+        }
+        canonicalPath = written.path
         return {
-          ...state,
-          planner_status: "plan_invalid",
-          planner_active_attempt: null,
-          planner_binding_error: written.reason,
+          ...bound.state,
+          planner_plan_binding: {
+            ...bound.state.planner_plan_binding,
+            snapshot_path: stagedSnapshot.relativePath,
+            snapshot_hash: stagedSnapshot.snapshot.semanticHash,
+            snapshot_file_hash: stagedSnapshot.snapshot.fileHash,
+          },
         }
       })
       if (!persisted.ok) throw new Error(`[planner-recovery] ${persisted.reason}`)
       if (!accepted) return
       if (canonicalPath) {
-        // Author and binder in one hook: no dispatch can observe a transient plan_pending_write.
-        try {
-          reconcilePlannerStateFromDisk(root, sessionId)
-        } catch {
-          /* plan-gate reconciles again before any downstream dispatch */
-        }
         try {
           const event = eventForPlanPath(canonicalPath)
           if (event) {

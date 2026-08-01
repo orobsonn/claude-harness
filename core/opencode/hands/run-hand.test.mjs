@@ -4,6 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -26,11 +27,14 @@ import {
 import { mergeGateState } from "../lib/gate-state.mjs";
 import { semanticPlanHash } from "../lib/planner-artifact.mjs";
 
+const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
+
 function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]) {
   const plan = {
     feature_id: featureId,
     kind: "full",
     mode: "full",
+    model_strategy: MODEL_STRATEGY,
     tasks: [{
       id: taskId,
       severity: "medium",
@@ -41,16 +45,18 @@ function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]
     }],
   };
   const hash = semanticPlanHash(plan);
+  const snapshotBytes = Buffer.from(JSON.stringify(plan));
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshotBytes).digest("hex");
   const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
-  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${hash}.json`;
+  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${snapshotFileHash}.json`;
   mkdirSync(join(stateDir, "bound-plans"), { recursive: true });
-  writeFileSync(join(root, snapshotRel), JSON.stringify(plan));
+  writeFileSync(join(root, snapshotRel), snapshotBytes);
   writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
     session_id: sessionId,
     feature_id: featureId,
     planner_status: "usable",
     delivery_status: "ready",
-    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash },
+    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
   }));
 }
 

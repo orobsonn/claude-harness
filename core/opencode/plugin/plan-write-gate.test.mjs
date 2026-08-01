@@ -35,11 +35,88 @@ function createScopedHooks(root) {
   });
 }
 
-test("allow write to execution-plan.json (orchestrator may author plan)", () => {
+test("deny model-tool writes to a feature canonical execution-plan.json", () => {
   const p = {
     tool_input: { file_path: ".opencode/plans/foo/execution-plan.json" },
   };
-  assert.equal(decide(p).allow, true);
+  assert.equal(decide(p).allow, false);
+  assert.match(decide(p).reason ?? "", /canonical plan/i);
+});
+
+test("literal Bash mutations against a canonical plan are frictioned while reads pass", () => {
+  for (const command of [
+    "echo '{}' > .opencode/plans/ses-feat/execution-plan.json",
+    "tee .opencode/plans/ses-feat/execution-plan.json",
+    "rm .opencode/plans/ses-feat/execution-plan.json",
+    "sed -i 's/a/b/' .opencode/plans/ses-feat/execution-plan.json",
+    "mv .opencode/plans/ses-feat/execution-plan.json /tmp/archive.json",
+    "mv /tmp/new.json .opencode/plans/ses-feat/execution-plan.json",
+  ]) {
+    assert.equal(decide({ args: { command } }).allow, false, command);
+  }
+  assert.equal(decide({ args: { command: "cat .opencode/plans/ses-feat/execution-plan.json" } }).allow, true);
+  assert.equal(decide({ args: { command: "cp .opencode/plans/ses-feat/execution-plan.json /tmp/plan-copy.json" } }).allow, true);
+  assert.equal(decide({ args: { command: "git diff -- .opencode/plans/ses-feat/execution-plan.json > /tmp/plan.diff" } }).allow, true);
+  assert.equal(decide({ args: { command: "cat .opencode/plans/ses-feat/execution-plan.json | tee /tmp/plan-copy.json" } }).allow, true);
+  assert.equal(decide({ args: { command: "tee /tmp/plan-copy.json < .opencode/plans/ses-feat/execution-plan.json" } }).allow, true);
+  assert.equal(decide({ args: { command: "tee /tmp/x < /dev/null; tee .opencode/plans/ses-feat/execution-plan.json" } }).allow, false);
+  assert.equal(decide({ args: { command: "echo tee && cat .opencode/plans/ses-feat/execution-plan.json" } }).allow, true);
+  assert.equal(decide({ args: { command: "echo x | tee .opencode/plans/ses-feat/execution-plan.json" } }).allow, false);
+  assert.equal(decide({ args: { command: "printf '{}' > /tmp/.opencode/plans/ses-feat/execution-plan.json" } }).allow, false);
+});
+
+test("literal Bash friction denies canonical targets but keeps cp and rsync sources readable", () => {
+  const canonical = ".opencode/plans/ses-feat/execution-plan.json";
+  const absolute = "/work/project/.opencode/plans/ses-feat/execution-plan.json";
+  for (const command of [
+    `cp /tmp/new-plan.json ${canonical}`,
+    `rsync /tmp/new-plan.json ${canonical}`,
+    `truncate -s 0 ${canonical}`,
+    `sed -i '' 's/a/b/' ${absolute}`,
+    `cp /tmp/new-plan.json ${absolute}`,
+    `rsync /tmp/new-plan.json ${absolute}`,
+    `truncate -s 0 ${absolute}`,
+  ]) assert.equal(decide({ args: { command } }).allow, false, command);
+  for (const command of [
+    `cp ${canonical} /tmp/plan-copy.json`,
+    `rsync ${canonical} /tmp/plan-copy.json`,
+    `cp ${absolute} /tmp/plan-copy.json`,
+    `rsync ${absolute} /tmp/plan-copy.json`,
+  ]) assert.equal(decide({ args: { command } }).allow, true, command);
+});
+
+test("canonical plan is denied through apply_patch for every role and any target in a multi-file patch", async () => {
+  const before = (await createPlanWriteGateHooks()) ["tool.execute.before"];
+  const patch = "*** Begin Patch\n*** Update File: src/allowed.ts\n@@\n-old\n+new\n*** Update File: .opencode/plans/ses-feat/execution-plan.json\n@@\n-old\n+new\n*** End Patch";
+  for (const agent of ["planner", "compliance", "executor-low", "sniper-high"]) {
+    await assert.rejects(
+      () => before({ tool: "apply_patch", agent }, { args: { patchText: patch } }),
+      /canonical plan/,
+      agent,
+    );
+  }
+});
+
+test("canonical plan scan reaches a real plan after a nested .state decoy", () => {
+  const p = "/tmp/.opencode/plans/.state/old/.opencode/plans/ses-feat/execution-plan.json";
+  assert.equal(decide({ tool_input: { file_path: p } }).allow, false);
+  assert.match(decide({ tool_input: { file_path: p } }).reason ?? "", /canonical plan/);
+});
+
+test("official delete variants deny canonical plan before identity resolution", async () => {
+  const before = (await createPlanWriteGateHooks()) ["tool.execute.before"];
+  for (const tool of ["delete", "file.delete", "delete_file", "fs_delete"]) {
+    await assert.rejects(
+      () => before({ tool }, { args: { filePath: ".opencode/plans/ses-feat/execution-plan.json" } }),
+      /canonical plan/,
+      tool,
+    );
+  }
+});
+
+test("canonical path ignores an unrelated .state ancestor but excludes plans/.state itself", () => {
+  assert.equal(decide({ tool_input: { file_path: "/tmp/.state/project/.opencode/plans/feat/execution-plan.json" } }).allow, false);
+  assert.equal(decide({ tool_input: { file_path: "/tmp/project/.opencode/plans/.state/ses/execution-plan.json" } }).allow, false);
 });
 
 test("deny write to gate-state.json (basename rail)", () => {
@@ -125,7 +202,7 @@ test("absolute path under .state hits oracle (deny)", () => {
   const absPlan = {
     tool_input: { file_path: "/tmp/.opencode/plans/foo/execution-plan.json" },
   };
-  assert.equal(decide(absPlan).allow, true);
+  assert.equal(decide(absPlan).allow, false);
 });
 
 test("absolute path with decoy .opencode parent still hits .state oracle (deny)", () => {
@@ -170,7 +247,7 @@ test("throwIfDenied throws [plan-write-gate] prefix", () => {
   );
 });
 
-test("hermetic plugin: OC write to gate-state throws; plan and normal file allow", async () => {
+test("hermetic plugin: OC write to gate-state and canonical plan throw; normal file allows", async () => {
   const hooks = await createPlanWriteGateHooks();
   const before = hooks["tool.execute.before"];
   assert.equal(typeof before, "function");
@@ -189,7 +266,7 @@ test("hermetic plugin: OC write to gate-state throws; plan and normal file allow
     /\[plan-write-gate\]/,
   );
 
-  await assert.doesNotReject(() =>
+  await assert.rejects(() =>
     before(
       { tool: "write" },
       {
@@ -199,6 +276,7 @@ test("hermetic plugin: OC write to gate-state throws; plan and normal file allow
         },
       },
     ),
+    /canonical plan/,
   );
 
   await assert.doesNotReject(() =>
@@ -219,7 +297,7 @@ test("hermetic plugin: OC write to gate-state throws; plan and normal file allow
   );
 });
 
-test("bound execution plan is immutable through Write/Edit until planner reclaims", async () => {
+test("canonical execution plan is denied through Write/Edit regardless of binding", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-bound-"));
   try {
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_bound");
@@ -231,7 +309,7 @@ test("bound execution plan is immutable through Write/Edit until planner reclaim
         { tool: "write", sessionID: "ses_bound" },
         { args: { filePath: ".opencode/plans/ses_bound-feat/execution-plan.json", content: "{}" } },
       ),
-      /immutable/,
+      /canonical plan/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
