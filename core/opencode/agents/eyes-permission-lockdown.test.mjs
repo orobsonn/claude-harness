@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const AGENTS_DIR = path.resolve(__dirname, "../agents")
+const AGENTS_DIR = path.resolve(__dirname)
 
 /**
  * @description No agent in this allowlist today — an explicit permission.bash override in agent frontmatter

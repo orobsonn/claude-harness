@@ -1,10 +1,10 @@
 /**
  * @description Locked tests for obs-hand's call-keyed writing-hand record (#476).
- * The active-dispatch claim is best-effort observability, not a gate: a missing prompt
+ * The call-keyed dispatch record is best-effort observability, not a gate: a missing prompt
  * marker or a rejected claim must never deny dispatch (shadow-record instead), and the
  * terminal evidence writes (hand-record, capture_verified) must still happen unconditionally.
  */
-import test from "node:test"
+import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
@@ -12,9 +12,13 @@ import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { createObsHandHooks } from "./obs-hand.ts"
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
-import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs"
-
-isolateObservabilityRunPath()
+const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH
+const hadObservabilityRunPath = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_OBSERVABILITY_RUN_PATH")
+before(() => { delete process.env.HARNESS_OBSERVABILITY_RUN_PATH })
+after(() => {
+  if (hadObservabilityRunPath) process.env.HARNESS_OBSERVABILITY_RUN_PATH = savedObservabilityRunPath
+  else delete process.env.HARNESS_OBSERVABILITY_RUN_PATH
+})
 
 /**
  * @param {(root: string) => void | Promise<void>} fn
@@ -170,7 +174,7 @@ test("lt-oh-background-shadow: background dispatch without a claim does not deny
   })
 })
 
-test("lt-oh-claim-rejected: rejected active-dispatch claim shadow-records, does not deny, and evidence still writes [#ac-2.2]", async () => {
+test("lt-oh-claim-rejected: rejected dispatch-record claim shadow-records, does not deny, and evidence still writes [#ac-2.2]", async () => {
   await withTempRoot(async (root) => {
     initGitRepo(root)
     const sessionId = "ses_obshand_claim"

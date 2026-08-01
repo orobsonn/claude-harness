@@ -847,6 +847,19 @@ test("re-vendoring sweeps only the legacy cleanup sentinel from local vendored s
   } finally { rmSync(tempDir, { recursive: true, force: true }); }
 });
 
+test("re-vendoring sweeps retired orphan paths and preserves lib/plugin siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-orphans-"));
+  const retired = ["plugin/lib/bound-plan.mjs", "plugin/lib/bound-plan.test.mjs", "plugin/lib/obs-test-isolation.mjs", "plugin/lib/obs-test-isolation.test.mjs", "plugin/eyes-permission-lockdown.test.mjs"];
+  const siblings = [join(tempDir, ".opencode", "plugin", "lib", "project-owned-lib.mjs"), join(tempDir, ".opencode", "plugin", "project-owned-plugin.ts")];
+  try {
+    for (const file of [...retired.map((rel) => join(tempDir, ".opencode", rel)), ...siblings]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "// stale or project sibling\n"); }
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const rel of retired) { assert.equal(existsSync(join(tempDir, ".opencode", rel)), false); assert.ok(OC_RETIRED_FILES.includes(rel)); }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true);
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
+});
+
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
   // Review alias / second-eye agent files stay in source for the two-release compatibility
   // window (#582) — they are NOT retired. Spawn hands and dual plugin modules remain scheduled.
@@ -900,6 +913,11 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "shared/lib/agent-retry.test.mjs",
     "shared/lib/agent-retry-call.mjs",
     "shared/lib/agent-retry-call.test.mjs",
+    "plugin/lib/bound-plan.mjs",
+    "plugin/lib/bound-plan.test.mjs",
+    "plugin/lib/obs-test-isolation.mjs",
+    "plugin/lib/obs-test-isolation.test.mjs",
+    "plugin/eyes-permission-lockdown.test.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",

@@ -855,6 +855,11 @@ export const OC_RETIRED_FILES = [
   "skills/orchestrating-delivery/ceremony-runtime.mjs",
   "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
   "plugin/lib/scope-runtime-composition.mjs",
+  "plugin/lib/bound-plan.mjs",
+  "plugin/lib/bound-plan.test.mjs",
+  "plugin/lib/obs-test-isolation.mjs",
+  "plugin/lib/obs-test-isolation.test.mjs",
+  "plugin/eyes-permission-lockdown.test.mjs",
 ];
 
 /**

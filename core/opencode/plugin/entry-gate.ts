@@ -276,7 +276,7 @@ export async function createEntryGateHooks(
         // which is merged AFTER the global ruleset and therefore shadowed every deny in the
         // denylist for that agent. Part 1 of #516 removed those redundant per-agent overrides;
         // this check survives even if a future agent is authored with `bash: allow` again, before
-        // the anti-drift test (eyes-permission-lockdown.test.mjs) catches it in CI.
+        // the agents permission-lockdown test catches it in CI.
         // Deliberately scoped to fleet dispatch only, keyed SOLELY on HARNESS_NOTIFY_PROJECT — the
         // one signal `core/vps/cron-a-dispatch.mjs` sets UNCONDITIONALLY for every VPS dispatch
         // (never guarded by an `if`). HARNESS_OC_DATA_HOME was deliberately dropped from this check

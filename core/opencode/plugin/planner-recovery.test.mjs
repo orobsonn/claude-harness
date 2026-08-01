@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after, before } from "node:test";
 import { createPlannerRecoveryHooks } from "./planner-recovery.ts";
-import { isolateObservabilityRunPath } from "./lib/obs-test-isolation.mjs";
-
-isolateObservabilityRunPath();
+const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+const hadObservabilityRunPath = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_OBSERVABILITY_RUN_PATH");
+before(() => { delete process.env.HARNESS_OBSERVABILITY_RUN_PATH; });
+after(() => {
+  if (hadObservabilityRunPath) process.env.HARNESS_OBSERVABILITY_RUN_PATH = savedObservabilityRunPath;
+  else delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
+});
 
 const sessionId = "ses_plannerRecovery01";
 const featureId = "planner-recovery";

@@ -233,13 +233,13 @@ export async function createObsHandHooks(
       if (writingHand(ids.role)) {
         const prompt = typeof args?.prompt === "string" ? args.prompt : "";
         const marker = parseTaskDispatchIdentity(prompt);
-        // The active-dispatch claim is best-effort observability, not a gate: plan-gate no
+        // The call-keyed dispatch record is best-effort observability, not a gate: plan-gate no
         // longer requires the prompt marker (#ac-2.1), and a rejected claim must not deny the
         // dispatch (#ac-2.2) — it downgrades to a shadow-record (logged, not persisted) while
         // evidence writes in the after-hook (hand-record, capture_verified) still happen
         // unconditionally on the terminal writing-hand result.
         if (!sessionId || !callId) {
-          console.warn(`${PREFIX} writing-hand dispatch shadow-record: runtime sessionID/callID unavailable, active-dispatch claim skipped`);
+          console.warn(`${PREFIX} writing-hand dispatch shadow-record: runtime sessionID/callID unavailable, dispatch record claim skipped`);
         } else {
           {
             const key = claimKey(sessionId, callId);
@@ -259,7 +259,7 @@ export async function createObsHandHooks(
               token,
             });
             if (!claimed.ok) {
-              console.warn(`${PREFIX} writing-hand dispatch shadow-record: active-dispatch claim rejected (${claimed.reason})`);
+              console.warn(`${PREFIX} writing-hand dispatch shadow-record: dispatch record claim rejected (${claimed.reason})`);
             } else {
               // Authoritative token is whatever the disk claim holds (idempotent re-entry
               // from a second plugin instance may return a different instance's token).
