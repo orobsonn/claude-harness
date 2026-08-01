@@ -7,7 +7,7 @@ import { bareRole } from "../../lib/roles.mjs";
 import { withGateStateLock as defaultWithGateStateLock } from "../../lib/gate-state.mjs";
 import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
 import { gateStatePath as defaultGateStatePath } from "../../../shared/lib/path-helpers.mjs";
-import { fidelityPassEntry } from "./mark-gate.mjs";
+import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 
 /**
  * @description True when role is sniper-high or sniper-medium (incl. -spawn twins).
@@ -75,7 +75,7 @@ export function armRegatePending({
       return { ok: false, reason: (gp && gp.reason) || "gateStatePath failed" };
     }
 
-    const bare = fidelityPassEntry(featureId, taskId, null);
+    const bare = formatFeatureTaskEntry(featureId, taskId);
 
     const lockResult = withGateStateLock(gp.path, (previous) => {
       const prev =

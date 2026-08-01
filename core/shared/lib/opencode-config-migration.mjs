@@ -23,6 +23,14 @@ export const MANIFEST_FILENAME = ".harness-config-manifest.json";
  */
 export const RETIRED_OC_PERMISSION_ENTRIES = Object.freeze([
   Object.freeze({
+    path: Object.freeze(["bash", "node .opencode/plugin/lib/mark-gate.mjs *"]),
+    historicalValue: "allow",
+  }),
+  Object.freeze({
+    path: Object.freeze(["bash", "node core/opencode/plugin/lib/mark-gate.mjs *"]),
+    historicalValue: "allow",
+  }),
+  Object.freeze({
     path: Object.freeze(["bash", "npx github:orobsonn/claude-harness#* init*"]),
     historicalValue: "allow",
     // last shipped in v0.45.0 (core/opencode/opencode.json.example); replaced by the pinned #v* set in v0.45.1 (#359)

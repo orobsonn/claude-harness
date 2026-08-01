@@ -10,7 +10,7 @@ import {
   isRegateArmingOutcome,
   armRegatePending,
 } from "./regate-arm.mjs";
-import { fidelityPassEntry } from "./mark-gate.mjs";
+import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 import { decideBashDelivery } from "./bash-decide.mjs";
 
 const SESSION = "ses_regate_arm";
@@ -64,7 +64,7 @@ test("armRegatePending: writes regate_pending feature/task", () => {
       taskId: TASK,
     });
     assert.equal(result.ok, true, result.reason);
-    const expected = fidelityPassEntry(FEATURE, TASK, null);
+    const expected = formatFeatureTaskEntry(FEATURE, TASK);
     assert.equal(result.entry, expected);
     assert.ok(Array.isArray(result.state.regate_pending));
     assert.ok(result.state.regate_pending.includes(expected));
@@ -93,7 +93,7 @@ test("armRegatePending: idempotent union", () => {
       taskId: TASK,
     });
     assert.equal(second.ok, true, second.reason);
-    const expected = fidelityPassEntry(FEATURE, TASK, null);
+    const expected = formatFeatureTaskEntry(FEATURE, TASK);
     assert.deepEqual(
       second.state.regate_pending.filter((e) => e === expected),
       [expected],

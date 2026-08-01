@@ -25,7 +25,7 @@ registerHooks({
 
 const { default: MarkerAuthority } = await import("./marker-authority.ts");
 const { writeHandRecord, buildTaskHandRecord } = await import("../lib/hand-records.mjs");
-const { fidelityPassEntry } = await import("./lib/mark-gate.mjs");
+const { formatFeatureTaskEntry } = await import("../../shared/lib/absolution.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
 
 function statePath(root, sessionID = "ses-authority") {
@@ -200,6 +200,55 @@ test("direct execute, structural clone, and mismatched runtime IDs fail byte-neu
   }
 });
 
+test("unsafe task_id values are rejected before formatting and remain byte-neutral", async () => {
+  for (const [label, taskId] of [
+    ["at", "@task"],
+    ["slash", "task/child"],
+    ["whitespace", "task one"],
+    ["non-string", 42],
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `marker-authority-task-id-${label}-`));
+    try {
+      const { file, bytes } = seed(root);
+      const { before, execute } = await harness(root);
+      const result = await markOnce(
+        before,
+        execute,
+        "regate-pending",
+        { task_id: taskId },
+        `call-unsafe-task-${label}`,
+      );
+      assert.equal(result.metadata.ok, false, label);
+      assert.match(String(result.metadata.reason ?? result.output), /safe task_id/i, label);
+      assert.equal(fs.readFileSync(file, "utf8"), bytes, label);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("unsafe feature_id in gate-state is denied before authorization and remains byte-neutral", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-feature-id-"));
+  try {
+    const file = statePath(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature/escape",\n  "classified": true\n}\n';
+    fs.writeFileSync(file, bytes, "utf8");
+    const { before, execute } = await harness(root);
+    const args = { action: "brainstormed" };
+
+    await assert.rejects(
+      () => before({ tool: "mark", sessionID: SESSION, callID: "call-unsafe-feature" }, { args }),
+      /safe feature_id/i,
+    );
+    const denied = await execute(args, context(SESSION, "call-unsafe-feature"));
+    assert.equal(denied.metadata.ok, false);
+    assert.equal(fs.readFileSync(file, "utf8"), bytes);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("feature change after before-hook authorization denies and preserves the replacement state", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-feature-race-"));
   try {
@@ -303,7 +352,7 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
     );
     assert.equal(captured.metadata.ok, true, captured.output);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const expected = fidelityPassEntry(FEATURE, TASK, sha);
+    const expected = formatFeatureTaskEntry(FEATURE, TASK, sha);
     assert.ok(Array.isArray(state.capture_verified), "capture_verified must be array");
     assert.ok(state.capture_verified.includes(expected), `expected ${expected} in ${JSON.stringify(state.capture_verified)}`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
@@ -332,7 +381,7 @@ test("hand-finished without hand-record → ok:false (blocks capture path)", asy
     assert.equal(captured.metadata.ok, false);
     assert.match(String(captured.metadata.reason ?? ""), /hand_finished does not contain|hand-record missing/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
+    const expected = formatFeatureTaskEntry(FEATURE, TASK, "abc123deadbeef");
     assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
     const resolved = handRecordPath(
       { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },

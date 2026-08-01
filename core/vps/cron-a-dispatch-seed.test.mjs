@@ -1028,6 +1028,8 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
           bash: {
             "*": "allow",
             "npx github:orobsonn/claude-harness#* init*": "allow",
+            "node .opencode/plugin/lib/mark-gate.mjs *": "allow",
+            "node core/opencode/plugin/lib/mark-gate.mjs *": "allow",
             // NOT in the ledger (issue #513 adversarial finding): no evidence the harness ever
             // shipped this wildcard form — the shipped default has always been the narrower
             // "git pull" (no wildcard) — so it must survive untouched, never dropped as "retired".
@@ -1045,6 +1047,16 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
       false,
       "the retired unpinned npx wildcard key must be dropped from the seeded worktree config",
     );
+    for (const retired of [
+      "node .opencode/plugin/lib/mark-gate.mjs *",
+      "node core/opencode/plugin/lib/mark-gate.mjs *",
+    ]) {
+      assert.equal(
+        Object.hasOwn(cfg.permission.bash, retired),
+        false,
+        `retired shell marker permission must not reach a seeded worktree: ${retired}`,
+      );
+    }
     assert.equal(
       cfg.permission.bash["git pull*"],
       "allow",
@@ -1349,6 +1361,7 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     const staleCatalogHealth = join(worktree, ".opencode", "plugin", "lib", "agent-catalog-health.mjs");
     const staleCeremonyBinding = join(worktree, ".opencode", "plugin", "lib", "ceremony-binding.mjs");
     const staleCeremonyTransition = join(worktree, ".opencode", "plugin", "lib", "ceremony-transition.mjs");
+    const staleMarkGate = join(worktree, ".opencode", "plugin", "lib", "mark-gate.mjs");
     const projectSibling = join(worktree, ".opencode", "plugin", "lib", "project-owned-ceremony-facts.mjs");
     const cleanup = join(worktree, ".opencode", "plans", ".state", "ses-stale", "active-dispatch-cleanup-pending.json");
     const receipt = join(worktree, ".opencode", "plans", ".state", "ses-stale", "ceremony", "spec-adversary-primary.json");
@@ -1361,6 +1374,7 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     writeFileSync(staleCatalogHealth, "// retired catalog-health helper\n", "utf8");
     writeFileSync(staleCeremonyBinding, "// retired ceremony binding helper\n", "utf8");
     writeFileSync(staleCeremonyTransition, "// retired ceremony transition helper\n", "utf8");
+    writeFileSync(staleMarkGate, "// retired shell marker helper\n", "utf8");
     writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
     writeFileSync(cleanup, "{}\n", "utf8");
     writeFileSync(receipt, '{"result":"legacy"}\n', "utf8");
@@ -1374,6 +1388,7 @@ test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and k
     assert.equal(existsSync(staleCatalogHealth), false, "complete worktree must prune retired catalog-health zombie");
     assert.equal(existsSync(staleCeremonyBinding), false, "complete worktree must prune retired ceremony binding zombie");
     assert.equal(existsSync(staleCeremonyTransition), false, "complete worktree must prune retired ceremony transition zombie");
+    assert.equal(existsSync(staleMarkGate), false, "complete worktree must prune retired shell marker zombie");
     assert.equal(existsSync(projectSibling), true, "exact-path worktree pruning must preserve project-owned lib siblings");
     assert.equal(existsSync(cleanup), false, "complete worktree must sweep retired run cleanup only inside worktree");
     assert.equal(existsSync(receipt), false, "complete worktree must sweep the retired ceremony receipt");
@@ -1395,14 +1410,18 @@ test("materializeOpencodeRuntime: stale complete vendored source cannot preserve
     materializeOpencodeRuntime(projectRoot, process.cwd());
     const primaryZombie = join(projectRoot, ".opencode", "plugin", "review-guard.ts");
     const worktreeZombie = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const primaryMarkGate = join(projectRoot, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    const worktreeMarkGate = join(worktree, ".opencode", "plugin", "lib", "mark-gate.mjs");
     const primaryBytes = "// stale primary review guard must survive byte-identical\n";
     writeFileSync(primaryZombie, primaryBytes, "utf8");
+    writeFileSync(primaryMarkGate, "// stale primary shell marker\n", "utf8");
     const primaryBefore = snapshotTree(projectRoot);
 
     const materialized = materializeOpencodeRuntime(worktree, projectRoot);
 
     assert.equal(materialized.source, "vendored");
     assert.equal(existsSync(worktreeZombie), false, "canonical retirement must remove the copied zombie");
+    assert.equal(existsSync(worktreeMarkGate), false, "canonical retirement must remove copied shell marker zombie");
     assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "entire primary vendored tree must remain byte-identical");
     const load = await checkPluginLoad(join(worktree, ".opencode"));
     assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));

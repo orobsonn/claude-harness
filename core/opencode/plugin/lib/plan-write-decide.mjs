@@ -17,7 +17,6 @@ import { isExecutorRole, isSniperRole, isTestAuthorRole } from "../../lib/roles.
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 /** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */
 const FORBIDDEN_MARKER_BASENAMES = new Set([
-  "mark-gate.mjs",
   "mark.mjs",
   "classify.mjs",
 ]);
@@ -113,9 +112,6 @@ function isMarkerScriptPath(filePath) {
   if (segs.length === 0) return false;
   const base = segs[segs.length - 1];
   if (!FORBIDDEN_MARKER_BASENAMES.has(base)) return false;
-  // plugin/lib/mark-gate.mjs or hooks/mark-gate.mjs (any parent tree)
-  const libIdx = segs.lastIndexOf("lib");
-  if (libIdx >= 1 && segs[libIdx - 1] === "plugin") return true;
   if (segs.includes("hooks")) return true;
   return false;
 }
@@ -359,7 +355,7 @@ export function decide(payload, opts = {}) {
   if (!carved && isMarkerScriptPath(filePath)) {
     return {
       allow: false,
-      reason: `${PREFIX} Blocked: harness marker scripts (mark-gate/mark/classify) are read-only via Write/Edit.`,
+      reason: `${PREFIX} Blocked: harness marker scripts (mark/classify) are read-only via Write/Edit.`,
     };
   }
   if (!carved && isFrozenToolingPath(filePath)) {

@@ -87,7 +87,6 @@ const OC_MODULE_FIELDS = ["cc_evidence", "consumers", "current_path", "failure_p
 const OC_RULE_IDS = ["A1", ...Array.from({ length: 15 }, (_, index) => `R${index + 1}`)];
 const OC_MODULE_VERDICTS = new Set(["KEEP", "KEEP (MOVE)", "REWRITE", "DELETE"]);
 const OC_PENDING_DELETE_PATHS = [
-  "plugin/lib/mark-gate.mjs",
   "lib/planner-fallback-config.mjs",
 ];
 const OC_AUTOLOAD_PLUGIN_PATHS = new Set(
@@ -159,7 +158,7 @@ const OC_MODULE_NORMATIVE_METADATA = {
   "plugin/lib/host-hand-capture.mjs": { failure_policy: "completion and capture are separate idempotent operations", tests: ["core/opencode/plugin/lib/host-hand-capture.test.mjs"] },
   "plugin/lib/is-delivery-command.mjs": { failure_policy: "malformed input returns false", tests: ["core/opencode/plugin/lib/is-delivery-command.test.mjs"] },
   "plugin/lib/lavish-command-decide.mjs": { failure_policy: "allow unless the exact forbidden command matches", tests: ["core/opencode/plugin/lavish-command-gate.test.mjs"] },
-  "plugin/lib/mark-gate.mjs": { failure_policy: "no privileged shell mutation or stale allowlist remains", tests: ["core/claude-code/skills/initializing-projects/references/vendor-core.test.mjs", "scripts/parity-manifest.test.mjs"] },
+  "plugin/lib/mark-gate.mjs": { failure_policy: "no dedicated privileged shell CLI or stale allowlist remains", tests: ["core/claude-code/skills/initializing-projects/references/vendor-core.test.mjs", "scripts/parity-manifest.test.mjs"] },
   "plugin/lib/obs-emit.mjs": { failure_policy: "always fail-open and never gates", tests: ["core/opencode/lib/obs-emit.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/obs-eye-append.mjs"] },
   "plugin/lib/plan-decide.mjs": { failure_policy: "invalid plan denies; validator exception opens and logs", tests: ["core/opencode/plugin/plan-gate.test.mjs"] },
   "plugin/lib/plan-hash.mjs": { failure_policy: "pure deterministic hash", tests: ["core/opencode/lib/planner-canonical-write.test.mjs"] },
@@ -206,7 +205,7 @@ const OC_MODULE_NORMATIVE_REASONS = {
   "plugin/lib/host-hand-capture.mjs": "Host authority must not let Task completion self-certify capture.",
   "plugin/lib/is-delivery-command.mjs": "Small predicate scopes Bash rails to delivery commands.",
   "plugin/lib/lavish-command-decide.mjs": "Pure counterpart implements A1 without side effects.",
-  "plugin/lib/mark-gate.mjs": "Pure needs move locally; observability remains in obs modules.",
+  "plugin/lib/mark-gate.mjs": "Pure formatter and HEAD resolver moved to factual owners; shell observability retired.",
   "plugin/lib/obs-emit.mjs": "Framework observation primitive is shared outside plugin adapters.",
   "plugin/lib/plan-decide.mjs": "Validation must precede plan usability.",
   "plugin/lib/plan-hash.mjs": "Shared semantic primitive belongs in the framework lib closure.",

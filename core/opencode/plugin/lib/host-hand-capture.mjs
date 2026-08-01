@@ -4,9 +4,31 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
+import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../lib/gate-state.mjs";
-import { fidelityPassEntry, defaultHeadSha } from "./mark-gate.mjs";
 import { writeHandRecord } from "../../lib/hand-records.mjs";
+
+/**
+ * @description Resolve HEAD from an explicit project root; faults and empty output are non-fatal.
+ * @param {string} projectRoot
+ * @param {typeof execFileSync} [execFileSyncFn]
+ * @returns {string | null}
+ */
+export function resolveHeadSha(projectRoot, execFileSyncFn = execFileSync) {
+  if (typeof projectRoot !== "string" || projectRoot.length === 0) return null;
+  try {
+    const output = execFileSyncFn("git", ["rev-parse", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
+    const sha = String(output ?? "").trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * @description Git paths changed since merge-base or last N commits (best-effort).
@@ -85,7 +107,7 @@ export function hostStampOcHandCapture(input) {
     if (!projectRoot || !sessionId || !featureId || !taskId) {
       return { ok: false, reason: "missing identity" };
     }
-    const sha = freezeCommitSha || defaultHeadSha(projectRoot) || "";
+    const sha = freezeCommitSha || resolveHeadSha(projectRoot) || "";
     const finalOutcome = outcome;
     const now = new Date().toISOString();
     const record = {
@@ -121,8 +143,8 @@ export function hostStampOcHandCapture(input) {
     const gs = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
     if (!gs.ok) return { ok: true, outcome: finalOutcome, reason: "gate-path-skip" };
 
-    const bare = fidelityPassEntry(featureId, taskId, null);
-    const capEntry = fidelityPassEntry(featureId, taskId, sha);
+    const bare = formatFeatureTaskEntry(featureId, taskId);
+    const capEntry = formatFeatureTaskEntry(featureId, taskId, sha);
 
     // This run supersedes every prior SHA for this task: prune the task's prior array
     // entries (any SHA) before appending — otherwise an old-SHA entry survives alongside
@@ -159,5 +181,6 @@ export function hostStampOcHandCapture(input) {
 export default {
   gitTouchedPaths,
   hostStampOcHandCapture,
+  resolveHeadSha,
   resolveOcHandOutcome,
 };

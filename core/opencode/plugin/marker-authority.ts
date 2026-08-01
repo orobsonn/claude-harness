@@ -2,8 +2,9 @@
  * @description Runtime marker tool and its before-hook share one private args-identity authority.
  * Threat boundary: WeakMap identity and ordering protect only the native mark invocation, blocking
  * direct execute, clones, replay, concurrent reuse, and runtime-binding mismatches before mutation.
- * Persisted booleans are plain workflow state, not provenance or OS isolation; same-user filesystem
- * writes and a compromised OpenCode host/plugin can forge them.
+ * Persisted booleans are plain workflow state, not provenance or OS isolation. A same-user process
+ * can import and instantiate its own authority or write state directly; a compromised host/plugin
+ * can do the same. Those capabilities are outside this boundary.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
@@ -14,7 +15,9 @@ import { withGateStateLock } from "../lib/gate-state.mjs"
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
-import { fidelityPassEntry, defaultHeadSha } from "./lib/mark-gate.mjs"
+import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs"
+import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs"
+import { resolveHeadSha } from "./lib/host-hand-capture.mjs"
 
 type MarkerArgs = {
   action?: string
@@ -87,12 +90,14 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         const field = action === "final-review" ? "final_review_done" : "demo_done"
         patch = { [field]: true }
       } else {
-        const taskId = typeof args.task_id === "string" ? args.task_id : ""
-        if (!taskId) return { ok: false, reason: `${action} requires task_id` }
-        const bare = fidelityPassEntry(authorization.featureID, taskId, null)
+        if (!isSafeTaskId(args.task_id)) {
+          return { ok: false, reason: `${action} requires a safe task_id` }
+        }
+        const taskId = args.task_id
+        const bare = formatFeatureTaskEntry(authorization.featureID, taskId)
         if (action === "fidelity") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : defaultHeadSha(projectRoot)
-          payload = fidelityPassEntry(authorization.featureID, taskId, sha)
+          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot)
+          payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
           patch = { fidelity_pass: [payload] }
         } else if (action === "regate-pending") {
           patch = { regate_pending: [bare] }
@@ -117,15 +122,15 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           patch = { hand_finished: [bare] }
         }
         else if (action === "regate-passed") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : defaultHeadSha(projectRoot)
+          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot)
           if (!sha) return { ok: false, reason: "regate-passed requires a resolved commit SHA" }
           if (!Array.isArray(previous.regate_pending) || !previous.regate_pending.includes(bare)) {
             return { ok: false, reason: "regate_pending does not contain feature/task" }
           }
-          payload = fidelityPassEntry(authorization.featureID, taskId, sha)
+          payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
           patch = { regate_passed: [payload] }
         } else if (action === "capture-verified") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : defaultHeadSha(projectRoot)
+          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot)
           if (!sha) return { ok: false, reason: "capture-verified requires a resolved commit SHA" }
           if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
             return { ok: false, reason: "hand_finished does not contain feature/task" }
@@ -147,7 +152,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           if (!atomicJsonWrite(recordPath.path, { ...record, capturedVerifiedAt: new Date().toISOString() })) {
             return { ok: false, reason: "hand-record persistence failed" }
           }
-          payload = fidelityPassEntry(authorization.featureID, taskId, sha)
+          payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
           patch = { capture_verified: [payload] }
         } else return { ok: false, reason: "unknown privileged marker action" }
       }
@@ -158,7 +163,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   }
 
   const mark = tool({
-    description: "Persist a runtime-bound privileged harness marker. Bash is observability-only.",
+    description: "Persist a runtime-bound privileged harness marker. No dedicated shell CLI exists; same-user import and instantiation are outside this authority boundary.",
     args: {
       action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | regate-pending | regate-passed | hand-finished | capture-verified | final-review | demo-done"),
       task_id: tool.schema.string().optional().describe("Task id for task-scoped markers"),
@@ -209,6 +214,9 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       const featureID = typeof state.feature_id === "string" ? state.feature_id : ""
       if (!featureID || state.session_id !== sessionID) {
         throw new Error("[marker-authority] classified runtime identity required")
+      }
+      if (!isSafeFeatureId(featureID)) {
+        throw new Error("[marker-authority] safe feature_id required")
       }
       authorizedArgs.set(args, { sessionID, callID, featureID, action })
     },

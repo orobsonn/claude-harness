@@ -166,7 +166,7 @@ Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuri
 | Durable memory | project root `MEMORY.md` |
 | Routing | `harness.routing.json` / `.opencode/harness.routing.json` |
 
-**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session. Use the native `classify` tool and the `mark` tool registered by `marker-authority.ts`; `mark-gate.mjs` is observability-only.
+**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session. Use the native `classify` tool and the `mark` tool registered by `marker-authority.ts`.
 
 **Marker threat boundary:** marker authority's WeakMap identity and ordering bind only the native `mark` invocation's exact `args` object to session, call, feature, and action, then consume it before mutation. This blocks direct execute, structural clones, replay, concurrent reuse, and runtime-binding mismatch for that invocation. Downstream R10 accepts plain persisted `brainstormed` / `adversary_fired` booleans plus the classified feature match; those values carry no on-disk provenance or OS isolation. Same-user filesystem/Bash writes or a compromised OpenCode host/plugin can forge them. The official path remains the native `mark` tool; direct gate-state edits are forbidden by convention and permission friction, not by a provenance proof. There is no ceremony sidecar, artifact receipt, HMAC, or recovery coordinator.
 

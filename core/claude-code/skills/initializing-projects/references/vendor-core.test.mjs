@@ -600,10 +600,14 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
   try {
     const staleResolver = join(tempDir, ".opencode/plugin/command-resolver.ts");
     const staleLib = join(tempDir, ".opencode/plugin/lib/command-resolver.mjs");
+    const staleMarkGate = join(tempDir, ".opencode/plugin/lib/mark-gate.mjs");
+    const projectSibling = join(tempDir, ".opencode/plugin/lib/project-owned-marker.mjs");
     mkdirSync(dirname(staleResolver), { recursive: true });
     mkdirSync(dirname(staleLib), { recursive: true });
     writeFileSync(staleResolver, "// stale plugin from a prior vendor\n", "utf8");
     writeFileSync(staleLib, "// stale lib from a prior vendor\n", "utf8");
+    writeFileSync(staleMarkGate, "// stale shell marker from a prior vendor\n", "utf8");
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
 
     const result = spawnSync(
       "node",
@@ -614,6 +618,8 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
 
     assert.ok(!existsSync(staleResolver), "retired plugin file must be deleted on re-vendor");
     assert.ok(!existsSync(staleLib), "retired plugin lib must be deleted on re-vendor");
+    assert.ok(!existsSync(staleMarkGate), "retired mark-gate helper must be deleted on re-vendor");
+    assert.ok(existsSync(projectSibling), "exact retirement must preserve project-owned siblings");
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
@@ -975,6 +981,7 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/dual-nudge.mjs",
     "plugin/lib/marker-seal.mjs",
     "plugin/lib/marker-security.test.mjs",
+    "plugin/lib/mark-gate.mjs",
     "skills/orchestrating-delivery/dual-runtime.mjs",
     "skills/orchestrating-delivery/dual-runtime.test.mjs",
     "plugin/lib/gate-state.mjs",
@@ -1053,6 +1060,7 @@ test("retired review-engine files are pruned from a fresh vendor", () => {
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/mark-gate.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1439,13 +1447,6 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
       "lib/gate-state.mjs",
     ),
     'import { x } from "../shared/lib/gate-state-shape.mjs";',
-  );
-  assert.equal(
-    rewriteSharedImportsForVendor(
-      "node core/opencode/plugin/lib/mark-gate.mjs stamp",
-      "plugin/lib/bash-decide.mjs",
-    ),
-    "node .opencode/plugin/lib/mark-gate.mjs stamp",
   );
 });
 

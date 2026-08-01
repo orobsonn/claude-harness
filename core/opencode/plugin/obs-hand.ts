@@ -41,9 +41,9 @@ export async function createObsHandHooks(
     parseHandStatusFromOutput,
     buildTaskHandRecord,
   } = await import("../lib/hand-records.mjs");
-  const { defaultHeadSha } = await import("./lib/mark-gate.mjs");
   const {
     gitTouchedPaths,
+    resolveHeadSha,
     resolveOcHandOutcome,
     hostStampOcHandCapture,
   } = await import("./lib/host-hand-capture.mjs");
@@ -137,7 +137,7 @@ export async function createObsHandHooks(
       // and host stamps hand_finished + capture_verified so parent can ship without CC capture-hand.
       const touched = gitTouchedPaths(cwd);
       const outcome = resolveOcHandOutcome(parsed, touched);
-      const freeze = defaultHeadSha(cwd);
+      const freeze = resolveHeadSha(cwd);
       hostStampOcHandCapture({
         projectRoot: cwd,
         sessionId,

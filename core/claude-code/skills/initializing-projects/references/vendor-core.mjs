@@ -364,12 +364,6 @@ export function pinTargetRoot(targetDir) {
  */
 export function rewriteSharedImportsForVendor(content, relFromOpencodeRoot) {
   if (typeof content !== "string" || typeof relFromOpencodeRoot !== "string") return content;
-  // Source-checkout marker paths must target the vendored runtime after copy.
-  content = content.split("core/opencode/plugin/lib/mark-gate.mjs").join(".opencode/plugin/lib/mark-gate.mjs");
-  content = content.replace(
-    '  ".opencode/plugin/lib/mark-gate.mjs",\n  ".opencode/plugin/lib/mark-gate.mjs",',
-    '  ".opencode/plugin/lib/mark-gate.mjs",',
-  );
   const parts = relFromOpencodeRoot.replace(/\\/g, "/").split("/").filter(Boolean);
   const depth = Math.max(0, parts.length - 1);
   // monorepo: from core/opencode/<path>, shared is (depth+1) levels up then shared/
@@ -815,6 +809,7 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/dual-nudge.mjs",
   "plugin/lib/marker-seal.mjs",
   "plugin/lib/marker-security.test.mjs",
+  "plugin/lib/mark-gate.mjs",
   "skills/orchestrating-delivery/dual-runtime.mjs",
   "skills/orchestrating-delivery/dual-runtime.test.mjs",
   "plugin/lib/gate-state.mjs",

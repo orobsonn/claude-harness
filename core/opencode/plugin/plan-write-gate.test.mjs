@@ -78,14 +78,6 @@ test("empty path fail-closed", () => {
   assert.match(r.reason ?? "", /path missing/);
 });
 
-test("deny Write overwrite of mark-gate.mjs marker script", () => {
-  const r = decide({
-    tool_input: { file_path: "core/opencode/plugin/lib/mark-gate.mjs" },
-  });
-  assert.equal(r.allow, false);
-  assert.match(r.reason ?? "", /marker scripts|mark-gate/);
-});
-
 test("deny Write overwrite of native mark authority", () => {
   for (const file_path of ["core/opencode/plugin/marker-authority.ts", ".opencode/plugin/marker-authority.ts"]) {
     const result = decide({ tool_input: { file_path } });

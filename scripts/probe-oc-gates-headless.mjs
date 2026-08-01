@@ -70,6 +70,18 @@ async function main() {
     if (pluginList.some((entry) => String(entry).includes(".opencode/plugin/"))) {
       fail("opencode.json must not list auto-globbed harness plugins");
     }
+    const retiredMarker = join(tempRoot, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    if (existsSync(retiredMarker)) {
+      fail("retired mark-gate helper survived fresh vendoring");
+    }
+    const bashPermissions = ocJson?.permission?.bash;
+    if (
+      bashPermissions &&
+      (Object.hasOwn(bashPermissions, "node .opencode/plugin/lib/mark-gate.mjs *") ||
+        Object.hasOwn(bashPermissions, "node core/opencode/plugin/lib/mark-gate.mjs *"))
+    ) {
+      fail("opencode.json retained a shell marker permission");
+    }
     pass("opencode.json leaves harness plugins to auto-glob");
 
     // 3. DENY scenario: prompt that forces task→executor-low once

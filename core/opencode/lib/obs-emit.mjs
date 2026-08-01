@@ -1,6 +1,6 @@
 /**
  * @description OC session-side observability emitters — pure decides + fail-open append.
- * Producers: classify, mark-gate, obs-plan-write, obs-eye, obs-hand plugins.
+ * Producers: classify, obs-plan-write, obs-eye, obs-hand plugins.
  * Event types must match core/vps/notify-telegram FEED_ALLOWLIST.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -75,7 +75,7 @@ export function dedupeByType(existing, event) {
       (e) => e && e.type === "task-executing" && e.n === event.n,
     );
   }
-  // plan-reviewed: same type+verdict (dual eyes + CLI belt)
+  // plan-reviewed: dedupe identical verdicts emitted structurally by review eyes.
   if (event.type === "plan-reviewed") {
     return (existing || []).some(
       (e) =>

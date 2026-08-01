@@ -91,8 +91,6 @@
       "eslint*": "allow",
       "prettier*": "allow",
       "node*": "allow",
-      "node .opencode/plugin/lib/mark-gate.mjs *": "allow",
-      "node core/opencode/plugin/lib/mark-gate.mjs *": "allow",
       "git status*": "allow",
       "git log*": "allow",
       "git diff*": "allow",

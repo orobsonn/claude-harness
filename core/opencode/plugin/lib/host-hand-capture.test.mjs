@@ -8,6 +8,31 @@ import {
   resolveOcHandOutcome,
   hostStampOcHandCapture,
 } from "./host-hand-capture.mjs";
+import * as hostHandCapture from "./host-hand-capture.mjs";
+
+test("resolveHeadSha uses only the explicit project root and fails best-effort", () => {
+  assert.equal(typeof hostHandCapture.resolveHeadSha, "function");
+  const calls = [];
+  const execFileSyncFn = (command, args, options) => {
+    calls.push({ command, args, options });
+    return "  abc123deadbeef\n";
+  };
+  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", execFileSyncFn), "abc123deadbeef");
+  assert.deepEqual(calls, [
+    {
+      command: "git",
+      args: ["rev-parse", "HEAD"],
+      options: {
+        cwd: "/explicit/project",
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      },
+    },
+  ]);
+  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", () => " \n"), null);
+  assert.equal(hostHandCapture.resolveHeadSha("/explicit/project", () => { throw new Error("no git"); }), null);
+});
 
 test("resolveOcHandOutcome promotes BLOCKED to DONE when git touched", () => {
   assert.equal(resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "DONE");

@@ -106,7 +106,7 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
-**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark-gate.mjs`, `mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround (or its `$`-escaping caveat) for it.
+**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround (or its `$`-escaping caveat) for it.
 </HARD-GATE>
 
 Route on its result:

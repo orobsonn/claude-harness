@@ -29,6 +29,73 @@ const NEW_CONFIG = {
   },
 };
 
+const RETIRED_MARK_GATE_PERMISSIONS = [
+  "node .opencode/plugin/lib/mark-gate.mjs *",
+  "node core/opencode/plugin/lib/mark-gate.mjs *",
+];
+
+test("mark-gate retirement removes only historical harness-owned allows and converges", () => {
+  for (const permission of RETIRED_MARK_GATE_PERMISSIONS) {
+    const ledger = RETIRED_OC_PERMISSION_ENTRIES.find(
+      (entry) => entry.path[0] === "bash" && entry.path[1] === permission,
+    );
+    assert.deepEqual(ledger, { path: ["bash", permission], historicalValue: "allow" });
+  }
+
+  const sibling = "node .opencode/plugin/lib/project-owned.mjs *";
+  const existingConfig = {
+    permission: {
+      bash: {
+        [RETIRED_MARK_GATE_PERMISSIONS[0]]: "allow",
+        [RETIRED_MARK_GATE_PERMISSIONS[1]]: "allow",
+        [sibling]: "allow",
+      },
+    },
+  };
+  const migrated = migrateOpencodeConfig({
+    existingConfig,
+    newConfig: { permission: { bash: {} } },
+    previousHarnessVersionStamp: "v0.56.0",
+    newHarnessVersion: "v0.57.0",
+  });
+  for (const permission of RETIRED_MARK_GATE_PERMISSIONS) {
+    assert.equal(Object.hasOwn(migrated.config.permission.bash, permission), false);
+  }
+  assert.equal(migrated.config.permission.bash[sibling], "allow");
+
+  const repeated = migrateOpencodeConfig({
+    existingConfig: migrated.config,
+    newConfig: { permission: { bash: {} } },
+    manifest: migrated.manifest,
+    newHarnessVersion: "v0.57.0",
+  });
+  assert.deepEqual(repeated.config, migrated.config);
+  assert.equal(repeated.report.some((entry) => entry.action === "removed-retired" || entry.action === "updated"), false);
+
+  const customized = migrateOpencodeConfig({
+    existingConfig: {
+      permission: {
+        bash: {
+          [RETIRED_MARK_GATE_PERMISSIONS[1]]: "ask",
+          [sibling]: "allow",
+        },
+      },
+    },
+    newConfig: { permission: { bash: {} } },
+    previousHarnessVersionStamp: "v0.56.0",
+  });
+  assert.equal(customized.config.permission.bash[RETIRED_MARK_GATE_PERMISSIONS[1]], "ask");
+  assert.equal(customized.config.permission.bash[sibling], "allow");
+
+  const unprovenanced = migrateOpencodeConfig({
+    existingConfig: {
+      permission: { bash: { [RETIRED_MARK_GATE_PERMISSIONS[0]]: "allow" } },
+    },
+    newConfig: { permission: { bash: {} } },
+  });
+  assert.equal(unprovenanced.config.permission.bash[RETIRED_MARK_GATE_PERMISSIONS[0]], "allow");
+});
+
 test("ac-1.1: tier 1 (manifest present) replaces harness-owned keys with the new generation's set and leaves operator keys intact", () => {
   const manifest = {
     version: 1,

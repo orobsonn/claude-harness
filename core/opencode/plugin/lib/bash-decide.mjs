@@ -29,8 +29,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeliveryCommand } from "./is-delivery-command.mjs";
 import { isSafeSessionIdSegment } from "../../lib/gate-state.mjs";
-import { matchesAbsolution, absolutionPrefix } from "../../../shared/lib/absolution.mjs";
-import { fidelityPassEntry } from "./mark-gate.mjs";
+import {
+  matchesAbsolution,
+  absolutionPrefix,
+  formatFeatureTaskEntry,
+} from "../../../shared/lib/absolution.mjs";
 import {
   classifyRegatePending,
   corruptRegatePendingReason,
@@ -222,7 +225,7 @@ function decideSpawnHandFidelity(command, input) {
         "Ensure the descriptor JSON exists and is well-formed before dispatching.",
     };
   }
-  const qualifiedId = fidelityPassEntry(descriptor.feature_id, descriptor.task_id, null);
+  const qualifiedId = formatFeatureTaskEntry(descriptor.feature_id, descriptor.task_id);
   const gs = normalizeGateState(input.gateState);
   const fidelityPrefixes = coerceArray(gs.fidelity_pass).map(absolutionPrefix);
   if (!fidelityPrefixes.includes(qualifiedId)) {

@@ -227,23 +227,9 @@ When the **compliance fidelity gate** (step a′) does not reach PASS within the
 - **One extra attempt.** If the repaired transcription also fails fidelity — or `sniper-high` returns `BLOCKED`/`NEEDS_CONTEXT` — **stop immediately** as CRITICAL EXCEPTION. Do not re-dispatch.
 - **The fidelity limit applies only to fidelity verdicts** inside the pre-freeze gate. Provider/transient Task failure is reported for explicit orchestrator judgment. Post-freeze maintenance edits are a different dispatch shape.
 
-**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), emit the same curated events the drain already renders. Prefer structural producers (plugins `obs-plan-write` / `obs-eye` / `obs-hand` + classify `pipeline-type`). `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Additionally, the conductor MUST run these observability-only mark-gate CLI side-effects (idempotent / fail-open if env unset):
+**Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), structural producers emit the curated events the drain already renders: plugins `obs-plan-write` / `obs-eye` / `obs-hand` plus classify `pipeline-type`. `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Plan-review observation comes from the structural eye producer; the conductor runs no observability CLI checkpoint.
 
-```bash
-# After the primary plan-reviewer result (APPROVE|REVISE):
-node .opencode/plugin/lib/mark-gate.mjs plan-reviewed --verdict APPROVE
-
-# After upfront / final spec adversary (obs only — map issues[] length; never ask the eye for a verdict string):
-node .opencode/plugin/lib/mark-gate.mjs spec-adversaried --findings 0
-
-# At the top of each task loop (1-based n / total from plan.tasks):
-node .opencode/plugin/lib/mark-gate.mjs task-executing --n <n> --total <total>
-
-# After final review (Phase 3) — observability only (does NOT stamp gate-state):
-node .opencode/plugin/lib/mark-gate.mjs final-review-done
-```
-
-**Privileged ship markers (native `mark` only — never Bash / mark-gate CLI):**
+**Privileged ship markers (native `mark` only — never Bash):**
 - After Phase 3 join (FULL): `action: final-review` → plain `final_review_done` workflow state (push-blocking).
 - After operator demo (FULL interactive): `action: demo-done` → plain `demo_done` workflow state (push-blocking when not headless).
 
@@ -257,10 +243,10 @@ Do not invent alternate event type strings — only the types in `notify-telegra
    - **The dispatch itself broke — provider/transient Task failure:** report the product impact and continue only after explicit orchestrator judgment; no OpenCode retry tracker decides this.
    - **`DONE_WITH_CONCERNS`:** neither branch — do **not** re-dispatch and do **not** route to critical exception on the unstampable record alone. The concern is judged by compliance/gates, then the escalation ladder's tier step when a compliance `fail`/`partial` or red gate confirms it. Carry the missing stamp as open risk / operator raise.
    - **Reading the cause:** a refusal is a verdict with a read-back. Absence of read-back is transient **only when the dispatch reached the provider**. A pre-dispatch gate deny (`[entry-gate] Blocked:…`) leaves no record — `mark` answers *"hand-record missing or unreadable"* — that is CONFIG_ERROR, CRITICAL EXCEPTION, no retry. Never infer either cause from the record's state alone.
-3. Never use Bash or `mark-gate` CLI for privileged markers.
+3. Never use Bash for privileged markers.
 4. **Ship on the parent `build` session only.** `shipper` may draft PR text; conductor runs push/PR bash on the parent after capture is present.
 
-**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch. Bash and direct module imports cannot satisfy the native invocation's WeakMap authority; that invocation boundary does not add provenance to the persisted state.
+**Fidelity-rail stamp (after compliance fidelity PASS → before executor):** Call the native `mark` tool with `action: fidelity` and the locked test's `task_id`. The tool derives session and feature identity from the runtime envelope and gate-state. This stamp **MUST** precede executor dispatch. There is no dedicated privileged shell CLI. Within one authority instance, direct execute, cloned args, and replay without its own before authorization fail; a same-user process can import and instantiate its own authority, which is outside the boundary. The invocation boundary does not add provenance to the persisted state.
 
 An executor hand spawn is **DENIED** (`CONFIG_ERROR`) unless `fidelity_pass` contains this feature/task (optional `@sha`). `test-author` is exempt — it creates the test that enables fidelity. Freeze-commit alone is not enough; the stamp is the on-disk signal `run-hand` and the entry-gate consume. (route to critical exception — do not retry)
 
@@ -311,13 +297,7 @@ Scope = the **whole feature**, not one task.
 
 Findings → tiered sniper (same rules as Phase 2, step g). Re-run gates after fixes. Proceed only when feature-wide gates are green.
 
-**Ship rail (FULL — privileged):** after the final review completes (every dispatched eye result collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This records plain `final_review_done: true` workflow state on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). Bash and `mark-gate` CLI cannot invoke the native mark authority; direct same-user state writes remain forgeable under the boundary above and are prohibited.
-
-Also emit the observability-only checkpoint (fail-open, does not gate delivery):
-
-```bash
-node .opencode/plugin/lib/mark-gate.mjs final-review-done
-```
+**Ship rail (FULL — privileged):** after the final review completes (every dispatched eye result collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This records plain `final_review_done: true` workflow state on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). There is no dedicated privileged shell CLI; same-user import/instantiation and direct state writes remain outside the boundary above and are prohibited.
 
 ---
 

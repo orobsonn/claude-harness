@@ -1,6 +1,4 @@
-/**
- * @description Skill must invoke vendored mark-gate paths, never monorepo core/opencode (consumer worktrees).
- */
+/** @description Active delivery prose must not advertise the retired shell marker CLI/checkpoints. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,12 +7,15 @@ import { dirname, join } from "node:path";
 
 const skill = join(dirname(fileURLToPath(import.meta.url)), "SKILL.md");
 
-test("OC orchestrating-delivery skill: no monorepo core/opencode mark-gate CLI paths", () => {
+test("OC orchestrating-delivery skill: no retired shell marker CLI or manual checkpoints", () => {
   const text = readFileSync(skill, "utf8");
   assert.equal(
-    /node\s+core\/opencode\/plugin\/lib\/mark-gate\.mjs/.test(text),
+    /mark-gate\.mjs/.test(text),
     false,
-    "must use .opencode/plugin/lib/mark-gate.mjs for vendored headless",
+    "retired shell marker path must not remain in active prose",
   );
-  assert.match(text, /node\s+\.opencode\/plugin\/lib\/mark-gate\.mjs/);
+  for (const command of ["spec-adversaried", "final-review-done"]) {
+    assert.equal(text.includes(command), false, `retired manual checkpoint remains: ${command}`);
+  }
+  assert.match(text, /task-executing/, "structural hand observation must remain documented");
 });

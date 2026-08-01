@@ -11,7 +11,7 @@ import { createObsEyeHooks } from "./obs-eye.ts";
 import { createObsHandHooks } from "./obs-hand.ts";
 import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
 import { semanticPlanHash } from "../lib/planner-artifact.mjs";
-import { fidelityPassEntry } from "./lib/mark-gate.mjs";
+import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs";
 
 /** @param {() => Promise<void>} fn */
 async function captureWarnings(fn) {
@@ -628,7 +628,7 @@ test("#ac-1.1 obs-hand: sniper-high DONE → sealed regate_pending for feature/t
     );
 
     const disk = JSON.parse(readFileSync(gatePath, "utf8"));
-    const expected = fidelityPassEntry(fid, tid, null);
+    const expected = formatFeatureTaskEntry(fid, tid);
     assert.ok(Array.isArray(disk.regate_pending), "regate_pending array");
     assert.ok(disk.regate_pending.includes(expected), `expected ${expected} in ${JSON.stringify(disk.regate_pending)}`);
   } finally {

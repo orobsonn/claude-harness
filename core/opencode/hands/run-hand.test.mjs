@@ -380,7 +380,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
 
 // ---- capturedVerifiedAt stamp (DONE only) ----
 
-test("buildHandRunRecord: DONE must NOT set capturedVerifiedAt (mark-gate only)", () => {
+test("buildHandRunRecord: DONE must NOT self-certify capturedVerifiedAt (host authority only)", () => {
   const record = buildHandRunRecord({
     featureId: "feat",
     taskId: "task-6",
