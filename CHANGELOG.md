@@ -5,6 +5,23 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.0](https://github.com/orobsonn/claude-harness/compare/v0.52.0...v0.53.0) (2026-08-02)
+
+
+### Features
+
+* **oc:** adjudica segundo olho com policy B ([#606](https://github.com/orobsonn/claude-harness/issues/606)) ([faded65](https://github.com/orobsonn/claude-harness/commit/faded65759fbab932a4362d63745c5cb4d1ea365))
+
+
+### Bug Fixes
+
+* **oc:** remove teto de sessão do planner ([#602](https://github.com/orobsonn/claude-harness/issues/602)) ([#604](https://github.com/orobsonn/claude-harness/issues/604)) ([2644d69](https://github.com/orobsonn/claude-harness/commit/2644d69b3b4968ef0707dc0b865727f00c65f567))
+
+
+### Refactors
+
+* reconstrói harness OpenCode por fatos ([#608](https://github.com/orobsonn/claude-harness/issues/608)) ([b05d055](https://github.com/orobsonn/claude-harness/commit/b05d055dc2b3104479de5cc5506d14b38a7b64af))
+
 ## [0.52.0](https://github.com/orobsonn/claude-harness/compare/v0.51.0...v0.52.0) (2026-07-30)
 
 
