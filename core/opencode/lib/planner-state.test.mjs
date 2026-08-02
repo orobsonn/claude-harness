@@ -10,6 +10,16 @@ import {
 } from "./planner-state.mjs";
 
 const base = { feature_id: "feature", classified: true };
+const expectedModelStrategy = {
+  hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" },
+  planner: "openai/gpt-5.6-sol",
+  "plan-reviewer": "openai/gpt-5.6-sol",
+  compliance: "openai/gpt-5.6-terra",
+  adversary: "openai/gpt-5.6-sol",
+  security: "openai/gpt-5.6-sol",
+  shipper: "openai/gpt-5.6-luna",
+  harvester: "openai/gpt-5.6-luna",
+};
 const claim = (state, overrides = {}) => claimPlannerAttempt(state, {
   role: "planner",
   callId: "call-1",
@@ -46,7 +56,8 @@ test("a canonical plan binds only to its matching planner identity", () => {
   });
   const bound = bindPlannerArtifact(returned.state, {
     sessionId: "session-1", featureId: "feature",
-    artifact: { valid: true, semanticHash: "hash", fileHash: "file", fingerprint: "new", plan: { feature_id: "feature" } },
+  artifact: { valid: true, semanticHash: "hash", fileHash: "file", fingerprint: "new", plan: { feature_id: "feature" } },
+    expectedModelStrategy,
   });
   assert.equal(bound.ok, true);
   assert.equal(bound.state.planner_status, "usable");

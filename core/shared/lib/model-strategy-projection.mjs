@@ -1,9 +1,9 @@
 /** @description Pure projection from validated routing facts to the frozen plan strategy. */
-import { APPROVED_HAND_LADDER } from "./hand-model-ladder.mjs";
 
 export const MODEL_STRATEGY_EYE_KEYS = Object.freeze([
   "planner", "plan-reviewer", "compliance", "adversary", "security", "shipper", "harvester",
 ]);
+const MODEL_STRATEGY_HAND_TIER_KEYS = Object.freeze(["low", "medium", "high"]);
 
 /**
  * @description Project the exact R15 strategy from routing without reading disk or validating schema.
@@ -14,7 +14,15 @@ export function projectExpectedModelStrategy(routing) {
   if (!routing || typeof routing !== "object" || Array.isArray(routing)) return { ok: false, reason: "routing must be an object" };
   const roles = routing.roles;
   if (!roles || typeof roles !== "object" || Array.isArray(roles)) return { ok: false, reason: "routing roles must be an object" };
-  const strategy = { hand_tiers: { ...APPROVED_HAND_LADDER } };
+  const handTiers = {};
+  for (const tier of MODEL_STRATEGY_HAND_TIER_KEYS) {
+    const model = roles.executor?.tiers?.[tier]?.model;
+    if (typeof model !== "string" || model.trim().length === 0) {
+      return { ok: false, reason: `routing executor ${tier} hand model missing` };
+    }
+    handTiers[tier] = model;
+  }
+  const strategy = { hand_tiers: handTiers };
   for (const role of MODEL_STRATEGY_EYE_KEYS) {
     const route = roles[role];
     const model = typeof route?.model === "string" ? route.model : route?.families?.["family-1"]?.model;
@@ -32,8 +40,8 @@ export function isCompleteExpectedModelStrategy(value) {
   const tiers = value.hand_tiers;
   if (!tiers || typeof tiers !== "object" || Array.isArray(tiers)) return false;
   const tierKeys = Object.keys(tiers);
-  if (tierKeys.length !== 3 || tierKeys.some((key) => !Object.hasOwn(APPROVED_HAND_LADDER, key))) return false;
-  if (!Object.entries(APPROVED_HAND_LADDER).every(([key, model]) => Object.hasOwn(tiers, key) && tiers[key] === model)) return false;
+  if (tierKeys.length !== MODEL_STRATEGY_HAND_TIER_KEYS.length || tierKeys.some((key) => !MODEL_STRATEGY_HAND_TIER_KEYS.includes(key))) return false;
+  if (!MODEL_STRATEGY_HAND_TIER_KEYS.every((key) => typeof tiers[key] === "string" && tiers[key].trim().length > 0)) return false;
   return MODEL_STRATEGY_EYE_KEYS.every((key) => Object.hasOwn(value, key) && typeof value[key] === "string" && value[key].trim().length > 0);
 }
 

@@ -20,7 +20,7 @@ after(() => {
 const sessionId = "ses_plannerRecovery01";
 const featureId = "planner-recovery";
 const modelStrategy = {
-  hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+  hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" },
   planner: "openai/gpt-5.6-sol",
   "plan-reviewer": "openai/gpt-5.6-sol",
   compliance: "openai/gpt-5.6-terra",
@@ -145,7 +145,7 @@ test("invalid R15 planner output leaves existing canonical bytes untouched", asy
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
     const args = { subagent_type: "planner" };
     await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "r15" }, { args });
-    const invalid = { ...plan, model_strategy: { ...modelStrategy, hand_tiers: { low: "gemma4", medium: "glm-5.2" } } };
+    const invalid = { ...plan, model_strategy: { ...modelStrategy, hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna" } } };
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "r15", args }, { output: JSON.stringify(invalid), metadata: {} });
     assert.equal(state().planner_status, "plan_invalid");
     assert.deepEqual(fs.readFileSync(canonical), original);

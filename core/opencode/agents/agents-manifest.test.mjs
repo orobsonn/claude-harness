@@ -274,18 +274,18 @@ test("t6-models-match-routing: agent frontmatter models match harness.routing.js
   }
 });
 
-test("executor and sniper tiers use the Ollama Cloud default ladder", () => {
+test("executor and sniper tiers use the configured OpenAI default ladder", () => {
   const routing = JSON.parse(read(ROUTING_PATH));
   const expected = [
-    "ollama-cloud/gemma4:31b",
-    "ollama-cloud/glm-5.2",
-    "ollama-cloud/kimi-k2.7-code",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-terra",
   ];
   for (const role of ["executor", "sniper"]) {
     assert.deepEqual(
       ["low", "medium", "high"].map((tier) => routing.roles[role].tiers[tier].model),
       expected,
-      `${role} must use the Ollama Cloud ladder`,
+      `${role} must use the configured OpenAI ladder`,
     );
   }
   assert.match(read(join(DECISIONS_DIR, "ADR-001-no-ollama-default.md")), /superseded by ADR-004/i);

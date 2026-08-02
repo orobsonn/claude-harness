@@ -40,6 +40,17 @@ const GOLDEN_FULL = {
     },
   ],
 }
+const OPENAI_FULL = {
+  ...GOLDEN_FULL,
+  model_strategy: {
+    ...GOLDEN_FULL.model_strategy,
+    hand_tiers: {
+      low: "openai/gpt-5.6-luna",
+      medium: "openai/gpt-5.6-luna",
+      high: "openai/gpt-5.6-terra",
+    },
+  },
+}
 
 /**
  * @param {(root: string) => void | Promise<void>} fn
@@ -90,10 +101,11 @@ function seedProject(root, gateState, plan) {
  * @param {string} root
  * @returns {{ statePath: string, stateBytes: Buffer }}
  */
-function seedUsableBoundProject(root) {
-  seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)
-  const artifact = readPlannerArtifact(root, SESSION, FEATURE)
-  const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact)
+function seedUsableBoundProject(root, plan = GOLDEN_FULL, expectedModelStrategy, bindingExpectedModelStrategy = expectedModelStrategy) {
+  seedProject(root, { feature_id: FEATURE }, plan)
+  const options = expectedModelStrategy === undefined ? {} : { expectedModelStrategy }
+  const artifact = readPlannerArtifact(root, SESSION, FEATURE, options)
+  const snapshot = writeBoundPlanSnapshot(root, SESSION, artifact, options)
   assert.equal(snapshot.ok, true)
   const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json")
   fs.writeFileSync(statePath, JSON.stringify(sealGateState({
@@ -108,9 +120,17 @@ function seedUsableBoundProject(root) {
       snapshot_path: snapshot.relativePath,
       snapshot_hash: artifact.semanticHash,
       snapshot_file_hash: snapshot.snapshot.fileHash,
+      ...(bindingExpectedModelStrategy === undefined ? {} : { expected_model_strategy: bindingExpectedModelStrategy }),
     },
   })), "utf8")
   return { statePath, stateBytes: fs.readFileSync(statePath) }
+}
+
+/** @description Install the vendored default routing used by a real OpenCode project. */
+function writeDefaultRouting(root) {
+  const destination = path.join(root, ".opencode", "harness.routing.json")
+  fs.mkdirSync(path.dirname(destination), { recursive: true })
+  fs.copyFileSync(new URL("../harness.routing.json", import.meta.url), destination)
 }
 
 /**
@@ -191,6 +211,20 @@ test("lt-pg-valid: executor + valid full plan does not plan-gate deny", async ()
       },
     })))
     await assert.doesNotReject(() => runHook(root, "executor-low"))
+  })
+})
+
+test("lt-pg-routing: validates hands against the active routing snapshot", async () => {
+  const expectedModelStrategy = OPENAI_FULL.model_strategy
+  await withTempRoot(async (root) => {
+    seedUsableBoundProject(root, OPENAI_FULL, expectedModelStrategy)
+    writeDefaultRouting(root)
+    await assert.doesNotReject(() => runHook(root, "executor-low"))
+  })
+  await withTempRoot(async (root) => {
+    seedUsableBoundProject(root, GOLDEN_FULL, undefined, expectedModelStrategy)
+    writeDefaultRouting(root)
+    await assert.rejects(() => runHook(root, "executor-low"), /status=plan_invalid/)
   })
 })
 

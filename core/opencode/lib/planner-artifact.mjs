@@ -11,6 +11,13 @@ import { semanticPlanHash } from "./plan-hash.mjs";
 
 export { semanticPlanHash };
 
+/** @description Preserve an explicitly frozen routing strategy through artifact validation. */
+function validationOptions(options) {
+  return Object.hasOwn(options, "expectedModelStrategy")
+    ? { expect: "full", expectedModelStrategy: options.expectedModelStrategy }
+    : { expect: "full" };
+}
+
 /** @description Read and fingerprint the one canonical plan artifact for a session/feature. */
 export function readPlannerArtifact(projectRoot, sessionId, featureId, options = {}) {
   const pd = planDir({ projectRoot, runtime: "opencode", sessionId, featureId });
@@ -29,7 +36,7 @@ export function readPlannerArtifact(projectRoot, sessionId, featureId, options =
     }
     let validation;
     try {
-      validation = (options.validatePlanFn ?? validatePlan)(plan, { expect: "full" });
+      validation = (options.validatePlanFn ?? validatePlan)(plan, validationOptions(options));
     } catch {
       return {
         exists: true, valid: false, validationError: "validator_internal", plan, raw,
@@ -149,7 +156,7 @@ export function preparedPlanMatchesArtifacts(prepared, artifact, snapshot) {
 }
 
 /** @description Persist a content-addressed immutable-by-construction plan snapshot for dispatch prompts. */
-export function writeBoundPlanSnapshot(projectRoot, sessionId, artifact) {
+export function writeBoundPlanSnapshot(projectRoot, sessionId, artifact, options = {}) {
   let temp = "";
   try {
     if (!artifact?.valid || typeof artifact.semanticHash !== "string") return { ok: false, reason: "invalid snapshot source" };
@@ -167,7 +174,7 @@ export function writeBoundPlanSnapshot(projectRoot, sessionId, artifact) {
       temp = "";
       fs.chmodSync(snapshotPath, 0o444);
     }
-    const snapshot = readBoundPlanSnapshot(snapshotPath);
+    const snapshot = readBoundPlanSnapshot(snapshotPath, options);
     if (!snapshot.valid || snapshot.semanticHash !== artifact.semanticHash || snapshot.fileHash !== expectedFileHash) {
       return { ok: false, reason: "content-addressed snapshot hash mismatch" };
     }
@@ -197,7 +204,7 @@ export function readBoundPlanSnapshot(snapshotPath, options = {}) {
     }
     let validation;
     try {
-      validation = (options.validatePlanFn ?? validatePlan)(plan, { expect: "full" });
+      validation = (options.validatePlanFn ?? validatePlan)(plan, validationOptions(options));
     } catch {
       return { valid: false, validationError: "validator_internal", plan, semanticHash: semanticPlanHash(plan), fileHash, path: snapshotPath };
     }
@@ -244,8 +251,16 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, _now = Dat
         state = { ...state, planner_status: "plan_invalid", planner_binding_error: "snapshot path is not canonical byte-addressed identity" };
       } else {
         const snapshotPath = path.resolve(projectRoot, expectedRelativePath);
-        snapshot = readBoundPlanSnapshot(snapshotPath, options);
-        const canonical = readPlannerArtifact(projectRoot, sessionId, featureId, options);
+        const boundExpected = isCompleteExpectedModelStrategy(options.expectedModelStrategy)
+          ? options.expectedModelStrategy
+          : isCompleteExpectedModelStrategy(binding.expected_model_strategy)
+            ? binding.expected_model_strategy
+            : isCompleteExpectedModelStrategy(state.planner_last_attempt?.expected_model_strategy)
+              ? state.planner_last_attempt.expected_model_strategy
+              : undefined;
+        const validation = boundExpected === undefined ? options : { ...options, expectedModelStrategy: boundExpected };
+        snapshot = readBoundPlanSnapshot(snapshotPath, validation);
+        const canonical = readPlannerArtifact(projectRoot, sessionId, featureId, validation);
         if (
           !snapshot.plan ||
           !canonical.plan ||

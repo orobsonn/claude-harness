@@ -71,6 +71,7 @@ async function createPlanGateHooks(
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
   const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs")
+  const { isCompleteExpectedModelStrategy } = await import("../../shared/lib/model-strategy-projection.mjs")
   const {
     bareRole,
     isExecutorRole,
@@ -127,6 +128,11 @@ async function createPlanGateHooks(
                 ? (reconciled.state as Record<string, unknown>)
                 : {}
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined
+            const expectedModelStrategy = isCompleteExpectedModelStrategy(binding?.expected_model_strategy)
+              ? binding.expected_model_strategy
+              : isCompleteExpectedModelStrategy((state.planner_last_attempt as Record<string, unknown> | undefined)?.expected_model_strategy)
+                ? (state.planner_last_attempt as Record<string, unknown>).expected_model_strategy
+                : undefined
             if (!binding) {
               const plannerStatus = String(state.planner_status ?? "")
               if (plannerStatus && plannerStatus !== "not_started") {
@@ -149,7 +155,12 @@ async function createPlanGateHooks(
               if (reconciled.validatorFailed === true) {
                 console.warn(`${PREFIX} Warning: validator failed internally; opening without a validation decision.`)
               } else {
-                const planDecision = decidePlanGate({ plan: artifact.plan, expect: "full" }, { validatePlanFn: deps.validatePlanFn })
+                const planDecision = decidePlanGate(
+                  expectedModelStrategy
+                    ? { plan: artifact.plan, expect: "full", expectedModelStrategy }
+                    : { plan: artifact.plan, expect: "full" },
+                  { validatePlanFn: deps.validatePlanFn },
+                )
                 if (planDecision.decision === "warn") console.warn(`${PREFIX} ${planDecision.reason}`)
                 throwIfPlanDenied(planDecision)
               }
