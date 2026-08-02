@@ -125,6 +125,7 @@ const OC_FROZEN_MODULES = {
   "plugin/lib/scope-runtime-identity.mjs": { current_path: "plugin/lib/scope-runtime-identity.mjs", verdict: "REWRITE" },
   "plugin/lib/session-state.mjs": { current_path: "plugin/lib/session-state.mjs", verdict: "REWRITE" },
   "plugin/lib/task-dispatch-identity.mjs": { current_path: "lib/task-dispatch-identity.mjs", verdict: "KEEP (MOVE)" },
+  "lib/worktree-baseline.mjs": { current_path: "lib/worktree-baseline.mjs", verdict: "KEEP" },
   "plugin/lib/version-check-core.ts": { current_path: "plugin/lib/version-check-core.ts", verdict: "REWRITE" },
   "plugin/marker-authority.ts": { current_path: "plugin/marker-authority.ts", verdict: "REWRITE" },
   "plugin/obs-eye.ts": { current_path: "plugin/obs-eye.ts", verdict: "KEEP" },
@@ -172,6 +173,7 @@ const OC_MODULE_NORMATIVE_METADATA = {
   "plugin/lib/scope-runtime-identity.mjs": { failure_policy: "verified writing-hand mismatch denies; non-hand or missing SDK opens", tests: ["core/opencode/plugin/plan-write-gate.test.mjs", "core/opencode/plugin/obs-hand.test.mjs"] },
   "plugin/lib/session-state.mjs": { failure_policy: "read-only recovery opens; corrupt factual pending is omitted or rejected", tests: ["core/opencode/plugin/reinject-state.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/reinject-state.mjs"] },
   "plugin/lib/task-dispatch-identity.mjs": { failure_policy: "parse failure is pure and never mutates", tests: ["core/opencode/lib/task-dispatch-identity.test.mjs"] },
+  "lib/worktree-baseline.mjs": { failure_policy: "unstable, invalid, or unavailable snapshots never suppress touched paths", tests: ["core/opencode/lib/worktree-baseline.test.mjs", "core/opencode/lib/dispatch-scope.test.mjs", "core/opencode/plugin/lib/host-hand-capture.test.mjs"] },
   "plugin/lib/version-check-core.ts": { failure_policy: "advisory; network and cache failures open", tests: ["core/opencode/plugin/version-check.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/version-check.mjs"] },
   "plugin/marker-authority.ts": { failure_policy: "invalid identity, action or record denies", tests: ["core/opencode/plugin/marker-authority.test.mjs", "core/opencode/plugin/lib/marker-security.test.mjs"] },
   "plugin/obs-eye.ts": { failure_policy: "always fail-open", tests: ["core/opencode/plugin/obs-eye.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/obs-eye-append.mjs"] },
@@ -219,6 +221,7 @@ const OC_MODULE_NORMATIVE_REASONS = {
   "plugin/lib/scope-runtime-identity.mjs": "Resolve exact runtime identity without a mutable global context.",
   "plugin/lib/session-state.mjs": "Keep bounded factual recovery and remove dual/count/fallback state.",
   "plugin/lib/task-dispatch-identity.mjs": "Shared runtime identity parser belongs outside plugin/lib.",
+  "lib/worktree-baseline.mjs": "Dispatch snapshot prevents pre-existing worktree dirt from being attributed to a writing hand.",
   "plugin/lib/version-check-core.ts": "Remove catalog-health branch and retain only version warning parity.",
   "plugin/marker-authority.ts": "Narrow authority to factual host mutations with no generic file claim.",
   "plugin/obs-eye.ts": "Observation remains operational and never authorizes delivery.",
@@ -298,14 +301,14 @@ const OC_RULE_SEMANTICS = {
     required_outcome: "hand_finished and capture_verified are distinct events",
     classification: "rewrite",
     failure_policy: "completion records only; capture absent keeps delivery blocked",
-    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts", "plugin/obs-hand.ts"],
+    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "lib/worktree-baseline.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts", "plugin/obs-hand.ts"],
     locked_evidence: ["Task return alone never captures"],
   },
   R8: {
     required_outcome: "capture points to a real DONE record and current ancestral SHA",
     classification: "rewrite",
     failure_policy: "missing/mismatched record is no-op/reject; delivery remains blocked",
-    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/dispatch-scope.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts"],
+    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/dispatch-scope.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "lib/worktree-baseline.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts"],
     locked_evidence: ["real record, task/feature/session/call/SHA all match"],
   },
   R9: {
@@ -1368,7 +1371,7 @@ describe("parity-manifest", () => {
     }
   });
 
-  it("t12-module-manifest: freezes all 44 original modules with the exact normative row schema", () => {
+  it("t12-module-manifest: freezes all 44 original modules and explicit runtime additions with the exact normative row schema", () => {
     const manifest = readOcModuleManifest();
     assert.deepEqual(Object.keys(manifest).sort(), ["inventory_provenance", "modules", "path_root", "pending_delete_paths", "rules", "schema_version"]);
     assert.equal(manifest.schema_version, 1);
@@ -1376,10 +1379,11 @@ describe("parity-manifest", () => {
     assert.deepEqual(manifest.inventory_provenance, OC_INVENTORY_PROVENANCE);
     assert.deepEqual(manifest.pending_delete_paths, OC_PENDING_DELETE_PATHS);
     assert.equal(Array.isArray(manifest.modules), true);
-    assert.equal(manifest.modules.length, 44);
+    assert.equal(manifest.modules.filter(({ original_path }) => original_path.startsWith("plugin/")).length, OC_INVENTORY_PROVENANCE.frozen_module_count);
+    assert.equal(manifest.modules.length, Object.keys(OC_FROZEN_MODULES).length);
     assertExactModuleTriples(manifest.modules);
-    assert.equal(new Set(manifest.modules.map(({ original_path }) => original_path)).size, 44, "original paths must be unique");
-    assert.equal(new Set(manifest.modules.map(({ current_path }) => current_path)).size, 44, "current paths must be unique");
+    assert.equal(new Set(manifest.modules.map(({ original_path }) => original_path)).size, manifest.modules.length, "original paths must be unique");
+    assert.equal(new Set(manifest.modules.map(({ current_path }) => current_path)).size, manifest.modules.length, "current paths must be unique");
     for (const row of manifest.modules) {
       assert.deepEqual(Object.keys(row).sort(), OC_MODULE_FIELDS, `wrong fields for ${row.original_path}`);
       for (const field of ["original_path", "current_path", "failure_policy", "reason"]) {
