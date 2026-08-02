@@ -6,9 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveScopeRuntimeIdentity } from "./scope-runtime-identity.mjs";
-import { planWriteGateTestApi, PlanWriteGate } from "../plan-write-gate.ts";
+import { PlanWriteGate } from "../plan-write-gate.ts";
 
-const { createPlanWriteGateHooks } = planWriteGateTestApi;
+const { createPlanWriteGateHooks } = PlanWriteGate.testApi;
 
 function seed(root, callId, { scopePaths = ["src/a.ts"], taskId = "task" } = {}) {
   const sessionId = "parent";

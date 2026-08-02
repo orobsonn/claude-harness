@@ -60,8 +60,6 @@ async function createObsHandHooks(dir?: string): Promise<Pick<Hooks, "tool.execu
   };
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const obsHandTestApi = Object.freeze({ createObsHandHooks });
-
 export const obsHand: Plugin = async ({ directory }: any) => createObsHandHooks(typeof directory === "string" ? directory : undefined);
+Object.defineProperty(obsHand, "testApi", { value: Object.freeze({ createObsHandHooks }) });
 export default obsHand;

@@ -48,10 +48,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
-import { plannerRecoveryTestApi } from "../opencode/plugin/planner-recovery.ts";
-import { planGateTestApi } from "../opencode/plugin/plan-gate.ts";
-import { obsHandTestApi } from "../opencode/plugin/obs-hand.ts";
-import { entryGateTestApi } from "../opencode/plugin/entry-gate.ts";
+import { PlannerRecovery } from "../opencode/plugin/planner-recovery.ts";
+import { PlanGate } from "../opencode/plugin/plan-gate.ts";
+import { obsHand } from "../opencode/plugin/obs-hand.ts";
+import { EntryGate } from "../opencode/plugin/entry-gate.ts";
 import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
 import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
 import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
@@ -61,10 +61,10 @@ import {
 } from "../opencode/tools/lib/classify-persist.mjs";
 import { plannerCycleResetPatch } from "../opencode/lib/planner-state.mjs";
 
-const { createPlannerRecoveryHooks } = plannerRecoveryTestApi;
-const { createPlanGateHooks } = planGateTestApi;
-const { createObsHandHooks } = obsHandTestApi;
-const { createEntryGateHooks } = entryGateTestApi;
+const { createPlannerRecoveryHooks } = PlannerRecovery.testApi;
+const { createPlanGateHooks } = PlanGate.testApi;
+const { createObsHandHooks } = obsHand.testApi;
+const { createEntryGateHooks } = EntryGate.testApi;
 
 /**
  * Reconstructs, from its real pure sub-functions, exactly what `core/opencode/tools/classify.ts`'s

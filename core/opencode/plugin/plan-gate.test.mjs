@@ -8,9 +8,9 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { planGateTestApi } from "./plan-gate.ts"
+import { PlanGate } from "./plan-gate.ts"
 
-const { createPlanGateHooks } = planGateTestApi
+const { createPlanGateHooks } = PlanGate.testApi
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
 
 const SESSION = "ses_planGateTest01"

@@ -63,11 +63,9 @@ async function createAgentIdleNudgeHooks(
   };
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const agentIdleNudgeTestApi = Object.freeze({ createAgentIdleNudgeHooks });
-
 export const agentIdleNudge: Plugin = async ({ directory }) =>
   createAgentIdleNudgeHooks(typeof directory === "string" ? directory : undefined);
+Object.defineProperty(agentIdleNudge, "testApi", { value: Object.freeze({ createAgentIdleNudgeHooks }) });
 
 /** @description OC load contract — default export required. */
 export default agentIdleNudge;

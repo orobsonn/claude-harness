@@ -4,11 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
-import { plannerRecoveryTestApi } from "./planner-recovery.ts";
-import { planGateTestApi } from "./plan-gate.ts";
+import { PlannerRecovery } from "./planner-recovery.ts";
+import { PlanGate } from "./plan-gate.ts";
 
-const { createPlannerRecoveryHooks } = plannerRecoveryTestApi;
-const { createPlanGateHooks } = planGateTestApi;
+const { createPlannerRecoveryHooks } = PlannerRecovery.testApi;
+const { createPlanGateHooks } = PlanGate.testApi;
 const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH;
 const hadObservabilityRunPath = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_OBSERVABILITY_RUN_PATH");
 before(() => { delete process.env.HARNESS_OBSERVABILITY_RUN_PATH; });

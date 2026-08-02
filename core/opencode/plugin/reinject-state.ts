@@ -52,11 +52,9 @@ async function createReinjectStateHooks(
   }
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const reinjectStateTestApi = Object.freeze({ createReinjectStateHooks })
-
 export const reinjectState: Plugin = async ({ directory, worktree }) =>
   createReinjectStateHooks(directory, worktree)
+Object.defineProperty(reinjectState, "testApi", { value: Object.freeze({ createReinjectStateHooks }) })
 
 /** @description OC load contract — default export required. */
 export default reinjectState;

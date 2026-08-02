@@ -29,7 +29,7 @@ test(
     const projectRoot = mkdtempSync(join(tmpdir(), "agent-idle-nudge-plugin-"));
     try {
       const mod = await import(PLUGIN_URL);
-      const createAgentIdleNudgeHooks = mod.agentIdleNudgeTestApi?.createAgentIdleNudgeHooks ?? mod.default;
+      const createAgentIdleNudgeHooks = mod.agentIdleNudge?.testApi?.createAgentIdleNudgeHooks ?? mod.default;
 
       assert.ok(
         typeof createAgentIdleNudgeHooks === "function",
@@ -77,7 +77,7 @@ test(
 
 test("lt-idle-plugin-fail-open: createAgentIdleNudgeHooks + hook never throws on malformed calls", async () => {
   const mod = await import(PLUGIN_URL);
-  const createAgentIdleNudgeHooks = mod.agentIdleNudgeTestApi?.createAgentIdleNudgeHooks ?? mod.default;
+  const createAgentIdleNudgeHooks = mod.agentIdleNudge?.testApi?.createAgentIdleNudgeHooks ?? mod.default;
 
   const hooks = await createAgentIdleNudgeHooks();
   await assert.doesNotReject(async () => {

@@ -336,11 +336,9 @@ async function createPlannerRecoveryHooks(
   }
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const plannerRecoveryTestApi = Object.freeze({ createPlannerRecoveryHooks })
-
 export const PlannerRecovery: Plugin = async ({ directory, worktree }: any) => createPlannerRecoveryHooks(
   typeof directory === "string" && directory ? directory : typeof worktree === "string" ? worktree : process.cwd(),
 )
+Object.defineProperty(PlannerRecovery, "testApi", { value: Object.freeze({ createPlannerRecoveryHooks }) })
 
 export default PlannerRecovery

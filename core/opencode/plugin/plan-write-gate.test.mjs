@@ -12,13 +12,13 @@ import {
   extractWritePath,
   throwIfDenied,
 } from "./lib/plan-write-decide.mjs";
-import { planWriteGateTestApi } from "./plan-write-gate.ts";
-import { planGateTestApi } from "./plan-gate.ts";
-import { obsHandTestApi } from "./obs-hand.ts";
+import { PlanWriteGate } from "./plan-write-gate.ts";
+import { PlanGate } from "./plan-gate.ts";
+import { obsHand } from "./obs-hand.ts";
 
-const { createPlanWriteGateHooks } = planWriteGateTestApi;
-const { createPlanGateHooks } = planGateTestApi;
-const { createObsHandHooks } = obsHandTestApi;
+const { createPlanWriteGateHooks } = PlanWriteGate.testApi;
+const { createPlanGateHooks } = PlanGate.testApi;
+const { createObsHandHooks } = obsHand.testApi;
 
 async function installComposition(root) {
   await createPlanGateHooks(root);

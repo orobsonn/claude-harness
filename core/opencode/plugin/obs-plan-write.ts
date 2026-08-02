@@ -48,12 +48,10 @@ async function createObsPlanWriteHooks(
   };
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const obsPlanWriteTestApi = Object.freeze({ createObsPlanWriteHooks });
-
 export const obsPlanWrite: Plugin = async ({ directory, worktree }: any) => {
   return createObsPlanWriteHooks(typeof directory === "string" && directory ? directory : worktree);
 };
+Object.defineProperty(obsPlanWrite, "testApi", { value: Object.freeze({ createObsPlanWriteHooks }) });
 
 /** @description OC load contract — default export required. */
 export default obsPlanWrite;

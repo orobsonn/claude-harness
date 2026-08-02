@@ -244,14 +244,14 @@ function callSourceModuleOracles(root, directRoles, editPermissionFacts) {
   writeFileSync(helper, `import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import PlannerRecovery, { plannerRecoveryTestApi } from ${staticSourceSpecifier("core/opencode/plugin/planner-recovery.ts")};
+import PlannerRecovery from ${staticSourceSpecifier("core/opencode/plugin/planner-recovery.ts")};
 import PlanGate from ${staticSourceSpecifier("core/opencode/plugin/plan-gate.ts")};
-import PlanWriteGate, { planWriteGateTestApi } from ${staticSourceSpecifier("core/opencode/plugin/plan-write-gate.ts")};
-import obsPlanWrite, { obsPlanWriteTestApi } from ${staticSourceSpecifier("core/opencode/plugin/obs-plan-write.ts")};
+import PlanWriteGate from ${staticSourceSpecifier("core/opencode/plugin/plan-write-gate.ts")};
+import obsPlanWrite from ${staticSourceSpecifier("core/opencode/plugin/obs-plan-write.ts")};
 
-const { createPlannerRecoveryHooks } = plannerRecoveryTestApi;
-const { createPlanWriteGateHooks } = planWriteGateTestApi;
-const { createObsPlanWriteHooks } = obsPlanWriteTestApi;
+const { createPlannerRecoveryHooks } = PlannerRecovery.testApi;
+const { createPlanWriteGateHooks } = PlanWriteGate.testApi;
+const { createObsPlanWriteHooks } = obsPlanWrite.testApi;
 
 const root = process.argv[2];
 const factPath = process.argv[3];

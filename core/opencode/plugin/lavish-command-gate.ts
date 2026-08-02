@@ -41,15 +41,13 @@ async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute
   };
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const lavishCommandGateTestApi = Object.freeze({ createLavishCommandGateHooks });
-
 /**
  * @description OpenCode plugin factory — named const + default (OC load contract).
  */
 export const LavishCommandGate: Plugin = async () => {
   return createLavishCommandGateHooks();
 };
+Object.defineProperty(LavishCommandGate, "testApi", { value: Object.freeze({ createLavishCommandGateHooks }) });
 
 /** @description OC load contract — default export required. */
 export default LavishCommandGate;

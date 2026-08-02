@@ -182,9 +182,6 @@ async function createPlanGateHooks(
   }
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const planGateTestApi = Object.freeze({ createPlanGateHooks })
-
 /**
  * @description Resolve project root — never empty string into hooks.
  */
@@ -208,5 +205,6 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
 export const PlanGate: Plugin = async ({ directory, worktree }: any) => {
   return createPlanGateHooks(resolveProjectRoot(directory, worktree))
 }
+Object.defineProperty(PlanGate, "testApi", { value: Object.freeze({ createPlanGateHooks }) })
 
 export default PlanGate

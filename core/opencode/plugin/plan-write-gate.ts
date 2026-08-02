@@ -184,9 +184,6 @@ async function createPlanWriteGateHooks(
   };
 }
 
-/** @description Non-function test surface so OpenCode's plugin autoloader cannot execute the hook builder as a second plugin. */
-export const planWriteGateTestApi = Object.freeze({ createPlanWriteGateHooks });
-
 /**
  * @description OpenCode plugin factory — named const + default (OC load contract).
  * Accepts { directory, worktree } like entry-gate for projectRoot resolution.
@@ -195,6 +192,7 @@ export const PlanWriteGate: Plugin = async ({ directory, worktree, client }: any
   const root = resolveProjectRoot(directory, worktree);
   return createPlanWriteGateHooks(root, { client });
 };
+Object.defineProperty(PlanWriteGate, "testApi", { value: Object.freeze({ createPlanWriteGateHooks }) });
 
 /** @description OC load contract — default export required. */
 export default PlanWriteGate;

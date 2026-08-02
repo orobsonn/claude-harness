@@ -64,11 +64,9 @@ async function createObsEyeHooks(
   };
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const obsEyeTestApi = Object.freeze({ createObsEyeHooks });
-
 export const obsEye: Plugin = async ({ directory }) =>
   createObsEyeHooks(typeof directory === "string" ? directory : undefined);
+Object.defineProperty(obsEye, "testApi", { value: Object.freeze({ createObsEyeHooks }) });
 
 /** @description OC load contract — default export required. */
 export default obsEye;

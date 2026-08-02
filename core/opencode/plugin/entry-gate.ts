@@ -488,9 +488,6 @@ async function createEntryGateHooks(
   }
 }
 
-/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
-export const entryGateTestApi = Object.freeze({ createEntryGateHooks })
-
 /**
  * @description Resolve project root — never empty string into hooks.
  */
@@ -535,5 +532,6 @@ export const EntryGate: Plugin = async ({ directory, worktree, client }: any) =>
   }
   return createEntryGateHooks(root, { getSessionParentIdFn, client })
 }
+Object.defineProperty(EntryGate, "testApi", { value: Object.freeze({ createEntryGateHooks }) })
 
 export default EntryGate

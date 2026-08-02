@@ -5,9 +5,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { forbiddenLavishSubcommand, lavishDenyReason } from "./lib/lavish-command-decide.mjs";
-import { lavishCommandGateTestApi } from "./lavish-command-gate.ts";
+import { LavishCommandGate } from "./lavish-command-gate.ts";
 
-const { createLavishCommandGateHooks } = lavishCommandGateTestApi;
+const { createLavishCommandGateHooks } = LavishCommandGate.testApi;
 
 // --- pure decide layer (mirrors Claude Code's lavish-command-gate.test.mjs 1:1) ---
 
