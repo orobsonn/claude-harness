@@ -3,7 +3,7 @@ description: Surgical fix for HIGH-severity defects (race condition, security, d
 mode: all
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
-maxSteps: 80
+steps: 80
 tools:
   task: false
 permission:

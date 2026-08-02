@@ -230,7 +230,7 @@ test("t6-shared-hands: no spawn twins exist and each shared hand preserves its f
     const fm = frontmatter(read(join(AGENTS_DIR, f)));
     assert.equal(fmField(fm, "mode"), "all", `${f} mode must be all`);
     assert.equal(fmField(fm, "model"), expectedModels(JSON.parse(read(ROUTING_PATH)))[name]);
-    assert.equal(fmField(fm, "maxSteps"), "80", `${f} must force a terminal response before a runaway hand loop`);
+    assert.equal(fmField(fm, "steps"), "80", `${f} must force a terminal response before a runaway hand loop`);
     assert.equal(fmNestedBool(fm, "permission", "edit"), "allow", `${f} permission.edit must stay allow`);
     assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
   }

@@ -3,7 +3,7 @@ description: Implements LOW-complexity tasks (config, types, constants, mechanic
 mode: all
 model: ollama-cloud/gemma4:31b
 temperature: 0.1
-maxSteps: 80
+steps: 80
 tools:
   task: false
 permission:

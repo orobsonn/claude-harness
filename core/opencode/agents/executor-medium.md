@@ -3,7 +3,7 @@ description: Implements MEDIUM-complexity tasks — the DEFAULT executor. Ollama
 mode: all
 model: ollama-cloud/glm-5.2
 temperature: 0.1
-maxSteps: 80
+steps: 80
 tools:
   task: false
 permission:

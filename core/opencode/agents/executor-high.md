@@ -3,7 +3,7 @@ description: Implements HIGH-complexity tasks (band 31+ residual reasoning). Oll
 mode: all
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
-maxSteps: 80
+steps: 80
 tools:
   task: false
 permission:

@@ -3,7 +3,7 @@ description: Surgical fix for LOW-severity defects (typo, naming, dead code, cos
 mode: all
 model: ollama-cloud/gemma4:31b
 temperature: 0.0
-maxSteps: 80
+steps: 80
 tools:
   task: false
 permission:
