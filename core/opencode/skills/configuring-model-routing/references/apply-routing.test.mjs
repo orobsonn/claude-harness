@@ -40,6 +40,9 @@ test("CANONICAL_DEFAULT_ROUTING is valid once capabilities are derived", () => {
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.build.model, "openai/gpt-5.6-terra");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.security.model, "openai/gpt-5.6-sol");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.harvester.model, "openai/gpt-5.6-luna");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.executor.tiers.low.model, "openai/gpt-5.6-luna");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.executor.tiers.medium.model, "openai/gpt-5.6-luna");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.executor.tiers.high.model, "openai/gpt-5.6-terra");
 });
 
 test("HARDENING: buildRoutingFromSlots rejects unknown slot key (typo) instead of silent default", () => {
@@ -139,7 +142,7 @@ test("rewriteAgentsModelTable rewrites §8 from routing", () => {
     "|---|---|",
     "| build | `old/model` |",
     "",
-    "Default hands use the Ollama Cloud ladder. Reconfigure via skill `configuring-model-routing`.",
+    "Default hands use the OpenAI Luna → Terra ladder. Reconfigure via skill `configuring-model-routing`.",
     "",
     "## 9. Hands vs eyes",
     "",

@@ -122,6 +122,13 @@ test(
   },
 );
 
+test("provider capacity exhaustion injects the executor escalation instruction instead of ending the loop", async () => {
+  const { decide } = await import(MODULE_URL);
+  const result = decide(mainLoopTaskPayload({ tool_input: { subagent_type: "executor-medium" }, tool_response: "Maximum steps reached" }));
+  assert.equal(result.action, "inject");
+  assert.match(result.context, /capacity|tier|escalat/i);
+});
+
 // ---------------------------------------------------------------------------
 // lt-idle-malformed-none
 // ---------------------------------------------------------------------------

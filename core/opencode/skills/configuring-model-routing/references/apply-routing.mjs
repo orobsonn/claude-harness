@@ -181,9 +181,9 @@ export function buildRoutingFromSlots(slots) {
       };
     }
     const hands = slots?.hands ?? {
-      low: "ollama-cloud/gemma4:31b",
-      medium: "ollama-cloud/glm-5.2",
-      high: "ollama-cloud/kimi-k2.7-code",
+      low: "openai/gpt-5.6-luna",
+      medium: "openai/gpt-5.6-luna",
+      high: "openai/gpt-5.6-terra",
     };
     for (const t of ["low", "medium", "high"]) {
       if (typeof hands[t] !== "string" || !hands[t].includes("/")) {
@@ -242,7 +242,7 @@ export function buildRoutingFromSlots(slots) {
 
 /**
  * @description Single source of truth for the shipped default routing (the three-layer
- * OpenAI-eyes architecture: terra produces, sol verifies, luna supports; Ollama hands).
+ * OpenAI architecture: terra produces, sol verifies, luna supports and handles low/medium hands).
  * The committed `harness.routing.json` must stay deep-equal to `withCapabilitiesForModels`
  * of this constant — enforced by a drift-guard test. Presets DERIVE from here so the
  * default preset can never re-introduce a stale layout that overwrites the template.
@@ -259,16 +259,16 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
     security: { model: "openai/gpt-5.6-sol" },
     executor: {
       tiers: {
-        low: { model: "ollama-cloud/gemma4:31b" },
-        medium: { model: "ollama-cloud/glm-5.2" },
-        high: { model: "ollama-cloud/kimi-k2.7-code" },
+        low: { model: "openai/gpt-5.6-luna" },
+        medium: { model: "openai/gpt-5.6-luna" },
+        high: { model: "openai/gpt-5.6-terra" },
       },
     },
     sniper: {
       tiers: {
-        low: { model: "ollama-cloud/gemma4:31b" },
-        medium: { model: "ollama-cloud/glm-5.2" },
-        high: { model: "ollama-cloud/kimi-k2.7-code" },
+        low: { model: "openai/gpt-5.6-luna" },
+        medium: { model: "openai/gpt-5.6-luna" },
+        high: { model: "openai/gpt-5.6-terra" },
       },
     },
     "test-author": { model: "openai/gpt-5.6-sol" },
@@ -340,7 +340,7 @@ export function listPresets() {
   return Object.freeze([
     {
       id: "openai-ollama-default",
-      label_pt: "Padrão — olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama",
+      label_pt: "Padrão — olhos OpenAI (terra produz · sol verifica · luna suporta) + mãos Luna → Terra",
       routing: openai,
     },
     {
@@ -437,7 +437,7 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
     `| harvester / shipper | \`${roles.harvester?.model}\` |`,
     "",
     `**Single evaluator** on plan-reviewer and adversary. ${secondEyeLine}`,
-    "Default hands use the Ollama Cloud ladder. Reconfigure via skill `oc-configuring-model-routing`.",
+    "Default hands use the OpenAI Luna → Terra ladder. Reconfigure via skill `oc-configuring-model-routing`.",
   ].join("\n");
 
   const re =

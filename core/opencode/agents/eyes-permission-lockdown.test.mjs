@@ -261,6 +261,12 @@ test("lt-no-agent-bash-override-drift", () => {
   }
 })
 
+test("executor hands explicitly deny Bash so frozen oracles cannot be rewritten through shell", () => {
+  for (const name of ["executor-low.md", "executor-medium.md", "executor-high.md"]) {
+    assert.match(readAgent(name), /permission:\n(?:[^\n]*\n)*?\s+bash:\s*deny\b/, name)
+  }
+})
+
 /**
  * @description Whether a `config.agent.<name>.permission.bash` value (already JSON-parsed — a
  * string, an object, or absent) would shadow the global bash denylist: the scalar `"allow"`, or an

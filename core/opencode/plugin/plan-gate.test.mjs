@@ -291,6 +291,27 @@ test("bound-plan prompt injection is idempotent across duplicate hook instances 
   })
 })
 
+test("bound-plan gate replaces one terminal same-SHA partial block with canonical bytes", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath } = seedUsableBoundProject(root)
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const sha = state.planner_plan_binding.snapshot_hash
+    const hooks = await createPlanGateHooks(root)
+    const output = { args: {
+      description: "implement",
+      subagent_type: "executor-low",
+      prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nImplement.\n\n[HARNESS_BOUND_PLAN sha256=${sha}]\n{"task":{"id":"t0-skeleton"}}\n[/HARNESS_BOUND_PLAN]`,
+    } }
+    await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output))
+    assert.match(output.args.prompt, new RegExp(`\\[HARNESS_BOUND_PLAN sha256=${sha}\\]`))
+    assert.match(output.args.prompt, /"feature_id":"feat-plan-gate"/)
+    assert.doesNotMatch(output.args.prompt, /\{"task":\{"id":"t0-skeleton"\}\}/)
+    const once = output.args.prompt
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output)
+    assert.equal(output.args.prompt, once)
+  })
+})
+
 test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies with mismatch reason [#ac-1.2]", async () => {
   await withTempRoot(async (root) => {
     seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)

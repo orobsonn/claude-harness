@@ -49,16 +49,17 @@ test("resolveOcHandOutcome never promotes non-DONE output from unrelated git evi
   assert.equal(hostHandCapture.resolveOcHandOutcome("NEEDS_CONTEXT", ["src/a.ts"]), "NEEDS_CONTEXT");
   assert.equal(hostHandCapture.resolveOcHandOutcome("DONE", []), "DONE");
   assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", []), "BLOCKED");
+  assert.equal(hostHandCapture.resolveOcHandOutcome(null, [], "Maximum steps reached"), "CAPACITY_EXHAUSTED");
 });
 
-function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claimedAt = "2026-08-01T00:00:00.000Z", worktreeBaseline }) {
+function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claimedAt = "2026-08-01T00:00:00.000Z", worktreeBaseline, frozenPaths = [] }) {
   const directory = path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records");
   fs.mkdirSync(directory, { recursive: true });
   const filename = `${crypto.createHash("sha256").update(callId).digest("hex")}.json`;
   fs.writeFileSync(path.join(directory, filename), JSON.stringify({
     parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
     feature_id: featureId, task_id: taskId, role, scope_paths: ["src/a.ts"],
-    allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: claimedAt,
+    allowed_writes: [], frozen_paths: frozenPaths, snapshot_hash: "a".repeat(64), claimed_at: claimedAt,
     ...(worktreeBaseline ? { worktree_baseline: worktreeBaseline } : {}),
   }));
 }
@@ -267,6 +268,25 @@ test("DONE_WITH_CONCERNS records completion but never stamps hand_finished", () 
     seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "concerns" });
     const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "concerns", outcome: "DONE_WITH_CONCERNS", touchedPaths: [], freezeCommitSha: null });
     assert.equal(result.recorded, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a frozen-path mutation downgrades a claimed DONE hand and never stamps completion", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-frozen-"));
+  try {
+    const sessionId = "ses_frozen";
+    const featureId = "feat-frozen";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "frozen", frozenPaths: ["tests/oracle.test.mjs"] });
+    const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "frozen", outcome: "DONE", touchedPaths: ["tests/oracle.test.mjs"], freezeCommitSha: "done" });
+    assert.equal(result.recorded, true);
+    const record = JSON.parse(fs.readFileSync(path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`), "utf8"));
+    assert.equal(record.outcome, "BLOCKED");
+    assert.deepEqual(record.frozenViolations, ["tests/oracle.test.mjs"]);
     assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

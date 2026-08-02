@@ -225,7 +225,7 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 1. Roda no `harness-config` (interativo) — o comando troca o agent da sessão.  
 2. Mostra o mapa atual (quem é olho / mão).  
 3. Presets **dual-safe** (dois providers):
-   - `openai-ollama-default` — default shippado  
+   - `openai-ollama-default` — default shippado (mãos Luna → Terra)
    - `xai-ollama-dual` — olhos Grok + second eye opt-in/hands Ollama  
 4. Aplica em **todos** os pontos:  
    `harness.routing.json` · frontmatter de **todos** os agents · `AGENTS.md` §8 · `opencode.json`  

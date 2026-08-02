@@ -12,6 +12,11 @@ const NUDGE_CONTEXT =
   "If the single re-prompt still yields no report, record the task as UNRESOLVED " +
   "and do NOT loop and do NOT re-dispatch.";
 
+const CAPACITY_CONTEXT =
+  "Provider capacity stop: this executor Task reached its step limit without an explicit hand verdict. " +
+  "Preserve the in-scope diff and immediately consume the one available executor tier escalation; " +
+  "do not ask the operator to restart the same hand and do not classify this as BLOCKED.";
+
 /**
  * @param {unknown} v
  * @returns {boolean}
@@ -52,6 +57,11 @@ export function decide(payload, env, deps) {
       tn.endsWith(".agent");
     if (!isTaskFamily) {
       return { action: "none" };
+    }
+    const handRole = typeof p.tool_input.subagent_type === "string" ? p.tool_input.subagent_type : "";
+    const capacityText = [p.tool_response, p.tool_output].filter((value) => typeof value === "string").join("\n");
+    if (/^(?:executor|sniper)-(?:low|medium|high)$/.test(handRole) && /\bmaximum steps reached\b/i.test(capacityText)) {
+      return { action: "inject", context: CAPACITY_CONTEXT };
     }
     const idleResp = isIdle(p.tool_response);
     const idleOut = isIdle(p.tool_output);

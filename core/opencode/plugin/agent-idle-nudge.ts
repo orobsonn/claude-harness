@@ -13,11 +13,12 @@ async function createAgentIdleNudgeHooks(
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { decide } = await import("./lib/agent-idle-nudge.mjs");
   const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
+  const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
         if (!isTaskTool(input?.tool)) return;
-        const toolInput = input?.tool_input ?? {};
+        const toolInput = resolveHookArgs(input, output) ?? input?.tool_input ?? {};
         if (typeof toolInput !== "object" || toolInput === null || Array.isArray(toolInput)) return;
 
         // presence check only — hasOwn on input

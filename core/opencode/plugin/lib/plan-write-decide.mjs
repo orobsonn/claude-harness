@@ -364,6 +364,17 @@ function decideScopeRail(filePath, opts) {
     ? allowedWritesRaw.filter((s) => typeof s === "string" && s.length > 0)
     : [];
 
+  const frozenPathsRaw = adObj.frozen_paths;
+  const frozenPaths = Array.isArray(frozenPathsRaw)
+    ? frozenPathsRaw.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  if ((isExecutorRole(actingRole) || isSniperRole(actingRole)) && frozenPaths.some((s) => scopeContains(filePath, s))) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: ${isSniperRole(actingRole) ? "sniper" : "executor"} hand write to '${filePath}' targets a frozen acceptance oracle.`,
+    };
+  }
+
   const inScope = scopePaths.some((s) => scopeContains(filePath, s));
   const inAllowed = allowedWrites.some((s) => scopeContains(filePath, s));
   if (inScope || inAllowed) return null;

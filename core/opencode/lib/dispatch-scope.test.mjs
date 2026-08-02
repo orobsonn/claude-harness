@@ -108,6 +108,7 @@ test("fix-mode authority creates the same exact call record without inventing a 
       role: "sniper-high",
       scope_paths: ["src/a.ts", "src/b.ts"],
       allowed_writes: [],
+      frozen_paths: [],
       snapshot_hash: claim.claim.snapshot_hash,
       claimed_at: "1970-01-01T00:00:01.000Z",
     });
@@ -272,7 +273,7 @@ test("claim stores the exact required record outside shared gate-state", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(recordPath(f, "exact-call"), "utf8")), {
       parent_session_id: f.sessionId, dispatch_call_id: "exact-call", child_session_id: null,
       feature_id: "feat-scope", task_id: "task-1", role: "executor-high",
-      scope_paths: ["src/a.ts"], allowed_writes: [], snapshot_hash: claim.claim.snapshot_hash,
+      scope_paths: ["src/a.ts"], allowed_writes: [], frozen_paths: ["tests/a.test.mjs"], snapshot_hash: claim.claim.snapshot_hash,
       claimed_at: "1970-01-01T00:00:01.000Z",
     });
     const state = JSON.parse(fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "gate-state.json"), "utf8"));
@@ -567,4 +568,22 @@ test("dispatch records reject a symlinked state root and canonicalize a root ali
     fs.rmSync(external, { recursive: true, force: true });
     f.close();
   }
+});
+
+test("canonical hand records derive frozen paths from the bound plan and narrow test-author writes", () => {
+  const f = fixture([{
+    id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/", "tests/"], criterion_refs: ["#ac-1"],
+    locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", fixture_paths: ["tests/fixtures/a.json"], assertion: "a" }],
+  }]);
+  try {
+    const executor = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "executor-frozen", role: "executor-low", taskId: "task-1" });
+    assert.equal(executor.ok, true, executor.reason);
+    assert.deepEqual(executor.claim.frozen_paths, ["tests/a.test.mjs", "tests/fixtures/a.json"]);
+
+    const testAuthor = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "test-author-frozen", role: "test-author", taskId: "task-1" });
+    assert.equal(testAuthor.ok, true, testAuthor.reason);
+    assert.deepEqual(testAuthor.claim.scope_paths, ["tests/a.test.mjs", "tests/fixtures/a.json"]);
+    assert.deepEqual(testAuthor.claim.allowed_writes, []);
+    assert.deepEqual(testAuthor.claim.frozen_paths, []);
+  } finally { f.close(); }
 });

@@ -31,13 +31,22 @@ For LIGHT/FULL, the next step is the `oc-brainstorming` skill (with HEADLESS bra
 Detect the mode **first**; it changes whether you may ask questions or wait for a human.
 
 - **INTERACTIVE (local):** an operator is present. Clarifying questions and the human veto (Step 4) are available.
+- **Autonomy directive — AUTONOMOUS (local):** the operator is present but explicitly says to proceed autonomously — for example
+  "sem parar", "sem me perguntar", or "siga autonomamente". Record
+  `autonomy_directive: enabled` in the feature's runtime spec/decision ledger at the first permitted
+  write, and keep it for the whole feature/session. Do not ask about engineering. The **only** permitted
+  question is an unresolved choice that changes the observable product behavior or contract. This is not
+  HEADLESS: communicate progress normally, but do not wait for a reply.
 - **HEADLESS:** no operator is reachable. Active when **any** of:
   - the trigger prompt says to run **autonomously** / VPS cron / "without asking questions" (the cron dispatcher always prepends this fixed prefix)
   - env `$HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS mid-run outbox)
 
   `$HARNESS_OC_DATA_HOME` (OC isolated data home) is **not** a headless signal on its own — a manually-started operator session on the VPS inherits it from the shell. A real autonomous run is always caught by the fixed cron prompt prefix and/or `$HARNESS_OBSERVABILITY_RUN_PATH`, so a live operator on the VPS (SSH/TUI, no autonomous prompt) is correctly **interactive**.
 
-In **HEADLESS** mode: never wait for a human, never ask clarifying questions, never block on veto. Steps 2 and 4 have explicit headless branches.
+In **AUTONOMOUS** or **HEADLESS** mode: never wait for a human, never ask clarifying questions about
+engineering, and never block on veto. If the issue/spec leaves an observable product choice unresolved,
+ask it in AUTONOMOUS or record it for asynchronous resolution in HEADLESS. Steps 2 and 4 have explicit
+autonomous/headless branches.
 
 ---
 
@@ -85,6 +94,11 @@ Does the request require writing, changing, or deleting code or configuration?
 ### Step 2 — Classify QUICK / LIGHT / FULL
 
 **INTERACTIVE:** classify only once you have enough clarity. **Ask clarifying questions until ambiguity is gone — do not guess.**
+
+**AUTONOMOUS:** classify deterministically from the trigger plus investigation. Choose the smallest
+reversible engineering path that preserves the same observable contract; decomposition, rails, tests,
+providers, configuration, and infrastructure are engineering, not questions. Ask only if the ambiguity
+changes what the product does for a user.
 
 Useful questions (ask only what is still unclear):
 - "Tem mais de um arquivo ou módulo envolvido?"

@@ -38,6 +38,22 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
   }
 }
 
+/** @description Replace only one exact terminal bound-plan block with canonical binding bytes. */
+function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, serializedPlan: string): { ok: true; prompt: string } | { ok: false } {
+  const planBlock = `[HARNESS_BOUND_PLAN sha256=${snapshotHash}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
+  const hasReservedToken = existingPrompt.includes("[HARNESS_BOUND_PLAN") || existingPrompt.includes("[/HARNESS_BOUND_PLAN]")
+  if (!hasReservedToken) return { ok: true, prompt: `${existingPrompt}\n\n${planBlock}`.trim() }
+  const opens = [...existingPrompt.matchAll(/(?:^|\n)\[HARNESS_BOUND_PLAN sha256=([0-9a-f]{64})\](?=\n)/g)]
+  const closes = [...existingPrompt.matchAll(/(?:^|\n)\[\/HARNESS_BOUND_PLAN\](?=$|\n)/g)]
+  if (opens.length !== 1 || closes.length !== 1) return { ok: false }
+  const open = opens[0]
+  const start = (open.index ?? -1) + (open[0].startsWith("\n") ? 1 : 0)
+  const close = closes[0]
+  const closeStart = (close.index ?? -1) + (close[0].startsWith("\n") ? 1 : 0)
+  if (start < 0 || closeStart < start || closeStart + "[/HARNESS_BOUND_PLAN]".length !== existingPrompt.length || open[1] !== snapshotHash) return { ok: false }
+  return { ok: true, prompt: `${existingPrompt.slice(0, start)}${planBlock}` }
+}
+
 /**
  * @description Builds plan-gate hooks (async load of pure plan-decide + identity modules).
  */
@@ -160,19 +176,11 @@ async function createPlanGateHooks(
               if (toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)) {
                 const args = toolArgs as Record<string, unknown>
                 const existingPrompt = typeof args.prompt === "string" ? args.prompt : ""
-                const serializedPlan = JSON.stringify(artifact.plan)
-                const planBlock = `[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
-                const openCount = existingPrompt.split("[HARNESS_BOUND_PLAN").length - 1
-                const closeCount = existingPrompt.split("[/HARNESS_BOUND_PLAN]").length - 1
-                if (openCount === 0 && closeCount === 0) {
-                  args.prompt = `${existingPrompt}\n\n${planBlock}`.trim()
-                } else if (
-                  openCount !== 1 ||
-                  closeCount !== 1 ||
-                  !existingPrompt.endsWith(planBlock)
-                ) {
+                const normalized = normalizeBoundPlanPrompt(existingPrompt, String(binding.snapshot_hash), JSON.stringify(artifact.plan))
+                if (!normalized.ok) {
                   throw new Error(`${PREFIX} denied: conflicting bound-plan prompt marker`)
                 }
+                args.prompt = normalized.prompt
               }
             }
           }

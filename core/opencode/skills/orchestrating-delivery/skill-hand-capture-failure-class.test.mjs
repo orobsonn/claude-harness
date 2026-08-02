@@ -1,8 +1,8 @@
 /**
  * @description A `mark` `ok:false` on a hand-record that is not DONE must be split by CAUSE in the OC
- * orchestrating-delivery skill: a transient dispatch failure is an explicit orchestrator judgment, a hand
+ * orchestrating-delivery skill: a transient dispatch failure enters bounded automatic recovery; a hand
  * that ran and refused (`BLOCKED` / `NEEDS_CONTEXT`) or was denied before it ran (`CONFIG_ERROR`)
- * goes straight to CRITICAL EXCEPTION with no retry, and a `DONE_WITH_CONCERNS` record — non-DONE
+ * has its concrete rail repaired without weakening a gate; and a `DONE_WITH_CONCERNS` record — non-DONE
  * with nothing having failed — is neither.
  *
  * After #585 the Post-hand capture path is collapsed to one cause-split (no Axis vocabulary), but
@@ -110,40 +110,38 @@ test("#ac-1.1 — step 2's own line carries no unconditional retry order", () =>
   );
 });
 
-test("#ac-1.1 — every bullet naming the refusal class routes to CRITICAL EXCEPTION, no retry", () => {
+test("#autonomy — every refusal class repairs through the bounded rail without asking the operator", () => {
   assert.ok(
     refusalBullets.length >= 1,
     "step 2 must carry a branch naming all three non-delivering read-backs.",
   );
 
   for (const bullet of refusalBullets) {
-    assert.match(bullet, /CRITICAL EXCEPTION/, "refusal class must state its outlet.");
+    assert.match(bullet, /repair|bounded ladder/i, "refusal class must state its engineering repair outlet.");
     assert.match(
       bullet,
-      /\b(?:no retry|not\b[^.]{0,40}\bre-?dispatch|never\b[^.]{0,40}\bre-?dispatch|do not retry)/i,
-      "the refusal class must have the re-dispatch forbidden in words.",
+      /without weakening rails|product behavior/i,
+      "the refusal class must preserve the rail and only ask for a genuine product choice.",
     );
   }
 });
 
-test("#ac-1.1 — the refusal branch agrees with the two rules that already govern this class", () => {
-  const branch = refusalBullets.find((bullet) => /Per-task steps/.test(bullet));
+test("#autonomy — the refusal branch is read from the Task result and remains inside the engineering rail", () => {
+  const branch = refusalBullets[0];
   assert.ok(
     branch,
-    "the refusal branch must point at § Per-task steps step b by SECTION NAME.",
+    "the refusal branch must exist.",
   );
-  assert.match(
-    branch,
-    /Hand CONFIG_ERROR/,
-    "the refusal branch must point at the § Escalation ladder rule 'Hand CONFIG_ERROR'.",
-  );
+  assert.match(branch, /Task read-back/i, "the refusal branch must name the Task read-back.");
+  assert.match(branch, /CONFIG_ERROR/, "the refusal branch must include the pre-dispatch denial.");
   assert.doesNotMatch(branch, /:\d{2,}/, "cross-references must be by section name, never line number.");
 });
 
-test("#ac-1.1 — the transient branch has no global retry budget", () => {
+test("#autonomy — the transient branch has bounded automatic recovery, not a global retry budget", () => {
   const branch = stepTwoBullets.find((bullet) => /transient/i.test(bullet));
   assert.ok(branch, "step 2 must keep a branch for a genuinely transient failure.");
-  assert.match(branch, /orchestrator|judgment/i, "transient handling must require explicit judgment.");
+  assert.match(branch, /automatic|bounded/i, "transient handling must be automatic and bounded.");
+  assert.match(branch, /do not ask the operator/i, "provider handling must not become a human question.");
   assert.doesNotMatch(branch, /K=3|same-agent|counter|retry status/i, "transient handling must not grant global retry authority.");
   assert.ok(!REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)), "the transient branch must not claim the refusal verdicts.");
 });
@@ -193,8 +191,8 @@ test("#ac-1.1 — step 2 says how to tell the causes apart, including the pre-di
   );
 });
 
-test("#ac-1.1 — the refusal is read off the Task read-back, not off the record", () => {
-  const branch = refusalBullets.find((bullet) => /Per-task steps/.test(bullet));
+test("#autonomy — the refusal is read off the Task read-back, not off the record", () => {
+  const branch = refusalBullets[0];
   assert.match(branch, /read-?back/i, "refusal branch must name the Task read-back.");
   assert.match(
     branch,
