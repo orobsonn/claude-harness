@@ -130,7 +130,9 @@ function validDispatchRecord(projectRoot, record) {
   if (record.child_session_id !== null && !safeSegment(record.child_session_id)) return false;
   const claimedAt = Date.parse(record.claimed_at);
   if (!Number.isFinite(claimedAt) || new Date(claimedAt).toISOString() !== record.claimed_at) return false;
-  return canonicalStringList(projectRoot, record.scope_paths, true) && canonicalStringList(projectRoot, record.allowed_writes, false);
+  return canonicalStringList(projectRoot, record.scope_paths, true) &&
+    canonicalStringList(projectRoot, record.allowed_writes, false) &&
+    (record.frozen_paths === undefined || canonicalStringList(projectRoot, record.frozen_paths, false));
 }
 
 function mutateExactRecord(recordPath, fn) {
@@ -199,7 +201,20 @@ export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) 
     if (!normalized.ok) return normalized;
     if (!allowedWrites.includes(normalized.path)) allowedWrites.push(normalized.path);
   }
-  return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, snapshotHash: bound.snapshotHash };
+  const frozenPaths = [];
+  for (const lockedTest of Array.isArray(bound.task.locked_tests) ? bound.task.locked_tests : []) {
+    const candidates = [lockedTest?.path, ...(Array.isArray(lockedTest?.fixture_paths) ? lockedTest.fixture_paths : [])];
+    for (const item of candidates) {
+      const normalized = normalizeProjectPath(projectRoot, item);
+      if (!normalized.ok) return normalized;
+      if (!frozenPaths.includes(normalized.path)) frozenPaths.push(normalized.path);
+    }
+  }
+  if (isTestAuthorRole(role)) {
+    if (frozenPaths.length === 0) return { ok: false, reason: "test-author requires canonical locked test paths" };
+    return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths: frozenPaths, allowedWrites: [], frozenPaths: [], snapshotHash: bound.snapshotHash };
+  }
+  return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, frozenPaths, snapshotHash: bound.snapshotHash };
 }
 
 function loadCanonicalState(projectRoot, sessionId) {
@@ -215,7 +230,8 @@ function sameDispatch(left, right) {
     left.dispatch_call_id === right.dispatch_call_id &&
     left.feature_id === right.feature_id && left.task_id === right.task_id && left.role === right.role &&
     left.snapshot_hash === right.snapshot_hash && JSON.stringify(left.scope_paths) === JSON.stringify(right.scope_paths) &&
-    JSON.stringify(left.allowed_writes) === JSON.stringify(right.allowed_writes);
+    JSON.stringify(left.allowed_writes) === JSON.stringify(right.allowed_writes) &&
+    JSON.stringify(left.frozen_paths ?? []) === JSON.stringify(right.frozen_paths ?? []);
 }
 
 function claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}, resolveCanonical) {
@@ -239,6 +255,7 @@ function claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, n
       parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
       feature_id: canonical.featureId, task_id: canonical.taskId, role,
       scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
+      frozen_paths: canonical.frozenPaths ?? [],
       snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
       ...(worktreeBaseline?.entries?.length ? { worktree_baseline: worktreeBaseline } : {}),
     };

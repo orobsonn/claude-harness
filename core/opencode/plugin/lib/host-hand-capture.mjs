@@ -6,8 +6,9 @@ import { gateStatePath, handRecordPath } from "../../../shared/lib/path-helpers.
 import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../lib/gate-state.mjs";
 import { readDispatchRecord, removeDispatchRecord } from "../../lib/dispatch-scope.mjs";
-import { parseHandStatusFromOutput, writeHandRecord } from "../../lib/hand-records.mjs";
+import { isCapacityExhaustedOutput, parseHandStatusFromOutput, writeHandRecord } from "../../lib/hand-records.mjs";
 import { listGitTouchedPaths, pathsChangedSinceBaseline } from "../../lib/worktree-baseline.mjs";
+import { checkFrozen } from "../../../shared/lib/capture-oracle.mjs";
 
 function isDone(outcome) {
   return outcome === "DONE";
@@ -71,11 +72,14 @@ export function recordHandFinished(input) {
         return gateState;
       }
       const now = new Date().toISOString();
+      const scope = scopeViolations(touchedPaths, producer.record);
+      const frozen = checkFrozen(touchedPaths, Array.isArray(producer.record.frozen_paths) ? producer.record.frozen_paths : []);
+      const effectiveOutcome = scope.length > 0 || frozen.length > 0 ? "BLOCKED" : outcome;
       const record = {
         featureId, taskId, sessionId, producerCallId, producerClaimedAt: producer.record.claimed_at,
         freezeCommitSha: typeof freezeCommitSha === "string" && freezeCommitSha ? freezeCommitSha : null,
-        outcome, touchedPaths: Array.isArray(touchedPaths) ? touchedPaths.filter((item) => typeof item === "string") : [],
-        scopeViolations: scopeViolations(touchedPaths, producer.record), frozenViolations: [], agent: role,
+        outcome: effectiveOutcome, touchedPaths: Array.isArray(touchedPaths) ? touchedPaths.filter((item) => typeof item === "string") : [],
+        scopeViolations: scope, frozenViolations: frozen, agent: role,
         startedAt: existing?.startedAt ?? now, finishedAt: now, writtenBy: "host-hand-finished",
       };
       const written = writeHandRecord({ roots: { projectRoot, runtime: "opencode", sessionId, featureId }, taskId, record });
@@ -87,7 +91,7 @@ export function recordHandFinished(input) {
         supersededProducerCallId = existing.producerCallId;
       }
       const handFinished = removeTaskEntry(gateState.hand_finished, bare);
-      if (isDone(outcome)) handFinished.push(bare);
+      if (isDone(effectiveOutcome)) handFinished.push(bare);
       outcomeResult = { ok: true, recorded: true };
       return { ...gateState, hand_finished: handFinished };
     });
@@ -132,9 +136,10 @@ export function gitTouchedPaths(cwd) {
 }
 
 /** @description Preserve only the Task's explicit terminal fact; git evidence never promotes it. */
-export function resolveOcHandOutcome(parsedStatus, _touched) {
+export function resolveOcHandOutcome(parsedStatus, _touched, outputText = "") {
   if (parsedStatus === "DONE" || parsedStatus === "DONE_WITH_CONCERNS") return parsedStatus;
   if (parsedStatus === "NEEDS_CONTEXT") return "NEEDS_CONTEXT";
+  if (parsedStatus === null && isCapacityExhaustedOutput(outputText)) return "CAPACITY_EXHAUSTED";
   return "BLOCKED";
 }
 
@@ -144,7 +149,7 @@ export function recordTaskCompletion(input) {
   if (input?.background === true && /<task\b[^>]*\bstate=["']running["']/i.test(outputText)) return { ok: true, terminal: false, recorded: false, reason: "background task still running" };
   const producer = readDispatchRecord(input?.projectRoot, { parentSessionId: input?.sessionId, callId: input?.producerCallId });
   const touched = pathsChangedSinceBaseline(input?.projectRoot, producer.ok ? producer.record.worktree_baseline : null);
-  const outcome = resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched);
+  const outcome = resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched, outputText);
   const recorded = recordHandFinished({
     projectRoot: input?.projectRoot,
     sessionId: input?.sessionId,

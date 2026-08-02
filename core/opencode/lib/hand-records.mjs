@@ -25,6 +25,15 @@ export function parseHandStatusFromOutput(text) {
   return last;
 }
 
+/** @description Detect a provider capacity stop only when the hand did not provide its own verdict. */
+export function isCapacityExhaustedOutput(text) {
+  if (typeof text !== "string") return false;
+  HAND_STATUS_RE.lastIndex = 0;
+  const hasExplicitStatus = HAND_STATUS_RE.test(text);
+  HAND_STATUS_RE.lastIndex = 0;
+  return !hasExplicitStatus && /\bmaximum steps reached\b/i.test(text);
+}
+
 const OC_HAND_RECORD_WRITERS = new Set(["host-hand-finished", "run-hand-adapter"]);
 
 /**

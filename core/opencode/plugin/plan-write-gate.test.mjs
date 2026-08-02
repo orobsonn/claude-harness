@@ -391,6 +391,20 @@ test("lt-scope-in-allow: same, write src/a.ts → allow true", () => {
   assert.equal(r.allow, true);
 });
 
+test("frozen oracle denies executor and sniper before their broad scope allows the write", () => {
+  for (const role of ["executor-high", "sniper-medium"]) {
+    const record = {
+      role: role.startsWith("sniper") ? "sniper" : "executor", feature_id: "feat", task_id: "t1",
+      scope_paths: ["src/"], allowed_writes: [], frozen_paths: ["src/oracle.test.mjs", "src/fixtures/oracle.json"],
+    };
+    const result = decide({ tool_input: { file_path: "src/oracle.test.mjs" } }, {
+      dispatchRecord: record, actingRole: role, isSubagent: true,
+    });
+    assert.equal(result.allow, false, role);
+    assert.match(result.reason ?? "", /frozen/i);
+  }
+});
+
 test("lt-scope-file-not-prefix: scope ['src/a.ts'], write src/a.ts/evil.ts → allow false", () => {
   const payload = { tool_input: { file_path: "src/a.ts/evil.ts" } };
   const gateState = {

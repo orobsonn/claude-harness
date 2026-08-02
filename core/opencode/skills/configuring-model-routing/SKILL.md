@@ -102,7 +102,7 @@ Presets válidos (`listPresets()`):
 
 | id | Label pt-br |
 |---|---|
-| `openai-ollama-default` | Olhos OpenAI (terra produz · sol verifica · luna suporta) + hands Ollama (default shippado) |
+| `openai-ollama-default` | Olhos OpenAI (terra produz · sol verifica · luna suporta) + mãos Luna → Terra (default shippado) |
 | `xai-ollama-dual` | Olhos Grok (xAI) + second eye/hands Ollama |
 
 O preset `openai-ollama-default` **deriva de `CANONICAL_DEFAULT_ROUTING`** (fonte única) — é deep-equal ao `harness.routing.json` shippado por drift-guard test. Aplicá-lo nunca reintroduz layout stale.
@@ -113,7 +113,7 @@ Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não
 1. `primaryEye` — build, planner, plan-reviewer, adversary, test-author (default)  
 2. `secondaryEye` — optional `secondEyeModel` on review roles (**outro provider**, fail-open)  
 3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
-4. `hands` low/medium/high (default Ollama ladder)  
+4. `hands` low/medium/high (default Luna → Terra ladder)
 5. `testAuthor`, `supportsReasoningEffort` (opcionais)
 6. Auth: “você já autenticou provider X no OpenCode?”
 

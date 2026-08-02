@@ -102,7 +102,9 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 
 **Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never swap models.
 
-**Dispatch failures:** report provider or tool failures in product language. Any decision to continue, change scope, or stop is an explicit operator/orchestrator decision; OpenCode keeps no retry budget for it.
+**Dispatch failures:** follow `oc-orchestrating-delivery`'s bounded automatic recovery. When the operator
+has given its autonomy directive, never ask about provider/tool failure, scope decomposition, or rail
+repair; only surface an unresolved decision that changes product behavior or contract.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 

@@ -134,14 +134,14 @@ Any match in plan `scope_paths` forces FULL mode.
 | adversary | `openai/gpt-5.6-sol` |
 | compliance | `openai/gpt-5.6-terra` |
 | security | `openai/gpt-5.6-sol` |
-| executor/sniper low | `ollama-cloud/gemma4:31b` |
-| executor/sniper medium | `ollama-cloud/glm-5.2` |
-| executor/sniper high | `ollama-cloud/kimi-k2.7-code` |
+| executor/sniper low | `openai/gpt-5.6-luna` |
+| executor/sniper medium | `openai/gpt-5.6-luna` |
+| executor/sniper high | `openai/gpt-5.6-terra` |
 | test-author | `openai/gpt-5.6-sol` |
 | harvester / shipper | `openai/gpt-5.6-luna` |
 
 **Single evaluator** on plan-reviewer and adversary. Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.
-Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuring-model-routing` command.
+Default hands use the OpenAI Luna → Terra ladder. Reconfigure by typing the `/configuring-model-routing` command.
 
 
 ---

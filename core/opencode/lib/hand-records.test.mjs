@@ -9,6 +9,7 @@ import {
   listHandRecordsForFeature,
   writeHandRecord,
   parseHandStatusFromOutput,
+  isCapacityExhaustedOutput,
 } from "./hand-records.mjs";
 import { handRecordPath } from "../../shared/lib/path-helpers.mjs";
 
@@ -147,6 +148,12 @@ test("parseHandStatusFromOutput: DONE / DONE_WITH_CONCERNS / missing / last wins
     "DONE_WITH_CONCERNS",
   );
   assert.equal(parseHandStatusFromOutput("status: DONE"), null);
+});
+
+test("isCapacityExhaustedOutput recognizes a provider step limit only without an explicit hand verdict", () => {
+  assert.equal(isCapacityExhaustedOutput("Maximum steps reached"), true);
+  assert.equal(isCapacityExhaustedOutput("Status: BLOCKED\nMaximum steps reached"), false);
+  assert.equal(isCapacityExhaustedOutput("provider returned no terminal result"), false);
 });
 
 test("DONE record with path/internal identity mismatch is surfaced, never hidden", async () => {

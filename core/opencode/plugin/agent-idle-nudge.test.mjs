@@ -69,6 +69,10 @@ test(
         !("agent_idle_nudge" in (outputAgentId.metadata || {})),
         "agentId present must not inject agent_idle_nudge",
       );
+
+      const capacityCarrier = { output: "Maximum steps reached", metadata: {}, args: { subagent_type: "executor-medium" } };
+      await hooks["tool.execute.after"]({ tool: "task" }, capacityCarrier);
+      assert.match(String(capacityCarrier.metadata.agent_idle_nudge ?? ""), /capacity|tier|escalat/i);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
     }

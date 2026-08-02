@@ -5,18 +5,28 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
-## [0.53.0](https://github.com/orobsonn/claude-harness/compare/v0.52.0...v0.53.0) (2026-08-02)
+## [0.53.1](https://github.com/orobsonn/claude-harness/compare/v0.53.0...v0.53.1) (2026-08-02)
 
+### Corrigido
+
+- **oc:** normaliza marcador parcial do plano no dispatch nativo, sem descolar o binding canônico.
+- **oc:** bloqueia executor/sniper de alterar teste congelado e registra violação real na captura da mão.
+- **oc:** classifica esgotamento de passos como capacidade e escala a mão automaticamente.
+- **oc:** torna sessão local explicitamente autônoma: só pergunta por decisão que muda o produto; rails, testes, infraestrutura e recuperações seguem com gates.
+
+### Alterado
+
+- **oc:** rota padrão das mãos para OpenAI — Luna nos tiers baixo/médio e Terra no alto.
+
+## [0.53.0](https://github.com/orobsonn/claude-harness/compare/v0.52.0...v0.53.0) (2026-08-02)
 
 ### Features
 
 * **oc:** adjudica segundo olho com policy B ([#606](https://github.com/orobsonn/claude-harness/issues/606)) ([faded65](https://github.com/orobsonn/claude-harness/commit/faded65759fbab932a4362d63745c5cb4d1ea365))
 
-
 ### Bug Fixes
 
 * **oc:** remove teto de sessão do planner ([#602](https://github.com/orobsonn/claude-harness/issues/602)) ([#604](https://github.com/orobsonn/claude-harness/issues/604)) ([2644d69](https://github.com/orobsonn/claude-harness/commit/2644d69b3b4968ef0707dc0b865727f00c65f567))
-
 
 ### Refactors
 
