@@ -315,6 +315,82 @@ test("a type-mismatched scalar that matches the manifest's owned value is safely
   assert.deepEqual(result.config.permission.bash, { "*": "ask" });
 });
 
+test("historical edit/read scalar allows upgrade to protected maps across the provenanced fleet", () => {
+  const editLedger = RETIRED_OC_PERMISSION_ENTRIES.find((entry) => entry.path.join(".") === "edit");
+  const readLedger = RETIRED_OC_PERMISSION_ENTRIES.find((entry) => entry.path.join(".") === "read");
+  assert.deepEqual(editLedger, { path: ["edit"], historicalValue: "allow" });
+  assert.deepEqual(readLedger, { path: ["read"], historicalValue: "allow" });
+
+  const newConfig = {
+    permission: {
+      edit: { "*": "allow", ".opencode/plans/.state/**": "deny" },
+      read: { "*": "allow", ".env": "deny" },
+    },
+  };
+  const first = migrateOpencodeConfig({
+    existingConfig: { permission: { edit: "allow", read: "allow" } },
+    newConfig,
+    manifest: { version: 1, harnessVersion: "v0.56.0", owned: {} },
+    newHarnessVersion: "v0.57.0",
+  });
+
+  assert.deepEqual(first.config.permission.edit, newConfig.permission.edit);
+  assert.deepEqual(first.config.permission.read, newConfig.permission.read);
+  assert.equal(
+    resolvePatternMap(first.config.permission.edit, ".opencode/plans/.state/session/gate-state.json"),
+    "deny",
+  );
+  assert.equal(resolvePatternMap(first.config.permission.read, ".env"), "deny");
+  assert.ok(first.report.some((entry) => entry.path.join(".") === "edit" && entry.action === "updated"));
+  assert.ok(first.report.some((entry) => entry.path.join(".") === "read" && entry.action === "updated"));
+
+  const repeated = migrateOpencodeConfig({
+    existingConfig: first.config,
+    newConfig,
+    manifest: first.manifest,
+    newHarnessVersion: "v0.57.0",
+  });
+  assert.deepEqual(repeated.config, first.config);
+  assert.deepEqual(repeated.report, []);
+
+  const stampOnly = migrateOpencodeConfig({
+    existingConfig: { permission: { edit: "allow", read: "allow" } },
+    newConfig,
+    previousHarnessVersionStamp: "v0.40.0",
+    newHarnessVersion: "v0.57.0",
+  });
+  assert.equal(stampOnly.tier, 2);
+  assert.equal(
+    resolvePatternMap(stampOnly.config.permission.edit, ".opencode/plans/.state/session/gate-state.json"),
+    "deny",
+  );
+  assert.equal(resolvePatternMap(stampOnly.config.permission.read, ".env"), "deny");
+});
+
+test("scalar map upgrade requires both harness provenance and the exact historical allow", () => {
+  const newConfig = {
+    permission: {
+      edit: { "*": "allow", ".opencode/plans/.state/**": "deny" },
+      read: { "*": "allow", ".env": "deny" },
+    },
+  };
+
+  const operatorDiverged = migrateOpencodeConfig({
+    existingConfig: { permission: { edit: "deny", read: "ask" } },
+    newConfig,
+    previousHarnessVersionStamp: "v0.56.0",
+  });
+  assert.equal(operatorDiverged.config.permission.edit, "deny");
+  assert.equal(operatorDiverged.config.permission.read, "ask");
+
+  const neverVendored = migrateOpencodeConfig({
+    existingConfig: { permission: { edit: "allow", read: "allow" } },
+    newConfig,
+  });
+  assert.equal(neverVendored.config.permission.edit, "allow");
+  assert.equal(neverVendored.config.permission.read, "allow");
+});
+
 test("isValidOpencodeConfigShape rejects a non-object config or a mis-shaped permission/plugin", () => {
   assert.equal(isValidOpencodeConfigShape({ permission: {}, plugin: [] }), true);
   assert.equal(isValidOpencodeConfigShape(null), false);

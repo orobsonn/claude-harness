@@ -47,6 +47,17 @@ export const RETIRED_OC_PERMISSION_ENTRIES = Object.freeze([
     // last shipped in v0.45.0; replaced by the pinned #v* set in v0.45.1 (#359)
   }),
   Object.freeze({
+    path: Object.freeze(["edit"]),
+    historicalValue: "allow",
+    // Historical OC generations shipped a blanket scalar. Upgrade the exact harness default to
+    // the current pattern map so state-path and secret denies reach already-vendored projects.
+  }),
+  Object.freeze({
+    path: Object.freeze(["read"]),
+    historicalValue: "allow",
+    // Same scalar-to-map transition as edit. Divergent operator values remain custom.
+  }),
+  Object.freeze({
     path: Object.freeze(["bash", "*"]),
     historicalValue: "ask",
     tier2Only: true,
