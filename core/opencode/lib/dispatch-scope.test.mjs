@@ -1,6 +1,7 @@
 /** @description Exact call-keyed dispatch scope records. */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -276,6 +277,44 @@ test("claim stores the exact required record outside shared gate-state", () => {
     });
     const state = JSON.parse(fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "gate-state.json"), "utf8"));
     assert.equal(state.dispatch_records, undefined);
+  } finally { f.close(); }
+});
+
+test("claim records a stable baseline for dirty files that predate the exact hand dispatch", () => {
+  const f = fixture();
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: "ignore" });
+  try {
+    git("init");
+    git("config", "user.email", "harness@example.invalid");
+    git("config", "user.name", "Harness Test");
+    fs.writeFileSync(path.join(f.root, ".gitignore"), ".opencode/plans/.state/\n");
+    fs.writeFileSync(path.join(f.root, "tracked.txt"), "baseline\n");
+    git("add", ".gitignore", "tracked.txt");
+    git("commit", "-m", "baseline");
+    fs.writeFileSync(path.join(f.root, "MEMORY.md"), "vendored before task\n");
+
+    const claim = claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "baseline-call", role: "executor-low", taskId: "task-1" });
+    assert.equal(claim.ok, true, claim.reason);
+    const record = readDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: "baseline-call" });
+    assert.equal(record.ok, true, record.reason);
+    assert.deepEqual(record.record.worktree_baseline?.entries.map((entry) => entry.path), ["MEMORY.md"]);
+    assert.equal(record.record.worktree_baseline?.entries[0]?.fingerprint.kind, "file");
+
+    const before = fs.readFileSync(recordPath(f, "baseline-call"));
+    fs.writeFileSync(path.join(f.root, "MEMORY.md"), "changed after dispatch\n");
+    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "baseline-call", role: "executor-low", taskId: "task-1" }).ok, true);
+    assert.deepEqual(fs.readFileSync(recordPath(f, "baseline-call")), before);
+  } finally { f.close(); }
+});
+
+test("a malformed optional worktree baseline does not invalidate dispatch authority", () => {
+  const f = fixture();
+  try {
+    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "optional-baseline", role: "executor-low", taskId: "task-1" }).ok, true);
+    const file = recordPath(f, "optional-baseline");
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({ ...record, worktree_baseline: { version: 99, entries: [] } }));
+    assert.equal(readDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: "optional-baseline" }).ok, true);
   } finally { f.close(); }
 });
 

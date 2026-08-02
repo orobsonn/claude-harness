@@ -7,6 +7,7 @@ import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../lib/gate-state.mjs";
 import { readDispatchRecord, removeDispatchRecord } from "../../lib/dispatch-scope.mjs";
 import { parseHandStatusFromOutput, writeHandRecord } from "../../lib/hand-records.mjs";
+import { listGitTouchedPaths, pathsChangedSinceBaseline } from "../../lib/worktree-baseline.mjs";
 
 function isDone(outcome) {
   return outcome === "DONE";
@@ -127,16 +128,7 @@ export function isAncestorSha(projectRoot, sha, execFileSyncFn = execFileSync) {
 
 /** @description Best-effort staged, unstaged, and untracked paths in the current Task worktree. */
 export function gitTouchedPaths(cwd) {
-  const paths = new Set();
-  const read = (args) => {
-    try {
-      const output = String(execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }));
-      for (const line of output.split(/\r?\n/)) if (line.trim()) paths.add(line.trim());
-    } catch { /* best-effort evidence */ }
-  };
-  read(["diff", "--name-only", "HEAD"]);
-  read(["ls-files", "--others", "--exclude-standard"]);
-  return [...paths];
+  return listGitTouchedPaths(cwd).paths;
 }
 
 /** @description Preserve only the Task's explicit terminal fact; git evidence never promotes it. */
@@ -150,7 +142,8 @@ export function resolveOcHandOutcome(parsedStatus, _touched) {
 export function recordTaskCompletion(input) {
   const outputText = String(input?.outputText ?? "");
   if (input?.background === true && /<task\b[^>]*\bstate=["']running["']/i.test(outputText)) return { ok: true, terminal: false, recorded: false, reason: "background task still running" };
-  const touched = gitTouchedPaths(input?.projectRoot);
+  const producer = readDispatchRecord(input?.projectRoot, { parentSessionId: input?.sessionId, callId: input?.producerCallId });
+  const touched = pathsChangedSinceBaseline(input?.projectRoot, producer.ok ? producer.record.worktree_baseline : null);
   const outcome = resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched);
   const recorded = recordHandFinished({
     projectRoot: input?.projectRoot,

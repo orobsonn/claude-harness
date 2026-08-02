@@ -51,7 +51,7 @@ test("resolveOcHandOutcome never promotes non-DONE output from unrelated git evi
   assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", []), "BLOCKED");
 });
 
-function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claimedAt = "2026-08-01T00:00:00.000Z" }) {
+function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claimedAt = "2026-08-01T00:00:00.000Z", worktreeBaseline }) {
   const directory = path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records");
   fs.mkdirSync(directory, { recursive: true });
   const filename = `${crypto.createHash("sha256").update(callId).digest("hex")}.json`;
@@ -59,8 +59,65 @@ function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claime
     parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
     feature_id: featureId, task_id: taskId, role, scope_paths: ["src/a.ts"],
     allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: claimedAt,
+    ...(worktreeBaseline ? { worktree_baseline: worktreeBaseline } : {}),
   }));
 }
+
+test("recordTaskCompletion ignores unchanged files that predate this exact dispatch", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-dispatch-baseline-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  try {
+    git("init");
+    git("config", "user.email", "harness@example.invalid");
+    git("config", "user.name", "Harness Test");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "export const value = 1;\n");
+    fs.writeFileSync(path.join(root, ".gitignore"), ".opencode/plans/.state/\n");
+    git("add", "src/a.ts", ".gitignore");
+    git("commit", "-m", "baseline");
+
+    fs.writeFileSync(path.join(root, "MEMORY.md"), "pre-existing harness memory\n");
+    fs.writeFileSync(path.join(root, "kaizen.md"), "pre-existing harness notes\n");
+    const fingerprint = (relativePath) => {
+      const absolute = path.join(root, relativePath);
+      const bytes = fs.readFileSync(absolute);
+      return { kind: "file", mode: fs.lstatSync(absolute).mode & 0o777, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+    };
+    const worktreeBaseline = {
+      version: 1,
+      entries: [
+        { path: "MEMORY.md", fingerprint: fingerprint("MEMORY.md") },
+        { path: "kaizen.md", fingerprint: fingerprint("kaizen.md") },
+      ],
+    };
+
+    const sessionId = "ses_baseline";
+    const featureId = "feat-baseline";
+    const taskId = "task-1";
+    const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "call-baseline", worktreeBaseline });
+
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "export const value = 2;\n");
+    const result = hostHandCapture.recordTaskCompletion({
+      projectRoot: root,
+      sessionId,
+      featureId,
+      taskId,
+      role: "executor-low",
+      producerCallId: "call-baseline",
+      outputText: "## Status: DONE",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.capturePending, true);
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    assert.deepEqual(record.touchedPaths, ["src/a.ts"]);
+    assert.deepEqual(record.scopeViolations, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("recordHandFinished stamps only completion and leaves capture unverified", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-finished-"));

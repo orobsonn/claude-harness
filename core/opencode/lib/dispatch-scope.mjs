@@ -7,6 +7,7 @@ import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { acquireLock, releaseLock } from "./gate-state.mjs";
 import { readBoundPlanSnapshot } from "./planner-artifact.mjs";
+import { snapshotWorktreeBaseline } from "./worktree-baseline.mjs";
 import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 
 function inside(root, candidate) {
@@ -233,11 +234,13 @@ function claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, n
   try {
     const canonical = resolveCanonical(realRoot);
     if (!canonical.ok) return canonical;
+    const worktreeBaseline = snapshotWorktreeBaseline(realRoot);
     const record = {
       parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
       feature_id: canonical.featureId, task_id: canonical.taskId, role,
       scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
       snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
+      ...(worktreeBaseline?.entries?.length ? { worktree_baseline: worktreeBaseline } : {}),
     };
     const resolved = dispatchRecordPath(realRoot, sessionId, callId);
     if (!resolved.ok) return resolved;
