@@ -170,6 +170,15 @@ Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuri
 
 **Marker threat boundary:** marker authority's WeakMap identity and ordering bind only the native `mark` invocation's exact `args` object to session, call, feature, and action, then consume it before mutation. This blocks direct execute, structural clones, replay, concurrent reuse, and runtime-binding mismatch for that invocation. Downstream R10 accepts plain persisted `brainstormed` / `adversary_fired` booleans plus the classified feature match; those values carry no on-disk provenance or OS isolation. Same-user filesystem/Bash writes or a compromised OpenCode host/plugin can forge them. The official path remains the native `mark` tool; direct gate-state edits are forbidden by convention and permission friction, not by a provenance proof. There is no ceremony sidecar, artifact receipt, HMAC, or recovery coordinator.
 
+**Fix-mode authority boundary:** the fleet dispatcher freezes reviewed SHA + exact changed-file scope in
+`HARNESS_FIX_SCOPE_JSON`; the OC host accepts it only for a classified LIGHT/FULL sniper dispatch,
+checks SHA ancestry, and binds it to the exact session/feature/task/call record. Root, directory,
+traversal, duplicate, oversized, malformed, and stale scopes fail closed. This prevents model prose
+from widening the reviewed scope inside the dispatched host. It is not OS isolation: a separate
+same-user OpenCode process can supply its own environment, and a compromised host/plugin can forge
+the envelope. Closing that boundary requires a sandbox or external IPC authority, not another
+marker/state sidecar.
+
 ## 11. Folder law — .opencode/ (OpenCode vendored harness)
 
 - Plans, gate-state, hand-records under `.opencode/plans/` and `.opencode/plans/.state/` are run-ephemeral (deleted at harvest); only execution-plan.json and shared_context.md (pre-delete) live in the feature subdir.

@@ -217,9 +217,9 @@ function sameDispatch(left, right) {
     JSON.stringify(left.allowed_writes) === JSON.stringify(right.allowed_writes);
 }
 
-/** @description Atomically create one immutable canonical scope record for this exact Task call. */
-export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}) {
+function claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}, resolveCanonical) {
   if (![sessionId, callId, role, taskId].every((value) => typeof value === "string" && value)) return { ok: false, reason: "runtime session, call, role, and task required" };
+  if (!safeSegment(sessionId) || !isSafeTaskId(taskId) || !writingHand(role)) return { ok: false, reason: "runtime session, task, or writing role invalid" };
   let realRoot;
   try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
   const lifecycleTarget = canonicalTarget(
@@ -231,10 +231,7 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
   const lifecycle = acquireLock(lifecycleTarget.path, lockOptions);
   if (!lifecycle.ok) return lifecycle;
   try {
-    const loaded = loadCanonicalState(realRoot, sessionId);
-    if (!loaded.ok) return loaded;
-    if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
-    const canonical = canonicalDispatchFromSnapshot(realRoot, loaded.state, taskId, role);
+    const canonical = resolveCanonical(realRoot);
     if (!canonical.ok) return canonical;
     const record = {
       parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
@@ -251,10 +248,83 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
       if (!current.absent) return current;
       return { record };
     });
-    return written.ok ? { ok: true, claim: written.record } : written;
+    return written.ok
+      ? { ok: true, claim: written.record, ...(typeof canonical.reviewedSha === "string" ? { reviewedSha: canonical.reviewedSha } : {}) }
+      : written;
   } finally {
     releaseLock(lifecycleTarget.path, lifecycle.token);
   }
+}
+
+/** @description Atomically create one immutable canonical scope record for this exact Task call. */
+export function claimActiveDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}) {
+  return claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, now, lockOptions }, (realRoot) => {
+    const loaded = loadCanonicalState(realRoot, sessionId);
+    if (!loaded.ok) return loaded;
+    if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
+    return canonicalDispatchFromSnapshot(realRoot, loaded.state, taskId, role);
+  });
+}
+
+function exactFixScopePath(value) {
+  if (typeof value !== "string" || !value || value.length > 512 || value !== value.trim()) return false;
+  if (value === "." || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:\//.test(value) || value.endsWith("/") || value.endsWith("\\") || value.includes("\\") || value.includes("\0")) return false;
+  const segments = value.split("/");
+  return segments.every((segment) => segment && segment !== "." && segment !== "..");
+}
+
+/** @description Parse the host-frozen fix-mode authority envelope without consulting model prose. */
+export function resolveFixModeScopeAuthority(env = process.env) {
+  if (env?.HARNESS_FIX_MODE !== "1") return { enabled: false, ok: true };
+  let parsed;
+  try { parsed = JSON.parse(env?.HARNESS_FIX_SCOPE_JSON ?? ""); } catch { return { enabled: true, ok: false, reason: "fix-mode scope envelope malformed" }; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.version !== 1) return { enabled: true, ok: false, reason: "fix-mode scope envelope invalid" };
+  if (typeof parsed.reviewed_sha !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(parsed.reviewed_sha)) return { enabled: true, ok: false, reason: "fix-mode reviewed sha invalid" };
+  if (!Array.isArray(parsed.scope_paths) || parsed.scope_paths.length === 0 || parsed.scope_paths.length > 100) return { enabled: true, ok: false, reason: "fix-mode exact scope missing or oversized" };
+  const seen = new Set();
+  for (const item of parsed.scope_paths) {
+    if (!exactFixScopePath(item) || seen.has(item)) return { enabled: true, ok: false, reason: "fix-mode exact scope invalid" };
+    seen.add(item);
+  }
+  return { enabled: true, ok: true, reviewedSha: parsed.reviewed_sha, scopePaths: [...parsed.scope_paths] };
+}
+
+/** @description Claim planner scope normally or the host-frozen reviewed scope in fix mode. */
+export function claimDispatchForRuntime(projectRoot, args = {}, { env = process.env, isAncestorFn } = {}) {
+  const authority = resolveFixModeScopeAuthority(env);
+  if (!authority.enabled) return claimActiveDispatch(projectRoot, args);
+  if (!authority.ok) return authority;
+  const { sessionId, callId, role, taskId, featureId, now = Date.now(), lockOptions } = args;
+  if (!isSniperRole(role)) return { ok: false, reason: "fix-mode dispatch requires sniper role" };
+  if (!isSafeFeatureId(featureId)) return { ok: false, reason: "fix-mode feature invalid" };
+  return claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, now, lockOptions }, (realRoot) => {
+    const loaded = loadCanonicalState(realRoot, sessionId);
+    if (!loaded.ok) return loaded;
+    const state = loaded.state;
+    if (state.session_id !== sessionId || state.feature_id !== featureId) return { ok: false, reason: "fix-mode gate-state identity mismatch" };
+    if (state.classified !== true || !["LIGHT", "FULL"].includes(state.mode)) return { ok: false, reason: "fix-mode classified LIGHT or FULL required" };
+    let ancestor = null;
+    try { ancestor = typeof isAncestorFn === "function" ? isAncestorFn(authority.reviewedSha) : null; } catch { ancestor = null; }
+    if (ancestor !== true) return { ok: false, reason: "fix-mode reviewed sha is not an ancestor of HEAD" };
+    const scopePaths = [];
+    for (const item of authority.scopePaths) {
+      const normalized = normalizeProjectPath(realRoot, item);
+      if (!normalized.ok || normalized.path !== item) return { ok: false, reason: normalized.reason ?? "fix-mode scope is not canonical" };
+      const absolute = path.join(realRoot, item);
+      try {
+        const stat = fs.lstatSync(absolute);
+        if (stat.isSymbolicLink() || !stat.isFile()) return { ok: false, reason: "fix-mode scope must name exact files" };
+      } catch (error) {
+        if (!error || typeof error !== "object" || error.code !== "ENOENT") return { ok: false, reason: "fix-mode scope unreadable" };
+      }
+      scopePaths.push(item);
+    }
+    const snapshotHash = crypto.createHash("sha256").update(JSON.stringify({
+      authority: "fix-mode-v1", session_id: sessionId, feature_id: featureId,
+      task_id: taskId, role, reviewed_sha: authority.reviewedSha, scope_paths: scopePaths,
+    })).digest("hex");
+    return { ok: true, featureId, taskId, scopePaths, allowedWrites: [], snapshotHash, reviewedSha: authority.reviewedSha };
+  });
 }
 
 function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
@@ -338,4 +408,4 @@ export function removeDispatchRecord(projectRoot, { sessionId, callId }) {
   return removed.ok ? { ok: true, removed: Boolean(removed.removed) } : removed;
 }
 
-export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, dispatchRecordPath, normalizeProjectPath, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord };
+export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, claimDispatchForRuntime, dispatchRecordPath, normalizeProjectPath, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord, resolveFixModeScopeAuthority };

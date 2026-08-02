@@ -6,7 +6,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { bindChildSession, claimActiveDispatch, normalizeProjectPath, readDispatchRecord, removeDispatchRecord } from "./dispatch-scope.mjs";
+import {
+  bindChildSession,
+  claimActiveDispatch,
+  claimDispatchForRuntime,
+  normalizeProjectPath,
+  readDispatchRecord,
+  removeDispatchRecord,
+  resolveFixModeScopeAuthority,
+} from "./dispatch-scope.mjs";
 import { acquireLock, releaseLock } from "./gate-state.mjs";
 import { semanticPlanHash } from "./planner-artifact.mjs";
 
@@ -32,6 +40,189 @@ function fixture(tasks = null) {
 function recordPath(f, callId) {
   return path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
 }
+
+const FIX_REVIEWED_SHA = "abc123abc123abc123abc123abc123abc123abcd";
+
+function fixModeFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-fix-scope-"));
+  const sessionId = "ses-fix-scope";
+  const featureId = "feat-fix-scope";
+  fs.mkdirSync(path.join(root, "src", "dir"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "a.ts"), "a\n");
+  fs.writeFileSync(path.join(root, "src", "b.ts"), "b\n");
+  fs.symlinkSync("a.ts", path.join(root, "src", "link.ts"));
+  const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({
+    session_id: sessionId,
+    feature_id: featureId,
+    classified: true,
+    mode: "LIGHT",
+    planner_status: "not_started",
+    planner_plan_binding: null,
+  }));
+  return { root, sessionId, featureId, close: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+function fixModeEnv(scopePaths) {
+  return {
+    HARNESS_FIX_MODE: "1",
+    HARNESS_FIX_SCOPE_JSON: JSON.stringify({
+      version: 1,
+      reviewed_sha: FIX_REVIEWED_SHA,
+      scope_paths: scopePaths,
+    }),
+  };
+}
+
+test("fix-mode authority creates the same exact call record without inventing a planner snapshot", () => {
+  const f = fixModeFixture();
+  try {
+    const env = fixModeEnv(["src/a.ts", "src/b.ts"]);
+    assert.deepEqual(resolveFixModeScopeAuthority(env), {
+      enabled: true,
+      ok: true,
+      reviewedSha: FIX_REVIEWED_SHA,
+      scopePaths: ["src/a.ts", "src/b.ts"],
+    });
+    const claim = claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "fix-call",
+      role: "sniper-high",
+      taskId: "fix-task",
+      featureId: f.featureId,
+      now: 1_000,
+    }, { env, isAncestorFn: () => true });
+    assert.equal(claim.ok, true, claim.reason);
+    assert.equal(claim.reviewedSha, FIX_REVIEWED_SHA);
+    assert.deepEqual(readDispatchRecord(f.root, {
+      parentSessionId: f.sessionId,
+      callId: "fix-call",
+    }).record, {
+      parent_session_id: f.sessionId,
+      dispatch_call_id: "fix-call",
+      child_session_id: null,
+      feature_id: f.featureId,
+      task_id: "fix-task",
+      role: "sniper-high",
+      scope_paths: ["src/a.ts", "src/b.ts"],
+      allowed_writes: [],
+      snapshot_hash: claim.claim.snapshot_hash,
+      claimed_at: "1970-01-01T00:00:01.000Z",
+    });
+    assert.match(claim.claim.snapshot_hash, /^[0-9a-f]{64}$/);
+
+    const replay = claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "fix-call",
+      role: "sniper-high",
+      taskId: "fix-task",
+      featureId: f.featureId,
+      now: 2_000,
+    }, { env, isAncestorFn: () => true });
+    assert.equal(replay.ok, true);
+    assert.equal(replay.claim.claimed_at, "1970-01-01T00:00:01.000Z");
+
+    const bound = bindChildSession(f.root, {
+      parentSessionId: f.sessionId,
+      childSessionId: "ses-fix-child",
+      role: "sniper-low",
+      callId: "fix-call",
+    });
+    assert.equal(bound.ok, true, bound.reason);
+  } finally { f.close(); }
+});
+
+test("fix-mode authority fails closed on widening, stale identity, wrong role, and replay conflict", () => {
+  const f = fixModeFixture();
+  try {
+    for (const [label, env] of [
+      ["missing envelope", { HARNESS_FIX_MODE: "1" }],
+      ["malformed envelope", { HARNESS_FIX_MODE: "1", HARNESS_FIX_SCOPE_JSON: "{" }],
+      ["root scope", fixModeEnv(["."])],
+      ["directory scope", fixModeEnv(["src/dir"])],
+      ["symlink scope", fixModeEnv(["src/link.ts"])],
+      ["traversal", fixModeEnv(["src/../b.ts"])],
+      ["windows absolute", fixModeEnv(["C:/Windows/system.ini"])],
+      ["duplicates", fixModeEnv(["src/a.ts", "src/a.ts"])],
+      ["overflow", fixModeEnv(Array.from({ length: 101 }, (_, index) => `src/f${index}.ts`))],
+    ]) {
+      const result = claimDispatchForRuntime(f.root, {
+        sessionId: f.sessionId,
+        callId: `bad-${label.replaceAll(" ", "-")}`,
+        role: "sniper-low",
+        taskId: "fix-task",
+        featureId: f.featureId,
+      }, { env, isAncestorFn: () => true });
+      assert.equal(result.ok, false, label);
+    }
+
+    for (const role of ["executor-low", "test-author"]) {
+      const result = claimDispatchForRuntime(f.root, {
+        sessionId: f.sessionId,
+        callId: `bad-role-${role}`,
+        role,
+        taskId: "fix-task",
+        featureId: f.featureId,
+      }, { env: fixModeEnv(["src/a.ts"]), isAncestorFn: () => true });
+      assert.equal(result.ok, false, role);
+    }
+
+    assert.equal(claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "stale-sha",
+      role: "sniper-low",
+      taskId: "fix-task",
+      featureId: f.featureId,
+    }, { env: fixModeEnv(["src/a.ts"]), isAncestorFn: () => false }).ok, false);
+    assert.equal(claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "wrong-feature",
+      role: "sniper-low",
+      taskId: "fix-task",
+      featureId: "other-feature",
+    }, { env: fixModeEnv(["src/a.ts"]), isAncestorFn: () => true }).ok, false);
+
+    const first = claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "conflict-call",
+      role: "sniper-low",
+      taskId: "fix-task",
+      featureId: f.featureId,
+    }, { env: fixModeEnv(["src/a.ts"]), isAncestorFn: () => true });
+    assert.equal(first.ok, true);
+    const conflict = claimDispatchForRuntime(f.root, {
+      sessionId: f.sessionId,
+      callId: "conflict-call",
+      role: "sniper-low",
+      taskId: "fix-task",
+      featureId: f.featureId,
+    }, { env: fixModeEnv(["src/b.ts"]), isAncestorFn: () => true });
+    assert.equal(conflict.ok, false);
+  } finally { f.close(); }
+});
+
+test("concurrent fix-mode calls keep independent exact records", async () => {
+  const f = fixModeFixture();
+  try {
+    const env = fixModeEnv(["src/a.ts"]);
+    const [left, right] = await Promise.all([
+      Promise.resolve().then(() => claimDispatchForRuntime(f.root, {
+        sessionId: f.sessionId, callId: "fix-left", role: "sniper-low",
+        taskId: "fix-left-task", featureId: f.featureId,
+      }, { env, isAncestorFn: () => true })),
+      Promise.resolve().then(() => claimDispatchForRuntime(f.root, {
+        sessionId: f.sessionId, callId: "fix-right", role: "sniper-high",
+        taskId: "fix-right-task", featureId: f.featureId,
+      }, { env, isAncestorFn: () => true })),
+    ]);
+    assert.equal(left.ok, true, left.reason);
+    assert.equal(right.ok, true, right.reason);
+    assert.equal(removeDispatchRecord(f.root, { sessionId: f.sessionId, callId: "fix-left" }).ok, true);
+    assert.equal(readDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: "fix-left" }).ok, false);
+    assert.equal(readDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: "fix-right" }).ok, true);
+  } finally { f.close(); }
+});
 
 function bindFromWorker(root, callId, childSessionId, barrier) {
   const workerSource = `

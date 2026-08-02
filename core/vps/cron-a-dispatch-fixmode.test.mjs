@@ -160,6 +160,8 @@ function baseOpts(over) {
     lock: { acquireTs: 1000 },
     branchExists: () => false,
     hasOpenPr: () => true,
+    freeMem: () => Number.POSITIVE_INFINITY,
+    worktreeHeadSha: () => SHA,
     ...over,
   };
 }
@@ -179,7 +181,17 @@ function readEnvFile(stateDir, issue) {
   return f ? fs.readFileSync(path.join(stateDir, f), "utf8") : "";
 }
 
-const SHA = "abc123abc123abc123";
+const SHA = "abc123abc123abc123abc123abc123abc123abcd";
+
+function fixEntryDeps(scopePaths = ["core/x.mjs"]) {
+  return {
+    dispatchEnvironment: {
+      HARNESS_FIX_MODE: "1",
+      HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: SHA, scope_paths: scopePaths }),
+    },
+    isAncestorFn: () => true,
+  };
+}
 
 test("#ac-1.1 fix-mode: resumed rejected PR with matching-sha findings → session SKIPS planner/plan-reviewer and runs the sniper loop; HARNESS_FIX_MODE=1 is the deterministic signal", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
@@ -227,6 +239,8 @@ test("#ac-1.1 fix-mode: resumed rejected PR with matching-sha findings → sessi
     assert.ok(/HARNESS_FIX_MODE='?1'?/.test(env), "HARNESS_FIX_MODE=1 must be threaded into the env-file (deterministic skip signal)");
     assert.ok(env.includes("HARNESS_FIX_FINDINGS_PATH"), "the trusted findings path must be threaded (the scope source)");
     assert.ok(env.includes(`fix-findings-42.json`), "the findings path points at the persisted file");
+    assert.match(env, /HARNESS_FIX_SCOPE_JSON=.*core\/vps\/x\.mjs/, "the host must freeze the reviewed file scope into the session env");
+    assert.match(env, /reviewed_sha.*abc123abc123abc123/, "the frozen scope envelope must carry the reviewed SHA");
   } finally {
     cleanup();
   }
@@ -304,6 +318,42 @@ test("fail-CLOSED: findings file with an EMPTY changedFiles scope → NORMAL mod
   }
 });
 
+test("fail-CLOSED: root/directory-shaped changedFiles never become fix-mode scope", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    writeFixFindings(stateDir, 12, {
+      root: 12, pr: 112, sha: SHA, finding: "adversary",
+      changedFiles: ["."], findings: [{ severity: "high", summary: "s" }],
+    });
+    const fake = makeFakeSpawn();
+    await dispatch({ number: 12, body: "b" }, baseOpts({
+      projectRoot, worktreeRoot, stateDir, spawn: fake.spawn,
+      branchExists: () => true, hasOpenPr: () => true, prHeadSha: () => SHA,
+    }));
+    assert.ok(!/FIX MODE/.test(tmuxCommand(fake.calls)), "root scope must fall back to normal mode");
+    assert.equal(readEnvFile(stateDir, 12).includes("HARNESS_FIX_SCOPE_JSON"), false);
+  } finally { cleanup(); }
+});
+
+test("post-checkout SHA mismatch aborts before tmux instead of running fix-mode on stale code", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    writeFixFindings(stateDir, 14, {
+      root: 14, pr: 114, sha: SHA, finding: "adversary",
+      changedFiles: ["core/x.mjs"], findings: [{ severity: "high", summary: "s" }],
+    });
+    const fake = makeFakeSpawn();
+    const result = await dispatch({ number: 14, body: "b" }, baseOpts({
+      projectRoot, worktreeRoot, stateDir, spawn: fake.spawn,
+      branchExists: () => true, hasOpenPr: () => true, prHeadSha: () => SHA,
+      worktreeHeadSha: () => "deadbeefdeadbeef",
+    }));
+    assert.equal(result.ok, false);
+    assert.equal(fake.calls.some((call) => call.command === "tmux"), false, "stale checkout must never spawn OpenCode");
+    assert.equal(fs.existsSync(path.join(stateDir, "fix-findings-14.json")), false, "stale authority must be consumed");
+  } finally { cleanup(); }
+});
+
 // ---------------------------------------------------------------------------
 // #ac-3.1 (issue #485): the sniper Task dispatch that fix-mode actually issues must survive the
 // REAL dispatch chain (planner-recovery → plan-gate → obs-hand → entry-gate, the
@@ -354,7 +404,7 @@ test("#ac-3.1 sniper Task dispatch with a realistic fresh fix-mode gate-state (r
     };
 
     for (const [name, createHooks] of DISPATCH_CHAIN) {
-      const hooks = await createHooks(root);
+      const hooks = name === "entry-gate" ? await createHooks(root, fixEntryDeps()) : await createHooks(root);
       await assert.doesNotReject(
         () => hooks["tool.execute.before"](input, output),
         `${name} must not deny the fix-mode sniper dispatch`,
@@ -409,9 +459,9 @@ const DISPATCH_CHAIN = [
  * documented order. Returns `{ survived: true }` if every plugin's `tool.execute.before` allowed
  * it, or `{ survived: false, deniedAt, message }` at the first thrown deny.
  */
-async function runDispatchChain(root, input, output) {
+async function runDispatchChain(root, input, output, entryDeps = null) {
   for (const [name, factory] of DISPATCH_CHAIN) {
-    const hooks = await factory(root);
+    const hooks = name === "entry-gate" && entryDeps ? await factory(root, entryDeps) : await factory(root);
     const before = hooks["tool.execute.before"];
     if (!before) continue;
     try {
@@ -513,7 +563,7 @@ test("#ac-3 (issue #513): once classify has genuinely run first (mode LIGHT), a 
       },
     };
 
-    const result = await runDispatchChain(root, input, output);
+    const result = await runDispatchChain(root, input, output, fixEntryDeps());
     assert.equal(
       result.survived,
       true,

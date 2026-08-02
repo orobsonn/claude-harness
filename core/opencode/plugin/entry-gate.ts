@@ -36,6 +36,8 @@ export type EntryGateDeps = {
     defaultBranch?: string | null
   } | null
   isAncestorFn?: (sha: string) => boolean | null
+  /** Session environment carrying host-frozen fix-mode authority (injectable in tests). */
+  dispatchEnvironment?: Record<string, string | undefined>
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
@@ -138,9 +140,10 @@ function defaultGitState(
 /**
  * @description git merge-base --is-ancestor sha HEAD → true / false / null.
  */
-function defaultIsAncestor(sha: string): boolean | null {
+function defaultIsAncestor(sha: string, cwd = process.cwd()): boolean | null {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd,
       stdio: ["ignore", "ignore", "ignore"],
     })
     return true
@@ -182,14 +185,15 @@ export async function createEntryGateHooks(
   } = await import("../lib/entry-decide.mjs")
   const { isDeliveryRole } = await import("../lib/roles.mjs")
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs")
-  const { claimActiveDispatch, bindChildSession, removeDispatchRecord } = await import("../lib/dispatch-scope.mjs")
+  const { claimDispatchForRuntime, bindChildSession, removeDispatchRecord } = await import("../lib/dispatch-scope.mjs")
   const { recordTaskCompletion } = await import("./lib/host-hand-capture.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
   const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
   const gitStateFn =
     deps.gitStateFn ?? (() => defaultGitState(computeGitState))
-  const isAncestorFn = deps.isAncestorFn ?? defaultIsAncestor
+  const isAncestorFn = deps.isAncestorFn ?? ((sha: string) => defaultIsAncestor(sha, root))
+  const dispatchEnvironment = deps.dispatchEnvironment ?? process.env
   const listHandRecordsForFeatureFn =
     deps.listHandRecordsForFeatureFn ??
     ((featureId: string) => listHandRecordsForFeature(root, featureId))
@@ -399,8 +403,17 @@ export async function createEntryGateHooks(
       )
       if (writingHand(subagentType)) {
         const callId = typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : ""
-        if (!sid || !callId || !taskId) return
-        const claimed = claimActiveDispatch(root, { sessionId: sid, callId, role: subagentType, taskId })
+        if (!sid || !callId || !taskId) {
+          if (dispatchEnvironment.HARNESS_FIX_MODE === "1") throw new Error(`${PREFIX} exact dispatch identity required in fix mode`)
+          return
+        }
+        const claimed = claimDispatchForRuntime(root, {
+          sessionId: sid,
+          callId,
+          role: subagentType,
+          taskId,
+          featureId,
+        }, { env: dispatchEnvironment, isAncestorFn })
         if (!claimed.ok) throw new Error(`${PREFIX} exact dispatch record rejected: ${claimed.reason}`)
       }
     },

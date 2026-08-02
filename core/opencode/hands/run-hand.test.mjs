@@ -645,6 +645,103 @@ test("runHand: DONE retains its exact producer dispatch until parent capture", a
   }
 });
 
+test("runHand: fix-mode sniper consumes the host-frozen scope without a planner snapshot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-fix-"));
+  try {
+    const sessionId = "ses_fix_hand";
+    const featureId = "feat-fix-hand";
+    const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd";
+    const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "fix.ts"), "before\n");
+    writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
+      session_id: sessionId,
+      feature_id: featureId,
+      classified: true,
+      mode: "LIGHT",
+    }));
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "sniper-low.md"), ALL_HAND_FM);
+
+    const result = await runHand({
+      feature_id: featureId,
+      task_id: "fix-task",
+      session_id: sessionId,
+      project_root: root,
+      freeze_commit_sha: reviewedSha,
+      role: "sniper-low",
+      no_tests: true,
+      brief: "repair",
+    }, {
+      agentsDir,
+      dispatchCallId: () => "run-hand:fix-call",
+      dispatchEnvironment: {
+        HARNESS_FIX_MODE: "1",
+        HARNESS_FIX_SCOPE_JSON: JSON.stringify({
+          version: 1,
+          reviewed_sha: reviewedSha,
+          scope_paths: ["src/fix.ts"],
+        }),
+      },
+      isReviewedShaAncestor: () => true,
+      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      git: {
+        headSha: () => reviewedSha,
+        diffNameOnly: () => ["src/fix.ts"],
+        lsFilesOthers: () => [],
+      },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+
+    assert.equal(result.outcome, OUTCOME.DONE);
+    const dispatchPath = join(stateDir, "dispatch-records", `${crypto.createHash("sha256").update("run-hand:fix-call").digest("hex")}.json`);
+    assert.deepEqual(JSON.parse(readFileSync(dispatchPath, "utf8")).scope_paths, ["src/fix.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runHand: fix-mode rejects a descriptor freeze SHA that differs from host authority before spawn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-fix-sha-"));
+  try {
+    const sessionId = "ses_fix_sha";
+    const featureId = "feat-fix-sha";
+    const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd";
+    const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "fix.ts"), "before\n");
+    writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true, mode: "LIGHT" }));
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "sniper-low.md"), ALL_HAND_FM);
+    let spawned = false;
+    const result = await runHand({
+      feature_id: featureId, task_id: "fix-task", session_id: sessionId,
+      project_root: root, freeze_commit_sha: "deadbeef", role: "sniper-low",
+      no_tests: true, brief: "repair",
+    }, {
+      agentsDir,
+      dispatchCallId: () => "run-hand:fix-sha",
+      dispatchEnvironment: {
+        HARNESS_FIX_MODE: "1",
+        HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: reviewedSha, scope_paths: ["src/fix.ts"] }),
+      },
+      isReviewedShaAncestor: () => true,
+      spawn: async () => { spawned = true; return { exitCode: 0, stdout: "", stderr: "" }; },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+    assert.equal(result.outcome, OUTCOME.CONFIG_ERROR);
+    assert.match(result.reason, /freeze sha conflicts with fix-mode authority/);
+    assert.equal(spawned, false);
+    assert.equal(existsSync(join(stateDir, "dispatch-records", `${crypto.createHash("sha256").update("run-hand:fix-sha").digest("hex")}.json`)), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("runHand: CAPTURE_ERROR sets quarantine when reset fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "t7-quar-"));
   try {

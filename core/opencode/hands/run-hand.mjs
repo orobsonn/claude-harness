@@ -26,7 +26,7 @@ import {
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { mergeGateState } from "../lib/gate-state.mjs";
 import { hasFidelityPass } from "../lib/entry-decide.mjs";
-import { claimActiveDispatch, removeDispatchRecord } from "../lib/dispatch-scope.mjs";
+import { claimDispatchForRuntime, removeDispatchRecord } from "../lib/dispatch-scope.mjs";
 import { writeHandRecord } from "../lib/hand-records.mjs";
 
 export { writeHandRecord };
@@ -772,13 +772,15 @@ export async function runHand(descriptor, deps = {}) {
     now = () => new Date().toISOString(),
     dispatchCallId = () => `run-hand:${randomUUID()}`,
     finishDispatch = removeDispatchRecord,
+    dispatchEnvironment = process.env,
+    isReviewedShaAncestor = null,
   } = deps;
 
   const featureId = descriptor?.feature_id ?? descriptor?.featureId;
   const taskId = descriptor?.task_id ?? descriptor?.taskId;
   const sessionId = descriptor?.session_id ?? descriptor?.sessionId;
   const projectRoot = descriptor?.project_root ?? descriptor?.projectRoot ?? process.cwd();
-  const freezeCommitSha = descriptor?.freeze_commit_sha ?? descriptor?.freezeCommitSha;
+  let freezeCommitSha = descriptor?.freeze_commit_sha ?? descriptor?.freezeCommitSha;
   const role = descriptor?.role ?? descriptor?.agent ?? "executor-medium";
   const agent = spawnAgentName(role);
   const no_tests = descriptor?.no_tests === true;
@@ -932,17 +934,40 @@ export async function runHand(descriptor, deps = {}) {
   );
 
   const callId = dispatchCallId();
-  const claimed = claimActiveDispatch(projectRoot, {
+  const claimed = claimDispatchForRuntime(projectRoot, {
     sessionId,
     callId,
     role,
     taskId,
+    featureId,
+  }, {
+    env: dispatchEnvironment,
+    isAncestorFn: isReviewedShaAncestor ?? ((sha) => {
+      try {
+        const status = spawnSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+          cwd: projectRoot,
+          stdio: "ignore",
+        }).status;
+        return status === 0 ? true : status === 1 ? false : null;
+      } catch { return null; }
+    }),
   });
   if (!claimed.ok) {
     return failConfig(`dispatch record claim failed: ${claimed.reason}`, {
       preUntracked: preSnap.paths,
       preUntrackedContents: preSnap.contents,
     });
+  }
+  if (typeof claimed.reviewedSha === "string" && freezeCommitSha !== claimed.reviewedSha) {
+    const suppliedFreezeCommitSha = freezeCommitSha;
+    freezeCommitSha = claimed.reviewedSha;
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
+    return failConfig(
+      finished.ok
+        ? `descriptor freeze sha conflicts with fix-mode authority: ${suppliedFreezeCommitSha}`
+        : `descriptor freeze sha conflicts with fix-mode authority and ${finished.reason}`,
+      { preUntracked: preSnap.paths, preUntrackedContents: preSnap.contents },
+    );
   }
   const dispatchScope = claimed.claim;
 

@@ -132,6 +132,8 @@ function baseOpts({
   branchExists = () => false,
   hasOpenPr = () => true,
   prHeadSha,
+  worktreeHeadSha,
+  freeMem = () => Number.POSITIVE_INFINITY,
   precreateLog = defaultPrecreateLog,
 }) {
   return {
@@ -148,6 +150,8 @@ function baseOpts({
     branchExists,
     hasOpenPr,
     prHeadSha,
+    worktreeHeadSha,
+    freeMem,
     precreateLog,
   };
 }
@@ -185,8 +189,9 @@ function plantMonorepoOcPlugins(root) {
   const dir = join(oc, "plugin");
   mkdirSync(dir, { recursive: true });
   for (const name of [
-    "entry-gate.ts", "plan-gate.ts", "planner-recovery.ts", "plan-write-gate.ts",
-    "reinject-state.ts", "version-check.ts", "obs-plan-write.ts",
+    "entry-gate.ts", "marker-authority.ts", "plan-gate.ts", "planner-recovery.ts",
+    "plan-write-gate.ts", "reinject-state.ts", "version-check.ts", "obs-plan-write.ts",
+    "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts",
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }
@@ -199,6 +204,15 @@ function plantMonorepoOcPlugins(root) {
   writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
   mkdirSync(join(oc, "agents"), { recursive: true });
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  const libDir = join(oc, "lib");
+  mkdirSync(libDir, { recursive: true });
+  for (const name of [
+    "gate-state.mjs", "entry-decide.mjs", "dispatch-scope.mjs", "hand-records.mjs",
+    "planner-state.mjs", "obs-emit.mjs", "plan-hash.mjs", "planner-artifact.mjs",
+    "roles.mjs", "task-dispatch-identity.mjs",
+  ]) {
+    writeFileSync(join(libDir, name), `// stub ${name}\n`, "utf8");
+  }
   const sharedLib = join(root, "core", "shared", "lib");
   mkdirSync(sharedLib, { recursive: true });
   writeFileSync(join(sharedLib, "path-helpers.mjs"), "export const x = 1;\n", "utf8");
@@ -463,7 +477,7 @@ test("dispatch: the composed normal redirected session command is shell-syntax-v
 test('dispatch: fix-mode dispatch ALSO redirects claude -p\'s combined output to issue-42-output.log and carries the log path + "$ec" to cron-a-exit.mjs (parity with the normal path)', async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
-    const sha = "a1b2c3d4e5f6";
+    const sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
     writeFileSync(
       join(stateDir, "fix-findings-42.json"),
       JSON.stringify({ changedFiles: ["src/foo.ts"], sha }),
@@ -479,6 +493,7 @@ test('dispatch: fix-mode dispatch ALSO redirects claude -p\'s combined output to
       branchExists: () => true,
       hasOpenPr: () => true,
       prHeadSha: () => sha,
+      worktreeHeadSha: () => sha,
     });
     await dispatch({ number: 42, body: "hello" }, opts);
 

@@ -7,6 +7,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import crypto from "node:crypto"
+import { execFileSync } from "node:child_process"
 import { createEntryGateHooks } from "./entry-gate.ts"
 import { createObsHandHooks } from "./obs-hand.ts"
 import { semanticPlanHash } from "../lib/planner-artifact.mjs"
@@ -1095,6 +1096,60 @@ test("entry-gate claims one exact dispatch record after allowing a writing Task"
       claimed_at: record.claimed_at,
     })
     assert.match(record.claimed_at, /^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
+test("fix-mode writing Task fails closed when exact task or call identity is missing", async () => {
+  const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd"
+  const deps = {
+    dispatchEnvironment: {
+      HARNESS_FIX_MODE: "1",
+      HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: reviewedSha, scope_paths: ["src/fix.ts"] }),
+    },
+    isAncestorFn: () => true,
+  }
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, { session_id: SID, feature_id: "feat", classified: true, mode: "LIGHT" })
+    const before = hooks["tool.execute.before"]
+    for (const [input, prompt] of [
+      [{ tool: "task", sessionID: SID, callID: "missing-task" }, "repair"],
+      [{ tool: "task", sessionID: SID, callID: "malformed-task" }, "[HARNESS_TASK_CONTEXT]{bad}[/HARNESS_TASK_CONTEXT]"],
+      [{ tool: "task", sessionID: SID }, '[HARNESS_TASK_CONTEXT]{"task_id":"fix-task"}[/HARNESS_TASK_CONTEXT]'],
+    ]) {
+      await assert.rejects(
+        () => before(input, { args: { prompt, subagent_type: "sniper-high", feature_id: "feat" } }),
+        /exact dispatch identity required/,
+      )
+    }
+  }, deps)
+})
+
+test("fix-mode default SHA ancestry probe is rooted in the target project", async () => {
+  const foreignSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+  await withHooks(async (hooks, root) => {
+    execFileSync("git", ["init", "-q"], { cwd: root })
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root })
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root })
+    fs.writeFileSync(path.join(root, "target.txt"), "target\n")
+    execFileSync("git", ["add", "target.txt"], { cwd: root })
+    execFileSync("git", ["commit", "-qm", "target"], { cwd: root })
+    writeGateState(root, SID, { session_id: SID, feature_id: "feat", classified: true, mode: "LIGHT" })
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID, callID: "foreign-sha" },
+        { args: {
+          prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"fix-task"}[/HARNESS_TASK_CONTEXT]',
+          subagent_type: "sniper-high",
+          feature_id: "feat",
+        } },
+      ),
+      /reviewed sha is not an ancestor/,
+    )
+  }, {
+    dispatchEnvironment: {
+      HARNESS_FIX_MODE: "1",
+      HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: foreignSha, scope_paths: ["target.txt"] }),
+    },
   })
 })
 
