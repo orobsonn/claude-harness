@@ -71,9 +71,8 @@ gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # �
 
 Both first-install and update use the same command — `init` is idempotent. Substitute `<latest-tag>`
 with the concrete `vX.Y.Z` from Step 1 and `<resolved-runtime>` with `opencode` or `both`. **Emit a
-single clean command** — no trailing comment, no `&&`, no redirect: that exact form is what the vendored
-`permission.bash` allowlist matches (the OC host's own glob-based permission map); an extra token falls
-through to the default `ask` prompt instead. **Run the CLI from the git tag, not from npm:**
+single clean command** — no trailing comment, no `&&`, no redirect — so the lifecycle action remains
+auditable and cannot compose an unrelated shell operation. **Run the CLI from the git tag, not from npm:**
 
 ```bash
 npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>

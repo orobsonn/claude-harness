@@ -85,6 +85,31 @@ test("literal Bash friction denies canonical targets but keeps cp and rsync sour
   ]) assert.equal(decide({ args: { command } }).allow, true, command);
 });
 
+test("literal Bash mutations cannot forge .opencode/plans/.state while reads remain available", () => {
+  const state = ".opencode/plans/.state/session/gate-state.json";
+  const absolute = `/work/project/${state}`;
+  for (const command of [
+    `node -e 'require("fs").writeFileSync("${state}", "{}")'`,
+    `python3 -c 'open("${state}", "w").write("{}")'`,
+    `sed -i 's/false/true/' ${state}`,
+    `printf '{}' | tee ${state}`,
+    `rm -f ${state}`,
+    `python3 - <<'PY'\nopen("${absolute}", "w").write("{}")\nPY`,
+    `cd .opencode/plans && python3 -c 'open(".state/session/gate-state.json", "w").write("{}")'`,
+    `cd .opencode/plans && printf '{}' | tee .state/session/gate-state.json`,
+    `cd .opencode/plans/.state/session && tee gate-state.json`,
+  ]) {
+    const decision = decide({ args: { command } });
+    assert.equal(decision.allow, false, command);
+    assert.match(decision.reason ?? "", /state|forge/i, command);
+  }
+  for (const command of [
+    `cat ${state}`,
+    `git diff -- ${state}`,
+    `cp ${state} /tmp/state-copy.json`,
+  ]) assert.equal(decide({ args: { command } }).allow, true, command);
+});
+
 test("canonical plan is denied through apply_patch for every role and any target in a multi-file patch", async () => {
   const before = (await createPlanWriteGateHooks()) ["tool.execute.before"];
   const patch = "*** Begin Patch\n*** Update File: src/allowed.ts\n@@\n-old\n+new\n*** Update File: .opencode/plans/ses-feat/execution-plan.json\n@@\n-old\n+new\n*** End Patch";

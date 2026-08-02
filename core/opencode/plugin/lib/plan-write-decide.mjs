@@ -148,6 +148,43 @@ export function isLiteralCanonicalPlanMutation(command) {
 }
 
 /**
+ * @description Best-effort deterministic block for literal Bash mutation of harness gate state.
+ * Read/copy-source commands stay available; variables and obfuscated paths remain outside this
+ * lexical rail and require process isolation, not more ceremony state.
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isLiteralStateMutation(command) {
+  if (typeof command !== "string") return false;
+  let normalized = command.replace(/\\/g, "/");
+  const cdPlans = /\bcd\s+["']?(?:\.\/)?\.opencode\/plans["']?\s*(?:&&|;|\r?\n)/i.test(normalized);
+  if (cdPlans) {
+    normalized = normalized.replace(/(^|[\s'"`(])\.state\//g, "$1.opencode/plans/.state/");
+  }
+  const cdState = normalized.match(/\bcd\s+["']?(?:\.\/)?\.opencode\/plans\/\.state(?:\/[^\s;&|"']*)?["']?\s*(?:&&|;|\r?\n)([\s\S]*)/i);
+  if (cdState && /(?:\b(?:node|python(?:3(?:\.\d+)?)?|tee|rm|truncate|mv)\b|\bsed\s+-i\b|(?:>|>>))/i.test(cdState[1])) {
+    return true;
+  }
+  const mentionsState = /\.opencode\/plans\/\.state\//i.test(normalized);
+  if (mentionsState && /\b(?:node|python(?:3(?:\.\d+)?)?)\b/i.test(normalized)) return true;
+  return normalized.split(/(?:;|\r?\n|&&|\|\||\|)/).some((segment) => {
+    const statePaths = segment.match(/(?:\/?[^\s'"`]*\/)?\.opencode\/plans\/\.state\/[^\s'"`]+/gi) ?? [];
+    return statePaths.some((literal) => {
+      const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const literalAt = segment.indexOf(literal);
+      const teeAt = segment.search(/\btee\b/i);
+      const teeTargetsLiteral = teeAt >= 0 && teeAt < literalAt && segment.slice(teeAt, literalAt).indexOf("<") === -1;
+      return new RegExp(`(?:>|>>)\\s*["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || teeTargetsLiteral
+        || new RegExp(`\\b(?:cp|rsync)\\b[^\\n]*\\s["']?${escaped}(?:[\\s'"\`]*$)`, "i").test(segment)
+        || new RegExp(`\\bmv\\b[^\\n]*["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || new RegExp(`\\b(?:rm|truncate)\\b[^\\n]*\\s["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || new RegExp(`\\bsed\\s+-i\\b[^\\n]*\\s["']?${escaped}(?:[\\s'"\`]*$)`, "i").test(segment);
+    });
+  });
+}
+
+/**
  * @description Write to harness marker scripts (path-bound forge allowlist targets).
  * @param {unknown} filePath
  * @returns {boolean}
@@ -376,6 +413,9 @@ export function decide(payload, opts = {}) {
     : {};
   const command = typeof args.command === "string" ? args.command : typeof raw.command === "string" ? raw.command : "";
   if (command) {
+    if (isLiteralStateMutation(command)) {
+      return { allow: false, reason: `${PREFIX} Blocked: literal Bash mutation of harness state is denied (anti-forge rail).` };
+    }
     if (isLiteralCanonicalPlanMutation(command)) {
       return { allow: false, reason: `${PREFIX} Blocked: literal Bash mutation of canonical plan is denied (best-effort friction).` };
     }

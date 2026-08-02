@@ -43,7 +43,8 @@
       ".dev.vars": "deny",
       "**/.dev.vars": "deny",
       "~/.ssh/**": "deny",
-      "~/.aws/**": "deny"
+      "~/.aws/**": "deny",
+      ".opencode/plans/.state/**": "deny"
     },
     "read": {
       "*": "allow",
@@ -68,7 +69,7 @@
     "external_directory": "allow",
     "question": "allow",
     "bash": {
-      "*": "ask",
+      "*": "allow",
       "npx tsc --noEmit": "allow",
       "npx -y \"github:orobsonn/claude-harness#v*\" init --target opencode": "allow",
       "npx -y \"github:orobsonn/claude-harness#v*\" init --target claude": "allow",
@@ -136,6 +137,15 @@
       "git push -f*": "deny",
       "git push * -f*": "deny",
       "git clean -f*": "deny",
+      "rm -r*": "deny",
+      "rm -R*": "deny",
+      "rm -fr*": "deny",
+      "rm --recursive*": "deny",
+      "node*.opencode/plans/.state/*": "deny",
+      "python*.opencode/plans/.state/*": "deny",
+      "sed *.opencode/plans/.state/*": "deny",
+      "tee *.opencode/plans/.state/*": "deny",
+      "rm *.opencode/plans/.state/*": "deny",
       "git push --force-with-lease*": "allow",
       "git push * --force-with-lease*": "allow"
     }

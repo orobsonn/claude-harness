@@ -147,7 +147,7 @@ test("opencode.json + opencode.json.example: permission.bash contains the same b
   }
 });
 
-test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 6 destructive-git classes from settings.json — no extras, and none of them swallow git push --force-with-lease (#ac-1.1/#ac-2.1/#ac-2.2)", () => {
+test("opencode.json + opencode.json.example: Auto Mode allows routine Bash and denies destructive git, recursive deletion, and state mutation", () => {
   const claudeDenyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
   assert.equal(claudeDenyCount, 6, "settings.json must carry exactly 6 destructive-git Bash denies");
   const configs = {
@@ -156,8 +156,8 @@ test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 
   };
   for (const [label, cfg] of Object.entries(configs)) {
     const bash = cfg.permission.bash;
-    const denyKeyCount = Object.entries(bash).filter(([key, value]) => key !== "*" && value === "deny").length;
-    assert.equal(denyKeyCount, 6, `${label}: permission.bash must carry exactly 6 deny keys — no extras`);
+    assert.equal(bash["*"], "allow", `${label}: routine Bash must not prompt`);
+    assert.equal(Object.values(bash).includes("ask"), false, `${label}: Auto Mode config must not contain ask`);
     for (const sample of DESTRUCTIVE_GIT_SAMPLES) {
       assert.equal(resolveBash(bash, sample), "deny", `${label}: ${JSON.stringify(sample)} must resolve deny`);
     }
@@ -166,6 +166,21 @@ test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 
       "allow",
       `${label}: git push --force-with-lease must NOT be swallowed by the 6 destructive-git denies`,
     );
+    for (const command of [
+      "rm -rf ./build",
+      "rm -fr ./build",
+      "rm -r -f ./build",
+      "rm -R -f ./build",
+      "rm --recursive --force ./build",
+      `node -e 'require("fs").writeFileSync(".opencode/plans/.state/s/gate-state.json", "{}")'`,
+      `python3 -c 'open(".opencode/plans/.state/s/gate-state.json", "w").write("{}")'`,
+      "sed -i 's/x/y/' .opencode/plans/.state/s/gate-state.json",
+      "tee .opencode/plans/.state/s/gate-state.json",
+      "rm -f .opencode/plans/.state/s/gate-state.json",
+    ]) assert.equal(resolveBash(bash, command), "deny", `${label}: ${JSON.stringify(command)} must resolve deny`);
+    for (const command of ["pnpm lint", "docker compose ps", "node scripts/report.mjs"]) {
+      assert.equal(resolveBash(bash, command), "allow", `${label}: routine ${JSON.stringify(command)} must resolve allow`);
+    }
   }
 });
 
@@ -1198,12 +1213,12 @@ test("seedOpencodeRootConfig: a tier-1 manifest (harness-owned key still matchin
   }
 });
 
-test("seedOpencodeRootConfig: permission.bash['*'] stays 'allow' in the seeded worktree regardless of migration — the fleet residue this forces is ledger-recognized (RETIRED_OC_PERMISSION_ENTRIES ['bash','*']), never leaked as a NEW unrecognized default (#ac-1.4)", () => {
+test("seedOpencodeRootConfig: permission.bash['*'] stays 'allow' and the migration ledger recognizes the superseded ask default", () => {
   const wildcardEntry = RETIRED_OC_PERMISSION_ENTRIES.find(
     (entry) => entry.path[0] === "bash" && entry.path[1] === "*",
   );
-  assert.ok(wildcardEntry, "the ledger must already track bash['*']:'allow' as recognized fleet residue");
-  assert.equal(wildcardEntry.historicalValue, "allow");
+  assert.ok(wildcardEntry, "the ledger must track the superseded bash['*']:'ask' default");
+  assert.equal(wildcardEntry.historicalValue, "ask");
 
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-wildcard-residue-");
   try {

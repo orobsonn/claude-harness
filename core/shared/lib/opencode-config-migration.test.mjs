@@ -14,6 +14,16 @@ function hash(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function resolvePatternMap(map, value) {
+  const entries = Object.entries(map);
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const [pattern, action] = entries[index];
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    if (new RegExp(`^${escaped}$`).test(value)) return action;
+  }
+  return undefined;
+}
+
 const NEW_CONFIG = {
   model: "openai/gpt-5.6-terra",
   permission: {
@@ -21,7 +31,7 @@ const NEW_CONFIG = {
     glob: "allow",
     edit: { "*": "allow", ".env": "deny" },
     bash: {
-      "*": "ask",
+      "*": "allow",
       "npx tsc --noEmit": "allow",
       'npx -y "github:orobsonn/claude-harness#v*" init --target both': "allow",
       "git pull": "allow",
@@ -96,7 +106,7 @@ test("mark-gate retirement removes only historical harness-owned allows and conv
   assert.equal(unprovenanced.config.permission.bash[RETIRED_MARK_GATE_PERMISSIONS[0]], "allow");
 });
 
-test("ac-1.1: tier 1 (manifest present) replaces harness-owned keys with the new generation's set and leaves operator keys intact", () => {
+test("ac-1.1: tier 1 replaces the old harness-owned ask wildcard with Auto Mode allow and leaves operator keys intact", () => {
   const manifest = {
     version: 1,
     harnessVersion: "v0.40.0",
@@ -120,6 +130,7 @@ test("ac-1.1: tier 1 (manifest present) replaces harness-owned keys with the new
   const result = migrateOpencodeConfig({ existingConfig, newConfig: NEW_CONFIG, manifest });
 
   assert.equal(result.tier, 1);
+  assert.equal(result.config.permission.bash["*"], "allow", "harness-owned ask must migrate to Auto Mode allow");
   assert.equal(result.config.permission.question, "deny", "harness-owned key must move to the new generation's value");
   assert.equal(
     result.config.permission.bash["docker *"],
@@ -356,6 +367,67 @@ test("issue #513 ac-1: a project with ZERO harness provenance (no manifest, no v
   );
   const kept = result.report.find((r) => r.path.join(" ") === "bash *");
   assert.equal(kept.action, "kept-custom");
+});
+
+test("Auto Mode migration upgrades the historical harness ask wildcard in a provenanced tier-2 project", () => {
+  const wildcard = RETIRED_OC_PERMISSION_ENTRIES.find(
+    (entry) => entry.path[0] === "bash" && entry.path[1] === "*",
+  );
+  assert.deepEqual(wildcard, { path: ["bash", "*"], historicalValue: "ask", tier2Only: true });
+  const result = migrateOpencodeConfig({
+    existingConfig: { permission: { bash: { "*": "ask", "docker *": "deny" } } },
+    newConfig: NEW_CONFIG,
+    previousHarnessVersionStamp: "v0.56.0",
+    newHarnessVersion: "v0.57.0",
+  });
+  assert.equal(result.config.permission.bash["*"], "allow");
+  assert.equal(result.config.permission.bash["docker *"], "deny");
+});
+
+test("Auto Mode migration preserves a tier-1 ask wildcard that its manifest proves was never harness-owned", () => {
+  const result = migrateOpencodeConfig({
+    existingConfig: { permission: { bash: { "*": "ask", "docker *": "deny" } } },
+    newConfig: NEW_CONFIG,
+    manifest: { version: 1, harnessVersion: "v0.56.0", owned: { bash: {} } },
+    newHarnessVersion: "v0.57.0",
+  });
+  assert.equal(result.config.permission.bash["*"], "ask");
+  assert.equal(result.config.permission.bash["docker *"], "deny");
+  assert.ok(result.report.some((entry) => entry.path.join(".") === "bash.*" && entry.action === "kept-custom"));
+});
+
+test("custom broad allows stay present but cannot shadow the canonical safety suffix", () => {
+  const newConfig = {
+    permission: {
+      edit: { "*": "allow", ".opencode/plans/.state/**": "deny" },
+      bash: {
+        "*": "allow",
+        "node*.opencode/plans/.state/*": "deny",
+        "rm -r*": "deny",
+        "git push --force-with-lease*": "allow",
+      },
+    },
+  };
+  const result = migrateOpencodeConfig({
+    existingConfig: {
+      permission: {
+        edit: { "*": "allow", ".opencode/**": "allow" },
+        bash: { "*": "ask", "node *": "allow", "rm *": "allow" },
+      },
+    },
+    newConfig,
+    manifest: {
+      version: 1,
+      harnessVersion: "v0.56.0",
+      owned: { edit: { "*": "allow" }, bash: { "*": "ask" } },
+    },
+  });
+  assert.equal(result.config.permission.edit[".opencode/**"], "allow", "custom key remains present");
+  assert.equal(result.config.permission.bash["node *"], "allow", "custom node key remains present");
+  assert.equal(result.config.permission.bash["rm *"], "allow", "custom rm key remains present");
+  assert.equal(resolvePatternMap(result.config.permission.edit, ".opencode/plans/.state/s/gate-state.json"), "deny");
+  assert.equal(resolvePatternMap(result.config.permission.bash, `node -e 'write(".opencode/plans/.state/s/gate-state.json")'`), "deny");
+  assert.equal(resolvePatternMap(result.config.permission.bash, "rm -rf ./build"), "deny");
 });
 
 test("migrateOpencodeConfig never touches top-level config keys outside permission", () => {

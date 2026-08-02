@@ -822,6 +822,8 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/planner-artifact.mjs",
   "plugin/lib/planner-fallback-config.mjs",
   "lib/planner-fallback-config.mjs",
+  "plugin/lib/regate-arm.mjs",
+  "plugin/lib/regate-arm.test.mjs",
   "agents/planner-fallback.md",
   "plugin/lib/roles.mjs",
   "plugin/lib/task-dispatch-identity.mjs",

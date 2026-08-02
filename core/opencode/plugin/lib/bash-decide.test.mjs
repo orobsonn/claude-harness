@@ -815,7 +815,12 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   const config = JSON.parse(raw);
   const bash = config.permission && config.permission.bash;
   assert.ok(bash, "permission.bash must exist");
-  assert.equal(bash["*"], "ask");
+  assert.equal(bash["*"], "allow");
+  assert.equal(bash["node*.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["python*.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["sed *.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["tee *.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["rm *.opencode/plans/.state/*"], "deny");
   assert.equal(Object.hasOwn(bash, "node .opencode/plugin/lib/mark-gate.mjs *"), false);
   assert.equal(Object.hasOwn(bash, "node core/opencode/plugin/lib/mark-gate.mjs *"), false);
   assert.equal(bash["gh *"], "allow");
