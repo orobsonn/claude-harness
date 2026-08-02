@@ -68,16 +68,21 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
   if (!runtimeSessionId || !runtimeCallId) return { ok: false, unavailable: true, reason: "runtime sessionID/callID unavailable" };
   const reader = options.reader ?? sdkIdentityReader(options.client, projectRoot);
   let session;
-  let childMessages;
   try {
     session = await reader.getSession(runtimeSessionId);
-    childMessages = await reader.getMessages(runtimeSessionId);
   } catch { return { ok: false, unavailable: true, reason: "official SDK metadata unavailable" };
   }
   if (!session || session.id !== runtimeSessionId) return { ok: false, conflict: true, reason: "official session identity conflicts" };
+  let parentSessionId = typeof session.parentID === "string" ? session.parentID : "";
+  const hasAdapterParent = typeof options.adapterParentSessionId === "string" && options.adapterParentSessionId && typeof options.adapterCallId === "string" && options.adapterCallId;
+  if (!parentSessionId && !hasAdapterParent) return { ok: false, notWritingSession: true, reason: "top-level session has no dispatch parent" };
+  let childMessages;
+  try {
+    childMessages = await reader.getMessages(runtimeSessionId);
+  } catch { return { ok: false, unavailable: true, reason: "official SDK metadata unavailable" };
+  }
   const role = toolRole(childMessages, runtimeSessionId, runtimeCallId, input?.tool);
   if (!role.ok) return role;
-  let parentSessionId = typeof session.parentID === "string" ? session.parentID : "";
   let callId = "";
   let parentRole = "";
   if (parentSessionId) {
@@ -89,14 +94,12 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
     parentRole = parent.role;
     const bound = bindChildSession(projectRoot, { parentSessionId, childSessionId: runtimeSessionId, role: parentRole, callId });
     if (!bound.ok) return { ok: false, conflict: true, verifiedWritingHand: true, reason: bound.reason };
-  } else if (typeof options.adapterParentSessionId === "string" && options.adapterParentSessionId && typeof options.adapterCallId === "string" && options.adapterCallId) {
+  } else if (hasAdapterParent) {
     parentSessionId = options.adapterParentSessionId;
     callId = options.adapterCallId;
     parentRole = role.role;
     const bound = bindChildSession(projectRoot, { parentSessionId, childSessionId: runtimeSessionId, role: role.role, callId });
     if (!bound.ok) return { ok: false, conflict: true, verifiedWritingHand: true, reason: bound.reason };
-  } else {
-    return { ok: false, notWritingSession: true, reason: "top-level session has no dispatch parent" };
   }
   const exact = readDispatchRecord(projectRoot, { parentSessionId, callId });
   if (!exact.ok && exact.conflict === true) return { ok: false, conflict: true, verifiedWritingHand: true, reason: exact.reason };

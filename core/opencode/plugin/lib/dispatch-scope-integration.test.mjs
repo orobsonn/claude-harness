@@ -42,6 +42,34 @@ test("missing SDK opens and returned contradiction denies", async () => {
   assert.equal(conflict.conflict, true);
 });
 
+test("top-level build Bash stays outside the writing-hand scope rail with official SDK metadata", async () => {
+  const sessionId = "top-level-build";
+  const reader = {
+    getSession: async () => ({ id: sessionId }),
+    getMessages: async () => [{
+      info: { id: "user", sessionID: sessionId, role: "user", agent: "build" },
+      parts: [],
+    }, {
+      info: { id: "assistant", sessionID: sessionId, role: "assistant", agent: "build", parentID: "user" },
+      parts: [{ type: "tool", sessionID: sessionId, messageID: "assistant", callID: "bash-call", tool: "bash" }],
+    }],
+  };
+
+  const resolved = await resolveScopeRuntimeIdentity(
+    "/tmp",
+    { sessionID: sessionId, callID: "bash-call", tool: "bash" },
+    { reader },
+  );
+  assert.equal(resolved.notWritingSession, true, resolved.reason);
+  assert.notEqual(resolved.conflict, true, resolved.reason);
+
+  const before = (await createPlanWriteGateHooks("/tmp", { identityReader: reader }))["tool.execute.before"];
+  await assert.doesNotReject(() => before(
+    { tool: "bash", sessionID: sessionId, callID: "bash-call" },
+    { args: { command: "gh issue view 134 --comments" } },
+  ));
+});
+
 test("official child metadata resolves one exact bound parent call and rejects ambiguity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-child-"));
   try {
