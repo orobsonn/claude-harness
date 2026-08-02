@@ -686,12 +686,14 @@ export function buildHandRunRecord({
   timestamps = {},
   hand_quarantine = false,
   worktree = {},
+  producerCallId,
 }) {
   const now = timestamps.finishedAt ?? new Date().toISOString();
   return {
     featureId,
     taskId,
     sessionId,
+    ...(typeof producerCallId === "string" && producerCallId ? { producerCallId } : {}),
     freezeCommitSha,
     outcome,
     touchedPaths,
@@ -972,14 +974,6 @@ export async function runHand(descriptor, deps = {}) {
       preUntrackedContents: preSnap.contents,
     });
   }
-  const finished = finishDispatch(projectRoot, { sessionId, callId });
-  if (!finished.ok) {
-    return failConfig(finished.reason, {
-      preUntracked: preSnap.paths,
-      preUntrackedContents: preSnap.contents,
-    });
-  }
-
   // Capture
   const gitAdapter =
     git ??
@@ -1105,6 +1099,7 @@ export async function runHand(descriptor, deps = {}) {
     timestamps: { startedAt, finishedAt: now() },
     hand_quarantine: worktree.hand_quarantine === true,
     worktree,
+    producerCallId: callId,
   });
 
   const written = writeRecord({
@@ -1117,6 +1112,16 @@ export async function runHand(descriptor, deps = {}) {
     taskId,
     record,
   });
+
+  if (outcome !== OUTCOME.DONE || !written.ok) {
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
+    if (!finished.ok) {
+      return failConfig(finished.reason, {
+        preUntracked: preSnap.paths,
+        preUntrackedContents: preSnap.contents,
+      });
+    }
+  }
 
   return {
     ok: outcome === OUTCOME.DONE,

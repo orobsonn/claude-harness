@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { gateStatePath, handRecordPath } from "../../../shared/lib/path-helpers.mjs";
 import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../lib/gate-state.mjs";
-import { readDispatchRecord } from "../../lib/dispatch-scope.mjs";
+import { readDispatchRecord, removeDispatchRecord } from "../../lib/dispatch-scope.mjs";
 import { parseHandStatusFromOutput, writeHandRecord } from "../../lib/hand-records.mjs";
 
 function isDone(outcome) {
@@ -44,6 +44,7 @@ export function recordHandFinished(input) {
     const state = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
     if (!state.ok) return { ok: false, recorded: false, reason: state.reason };
     let outcomeResult = { ok: false, recorded: false, reason: "completion record failed" };
+    let supersededProducerCallId = "";
     const locked = withGateStateLock(state.path, (gateState) => {
       const producer = readDispatchRecord(projectRoot, { parentSessionId: sessionId, callId: producerCallId });
       if (!producer.ok || producer.record.feature_id !== featureId || producer.record.task_id !== taskId || producer.record.role !== role) {
@@ -81,12 +82,18 @@ export function recordHandFinished(input) {
         outcomeResult = { ok: false, recorded: false, reason: written.reason };
         return gateState;
       }
+      if (typeof existing?.producerCallId === "string" && existing.producerCallId !== producerCallId) {
+        supersededProducerCallId = existing.producerCallId;
+      }
       const handFinished = removeTaskEntry(gateState.hand_finished, bare);
       if (isDone(outcome)) handFinished.push(bare);
       outcomeResult = { ok: true, recorded: true };
       return { ...gateState, hand_finished: handFinished };
     });
     if (!locked.ok) return { ok: false, recorded: false, reason: locked.reason };
+    if (supersededProducerCallId) {
+      removeDispatchRecord(projectRoot, { sessionId, callId: supersededProducerCallId });
+    }
     return outcomeResult;
   } catch (error) {
     return { ok: false, recorded: false, reason: error instanceof Error ? error.message : "recordHandFinished failed" };
@@ -102,6 +109,22 @@ export function resolveHeadSha(projectRoot, execFileSyncFn = execFileSync) {
   } catch { return null; }
 }
 
+/** @description Resolve whether one SHA is an ancestor of HEAD; git faults are undetermined. */
+export function isAncestorSha(projectRoot, sha, execFileSyncFn = execFileSync) {
+  if (![projectRoot, sha].every((value) => typeof value === "string" && value.length > 0)) return null;
+  try {
+    execFileSyncFn("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
+    return true;
+  } catch (error) {
+    return error && typeof error === "object" && "status" in error && error.status === 1 ? false : null;
+  }
+}
+
 /** @description Best-effort changed paths for Task completion observation. */
 export function gitTouchedPaths(cwd) {
   try {
@@ -115,12 +138,11 @@ export function gitTouchedPaths(cwd) {
   }
 }
 
-/** @description Promote a blocked OC Task result only when best-effort git evidence found work. */
-export function resolveOcHandOutcome(parsedStatus, touched) {
+/** @description Preserve only the Task's explicit terminal fact; git evidence never promotes it. */
+export function resolveOcHandOutcome(parsedStatus, _touched) {
   if (parsedStatus === "DONE" || parsedStatus === "DONE_WITH_CONCERNS") return parsedStatus;
   if (parsedStatus === "NEEDS_CONTEXT") return "NEEDS_CONTEXT";
-  if (Array.isArray(touched) && touched.length > 0) return "DONE";
-  return parsedStatus || "BLOCKED";
+  return "BLOCKED";
 }
 
 /** @description Normalize one terminal Task result and persist it through exact producer authority. */
@@ -128,6 +150,7 @@ export function recordTaskCompletion(input) {
   const outputText = String(input?.outputText ?? "");
   if (input?.background === true && /<task\b[^>]*\bstate=["']running["']/i.test(outputText)) return { ok: true, terminal: false, recorded: false, reason: "background task still running" };
   const touched = gitTouchedPaths(input?.projectRoot);
+  const outcome = resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched);
   const recorded = recordHandFinished({
     projectRoot: input?.projectRoot,
     sessionId: input?.sessionId,
@@ -135,11 +158,16 @@ export function recordTaskCompletion(input) {
     taskId: input?.taskId,
     role: input?.role,
     producerCallId: input?.producerCallId,
-    outcome: resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched),
+    outcome,
     touchedPaths: touched,
     freezeCommitSha: resolveHeadSha(input?.projectRoot),
   });
-  return { ...recorded, terminal: true };
+  const persisted = readHandRecord(input?.projectRoot, input?.sessionId, input?.featureId, input?.taskId);
+  const capturePending =
+    recorded.ok === true &&
+    persisted?.outcome === "DONE" &&
+    persisted?.producerCallId === input?.producerCallId;
+  return { ...recorded, terminal: true, capturePending };
 }
 
-export default { gitTouchedPaths, recordHandFinished, recordTaskCompletion, resolveHeadSha, resolveOcHandOutcome };
+export default { gitTouchedPaths, isAncestorSha, recordHandFinished, recordTaskCompletion, resolveHeadSha, resolveOcHandOutcome };

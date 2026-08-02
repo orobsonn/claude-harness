@@ -110,6 +110,14 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
   for (const item of records) {
     if (!item || typeof item !== "object") continue;
     const taskId = /** @type {{ taskId?: string }} */ (item).taskId ?? "unknown";
+    const identityError = /** @type {{ identityError?: unknown }} */ (item).identityError;
+    if (typeof identityError === "string" && identityError.length > 0) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `[entry-gate] Blocked: hand-record identity mismatch for ${featureId}/${taskId} — ${identityError}.`,
+      };
+    }
     const itemSessionId =
       typeof /** @type {{ sessionId?: unknown }} */ (item).sessionId === "string"
         ? /** @type {{ sessionId: string }} */ (item).sessionId

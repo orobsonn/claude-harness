@@ -198,9 +198,10 @@ test("#ac-1.1 — the refusal is read off the Task read-back, not off the record
   assert.match(branch, /read-?back/i, "refusal branch must name the Task read-back.");
   assert.match(
     branch,
-    /promote[sd]?\b[^.]{0,60}DONE|never records `?CONFIG_ERROR|record can hide/i,
-    "the branch must warn that the record is not a second source.",
+    /never promotes?[^.]{0,80}(BLOCKED|NEEDS_CONTEXT)|preserves?[^.]{0,80}(BLOCKED|NEEDS_CONTEXT)/i,
+    "the branch must lock that explicit refusal is never promoted to DONE.",
   );
+  assert.doesNotMatch(branch, /record can hide/i);
 });
 
 test("#ac-2.1 — the Escalation ladder declares whether a never-DONE capture record is in its trigger", () => {

@@ -25,45 +25,43 @@ export function parseHandStatusFromOutput(text) {
   return last;
 }
 
+const OC_HAND_RECORD_WRITERS = new Set(["host-hand-finished", "run-hand-adapter"]);
+
 /**
- * @description Build Task-path hand-record object (adapter-written, not model prose alone for attestation).
- * @param {{
- *   featureId: string,
- *   taskId: string,
- *   sessionId: string,
- *   freezeCommitSha?: string | null,
- *   outcome: string,
- *   touchedPaths?: string[],
- *   agent?: string,
- *   timestamps?: { startedAt?: string, finishedAt?: string },
- * }} p
- * @returns {object}
+ * @description Validate the factual identity of one OC DONE record against its exact path owner.
+ * @param {unknown} record
+ * @param {{ featureId: string, taskId: string, sessionId: string, producerCallId?: string, sha?: string }} expected
+ * @returns {{ ok: true } | { ok: false, reason: string }}
  */
-export function buildTaskHandRecord({
-  featureId,
-  taskId,
-  sessionId,
-  freezeCommitSha = null,
-  outcome,
-  touchedPaths = [],
-  agent,
-  timestamps = {},
-}) {
-  const now = timestamps.finishedAt ?? new Date().toISOString();
-  return {
-    featureId,
-    taskId,
-    sessionId,
-    freezeCommitSha: freezeCommitSha ?? null,
-    outcome,
-    touchedPaths: Array.isArray(touchedPaths) ? touchedPaths : [],
-    scopeViolations: [],
-    frozenViolations: [],
-    agent,
-    startedAt: timestamps.startedAt ?? now,
-    finishedAt: now,
-    writtenBy: "obs-hand-task",
-  };
+export function validateOcDoneHandRecord(record, expected) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return { ok: false, reason: "hand-record must be an object" };
+  }
+  const value = /** @type {Record<string, unknown>} */ (record);
+  if (value.outcome !== "DONE") return { ok: false, reason: "hand-record is not DONE" };
+  if (!OC_HAND_RECORD_WRITERS.has(value.writtenBy)) {
+    return { ok: false, reason: "hand-record writtenBy is not a host adapter" };
+  }
+  if (
+    value.featureId !== expected.featureId ||
+    value.taskId !== expected.taskId ||
+    value.sessionId !== expected.sessionId
+  ) {
+    return { ok: false, reason: "hand-record feature/task/session identity mismatch" };
+  }
+  if (typeof value.producerCallId !== "string" || value.producerCallId.length === 0) {
+    return { ok: false, reason: "hand-record producer call identity missing" };
+  }
+  if (typeof expected.producerCallId === "string" && value.producerCallId !== expected.producerCallId) {
+    return { ok: false, reason: "hand-record producer call identity mismatch" };
+  }
+  if (typeof value.freezeCommitSha !== "string" || value.freezeCommitSha.length === 0) {
+    return { ok: false, reason: "hand-record freeze SHA missing" };
+  }
+  if (typeof expected.sha === "string" && value.freezeCommitSha !== expected.sha) {
+    return { ok: false, reason: "hand-record freeze SHA mismatch" };
+  }
+  return { ok: true };
 }
 
 /**
@@ -150,7 +148,7 @@ function readRecordFile(filePath) {
  * Unsafe featureId → []. Missing dir → []. Never throws.
  * @param {string} projectRoot
  * @param {string} featureId
- * @returns {Array<{ taskId: string, sessionId: string, record: object }>}
+ * @returns {Array<{ taskId: string, sessionId: string, record: object, identityError?: string }>}
  */
 export function listHandRecordsForFeature(projectRoot, featureId) {
   try {
@@ -164,7 +162,7 @@ export function listHandRecordsForFeature(projectRoot, featureId) {
       return [];
     }
 
-    /** @type {Array<{ taskId: string, sessionId: string, record: object }>} */
+    /** @type {Array<{ taskId: string, sessionId: string, record: object, identityError?: string }>} */
     const results = [];
 
     for (const sessionEntry of sessionEntries) {
@@ -186,7 +184,15 @@ export function listHandRecordsForFeature(projectRoot, featureId) {
         if (!taskId) continue;
         const record = readRecordFile(path.join(sessionDir, taskEntry.name));
         if (record !== null) {
-          results.push({ taskId, sessionId, record });
+          const identity = record.outcome === "DONE"
+            ? validateOcDoneHandRecord(record, { featureId, taskId, sessionId })
+            : { ok: true };
+          results.push({
+            taskId,
+            sessionId,
+            record,
+            ...(!identity.ok ? { identityError: identity.reason } : {}),
+          });
         }
       }
     }

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { registerHooks } from "node:module";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -24,7 +25,7 @@ registerHooks({
 });
 
 const { default: MarkerAuthority } = await import("./marker-authority.ts");
-const { writeHandRecord, buildTaskHandRecord } = await import("../lib/hand-records.mjs");
+const { writeHandRecord } = await import("../lib/hand-records.mjs");
 const { formatFeatureTaskEntry } = await import("../../shared/lib/absolution.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
 
@@ -42,22 +43,62 @@ async function markOnce(before, execute, action, extra = {}, callID = `call-${ac
   return execute(args, context(SESSION, callID));
 }
 
-function seedDoneHandRecord(root, outcome = "DONE") {
-  const record = buildTaskHandRecord({
+function ensureGitHead(root) {
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    fs.writeFileSync(path.join(root, "capture-anchor.txt"), "anchor\n");
+    assert.equal(spawnSync("git", ["add", "capture-anchor.txt"], { cwd: root }).status, 0);
+    const committed = spawnSync("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-qm", "test anchor"], { cwd: root });
+    assert.equal(committed.status, 0, committed.stderr?.toString());
+  }
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  assert.equal(head.status, 0, head.stderr);
+  return head.stdout.trim();
+}
+
+function exactDispatchPath(root, callId) {
+  return path.join(root, ".opencode", "plans", ".state", SESSION, "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
+}
+
+function seedProducerDispatch(root, callId = "task-call-one") {
+  const file = exactDispatchPath(root, callId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    parent_session_id: SESSION,
+    dispatch_call_id: callId,
+    child_session_id: "child-task-one",
+    feature_id: FEATURE,
+    task_id: TASK,
+    role: "executor-medium",
+    scope_paths: ["src"],
+    allowed_writes: [],
+    snapshot_hash: "a".repeat(64),
+    claimed_at: "2026-08-01T00:00:00.000Z",
+  }));
+  return file;
+}
+
+function seedDoneHandRecord(root, outcome = "DONE", overrides = {}, dispatchCallId = "task-call-one") {
+  const sha = ensureGitHead(root);
+  const dispatchPath = seedProducerDispatch(root, dispatchCallId);
+  const record = {
     featureId: FEATURE,
     taskId: TASK,
     sessionId: SESSION,
+    producerCallId: "task-call-one",
+    freezeCommitSha: sha,
     outcome,
     agent: "executor-medium",
-  });
-  record.writtenBy = "host-hand-finished";
+    writtenBy: "host-hand-finished",
+    ...overrides,
+  };
   const written = writeHandRecord({
     roots: { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
     taskId: TASK,
     record,
   });
   assert.equal(written.ok, true, written.reason);
-  return written.path;
+  return { path: written.path, sha, dispatchPath };
 }
 
 function seed(root) {
@@ -339,9 +380,8 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-ok-"));
   try {
     const { file } = seed(root);
-    const recordPath = seedDoneHandRecord(root, "DONE");
+    const { path: recordPath, sha, dispatchPath } = seedDoneHandRecord(root, "DONE");
     const { before, execute } = await harness(root);
-    const sha = "abc123deadbeef";
     const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
     assert.equal(finished.metadata.ok, true, finished.output);
     const captured = await markOnce(
@@ -359,6 +399,71 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     assert.equal(typeof record.capturedVerifiedAt, "string");
     assert.ok(record.capturedVerifiedAt.length > 0);
+    assert.equal(fs.existsSync(dispatchPath), false, "capture consumes its exact producer record");
+    const stableState = fs.readFileSync(file);
+    const stableRecord = fs.readFileSync(recordPath);
+    const replay = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-capture-replay");
+    assert.equal(replay.metadata.ok, true, replay.output);
+    assert.deepEqual(fs.readFileSync(file), stableState);
+    assert.deepEqual(fs.readFileSync(recordPath), stableRecord);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hand-finished and capture-verified reject a path-correct record with foreign internal identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-foreign-"));
+  try {
+    const { file } = seed(root);
+    const { path: recordPath, sha } = seedDoneHandRecord(root, "DONE", {
+      featureId: "foreign-feature",
+      taskId: "foreign-task",
+      sessionId: "foreign-session",
+      producerCallId: "foreign-call-nonempty",
+    });
+    const beforeRecord = fs.readFileSync(recordPath, "utf8");
+    const { before, execute } = await harness(root);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-foreign-finished");
+    assert.equal(finished.metadata.ok, false);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-foreign-capture");
+    assert.equal(captured.metadata.ok, false);
+    assert.equal(fs.readFileSync(recordPath, "utf8"), beforeRecord);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(state.hand_finished ?? [], []);
+    assert.deepEqual(state.capture_verified ?? [], []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified is parent-only even with a valid record and hand_finished", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-child-"));
+  try {
+    seed(root);
+    const { sha } = seedDoneHandRecord(root);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-parent-finished")).metadata.ok, true);
+    const args = { action: "capture-verified", task_id: TASK, sha };
+    await before({ tool: "mark", sessionID: SESSION, callID: "call-child-capture" }, { args });
+    const captured = await execute(args, { ...context(SESSION, "call-child-capture"), agent: "executor-low" });
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? captured.output), /build|parent/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified rejects a SHA that does not match the real DONE record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-sha-"));
+  try {
+    const { file } = seed(root);
+    seedDoneHandRecord(root);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-sha-finished")).metadata.ok, true);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha: "abc123deadbeef" }, "call-sha-capture");
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? captured.output), /SHA mismatch/i);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified ?? [], []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -456,13 +561,13 @@ test("hand-finished rejects forged writtenBy (not host adapter)", async () => {
   try {
     const { file } = seed(root);
     const forged = {
-      ...buildTaskHandRecord({
-        featureId: FEATURE,
-        taskId: TASK,
-        sessionId: SESSION,
-        outcome: "DONE",
-        agent: "executor-medium",
-      }),
+      featureId: FEATURE,
+      taskId: TASK,
+      sessionId: SESSION,
+      producerCallId: "task-call-one",
+      freezeCommitSha: "abc123deadbeef",
+      outcome: "DONE",
+      agent: "executor-medium",
       writtenBy: "model-bash",
     };
     const written = writeHandRecord({

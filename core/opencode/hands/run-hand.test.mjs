@@ -342,6 +342,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
         reasons: ["locked tests exited 1"],
       },
       agent: "executor-medium",
+      producerCallId: "run-hand:test-call",
     });
     assert.equal(record.writtenBy, "run-hand-adapter");
     assert.equal(record.featureId, "oc-port-phase-1");
@@ -380,6 +381,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
     assert.equal(disk.writtenBy, "run-hand-adapter");
     assert.equal(disk.outcome, OUTCOME.FAILED);
     assert.equal(disk.sessionId, "ses_abc123");
+    assert.equal(disk.producerCallId, "run-hand:test-call");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -600,6 +602,44 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
     assert.equal(result.processExitCode, 0);
     assert.equal(existsSync(join(root, ".opencode", "plans", ".state", "ses_run1", "dispatch-records", `${crypto.createHash("sha256").update("call-run").digest("hex")}.json`)), false);
 
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runHand: DONE retains its exact producer dispatch until parent capture", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-done-"));
+  try {
+    seedBoundTask(root, "ses_done", "feat-done", "task-done");
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "test-author.md"), ALL_HAND_FM);
+    const callId = "run-hand:done-call";
+    const result = await runHand({
+      feature_id: "feat-done",
+      task_id: "task-done",
+      session_id: "ses_done",
+      project_root: root,
+      freeze_commit_sha: "freeze-done",
+      role: "test-author",
+      no_tests: true,
+      brief: "do work",
+    }, {
+      agentsDir,
+      dispatchCallId: () => callId,
+      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      git: {
+        headSha: () => "freeze-done",
+        diffNameOnly: () => ["src/done.ts"],
+        lsFilesOthers: () => [],
+      },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+    assert.equal(result.outcome, OUTCOME.DONE);
+    assert.equal(result.record.producerCallId, callId);
+    const dispatchPath = join(root, ".opencode", "plans", ".state", "ses_done", "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
+    assert.equal(existsSync(dispatchPath), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

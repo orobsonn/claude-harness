@@ -434,7 +434,7 @@ export async function createEntryGateHooks(
           outputText: String(output?.output ?? output?.content ?? output?.result ?? ""),
           background: output?.metadata?.background === true,
           })
-          cleanupExactRecord = completion.ok === true && completion.terminal === true
+          cleanupExactRecord = completion.ok === true && completion.terminal === true && completion.capturePending !== true
         }
       } catch { /* terminal completion observation is best-effort */ }
       finally {

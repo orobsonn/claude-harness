@@ -9,7 +9,6 @@ import {
   listHandRecordsForFeature,
   writeHandRecord,
   parseHandStatusFromOutput,
-  buildTaskHandRecord,
 } from "./hand-records.mjs";
 import { handRecordPath } from "../../shared/lib/path-helpers.mjs";
 
@@ -150,27 +149,18 @@ test("parseHandStatusFromOutput: DONE / DONE_WITH_CONCERNS / missing / last wins
   assert.equal(parseHandStatusFromOutput("status: DONE"), null);
 });
 
-test("buildTaskHandRecord shape", () => {
-  const rec = buildTaskHandRecord({
-    featureId: "feat-a",
-    taskId: "t-1",
-    sessionId: "ses_1",
-    freezeCommitSha: "abc",
-    outcome: "DONE",
-    touchedPaths: ["src/a.ts"],
-    agent: "executor-medium",
-    timestamps: { startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:01:00.000Z" },
+test("DONE record with path/internal identity mismatch is surfaced, never hidden", async () => {
+  await withTempProject((projectRoot) => {
+    seedHandRecord(projectRoot, "feat-owned", "ses-owned", "task-owned", {
+      featureId: "feat-foreign",
+      taskId: "task-foreign",
+      sessionId: "ses-foreign",
+      producerCallId: "",
+      freezeCommitSha: "abc",
+      outcome: "DONE",
+      writtenBy: "host-hand-finished",
+    });
+    const [listed] = listHandRecordsForFeature(projectRoot, "feat-owned");
+    assert.match(listed.identityError, /identity|producer/i);
   });
-  assert.equal(rec.featureId, "feat-a");
-  assert.equal(rec.taskId, "t-1");
-  assert.equal(rec.sessionId, "ses_1");
-  assert.equal(rec.freezeCommitSha, "abc");
-  assert.equal(rec.outcome, "DONE");
-  assert.deepEqual(rec.touchedPaths, ["src/a.ts"]);
-  assert.deepEqual(rec.scopeViolations, []);
-  assert.deepEqual(rec.frozenViolations, []);
-  assert.equal(rec.agent, "executor-medium");
-  assert.equal(rec.writtenBy, "obs-hand-task");
-  assert.equal(rec.startedAt, "2026-01-01T00:00:00.000Z");
-  assert.equal(rec.finishedAt, "2026-01-01T00:01:00.000Z");
 });

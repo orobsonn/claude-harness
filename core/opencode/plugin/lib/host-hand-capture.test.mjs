@@ -17,8 +17,15 @@ test("resolveHeadSha uses only its explicit project root and fails best-effort",
   assert.equal(hostHandCapture.resolveHeadSha("/explicit", () => { throw new Error("no git"); }), null);
 });
 
-test("resolveOcHandOutcome promotes work evidence but preserves explicit terminal outcomes", () => {
-  assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "DONE");
+test("isAncestorSha distinguishes ancestral, divergent, and unavailable git facts", () => {
+  assert.equal(hostHandCapture.isAncestorSha("/explicit", "abc", () => ""), true);
+  assert.equal(hostHandCapture.isAncestorSha("/explicit", "abc", () => { throw Object.assign(new Error("diverged"), { status: 1 }); }), false);
+  assert.equal(hostHandCapture.isAncestorSha("/explicit", "abc", () => { throw new Error("git missing"); }), null);
+});
+
+test("resolveOcHandOutcome never promotes non-DONE output from unrelated git evidence", () => {
+  assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", ["src/a.ts"]), "BLOCKED");
+  assert.equal(hostHandCapture.resolveOcHandOutcome(null, ["src/a.ts"]), "BLOCKED");
   assert.equal(hostHandCapture.resolveOcHandOutcome("NEEDS_CONTEXT", ["src/a.ts"]), "NEEDS_CONTEXT");
   assert.equal(hostHandCapture.resolveOcHandOutcome("DONE", []), "DONE");
   assert.equal(hostHandCapture.resolveOcHandOutcome("BLOCKED", []), "BLOCKED");
@@ -150,6 +157,24 @@ test("same-producer retry repairs a missing bare completion stamp without rewrit
     assert.equal(retry.recorded, false);
     assert.deepEqual(fs.readFileSync(recordPath), before);
     assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, [`${featureId}/${taskId}`]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("capturePending belongs only to the producer that owns the persisted DONE record", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-pending-owner-"));
+  try {
+    const sessionId = "ses_pending";
+    const featureId = "feat-pending";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "older", claimedAt: "2026-08-01T00:00:00.000Z" });
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "newer", claimedAt: "2026-08-01T00:01:00.000Z" });
+    const base = { projectRoot: root, sessionId, featureId, taskId, role: "executor-low" };
+    assert.equal(hostHandCapture.recordTaskCompletion({ ...base, producerCallId: "newer", outputText: "Status: DONE" }).capturePending, true);
+    assert.equal(hostHandCapture.recordTaskCompletion({ ...base, producerCallId: "older", outputText: "Status: DONE" }).capturePending, false);
+    assert.equal(hostHandCapture.recordTaskCompletion({ ...base, producerCallId: "newer", outputText: "Status: BLOCKED" }).capturePending, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

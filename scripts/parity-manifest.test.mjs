@@ -194,7 +194,7 @@ const OC_MODULE_NORMATIVE_REASONS = {
   "plugin/lib/bash-decide.mjs": "Reduce Bash judgment to the factual delivery boundary.",
   "plugin/lib/ceremony-binding.mjs": "R10 is represented by plain booleans and feature match.",
   "plugin/lib/ceremony-transition.mjs": "Host marker writes ordered R10 facts directly with no sidecar.",
-  "plugin/lib/dispatch-scope.mjs": "Call-keyed scope records prevent concurrent sibling borrowing.",
+  "plugin/lib/dispatch-scope.mjs": "Call-keyed records prevent sibling scope borrowing and bind capture to its producer.",
   "plugin/lib/entry-decide.mjs": "Pure decision retains only triage, fidelity, re-gate and planner facts.",
   "plugin/lib/gate-state.mjs": "Framework-owned atomic primitive belongs outside plugin/lib.",
   "plugin/lib/hand-records.mjs": "Record identity and capture facts must remain independently verifiable.",
@@ -305,7 +305,7 @@ const OC_RULE_SEMANTICS = {
     required_outcome: "capture points to a real DONE record and current ancestral SHA",
     classification: "rewrite",
     failure_policy: "missing/mismatched record is no-op/reject; delivery remains blocked",
-    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts"],
+    implementation_targets: ["plugin/entry-gate.ts", "plugin/lib/bash-decide.mjs", "lib/dispatch-scope.mjs", "lib/gate-state.mjs", "lib/hand-records.mjs", "plugin/lib/host-hand-capture.mjs", "plugin/lib/is-delivery-command.mjs", "plugin/lib/session-state.mjs", "plugin/marker-authority.ts"],
     locked_evidence: ["real record, task/feature/session/call/SHA all match"],
   },
   R9: {

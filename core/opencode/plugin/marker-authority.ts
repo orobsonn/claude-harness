@@ -17,7 +17,9 @@ import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs
 import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
 import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs"
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs"
-import { resolveHeadSha } from "./lib/host-hand-capture.mjs"
+import { validateOcDoneHandRecord } from "../lib/hand-records.mjs"
+import { readDispatchRecord, removeDispatchRecord } from "../lib/dispatch-scope.mjs"
+import { isAncestorSha, resolveHeadSha } from "./lib/host-hand-capture.mjs"
 
 type MarkerArgs = {
   action?: string
@@ -68,10 +70,39 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   const projectRoot = typeof directory === "string" && directory ? directory : worktree
   const authorizedArgs = new WeakMap<object, Authorization>()
 
+  function validateExactProducer(record: Record<string, unknown>, authorization: Authorization, taskId: string, sha?: string) {
+    const identity = validateOcDoneHandRecord(record, {
+      featureId: authorization.featureID,
+      taskId,
+      sessionId: authorization.sessionID,
+      ...(typeof sha === "string" ? { sha } : {}),
+    })
+    if (!identity.ok) return identity
+    const producerCallId = typeof record.producerCallId === "string" ? record.producerCallId : ""
+    const producer = readDispatchRecord(projectRoot, {
+      parentSessionId: authorization.sessionID,
+      callId: producerCallId,
+    })
+    if (!producer.ok) return { ok: false as const, reason: "exact producer dispatch record required" }
+    if (
+      producer.record.feature_id !== authorization.featureID ||
+      producer.record.task_id !== taskId ||
+      producer.record.role !== record.agent
+    ) return { ok: false as const, reason: "producer dispatch identity mismatch" }
+    return validateOcDoneHandRecord(record, {
+      featureId: authorization.featureID,
+      taskId,
+      sessionId: authorization.sessionID,
+      producerCallId: producer.record.dispatch_call_id,
+      ...(typeof sha === "string" ? { sha } : {}),
+    })
+  }
+
   function mutate(args: MarkerArgs, authorization: Authorization) {
     const statePath = gateStatePath({ projectRoot, runtime: "opencode", sessionId: authorization.sessionID })
     if (!statePath.ok) return { ok: false, reason: statePath.reason }
-    return withGateStateLock(statePath.path, (previous: Record<string, unknown>) => {
+    let capturedProducerCallId = ""
+    const locked = withGateStateLock(statePath.path, (previous: Record<string, unknown>) => {
       if (previous.session_id !== authorization.sessionID || previous.feature_id !== authorization.featureID) {
         return { ok: false, reason: "gate-state identity changed before marker mutation" }
       }
@@ -115,10 +146,8 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
           if (!isDoneHandRecord(hfRecord)) return { ok: false, reason: "hand-record is not DONE" }
-          const hfBy = hfRecord.writtenBy
-          if (hfBy !== "host-hand-finished" && hfBy !== "run-hand-adapter") {
-            return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
-          }
+          const hfIdentity = validateExactProducer(hfRecord, authorization, taskId)
+          if (!hfIdentity.ok) return hfIdentity
           patch = { hand_finished: [bare] }
         }
         else if (action === "regate-passed") {
@@ -145,14 +174,33 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
           if (!isDoneHandRecord(record)) return { ok: false, reason: "hand-record is not DONE" }
-          const writtenBy = record.writtenBy
-          if (writtenBy !== "host-hand-finished" && writtenBy !== "run-hand-adapter") {
-            return { ok: false, reason: "hand-record writtenBy is not a host adapter" }
+          payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
+          if (Array.isArray(previous.capture_verified) && previous.capture_verified.includes(payload)) {
+            const replayIdentity = validateOcDoneHandRecord(record, {
+              featureId: authorization.featureID,
+              taskId,
+              sessionId: authorization.sessionID,
+              sha,
+            })
+            if (!replayIdentity.ok) return replayIdentity
+            if (typeof record.capturedVerifiedAt !== "string" || record.capturedVerifiedAt.length === 0) {
+              return { ok: false, reason: "captured hand-record stamp missing" }
+            }
+            if (isAncestorSha(projectRoot, sha) !== true) {
+              return { ok: false, reason: "capture-verified requires the matching record SHA to be ancestral to HEAD" }
+            }
+            capturedProducerCallId = String(record.producerCallId)
+            return previous
+          }
+          const identity = validateExactProducer(record, authorization, taskId, sha)
+          if (!identity.ok) return identity
+          if (isAncestorSha(projectRoot, sha) !== true) {
+            return { ok: false, reason: "capture-verified requires the matching record SHA to be ancestral to HEAD" }
           }
           if (!atomicJsonWrite(recordPath.path, { ...record, capturedVerifiedAt: new Date().toISOString() })) {
             return { ok: false, reason: "hand-record persistence failed" }
           }
-          payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
+          capturedProducerCallId = String(record.producerCallId)
           patch = { capture_verified: [payload] }
         } else return { ok: false, reason: "unknown privileged marker action" }
       }
@@ -160,6 +208,13 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       if (!applied.ok) return applied
       return applied.state
     })
+    if (!locked.ok || !capturedProducerCallId) return locked
+    const removed = removeDispatchRecord(projectRoot, {
+      sessionId: authorization.sessionID,
+      callId: capturedProducerCallId,
+    })
+    if (!removed.ok) return { ok: false, reason: removed.reason }
+    return locked
   }
 
   const mark = tool({
@@ -181,6 +236,9 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         authorization.callID !== callID ||
         authorization.action !== args.action
       ) return response(false, "marker authorization missing, cloned, replayed, or binding-mismatched")
+      if (authorization.action === "capture-verified" && (context as unknown as { agent?: unknown }).agent !== "build") {
+        return response(false, "capture-verified is restricted to the parent build agent")
+      }
       const result = mutate(args, authorization)
       if (!result.ok) return response(false, String(result.reason ?? "marker failed"))
       return response(true, "", {

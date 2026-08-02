@@ -41,6 +41,29 @@ test("OC DONE + valid stamp + empty violations → null allow", () => {
   assert.equal(d, null);
 });
 
+test("OC path record with mismatched internal identity remains a delivery deny", () => {
+  const d = checkRealFileCaptureRail("feat", {
+    listHandRecordsForFeatureFn: listOf({
+      taskId: "t1",
+      sessionId: "ses-1",
+      identityError: "hand-record feature/task/session/call mismatch",
+      record: {
+        featureId: "foreign",
+        taskId: "foreign",
+        sessionId: "foreign",
+        producerCallId: "",
+        writtenBy: "host-hand-finished",
+        outcome: "DONE",
+        freezeCommitSha: "abc",
+        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
+      },
+    }),
+    isAncestorFn: ancTrue,
+  });
+  assert.equal(d?.decision, "deny");
+  assert.match(d.reason, /identity|mismatch/i);
+});
+
 test("OC DONE + stamp + root scopeViolations → SCOPE/FROZEN deny", () => {
   const d = checkRealFileCaptureRail("feat", {
     listHandRecordsForFeatureFn: listOf({

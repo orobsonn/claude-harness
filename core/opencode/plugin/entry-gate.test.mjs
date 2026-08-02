@@ -1168,7 +1168,7 @@ test("entry-gate leaves an exact record unbound when SDK is unavailable or paren
   }, { client: { session: { get: async () => ({ data: { id: "different-child", parentID: SID } }), messages: async () => { throw new Error("must not query foreign parent") } } } })
 })
 
-test("entry-gate terminal after records completion before exact dispatch cleanup", async () => {
+test("entry-gate DONE completion retains exact producer authority until capture", async () => {
   await withHooks(async (hooks, root) => {
     writeScopeReadyState(root)
     const args = writingTaskArgs()
@@ -1177,7 +1177,7 @@ test("entry-gate terminal after records completion before exact dispatch cleanup
     const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")
     assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).producerCallId, "call-finish-first")
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, `.opencode/plans/.state/${SID}/gate-state.json`), "utf8")).hand_finished, ["feat/task-scope"])
-    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-finish-first")), false)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-finish-first")), true)
   })
 })
 
@@ -1205,7 +1205,7 @@ test("entry-gate completion producer failure retains exact dispatch authority fo
   })
 })
 
-test("obs-first then entry terminal after keeps the producer record byte-stable and cleans exactly", async () => {
+test("obs-first then entry terminal after keeps hand record and capture-pending producer stable", async () => {
   await withHooks(async (hooks, root) => {
     writeScopeReadyState(root)
     const args = writingTaskArgs()
@@ -1218,6 +1218,6 @@ test("obs-first then entry terminal after keeps the producer record byte-stable 
     const before = fs.readFileSync(recordPath)
     await hooks["tool.execute.after"](input, output)
     assert.deepEqual(fs.readFileSync(recordPath), before)
-    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-obs-first")), false)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-obs-first")), true)
   })
 })
