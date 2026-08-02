@@ -9,7 +9,9 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
-import { createObsHandHooks } from "./obs-hand.ts"
+import { obsHandTestApi } from "./obs-hand.ts"
+
+const { createObsHandHooks } = obsHandTestApi
 import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
 const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }
 const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH

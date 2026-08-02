@@ -26,7 +26,7 @@ function isBashTool(name: unknown): boolean {
 /**
  * @description Builds the lavish-command-gate hook (async load of pure lavishDenyReason).
  */
-export async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute.before">> {
+async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute.before">> {
   const { lavishDenyReason } = await import("./lib/lavish-command-decide.mjs");
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
 
@@ -40,6 +40,9 @@ export async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.
     },
   };
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const lavishCommandGateTestApi = Object.freeze({ createLavishCommandGateHooks });
 
 /**
  * @description OpenCode plugin factory — named const + default (OC load contract).

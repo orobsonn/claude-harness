@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** @description Build observation hooks with no dispatch scope authority. */
-export async function createObsHandHooks(dir?: string): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
+async function createObsHandHooks(dir?: string): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after">> {
   const { isHandRole, extractTaskIds, resolveHookArgs, eventForTaskExecuting, eventForHandRan, obsAppend, dedupeByType, taskIndexFromPlan, planDirForRun } = await import("../lib/obs-emit.mjs");
   const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs");
   const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
@@ -59,6 +59,9 @@ export async function createObsHandHooks(dir?: string): Promise<Pick<Hooks, "too
     },
   };
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const obsHandTestApi = Object.freeze({ createObsHandHooks });
 
 export const obsHand: Plugin = async ({ directory }: any) => createObsHandHooks(typeof directory === "string" ? directory : undefined);
 export default obsHand;

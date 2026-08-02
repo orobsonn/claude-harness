@@ -8,8 +8,11 @@ import os from "node:os"
 import path from "node:path"
 import crypto from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { createEntryGateHooks } from "./entry-gate.ts"
-import { createObsHandHooks } from "./obs-hand.ts"
+import { entryGateTestApi } from "./entry-gate.ts"
+import { obsHandTestApi } from "./obs-hand.ts"
+
+const { createEntryGateHooks } = entryGateTestApi
+const { createObsHandHooks } = obsHandTestApi
 import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 
 const SID = "ses_test1"

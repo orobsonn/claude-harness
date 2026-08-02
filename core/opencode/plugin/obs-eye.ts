@@ -23,7 +23,7 @@ function extractResponse(input: any, output: any): string {
 /**
  * @description Build after-hooks for eye outbox events.
  */
-export async function createObsEyeHooks(
+async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
@@ -63,6 +63,9 @@ export async function createObsEyeHooks(
     },
   };
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const obsEyeTestApi = Object.freeze({ createObsEyeHooks });
 
 export const obsEye: Plugin = async ({ directory }) =>
   createObsEyeHooks(typeof directory === "string" ? directory : undefined);

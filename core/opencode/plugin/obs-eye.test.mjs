@@ -6,7 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createObsEyeHooks } from "./obs-eye.ts";
+import { obsEyeTestApi } from "./obs-eye.ts";
+
+const { createObsEyeHooks } = obsEyeTestApi;
 import { eventsPathFor, readEvents } from "../../shared/lib/obs-append.mjs";
 
 const SESSION = "ses-obs-eye";

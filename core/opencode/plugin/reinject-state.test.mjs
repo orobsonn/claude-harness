@@ -6,7 +6,9 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { Worker } from "node:worker_threads"
-import { createReinjectStateHooks } from "./reinject-state.ts"
+import { reinjectStateTestApi } from "./reinject-state.ts"
+
+const { createReinjectStateHooks } = reinjectStateTestApi
 import { buildSessionRecovery, cleanupRetainedCompletedSession, encodeRecoveryPayload, sweepRetainedSessions } from "./lib/session-state.mjs"
 import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }

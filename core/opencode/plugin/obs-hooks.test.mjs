@@ -5,9 +5,13 @@ import crypto from "node:crypto";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { createObsPlanWriteHooks } from "./obs-plan-write.ts";
-import { createObsEyeHooks } from "./obs-eye.ts";
-import { createObsHandHooks } from "./obs-hand.ts";
+import { obsPlanWriteTestApi } from "./obs-plan-write.ts";
+import { obsEyeTestApi } from "./obs-eye.ts";
+import { obsHandTestApi } from "./obs-hand.ts";
+
+const { createObsPlanWriteHooks } = obsPlanWriteTestApi;
+const { createObsEyeHooks } = obsEyeTestApi;
+const { createObsHandHooks } = obsHandTestApi;
 
 function taskArgs(taskId, role = "executor-medium", featureId = "feat") {
   return {

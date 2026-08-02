@@ -161,7 +161,7 @@ function defaultIsAncestor(sha: string, cwd = process.cwd()): boolean | null {
  * @description Builds entry-gate hooks (async load of pure decide mjs).
  * Optional deps override git/list/ancestor seams for tests.
  */
-export async function createEntryGateHooks(
+async function createEntryGateHooks(
   projectRoot: string,
   deps: EntryGateDeps = {},
 ): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
@@ -487,6 +487,9 @@ export async function createEntryGateHooks(
     },
   }
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const entryGateTestApi = Object.freeze({ createEntryGateHooks })
 
 /**
  * @description Resolve project root — never empty string into hooks.

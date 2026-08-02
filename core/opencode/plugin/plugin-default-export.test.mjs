@@ -24,6 +24,10 @@ async function assertPluginDir(pluginDir) {
   for (const name of files) {
     const mod = await import(pathToFileURL(join(pluginDir, name)).href);
     assert.equal(typeof mod.default, "function", `${name} missing default export`);
+    for (const [exportName, value] of Object.entries(mod)) {
+      if (typeof value !== "function" || exportName === "default") continue;
+      assert.equal(value, mod.default, `${name} exports helper function '${exportName}' that OpenCode autoloads as a duplicate plugin`);
+    }
   }
 }
 

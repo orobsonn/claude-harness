@@ -35,7 +35,7 @@ function routingAt(root: string): { routing: Record<string, any> | null; selecte
 }
 
 /** @description Build durable planner hooks, including the documented OpenCode ToolStateError event boundary. */
-export async function createPlannerRecoveryHooks(
+async function createPlannerRecoveryHooks(
   projectRoot: string,
   deps: { now?: () => number; token?: () => string } = {},
 ): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
@@ -335,6 +335,9 @@ export async function createPlannerRecoveryHooks(
     },
   }
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const plannerRecoveryTestApi = Object.freeze({ createPlannerRecoveryHooks })
 
 export const PlannerRecovery: Plugin = async ({ directory, worktree }: any) => createPlannerRecoveryHooks(
   typeof directory === "string" && directory ? directory : typeof worktree === "string" ? worktree : process.cwd(),

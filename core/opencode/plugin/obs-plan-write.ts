@@ -20,7 +20,7 @@ function extractPath(args: Record<string, unknown> | null): string {
 /**
  * @description Build fail-open after-hooks for actual Write/Edit plan/spec observations.
  */
-export async function createObsPlanWriteHooks(
+async function createObsPlanWriteHooks(
   _projectRoot?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { eventForPlanPath, obsAppend, dedupeByType, resolveHookArgs } = await import(
@@ -47,6 +47,9 @@ export async function createObsPlanWriteHooks(
     },
   };
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const obsPlanWriteTestApi = Object.freeze({ createObsPlanWriteHooks });
 
 export const obsPlanWrite: Plugin = async ({ directory, worktree }: any) => {
   return createObsPlanWriteHooks(typeof directory === "string" && directory ? directory : worktree);

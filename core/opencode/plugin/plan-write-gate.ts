@@ -83,7 +83,7 @@ function extractOfficialWritePaths(args: Record<string, unknown> | null, extract
  * @description Builds plan-write-gate hooks (async load of pure decide + resolveHookArgs).
  * When projectRoot is set, loads gate-state by sessionId for the scope rail.
  */
-export async function createPlanWriteGateHooks(
+async function createPlanWriteGateHooks(
   projectRoot?: string,
   deps: { client?: any; identityReader?: any; resolveRuntimeIdentity?: any; requireHeartbeat?: boolean } = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
@@ -183,6 +183,9 @@ export async function createPlanWriteGateHooks(
     },
   };
 }
+
+/** @description Non-function test surface so OpenCode's plugin autoloader cannot execute the hook builder as a second plugin. */
+export const planWriteGateTestApi = Object.freeze({ createPlanWriteGateHooks });
 
 /**
  * @description OpenCode plugin factory — named const + default (OC load contract).

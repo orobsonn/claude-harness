@@ -41,7 +41,7 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
 /**
  * @description Builds plan-gate hooks (async load of pure plan-decide + identity modules).
  */
-export async function createPlanGateHooks(
+async function createPlanGateHooks(
   projectRoot: string,
   deps: { validatePlanFn?: (plan: unknown, options: unknown) => { ok: boolean; errors: string[] } } = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
@@ -181,6 +181,9 @@ export async function createPlanGateHooks(
     },
   }
 }
+
+/** @description Non-function test surface; function exports are auto-loaded as plugins by OpenCode. */
+export const planGateTestApi = Object.freeze({ createPlanGateHooks })
 
 /**
  * @description Resolve project root — never empty string into hooks.

@@ -6,7 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveScopeRuntimeIdentity } from "./scope-runtime-identity.mjs";
-import { createPlanWriteGateHooks, PlanWriteGate } from "../plan-write-gate.ts";
+import { planWriteGateTestApi, PlanWriteGate } from "../plan-write-gate.ts";
+
+const { createPlanWriteGateHooks } = planWriteGateTestApi;
 
 function seed(root, callId, { scopePaths = ["src/a.ts"], taskId = "task" } = {}) {
   const sessionId = "parent";
@@ -61,6 +63,9 @@ test("bound child keeps its exact scope rail when official SDK metadata is tempo
     await assert.rejects(
       () => before({ tool: "write", sessionID: "child", callID: "write" }, { args: { filePath: "outside/evil.ts", content: "x" } }),
       /OUTSIDE/i,
+    );
+    await assert.doesNotReject(
+      () => before({ tool: "write", sessionID: "child", callID: "write-in-scope" }, { args: { filePath: path.join(root, "src/a.ts"), content: "x" } }),
     );
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

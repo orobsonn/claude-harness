@@ -12,9 +12,13 @@ import {
   extractWritePath,
   throwIfDenied,
 } from "./lib/plan-write-decide.mjs";
-import { createPlanWriteGateHooks } from "./plan-write-gate.ts";
-import { createPlanGateHooks } from "./plan-gate.ts";
-import { createObsHandHooks } from "./obs-hand.ts";
+import { planWriteGateTestApi } from "./plan-write-gate.ts";
+import { planGateTestApi } from "./plan-gate.ts";
+import { obsHandTestApi } from "./obs-hand.ts";
+
+const { createPlanWriteGateHooks } = planWriteGateTestApi;
+const { createPlanGateHooks } = planGateTestApi;
+const { createObsHandHooks } = obsHandTestApi;
 
 async function installComposition(root) {
   await createPlanGateHooks(root);
@@ -34,6 +38,16 @@ function createScopedHooks(root, { scopePaths = ["src/a.ts"] } = {}) {
     }),
   });
 }
+
+test("autoload surface exposes only the canonical plugin factory as a function", async () => {
+  const module = await import("./plan-write-gate.ts");
+  const functionExports = Object.entries(module)
+    .filter(([, value]) => typeof value === "function")
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(functionExports, ["PlanWriteGate", "default"]);
+  assert.equal(module.PlanWriteGate, module.default);
+});
 
 test("deny model-tool writes to a feature canonical execution-plan.json", () => {
   const p = {
