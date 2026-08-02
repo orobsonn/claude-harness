@@ -42,6 +42,45 @@ test("missing SDK opens and returned contradiction denies", async () => {
   assert.equal(conflict.conflict, true);
 });
 
+test("bound child keeps its exact scope rail when official SDK metadata is temporarily unavailable", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-bound-fallback-"));
+  try {
+    seed(root, "bound-call", { scopePaths: ["src/a.ts"], taskId: "bound" });
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "parent", "dispatch-records", `${crypto.createHash("sha256").update("bound-call").digest("hex")}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    record.child_session_id = "child";
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    const reader = { getSession: async () => { throw new Error("SDK unavailable"); } };
+    const resolved = await resolveScopeRuntimeIdentity(root, { sessionID: "child", callID: "write", tool: "write" }, { reader });
+    assert.equal(resolved.ok, true, resolved.reason);
+    assert.equal(resolved.parentSessionId, "parent");
+    assert.equal(resolved.callId, "bound-call");
+    assert.deepEqual(resolved.record.scope_paths, ["src/a.ts"]);
+
+    const before = (await createPlanWriteGateHooks(root, { identityReader: reader }))["tool.execute.before"];
+    await assert.rejects(
+      () => before({ tool: "write", sessionID: "child", callID: "write" }, { args: { filePath: "outside/evil.ts", content: "x" } }),
+      /OUTSIDE/i,
+    );
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("durable child fallback rejects duplicate bindings instead of borrowing either scope", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-bound-duplicate-"));
+  try {
+    for (const callId of ["left", "right"]) {
+      seed(root, callId);
+      const recordPath = path.join(root, ".opencode", "plans", ".state", "parent", "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
+      const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+      record.child_session_id = "child";
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+    }
+    const resolved = await resolveScopeRuntimeIdentity(root, { sessionID: "child", callID: "write", tool: "write" }, { reader: { getSession: async () => { throw new Error("SDK unavailable"); } } });
+    assert.equal(resolved.conflict, true, resolved.reason);
+    assert.match(resolved.reason, /multiple|duplicate/i);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("top-level build Bash stays outside the writing-hand scope rail with official SDK metadata", async () => {
   const sessionId = "top-level-build";
   const reader = {

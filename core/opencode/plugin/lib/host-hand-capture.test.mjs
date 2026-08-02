@@ -2,10 +2,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as hostHandCapture from "./host-hand-capture.mjs";
+
+test("gitTouchedPaths reports only the current hand delta, never recent committed history", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-touched-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  try {
+    git("init");
+    git("config", "user.email", "harness@example.invalid");
+    git("config", "user.name", "Harness Test");
+    fs.writeFileSync(path.join(root, "historical.txt"), "old\n");
+    git("add", "historical.txt");
+    git("commit", "-m", "historical");
+    fs.writeFileSync(path.join(root, "historical.txt"), "committed\n");
+    git("add", "historical.txt");
+    git("commit", "-m", "recent history");
+    fs.writeFileSync(path.join(root, "dirty.txt"), "current hand\n");
+    fs.writeFileSync(path.join(root, "historical.txt"), "current hand edit\n");
+    assert.deepEqual(hostHandCapture.gitTouchedPaths(root).sort(), ["dirty.txt", "historical.txt"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("resolveHeadSha uses only its explicit project root and fails best-effort", () => {
   const calls = [];

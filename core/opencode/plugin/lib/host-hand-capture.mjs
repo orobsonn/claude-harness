@@ -125,17 +125,18 @@ export function isAncestorSha(projectRoot, sha, execFileSyncFn = execFileSync) {
   }
 }
 
-/** @description Best-effort changed paths for Task completion observation. */
+/** @description Best-effort staged, unstaged, and untracked paths in the current Task worktree. */
 export function gitTouchedPaths(cwd) {
-  try {
-    return String(execFileSync("git", ["diff", "--name-only", "HEAD~5", "HEAD"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }))
-      .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  } catch {
+  const paths = new Set();
+  const read = (args) => {
     try {
-      return String(execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }))
-        .split(/\r?\n/).map((line) => line.trim().slice(3).trim()).filter(Boolean);
-    } catch { return []; }
-  }
+      const output = String(execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }));
+      for (const line of output.split(/\r?\n/)) if (line.trim()) paths.add(line.trim());
+    } catch { /* best-effort evidence */ }
+  };
+  read(["diff", "--name-only", "HEAD"]);
+  read(["ls-files", "--others", "--exclude-standard"]);
+  return [...paths];
 }
 
 /** @description Preserve only the Task's explicit terminal fact; git evidence never promotes it. */

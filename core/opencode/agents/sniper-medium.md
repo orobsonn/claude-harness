@@ -3,6 +3,7 @@ description: Surgical fix for MEDIUM-severity defects (logic error, missing case
 mode: all
 model: ollama-cloud/glm-5.2
 temperature: 0.1
+maxSteps: 80
 tools:
   task: false
 permission:

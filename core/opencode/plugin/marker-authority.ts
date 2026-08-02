@@ -14,7 +14,7 @@ import crypto from "node:crypto"
 import { withGateStateLock } from "../lib/gate-state.mjs"
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
-import { isDoneHandRecord } from "../../shared/lib/real-file-capture-rail.mjs"
+import { isDoneHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs"
 import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs"
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs"
 import { validateOcDoneHandRecord } from "../lib/hand-records.mjs"
@@ -174,6 +174,10 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
           if (!isDoneHandRecord(record)) return { ok: false, reason: "hand-record is not DONE" }
+          const violations = recordViolations(record)
+          if (violations.scope.length > 0 || violations.frozen.length > 0) {
+            return { ok: false, reason: "hand-record contains scope or frozen violations" }
+          }
           payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
           if (Array.isArray(previous.capture_verified) && previous.capture_verified.includes(payload)) {
             const replayIdentity = validateOcDoneHandRecord(record, {

@@ -19,6 +19,7 @@ Every shared hand agent MUST have:
 - `mode: all`
 - `tools.task: false` (hands must not nest task)
 - `model:` matching its role/tier in `harness.routing.json`
+- `maxSteps: 80` (native fuse forces a terminal text response instead of an unbounded tool loop)
 - the hand's `permission:` lockdown
 
 ## Rules

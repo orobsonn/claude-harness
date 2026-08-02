@@ -411,6 +411,28 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
   }
 });
 
+test("capture-verified rejects a DONE record with scope or frozen violations", async () => {
+  for (const violations of [
+    { scopeViolations: ["outside/evil.ts"], frozenViolations: [] },
+    { scopeViolations: [], frozenViolations: ["test/locked.test.ts"] },
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-violation-"));
+    try {
+      const { file } = seed(root);
+      const { path: recordPath, sha } = seedDoneHandRecord(root, "DONE", violations);
+      const { before, execute } = await harness(root);
+      assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished")).metadata.ok, true);
+      const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-capture-violation");
+      assert.equal(captured.metadata.ok, false);
+      assert.match(String(captured.metadata.reason ?? captured.output), /scope|frozen|violation/i);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified ?? [], []);
+      assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).capturedVerifiedAt, undefined);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("hand-finished and capture-verified reject a path-correct record with foreign internal identity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-foreign-"));
   try {

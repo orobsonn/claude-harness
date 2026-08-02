@@ -230,8 +230,16 @@ test("t6-shared-hands: no spawn twins exist and each shared hand preserves its f
     const fm = frontmatter(read(join(AGENTS_DIR, f)));
     assert.equal(fmField(fm, "mode"), "all", `${f} mode must be all`);
     assert.equal(fmField(fm, "model"), expectedModels(JSON.parse(read(ROUTING_PATH)))[name]);
+    assert.equal(fmField(fm, "maxSteps"), "80", `${f} must force a terminal response before a runaway hand loop`);
     assert.equal(fmNestedBool(fm, "permission", "edit"), "allow", `${f} permission.edit must stay allow`);
     assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
+  }
+});
+
+test("t6-executors leave Git index ownership to the host capture rail", () => {
+  for (const name of ["executor-low", "executor-medium", "executor-high"]) {
+    const body = read(join(AGENTS_DIR, `${name}.md`));
+    assert.match(body, /Never stage, unstage, commit, or otherwise mutate the Git index/i, `${name} must not manipulate host capture state`);
   }
 });
 

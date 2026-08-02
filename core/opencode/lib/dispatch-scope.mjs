@@ -327,10 +327,12 @@ export function claimDispatchForRuntime(projectRoot, args = {}, { env = process.
   });
 }
 
-function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
+function scanBoundChild(projectRoot, childSessionId, excludedPath = "") {
+  if (!safeSegment(childSessionId)) return { ok: false, conflict: true, reason: "child session identity invalid" };
   let realRoot;
   try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
   const root = path.join(realRoot, ".opencode", "plans", ".state");
+  let match = null;
   try {
     for (const session of fs.readdirSync(root, { withFileTypes: true })) {
       if (session.isSymbolicLink()) return { ok: false, reason: "dispatch sibling scan failed" };
@@ -346,17 +348,34 @@ function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
         let file;
         try { file = fs.realpathSync(path.join(records, entry)); } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
         if (!inside(realRoot, file)) return { ok: false, reason: "dispatch sibling scan failed" };
-        if (file === wantedPath) continue;
+        if (file === excludedPath) continue;
         const found = readJson(file);
-        if (!found.ok) return { ok: false, reason: "dispatch sibling scan failed" };
-        if (!validDispatchRecord(realRoot, found.value)) return { ok: false, reason: "dispatch sibling scan failed" };
+        if (!found.ok) return { ok: false, conflict: true, reason: "dispatch sibling scan failed" };
+        if (!validDispatchRecord(realRoot, found.value)) return { ok: false, conflict: true, reason: "dispatch sibling scan failed" };
         const expectedName = `${crypto.createHash("sha256").update(found.value.dispatch_call_id).digest("hex")}.json`;
-        if (entry !== expectedName || found.value.parent_session_id !== session.name) return { ok: false, reason: "dispatch sibling scan failed" };
-        if (found.value.child_session_id === childSessionId) return { ok: true, bound: true };
+        if (entry !== expectedName || found.value.parent_session_id !== session.name) return { ok: false, conflict: true, reason: "dispatch sibling scan failed" };
+        if (found.value.child_session_id !== childSessionId) continue;
+        if (match) return { ok: false, conflict: true, reason: "multiple durable dispatch records bind the same child session" };
+        match = { record: found.value, path: file, parentSessionId: found.value.parent_session_id, callId: found.value.dispatch_call_id };
       }
     }
-  } catch { return { ok: false, reason: "dispatch sibling scan failed" }; }
-  return { ok: true, bound: false };
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return { ok: false, absent: true, reason: "bound child dispatch record absent" };
+    return { ok: false, conflict: true, reason: "dispatch sibling scan failed" };
+  }
+  return match ? { ok: true, ...match } : { ok: false, absent: true, reason: "bound child dispatch record absent" };
+}
+
+/** @description Recover exactly one host-bound parent call for a child session; zero is absent and many conflict. */
+export function readBoundDispatchForChild(projectRoot, childSessionId) {
+  return scanBoundChild(projectRoot, childSessionId);
+}
+
+function childBoundElsewhere(projectRoot, childSessionId, wantedPath) {
+  const found = scanBoundChild(projectRoot, childSessionId, wantedPath);
+  if (found.ok) return { ok: true, bound: true };
+  if (found.absent) return { ok: true, bound: false };
+  return found;
 }
 
 function childLockTarget(projectRoot, childSessionId) {
@@ -408,4 +427,4 @@ export function removeDispatchRecord(projectRoot, { sessionId, callId }) {
   return removed.ok ? { ok: true, removed: Boolean(removed.removed) } : removed;
 }
 
-export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, claimDispatchForRuntime, dispatchRecordPath, normalizeProjectPath, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord, resolveFixModeScopeAuthority };
+export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, claimDispatchForRuntime, dispatchRecordPath, normalizeProjectPath, readBoundDispatchForChild, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord, resolveFixModeScopeAuthority };

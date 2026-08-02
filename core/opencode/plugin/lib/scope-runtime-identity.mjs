@@ -1,6 +1,6 @@
 /** @description Resolve an official child Task identity to exactly one durable parent-call record. */
 
-import { bindChildSession, readDispatchRecord } from "../../lib/dispatch-scope.mjs";
+import { bindChildSession, readBoundDispatchForChild, readDispatchRecord } from "../../lib/dispatch-scope.mjs";
 import { isExecutorRole, isSniperRole, isTestAuthorRole } from "../../lib/roles.mjs";
 import { isTaskTool } from "../../lib/task-dispatch-identity.mjs";
 
@@ -61,7 +61,22 @@ function parentTask(messages, parentSessionId, childSessionId, role) {
   return { ok: true, ...matches[0] };
 }
 
-/** @description Resolve only facts supplied by the SDK or exact CLI parent+call inputs; unavailable SDK stays outside the rail. */
+function durableBoundFallback(projectRoot, runtimeSessionId, reason) {
+  const bound = readBoundDispatchForChild(projectRoot, runtimeSessionId);
+  if (bound.ok) return {
+    ok: true,
+    parentSessionId: bound.parentSessionId,
+    runtimeSessionId,
+    callId: bound.callId,
+    role: bound.record.role,
+    record: bound.record,
+    recoveredFromDurableBinding: true,
+  };
+  if (bound.conflict === true) return { ok: false, conflict: true, verifiedWritingHand: true, reason: bound.reason };
+  return { ok: false, unavailable: true, reason };
+}
+
+/** @description Resolve SDK/CLI identity, recovering only a unique host-bound durable child record when SDK reads fail. */
 export async function resolveScopeRuntimeIdentity(projectRoot, input, options = {}) {
   const runtimeSessionId = typeof input?.sessionID === "string" ? input.sessionID : typeof input?.sessionId === "string" ? input.sessionId : "";
   const runtimeCallId = typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : "";
@@ -70,7 +85,7 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
   let session;
   try {
     session = await reader.getSession(runtimeSessionId);
-  } catch { return { ok: false, unavailable: true, reason: "official SDK metadata unavailable" };
+  } catch { return durableBoundFallback(projectRoot, runtimeSessionId, "official SDK metadata unavailable");
   }
   if (!session || session.id !== runtimeSessionId) return { ok: false, conflict: true, reason: "official session identity conflicts" };
   let parentSessionId = typeof session.parentID === "string" ? session.parentID : "";
@@ -79,7 +94,7 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
   let childMessages;
   try {
     childMessages = await reader.getMessages(runtimeSessionId);
-  } catch { return { ok: false, unavailable: true, reason: "official SDK metadata unavailable" };
+  } catch { return durableBoundFallback(projectRoot, runtimeSessionId, "official SDK metadata unavailable");
   }
   const role = toolRole(childMessages, runtimeSessionId, runtimeCallId, input?.tool);
   if (!role.ok) return role;
@@ -87,7 +102,7 @@ export async function resolveScopeRuntimeIdentity(projectRoot, input, options = 
   let parentRole = "";
   if (parentSessionId) {
     let parentMessages;
-    try { parentMessages = await reader.getMessages(parentSessionId); } catch { return { ok: false, unavailable: true, reason: "official parent Task metadata unavailable" }; }
+    try { parentMessages = await reader.getMessages(parentSessionId); } catch { return durableBoundFallback(projectRoot, runtimeSessionId, "official parent Task metadata unavailable"); }
     const parent = parentTask(parentMessages, parentSessionId, runtimeSessionId, role.role);
     if (!parent.ok) return parent;
     callId = parent.callId;
