@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.1](https://github.com/orobsonn/claude-harness/compare/v0.53.0...v0.53.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* alinha plano ao routing do OpenCode ([#611](https://github.com/orobsonn/claude-harness/issues/611)) ([0137902](https://github.com/orobsonn/claude-harness/commit/01379027078e1eec684faa7fdc25588c7f3ce4c6))
+* fortalece rails nativos do OpenCode ([#609](https://github.com/orobsonn/claude-harness/issues/609)) ([a16f78c](https://github.com/orobsonn/claude-harness/commit/a16f78c688d29b037ff0c4a94b7f1051da45f61a))
+
 ## [0.53.2](https://github.com/orobsonn/claude-harness/compare/v0.53.1...v0.53.2) (2026-08-02)
 
 ### Corrigido
