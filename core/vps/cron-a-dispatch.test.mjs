@@ -364,6 +364,22 @@ function plantMonorepoOcPlugins(root) {
   writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
   mkdirSync(join(oc, "agents"), { recursive: true });
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  const libDir = join(oc, "lib");
+  mkdirSync(libDir, { recursive: true });
+  for (const name of [
+    "gate-state.mjs",
+    "entry-decide.mjs",
+    "dispatch-scope.mjs",
+    "hand-records.mjs",
+    "planner-state.mjs",
+    "obs-emit.mjs",
+    "plan-hash.mjs",
+    "planner-artifact.mjs",
+    "roles.mjs",
+    "task-dispatch-identity.mjs",
+  ]) {
+    writeFileSync(join(libDir, name), `// stub ${name}\n`, "utf8");
+  }
   const sharedLib = join(root, "core", "shared", "lib");
   mkdirSync(sharedLib, { recursive: true });
   writeFileSync(join(sharedLib, "path-helpers.mjs"), "export const x = 1;\n", "utf8");

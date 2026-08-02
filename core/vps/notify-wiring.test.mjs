@@ -161,6 +161,7 @@ test("#ac-6.2 dispatch threads non-secret HARNESS_NOTIFY_* into the session env,
         gh: () => ({ ok: true }),
         counter: { increment: () => {} },
         buildScopedEnv: () => ({ OLLAMA_HAND_TOKEN: "x" }),
+        freeMem: () => Number.POSITIVE_INFINITY,
         notify: { chatId: -1003044689525, threadId: 613 },
       }
     );
@@ -196,6 +197,7 @@ test("#ac-6.2 dispatch WITHOUT notify writes only HARNESS_NOTIFY_PROJECT (no cha
         gh: () => ({ ok: true }),
         counter: { increment: () => {} },
         buildScopedEnv: () => ({ OLLAMA_HAND_TOKEN: "x" }),
+        freeMem: () => Number.POSITIVE_INFINITY,
       }
     );
     const tmuxCall = spawnCalls.find((c) => c.command === "tmux");
