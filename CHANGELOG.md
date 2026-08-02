@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.2](https://github.com/orobsonn/claude-harness/compare/v0.53.1...v0.53.2) (2026-08-02)
+
+### Corrigido
+
+- **oc:** congela `model_strategy.hand_tiers` a partir do routing efetivo do executor, em vez da escada histórica de Ollama.
+- **oc:** preserva o snapshot de routing na gravação, no plano vinculado, na reconciliação e no gate de dispatch.
+- **oc:** alinha exemplos e descrições dos executores ao roteamento Luna/Terra.
+
 ## [0.53.1](https://github.com/orobsonn/claude-harness/compare/v0.53.0...v0.53.1) (2026-08-02)
 
 ### Corrigido

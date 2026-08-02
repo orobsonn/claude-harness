@@ -8,7 +8,7 @@ import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 
 /**
  * @description Deny stub kind or empty tasks when expect is full (plan-gate before executors).
- * @param {{ plan?: unknown, expect?: "full"|"stub"|"any" }} input
+ * @param {{ plan?: unknown, expect?: "full"|"stub"|"any", expectedModelStrategy?: unknown }} input
  * @returns {Decision}
  */
 export function decidePlanGate(input = {}, { validatePlanFn = validatePlan } = {}) {
@@ -47,7 +47,10 @@ export function decidePlanGate(input = {}, { validatePlanFn = validatePlan } = {
       }
     }
 
-    const result = validatePlanFn(plan, { expect });
+    const options = Object.hasOwn(input, "expectedModelStrategy")
+      ? { expect, expectedModelStrategy: input.expectedModelStrategy }
+      : { expect };
+    const result = validatePlanFn(plan, options);
     if (!result.ok) {
       return {
         ok: false,

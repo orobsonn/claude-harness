@@ -100,7 +100,7 @@ Rules:
 - **Never pin an invariant the spec did not ask for.** Locked tests come from the ACs — no exceptions. If the codebase convinces you an EXTRA invariant is needed for the ACs to hold, express it as a `resolved_judgment` (a scalar the executor must honour) and explain it in the task description — never as a locked_test, never as a new AC. Live failure: a planner invented a "single clock" contract and pinned it with a locked_test asserting `Date.now()` is called exactly once in the inbound path, when the spec only required each write to use `Math.floor(Date.now() / 1000)`. Its own scope left three wrappers sampling the clock independently, so the test it wrote was unsatisfiable — and the review loop burned three rounds on a contradiction the plan itself introduced, then escalated a choice that only existed because of the invention. A locked_test no AC demands is scope creep with a test around it.
 - **A locked_test must be satisfiable at its own task's boundary** (see the rule in Step 2): with only that task's changes applied, it passes.
 - Every locked_test carries a `path` the test-author can write (within `scope_paths` or the project test dir).
-- The **planner pins** the concrete assertion (the judgment); a cheap **test-author** (Ollama hand) transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
+- The **planner pins** the concrete assertion (the judgment); the dedicated **test-author** transcribes it into the test file under **compliance fidelity validation** (the orchestrator loop). The planner does not author the test file and does not in-run-validate it — fidelity is the compliance eye's job, validated before freeze. After compliance PASS the test is frozen (content-hash MANIFEST); the executor receives it read-only and implements production code until the frozen test goes green. The executor cannot edit or relax the frozen test. It is the deterministic gate.
 - A targeted Vitest gate names exactly one normalized repo-relative `locked_tests[].path`. No globs, no forwarded runner options. The parent conductor runs it after the hand returns (`npx vitest run <path>`, the project's own test command, etc.), scoped to that one path only; executors and snipers do not receive Bash.
 - An invariant with multiple branches/roles/states needs a locked_test per branch (one observable assertion each) — its locked_tests must cover ALL branches; a happy-path-only freeze is a gap.
 
@@ -233,7 +233,7 @@ Copy the exact routing snapshot appended by `planner-recovery`; do not reread ro
 
 ```json
 "model_strategy": {
-  "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
+  "hand_tiers": { "low": "openai/gpt-5.6-luna", "medium": "openai/gpt-5.6-luna", "high": "openai/gpt-5.6-terra" },
   "planner": "<routing primary model>",
   "plan-reviewer": "<routing primary model>",
   "compliance": "<routing primary model>",
@@ -245,7 +245,7 @@ Copy the exact routing snapshot appended by `planner-recovery`; do not reread ro
 }
 ```
 
-`hand_tiers` must be exactly the three frozen values. The seven hyphenated eye keys must exactly match the supplied snapshot. `fallback` is optional opaque JSON. Legacy `tiers`, `plan_reviewer`, `executor`, `sniper`, top-level hand keys, and unknown keys are rejected.
+`hand_tiers` must be exactly the three executor-tier values in the supplied snapshot; the values above are the default routing example. The seven hyphenated eye keys must exactly match that snapshot. `fallback` is optional opaque JSON. Legacy `tiers`, `plan_reviewer`, `executor`, `sniper`, top-level hand keys, and unknown keys are rejected.
 
 **Hand roles (executor and sniper):**
 - `executor` and `sniper` select their dispatch tier elsewhere; `max` maps to high.

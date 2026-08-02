@@ -1,5 +1,5 @@
 ---
-description: Implements MEDIUM-complexity tasks — the DEFAULT executor. Ollama Cloud hand (glm-5.2).
+description: Implements MEDIUM-complexity tasks — the DEFAULT executor. OpenAI Luna hand.
 mode: all
 model: openai/gpt-5.6-luna
 temperature: 0.1

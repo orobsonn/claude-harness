@@ -68,6 +68,28 @@ test("r15: full plans require the exact frozen model strategy", () => {
   assert.ok(explicitUndefined.errors.some((error) => error.includes("expectedModelStrategy")));
 });
 
+test("r15: a runtime routing snapshot may freeze OpenAI hand tiers", () => {
+  const runtimeStrategy = {
+    ...expectedModelStrategy,
+    hand_tiers: {
+      low: "openai/gpt-5.6-luna",
+      medium: "openai/gpt-5.6-luna",
+      high: "openai/gpt-5.6-terra",
+    },
+  };
+  const plan = { ...goldenFull, model_strategy: runtimeStrategy };
+
+  const valid = validatePlan(plan, { expect: "full", expectedModelStrategy: runtimeStrategy });
+  assert.equal(valid.ok, true, valid.errors.join("; "));
+
+  const staleTier = validatePlan({
+    ...plan,
+    model_strategy: { ...runtimeStrategy, hand_tiers: expectedModelStrategy.hand_tiers },
+  }, { expect: "full", expectedModelStrategy: runtimeStrategy });
+  assert.equal(staleTier.ok, false);
+  assert.ok(staleTier.errors.some((error) => error.includes("hand_tiers.low")));
+});
+
 test("r15: fallback is opaque and stubs do not require a strategy", () => {
   for (const fallback of [null, "opaque", ["opaque"], { provider: "opaque" }]) {
     const plan = { ...goldenFull, model_strategy: { ...expectedModelStrategy, fallback } };

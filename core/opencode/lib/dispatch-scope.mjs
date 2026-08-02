@@ -7,6 +7,7 @@ import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { acquireLock, releaseLock } from "./gate-state.mjs";
 import { readBoundPlanSnapshot } from "./planner-artifact.mjs";
+import { isCompleteExpectedModelStrategy } from "../../shared/lib/model-strategy-projection.mjs";
 import { snapshotWorktreeBaseline } from "./worktree-baseline.mjs";
 import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 
@@ -176,7 +177,12 @@ export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
   const expectedPath = path.join(expectedDir, `${binding.snapshot_file_hash}.json`);
   const expectedRelative = path.relative(projectRoot, expectedPath).split(path.sep).join("/");
   if (snapshotPath !== expectedPath || binding.snapshot_path !== expectedRelative) return { ok: false, reason: "bound planner snapshot path is not canonical content-addressed identity" };
-  const snapshot = readBoundPlanSnapshot(snapshotPath);
+  const expectedModelStrategy = isCompleteExpectedModelStrategy(binding.expected_model_strategy)
+    ? binding.expected_model_strategy
+    : isCompleteExpectedModelStrategy(state?.planner_last_attempt?.expected_model_strategy)
+      ? state.planner_last_attempt.expected_model_strategy
+      : undefined;
+  const snapshot = readBoundPlanSnapshot(snapshotPath, expectedModelStrategy === undefined ? {} : { expectedModelStrategy });
   if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.fileHash !== binding.snapshot_file_hash || snapshot.plan?.feature_id !== state.feature_id) return { ok: false, reason: "bound planner snapshot integrity failed" };
   const matches = (Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : []).filter((task) => task && task.id === taskId);
   if (matches.length !== 1) return { ok: false, reason: "canonical task id missing or ambiguous in bound plan" };

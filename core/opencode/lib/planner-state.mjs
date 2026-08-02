@@ -1,5 +1,6 @@
 /** @description Identity-bound planner lifecycle; it never enforces retry or review budgets. */
 import crypto from "node:crypto";
+import { isCompleteExpectedModelStrategy } from "../../shared/lib/model-strategy-projection.mjs";
 
 const PROCESS_INSTANCE = crypto.randomUUID();
 
@@ -120,6 +121,9 @@ export function bindPlannerArtifact(previous, input = {}) {
   if (!artifact?.valid || artifact.semanticHash !== active.returned_plan_hash) {
     return { ok: false, reason: "canonical plan content does not match planner result", state };
   }
+  if (!isCompleteExpectedModelStrategy(input.expectedModelStrategy)) {
+    return { ok: false, reason: "canonical plan binding requires the frozen model strategy", state };
+  }
   if (active.baseline_plan?.fingerprint && active.baseline_plan.fingerprint === artifact.fingerprint) {
     return { ok: false, reason: "planner returned the canonical plan unchanged", state };
   }
@@ -138,6 +142,7 @@ export function bindPlannerArtifact(previous, input = {}) {
         semantic_hash: artifact.semanticHash,
         file_hash: artifact.fileHash,
         fingerprint: artifact.fingerprint,
+        expected_model_strategy: input.expectedModelStrategy,
       },
     },
   };

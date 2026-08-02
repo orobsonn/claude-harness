@@ -1,5 +1,5 @@
 ---
-description: Implements HIGH-complexity tasks (band 31+ residual reasoning). Ollama Cloud hand (kimi-k2.7-code). Stays strictly inside scope_paths.
+description: Implements HIGH-complexity tasks (band 31+ residual reasoning). OpenAI Terra hand. Stays strictly inside scope_paths.
 mode: all
 model: openai/gpt-5.6-terra
 temperature: 0.1

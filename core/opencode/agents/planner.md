@@ -147,7 +147,7 @@ Canonical object shape (shared `validatePlan` source of truth) — **not** a bar
 
 ```json
 {
-  "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
+  "hand_tiers": { "low": "openai/gpt-5.6-luna", "medium": "openai/gpt-5.6-luna", "high": "openai/gpt-5.6-terra" },
   "planner": "<routing primary model>",
   "plan-reviewer": "<routing primary model>",
   "compliance": "<routing primary model>",

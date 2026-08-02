@@ -140,7 +140,9 @@ async function createPlannerRecoveryHooks(
           return previous
         }
         const featureId = typeof previous.feature_id === "string" ? previous.feature_id : ""
-        const baselinePlan = readPlannerArtifact(root, sessionId, featureId)
+        const baselinePlan = readPlannerArtifact(root, sessionId, featureId, {
+          expectedModelStrategy: config.expectedModelStrategy,
+        })
         const binding = previous.planner_plan_binding as Record<string, unknown> | undefined
         const bound = previous.planner_status === "usable" &&
           binding?.semantic_hash === baselinePlan.semanticHash &&
@@ -271,7 +273,7 @@ async function createPlannerRecoveryHooks(
           semanticHash: prepared.semanticHash,
           plan: classified.plan,
           raw: prepared.raw,
-        })
+        }, { expectedModelStrategy })
         if (!stagedSnapshot.ok) {
           writeError = stagedSnapshot.reason
           return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
@@ -281,12 +283,12 @@ async function createPlannerRecoveryHooks(
           writeError = written.reason
           return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
         }
-        const artifact = readPlannerArtifact(root, sessionId, featureId)
+        const artifact = readPlannerArtifact(root, sessionId, featureId, { expectedModelStrategy })
         if (!preparedPlanMatchesArtifacts(prepared, artifact, stagedSnapshot.snapshot)) {
           writeError = "canonical artifact bytes differ from the staged bound snapshot"
           return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
         }
-        const bound = bindPlannerArtifact(state, { artifact, sessionId, featureId })
+        const bound = bindPlannerArtifact(state, { artifact, sessionId, featureId, expectedModelStrategy })
         if (!bound.ok) {
           writeError = bound.reason
           return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }

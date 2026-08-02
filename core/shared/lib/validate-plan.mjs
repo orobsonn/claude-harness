@@ -35,6 +35,13 @@ function validateModelStrategy(strategy, expectedStrategy, errors, expectedSuppl
     return;
   }
   const value = /** @type {Record<string, unknown>} */ (strategy);
+  const hasCompleteExpectedStrategy = expectedSupplied && isCompleteExpectedModelStrategy(expectedStrategy);
+  if (expectedSupplied && !hasCompleteExpectedStrategy) {
+    errors.push("expectedModelStrategy must be a complete authoritative projection");
+  }
+  const approvedHands = hasCompleteExpectedStrategy
+    ? /** @type {Record<string, unknown>} */ (expectedStrategy).hand_tiers
+    : APPROVED_HAND_LADDER;
   for (const key of Object.keys(value)) {
     if (!MODEL_STRATEGY_KEYS.has(key)) errors.push(`model_strategy.${key} is not allowed`);
   }
@@ -44,9 +51,9 @@ function validateModelStrategy(strategy, expectedStrategy, errors, expectedSuppl
   } else {
     const tiers = /** @type {Record<string, unknown>} */ (handTiers);
     for (const key of Object.keys(tiers)) {
-      if (!Object.hasOwn(APPROVED_HAND_LADDER, key)) errors.push(`model_strategy.hand_tiers.${key} is not allowed`);
+      if (!Object.hasOwn(approvedHands, key)) errors.push(`model_strategy.hand_tiers.${key} is not allowed`);
     }
-    for (const [key, model] of Object.entries(APPROVED_HAND_LADDER)) {
+    for (const [key, model] of Object.entries(approvedHands)) {
       if (!Object.hasOwn(tiers, key) || tiers[key] !== model) errors.push(`model_strategy.hand_tiers.${key} must equal ${model}`);
     }
   }
@@ -56,22 +63,8 @@ function validateModelStrategy(strategy, expectedStrategy, errors, expectedSuppl
     }
   }
 
-  if (expectedSupplied) {
-    if (!isCompleteExpectedModelStrategy(expectedStrategy)) {
-      errors.push("expectedModelStrategy must be a complete authoritative projection");
-      return;
-    }
+  if (hasCompleteExpectedStrategy) {
     const expected = /** @type {Record<string, unknown>} */ (expectedStrategy);
-    const expectedHands = expected.hand_tiers;
-    if (!expectedHands || typeof expectedHands !== "object" || Array.isArray(expectedHands)) {
-      errors.push("expectedModelStrategy must contain approved hand_tiers");
-    } else {
-      for (const [key, model] of Object.entries(APPROVED_HAND_LADDER)) {
-        if ((/** @type {Record<string, unknown>} */ (expectedHands))[key] !== model) {
-          errors.push(`expectedModelStrategy.hand_tiers.${key} must equal ${model}`);
-        }
-      }
-    }
     for (const key of MODEL_STRATEGY_EYE_KEYS) {
       if (typeof expected[key] !== "string" || expected[key].trim().length === 0) {
         errors.push(`expectedModelStrategy.${key} must be a non-empty string`);

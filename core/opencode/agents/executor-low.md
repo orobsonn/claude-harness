@@ -1,5 +1,5 @@
 ---
-description: Implements LOW-complexity tasks (config, types, constants, mechanical wiring). Ollama Cloud cheap hand (gemma4:31b).
+description: Implements LOW-complexity tasks (config, types, constants, mechanical wiring). OpenAI Luna hand.
 mode: all
 model: openai/gpt-5.6-luna
 temperature: 0.1
