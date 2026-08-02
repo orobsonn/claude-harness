@@ -20,6 +20,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -1447,8 +1448,9 @@ test("normalizeRuntimeTarget: absent/empty → claude; known tokens map; garbage
 test("resolveProjectTarget: existing dir passes; runtime token → hint at --runtime; missing dir throws", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vc-target-"));
   try {
-    assert.equal(resolveProjectTarget(undefined, tempDir), tempDir);
-    assert.equal(resolveProjectTarget(tempDir, "/unused"), tempDir);
+    const physicalTempDir = realpathSync(tempDir);
+    assert.equal(resolveProjectTarget(undefined, tempDir), physicalTempDir);
+    assert.equal(resolveProjectTarget(tempDir, "/unused"), physicalTempDir);
     // The --target/--runtime footgun: `--target both` (not a dir) must not create ./both/.
     assert.throws(() => resolveProjectTarget("both", tempDir), /use --runtime both/);
     assert.throws(() => resolveProjectTarget("opencode", tempDir), /use --runtime opencode/);
