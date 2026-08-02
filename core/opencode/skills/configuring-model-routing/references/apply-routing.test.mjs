@@ -53,6 +53,16 @@ test("HARDENING: buildRoutingFromSlots rejects unknown slot key (typo) instead o
   assert.match(typo.reason, /supportEyes/);
 });
 
+test("HARDENING: buildRoutingFromSlots rejects the retired plannerFallback slot", () => {
+  const retired = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    plannerFallback: "ollama-cloud/kimi-k2.7-code",
+  });
+  assert.equal(retired.ok, false);
+  assert.match(retired.reason, /unknown slot key/i);
+  assert.match(retired.reason, /plannerFallback/);
+});
+
 test("HARDENING: buildRoutingFromSlots rejects unknown hands tier", () => {
   const bad = buildRoutingFromSlots({
     primaryEye: "openai/gpt-5.6-sol",
@@ -81,6 +91,7 @@ test("listRoutingTouchpoints covers routing agents AGENTS opencode", () => {
   assert.match(t, /agents/);
   assert.match(t, /AGENTS\.md/);
   assert.match(t, /opencode\.json/);
+  assert.doesNotMatch(t, /planner-fallback/i);
 });
 
 test("every preset passes validateRouting", () => {
@@ -182,13 +193,49 @@ test("applyRoutingToDisk on temp copy of agents updates frontmatter + routing", 
 
     // All resolvers with files present produce provider/model
     for (const [name, resolve] of Object.entries(AGENT_MODEL_RESOLVERS)) {
-      if (name === "planner-fallback") continue;
       const file = path.join(agentsDst, `${name}.md`);
       if (!fs.existsSync(file)) continue;
       const m = resolve(built.routing.roles);
       assert.equal(typeof m, "string", name);
       assert.ok(m.includes("/"), name);
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("applyRoutingToDisk rejects retired v2 routing before modifying the target", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-routing-retired-fallback-"));
+  try {
+    seedMiniOcRoot(root);
+    const before = fs.readFileSync(path.join(root, "harness.routing.json"), "utf8");
+    const routing = JSON.parse(before);
+    routing.roles.planner.fallback = { model: "ollama-cloud/kimi-k2.7-code" };
+    const applied = applyRoutingToDisk({ targetRoot: root, routing, updateOpencodeJson: false });
+    assert.equal(applied.ok, false);
+    assert.match(applied.reason, /planner fallback.*retired|retired.*planner fallback/i);
+    assert.equal(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("applyRoutingToDisk rejects own undefined planner fallback byte-neutral", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-routing-undefined-fallback-"));
+  try {
+    const routing = seedMiniOcRoot(root);
+    const before = new Map([
+      ["routing", fs.readFileSync(path.join(root, "harness.routing.json"), "utf8")],
+      ["agents", fs.readFileSync(path.join(root, "AGENTS.md"), "utf8")],
+      ["planner", fs.readFileSync(path.join(root, "agents", "planner.md"), "utf8")],
+    ]);
+    routing.roles.planner.fallback = undefined;
+    const applied = applyRoutingToDisk({ targetRoot: root, routing, updateOpencodeJson: false });
+    assert.equal(applied.ok, false);
+    assert.match(applied.reason, /planner fallback.*retired|retired.*planner fallback/i);
+    assert.equal(fs.readFileSync(path.join(root, "harness.routing.json"), "utf8"), before.get("routing"));
+    assert.equal(fs.readFileSync(path.join(root, "AGENTS.md"), "utf8"), before.get("agents"));
+    assert.equal(fs.readFileSync(path.join(root, "agents", "planner.md"), "utf8"), before.get("planner"));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

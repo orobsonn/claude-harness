@@ -60,7 +60,6 @@ Compliance and security are **single-eye**.
 - `complexity-scorer` — score a file path (0–10 low · 11–30 medium · 31–45 high · 46–60 max→executor-high · 61+ split). One call per path.
 - `validate-plan` — deterministic structural gate for `execution-plan.json`. Does NOT check spec-AC semantic coverage — that is the plan-reviewer's job.
 - `classify` — entry triage stub writer (via oc-triaging-requests skill).
-- `ceremony-next` — consumes the exact structured planner denial and returns one state-valid, allowlisted ceremony descriptor; rejection stops recovery.
 - `verify` — resolves a registered targeted-test snapshot to a concrete test path (feature/task ids in, `locked_tests[].path` out). Optional: bash runs the targeted test directly just as well (see below); `verify` stays available for the resolver's snapshot lookup when that is more convenient.
 - **Bash gates** — `npm run typecheck` (tsc --noEmit), `npm test`, lint. Deterministic; no LLM in the gate.
 
@@ -77,16 +76,16 @@ Under OpenCode, **gate-state lives only under `.opencode/`**. Never run Claude-C
 | Wrong (CC — does NOT stamp OC) | Right (OC) |
 |---|---|
 | `node .claude/hooks/classify.mjs …` | native tool **`classify({ mode, feature_id })`** |
-| `node .claude/hooks/mark.mjs …` | `node .opencode/plugin/lib/mark-gate.mjs … --session <sessionID>` |
+| `node .claude/hooks/mark.mjs …` | native tool **`mark({ action })`** |
 | plans under `.claude/plans/…` | `.opencode/plans/<sessionID>-<feature_id>/` |
 
 The entry-gate **denies** CC marker CLIs. If you see that deny, switch to the OC row — do not retry the CC path.
 
-### Deterministic ceremony transition before planner
+### Ordered planner entry facts
 
 For LIGHT/FULL, the approved spec is canonical at `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Immediately after brainstorming approval, call native `mark({ action: "brainstormed" })`. Immediately after the required spec-adversary result is accepted, call native `mark({ action: "adversary_fired" })`. Both transitions MUST complete, in that order, before the first planner Task call.
 
-On planner preflight denial, pass the exact structured denial object to native `ceremony-next({ denial })`. Execute only its returned `descriptor.coordinator_step`, then call its `descriptor.completion_transition` after successful completion/acceptance. The consumer validates `code`, `missing_proof`, `phase`, `action`, `marker`, current sealed state, and a closed mapping: the brainstorming phase → skill `oc-brainstorming`; the spec-adversary phase → Task `adversary`. Rejection means stop. Never derive a role from strings or dispatch `explore`, `general`, or another diagnostic agent. Preflight may reissue a current-process HMAC seal only when the matching session+feature+phase completion evidence verifies against its canonical spec/result. Missing or invalid evidence means resume that exact prior phase or stop with `missing_proof`; never infer completion from prose, an old marker, or an unsigned boolean.
+Planner dispatch remains denied until both facts are recorded for the classified feature. If `brainstormed` is missing, execute `oc-brainstorming` and then call the native mark action. If `adversary_fired` is missing, dispatch the primary `adversary` and then call the native mark action. Downstream these are plain booleans, not provenance proof; do not infer completion from prose or direct filesystem edits, and resume only the missing factual phase.
 
 ---
 
@@ -99,15 +98,15 @@ On the **first request of every session**, **load and follow the `oc-triaging-re
 
 Your **FIRST action of the top-level session is the tool call `skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
-**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK when LIGHT/FULL is stuck (review cap or provider error). Host rails deny downgrade and QUICK ship after elevated ceremony. On `primary_failure_cap_reached`: stop, comment the PR/issue in pt-br, and request canonical ceremony restart — do **not** implement inline and do **not** call `classify({ mode: "QUICK" })`.
+**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
 
-**Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never `planner-fallback`, never swap models.
+**Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never swap models.
 
-**Retry K=3 (every Task agent — all of them):** planner, plan-reviewer-*, adversary-*, executor-*, sniper-*, test-author, compliance, security, harvester, shipper. On failure, retry the **same** `subagent_type` up to **3** times. After 3 → stop (product error). Never ladder models. **The host does NOT enforce this cap** (#482: the in-session same-agent retry brake was removed and is not replaced — the real per-issue ceiling lives in the fleet engine, `core/vps/cron-a-exit.mjs`, outside this session). You are the only enforcement in an interactive session: count failures yourself and stop at 3.
+**Dispatch failures:** report provider or tool failures in product language. Any decision to continue, change scope, or stop is an explicit operator/orchestrator decision; OpenCode keeps no retry budget for it.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
-**OC ship:** after hands complete, host auto-stamps capture on DONE Task hands. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Spec/plan files: write them directly with the edit tool. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, and the harness marker scripts (`mark-gate.mjs`, `mark.mjs`, `classify.mjs`) — those stay marker-only, never a direct edit. Everything else (spec/plan/decision-ledger content outside that denylist) is a normal direct edit-tool write now that `edit` is allowed; you no longer need the bash/`printf`/`tee` workaround (or its `$`-escaping caveat) for it.
+**OC ship:** after a DONE Task hand, the host records completion; capture is stamped separately by native `mark` only after the parent independently inspects the read-back, diff and locked-test result. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Specs may be edited only where the active lane permits it. The canonical execution plan is never a direct model edit: planner returns JSON and `planner-recovery` alone persists it. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, the canonical `execution-plan.json`, and the harness marker scripts (`mark.mjs`, `classify.mjs`) — those stay host/marker-only, never a direct edit.
 </HARD-GATE>
 
 Route on its result:
@@ -128,7 +127,7 @@ For **LIGHT** and **FULL**, the full delivery loop lives in the `oc-orchestratin
 skill({ name: "oc-orchestrating-delivery" })
 ```
 
-The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and file writes. Plan files are written to `.opencode/plans/<sessionID>-<feature_id>/` — the `<sessionID>-` prefix is **mandatory**. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
+The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → final review → demo → harvest + ship), all internal HARD-GATES, context curation (ICM layers L0–L4), and permitted file writes. The canonical plan path is `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json` — the `<sessionID>-` prefix is **mandatory** — and only `planner-recovery` persists the planner's returned JSON there. NEVER restate or reimplement the loop phases here; the skill is the single source of truth.
 
 **Mode mapping:** triage `LIGHT`/`FULL` → full plan `mode` is lowercase `light`/`full`. Never write uppercase triage modes into a full plan.
 
@@ -138,7 +137,7 @@ The skill owns Phases 0–5 (brainstorm + spec → plan → per-task loop → fi
 
 Re-inject this checklist on every turn to survive context compaction. Before declaring delivery done, verify each item:
 
-- [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review until APPROVE — never stop mid-loop (the hands stay blocked); escalate only when the `revise_nudge` reports the round budget exhausted.
+- [ ] **plan-reviewer** — `plan-reviewer` ran (and optional `plan-reviewer-family-2` only when `secondEyeModel` is set); verdict is `APPROVE` before execution. On `REVISE`, re-plan and re-review; escalate only for an explicit product decision.
 - [ ] **compliance** ran lean (diff + ACs + locked_tests only) on each task (FULL) and on the whole feature (final review, both modes).
 - [ ] **adversary** — `adversary` (and optional `adversary-family-2` only when `secondEyeModel` is set) entered **VIRGIN** on every dispatch; no prior verdict leaked. Any violation invalidates the result.
 - [ ] **security** dispatched when the task touched auth/secrets/external-input/new-deps/SQL/service-entrypoint.

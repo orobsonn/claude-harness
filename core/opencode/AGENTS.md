@@ -166,17 +166,25 @@ Default hands use the Ollama Cloud ladder. Reconfigure by typing the `/configuri
 | Durable memory | project root `MEMORY.md` |
 | Routing | `harness.routing.json` / `.opencode/harness.routing.json` |
 
-**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session. Use the native `classify` tool and the `mark` tool registered by `marker-authority.ts`; `mark-gate.mjs` is observability-only.
+**HARD:** never use `.claude/hooks/classify.mjs` or `.claude/hooks/mark.mjs` in an OC session. Use the native `classify` tool and the `mark` tool registered by `marker-authority.ts`.
 
-**Marker threat boundary:** marker authority binds the runtime before-hook's exact `args` object to session, call, feature, and operation, then consumes it before mutation. Process-instance HMAC seals make direct filesystem writes and markers minted by another process semantically invalid to host gates. It blocks model Bash/import, clones, replay, concurrent reuse, and child-process authority forgery. It does not protect against a compromised OpenCode host/plugin running in the authority process. A host restart rotates the in-memory secret and fails closed for existing privileged markers; durable restart recovery belongs to #340.
+**Marker threat boundary:** marker authority's WeakMap identity and ordering bind only the native `mark` invocation's exact `args` object to session, call, feature, and action, then consume it before mutation. This blocks direct execute, structural clones, replay, concurrent reuse, and runtime-binding mismatch for that invocation. Downstream R10 accepts plain persisted `brainstormed` / `adversary_fired` booleans plus the classified feature match; those values carry no on-disk provenance or OS isolation. Same-user filesystem/Bash writes or a compromised OpenCode host/plugin can forge them. The official path remains the native `mark` tool; direct gate-state edits are forbidden by convention and permission friction, not by a provenance proof. There is no ceremony sidecar, artifact receipt, HMAC, or recovery coordinator.
+
+**Fix-mode authority boundary:** the fleet dispatcher freezes reviewed SHA + exact changed-file scope in
+`HARNESS_FIX_SCOPE_JSON`; the OC host accepts it only for a classified LIGHT/FULL sniper dispatch,
+checks SHA ancestry, and binds it to the exact session/feature/task/call record. Root, directory,
+traversal, duplicate, oversized, malformed, and stale scopes fail closed. This prevents model prose
+from widening the reviewed scope inside the dispatched host. It is not OS isolation: a separate
+same-user OpenCode process can supply its own environment, and a compromised host/plugin can forge
+the envelope. Closing that boundary requires a sandbox or external IPC authority, not another
+marker/state sidecar.
 
 ## 11. Folder law — .opencode/ (OpenCode vendored harness)
 
 - Plans, gate-state, hand-records under `.opencode/plans/` and `.opencode/plans/.state/` are run-ephemeral (deleted at harvest); only execution-plan.json and shared_context.md (pre-delete) live in the feature subdir.
 - Edit source under `core/opencode/` (agents, skills, AGENTS.md); `.opencode/` at project root is the vendored runtime copy (do not edit directly in a vendored project).
-- Harvest-guard checks for presence of root `findings.md` before allowing harvest step.
 
-See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths), core/opencode/plugin/harvest-guard.ts
+See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths)
 
 
 ### Folder router (law of one folder)
@@ -193,7 +201,7 @@ dispatch, the first plugin to `throw` wins, so **discovery order decides which g
 operator actually sees deny**. The chain that gates a real Task dispatch runs, in order:
 
 ```
-review-guard → planner-recovery → plan-gate → obs-hand → entry-gate
+planner-recovery → plan-gate → obs-hand → entry-gate
 ```
 
 Note `entry-gate.ts` — the plugin usually thought of as "the gate" — runs **last**. A rename

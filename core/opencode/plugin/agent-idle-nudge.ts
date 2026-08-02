@@ -8,11 +8,11 @@
  */
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 
-export async function createAgentIdleNudgeHooks(
+async function createAgentIdleNudgeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { decide } = await import("./lib/agent-idle-nudge.mjs");
-  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
+  const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
@@ -65,6 +65,7 @@ export async function createAgentIdleNudgeHooks(
 
 export const agentIdleNudge: Plugin = async ({ directory }) =>
   createAgentIdleNudgeHooks(typeof directory === "string" ? directory : undefined);
+Object.defineProperty(agentIdleNudge, "testApi", { value: Object.freeze({ createAgentIdleNudgeHooks }) });
 
 /** @description OC load contract — default export required. */
 export default agentIdleNudge;

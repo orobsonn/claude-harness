@@ -26,7 +26,6 @@ permission:
   classify: deny
   mark: deny
   verify: deny
-  ceremony-next: deny
   task: deny
   skill: deny
 ---

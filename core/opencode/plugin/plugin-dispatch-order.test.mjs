@@ -6,12 +6,12 @@
  * on macOS/APFS, and docs/OC-CC-PARITY-REPORT.md measured descending-alphabetical on the
  * report author's environment). Reproducing that raw order here would make this test flaky
  * across machines/CI, so this test asserts the one property that IS portable and that a
- * rename of one of the 5 tracked files actually breaks: each file's name-sorted position
+ * rename of one of the tracked files actually breaks: each file's name-sorted position
  * relative to the others. Scope, honestly stated: this catches a rename/removal of
- * `review-guard.ts`, `planner-recovery.ts`, `plan-gate.ts`, `obs-hand.ts`, or `entry-gate.ts`
+ * `planner-recovery.ts`, `plan-gate.ts`, `obs-hand.ts`, or `entry-gate.ts`
  * that changes their relative alphabetical order. It does NOT reproduce the real node-glob
  * nosort walk, so it canNOT catch a 6th plugin file joining the directory and shifting the
- * true unsorted walk order without touching any of the 5 tracked names — that residual gap is
+ * true unsorted walk order without touching any tracked name — that residual gap is
  * exactly why docs/OC-CC-PARITY-ROADMAP-INPUT.md item #16 keeps a numeric-prefix/explicit-loader
  * follow-up open for "when a 6th plugin enters the chain".
  */
@@ -27,7 +27,7 @@ const pluginDir = dirname(fileURLToPath(import.meta.url))
  * The Task-dispatch chain that actually gates a dispatch, in the order the operator
  * experiences a deny (first throw wins) — see AGENTS.md §12 for the human-readable doc.
  */
-const DISPATCH_CHAIN_ORDER = ["review-guard", "planner-recovery", "plan-gate", "obs-hand", "entry-gate"]
+const DISPATCH_CHAIN_ORDER = ["planner-recovery", "plan-gate", "obs-hand", "entry-gate"]
 
 /**
  * Sorted-then-reversed basenames of every auto-globbed plugin file — a deterministic,
@@ -52,7 +52,7 @@ test("Task dispatch chain discovery order matches the documented sequence (ac-1.
   )
 })
 
-test("all 5 documented dispatch-chain files exist in core/opencode/plugin", () => {
+test("all documented dispatch-chain files exist in core/opencode/plugin", () => {
   const files = readdirSync(pluginDir).filter((name) => /\.(ts|js)$/.test(name))
   for (const name of DISPATCH_CHAIN_ORDER) {
     assert.ok(files.includes(`${name}.ts`) || files.includes(`${name}.js`), `missing plugin file for ${name}`)

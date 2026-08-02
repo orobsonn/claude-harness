@@ -20,6 +20,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -578,6 +579,11 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
     for (const rel of required) {
       assert.ok(existsSync(join(tempDir, rel)), `missing ${rel}`);
     }
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/harvest-findings.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/agent-catalog-health.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/ceremony-binding.mjs")), false);
+    assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/ceremony-transition.mjs")), false);
     // default runtime remains claude-only — OC path must NOT create .claude
     assert.ok(!existsSync(join(tempDir, ".claude/agents")), "opencode-only must not vendor .claude agents");
     assert.ok(!existsSync(join(tempDir, ".opencode/agents/SPAWN-PATTERN.md")), "documentation must not be callable as an agent");
@@ -595,10 +601,14 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
   try {
     const staleResolver = join(tempDir, ".opencode/plugin/command-resolver.ts");
     const staleLib = join(tempDir, ".opencode/plugin/lib/command-resolver.mjs");
+    const staleMarkGate = join(tempDir, ".opencode/plugin/lib/mark-gate.mjs");
+    const projectSibling = join(tempDir, ".opencode/plugin/lib/project-owned-marker.mjs");
     mkdirSync(dirname(staleResolver), { recursive: true });
     mkdirSync(dirname(staleLib), { recursive: true });
     writeFileSync(staleResolver, "// stale plugin from a prior vendor\n", "utf8");
     writeFileSync(staleLib, "// stale lib from a prior vendor\n", "utf8");
+    writeFileSync(staleMarkGate, "// stale shell marker from a prior vendor\n", "utf8");
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
 
     const result = spawnSync(
       "node",
@@ -609,12 +619,380 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
 
     assert.ok(!existsSync(staleResolver), "retired plugin file must be deleted on re-vendor");
     assert.ok(!existsSync(staleLib), "retired plugin lib must be deleted on re-vendor");
+    assert.ok(!existsSync(staleMarkGate), "retired mark-gate helper must be deleted on re-vendor");
+    assert.ok(existsSync(projectSibling), "exact retirement must preserve project-owned siblings");
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("re-vendoring removes the retired harvest guard closure and preserves plugin siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-harvest-"));
+  const retired = ["plugin/harvest-guard.ts", "plugin/lib/harvest-findings.mjs"];
+  const sibling = join(tempDir, ".opencode/plugin/project-owned-harvest-sibling.ts");
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale harvest ceremony\n", "utf8");
+    }
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned siblings");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes the retired catalog-health helper and preserves lib siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-catalog-health-"));
+  const retired = "plugin/lib/agent-catalog-health.mjs";
+  const stale = join(tempDir, ".opencode", retired);
+  const sibling = join(tempDir, ".opencode/plugin/lib/project-owned-catalog-sibling.mjs");
+  try {
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "// stale catalog-health advisory\n", "utf8");
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(stale), false, "retired catalog-health helper remains vendored");
+    assert.ok(OC_RETIRED_FILES.includes(retired), "retired catalog-health helper must be declared");
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned lib siblings");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes ceremony sidecar helpers and preserves lib siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-ceremony-sidecars-"));
+  const retired = [
+    "plugin/lib/ceremony-binding.mjs",
+    "plugin/lib/ceremony-transition.mjs",
+  ];
+  const sibling = join(tempDir, ".opencode/plugin/lib/project-owned-ceremony-facts.mjs");
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale ceremony sidecar helper\n", "utf8");
+    }
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    assert.equal(existsSync(sibling), true, "exact-path pruning must preserve project-owned lib siblings");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring moves the closure-10 into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-closure-10-"));
+  const closure = [
+    "gate-state.mjs",
+    "entry-decide.mjs",
+    "dispatch-scope.mjs",
+    "hand-records.mjs",
+    "planner-state.mjs",
+    "obs-emit.mjs",
+    "plan-hash.mjs",
+    "planner-artifact.mjs",
+    "roles.mjs",
+    "task-dispatch-identity.mjs",
+  ];
+  try {
+    const projectSibling = join(tempDir, ".opencode", "plugin", "lib", "project-owned-sibling.mjs");
+    mkdirSync(dirname(projectSibling), { recursive: true });
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
+    for (const name of closure) {
+      const stale = join(tempDir, ".opencode", "plugin", "lib", name);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale pre-move closure module\n", "utf8");
+    }
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const name of closure) {
+      assert.ok(existsSync(join(tempDir, ".opencode", "lib", name)), `framework-owned lib must vendor ${name}`);
+      assert.ok(!existsSync(join(tempDir, ".opencode", "plugin", "lib", name)), `retired old path must be swept: ${name}`);
+    }
+    assert.ok(existsSync(projectSibling), "exact-path sweep must preserve a project-owned sibling in the retired-path directory");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring prunes the retired planner fallback module and agent without touching siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-planner-fallback-"));
+  const retired = ["lib/planner-fallback-config.mjs", "agents/planner-fallback.md"];
+  const siblings = [
+    join(tempDir, ".opencode", "lib", "project-owned-planner-sibling.mjs"),
+    join(tempDir, ".opencode", "agents", "project-owned-planner-sibling.md"),
+  ];
+  try {
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale planner fallback\n", "utf8");
+    }
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "project-owned\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes every retired second-eye path and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-second-eye-"));
+  const retired = [
+    "plugin/lib/second-eye-authority.mjs",
+    "plugin/lib/second-eye-authority.test.mjs",
+    "plugin/second-eye-coordinator.ts",
+    "plugin/second-eye-coordinator.test.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+    "shared/lib/agent-retry.mjs",
+    "shared/lib/agent-retry.test.mjs",
+    "shared/lib/agent-retry-call.mjs",
+    "shared/lib/agent-retry-call.test.mjs",
+    "plugin/ceremony-coordinator.ts",
+    "plugin/ceremony-coordinator.test.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
+  ];
+  try {
+    const siblings = [
+      join(tempDir, ".opencode", "plugin", "lib", "project-owned-second-eye-sibling.mjs"),
+      join(tempDir, ".opencode", "plugin", "project-owned-second-eye-sibling.ts"),
+      join(
+        tempDir,
+        ".opencode",
+        "skills",
+        "orchestrating-delivery",
+        "project-owned-second-eye-sibling.mjs",
+      ),
+    ];
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const rel of retired) {
+      const stale = join(tempDir, ".opencode", rel);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale second-eye runtime\n", "utf8");
+    }
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+
+    for (const rel of retired) {
+      assert.ok(!existsSync(join(tempDir, ".opencode", rel)), `retired second-eye path must be swept: ${rel}`);
+      assert.ok(OC_RETIRED_FILES.includes(rel), `retired path must be declared: ${rel}`);
+    }
+    for (const sibling of siblings) {
+      assert.ok(existsSync(sibling), "exact-path sweep must preserve a project-owned second-eye sibling");
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes retired review-engine paths and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-review-engine-"));
+  const retired = [
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+  ];
+  const siblings = [
+    join(tempDir, ".opencode", "plugin", "project-owned-review-sibling.ts"),
+    join(tempDir, ".opencode", "plugin", "lib", "project-owned-review-sibling.mjs"),
+    join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-review-sibling.mjs"),
+    join(tempDir, ".opencode", "shared", "lib", "project-owned-sibling.mjs"),
+  ];
+  try {
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale OC-only review engine\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes retired ceremony paths and preserves per-directory siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-ceremony-"));
+  const retired = [
+    "plugin/ceremony-coordinator.ts",
+    "plugin/ceremony-coordinator.test.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.mjs",
+    "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
+  ];
+  const siblings = [
+    join(tempDir, ".opencode", "plugin", "project-owned-ceremony-sibling.ts"),
+    join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-ceremony-sibling.mjs"),
+  ];
+  try {
+    for (const sibling of siblings) {
+      mkdirSync(dirname(sibling), { recursive: true });
+      writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    }
+    for (const relativePath of retired) {
+      const stale = join(tempDir, ".opencode", relativePath);
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, "// stale ceremony API\n", "utf8");
+    }
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    for (const relativePath of retired) {
+      assert.equal(existsSync(join(tempDir, ".opencode", relativePath)), false, `retired path remains: ${relativePath}`);
+      assert.ok(OC_RETIRED_FILES.includes(relativePath), `retired path must be declared: ${relativePath}`);
+    }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true, `sibling must survive: ${sibling}`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-vendoring removes the retired scope composition module and preserves its lib sibling", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-scope-composition-"));
+  const retired = "plugin/lib/scope-runtime-composition.mjs";
+  const sibling = join(tempDir, ".opencode", "plugin", "lib", "project-owned-scope-sibling.mjs");
+  try {
+    const stale = join(tempDir, ".opencode", retired);
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "// stale composition registry\n", "utf8");
+    writeFileSync(sibling, "export const projectOwned = true;\n", "utf8");
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(stale), false);
+    assert.equal(existsSync(sibling), true);
+    assert.ok(OC_RETIRED_FILES.includes(retired));
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
+});
+
+test("re-vendoring sweeps retired local state artifacts and preserves siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-cleanup-sweep-"));
+  const stateDir = join(tempDir, ".opencode", "plans", ".state", "ses-local");
+  const sentinel = join(stateDir, "active-dispatch-cleanup-pending.json");
+  const sibling = join(stateDir, "keep.json");
+  const receipt = join(stateDir, "ceremony", "spec-adversary-primary.json");
+  const ceremonySibling = join(stateDir, "ceremony", "keep.json");
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(dirname(receipt), { recursive: true });
+    writeFileSync(sentinel, "{}");
+    writeFileSync(sibling, "{}");
+    writeFileSync(receipt, '{"result":"legacy"}');
+    writeFileSync(ceremonySibling, "{}");
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(sentinel), false);
+    assert.equal(existsSync(receipt), false);
+    assert.equal(existsSync(sibling), true);
+    assert.equal(existsSync(ceremonySibling), true);
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
+});
+
+test("re-vendoring sweeps retired orphan paths and preserves lib/plugin siblings", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-orphans-"));
+  const retired = ["plugin/lib/bound-plan.mjs", "plugin/lib/bound-plan.test.mjs", "plugin/lib/obs-test-isolation.mjs", "plugin/lib/obs-test-isolation.test.mjs", "plugin/eyes-permission-lockdown.test.mjs", "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs", "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs", "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs"];
+  const siblings = [join(tempDir, ".opencode", "plugin", "lib", "project-owned-lib.mjs"), join(tempDir, ".opencode", "plugin", "project-owned-plugin.ts"), join(tempDir, ".opencode", "skills", "orchestrating-delivery", "project-owned-skill.md")];
+  try {
+    for (const file of [...retired.map((rel) => join(tempDir, ".opencode", rel)), ...siblings]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "// stale or project sibling\n"); }
+    const result = spawnSync("node", [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--runtime", "opencode"], { encoding: "utf8", stdio: "pipe" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const rel of retired) { assert.equal(existsSync(join(tempDir, ".opencode", rel)), false); assert.ok(OC_RETIRED_FILES.includes(rel)); }
+    for (const sibling of siblings) assert.equal(existsSync(sibling), true);
+  } finally { rmSync(tempDir, { recursive: true, force: true }); }
 });
 
 test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pruning (#576 ac-1.2)", () => {
@@ -636,8 +1014,53 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/dual-nudge.mjs",
     "plugin/lib/marker-seal.mjs",
     "plugin/lib/marker-security.test.mjs",
+    "plugin/lib/mark-gate.mjs",
     "skills/orchestrating-delivery/dual-runtime.mjs",
     "skills/orchestrating-delivery/dual-runtime.test.mjs",
+    "plugin/lib/gate-state.mjs",
+    "plugin/lib/entry-decide.mjs",
+    "plugin/lib/dispatch-scope.mjs",
+    "plugin/lib/hand-records.mjs",
+    "plugin/lib/planner-state.mjs",
+    "plugin/lib/obs-emit.mjs",
+    "plugin/lib/plan-hash.mjs",
+    "plugin/lib/planner-artifact.mjs",
+    "plugin/lib/planner-fallback-config.mjs",
+    "lib/planner-fallback-config.mjs",
+    "agents/planner-fallback.md",
+    "plugin/lib/roles.mjs",
+    "plugin/lib/task-dispatch-identity.mjs",
+    "plugin/lib/second-eye-authority.mjs",
+    "plugin/lib/second-eye-authority.test.mjs",
+    "plugin/second-eye-coordinator.ts",
+    "plugin/second-eye-coordinator.test.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.mjs",
+    "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+    "plugin/lib/loop-decide.mjs",
+    "plugin/lib/plan-and-loop-decide.test.mjs",
+    "plugin/review-guard.ts",
+    "plugin/lib/review-accounting.test.mjs",
+    "plugin/lib/adversary-nudge.mjs",
+    "plugin/lib/adversary-nudge.test.mjs",
+    "plugin/lib/revise-nudge.mjs",
+    "plugin/lib/revise-nudge.test.mjs",
+    "plugin/lib/review-restart.mjs",
+    "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+    "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+    "shared/lib/agent-retry.mjs",
+    "shared/lib/agent-retry.test.mjs",
+    "shared/lib/agent-retry-call.mjs",
+    "shared/lib/agent-retry-call.test.mjs",
+    "plugin/lib/bound-plan.mjs",
+    "plugin/lib/bound-plan.test.mjs",
+    "plugin/lib/obs-test-isolation.mjs",
+    "plugin/lib/obs-test-isolation.test.mjs",
+    "plugin/eyes-permission-lockdown.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
+    "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
+    "plugin/lib/ceremony-binding.mjs",
+    "plugin/lib/ceremony-transition.mjs",
   ];
   for (const kept of [
     "agents/adversary-family-1.md",
@@ -655,22 +1078,9 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
   }
   assert.equal(new Set(OC_RETIRED_FILES).size, OC_RETIRED_FILES.length, "retired paths must be unique");
 
-  // The pruning keeps these modules alive on purpose (docs/prd/oc-parity-pruning.md § Passo 5,
-  // #583): adversary-nudge is the spec loop's only brake — the Claude Code lane has no adversary
-  // cap to replace it — and revise-nudge is the authoritative round budget. Listing either as
-  // retired would delete it from every vendored project the day its path changes.
-  const keptOnPurpose = [
-    "plugin/lib/adversary-nudge.mjs",
-    "plugin/lib/adversary-nudge.test.mjs",
-    "plugin/lib/revise-nudge.mjs",
-    "plugin/lib/revise-nudge.test.mjs",
-  ];
-  for (const path of keptOnPurpose) {
-    assert.ok(!OC_RETIRED_FILES.includes(path), `retired path must not include a module kept on purpose: ${path}`);
-  }
 });
 
-test("retired dual files are pruned while review-guard and review budgets remain vendored (#583)", () => {
+test("retired review-engine files are pruned from a fresh vendor", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-predeclared-retired-"));
   try {
     const result = spawnSync(
@@ -679,12 +1089,13 @@ test("retired dual files are pruned while review-guard and review budgets remain
       { encoding: "utf8", stdio: "pipe" },
     );
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/review-guard.ts")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/loop-guard.ts")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/dual-merge.mjs")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
-    assert.ok(existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/review-guard.ts")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/adversary-nudge.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/revise-nudge.mjs")));
     assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/marker-seal.mjs")));
+    assert.ok(!existsSync(join(tempDir, ".opencode/plugin/lib/mark-gate.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1007,13 +1418,13 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     // entry-gate pulls shared utils from task-dispatch-identity / hook-identity / gate-state
     // (#580); imports must stay relative, never absolute home.
     const entry = readFileSync(join(tempDir, ".opencode/plugin/entry-gate.ts"), "utf8");
-    assert.match(entry, /import\("\.\/lib\/task-dispatch-identity\.mjs"\)/);
+    assert.match(entry, /import\("\.\.\/lib\/task-dispatch-identity\.mjs"\)/);
     assert.match(entry, /import\("\.\/lib\/hook-identity\.mjs"\)/);
-    assert.match(entry, /import\("\.\/lib\/gate-state\.mjs"\)/);
+    assert.match(entry, /import\("\.\.\/lib\/gate-state\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
-    const reviewGuard = readFileSync(join(tempDir, ".opencode/plugin/review-guard.ts"), "utf8");
-    assert.match(reviewGuard, /import\("\.\.\/shared\/lib\/path-helpers\.mjs"\)/);
-    assert.ok(!reviewGuard.includes("/Users/"), "vendored shared import must be relative, not home path");
+    const plannerRecovery = readFileSync(join(tempDir, ".opencode/plugin/planner-recovery.ts"), "utf8");
+    assert.match(plannerRecovery, /import\("\.\.\/lib\/planner-artifact\.mjs"\)/);
+    assert.ok(!plannerRecovery.includes("/Users/"), "vendored planner import must be relative, not home path");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1037,8 +1448,9 @@ test("normalizeRuntimeTarget: absent/empty → claude; known tokens map; garbage
 test("resolveProjectTarget: existing dir passes; runtime token → hint at --runtime; missing dir throws", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vc-target-"));
   try {
-    assert.equal(resolveProjectTarget(undefined, tempDir), tempDir);
-    assert.equal(resolveProjectTarget(tempDir, "/unused"), tempDir);
+    const physicalTempDir = realpathSync(tempDir);
+    assert.equal(resolveProjectTarget(undefined, tempDir), physicalTempDir);
+    assert.equal(resolveProjectTarget(tempDir, "/unused"), physicalTempDir);
     // The --target/--runtime footgun: `--target both` (not a dir) must not create ./both/.
     assert.throws(() => resolveProjectTarget("both", tempDir), /use --runtime both/);
     assert.throws(() => resolveProjectTarget("opencode", tempDir), /use --runtime opencode/);
@@ -1067,17 +1479,10 @@ test("rewriteSharedImportsForVendor: depth-aware monorepo → vendored paths", (
   );
   assert.equal(
     rewriteSharedImportsForVendor(
-      'import { x } from "../../../shared/lib/gate-state-shape.mjs";',
-      "plugin/lib/gate-state.mjs",
+      'import { x } from "../../shared/lib/gate-state-shape.mjs";',
+      "lib/gate-state.mjs",
     ),
-    'import { x } from "../../shared/lib/gate-state-shape.mjs";',
-  );
-  assert.equal(
-    rewriteSharedImportsForVendor(
-      "node core/opencode/plugin/lib/mark-gate.mjs stamp",
-      "plugin/lib/bash-decide.mjs",
-    ),
-    "node .opencode/plugin/lib/mark-gate.mjs stamp",
+    'import { x } from "../shared/lib/gate-state-shape.mjs";',
   );
 });
 

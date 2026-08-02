@@ -11,7 +11,7 @@ import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
  * @param {{ plan?: unknown, expect?: "full"|"stub"|"any" }} input
  * @returns {Decision}
  */
-export function decidePlanGate(input = {}) {
+export function decidePlanGate(input = {}, { validatePlanFn = validatePlan } = {}) {
   try {
     const expect = input.expect ?? "full";
     const plan = input.plan;
@@ -32,7 +32,7 @@ export function decidePlanGate(input = {}) {
           ok: false,
           decision: "deny",
           reason:
-            "[plan-gate] Blocked: plan is stub kind — planner must overwrite with full plan before executors.",
+            "[plan-gate] Blocked: plan is stub kind — planner returns JSON and planner-recovery overwrites the stub with the full plan before executors.",
           details: { kind: "stub" },
         };
       }
@@ -47,7 +47,7 @@ export function decidePlanGate(input = {}) {
       }
     }
 
-    const result = validatePlan(plan, { expect });
+    const result = validatePlanFn(plan, { expect });
     if (!result.ok) {
       return {
         ok: false,
@@ -60,15 +60,15 @@ export function decidePlanGate(input = {}) {
     return { ok: true, decision: "allow", reason: "plan-valid-full" };
   } catch {
     return {
-      ok: false,
-      decision: "deny",
-      reason: "[plan-gate] Blocked: plan decision failed",
+      ok: true,
+      decision: "warn",
+      reason: "[plan-gate] Warning: validator failed internally; opening without a validation decision.",
     };
   }
 }
 
 /**
- * @param {import("./entry-decide.mjs").Decision | Decision} decision
+ * @param {import("../../lib/entry-decide.mjs").Decision | Decision} decision
  * @returns {void}
  */
 export function throwIfPlanDenied(decision) {

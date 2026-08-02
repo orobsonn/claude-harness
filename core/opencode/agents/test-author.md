@@ -3,6 +3,7 @@ description: Transcribes pinned locked_test assertions into one test file (and n
 mode: all
 model: openai/gpt-5.6-sol
 temperature: 0.1
+steps: 80
 tools:
   task: false
 permission:

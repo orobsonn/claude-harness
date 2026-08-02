@@ -53,7 +53,6 @@ const REQUIRED_AGENTS = [
   "harness-config",
   "discussion-adversary",
   "planner",
-  "planner-fallback",
   "plan-reviewer",
   "adversary",
   "compliance",
@@ -130,6 +129,13 @@ test("t6-agents: required agent files exist including test-author.md", () => {
     existsSync(join(OC_ROOT, "docs", "SPAWN-PATTERN.md")),
     "SPAWN-PATTERN.md documents P2 under docs/",
   );
+  assert.equal(existsSync(join(AGENTS_DIR, "planner-fallback.md")), false, "retired planner fallback agent must stay absent");
+});
+
+test("t6-routing-table: AGENTS has exactly one canonical planner row", () => {
+  const table = read(join(OC_ROOT, "AGENTS.md"));
+  assert.equal((table.match(/^\| planner \|/gm) ?? []).length, 1);
+  assert.doesNotMatch(table, /planner-fallback/i);
 });
 
 test("t6-single-evaluator-files: canonical eyes + compatibility alias stubs", () => {
@@ -196,6 +202,18 @@ test("t6-skills: required loop skills exist under core/opencode/skills", () => {
   }
 });
 
+test("planner agent and creating-plans skill expose one canonical terminal summary", () => {
+  const canonical = "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs].";
+  for (const path of [
+    join(AGENTS_DIR, "planner.md"),
+    join(SKILLS_DIR, "creating-plans", "SKILL.md"),
+  ]) {
+    const body = read(path);
+    assert.equal(body.includes(canonical), true, `${path} lacks the canonical summary`);
+    assert.doesNotMatch(body, /Tasks com adversarial: \[IDs\]\. Próximo passo:/, `${path} extends the terminal summary`);
+  }
+});
+
 test("t6-shared-hands: no spawn twins exist and each shared hand preserves its full contract", () => {
   const files = readdirSync(AGENTS_DIR).filter((f) => f.endsWith("-spawn.md"));
   assert.deepEqual(files, [], "retired *-spawn.md twins must not exist");
@@ -212,8 +230,16 @@ test("t6-shared-hands: no spawn twins exist and each shared hand preserves its f
     const fm = frontmatter(read(join(AGENTS_DIR, f)));
     assert.equal(fmField(fm, "mode"), "all", `${f} mode must be all`);
     assert.equal(fmField(fm, "model"), expectedModels(JSON.parse(read(ROUTING_PATH)))[name]);
+    assert.equal(fmField(fm, "steps"), "80", `${f} must force a terminal response before a runaway hand loop`);
     assert.equal(fmNestedBool(fm, "permission", "edit"), "allow", `${f} permission.edit must stay allow`);
     assert.equal(fmNestedBool(fm, "tools", "task"), false, `${f} tools.task must be false`);
+  }
+});
+
+test("t6-executors leave Git index ownership to the host capture rail", () => {
+  for (const name of ["executor-low", "executor-medium", "executor-high"]) {
+    const body = read(join(AGENTS_DIR, `${name}.md`));
+    assert.match(body, /Never stage, unstage, commit, or otherwise mutate the Git index/i, `${name} must not manipulate host capture state`);
   }
 });
 

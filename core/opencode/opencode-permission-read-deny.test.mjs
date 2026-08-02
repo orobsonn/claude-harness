@@ -1,7 +1,7 @@
 /** @description Pins the target shape of `permission.read` / `permission.edit` in the two
  * tracked opencode configs (repo-root `opencode.json` and the vendored
  * `core/opencode/opencode.json.example`): per-pattern maps with a `"*": "allow"` wildcard
- * serialized FIRST, followed by the 8 locked deny patterns, resolved last-match-wins. */
+ * serialized FIRST. Read keeps the 8 secret denies; edit adds the harness-owned state deny. */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -24,12 +24,16 @@ const DENY_PATTERNS = [
   "~/.aws/**",
 ];
 
-const maps = [
+const STATE_DENY = ".opencode/plans/.state/**";
+const readMaps = [
   { label: "root read", map: rootConfig.permission.read },
-  { label: "root edit", map: rootConfig.permission.edit },
   { label: "example read", map: exampleConfig.permission.read },
+];
+const editMaps = [
+  { label: "root edit", map: rootConfig.permission.edit },
   { label: "example edit", map: exampleConfig.permission.edit },
 ];
+const maps = [...readMaps, ...editMaps];
 
 test("opencode.json permission.read/edit are per-pattern maps, not scalars (#ac-1.5)", () => {
   assert.equal(
@@ -113,7 +117,7 @@ test("wildcard \"*\": \"allow\" is serialized as the first key in every permissi
   }
 });
 
-test("all 8 locked deny patterns are present and sit after the wildcard (#ac-1.5)", () => {
+test("all 8 locked secret deny patterns are present and sit after the wildcard (#ac-1.5)", () => {
   for (const { label, map } of maps) {
     const keys = Object.keys(map);
     const wildcardIndex = keys.indexOf("*");
@@ -132,13 +136,18 @@ test("all 8 locked deny patterns are present and sit after the wildcard (#ac-1.5
   }
 });
 
-test("each permission map has exactly 9 keys — wildcard plus the 8 locked denies (#ac-1.5)", () => {
-  for (const { label, map } of maps) {
+test("read has exactly the wildcard + 8 secret denies; edit also denies harness state", () => {
+  for (const { label, map } of readMaps) {
     assert.equal(
       Object.keys(map).length,
       9,
-      `${label}: must have exactly 9 keys (1 wildcard + 8 locked deny patterns) — no invented ninth pattern and no allow carve-out`,
+      `${label}: must have exactly 9 keys (1 wildcard + 8 locked deny patterns)`,
     );
+  }
+  for (const { label, map } of editMaps) {
+    assert.equal(map[STATE_DENY], "deny", `${label}: harness state must be denied`);
+    assert.ok(Object.keys(map).indexOf(STATE_DENY) > Object.keys(map).indexOf("*"));
+    assert.equal(Object.keys(map).length, 10, `${label}: must add exactly one state deny`);
   }
 });
 

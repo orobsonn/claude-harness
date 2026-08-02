@@ -1,6 +1,6 @@
 /**
  * @description A `mark` `ok:false` on a hand-record that is not DONE must be split by CAUSE in the OC
- * orchestrating-delivery skill: a transient dispatch failure retries under the same-agent K=3, a hand
+ * orchestrating-delivery skill: a transient dispatch failure is an explicit orchestrator judgment, a hand
  * that ran and refused (`BLOCKED` / `NEEDS_CONTEXT`) or was denied before it ran (`CONFIG_ERROR`)
  * goes straight to CRITICAL EXCEPTION with no retry, and a `DONE_WITH_CONCERNS` record — non-DONE
  * with nothing having failed — is neither.
@@ -17,6 +17,14 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const lines = skill.split("\n");
+
+function captureStepOne() {
+  const start = lines.findIndex((line) => /^1\. Host /.test(line));
+  assert.notEqual(start, -1, "SKILL.md must keep § Post-hand capture path step 1 as the host completion item.");
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^2\. /.test(line));
+  return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join("\n");
+}
 
 /**
  * Step 2 of § Post-hand capture path — the numbered item plus every sub-bullet indented under it,
@@ -58,6 +66,7 @@ function bullets(blockLines) {
 }
 
 const stepTwoLines = captureStepTwoLines();
+const stepOne = captureStepOne();
 const stepTwo = stepTwoLines.join("\n");
 const stepTwoHeader = stepTwoLines[0];
 const stepTwoBullets = bullets(stepTwoLines);
@@ -71,6 +80,13 @@ const REFUSAL_VERDICTS = ["BLOCKED", "NEEDS_CONTEXT", "CONFIG_ERROR"];
 const refusalBullets = stepTwoBullets.filter((bullet) =>
   REFUSAL_VERDICTS.every((verdict) => bullet.includes(verdict)),
 );
+
+test("#ac-1.1 — host completion never self-certifies independent capture", () => {
+  assert.match(stepOne, /hand_finished/, "host completion must name the factual DONE stamp it owns.");
+  assert.match(stepOne, /does\s+\**not|never/i, "step 1 must explicitly deny automatic capture certification.");
+  assert.match(stepOne, /capture_verified/, "step 1 must name the independent capture fact it does not own.");
+  assert.match(stepOne, /capturedVerifiedAt/, "step 1 must name the record evidence it does not own.");
+});
 
 test("#ac-1.1 — capture step 2 splits `ok:false` into causes instead of one retry order", () => {
   assert.ok(
@@ -124,21 +140,12 @@ test("#ac-1.1 — the refusal branch agrees with the two rules that already gove
   assert.doesNotMatch(branch, /:\d{2,}/, "cross-references must be by section name, never line number.");
 });
 
-test("#ac-1.1 — the transient branch keeps the same-agent K=3 budget", () => {
-  const branch = stepTwoBullets.find(
-    (bullet) => /transient/i.test(bullet) && /K=3/.test(bullet),
-  );
-  assert.ok(
-    branch,
-    "step 2 must keep a branch granting the same-agent K=3 to a genuinely transient failure.",
-  );
-
-  assert.match(branch, /Escalation ladder/, "transient branch must name § Escalation ladder.");
-  assert.match(branch, /existing/i, "transient branch must say the counter is the role's EXISTING one.");
-  assert.ok(
-    !REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)),
-    "the transient branch must not claim the refusal verdicts.",
-  );
+test("#ac-1.1 — the transient branch has no global retry budget", () => {
+  const branch = stepTwoBullets.find((bullet) => /transient/i.test(bullet));
+  assert.ok(branch, "step 2 must keep a branch for a genuinely transient failure.");
+  assert.match(branch, /orchestrator|judgment/i, "transient handling must require explicit judgment.");
+  assert.doesNotMatch(branch, /K=3|same-agent|counter|retry status/i, "transient handling must not grant global retry authority.");
+  assert.ok(!REFUSAL_VERDICTS.some((verdict) => branch.includes(verdict)), "the transient branch must not claim the refusal verdicts.");
 });
 
 test("#ac-1.1 — a `DONE_WITH_CONCERNS` record is routed, not left in the gap the split opened", () => {
@@ -191,9 +198,10 @@ test("#ac-1.1 — the refusal is read off the Task read-back, not off the record
   assert.match(branch, /read-?back/i, "refusal branch must name the Task read-back.");
   assert.match(
     branch,
-    /promote[sd]?\b[^.]{0,60}DONE|never records `?CONFIG_ERROR|record can hide/i,
-    "the branch must warn that the record is not a second source.",
+    /never promotes?[^.]{0,80}(BLOCKED|NEEDS_CONTEXT)|preserves?[^.]{0,80}(BLOCKED|NEEDS_CONTEXT)/i,
+    "the branch must lock that explicit refusal is never promoted to DONE.",
   );
+  assert.doesNotMatch(branch, /record can hide/i);
 });
 
 test("#ac-2.1 — the Escalation ladder declares whether a never-DONE capture record is in its trigger", () => {

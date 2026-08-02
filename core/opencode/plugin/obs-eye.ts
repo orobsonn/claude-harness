@@ -23,10 +23,10 @@ function extractResponse(input: any, output: any): string {
 /**
  * @description Build after-hooks for eye outbox events.
  */
-export async function createObsEyeHooks(
+async function createObsEyeHooks(
   dir?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
-  const { isTaskTool } = await import("./lib/task-dispatch-identity.mjs");
+  const { isTaskTool } = await import("../lib/task-dispatch-identity.mjs");
   const {
     eventForEyeRole,
     isEyeRole,
@@ -36,7 +36,7 @@ export async function createObsEyeHooks(
     fullPlanExistsForRun,
     resolveHookArgs,
     extractTaskIds,
-  } = await import("./lib/obs-emit.mjs");
+  } = await import("../lib/obs-emit.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   return {
     "tool.execute.after": async (input: any, output: any) => {
@@ -66,6 +66,7 @@ export async function createObsEyeHooks(
 
 export const obsEye: Plugin = async ({ directory }) =>
   createObsEyeHooks(typeof directory === "string" ? directory : undefined);
+Object.defineProperty(obsEye, "testApi", { value: Object.freeze({ createObsEyeHooks }) });
 
 /** @description OC load contract — default export required. */
 export default obsEye;

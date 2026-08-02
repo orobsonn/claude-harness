@@ -3,6 +3,7 @@ description: Implements LOW-complexity tasks (config, types, constants, mechanic
 mode: all
 model: ollama-cloud/gemma4:31b
 temperature: 0.1
+steps: 80
 tools:
   task: false
 permission:
@@ -38,6 +39,8 @@ If a judgment is missing, emit `NEEDS_CONTEXT` immediately. Do not guess.
 
 ### scope_paths are the boundary
 **BLOCKED** if you need to write outside the declared `scope_paths`. Report `BLOCKED` with the conflicting path.
+
+Never stage, unstage, commit, or otherwise mutate the Git index. Host capture owns Git evidence; use `git status`/`git diff` only for inspection.
 
 ### locked_tests are immutable gates
 Never edit, delete, or rename files that contain `locked_tests`. They are the acceptance gate.

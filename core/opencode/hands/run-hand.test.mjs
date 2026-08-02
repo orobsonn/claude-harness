@@ -4,6 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -23,14 +24,17 @@ import {
   isExecutorHandRole,
   defaultHasFidelityPass,
 } from "./run-hand.mjs";
-import { mergeGateState } from "../plugin/lib/gate-state.mjs";
-import { semanticPlanHash } from "../plugin/lib/planner-artifact.mjs";
+import { mergeGateState } from "../lib/gate-state.mjs";
+import { semanticPlanHash } from "../lib/planner-artifact.mjs";
+
+const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
 
 function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]) {
   const plan = {
     feature_id: featureId,
     kind: "full",
     mode: "full",
+    model_strategy: MODEL_STRATEGY,
     tasks: [{
       id: taskId,
       severity: "medium",
@@ -41,16 +45,19 @@ function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]
     }],
   };
   const hash = semanticPlanHash(plan);
+  const snapshotBytes = Buffer.from(JSON.stringify(plan));
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshotBytes).digest("hex");
   const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
-  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${hash}.json`;
+  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${snapshotFileHash}.json`;
   mkdirSync(join(stateDir, "bound-plans"), { recursive: true });
-  writeFileSync(join(root, snapshotRel), JSON.stringify(plan));
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, snapshotRel), snapshotBytes);
   writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
     session_id: sessionId,
     feature_id: featureId,
     planner_status: "usable",
     delivery_status: "ready",
-    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash },
+    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
   }));
 }
 
@@ -335,6 +342,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
         reasons: ["locked tests exited 1"],
       },
       agent: "executor-medium",
+      producerCallId: "run-hand:test-call",
     });
     assert.equal(record.writtenBy, "run-hand-adapter");
     assert.equal(record.featureId, "oc-port-phase-1");
@@ -373,6 +381,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
     assert.equal(disk.writtenBy, "run-hand-adapter");
     assert.equal(disk.outcome, OUTCOME.FAILED);
     assert.equal(disk.sessionId, "ses_abc123");
+    assert.equal(disk.producerCallId, "run-hand:test-call");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -380,7 +389,7 @@ test("t7-record: run-record written on disk at session-scoped path by adapter co
 
 // ---- capturedVerifiedAt stamp (DONE only) ----
 
-test("buildHandRunRecord: DONE must NOT set capturedVerifiedAt (mark-gate only)", () => {
+test("buildHandRunRecord: DONE must NOT self-certify capturedVerifiedAt (host authority only)", () => {
   const record = buildHandRunRecord({
     featureId: "feat",
     taskId: "task-6",
@@ -541,15 +550,17 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
       },
       {
         agentsDir,
+        dispatchCallId: () => "call-run",
         checkFidelityPass: () => true,
-        spawn: async ({ agent, model }) => {
+        spawn: async ({ agent, model, dispatchAuthority }) => {
           assert.equal(agent, "executor-medium");
           assert.equal(model, "openai/gpt-5.6-terra");
-          const active = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch;
-          assert.equal(active.session_id, "ses_run1");
-          assert.equal(active.feature_id, "feat-x");
-          assert.equal(active.task_id, "task-1");
-          assert.deepEqual(active.scope_paths, ["src"]);
+          assert.deepEqual(dispatchAuthority, { sessionId: "ses_run1", callId: "call-run" });
+          const dispatch = JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "dispatch-records", `${crypto.createHash("sha256").update("call-run").digest("hex")}.json`), "utf8"));
+          assert.equal(dispatch.parent_session_id, "ses_run1");
+          assert.equal(dispatch.feature_id, "feat-x");
+          assert.equal(dispatch.task_id, "task-1");
+          assert.deepEqual(dispatch.scope_paths, ["src"]);
           phase = "post";
           return {
             exitCode: 0,
@@ -589,11 +600,146 @@ test("runHand: FAILED path resets and writes a session-scoped record with the sh
     assert.equal(result.record.agent, "executor-medium");
     // process exit was 0 but outcome is FAILED — exit is not oracle
     assert.equal(result.processExitCode, 0);
-    assert.equal(JSON.parse(readFileSync(join(root, ".opencode", "plans", ".state", "ses_run1", "gate-state.json"), "utf8")).active_dispatch, undefined);
+    assert.equal(existsSync(join(root, ".opencode", "plans", ".state", "ses_run1", "dispatch-records", `${crypto.createHash("sha256").update("call-run").digest("hex")}.json`)), false);
 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("runHand: DONE retains its exact producer dispatch until parent capture", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-done-"));
+  try {
+    seedBoundTask(root, "ses_done", "feat-done", "task-done");
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "test-author.md"), ALL_HAND_FM);
+    const callId = "run-hand:done-call";
+    const result = await runHand({
+      feature_id: "feat-done",
+      task_id: "task-done",
+      session_id: "ses_done",
+      project_root: root,
+      freeze_commit_sha: "freeze-done",
+      role: "test-author",
+      no_tests: true,
+      brief: "do work",
+    }, {
+      agentsDir,
+      dispatchCallId: () => callId,
+      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      git: {
+        headSha: () => "freeze-done",
+        diffNameOnly: () => ["src/done.ts"],
+        lsFilesOthers: () => [],
+      },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+    assert.equal(result.outcome, OUTCOME.DONE);
+    assert.equal(result.record.producerCallId, callId);
+    const dispatchPath = join(root, ".opencode", "plans", ".state", "ses_done", "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
+    assert.equal(existsSync(dispatchPath), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runHand: fix-mode sniper consumes the host-frozen scope without a planner snapshot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-fix-"));
+  try {
+    const sessionId = "ses_fix_hand";
+    const featureId = "feat-fix-hand";
+    const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd";
+    const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "fix.ts"), "before\n");
+    writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
+      session_id: sessionId,
+      feature_id: featureId,
+      classified: true,
+      mode: "LIGHT",
+    }));
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "sniper-low.md"), ALL_HAND_FM);
+
+    const result = await runHand({
+      feature_id: featureId,
+      task_id: "fix-task",
+      session_id: sessionId,
+      project_root: root,
+      freeze_commit_sha: reviewedSha,
+      role: "sniper-low",
+      no_tests: true,
+      brief: "repair",
+    }, {
+      agentsDir,
+      dispatchCallId: () => "run-hand:fix-call",
+      dispatchEnvironment: {
+        HARNESS_FIX_MODE: "1",
+        HARNESS_FIX_SCOPE_JSON: JSON.stringify({
+          version: 1,
+          reviewed_sha: reviewedSha,
+          scope_paths: ["src/fix.ts"],
+        }),
+      },
+      isReviewedShaAncestor: () => true,
+      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      git: {
+        headSha: () => reviewedSha,
+        diffNameOnly: () => ["src/fix.ts"],
+        lsFilesOthers: () => [],
+      },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+
+    assert.equal(result.outcome, OUTCOME.DONE);
+    const dispatchPath = join(stateDir, "dispatch-records", `${crypto.createHash("sha256").update("run-hand:fix-call").digest("hex")}.json`);
+    assert.deepEqual(JSON.parse(readFileSync(dispatchPath, "utf8")).scope_paths, ["src/fix.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runHand: fix-mode rejects a descriptor freeze SHA that differs from host authority before spawn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "t7-runhand-fix-sha-"));
+  try {
+    const sessionId = "ses_fix_sha";
+    const featureId = "feat-fix-sha";
+    const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd";
+    const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "fix.ts"), "before\n");
+    writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true, mode: "LIGHT" }));
+    const agentsDir = join(root, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "sniper-low.md"), ALL_HAND_FM);
+    let spawned = false;
+    const result = await runHand({
+      feature_id: featureId, task_id: "fix-task", session_id: sessionId,
+      project_root: root, freeze_commit_sha: "deadbeef", role: "sniper-low",
+      no_tests: true, brief: "repair",
+    }, {
+      agentsDir,
+      dispatchCallId: () => "run-hand:fix-sha",
+      dispatchEnvironment: {
+        HARNESS_FIX_MODE: "1",
+        HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: reviewedSha, scope_paths: ["src/fix.ts"] }),
+      },
+      isReviewedShaAncestor: () => true,
+      spawn: async () => { spawned = true; return { exitCode: 0, stdout: "", stderr: "" }; },
+      lsUntracked: () => [],
+      isDirtyVsFreeze: () => false,
+    });
+    assert.equal(result.outcome, OUTCOME.CONFIG_ERROR);
+    assert.match(result.reason, /freeze sha conflicts with fix-mode authority/);
+    assert.equal(spawned, false);
+    assert.equal(existsSync(join(stateDir, "dispatch-records", `${crypto.createHash("sha256").update("run-hand:fix-sha").digest("hex")}.json`)), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("runHand: CAPTURE_ERROR sets quarantine when reset fails", async () => {
@@ -661,7 +807,7 @@ test("runHand: cleanup failure is verified and fails closed instead of returning
     }, {
       agentsDir,
       spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-      finishDispatch: () => ({ ok: false, cleanup_pending: true, reason: "active_dispatch cleanup pending" }),
+      finishDispatch: () => ({ ok: false, reason: "dispatch record cleanup failed" }),
       lsUntracked: () => [],
       gitResetHard: () => ({ ok: true }),
       removePath: () => ({ ok: true }),
@@ -669,7 +815,7 @@ test("runHand: cleanup failure is verified and fails closed instead of returning
       isDirtyVsFreeze: () => false,
     });
     assert.equal(result.outcome, OUTCOME.CONFIG_ERROR);
-    assert.match(result.reason, /cleanup pending/);
+    assert.match(result.reason, /dispatch record cleanup failed/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -839,7 +985,7 @@ test("runHand: default vendored agent is authoritative for model and test-author
   }
 });
 
-test("defaultHasFidelityPass: true after a host-authorized fidelity marker reaches disk", () => {
+test("defaultHasFidelityPass: true after a native mark fidelity fact reaches disk", () => {
   const root = mkdtempSync(join(tmpdir(), "t7-fid-disk-"));
   const sessionId = "ses_fiddisk";
   try {

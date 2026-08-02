@@ -6,40 +6,7 @@
   "classified": true,
   "triaged": true,
   "brainstormed": true,
-  "brainstormed_binding": {
-    "session_id": "ses_exemplo_b",
-    "feature_id": "fix-plan-review-stop-rules",
-    "operation": "brainstormed"
-  },
   "adversary_fired": true,
-  "adversary_fired_binding": {
-    "session_id": "ses_exemplo_b",
-    "feature_id": "fix-plan-review-stop-rules",
-    "operation": "adversary_fired"
-  },
-  "ceremony_generation": "ceremony_generation-placeholder-01",
-  "ceremony_evidence": {
-    "brainstormed": {
-      "version": 1,
-      "session_id": "ses_exemplo_b",
-      "feature_id": "fix-plan-review-stop-rules",
-      "ceremony_generation": "ceremony_generation-placeholder-01",
-      "phase": "brainstorming",
-      "artifact_path": ".opencode/plans/ses_exemplo_b-fix-plan-review-stop-rules/spec.md",
-      "artifact_sha256": "sha256-placeholder-02",
-      "artifact_size": 4403
-    },
-    "adversary_fired": {
-      "version": 1,
-      "session_id": "ses_exemplo_b",
-      "feature_id": "fix-plan-review-stop-rules",
-      "ceremony_generation": "ceremony_generation-placeholder-01",
-      "phase": "spec-adversary",
-      "result_path": ".opencode/plans/.state/ses_exemplo_b/ceremony/spec-adversary-primary.json",
-      "result_sha256": "sha256-placeholder-03",
-      "call_id": "call_id-placeholder-04"
-    }
-  },
   "marker_seals": [
     {
       "version": 1,

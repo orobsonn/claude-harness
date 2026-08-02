@@ -1,5 +1,9 @@
 # Approved Design: OpenCode Agent Catalog Hardening
 
+> **Superado pela PR4.2:** este design permanece como registro histórico. A saúde dinâmica do
+> catálogo era um advisory OpenCode-only e foi removida; `version-check` agora cobre somente
+> versão/staleness, no formato do Claude Code e sempre fail-open.
+
 ## Components
 
 - **Catalog resolver:** Select `.opencode/agents` whenever that directory exists. Use `core/opencode/agents` only when the vendored directory is absent in a source checkout.

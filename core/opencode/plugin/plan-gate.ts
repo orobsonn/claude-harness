@@ -1,27 +1,19 @@
 /**
  * @description OC plan-gate plugin — full bound plan required before writing roles dispatch.
  * Before plan-reviewer/test-author/executor/sniper dispatch: reconcile one locked artifact snapshot + decidePlanGate(expect full).
- * Discipline around waiting for plan-review APPROVE is prose + orchestration now (see
- * lib/revise-nudge.mjs), exactly like Claude Code. Deny throws [plan-gate]. Conditional on
- * planner_plan_binding: absent (no ceremony ever ran for this session, or a terminated/failed
- * attempt with no binding) -> fail-open, no plan required (operator no-ceremony branch, fleet
- * fix-mode); present -> validated for real, unchanged from before. Gate-state reconciliation
- * failure fails open only for genuinely missing/unreadable state — lock contention or a write
+ * Discipline around waiting for plan-review APPROVE is prose + orchestration, exactly like
+ * Claude Code. Deny throws [plan-gate]. Conditional on
+ * planner_plan_binding: absent with no planner lifecycle -> fail-open, no plan required
+ * (operator/fix-mode branch, fleet fix-mode); any started lifecycle without a usable binding
+ * denies. A present binding is validated for real. Gate-state reconciliation
+ * failure fails open only for genuinely unreadable state — lock contention or a write
  * failure still denies.
  * Roles outside the guarded downstream set skip plan require.
- * Load shape matches review-guard: dynamic import of pure mjs inside Plugin factory.
+ * Load shape uses dynamic imports of pure mjs inside the Plugin factory.
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
-import { resealRefutePrompt } from "./lib/second-eye-authority.mjs"
 const PREFIX = "[plan-gate]"
-
-/** @description Keep untrusted bound-plan text from creating extra refute authority markers. */
-export function escapeRefuteSentinels(value: string): string {
-  return value
-    .replaceAll("[HARNESS_REFUTE_PASS]", "\\u005bHARNESS_REFUTE_PASS]")
-    .replaceAll("[/HARNESS_REFUTE_PASS]", "\\u005b/HARNESS_REFUTE_PASS]")
-}
 
 // lib/gate-state.mjs reason strings for lock/write infra faults (as opposed to a genuinely
 // missing/unreadable gate-state) — see withGateStateLock / acquireLock.
@@ -49,29 +41,27 @@ function dispatchIds(args: unknown): { featureId: string; taskId: string } {
 /**
  * @description Builds plan-gate hooks (async load of pure plan-decide + identity modules).
  */
-export async function createPlanGateHooks(
+async function createPlanGateHooks(
   projectRoot: string,
+  deps: { validatePlanFn?: (plan: unknown, options: unknown) => { ok: boolean; errors: string[] } } = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd()
-  const { registerScopeComponent } = await import("./lib/scope-runtime-composition.mjs")
-  registerScopeComponent(root, "plan-gate")
   const { extractSubagentType, isTaskTool, parseTaskDispatchIdentity } = await import(
-    "./lib/task-dispatch-identity.mjs",
+    "../lib/task-dispatch-identity.mjs",
   )
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
   const { decidePlanGate, throwIfPlanDenied } = await import("./lib/plan-decide.mjs")
-  const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs")
-  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
+  const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs")
   const {
     bareRole,
     isExecutorRole,
     isPlanReviewerRole,
     isSniperRole,
     isTestAuthorRole,
-  } = await import("./lib/roles.mjs")
+  } = await import("../lib/roles.mjs")
   return {
     "tool.execute.before": async (input: any, output: any) => {
       const { toolName, toolArgs } = extractHookTaskContext(input, output)
@@ -86,7 +76,7 @@ export async function createPlanGateHooks(
         toolArgs,
         promptTaskId: marker.ok ? marker.taskId : "",
       })
-      if (!identity.ok) throw new Error(`${PREFIX} delivery-blocked: ${identity.reason}`)
+      if (!identity.ok) throw new Error(`${PREFIX} denied: ${identity.reason}`)
       const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractSubagentType(toolArgs)
       const role = bareRole(subagentType)
@@ -95,22 +85,24 @@ export async function createPlanGateHooks(
         isTestAuthorRole(role) ||
         isExecutorRole(role) ||
         isSniperRole(role)
-      // Conditional on binding existence: absent (no planner ceremony ever ran for this
-      // session — the operator's no-ceremony branch, or a fix-mode dispatch reusing a
-      // branch) -> skip fail-open, no plan required. Present -> validate for real; nothing
-      // below this point is relaxed once a real planner attempt is on the table (#ac-1.2, #ac-1.3).
+      // No planner lifecycle means operator/fix-mode and remains the narrow fail-open branch.
+      // Once a planner attempt exists, only a usable bound snapshot may pass.
       if (requiresFullPlan) {
         const sid = sessionId ?? undefined
         if (sid) {
-          const reconciled = reconcilePlannerStateFromDisk(root, sid)
+          const reconciled = reconcilePlannerStateFromDisk(root, sid, Date.now(), { validatePlanFn: deps.validatePlanFn })
           if (!reconciled.ok) {
-            // #ac-1.4 fail-open is scoped to genuinely missing/unreadable state — lock
-            // contention or a write failure is an infra fault, not "no ceremony ran", and
+            // #ac-1.4 fail-open is scoped to genuinely unreadable state — lock
+            // contention or a write failure is an infra fault, not "no planner attempt ran", and
             // must keep denying (a squatted lock must never disable plan validation).
             if (GATE_STATE_INFRA_FAILURE_REASONS.has(String(reconciled.reason))) {
-              throw new Error(`${PREFIX} delivery-blocked: gate-state contention (${reconciled.reason})`)
+              throw new Error(`${PREFIX} denied: gate-state contention (${reconciled.reason})`)
             }
-            console.warn(`${PREFIX} planner-state-unreadable (fail-open, plan validation skipped): ${reconciled.reason}`)
+            if (reconciled.reason === "gate-state-unreadable") {
+              console.warn(`${PREFIX} planner-state-unreadable (fail-open, plan validation skipped): ${reconciled.reason}`)
+            } else {
+              throw new Error(`${PREFIX} denied: planner state unavailable (${String(reconciled.reason ?? "unknown")})`)
+            }
           } else {
             const state =
               reconciled.state != null &&
@@ -120,30 +112,14 @@ export async function createPlanGateHooks(
                 : {}
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined
             if (!binding) {
-              // A planner attempt that really ran and ended terminally-blocked (invalid plan,
-              // failed/unavailable provider, delivery-blocked) never produces a binding either
-              // — but it is NOT "no ceremony ran" and must not be treated as the fail-open case.
-              // Mirrors the invariant lib/dispatch-scope.mjs:readCanonicalTaskFromSnapshot already
-              // enforces (refuses delivery_status === "delivery-blocked").
-              const terminalPlannerStatus = new Set(["plan_invalid", "planner_failed", "planner_unavailable"])
-              if (
-                state.delivery_status === "delivery-blocked" ||
-                terminalPlannerStatus.has(String(state.planner_status ?? ""))
-              ) {
-                throw new Error(`${PREFIX} delivery-blocked: planner attempt ended in a non-usable state; status=${String(state.planner_status ?? "missing")}`)
+              const plannerStatus = String(state.planner_status ?? "")
+              if (plannerStatus && plannerStatus !== "not_started") {
+                throw new Error(`${PREFIX} denied: planner lifecycle has no usable binding; status=${plannerStatus}`)
               }
             }
             if (binding) {
-              const ceremonyBinding = validateCeremonyBinding(state, {
-                sessionId: sid,
-                featureId: typeof state.feature_id === "string" ? state.feature_id : "",
-                required: ["brainstormed", "adversary_fired"],
-              })
-              if (!ceremonyBinding.ok) {
-                throw new Error(`${PREFIX} delivery-blocked: ${ceremonyBinding.reason}`)
-              }
               if (state.planner_status !== "usable") {
-                throw new Error(`${PREFIX} delivery-blocked: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
+                throw new Error(`${PREFIX} denied: planner usable bound artifact required; status=${String(state.planner_status ?? "missing")}`)
               }
               const artifact = reconciled.artifact as Record<string, unknown> | null
               if (
@@ -152,44 +128,51 @@ export async function createPlanGateHooks(
                 binding.feature_id !== state.feature_id ||
                 artifact.semanticHash !== binding.snapshot_hash
               ) {
-                throw new Error(`${PREFIX} delivery-blocked: current plan snapshot does not match planner binding`)
+                throw new Error(`${PREFIX} denied: current plan snapshot does not match planner binding`)
               }
-              throwIfPlanDenied(decidePlanGate({ plan: artifact.plan, expect: "full" }))
+              if (reconciled.validatorFailed === true) {
+                console.warn(`${PREFIX} Warning: validator failed internally; opening without a validation decision.`)
+              } else {
+                const planDecision = decidePlanGate({ plan: artifact.plan, expect: "full" }, { validatePlanFn: deps.validatePlanFn })
+                if (planDecision.decision === "warn") console.warn(`${PREFIX} ${planDecision.reason}`)
+                throwIfPlanDenied(planDecision)
+              }
               const ids = dispatchIds(toolArgs)
               const featureId = identity.featureId || ids.featureId
               if (featureId && identity.featureIdSource === "runtime-envelope" && featureId !== binding.feature_id) {
-                throw new Error(`${PREFIX} delivery-blocked: trusted runtime feature_id conflicts with bound planner feature`)
+                throw new Error(`${PREFIX} denied: trusted runtime feature_id conflicts with bound planner feature`)
               }
               if (ids.featureId && identity.featureIdSource !== "runtime-envelope" && ids.featureId !== binding.feature_id) {
-                throw new Error(`${PREFIX} delivery-blocked: optional dispatch feature_id conflicts with bound planner feature`)
+                throw new Error(`${PREFIX} denied: optional dispatch feature_id conflicts with bound planner feature`)
               }
               const tasks = Array.isArray((artifact.plan as Record<string, unknown>)?.tasks)
                 ? (artifact.plan as { tasks: Array<Record<string, unknown>> }).tasks
                 : []
               const requiresTaskId = isTestAuthorRole(role) || isExecutorRole(role) || isSniperRole(role)
               if (requiresTaskId && !marker.ok && identity.taskIdSource !== "runtime-envelope") {
-                throw new Error(`${PREFIX} delivery-blocked: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
+                throw new Error(`${PREFIX} denied: ${role} ${String(marker?.reason ?? "task prompt marker missing")}`)
               }
               const trustedTaskId = identity.taskId || ids.taskId
               if (trustedTaskId && !tasks.some((task) => task?.id === trustedTaskId)) {
-                throw new Error(`${PREFIX} delivery-blocked: dispatch task_id does not exist in bound plan`)
+                throw new Error(`${PREFIX} denied: dispatch task_id does not exist in bound plan`)
               }
 
               if (toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs)) {
                 const args = toolArgs as Record<string, unknown>
                 const existingPrompt = typeof args.prompt === "string" ? args.prompt : ""
-                const refuteMarker = existingPrompt.endsWith("[/HARNESS_REFUTE_PASS]")
-                  ? existingPrompt.lastIndexOf("[HARNESS_REFUTE_PASS]")
-                  : -1
                 const serializedPlan = JSON.stringify(artifact.plan)
-                const boundPlan = refuteMarker >= 0 ? escapeRefuteSentinels(serializedPlan) : serializedPlan
-                const planBlock = `[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${boundPlan}\n[/HARNESS_BOUND_PLAN]`
-                const nextPrompt = refuteMarker >= 0
-                  ? `${existingPrompt.slice(0, refuteMarker).trim()}\n\n${planBlock}\n\n${existingPrompt.slice(refuteMarker)}`
-                  : `${existingPrompt}\n\n${planBlock}`.trim()
-                args.prompt = refuteMarker >= 0
-                  ? resealRefutePrompt(nextPrompt, { sessionId: sid, role })
-                  : nextPrompt
+                const planBlock = `[HARNESS_BOUND_PLAN sha256=${String(binding.snapshot_hash)}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
+                const openCount = existingPrompt.split("[HARNESS_BOUND_PLAN").length - 1
+                const closeCount = existingPrompt.split("[/HARNESS_BOUND_PLAN]").length - 1
+                if (openCount === 0 && closeCount === 0) {
+                  args.prompt = `${existingPrompt}\n\n${planBlock}`.trim()
+                } else if (
+                  openCount !== 1 ||
+                  closeCount !== 1 ||
+                  !existingPrompt.endsWith(planBlock)
+                ) {
+                  throw new Error(`${PREFIX} denied: conflicting bound-plan prompt marker`)
+                }
               }
             }
           }
@@ -222,5 +205,6 @@ function resolveProjectRoot(directory?: unknown, worktree?: unknown): string {
 export const PlanGate: Plugin = async ({ directory, worktree }: any) => {
   return createPlanGateHooks(resolveProjectRoot(directory, worktree))
 }
+Object.defineProperty(PlanGate, "testApi", { value: Object.freeze({ createPlanGateHooks }) })
 
 export default PlanGate

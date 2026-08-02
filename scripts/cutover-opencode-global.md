@@ -77,7 +77,7 @@ cp "$HOME/.config/opencode/opencode.json" "$BACKUP/" 2>/dev/null || true
 | Remove from `~/.config/opencode` |
 |---|
 | `agents/*` delivery roles |
-| `plugin/*` gates (entry-gate, plan-gate, loop-guard, harvest-guard, …) |
+| `plugin/*` gates (entry-gate, plan-gate, loop-guard, …) |
 | `tools/*` classify / validate-plan / complexity-scorer if harness-only |
 | Harness skills: triaging-requests, orchestrating-delivery, brainstorming, grill, recording-findings, distilling-learnings, proposing-improvements, surveying-codebase, proposing-deepening, committing-changes, releasing-versions, authoring-rules, canonical-critical-classes, importing-claude-memory |
 | Harness body of `AGENTS.md` (replace with minimal personal stub) |

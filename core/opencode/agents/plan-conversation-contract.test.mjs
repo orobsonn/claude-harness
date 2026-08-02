@@ -6,14 +6,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { decideEntryTask } from "../plugin/lib/entry-decide.mjs";
+import { decideEntryTask } from "../lib/entry-decide.mjs";
 
 const AGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 const OC_ROOT = join(AGENTS_DIR, "..");
 const KNOWLEDGE_EYES = [
   "plan.md",
   "planner.md",
-  "planner-fallback.md",
   "plan-reviewer.md",
   "discussion-adversary.md",
   "adversary.md",
@@ -98,7 +97,7 @@ test("plan lane is primary, read-only, web-enabled, and cannot mutate ceremony",
   assert.match(fm, /^mode: primary$/m);
   assert.match(fm, /^model: openai\/gpt-5\.6-terra$/m);
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["external_directory", "classify", "mark", "verify", "ceremony-next"]) {
+  for (const permission of ["external_directory", "classify", "mark", "verify"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   for (const permission of ["webfetch", "websearch"]) {
@@ -268,7 +267,7 @@ test("discussion adversary is a hidden read-only subagent with no delegation", (
   assert.match(fm, /^hidden: true$/m);
   assert.doesNotMatch(fm, /^model:/m, "helper must inherit the invoking Plan model");
   assert.match(fm, /^  "\*": deny$/m, "unknown and MCP tools must fail closed");
-  for (const permission of ["edit", "bash", "external_directory", "task", "skill", "classify", "mark", "verify", "ceremony-next"]) {
+  for (const permission of ["edit", "bash", "external_directory", "task", "skill", "classify", "mark", "verify"]) {
     assert.match(fm, new RegExp(`^  ${permission}: deny$`, "m"), `${permission} must be denied`);
   }
   for (const permission of ["webfetch", "websearch"]) {

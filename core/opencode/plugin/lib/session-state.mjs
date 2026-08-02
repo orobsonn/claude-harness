@@ -7,9 +7,8 @@ import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../../shared/
 import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
 import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/path-helpers.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
-import { semanticPlanHash } from "./planner-artifact.mjs";
-import { acquireLock, releaseLock, writeGateStateAtomic } from "./gate-state.mjs";
-import { readDualStatus } from "../../../shared/lib/gate-state-shape.mjs";
+import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
+import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_REINJECT_BYTES = 8 * 1024;
@@ -140,14 +139,32 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
 
   const binding = state.planner_plan_binding;
   const canonicalRelativePath = `.opencode/plans/${sessionId}-${featureId}/execution-plan.json`;
-  if (binding == null) return { ok: true, plan: canonical.value, canonicalPath, canonicalRelativePath };
+  if (binding == null) {
+    const tasks = canonical.value.tasks;
+    if (Array.isArray(tasks) && tasks.length > 0) {
+      const full = validatePlan(canonical.value, { expect: "full" });
+      if (!full.ok) return { ok: false, reason: "canonical full plan failed validation" };
+      return { ok: false, reason: "full plan recovery requires planner snapshot binding" };
+    }
+    const stub = validatePlan(canonical.value, { expect: "stub" });
+    if (!stub.ok || canonical.value.kind !== "stub" || canonical.value.session_id !== sessionId ||
+        !Array.isArray(tasks) || tasks.length !== 0) {
+      return { ok: false, reason: "canonical classify stub failed validation" };
+    }
+    return { ok: true, plan: canonical.value, canonicalPath, canonicalRelativePath };
+  }
   if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+      state.planner_status !== "usable" ||
       binding.session_id !== sessionId || binding.feature_id !== featureId ||
-      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string") {
+      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" ||
+      typeof binding.snapshot_file_hash !== "string" || typeof binding.semantic_hash !== "string" ||
+      typeof binding.file_hash !== "string") {
     return { ok: false, reason: "planner snapshot identity mismatch" };
   }
-  const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_hash}.json`;
-  if (!/^[0-9a-f]{64}$/.test(binding.snapshot_hash) || binding.snapshot_path !== expectedSnapshotPath ||
+  const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_file_hash}.json`;
+  if (!/^[0-9a-f]{64}$/.test(binding.snapshot_hash) || !/^[0-9a-f]{64}$/.test(binding.snapshot_file_hash) ||
+      !/^[0-9a-f]{64}$/.test(binding.semantic_hash) || !/^[0-9a-f]{64}$/.test(binding.file_hash) ||
+      binding.snapshot_path !== expectedSnapshotPath ||
       binding.snapshot_path.includes("\\") || path.isAbsolute(binding.snapshot_path)) {
     return { ok: false, reason: "planner snapshot path is not canonical repo-relative form" };
   }
@@ -155,12 +172,17 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
   const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
   if (!inside(snapshotRoot, snapshotPath)) return { ok: false, reason: "planner snapshot escaped session" };
   const snapshot = readSafeJson(projectRoot, snapshotPath);
-  if (!snapshot.ok || snapshot.value.feature_id !== featureId ||
-      semanticPlanHash(snapshot.value) !== binding.snapshot_hash ||
-      semanticPlanHash(canonical.value) !== binding.snapshot_hash ||
-      (typeof binding.semantic_hash === "string" && binding.semantic_hash !== binding.snapshot_hash)) {
+  if (!snapshot.ok) return { ok: false, reason: "planner snapshot integrity mismatch" };
+  const snapshotFileHash = crypto.createHash("sha256").update(snapshot.raw, "utf8").digest("hex");
+  const canonicalFileHash = crypto.createHash("sha256").update(canonical.raw, "utf8").digest("hex");
+  if (snapshot.value.feature_id !== featureId || snapshot.raw !== canonical.raw ||
+      snapshotFileHash !== binding.snapshot_file_hash || canonicalFileHash !== binding.file_hash ||
+      canonicalFileHash !== binding.snapshot_file_hash || semanticPlanHash(snapshot.value) !== binding.snapshot_hash ||
+      semanticPlanHash(canonical.value) !== binding.snapshot_hash || binding.semantic_hash !== binding.snapshot_hash) {
     return { ok: false, reason: "planner snapshot integrity mismatch" };
   }
+  const full = validatePlan(snapshot.value, { expect: "full" });
+  if (!full.ok) return { ok: false, reason: "planner snapshot full plan failed validation" };
   return { ok: true, plan: snapshot.value, canonicalPath, canonicalRelativePath };
 }
 
@@ -207,32 +229,27 @@ export function buildSessionRecovery(projectRoot, sessionId, options = {}) {
   return { ok: true, context, statePath: loaded.path };
 }
 
-function hasCleanupPending(projectRoot, sessionId) {
-  return fs.existsSync(path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "active-dispatch-cleanup-pending.json"));
-}
-
-function hasOwnedChildIndex(projectRoot, sessionId) {
-  const childRoot = path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children");
+function hasExactDispatchRecords(projectRoot, sessionId) {
+  const records = path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "dispatch-records");
+  let stat;
   try {
-    for (const entry of fs.readdirSync(childRoot, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const loaded = readSafeJson(projectRoot, path.join(childRoot, entry.name), 64 * 1024);
-      if (loaded.ok && loaded.value.parentSessionId === sessionId) return true;
-    }
-  } catch { /* absent index */ }
-  return false;
-}
-
-/** @description Whether current or persisted legacy review state blocks terminal retention. */
-export function isPendingReviewState(state) {
-  return readDualStatus(state) === "pending";
+    stat = fs.lstatSync(records);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return false;
+    return true;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
+  try {
+    return fs.readdirSync(records).length > 0;
+  } catch {
+    return true;
+  }
 }
 
 function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
-  if (state.session_id !== sessionId || state.active_dispatch != null) return false;
-  if (hasCleanupPending(projectRoot, sessionId) || hasOwnedChildIndex(projectRoot, sessionId)) return false;
-  if (state.planner_status !== "usable" || state.delivery_status === "delivery-blocked" || state.planner_binding_error != null ||
-      state.classified === false || isPendingReviewState(state)) return false;
+  if (state.session_id !== sessionId || hasExactDispatchRecords(projectRoot, sessionId)) return false;
+  if (state.planner_status !== "usable" || state.planner_binding_error != null ||
+      state.classified === false) return false;
   const featureId = state.feature_id;
   if (!isSafeFeatureId(featureId)) return false;
   const resolved = currentPlan(projectRoot, sessionId, featureId, state);
@@ -311,37 +328,6 @@ export function recordSessionCompletion(projectRoot, sessionId, options = {}) {
   }
 }
 
-function claimOwnedChildIndexes(projectRoot, sessionId) {
-  const root = path.join(projectRoot, ".opencode", "plans", ".state", "active-dispatch-children");
-  const claimed = [];
-  try {
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const target = path.join(root, entry.name);
-      const before = readSafeJson(projectRoot, target, 64 * 1024);
-      if (!before.ok) continue;
-      const binding = before.value;
-      const expectedName = typeof binding.childSessionId === "string"
-        ? `${crypto.createHash("sha256").update(binding.childSessionId).digest("hex")}.json`
-        : "";
-      if (binding.parentSessionId !== sessionId || !isSafeSessionId(binding.childSessionId) ||
-          typeof binding.callId !== "string" || binding.callId.length === 0 ||
-          typeof binding.token !== "string" || binding.token.length === 0 || entry.name !== expectedName) continue;
-      const tombstone = `${target}.${crypto.randomUUID()}.retained`;
-      try {
-        fs.renameSync(target, tombstone);
-        const loaded = readSafeJson(projectRoot, tombstone, 64 * 1024);
-        if (loaded.ok && loaded.raw === before.raw && loaded.value.parentSessionId === sessionId) {
-          claimed.push({ target, tombstone });
-        } else if (!fs.existsSync(target)) {
-          fs.renameSync(tombstone, target);
-        }
-      } catch { /* retain on uncertainty */ }
-    }
-  } catch { /* absent index */ }
-  return claimed;
-}
-
 function restoreClaims(claims) {
   for (const claim of claims) {
     try {
@@ -378,15 +364,13 @@ export function cleanupRetainedCompletedSession(projectRoot, sessionId, options 
   }
   let tombstone = null;
   let tombstoneStatePath = null;
-  let childClaims = [];
   let handRecordClaim = null;
   const sessionDir = path.dirname(stateResult.path);
   try {
     const loaded = readSafeJson(projectRoot, stateResult.path);
-    if (!eligible(loaded) || loaded.value.active_dispatch != null || hasCleanupPending(projectRoot, sessionId)) {
+    if (!eligible(loaded) || hasExactDispatchRecords(projectRoot, sessionId)) {
       return { ok: true, cleaned: false };
     }
-    childClaims = claimOwnedChildIndexes(projectRoot, sessionId);
     if (isSafeFeatureId(loaded.value.feature_id)) {
       const records = path.join(projectRoot, ".opencode", "plans", ".state", "hand-records", loaded.value.feature_id, sessionId);
       if (fs.existsSync(records)) {
@@ -412,15 +396,11 @@ export function cleanupRetainedCompletedSession(projectRoot, sessionId, options 
         tombstoneStatePath = null;
       } catch { /* fail closed with claimed session tombstone retained */ }
     }
-    restoreClaims(childClaims);
     if (handRecordClaim) restoreClaims([handRecordClaim]);
     return { ok: false, cleaned: false, reason: "completed session cleanup failed" };
   } finally {
     releaseLock(tombstoneStatePath ?? stateResult.path, acquired.token);
     releaseLock(lifecyclePath, lifecycle.token);
-  }
-  for (const claim of childClaims) {
-    try { fs.rmSync(claim.tombstone, { force: true }); } catch { /* tombstone is inert */ }
   }
   if (handRecordClaim) {
     try { fs.rmSync(handRecordClaim.tombstone, { recursive: true, force: true }); } catch { /* tombstone is inert */ }

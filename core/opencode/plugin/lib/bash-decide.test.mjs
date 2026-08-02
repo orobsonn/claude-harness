@@ -711,7 +711,7 @@ test("mode=no-ceremony + clean rails → allow (was a hard deny; ceremony is not
   assert.equal(d.decision, "allow");
 });
 
-test("FULL ceremony fields present but incomplete (no dual_status/final_review/demo) → allow (those rails removed from the bash gate)", () => {
+test("FULL mode with clean delivery facts → allow", () => {
   const d = decideBashDelivery({
     command: "git push",
     gateState: { mode: "FULL", classified: true, feature_id: "feat" },
@@ -720,10 +720,10 @@ test("FULL ceremony fields present but incomplete (no dual_status/final_review/d
   assert.equal(d.decision, "allow");
 });
 
-test("review_status=primary_failure_cap_reached no longer blocks the bash gate (moved out of scope; not one of the 4 kept rails)", () => {
+test("a legacy review status does not block the bash gate", () => {
   const d = decideBashDelivery({
     command: "git push",
-    gateState: { feature_id: "feat", review_status: "primary_failure_cap_reached" },
+    gateState: { feature_id: "feat", review_status: "legacy-review-status" },
     ...cleanDepsWithCapture(),
   });
   assert.equal(d.decision, "allow");
@@ -815,7 +815,13 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   const config = JSON.parse(raw);
   const bash = config.permission && config.permission.bash;
   assert.ok(bash, "permission.bash must exist");
-  assert.equal(bash["*"], "ask");
-  assert.equal(bash["node .opencode/plugin/lib/mark-gate.mjs *"], "allow");
+  assert.equal(bash["*"], "allow");
+  assert.equal(bash["node*.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["python*.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["sed *.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["tee *.opencode/plans/.state/*"], "deny");
+  assert.equal(bash["rm *.opencode/plans/.state/*"], "deny");
+  assert.equal(Object.hasOwn(bash, "node .opencode/plugin/lib/mark-gate.mjs *"), false);
+  assert.equal(Object.hasOwn(bash, "node core/opencode/plugin/lib/mark-gate.mjs *"), false);
   assert.equal(bash["gh *"], "allow");
 });

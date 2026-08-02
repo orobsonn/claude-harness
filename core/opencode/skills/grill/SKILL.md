@@ -27,8 +27,8 @@ artifact.
 - **Before the pipeline.** It runs *before* triage, before any spec, before any plan. Its output is
   the input the pipeline later consumes.
 - **NOT the entry gate.** `oc-triaging-requests` owns the first request of every `build` session. This
-  skill never claims that slot, never says "run me first", never calls `classify`, `mark`, `verify`
-  or `ceremony-next`, and gates nothing. It is entered only when the operator asks for it or accepts
+  skill never claims that slot, never says "run me first", never calls `classify`, `mark`, or `verify`,
+  and gates nothing. It is entered only when the operator asks for it or accepts
   a suggestion to use it.
 - **NOT a source of truth.** *(the single most important line in this file)* Everything the grill
   produces enters the pipeline later as **ordinary input** — issue text. It is fully attackable and
@@ -223,9 +223,9 @@ sequence, retry-on-timeout handling, and the forbidden-commands list (`share`, `
 authoritative source for this step, this section is only the summary:
 
 1. Write the mockup per the content rules above.
-2. `npx -y lavish-axi docs/prd/<slug>-mockup.html` to open the review session. This is not on
-   `build`'s local bash allowlist (`permission.bash` in `opencode.json` — default `"*": "ask"`), so
-   this is a live permission prompt in an interactive session — expected, answer it.
+2. `npx -y lavish-axi docs/prd/<slug>-mockup.html` to open the review session. Interactive
+   OpenCode uses Auto Mode (`permission.bash` default `"*": "allow"` plus targeted denies), so this
+   routine command runs without a permission prompt.
 3. `npx -y lavish-axi poll docs/prd/<slug>-mockup.html` to wait for the operator's feedback. Keep it
    in the foreground; if the bash call times out, that's expected — just re-run `poll`, nothing is
    lost.

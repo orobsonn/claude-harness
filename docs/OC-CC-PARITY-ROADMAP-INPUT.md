@@ -1,5 +1,10 @@
 # Roadmap input — paridade OpenCode ↔ Claude Code
 
+> **Nota PR4.2 (2026-07-31):** itens abaixo que citam `ceremony-binding.mjs`,
+> `ceremony-transition.mjs`, sidecars/receipts de cerimônia ou recovery do planner entry são
+> históricos e foram superados. R10 vigente é `brainstormed === true`, depois
+> `adversary_fired === true`, com match da feature classificada e sem sidecar.
+
 **Como usar:** este arquivo é a matéria-prima para criar as issues via a skill `creating-issues`
 (form `.github/ISSUE_TEMPLATE/harness-task.yml`, título `[harness] <slug>`, label `harness:ready`,
 dependências no bloco `harness-deps`). Cada item abaixo já obedece à regra de sizing do repo

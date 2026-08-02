@@ -17,72 +17,29 @@ function extractPath(args: Record<string, unknown> | null): string {
   return typeof p === "string" ? p : "";
 }
 
-function isBashTool(name: unknown): boolean {
-  if (typeof name !== "string") return false;
-  const n = name.toLowerCase();
-  return n === "bash" || n === "shell" || n.endsWith(".bash") || n.endsWith("_bash");
-}
-
 /**
- * @description After execution-plan.json lands on disk, bind planner immediately (auto-bind).
- * Removes race: plan-reviewer before usable.
+ * @description Build fail-open after-hooks for actual Write/Edit plan/spec observations.
  */
-async function maybeAutoBindPlan(projectRoot: string, filePath: string) {
-  try {
-    const { sessionFeatureFromPlanPath } = await import("./lib/plan-path-session.mjs");
-    const ids = sessionFeatureFromPlanPath(filePath);
-    if (!ids) return;
-    if (!/execution-plan\.json$/i.test(filePath.replace(/\\/g, "/"))) return;
-    const { reconcilePlannerStateFromDisk } = await import("./lib/planner-artifact.mjs");
-    reconcilePlannerStateFromDisk(projectRoot, ids.sessionId);
-  } catch {
-    /* fail-open */
-  }
-}
-
-/**
- * @description Build after-hooks for plan/spec outbox events + planner auto-bind.
- */
-export async function createObsPlanWriteHooks(
-  projectRoot?: string,
+async function createObsPlanWriteHooks(
+  _projectRoot?: string,
 ): Promise<Pick<Hooks, "tool.execute.after">> {
   const { eventForPlanPath, obsAppend, dedupeByType, resolveHookArgs } = await import(
-    "./lib/obs-emit.mjs"
+    "../lib/obs-emit.mjs"
   );
-  const root =
-    typeof projectRoot === "string" && projectRoot.length > 0 ? projectRoot : process.cwd();
+  const { sessionFeatureFromPlanPath } = await import("./lib/plan-path-session.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
         const args = resolveHookArgs(input, output);
         let filePath = extractPath(args);
-        // bash tee/printf path: scrape command for execution-plan.json
-        if (!filePath && isBashTool(input?.tool)) {
-          const cmd = typeof args?.command === "string" ? args.command : "";
-          const m = cmd.match(/(\S*execution-plan\.json)/);
-          if (m) filePath = m[1];
-        }
-        if (filePath) {
-          await maybeAutoBindPlan(root, filePath);
-        }
-        if (!isWriteTool(input?.tool) && !isBashTool(input?.tool)) return;
+        if (!isWriteTool(input?.tool)) return;
         if (!filePath && isWriteTool(input?.tool)) return;
         const ev = filePath ? eventForPlanPath(filePath) : null;
-        if (!ev) return;
-        if (ev.type === "plan-created" && filePath) {
-          try {
-            const fs = await import("node:fs");
-            let raw = "";
-            if (typeof args?.content === "string") raw = args.content;
-            else if (fs.existsSync(filePath)) raw = fs.readFileSync(filePath, "utf8");
-            if (raw) {
-              const j = JSON.parse(raw);
-              if (Array.isArray(j?.tasks)) (ev as { tasks?: number }).tasks = j.tasks.length;
-            }
-          } catch {
-            /* optional enrichment */
-          }
-        }
+        // Canonical execution-plan writes are owner-only (`planner-recovery`); this observer
+        // must never consume the global plan-created dedupe key for a forbidden model write.
+        if (!ev || ev.type === "plan-created") return;
+        const sessionFeature = sessionFeatureFromPlanPath(filePath);
+        if (sessionFeature) Object.assign(ev, { session_id: sessionFeature.sessionId, feature_id: sessionFeature.featureId });
         obsAppend(ev, { dedupe: dedupeByType });
       } catch {
         /* fail-open */
@@ -92,14 +49,9 @@ export async function createObsPlanWriteHooks(
 }
 
 export const obsPlanWrite: Plugin = async ({ directory, worktree }: any) => {
-  const root =
-    typeof directory === "string" && directory
-      ? directory
-      : typeof worktree === "string" && worktree
-        ? worktree
-        : process.cwd();
-  return createObsPlanWriteHooks(root);
+  return createObsPlanWriteHooks(typeof directory === "string" && directory ? directory : worktree);
 };
+Object.defineProperty(obsPlanWrite, "testApi", { value: Object.freeze({ createObsPlanWriteHooks }) });
 
 /** @description OC load contract — default export required. */
 export default obsPlanWrite;

@@ -3,7 +3,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { mergeGateState as defaultMergeGateState } from "../../plugin/lib/gate-state.mjs";
+import {
+  mergeGateState as defaultMergeGateState,
+  withGateStateLock as defaultWithGateStateLock,
+} from "../../lib/gate-state.mjs";
+import { mergeGateStatePatch } from "../../../shared/lib/gate-state-shape.mjs";
+
+export const FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE = Object.freeze([
+  "brainstormed_binding",
+  "adversary_fired_binding",
+  "ceremony_generation",
+  "ceremony_evidence",
+]);
 
 function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -17,15 +28,33 @@ function atomicWrite(file, content) {
   }
 }
 
-/** @description Persist blocked reset, replace stub, then mark classify ready; no failure path rewrites the plan. */
+function mergeGateStateAndRemove(statePath, patch, removeStateKeys, deps = {}) {
+  const withGateStateLock = deps.withGateStateLock ?? defaultWithGateStateLock;
+  return withGateStateLock(statePath, (previous) => {
+    const merged = mergeGateStatePatch(previous, patch);
+    if (!merged.ok) return merged;
+    const next = { ...merged.state };
+    for (const key of removeStateKeys) delete next[key];
+    return next;
+  });
+}
+
+/** @description Persist reset, replace stub, then mark classify ready; no failure path rewrites the plan. */
 export function persistClassifyArtifacts(input, deps = {}) {
-  const mergeGateState = deps.mergeGateState ?? defaultMergeGateState;
+  const removeStateKeys = Array.isArray(input.removeStateKeys)
+    ? input.removeStateKeys.filter((key) => typeof key === "string")
+    : [];
+  const mergeGateState = removeStateKeys.length === 0
+    ? deps.mergeGateState ?? defaultMergeGateState
+    : (statePath, patch) => {
+        const mergeAndRemove = deps.mergeGateStateAndRemove ?? mergeGateStateAndRemove;
+        return mergeAndRemove(statePath, patch, removeStateKeys, deps);
+      };
   const writePlan = deps.writePlan ?? atomicWrite;
   const pending = mergeGateState(input.statePath, {
     ...input.statePatch,
     classified: false,
     classify_status: "stub_pending",
-    delivery_status: "delivery-blocked",
   });
   if (!pending?.ok) {
     return { ok: false, reason: `gate-state persistence failed: ${String(pending?.reason ?? "unknown")}` };
@@ -46,4 +75,4 @@ export function persistClassifyArtifacts(input, deps = {}) {
   return { ok: true, state: finalized.state };
 }
 
-export default { persistClassifyArtifacts };
+export default { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyArtifacts };

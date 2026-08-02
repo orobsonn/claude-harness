@@ -6,9 +6,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { checkPluginLoad } from "../../scripts/parity-manifest.mjs";
 
 import {
   seedOpencodeRootConfig,
@@ -27,19 +28,28 @@ import { RETIRED_OC_PERMISSION_ENTRIES, MANIFEST_FILENAME } from "../shared/lib/
 const CANONICAL_STUBS = [
   "entry-gate.ts",
   "marker-authority.ts",
-  "ceremony-coordinator.ts",
-  "second-eye-coordinator.ts",
   "plan-gate.ts",
   "planner-recovery.ts",
   "plan-write-gate.ts",
-  "review-guard.ts",
   "reinject-state.ts",
   "version-check.ts",
-  "harvest-guard.ts",
   "obs-plan-write.ts",
   "obs-eye.ts",
   "obs-hand.ts",
   "agent-idle-nudge.ts",
+];
+
+const CLOSURE_LIBS = [
+  "gate-state.mjs",
+  "entry-decide.mjs",
+  "dispatch-scope.mjs",
+  "hand-records.mjs",
+  "planner-state.mjs",
+  "obs-emit.mjs",
+  "plan-hash.mjs",
+  "planner-artifact.mjs",
+  "roles.mjs",
+  "task-dispatch-identity.mjs",
 ];
 
 /** @description The 8 canonical secret-path deny patterns permission.read/edit must always carry. */
@@ -137,7 +147,7 @@ test("opencode.json + opencode.json.example: permission.bash contains the same b
   }
 });
 
-test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 6 destructive-git classes from settings.json — no extras, and none of them swallow git push --force-with-lease (#ac-1.1/#ac-2.1/#ac-2.2)", () => {
+test("opencode.json + opencode.json.example: Auto Mode allows routine Bash and denies destructive git, recursive deletion, and state mutation", () => {
   const claudeDenyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
   assert.equal(claudeDenyCount, 6, "settings.json must carry exactly 6 destructive-git Bash denies");
   const configs = {
@@ -146,8 +156,8 @@ test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 
   };
   for (const [label, cfg] of Object.entries(configs)) {
     const bash = cfg.permission.bash;
-    const denyKeyCount = Object.entries(bash).filter(([key, value]) => key !== "*" && value === "deny").length;
-    assert.equal(denyKeyCount, 6, `${label}: permission.bash must carry exactly 6 deny keys — no extras`);
+    assert.equal(bash["*"], "allow", `${label}: routine Bash must not prompt`);
+    assert.equal(Object.values(bash).includes("ask"), false, `${label}: Auto Mode config must not contain ask`);
     for (const sample of DESTRUCTIVE_GIT_SAMPLES) {
       assert.equal(resolveBash(bash, sample), "deny", `${label}: ${JSON.stringify(sample)} must resolve deny`);
     }
@@ -156,6 +166,21 @@ test("opencode.json + opencode.json.example: permission.bash denies EXACTLY the 
       "allow",
       `${label}: git push --force-with-lease must NOT be swallowed by the 6 destructive-git denies`,
     );
+    for (const command of [
+      "rm -rf ./build",
+      "rm -fr ./build",
+      "rm -r -f ./build",
+      "rm -R -f ./build",
+      "rm --recursive --force ./build",
+      `node -e 'require("fs").writeFileSync(".opencode/plans/.state/s/gate-state.json", "{}")'`,
+      `python3 -c 'open(".opencode/plans/.state/s/gate-state.json", "w").write("{}")'`,
+      "sed -i 's/x/y/' .opencode/plans/.state/s/gate-state.json",
+      "tee .opencode/plans/.state/s/gate-state.json",
+      "rm -f .opencode/plans/.state/s/gate-state.json",
+    ]) assert.equal(resolveBash(bash, command), "deny", `${label}: ${JSON.stringify(command)} must resolve deny`);
+    for (const command of ["pnpm lint", "docker compose ps", "node scripts/report.mjs"]) {
+      assert.equal(resolveBash(bash, command), "allow", `${label}: routine ${JSON.stringify(command)} must resolve allow`);
+    }
   }
 });
 
@@ -249,6 +274,23 @@ const CANONICAL_ROUTING = JSON.parse(
   readFileSync(new URL("../opencode/harness.routing.json", import.meta.url), "utf8"),
 );
 
+/** @description Deterministic test-only snapshot of every primary-tree path and file byte. */
+function snapshotTree(root, directory = root) {
+  const snapshot = [];
+  for (const name of readdirSync(directory).sort()) {
+    const absolute = join(directory, name);
+    const relative = absolute.slice(root.length + 1);
+    const info = statSync(absolute);
+    if (info.isDirectory()) {
+      snapshot.push([relative, "directory"]);
+      snapshot.push(...snapshotTree(root, absolute));
+    } else {
+      snapshot.push([relative, readFileSync(absolute).toString("base64")]);
+    }
+  }
+  return snapshot;
+}
+
 function legacyRouting() {
   const legacy = structuredClone(CANONICAL_ROUTING);
   legacy.version = 1;
@@ -264,7 +306,7 @@ function legacyRouting() {
 /**
  * @description Minimal complete monorepo OC runtime under root/core/opencode (+ optional shared).
  * @param {string} root
- * @param {{ withSharedImport?: boolean }} [opts]
+ * @param {{ withSharedImport?: boolean, omitLib?: string }} [opts]
  */
 function writeMinimalOcRuntime(root, opts = {}) {
   const oc = join(root, "core", "opencode");
@@ -290,6 +332,12 @@ function writeMinimalOcRuntime(root, opts = {}) {
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
   mkdirSync(join(oc, "hands"), { recursive: true });
   mkdirSync(join(oc, "rules"), { recursive: true });
+  const lib = join(oc, "lib");
+  mkdirSync(lib, { recursive: true });
+  for (const name of CLOSURE_LIBS) {
+    if (name === opts.omitLib) continue;
+    writeFileSync(join(lib, name), `// critical lib ${name}\n`, "utf8");
+  }
   writeFileSync(join(oc, "harness.routing.json"), `${JSON.stringify(CANONICAL_ROUTING)}\n`, "utf8");
 
   if (opts.withSharedImport) {
@@ -328,6 +376,11 @@ function writeVendoredOcRuntime(root) {
   writeFileSync(join(oc, "tools", "classify.ts"), "// classify\n", "utf8");
   mkdirSync(join(oc, "agents"), { recursive: true });
   writeFileSync(join(oc, "agents", "build.md"), "# build\n", "utf8");
+  const lib = join(oc, "lib");
+  mkdirSync(lib, { recursive: true });
+  for (const name of CLOSURE_LIBS) {
+    writeFileSync(join(lib, name), `// vendored critical lib ${name}\n`, "utf8");
+  }
 }
 
 /** @description Fresh temp root with projectRoot + worktree dirs. */
@@ -343,6 +396,32 @@ function makeSeedDirs(prefix, opts = {}) {
   }
   return { root, projectRoot, worktree };
 }
+
+test("materialize sweeps retired state artifacts only in its ephemeral worktree", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-cleanup-sweep-");
+  const projectSentinel = join(projectRoot, ".opencode", "plans", ".state", "ses-primary", "active-dispatch-cleanup-pending.json");
+  const worktreeSentinel = join(worktree, ".opencode", "plans", ".state", "ses-run", "active-dispatch-cleanup-pending.json");
+  const projectReceipt = join(projectRoot, ".opencode", "plans", ".state", "ses-primary", "ceremony", "spec-adversary-primary.json");
+  const worktreeReceipt = join(worktree, ".opencode", "plans", ".state", "ses-run", "ceremony", "spec-adversary-primary.json");
+  const worktreeSibling = join(dirname(worktreeReceipt), "keep.json");
+  try {
+    mkdirSync(join(projectSentinel, ".."), { recursive: true });
+    mkdirSync(join(worktreeSentinel, ".."), { recursive: true });
+    mkdirSync(dirname(projectReceipt), { recursive: true });
+    mkdirSync(dirname(worktreeReceipt), { recursive: true });
+    writeFileSync(projectSentinel, "primary-bytes");
+    writeFileSync(worktreeSentinel, "worktree-bytes");
+    writeFileSync(projectReceipt, "primary-receipt-bytes");
+    writeFileSync(worktreeReceipt, "worktree-receipt-bytes");
+    writeFileSync(worktreeSibling, "sibling-bytes");
+    const primaryBefore = snapshotTree(projectRoot);
+    materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(existsSync(worktreeSentinel), false);
+    assert.equal(existsSync(worktreeReceipt), false);
+    assert.equal(readFileSync(worktreeSibling, "utf8"), "sibling-bytes");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "primary project must remain byte-identical");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 /** @description Assert #ac-1.1 critical paths under worktree .opencode. */
 function assertCriticalRuntime(worktree) {
@@ -963,6 +1042,8 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
           bash: {
             "*": "allow",
             "npx github:orobsonn/claude-harness#* init*": "allow",
+            "node .opencode/plugin/lib/mark-gate.mjs *": "allow",
+            "node core/opencode/plugin/lib/mark-gate.mjs *": "allow",
             // NOT in the ledger (issue #513 adversarial finding): no evidence the harness ever
             // shipped this wildcard form — the shipped default has always been the narrower
             // "git pull" (no wildcard) — so it must survive untouched, never dropped as "retired".
@@ -980,6 +1061,16 @@ test("seedOpencodeRootConfig: a projectRoot config carrying a retired permission
       false,
       "the retired unpinned npx wildcard key must be dropped from the seeded worktree config",
     );
+    for (const retired of [
+      "node .opencode/plugin/lib/mark-gate.mjs *",
+      "node core/opencode/plugin/lib/mark-gate.mjs *",
+    ]) {
+      assert.equal(
+        Object.hasOwn(cfg.permission.bash, retired),
+        false,
+        `retired shell marker permission must not reach a seeded worktree: ${retired}`,
+      );
+    }
     assert.equal(
       cfg.permission.bash["git pull*"],
       "allow",
@@ -1122,12 +1213,12 @@ test("seedOpencodeRootConfig: a tier-1 manifest (harness-owned key still matchin
   }
 });
 
-test("seedOpencodeRootConfig: permission.bash['*'] stays 'allow' in the seeded worktree regardless of migration — the fleet residue this forces is ledger-recognized (RETIRED_OC_PERMISSION_ENTRIES ['bash','*']), never leaked as a NEW unrecognized default (#ac-1.4)", () => {
+test("seedOpencodeRootConfig: permission.bash['*'] stays 'allow' and the migration ledger recognizes the superseded ask default", () => {
   const wildcardEntry = RETIRED_OC_PERMISSION_ENTRIES.find(
     (entry) => entry.path[0] === "bash" && entry.path[1] === "*",
   );
-  assert.ok(wildcardEntry, "the ledger must already track bash['*']:'allow' as recognized fleet residue");
-  assert.equal(wildcardEntry.historicalValue, "allow");
+  assert.ok(wildcardEntry, "the ledger must track the superseded bash['*']:'ask' default");
+  assert.equal(wildcardEntry.historicalValue, "ask");
 
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-wildcard-residue-");
   try {
@@ -1244,6 +1335,160 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
   }
 });
 
+test("materializeOpencodeRuntime: every closure-10 lib is required and copied into the headless runtime", () => {
+  const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-10-");
+  try {
+    const mat = materializeOpencodeRuntime(worktree, projectRoot);
+    assert.equal(mat.source, "monorepo");
+    for (const name of CLOSURE_LIBS) {
+      assert.ok(existsSync(join(worktree, ".opencode", "lib", name)), `runtime must copy lib/${name}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: a real materialized runtime loads every plugin factory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-factory-load-"));
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(worktree, { recursive: true });
+    const mat = materializeOpencodeRuntime(worktree, process.cwd());
+    assert.equal(mat.source, "monorepo");
+
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: worktree-complete prunes retired zombies and keeps factories loadable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-complete-prune-"));
+  const worktree = join(root, "worktree");
+  const emptyPrimary = join(root, "empty-primary");
+  try {
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(worktree, process.cwd());
+    const stale = join(worktree, ".opencode", "plugin", "harvest-guard.ts");
+    const staleHelper = join(worktree, ".opencode", "plugin", "lib", "harvest-findings.mjs");
+    const staleCatalogHealth = join(worktree, ".opencode", "plugin", "lib", "agent-catalog-health.mjs");
+    const staleCeremonyBinding = join(worktree, ".opencode", "plugin", "lib", "ceremony-binding.mjs");
+    const staleCeremonyTransition = join(worktree, ".opencode", "plugin", "lib", "ceremony-transition.mjs");
+    const staleMarkGate = join(worktree, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    const projectSibling = join(worktree, ".opencode", "plugin", "lib", "project-owned-ceremony-facts.mjs");
+    const cleanup = join(worktree, ".opencode", "plans", ".state", "ses-stale", "active-dispatch-cleanup-pending.json");
+    const receipt = join(worktree, ".opencode", "plans", ".state", "ses-stale", "ceremony", "spec-adversary-primary.json");
+    const receiptSibling = join(dirname(receipt), "keep.json");
+    mkdirSync(dirname(cleanup), { recursive: true });
+    mkdirSync(dirname(receipt), { recursive: true });
+    writeFileSync(stale, "// retired zombie\n", "utf8");
+    mkdirSync(dirname(staleHelper), { recursive: true });
+    writeFileSync(staleHelper, "// retired harvest helper\n", "utf8");
+    writeFileSync(staleCatalogHealth, "// retired catalog-health helper\n", "utf8");
+    writeFileSync(staleCeremonyBinding, "// retired ceremony binding helper\n", "utf8");
+    writeFileSync(staleCeremonyTransition, "// retired ceremony transition helper\n", "utf8");
+    writeFileSync(staleMarkGate, "// retired shell marker helper\n", "utf8");
+    writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
+    writeFileSync(cleanup, "{}\n", "utf8");
+    writeFileSync(receipt, '{"result":"legacy"}\n', "utf8");
+    writeFileSync(receiptSibling, "{}\n", "utf8");
+
+    const materialized = materializeOpencodeRuntime(worktree, emptyPrimary);
+
+    assert.equal(materialized.source, "worktree-complete");
+    assert.equal(existsSync(stale), false, "complete worktree must prune retired plugin zombie");
+    assert.equal(existsSync(staleHelper), false, "complete worktree must prune retired helper zombie");
+    assert.equal(existsSync(staleCatalogHealth), false, "complete worktree must prune retired catalog-health zombie");
+    assert.equal(existsSync(staleCeremonyBinding), false, "complete worktree must prune retired ceremony binding zombie");
+    assert.equal(existsSync(staleCeremonyTransition), false, "complete worktree must prune retired ceremony transition zombie");
+    assert.equal(existsSync(staleMarkGate), false, "complete worktree must prune retired shell marker zombie");
+    assert.equal(existsSync(projectSibling), true, "exact-path worktree pruning must preserve project-owned lib siblings");
+    assert.equal(existsSync(cleanup), false, "complete worktree must sweep retired run cleanup only inside worktree");
+    assert.equal(existsSync(receipt), false, "complete worktree must sweep the retired ceremony receipt");
+    assert.equal(existsSync(receiptSibling), true, "complete worktree must preserve ceremony siblings");
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: stale complete vendored source cannot preserve a retired plugin in the worktree", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-stale-vendored-prune-"));
+  const projectRoot = join(root, "primary");
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(projectRoot, process.cwd());
+    const primaryZombie = join(projectRoot, ".opencode", "plugin", "review-guard.ts");
+    const worktreeZombie = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const primaryMarkGate = join(projectRoot, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    const worktreeMarkGate = join(worktree, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    const primaryBytes = "// stale primary review guard must survive byte-identical\n";
+    writeFileSync(primaryZombie, primaryBytes, "utf8");
+    writeFileSync(primaryMarkGate, "// stale primary shell marker\n", "utf8");
+    const primaryBefore = snapshotTree(projectRoot);
+
+    const materialized = materializeOpencodeRuntime(worktree, projectRoot);
+
+    assert.equal(materialized.source, "vendored");
+    assert.equal(existsSync(worktreeZombie), false, "canonical retirement must remove the copied zombie");
+    assert.equal(existsSync(worktreeMarkGate), false, "canonical retirement must remove copied shell marker zombie");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "entire primary vendored tree must remain byte-identical");
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: partial stale monorepo cannot preserve a zombie in a complete worktree", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-seed-partial-primary-prune-"));
+  const projectRoot = join(root, "primary");
+  const worktree = join(root, "worktree");
+  try {
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    materializeOpencodeRuntime(worktree, process.cwd());
+    const primaryZombie = join(projectRoot, "core", "opencode", "plugin", "review-guard.ts");
+    const worktreeZombie = join(worktree, ".opencode", "plugin", "review-guard.ts");
+    const primaryBytes = "// partial stale primary review guard must survive byte-identical\n";
+    mkdirSync(dirname(primaryZombie), { recursive: true });
+    writeFileSync(primaryZombie, primaryBytes, "utf8");
+    writeFileSync(worktreeZombie, "// stale worktree review guard\n", "utf8");
+    const primaryBefore = snapshotTree(projectRoot);
+
+    const materialized = materializeOpencodeRuntime(worktree, projectRoot);
+
+    assert.equal(materialized.source, "worktree-complete");
+    assert.equal(existsSync(worktreeZombie), false, "canonical retirement must remove the complete-worktree zombie");
+    assert.deepEqual(snapshotTree(projectRoot), primaryBefore, "entire partial primary tree must remain byte-identical");
+    const load = await checkPluginLoad(join(worktree, ".opencode"));
+    assert.equal(load.ok, true, load.reason || JSON.stringify(load.failures));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializeOpencodeRuntime: each missing closure-10 lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
+  for (const name of CLOSURE_LIBS) {
+    const { root, projectRoot, worktree } = makeSeedDirs(`oc-seed-missing-${name}-`, { bare: true });
+    try {
+      writeMinimalOcRuntime(projectRoot, { withSharedImport: true, omitLib: name });
+      assert.equal(isOpencodeRuntimeComplete(join(projectRoot, "core", "opencode")), false, `source missing lib/${name} must be incomplete`);
+      assert.throws(
+        () => materializeOpencodeRuntime(worktree, projectRoot),
+        new RegExp(`lib/${name.replace(".", "\\.")}|materialize failed|incomplete`, "i"),
+        `materialize must reject source missing lib/${name}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("materializeOpencodeRuntime: missing source throws fail-closed (#ac-1.4)", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-missing-mat-", { bare: true });
   try {
@@ -1304,7 +1549,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
     assert.deepEqual(cfg.plugin, ["my-external-package"]);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
-    assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), false, "retired review plugin must stay absent");
     assert.equal(existsSync(join(worktree, ".opencode/plugin/loop-guard.ts")), false);
     assertCriticalRuntime(worktree);
     assert.equal(

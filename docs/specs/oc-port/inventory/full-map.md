@@ -93,7 +93,6 @@ This is the exhaustive reference. Implementation contracts live in `../0x-*.md`.
 | agent-idle-nudge.mjs | CC; OC loop-guard | 1 |
 | obs-eye-append / obs-plan-write | CC; optional OC | 1–2 |
 | gate-lib.mjs | SHARED (+ fs in shells) | 1 |
-| loop-guard / harvest-guard | OC | 1 |
 | feature-id.ts (OC) | merge SHARED | 1 |
 | operator-origin.ts | OC | 1 |
 

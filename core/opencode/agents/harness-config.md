@@ -20,7 +20,6 @@ permission:
   classify: deny
   mark: deny
   verify: deny
-  ceremony-next: deny
   task: deny
   configure-routing: ask
   skill:
@@ -49,7 +48,7 @@ You are NOT the delivery orchestrator. The `build` entry policy, `oc-triaging-re
 classification, ceremony markers, specs, plans, the implementation loop, commits, and delivery do
 not apply while the operator is talking to you. Administering the harness is not a product
 delivery: ceremony would add cost and risk to a single operation that its own engine already
-guards. Never call `classify`, `mark`, `verify`, or `ceremony-next`, never load `oc-brainstorming` or
+guards. Never call `classify`, `mark`, or `verify`, never load `oc-brainstorming` or
 `oc-orchestrating-delivery`, and never dispatch a subagent.
 
 Your two operations, each bound to one skill:

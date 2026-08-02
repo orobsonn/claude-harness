@@ -298,7 +298,6 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Push bloqueado: task do plano sem evidência | **Uma writing task do plano nunca foi despachada** (nem hand-record, nem captura) — feature ia subir pela metade | Despachar a mão de cada task que falta antes de entregar. Não bloqueia `DONE_WITH_CONCERNS` (shippable) nem se o plano não puder ser lido (fail-open) |
 | Push bloqueado: regate | Correção grave (sniper-high) sem re-auditoria | Rodar adversary de regate + `regate-passed` |
 | Push FULL bloqueado: final / demo | Falta review final (ou demo no interativo) | Completar review final; no interativo, demo quando pedido |
-| Harvester bloqueado | `findings.md` ausente | Garantir que o loop gravou findings antes do harvest |
 | Comportamento “meio velho” | Update/routing sem restart | Reiniciar sessão OpenCode |
 
 **Avaliador único** por padrão. Segundo olho (`secondEyeModel`) é opt-in e fail-open (se o 2º provider cair, segue com aviso — não finge que o segundo olho rodou).
@@ -326,9 +325,10 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | `classify` | Grava modo + feature no gate-state (fim do triage) |
 | `validate-plan` | Valida o JSON do plano |
 | `mark` | Carimbos privilegiados (hand-finished, capture-verified, regate, final-review…) — **não** use Bash pra isso |
-| `ceremony-next` | Próximo passo allowlisted após denial de cerimônia |
 | `verify` | Roda teste pinado da task (hand ativa) |
 | `complexity-scorer` | Banda low/medium/high de um path |
+
+Quando o planner estiver bloqueado por cerimônia, complete somente o fato ausente para a feature classificada: `brainstormed` ausente → execute o brainstorming e chame a ação nativa `mark`; `adversary_fired` ausente → despache o adversary primário e chame a ação nativa `mark`. O planner libera quando encontra os dois booleans crus e a feature correspondente no gate-state; isso não prova proveniência on-disk. O caminho oficial continua sendo a tool nativa, e edição direta é proibida por convenção/permissões.
 
 ---
 
@@ -354,9 +354,6 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | `.opencode/skills/*/SKILL.md` | Contrato de cada skill |
 | `.opencode/harness.routing.json` | Modelos atuais |
 | `.opencode/agents/*.md` | Prompt e permissões de cada papel |
-
-No monorepo do harness (desenvolvedores do framework):  
-`docs/opencode-implementation-playbook.md` é **engenharia de batches**, não onboarding de operador.
 
 ---
 

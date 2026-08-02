@@ -7,7 +7,7 @@
  * backstop, since `build`'s local bash is generally permitted and prose alone is not a gate.
  *
  * Deliberately its own plugin file (mirrors the existing pattern of many independent single-
- * purpose plugins in this directory: plan-write-gate.ts, harvest-guard.ts, review-guard.ts, ...)
+ * purpose plugins in this directory: plan-write-gate.ts, agent-idle-nudge.ts, ...)
  * rather than folding into entry-gate.ts's decideBashDelivery — that function is delivery-
  * pipeline ceremony (branch/regate/capture rails), a different concern from a narrow third-
  * party-CLI command deny. tool.execute.before: deny throws `[lavish-command-gate]` (OC contract
@@ -26,9 +26,9 @@ function isBashTool(name: unknown): boolean {
 /**
  * @description Builds the lavish-command-gate hook (async load of pure lavishDenyReason).
  */
-export async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute.before">> {
+async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.execute.before">> {
   const { lavishDenyReason } = await import("./lib/lavish-command-decide.mjs");
-  const { resolveHookArgs } = await import("./lib/obs-emit.mjs");
+  const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -47,6 +47,7 @@ export async function createLavishCommandGateHooks(): Promise<Pick<Hooks, "tool.
 export const LavishCommandGate: Plugin = async () => {
   return createLavishCommandGateHooks();
 };
+Object.defineProperty(LavishCommandGate, "testApi", { value: Object.freeze({ createLavishCommandGateHooks }) });
 
 /** @description OC load contract — default export required. */
 export default LavishCommandGate;

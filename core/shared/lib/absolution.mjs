@@ -4,6 +4,18 @@
  */
 
 /**
+ * @description Build the canonical feature/task marker identity, optionally qualified by SHA.
+ * @param {unknown} featureId
+ * @param {unknown} taskId
+ * @param {unknown} [sha]
+ * @returns {string}
+ */
+export function formatFeatureTaskEntry(featureId, taskId, sha = null) {
+  const base = `${featureId}/${taskId}`;
+  return typeof sha === "string" && sha.length > 0 ? `${base}@${sha}` : base;
+}
+
+/**
  * @param {unknown} entry
  * @returns {{ prefix: string, sha: string } | null}
  */

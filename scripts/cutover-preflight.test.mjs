@@ -499,7 +499,7 @@ export function applyCutover(opts) {
       json.plugin = json.plugin.filter((p) => {
         if (typeof p !== "string") return false;
         // Drop any global harness plugin path
-        if (p.includes("/.config/opencode/plugin/") || p.includes("entry-gate") || p.includes("plan-gate") || p.includes("loop-guard") || p.includes("harvest-guard")) {
+        if (p.includes("/.config/opencode/plugin/") || p.includes("entry-gate") || p.includes("plan-gate") || p.includes("loop-guard")) {
           return false;
         }
         // Keep only if somehow project-relative (unusual in global)

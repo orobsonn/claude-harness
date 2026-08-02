@@ -1,15 +1,32 @@
 /**
- * @description Locked tests for OC entry-gate shell (bash delivery + task ceremony).
+ * @description Locked tests for OC entry-gate shell (bash delivery + task facts).
  */
 import test from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createEntryGateHooks } from "./entry-gate.ts"
-import { ceremonyMarkerPatch } from "./lib/ceremony-binding.mjs"
+import crypto from "node:crypto"
+import { execFileSync } from "node:child_process"
+import { EntryGate } from "./entry-gate.ts"
+import { obsHand } from "./obs-hand.ts"
+
+const { createEntryGateHooks } = EntryGate.testApi
+const { createObsHandHooks } = obsHand.testApi
+import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 
 const SID = "ses_test1"
+
+test("entry and plan gates have no ceremony sidecar or recovery dependency", () => {
+  for (const relativePath of ["entry-gate.ts", "plan-gate.ts"]) {
+    const source = fs.readFileSync(new URL(relativePath, import.meta.url), "utf8")
+    assert.doesNotMatch(
+      source,
+      /ceremony-binding|ceremony-transition|recoverCeremony|validateCeremonyBinding/,
+      relativePath,
+    )
+  }
+})
 
 /**
  * @param {string} root
@@ -46,30 +63,63 @@ async function withHooks(fn, deps = {}) {
 }
 
 /** @returns {Record<string, unknown>} */
-function fullCeremony(extra = {}, sessionId = SID) {
-  const state = {
+function fullDeliveryState(extra = {}, sessionId = SID) {
+  return {
     session_id: sessionId,
     mode: "FULL",
     classified: true,
     brainstormed: true,
     adversary_fired: true,
-    dual_status: "done",
-    plan_verdict: "APPROVE",
     feature_id: "feat",
-    final_review_done: true,
-    demo_done: true,
+    // Exact writing-hand scope is bound only to a usable planner artifact.
     planner_status: "usable",
-    delivery_status: "ready",
     regate_pending: [],
     regate_passed: [],
     hand_finished: [],
     capture_verified: [],
     ...extra,
   }
-  const featureId = typeof state.feature_id === "string" ? state.feature_id : ""
-  if (!("brainstormed_binding" in extra)) Object.assign(state, ceremonyMarkerPatch("brainstormed", sessionId, featureId))
-  if (!("adversary_fired_binding" in extra)) Object.assign(state, ceremonyMarkerPatch("adversary_fired", sessionId, featureId))
-  return state
+}
+
+/** @description Install the immutable snapshot required for an exact writing-hand claim. */
+function writeScopeReadyState(root, sessionId = SID, taskId = "task-scope") {
+  const featureId = "feat"
+  const plan = {
+    feature_id: featureId,
+    kind: "full",
+    mode: "full",
+    model_strategy: {
+      hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+      planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
+      adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
+    },
+    tasks: [{ id: taskId, severity: "low", complexity: "low", scope_paths: ["src"], allowed_writes: [], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "a" }] }],
+  }
+  const content = JSON.stringify(plan)
+  const fileHash = crypto.createHash("sha256").update(content).digest("hex")
+  const snapshotPath = path.join(root, ".opencode", "plans", ".state", sessionId, "bound-plans", `${fileHash}.json`)
+  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true })
+  fs.mkdirSync(path.join(root, "src"), { recursive: true })
+  fs.writeFileSync(snapshotPath, content)
+  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${fileHash}.json`
+  writeGateState(root, sessionId, fullDeliveryState({
+    fidelity_pass: [`${featureId}/${taskId}`],
+    planner_plan_binding: {
+      session_id: sessionId,
+      feature_id: featureId,
+      snapshot_path: snapshotRel,
+      snapshot_hash: semanticPlanHash(plan),
+      snapshot_file_hash: fileHash,
+    },
+  }, sessionId))
+}
+
+function exactDispatchPath(root, sessionId, callId) {
+  return path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`)
+}
+
+function writingTaskArgs(taskId = "task-scope") {
+  return { subagent_type: "executor-low", taskId, feature_id: "feat", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]` }
 }
 
 test("#ac-1.1: bash gh pr create + empty gate-state on a feature branch with commits → PERMITIDO (fail-open; was denied by 'delivery requires readable gate-state')", async () => {
@@ -93,7 +143,7 @@ test("#ac-1.1: bash gh pr create + empty gate-state on a feature branch with com
   )
 })
 
-test("task executor without ceremony → throws [entry-gate]", async () => {
+test("task executor without required delivery facts → throws [entry-gate]", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, {})
     const before = hooks["tool.execute.before"]
@@ -112,7 +162,46 @@ test("task executor without ceremony → throws [entry-gate]", async () => {
   })
 })
 
-test("direct unsigned marker mutation cannot release a delivery role", async () => {
+test("shipper Task resolves re-gate SHA ancestry through the entry hook", async () => {
+  const state = fullDeliveryState({
+    regate_pending: ["feat/task-1"],
+    regate_passed: ["feat/task-1@review-sha"],
+  })
+
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, state)
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID },
+        { args: { subagent_type: "shipper" } },
+      ),
+      /strong-eye re-gate/,
+    )
+  }, { isAncestorFn: () => false })
+
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, state)
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: SID },
+      { args: { subagent_type: "shipper" } },
+    ))
+  }, { isAncestorFn: () => true })
+
+  for (const unavailableLookup of [() => null, () => { throw new Error("git unavailable") }]) {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, state)
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "task", sessionID: SID },
+          { args: { subagent_type: "shipper" } },
+        ),
+        /strong-eye re-gate/,
+      )
+    }, { isAncestorFn: unavailableLookup })
+  }
+})
+
+test("planner accepts plain persisted boolean facts without sidecars or provenance proof", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, {
       session_id: SID,
@@ -121,22 +210,19 @@ test("direct unsigned marker mutation cannot release a delivery role", async () 
       classified: true,
       brainstormed: true,
       adversary_fired: true,
-      dual_status: "done",
-      plan_verdict: "APPROVE",
     })
-    await assert.rejects(
+    await assert.doesNotReject(
       () => hooks["tool.execute.before"](
         { tool: "task", sessionID: SID },
         { args: { subagent_type: "planner" } },
       ),
-      /CEREMONY_PROOF_REQUIRED|unsigned|another process instance/,
     )
   })
 })
 
 test("dispatch args diverging from the brief's HARNESS_TASK_CONTEXT still fail closed (#484 adversary finding)", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task", "feat/task-b"] }))
+    writeGateState(root, SID, fullDeliveryState({ fidelity_pass: ["feat/trusted-task", "feat/task-b"] }))
     const before = hooks["tool.execute.before"]
     // The brief (prompt marker) says task-a; dispatch args claim task-b. Tolerating alias
     // disagreement (#484) must NOT extend to laundering which task the fidelity/scope gates
@@ -159,7 +245,7 @@ test("dispatch args diverging from the brief's HARNESS_TASK_CONTEXT still fail c
 
 test("task/taskId aliases without a brief marker resolve tolerantly to the first alias in priority order (#484)", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/task-b"] }))
+    writeGateState(root, SID, fullDeliveryState({ fidelity_pass: ["feat/task-b"] }))
     const before = hooks["tool.execute.before"]
     // No prompt marker to cross-check against — nothing but the dispatch args themselves
     // disagree, so this stays tolerant: the first alias in priority order (taskId) wins.
@@ -179,7 +265,7 @@ test("task/taskId aliases without a brief marker resolve tolerantly to the first
 
 test("official resume fields (command/task_id) do not fight HARNESS_TASK_CONTEXT or the trusted envelope", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ fidelity_pass: ["feat/trusted-task"] }))
+    writeGateState(root, SID, fullDeliveryState({ fidelity_pass: ["feat/trusted-task"] }))
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() => before(
       { tool: "task", sessionID: SID, task_id: "trusted-task" },
@@ -193,23 +279,6 @@ test("official resume fields (command/task_id) do not fight HARNESS_TASK_CONTEXT
   })
 })
 
-test("planner rejects ceremony marker bound to another session or feature", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({
-      session_id: SID,
-      brainstormed_binding: { session_id: "ses-other", feature_id: "feat", operation: "brainstormed" },
-      adversary_fired_binding: { session_id: SID, feature_id: "other-feature", operation: "adversary_fired" },
-    }))
-    await assert.rejects(
-      () => hooks["tool.execute.before"](
-        { tool: "task", sessionID: SID },
-        { args: { subagent_type: "planner" } },
-      ),
-      /CEREMONY_PROOF_REQUIRED|not bound|session binding mismatch|feature binding mismatch/,
-    )
-  })
-})
-
 test("bash ls → does not throw", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, {})
@@ -220,17 +289,14 @@ test("bash ls → does not throw", async () => {
   })
 })
 
-test("bound execution plan blocks bash mutation but permits read", async () => {
+test("canonical plan Bash ownership is not duplicated in entry-gate", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ planner_status: "usable" }))
+    writeGateState(root, SID, fullDeliveryState())
     const before = hooks["tool.execute.before"]
-    await assert.rejects(
-      () => before(
-        { tool: "bash", sessionID: SID },
-        { args: { command: "cat > .opencode/plans/ses-feat/execution-plan.json <<'EOF'\n{}\nEOF" } },
-      ),
-      /immutable/,
-    )
+    await assert.doesNotReject(() => before(
+      { tool: "bash", sessionID: SID },
+      { args: { command: "cat > .opencode/plans/ses-feat/execution-plan.json <<'EOF'\n{}\nEOF" } },
+    ))
     await assert.doesNotReject(() => before(
       { tool: "bash", sessionID: SID },
       { args: { command: "cat .opencode/plans/ses-feat/execution-plan.json" } },
@@ -285,7 +351,7 @@ test("bash ls non-delivery → git/list never invoked, no throw", async () => {
   )
 })
 
-test("#ac-1.1: bash git push empty ceremony on a feature branch with commits → PERMITIDO (fail-open)", async () => {
+test("#ac-1.1: bash git push empty delivery state on a feature branch with commits → PERMITIDO (fail-open)", async () => {
   await withHooks(
     async (hooks, root) => {
       writeGateState(root, SID, {})
@@ -309,10 +375,10 @@ test("#ac-1.1: bash git push empty ceremony on a feature branch with commits →
   )
 })
 
-test("bash git push FULL dual + clear rails + gitState fixture → no throw", async () => {
+test("bash git push with clear rails + gitState fixture → no throw", async () => {
   await withHooks(
     async (hooks, root) => {
-      writeGateState(root, SID, fullCeremony())
+      writeGateState(root, SID, fullDeliveryState())
       const before = hooks["tool.execute.before"]
       await assert.doesNotReject(() =>
         before(
@@ -346,10 +412,10 @@ test("bash git push FULL dual + clear rails + gitState fixture → no throw", as
   )
 })
 
-test("bash git push FULL dual + DONE hand-record capturedVerifiedAt + freeze ancestor → no throw", async () => {
+test("bash git push with DONE hand-record capturedVerifiedAt + freeze ancestor → no throw", async () => {
   await withHooks(
     async (hooks, root) => {
-      writeGateState(root, SID, fullCeremony())
+      writeGateState(root, SID, fullDeliveryState())
       const before = hooks["tool.execute.before"]
       await assert.doesNotReject(() =>
         before(
@@ -565,19 +631,19 @@ test("#ac-2.2: an ordinary git commit message through the real hook → PERMITID
   )
 })
 
-test("lt-pure-planner-full-ceremony-allow — decideEntryTask planner + full ceremony → allow (import decideEntryTask from entry-decide.mjs)", async () => {
-  const { decideEntryTask } = await import("./lib/entry-decide.mjs")
+test("lt-pure-planner-facts-allow — decideEntryTask planner + required facts → allow", async () => {
+  const { decideEntryTask } = await import("../lib/entry-decide.mjs")
   const decision = decideEntryTask({
     subagentType: "planner",
-    gateState: fullCeremony(),
+    gateState: fullDeliveryState(),
   })
   assert.equal(decision.ok, true)
   assert.equal(decision.decision, "allow")
 })
 
-test("lt-entry-planner-s1-full-ceremony-allow — write fullCeremony under SID, hook sessionID SID, task planner → doesNotReject", async () => {
+test("lt-entry-planner-s1-facts-allow — plain boolean facts under SID allow planner", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony())
+    writeGateState(root, SID, fullDeliveryState())
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() =>
       before(
@@ -588,7 +654,7 @@ test("lt-entry-planner-s1-full-ceremony-allow — write fullCeremony under SID, 
   })
 })
 
-test("lt-entry-planner-null-sessionid-deny — task planner without sessionID → rejects with /sessionId/ and NOT /ceremony missing/", async () => {
+test("lt-entry-planner-null-sessionid-deny — task planner without sessionID rejects with /sessionId/", async () => {
   await withHooks(async (hooks) => {
     const before = hooks["tool.execute.before"]
     await assert.rejects(
@@ -601,8 +667,8 @@ test("lt-entry-planner-null-sessionid-deny — task planner without sessionID �
         assert.ok(err instanceof Error)
         assert.match(err.message, /sessionId/)
         assert.ok(
-          !/ceremony missing/.test(err.message),
-          "must not contain generic ceremony missing when sessionId is the cause",
+          !/brainstormed|adversary_fired/.test(err.message),
+          "must not mask a missing sessionId as a missing planner fact",
         )
         return true
       },
@@ -625,9 +691,9 @@ test('#ac-1.5: lt-entry-delivery-bash-null-sessionid-allow — bash "gh pr creat
   )
 })
 
-test("lt-entry-s1-load-reads-classified — fullCeremony with classified under S1 + planner + sessionID S1 → allow", async () => {
+test("lt-entry-s1-load-reads-classified — classified state with planner facts under S1 allows planner", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony())
+    writeGateState(root, SID, fullDeliveryState())
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() =>
       before(
@@ -638,9 +704,9 @@ test("lt-entry-s1-load-reads-classified — fullCeremony with classified under S
   })
 })
 
-test("#ac-1.4 planner dispatch declaring a DIFFERENT feature_id than gate-state's ceremony → denied through the REAL hook (not just the pure decideEntryTask unit)", async () => {
+test("#ac-1.4 planner dispatch declaring a DIFFERENT feature_id than gate-state is denied through the real hook", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({ feature_id: "feat" }))
+    writeGateState(root, SID, fullDeliveryState({ feature_id: "feat" }))
     const before = hooks["tool.execute.before"]
     await assert.rejects(
       () =>
@@ -657,7 +723,7 @@ test("#ac-1.4 planner dispatch declaring a DIFFERENT feature_id than gate-state'
         return true
       },
     )
-    // Same feature_id as gate-state's ceremony: no mismatch, allowed.
+    // Same feature_id as gate-state: no mismatch, allowed.
     await assert.doesNotReject(() =>
       before(
         { tool: "task", sessionID: SID },
@@ -667,11 +733,10 @@ test("#ac-1.4 planner dispatch declaring a DIFFERENT feature_id than gate-state'
   })
 })
 
-// #ac-1.5 regression matrix (task-3) — explicit lt-reg-* names per spec; reuse helpers; foreign S2 written to prove no toolArgs bind
-// 1+2 covered by identical lt-entry-* (task-2); thin aliases with comment only (per instruction)
-test("lt-reg-full-ceremony-s1-planner-allow — full ceremony S1 + planner allow (thin alias; identical to lt-entry-planner-s1-full-ceremony-allow which task-2 covers; explicit lt-reg name for AC matrix)", async () => {
+// #ac-1.5 regression matrix: foreign S2 state proves tool args cannot select identity.
+test("lt-reg-full-state-s1-planner-allow — required S1 facts allow planner", async () => {
   await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony())
+    writeGateState(root, SID, fullDeliveryState())
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() =>
       before(
@@ -682,7 +747,7 @@ test("lt-reg-full-ceremony-s1-planner-allow — full ceremony S1 + planner allow
   })
 })
 
-test("lt-reg-null-sessionid-not-ceremony — null sessionId deny /sessionId/ not ceremony (thin alias; identical to lt-entry-planner-null-sessionid-deny which task-2 covers; explicit lt-reg name for AC matrix)", async () => {
+test("lt-reg-null-sessionid-not-planner-fact — null sessionId denial names sessionId", async () => {
   await withHooks(async (hooks) => {
     const before = hooks["tool.execute.before"]
     await assert.rejects(
@@ -695,8 +760,8 @@ test("lt-reg-null-sessionid-not-ceremony — null sessionId deny /sessionId/ not
         assert.ok(err instanceof Error)
         assert.match(err.message, /sessionId/)
         assert.ok(
-          !/ceremony missing/.test(err.message),
-          "must not contain generic ceremony missing when sessionId is the cause",
+          !/brainstormed|adversary_fired/.test(err.message),
+          "must not mask a missing sessionId as a missing planner fact",
         )
         return true
       },
@@ -704,8 +769,7 @@ test("lt-reg-null-sessionid-not-ceremony — null sessionId deny /sessionId/ not
   })
 })
 
-// 3,4,5: missing coverage for matrix; use planner + fullCeremony state on disk; foreign S2
-test("lt-reg-empty-ceremony-valid-sid-fail-closed — valid S1 empty/missing state + planner → deny ceremony or brainstorm (NOT allow)", async () => {
+test("lt-reg-empty-state-valid-sid-fail-closed — valid S1 empty/missing state denies planner prerequisites", async () => {
   // missing file case (load returns ok+{} )
   await withHooks(async (hooks, root) => {
     const before = hooks["tool.execute.before"]
@@ -718,11 +782,6 @@ test("lt-reg-empty-ceremony-valid-sid-fail-closed — valid S1 empty/missing sta
       (err) => {
         assert.ok(err instanceof Error)
         assert.match(err.message, /\[entry-gate\]/)
-        const m = err.message
-        assert.ok(
-          /ceremony missing|brainstormed|adversary_fired/.test(m),
-          "deny with ceremony/brainstorm reason on empty state"
-        )
         return true
       },
     )
@@ -746,13 +805,13 @@ test("lt-reg-empty-ceremony-valid-sid-fail-closed — valid S1 empty/missing sta
   })
 })
 
-test("lt-reg-toolargs-foreign-hook-s1 — hook S1 full ceremony + toolArgs.session_id foreign S2 → still allow via S1 (planner)", async () => {
+test("lt-reg-toolargs-foreign-hook-s1 — hook S1 facts + toolArgs.session_id foreign S2 still use S1", async () => {
   await withHooks(async (hooks, root) => {
     const S1 = "ses_reg_s1"
     const S2 = "ses_reg_s2"
-    writeGateState(root, S1, fullCeremony({}, S1))
-    // write foreign S2 with full ceremony to prove toolArgs does not bind / leak
-    writeGateState(root, S2, fullCeremony({}, S2))
+    writeGateState(root, S1, fullDeliveryState({}, S1))
+    // Foreign S2 proves toolArgs does not bind or leak identity.
+    writeGateState(root, S2, fullDeliveryState({}, S2))
     const before = hooks["tool.execute.before"]
     await assert.doesNotReject(() =>
       before(
@@ -763,10 +822,10 @@ test("lt-reg-toolargs-foreign-hook-s1 — hook S1 full ceremony + toolArgs.sessi
   })
 })
 
-test("lt-reg-toolargs-foreign-hook-missing — hook missing sessionID + toolArgs foreign full ceremony → deny /sessionId/ NOT allow", async () => {
+test("lt-reg-toolargs-foreign-hook-missing — missing hook sessionID ignores foreign toolArgs state", async () => {
   await withHooks(async (hooks, root) => {
     const S2 = "ses_reg_s2"
-    writeGateState(root, S2, fullCeremony())
+    writeGateState(root, S2, fullDeliveryState())
     const before = hooks["tool.execute.before"]
     await assert.rejects(
       () =>
@@ -779,8 +838,8 @@ test("lt-reg-toolargs-foreign-hook-missing — hook missing sessionID + toolArgs
         assert.match(err.message, /\[entry-gate\]/)
         assert.match(err.message, /sessionId/)
         assert.ok(
-          !/ceremony missing/.test(err.message),
-          "sessionId cause must not be masked as ceremony"
+          !/brainstormed|adversary_fired/.test(err.message),
+          "sessionId cause must not be masked as a planner fact"
         )
         return true
       },
@@ -850,23 +909,6 @@ test("classify allowed for top-level build", async () => {
   )
 })
 
-test("#ac-1.3 task permitted on the 4th dispatch after 3 same-agent failures — the in-session K=3 retry brake was removed", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({
-      agent_dispatch_failures: { "planner": 3 },
-    }))
-    const before = hooks["tool.execute.before"]
-    // The real per-issue ceiling now lives outside the session (core/vps cron-a-exit.mjs:116) —
-    // a 4th same-agent dispatch is no longer refused by the entry-gate itself. fullCeremony()
-    // satisfies every OTHER planner precondition, so a genuine doesNotReject actually proves the
-    // K=3 brake is gone (not just "denied for some other reason").
-    await assert.doesNotReject(() => before(
-      { tool: "task", sessionID: SID },
-      { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
-    ))
-  })
-})
-
 test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged warning, and a transient hiccup self-heals on retry", async () => {
   await withHooks(async (hooks, root) => {
     const dir = path.join(root, ".opencode", "plans", ".state", SID)
@@ -878,8 +920,8 @@ test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged
     const logged = []
     console.error = (...args) => { logged.push(args.map(String).join(" ")) }
     try {
-      // Every harness role is a "delivery role" — a genuinely EMPTY fallback state (what an
-      // unreadable file collapses to) still fails ITS OWN ceremony check downstream. This
+      // Every harness role is a "delivery role" — a genuinely empty state (what an
+      // unreadable file collapses to) still fails its own planner-fact check downstream. This
       // dispatch alone cannot prove "permitted"; it only proves the unreadable FILE itself is
       // never the denial reason (never gate-state-unreadable / invalid JSON).
       try {
@@ -900,55 +942,11 @@ test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged
     // with a concurrent writer, a momentary read error) does not permanently brick the session.
     // Once the file is readable again, the NEXT dispatch proceeds normally — unlike the old
     // fail-closed behavior, which denied unconditionally and never recovered on retry.
-    writeGateState(root, SID, fullCeremony())
+    writeGateState(root, SID, fullDeliveryState())
     await assert.doesNotReject(() => before(
       { tool: "task", sessionID: SID },
       { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
     ))
-  })
-})
-
-test("#ac-1.2 review_cap_reached no longer blocks executor/sniper/test-author dispatch", async () => {
-  await withHooks(async (hooks, root) => {
-    for (const status of ["review_cap_reached", "primary_failure_cap_reached"]) {
-      for (const subagent of ["executor-high", "sniper-high", "test-author"]) {
-        // test-author is fidelity-exempt (decideEntryTask); executor/sniper need fidelity_pass —
-        // a state missing it would deny for THAT reason, proving nothing about the review cap.
-        const needsFidelity = subagent !== "test-author"
-        writeGateState(root, SID, fullCeremony({
-          review_status: status,
-          ...(needsFidelity ? { fidelity_pass: ["feat/task-1"] } : {}),
-        }))
-        const before = hooks["tool.execute.before"]
-        await assert.doesNotReject(
-          () => before(
-            { tool: "task", sessionID: SID },
-            { args: { subagent_type: subagent, feature_id: "feat", task_id: "task-1" } },
-          ),
-          `${subagent} under ${status} must be permitted now that the review-cap writing-hand block is removed`,
-        )
-      }
-    }
-  })
-})
-
-test("task allowed when failures under K=3", async () => {
-  await withHooks(async (hooks, root) => {
-    writeGateState(root, SID, fullCeremony({
-      agent_dispatch_failures: { "planner": 2 },
-      planner_status: "usable",
-    }))
-    const before = hooks["tool.execute.before"]
-    // may still deny on dual/plan for planner dispatch depending on gates — only check retry not exhausted
-    try {
-      await before(
-        { tool: "task", sessionID: SID },
-        { args: { subagent_type: "planner", description: "plan", prompt: "x" } },
-      )
-    } catch (err) {
-      assert.ok(err instanceof Error)
-      assert.doesNotMatch(err.message, /agent retry exhausted/)
-    }
   })
 })
 
@@ -1080,5 +1078,204 @@ test("#516: HARNESS_OC_DATA_HOME alone does NOT arm the choke-point (adversarial
         isAncestorFn: () => true,
       },
     )
+  })
+})
+
+test("entry-gate claims one exact dispatch record after allowing a writing Task", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-claim" }, { args: writingTaskArgs() })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-claim"), "utf8"))
+    assert.deepEqual(record, {
+      parent_session_id: SID,
+      dispatch_call_id: "call-claim",
+      child_session_id: null,
+      feature_id: "feat",
+      task_id: "task-scope",
+      role: "executor-low",
+      scope_paths: ["src"],
+      allowed_writes: [],
+      snapshot_hash: record.snapshot_hash,
+      claimed_at: record.claimed_at,
+    })
+    assert.match(record.claimed_at, /^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
+test("fix-mode writing Task fails closed when exact task or call identity is missing", async () => {
+  const reviewedSha = "abc123abc123abc123abc123abc123abc123abcd"
+  const deps = {
+    dispatchEnvironment: {
+      HARNESS_FIX_MODE: "1",
+      HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: reviewedSha, scope_paths: ["src/fix.ts"] }),
+    },
+    isAncestorFn: () => true,
+  }
+  await withHooks(async (hooks, root) => {
+    writeGateState(root, SID, { session_id: SID, feature_id: "feat", classified: true, mode: "LIGHT" })
+    const before = hooks["tool.execute.before"]
+    for (const [input, prompt] of [
+      [{ tool: "task", sessionID: SID, callID: "missing-task" }, "repair"],
+      [{ tool: "task", sessionID: SID, callID: "malformed-task" }, "[HARNESS_TASK_CONTEXT]{bad}[/HARNESS_TASK_CONTEXT]"],
+      [{ tool: "task", sessionID: SID }, '[HARNESS_TASK_CONTEXT]{"task_id":"fix-task"}[/HARNESS_TASK_CONTEXT]'],
+    ]) {
+      await assert.rejects(
+        () => before(input, { args: { prompt, subagent_type: "sniper-high", feature_id: "feat" } }),
+        /exact dispatch identity required/,
+      )
+    }
+  }, deps)
+})
+
+test("fix-mode default SHA ancestry probe is rooted in the target project", async () => {
+  const foreignSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+  await withHooks(async (hooks, root) => {
+    execFileSync("git", ["init", "-q"], { cwd: root })
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root })
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root })
+    fs.writeFileSync(path.join(root, "target.txt"), "target\n")
+    execFileSync("git", ["add", "target.txt"], { cwd: root })
+    execFileSync("git", ["commit", "-qm", "target"], { cwd: root })
+    writeGateState(root, SID, { session_id: SID, feature_id: "feat", classified: true, mode: "LIGHT" })
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: SID, callID: "foreign-sha" },
+        { args: {
+          prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"fix-task"}[/HARNESS_TASK_CONTEXT]',
+          subagent_type: "sniper-high",
+          feature_id: "feat",
+        } },
+      ),
+      /reviewed sha is not an ancestor/,
+    )
+  }, {
+    dispatchEnvironment: {
+      HARNESS_FIX_MODE: "1",
+      HARNESS_FIX_SCOPE_JSON: JSON.stringify({ version: 1, reviewed_sha: foreignSha, scope_paths: ["target.txt"] }),
+    },
+  })
+})
+
+test("entry-gate terminal after and tool error remove only their exact parent call", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-after" }, { args })
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sibling" }, { args })
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: SID, callID: "call-after" }, { args })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-after")), false)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-sibling")), true)
+    await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "task", sessionID: SID, callID: "call-sibling", state: { status: "error" } } } } })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-sibling")), false)
+  })
+})
+
+test("entry-gate binds a child only from one official parent Task fact", async () => {
+  const childSessionId = "child-scope"
+  const client = {
+    session: {
+      get: async () => ({ data: { id: childSessionId, parentID: SID } }),
+      messages: async () => ({ data: [{
+        info: { id: "parent-message", sessionID: SID, role: "assistant" },
+        parts: [{ type: "tool", tool: "task", sessionID: SID, messageID: "parent-message", callID: "call-bind", state: { status: "running", input: { subagent_type: "executor-low" }, metadata: { sessionId: childSessionId } } }],
+      }] }),
+    },
+  }
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-bind" }, { args: writingTaskArgs() })
+    await hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-bind"), "utf8"))
+    assert.equal(record.child_session_id, childSessionId)
+  }, { client })
+})
+
+test("entry-gate leaves an exact record unbound when SDK is unavailable or parent facts are ambiguous", async () => {
+  const childSessionId = "child-unbound"
+  const ambiguousClient = {
+    session: {
+      get: async () => ({ data: { id: childSessionId, parentID: SID } }),
+      messages: async () => ({ data: ["one", "two"].map((id) => ({
+        info: { id, sessionID: SID, role: "assistant" },
+        parts: [{ type: "tool", tool: "task", sessionID: SID, messageID: id, callID: "call-unbound", state: { status: "running", input: { subagent_type: "executor-low" }, metadata: { sessionId: childSessionId } } }],
+      })) }),
+    },
+  }
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-unbound" }, { args: writingTaskArgs() })
+    await assert.doesNotReject(() => hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } }))
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-unbound"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: ambiguousClient })
+
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sdk-fault" }, { args: writingTaskArgs() })
+    await assert.doesNotReject(() => hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } }))
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-sdk-fault"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: { session: { get: async () => { throw new Error("SDK unavailable") }, messages: async () => [] } } })
+
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-sdk-mismatch" }, { args: writingTaskArgs() })
+    await hooks.event({ event: { type: "message.updated", properties: { info: { sessionID: childSessionId, agent: "executor-low" } } } })
+    const record = JSON.parse(fs.readFileSync(exactDispatchPath(root, SID, "call-sdk-mismatch"), "utf8"))
+    assert.equal(record.child_session_id, null)
+  }, { client: { session: { get: async () => ({ data: { id: "different-child", parentID: SID } }), messages: async () => { throw new Error("must not query foreign parent") } } } })
+})
+
+test("entry-gate DONE completion retains exact producer authority until capture", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: SID, callID: "call-finish-first" }, { args })
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: SID, callID: "call-finish-first" }, { args, output: "Status: DONE" })
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")
+    assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).producerCallId, "call-finish-first")
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, `.opencode/plans/.state/${SID}/gate-state.json`), "utf8")).hand_finished, ["feat/task-scope"])
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-finish-first")), true)
+  })
+})
+
+test("entry-gate background running after keeps its exact dispatch record", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-background-running" }
+    await hooks["tool.execute.before"](input, { args })
+    await hooks["tool.execute.after"](input, { args, metadata: { background: true }, output: '<task state="running">' })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-background-running")), true)
+  })
+})
+
+test("entry-gate completion producer failure retains exact dispatch authority for retry", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const initialArgs = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-completion-retry" }
+    await hooks["tool.execute.before"](input, { args: initialArgs })
+    const mismatchedArgs = { ...initialArgs, subagent_type: "sniper-low" }
+    await hooks["tool.execute.after"](input, { args: mismatchedArgs, output: "Status: DONE" })
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-completion-retry")), true)
+    assert.equal(fs.existsSync(path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")), false)
+  })
+})
+
+test("obs-first then entry terminal after keeps hand record and capture-pending producer stable", async () => {
+  await withHooks(async (hooks, root) => {
+    writeScopeReadyState(root)
+    const args = writingTaskArgs()
+    const input = { tool: "task", sessionID: SID, callID: "call-obs-first" }
+    const output = { args, output: "Status: DONE" }
+    await hooks["tool.execute.before"](input, { args })
+    const obs = await createObsHandHooks(root)
+    await obs["tool.execute.after"](input, output)
+    const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", "feat", SID, "task-scope.json")
+    const before = fs.readFileSync(recordPath)
+    await hooks["tool.execute.after"](input, output)
+    assert.deepEqual(fs.readFileSync(recordPath), before)
+    assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-obs-first")), true)
   })
 })

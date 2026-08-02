@@ -6,8 +6,7 @@
  *
  * Parity contract with Claude Code (core/claude-code/hooks/entry-gate.mjs decideBash,
  * lines 451-521 spawn-hand + 529-696 delivery-command handling): the bash gate does NOT
- * enforce ceremony (mode/classified/brainstormed/adversary_fired/planner_status/dual_status/
- * final_review/demo) — that lives on the Agent/Task dispatch gate. The bash gate only
+ * enforce ceremony — that lives on the Agent/Task dispatch gate. The bash gate only
  * enforces: branch/zero-commits, regate (regate_pending vs regate_passed), capture
  * (hand_finished vs capture_verified), and real-file (checkRealFileCaptureRail via
  * feature_id). Fail-open on infra error (unreadable gate-state, missing/unsafe sessionId) —
@@ -28,9 +27,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeliveryCommand } from "./is-delivery-command.mjs";
-import { isSafeSessionIdSegment } from "./gate-state.mjs";
-import { matchesAbsolution, absolutionPrefix } from "../../../shared/lib/absolution.mjs";
-import { fidelityPassEntry } from "./mark-gate.mjs";
+import { isSafeSessionIdSegment } from "../../lib/gate-state.mjs";
+import {
+  matchesAbsolution,
+  absolutionPrefix,
+  formatFeatureTaskEntry,
+} from "../../../shared/lib/absolution.mjs";
 import {
   classifyRegatePending,
   corruptRegatePendingReason,
@@ -118,7 +120,7 @@ export function decideBashAdvisory(input = {}) {
 
 /**
  * @description Writes a Decision's advisory (if any) to the plugin's only prose channel back
- * to the model -- `output.metadata` -- mirroring revise_nudge / adversary_nudge /
+ * to the model -- `output.metadata` -- without becoming runtime authority.
  * agent_idle_nudge. Fail-open: any error while writing is swallowed, never a new block.
  * @param {Decision} decision
  * @param {{ metadata?: Record<string, unknown> } | null | undefined} output
@@ -222,7 +224,7 @@ function decideSpawnHandFidelity(command, input) {
         "Ensure the descriptor JSON exists and is well-formed before dispatching.",
     };
   }
-  const qualifiedId = fidelityPassEntry(descriptor.feature_id, descriptor.task_id, null);
+  const qualifiedId = formatFeatureTaskEntry(descriptor.feature_id, descriptor.task_id);
   const gs = normalizeGateState(input.gateState);
   const fidelityPrefixes = coerceArray(gs.fidelity_pass).map(absolutionPrefix);
   if (!fidelityPrefixes.includes(qualifiedId)) {

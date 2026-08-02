@@ -1,23 +1,22 @@
 /**
  * @description Pure decide for OC plan-write-gate: anti-forge + optional scope rail.
  * Denies Write/Edit to gate-state.json, triage.json, and any JSON under
- * .opencode/plans/.state/ — absolute or relative. Does NOT deny execution-plan.json
- * (orchestrator/build may author the plan via Write or bash; bash forge is separate).
+ * .opencode/plans/.state/ — absolute or relative — and every feature canonical
+ * execution-plan.json. Canonical persistence belongs exclusively to planner-recovery.
  * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
  * Anti-forge is fail-closed (outside soft catch). Scope rail fail-opens when context
- * is incomplete or on rail errors; armed active_dispatch denies executor/sniper
+ * is incomplete or on rail errors; an exact dispatch record denies executor/sniper
  * subagent writes outside scope_paths ∪ allowed_writes (family match). Under an
  * armed hand dispatch, subagent writes with empty/non-hand actingRole are denied
  * (cannot verify identity — no fail-open on agent_id-only).
  */
 
 import path from "node:path";
-import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
+import { isExecutorRole, isSniperRole, isTestAuthorRole } from "../../lib/roles.mjs";
 
 const FORBIDDEN_STATE_BASENAMES = new Set(["gate-state.json", "triage.json"]);
 /** Marker / forge-allowlist scripts — never Write-overwrite (impostor under trusted path). */
 const FORBIDDEN_MARKER_BASENAMES = new Set([
-  "mark-gate.mjs",
   "mark.mjs",
   "classify.mjs",
 ]);
@@ -103,6 +102,89 @@ function isStateFilePath(filePath) {
 }
 
 /**
+ * @description True only for a feature's canonical plan, never for .state artifacts.
+ * This is a path fact, not a shell parser or process-isolation claim.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+export function isCanonicalPlanPath(filePath) {
+  const segs = pathSegments(filePath);
+  if (segs.length < 4 || segs.at(-1) !== "execution-plan.json") return false;
+  for (let index = 0; index <= segs.length - 4; index++) {
+    if (segs[index] === ".opencode" && segs[index + 1] === "plans") {
+      if (segs[index + 2] === ".state") continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @description Best-effort literal Bash friction for known mutation forms. Reads are deliberately
+ * untouched; variables, substitutions and split paths are outside this path-level protection.
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isLiteralCanonicalPlanMutation(command) {
+  if (typeof command !== "string") return false;
+  // Deliberately lexical, not a shell parser: splitting operators keeps one harmless `tee`
+  // mention from changing the meaning of a later command segment.
+  return command.split(/(?:;|\r?\n|&&|\|\||\|)/).some((segment) => {
+    const paths = segment.match(/(?:\/?[^\s'"`]*\/)?\.opencode\/plans\/(?!\.state(?:\/|$))[^\s'"`]+\/execution-plan\.json/gi) ?? [];
+    return paths.some((literal) => {
+      const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const targetEnd = `(?:[\\s'\"\`]*$)`;
+      const tee = segment.search(/\btee\b/i);
+      const literalAt = segment.indexOf(literal);
+      const teeTargetsLiteral = tee >= 0 && tee < literalAt && segment.slice(tee, literalAt).indexOf("<") === -1;
+      return new RegExp(`(?:>|>>)\\s*["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || teeTargetsLiteral
+        || new RegExp(`\\b(?:cp|rsync)\\b[^\\n]*\\s["']?${escaped}${targetEnd}`, "i").test(segment)
+        || new RegExp(`\\bmv\\b[^\\n]*["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || new RegExp(`\\b(?:rm|truncate)\\b[^\\n]*\\s["']?${escaped}(?=$|[\\s'\"])`, "i").test(segment)
+        || new RegExp(`\\bsed\\s+-i\\b[^\\n]*\\s["']?${escaped}${targetEnd}`, "i").test(segment);
+    });
+  });
+}
+
+/**
+ * @description Best-effort deterministic block for literal Bash mutation of harness gate state.
+ * Read/copy-source commands stay available; variables and obfuscated paths remain outside this
+ * lexical rail and require process isolation, not more ceremony state.
+ * @param {unknown} command
+ * @returns {boolean}
+ */
+export function isLiteralStateMutation(command) {
+  if (typeof command !== "string") return false;
+  let normalized = command.replace(/\\/g, "/");
+  const cdPlans = /\bcd\s+["']?(?:\.\/)?\.opencode\/plans["']?\s*(?:&&|;|\r?\n)/i.test(normalized);
+  if (cdPlans) {
+    normalized = normalized.replace(/(^|[\s'"`(])\.state\//g, "$1.opencode/plans/.state/");
+  }
+  const cdState = normalized.match(/\bcd\s+["']?(?:\.\/)?\.opencode\/plans\/\.state(?:\/[^\s;&|"']*)?["']?\s*(?:&&|;|\r?\n)([\s\S]*)/i);
+  if (cdState && /(?:\b(?:node|python(?:3(?:\.\d+)?)?|tee|rm|truncate|mv)\b|\bsed\s+-i\b|(?:>|>>))/i.test(cdState[1])) {
+    return true;
+  }
+  const mentionsState = /\.opencode\/plans\/\.state\//i.test(normalized);
+  if (mentionsState && /\b(?:node|python(?:3(?:\.\d+)?)?)\b/i.test(normalized)) return true;
+  return normalized.split(/(?:;|\r?\n|&&|\|\||\|)/).some((segment) => {
+    const statePaths = segment.match(/(?:\/?[^\s'"`]*\/)?\.opencode\/plans\/\.state\/[^\s'"`]+/gi) ?? [];
+    return statePaths.some((literal) => {
+      const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const literalAt = segment.indexOf(literal);
+      const teeAt = segment.search(/\btee\b/i);
+      const teeTargetsLiteral = teeAt >= 0 && teeAt < literalAt && segment.slice(teeAt, literalAt).indexOf("<") === -1;
+      return new RegExp(`(?:>|>>)\\s*["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || teeTargetsLiteral
+        || new RegExp(`\\b(?:cp|rsync)\\b[^\\n]*\\s["']?${escaped}(?:[\\s'"\`]*$)`, "i").test(segment)
+        || new RegExp(`\\bmv\\b[^\\n]*["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || new RegExp(`\\b(?:rm|truncate)\\b[^\\n]*\\s["']?${escaped}(?=$|[\\s'"])`, "i").test(segment)
+        || new RegExp(`\\bsed\\s+-i\\b[^\\n]*\\s["']?${escaped}(?:[\\s'"\`]*$)`, "i").test(segment);
+    });
+  });
+}
+
+/**
  * @description Write to harness marker scripts (path-bound forge allowlist targets).
  * @param {unknown} filePath
  * @returns {boolean}
@@ -113,9 +195,6 @@ function isMarkerScriptPath(filePath) {
   if (segs.length === 0) return false;
   const base = segs[segs.length - 1];
   if (!FORBIDDEN_MARKER_BASENAMES.has(base)) return false;
-  // plugin/lib/mark-gate.mjs or hooks/mark-gate.mjs (any parent tree)
-  const libIdx = segs.lastIndexOf("lib");
-  if (libIdx >= 1 && segs[libIdx - 1] === "plugin") return true;
   if (segs.includes("hooks")) return true;
   return false;
 }
@@ -233,7 +312,7 @@ function sameHandFamily(actingRole, dispatchRole) {
 
 /**
  * @description Scope rail: deny out-of-scope executor/sniper subagent writes when
- * active_dispatch is armed. Returns null when rail is off / allow; Decision when deny.
+ * an exact dispatch record is armed. Returns null when rail is off / allow; Decision when deny.
  * Fail-open (null) on incomplete context. Under armed hand dispatch, empty/non-hand
  * actingRole on a subagent is DENY (identity unverifiable). Never throws to caller.
  * @param {string} filePath
@@ -247,11 +326,7 @@ function sameHandFamily(actingRole, dispatchRole) {
 function decideScopeRail(filePath, opts) {
   if (opts.isSubagent !== true) return null;
 
-  const gateState = opts.gateState;
-  if (gateState == null || typeof gateState !== "object" || Array.isArray(gateState)) {
-    return null;
-  }
-  const ad = /** @type {Record<string, unknown>} */ (gateState).active_dispatch;
+  const ad = opts.dispatchRecord ?? null;
   if (ad == null || typeof ad !== "object" || Array.isArray(ad)) return null;
 
   const adObj = /** @type {Record<string, unknown>} */ (ad);
@@ -323,12 +398,27 @@ function decideScopeRail(filePath, opts) {
  *   gateState?: unknown,
  *   actingRole?: unknown,
  *   isSubagent?: unknown,
+ *   dispatchRecord?: unknown,
  * }} [opts]
  * @returns {Decision}
  */
 export function decide(payload, opts = {}) {
   // --- Anti-forge: fail-closed, outside soft catch ---
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return { allow: true };
+  }
+  const raw = /** @type {Record<string, unknown>} */ (payload);
+  const args = raw.args && typeof raw.args === "object" && !Array.isArray(raw.args)
+    ? /** @type {Record<string, unknown>} */ (raw.args)
+    : {};
+  const command = typeof args.command === "string" ? args.command : typeof raw.command === "string" ? raw.command : "";
+  if (command) {
+    if (isLiteralStateMutation(command)) {
+      return { allow: false, reason: `${PREFIX} Blocked: literal Bash mutation of harness state is denied (anti-forge rail).` };
+    }
+    if (isLiteralCanonicalPlanMutation(command)) {
+      return { allow: false, reason: `${PREFIX} Blocked: literal Bash mutation of canonical plan is denied (best-effort friction).` };
+    }
     return { allow: true };
   }
   const filePath = extractWritePath(payload);
@@ -346,6 +436,12 @@ export function decide(payload, opts = {}) {
       reason: `${PREFIX} Blocked: gate-state/triage written ONLY by harness markers, never Write/Edit.`,
     };
   }
+  if (isCanonicalPlanPath(filePath)) {
+    return {
+      allow: false,
+      reason: `${PREFIX} Blocked: canonical plan is written only by planner-recovery, never by a model tool.`,
+    };
+  }
   if (!carved && isStateFilePath(filePath)) {
     return {
       allow: false,
@@ -355,7 +451,7 @@ export function decide(payload, opts = {}) {
   if (!carved && isMarkerScriptPath(filePath)) {
     return {
       allow: false,
-      reason: `${PREFIX} Blocked: harness marker scripts (mark-gate/mark/classify) are read-only via Write/Edit.`,
+      reason: `${PREFIX} Blocked: harness marker scripts (mark/classify) are read-only via Write/Edit.`,
     };
   }
   if (!carved && isFrozenToolingPath(filePath)) {
@@ -375,6 +471,7 @@ export function decide(payload, opts = {}) {
       gateState,
       actingRole: opts.actingRole,
       isSubagent: opts.isSubagent,
+      dispatchRecord: opts.dispatchRecord,
     });
     if (scopeDeny) return scopeDeny;
   } catch {
@@ -382,7 +479,6 @@ export function decide(payload, opts = {}) {
     return { allow: true };
   }
 
-  // execution-plan.json is allowed (LIGHT model C — orchestrator may author plan)
   return { allow: true };
 }
 

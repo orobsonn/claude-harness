@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @description Headless probe for OC gates post-fix (entry-gate/plan-gate/review-guard).
+ * @description Headless probe for OC gates post-fix (entry-gate/plan-gate).
  * Creates temp project via vendor-core --runtime opencode, runs DENY scenario via real opencode,
  * validates oracle on tool_use error (NOT exit code), runs hermetic in-process ALLOW oracle.
  * Documents that exit code of opencode alone is not the oracle.
@@ -19,7 +19,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createPlanGateHooks } from "../core/opencode/plugin/plan-gate.ts";
+import { PlanGate } from "../core/opencode/plugin/plan-gate.ts";
+
+const { createPlanGateHooks } = PlanGate.testApi;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -70,6 +72,18 @@ async function main() {
     if (pluginList.some((entry) => String(entry).includes(".opencode/plugin/"))) {
       fail("opencode.json must not list auto-globbed harness plugins");
     }
+    const retiredMarker = join(tempRoot, ".opencode", "plugin", "lib", "mark-gate.mjs");
+    if (existsSync(retiredMarker)) {
+      fail("retired mark-gate helper survived fresh vendoring");
+    }
+    const bashPermissions = ocJson?.permission?.bash;
+    if (
+      bashPermissions &&
+      (Object.hasOwn(bashPermissions, "node .opencode/plugin/lib/mark-gate.mjs *") ||
+        Object.hasOwn(bashPermissions, "node core/opencode/plugin/lib/mark-gate.mjs *"))
+    ) {
+      fail("opencode.json retained a shell marker permission");
+    }
     pass("opencode.json leaves harness plugins to auto-glob");
 
     // 3. DENY scenario: prompt that forces task→executor-low once
@@ -93,12 +107,12 @@ After the task returns (success or error), reply GATE_PROBE_DONE.`;
     const combined = denyStderr + "\n" + denyStdout;
     if (/failed to load plugin/i.test(combined)) {
       // only fail if critical gates
-      if (/entry-gate|plan-gate|review-guard/i.test(combined)) {
+      if (/entry-gate|plan-gate/i.test(combined)) {
         pluginLoadFail = true;
       }
     }
     if (pluginLoadFail) {
-      fail("plugin load error for entry-gate|plan-gate|review-guard: " + combined.slice(0, 500));
+      fail("plugin load error for entry-gate|plan-gate: " + combined.slice(0, 500));
     }
     for (const line of denyStdout.split("\n")) {
       if (!line.trim().startsWith("{")) continue;

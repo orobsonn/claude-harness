@@ -9,8 +9,17 @@ import {
   matchesAbsolution,
   parseAbsolutionEntry,
 } from "./absolution.mjs";
+import * as absolution from "./absolution.mjs";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
+
+test("formatFeatureTaskEntry: bare and SHA-qualified entries are deterministic", () => {
+  assert.equal(typeof absolution.formatFeatureTaskEntry, "function");
+  assert.equal(absolution.formatFeatureTaskEntry("feature", "task"), "feature/task");
+  assert.equal(absolution.formatFeatureTaskEntry("feature", "task", null), "feature/task");
+  assert.equal(absolution.formatFeatureTaskEntry("feature", "task", "abc123"), "feature/task@abc123");
+  assert.equal(absolution.formatFeatureTaskEntry("feature", "task", ""), "feature/task");
+});
 
 test("matchesAbsolution: prefix@sha + ancestor true → true", () => {
   assert.equal(

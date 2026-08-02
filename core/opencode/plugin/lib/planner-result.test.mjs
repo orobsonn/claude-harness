@@ -3,10 +3,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyPlannerBoundaryError, classifyPlannerResult } from "./planner-result.mjs";
 
+const expectedModelStrategy = {
+  hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+  planner: "openai/gpt-5.6-sol",
+  "plan-reviewer": "openai/gpt-5.6-sol",
+  compliance: "openai/gpt-5.6-sol",
+  adversary: "openai/gpt-5.6-sol",
+  security: "openai/gpt-5.6-sol",
+  shipper: "openai/gpt-5.6-sol",
+  harvester: "openai/gpt-5.6-sol",
+};
+
 const FULL_PLAN = {
   feature_id: "planner-recovery",
   kind: "full",
   mode: "full",
+  model_strategy: expectedModelStrategy,
   tasks: [{
     id: "task-1",
     severity: "medium",
@@ -17,6 +29,23 @@ const FULL_PLAN = {
     locked_tests: [{ id: "lt-1", path: "src/planner.test.ts", assertion: "Given plan, When classified, Then usable" }],
   }],
 };
+const classify = (response) => classifyPlannerResult(response, { expectedModelStrategy });
+
+test("rejects a structurally full response whose strategy differs from the active planner snapshot", () => {
+  const result = classifyPlannerResult(JSON.stringify(FULL_PLAN), {
+    expectedModelStrategy: { ...expectedModelStrategy, planner: "other/planner" },
+  });
+  assert.equal(result.kind, "invalid_plan");
+  assert.ok(result.errors.some((error) => error.includes("expectedModelStrategy")));
+});
+
+test("rejects a response when the active planner snapshot is absent or malformed", () => {
+  for (const snapshot of [undefined, {}, { ...expectedModelStrategy, extra: "forbidden" }]) {
+    const result = classifyPlannerResult(JSON.stringify(FULL_PLAN), { expectedModelStrategy: snapshot });
+    assert.equal(result.kind, "invalid_plan");
+    assert.match(result.errors[0], /expectedModelStrategy/);
+  }
+});
 
 for (const [failureClass, response] of [
   ["auth", { name: "ProviderAuthError", data: { message: "401 unauthorized" } }],
@@ -50,14 +79,14 @@ test("status taxonomy keeps retryable provider failures narrow", () => {
 });
 
 test("accepts a fenced structurally valid full plan with summary", () => {
-  const result = classifyPlannerResult(`\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\`\nPlano pronto.`);
+  const result = classify(`\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\`\nPlano pronto.`);
   assert.equal(result.kind, "usable_plan");
   assert.equal(result.plan.tasks.length, 1);
 });
 
 test("same plan extracted from both the fence and the raw text is one candidate, not two", () => {
   // jsonObjects() scans the fenced block AND the whole text — the duplicate must not read as ambiguity.
-  const result = classifyPlannerResult(`\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\``);
+  const result = classify(`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\``);
   assert.equal(result.kind, "usable_plan");
   assert.equal(result.plan.feature_id, FULL_PLAN.feature_id);
 });
@@ -69,7 +98,7 @@ test("a revision quoting the superseded plan is invalid, never first-one-wins", 
     ...FULL_PLAN,
     tasks: [{ ...FULL_PLAN.tasks[0], complexity: "high" }],
   };
-  const result = classifyPlannerResult(
+  const result = classify(
     `Plano anterior:\n\`\`\`json\n${JSON.stringify(FULL_PLAN)}\n\`\`\`\nPlano revisado:\n\`\`\`json\n${JSON.stringify(revised)}\n\`\`\``,
   );
   assert.equal(result.kind, "invalid_plan");
@@ -91,7 +120,7 @@ for (const [name, response] of [
   ["provider-looking prose", "429 provider unavailable"],
 ]) {
   test(`rejects ${name} planner output as invalid, not provider failure`, () => {
-    const result = classifyPlannerResult(response);
+    const result = classify(response);
     assert.equal(result.kind, "invalid_plan");
     assert.ok(result.errors.length >= 1);
   });

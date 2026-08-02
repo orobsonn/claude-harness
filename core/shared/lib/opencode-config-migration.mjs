@@ -6,8 +6,9 @@ export const MANIFEST_FILENAME = ".harness-config-manifest.json";
 /**
  * Ledger of retired `permission.*` entries. A project's current value for `path` is safe to
  * drop (or force-upgrade to the new generation's value) when it still EQUALS `historicalValue`
- * (the operator never touched it) AND the project has ANY harness provenance — a manifest or a
- * legible `.harness-version` stamp, proof the harness vendored this project at some point.
+ * (the operator never touched it) AND the project has harness provenance. An entry may be
+ * `tier2Only` when a tier-1 manifest can distinguish an owned default from an identical operator
+ * choice; those entries use the ledger only when no manifest exists.
  *
  * Retirement is deliberately NOT gated by which generation that stamp shows (issue #513): the
  * original design additionally required the project's generation to be at or before the
@@ -22,6 +23,14 @@ export const MANIFEST_FILENAME = ".harness-config-manifest.json";
  * matching value can only be the operator's own doing, and that case alone survives untouched.
  */
 export const RETIRED_OC_PERMISSION_ENTRIES = Object.freeze([
+  Object.freeze({
+    path: Object.freeze(["bash", "node .opencode/plugin/lib/mark-gate.mjs *"]),
+    historicalValue: "allow",
+  }),
+  Object.freeze({
+    path: Object.freeze(["bash", "node core/opencode/plugin/lib/mark-gate.mjs *"]),
+    historicalValue: "allow",
+  }),
   Object.freeze({
     path: Object.freeze(["bash", "npx github:orobsonn/claude-harness#* init*"]),
     historicalValue: "allow",
@@ -38,10 +47,23 @@ export const RETIRED_OC_PERMISSION_ENTRIES = Object.freeze([
     // last shipped in v0.45.0; replaced by the pinned #v* set in v0.45.1 (#359)
   }),
   Object.freeze({
-    path: Object.freeze(["bash", "*"]),
+    path: Object.freeze(["edit"]),
     historicalValue: "allow",
-    // the original catch-all default (superseded by "ask" in the current generation) — reproduced
-    // empirically in a real vendored project (issue #513: victor-bot, .harness-version v0.45.3)
+    // Historical OC generations shipped a blanket scalar. Upgrade the exact harness default to
+    // the current pattern map so state-path and secret denies reach already-vendored projects.
+  }),
+  Object.freeze({
+    path: Object.freeze(["read"]),
+    historicalValue: "allow",
+    // Same scalar-to-map transition as edit. Divergent operator values remain custom.
+  }),
+  Object.freeze({
+    path: Object.freeze(["bash", "*"]),
+    historicalValue: "ask",
+    tier2Only: true,
+    // the prompt-everything catch-all shipped before Auto Mode. Provenanced projects that still
+    // carry it are upgraded to the current allow-by-default generation; an operator-diverged
+    // value remains protected by the normal content/manifest checks.
   }),
 ]);
 // `["bash", "git pull*"]` was DELIBERATELY left out of this ledger (adversarial finding on #513):
@@ -128,18 +150,20 @@ export function isValidOpencodeConfigShape(config) {
  * @param {unknown} existingNode - value at `path` in the project's current config
  * @param {unknown} newNode - value at `path` in the new generation's canonical config
  * @param {unknown} ownedNode - value at `path` the manifest recorded as harness-written (tier 1)
- * @param {Map<string, {path: string[], historicalValue: unknown}>} ledgerByPath
+ * @param {Map<string, {path: string[], historicalValue: unknown, tier2Only?: boolean}>} ledgerByPath
  * @param {boolean} hasHarnessProvenance - whether the harness has EVER vendored this project (a
  *   manifest or a legible `.harness-version` stamp) — a ledger content match only applies when
  *   this holds; a project with no provenance keeps a coincidentally matching value untouched,
  *   since there it can only be the operator's own doing (issue #513)
+ * @param {1 | 2 | 3} tier
  * @returns {{ value: unknown, owned: unknown, report: Array<Record<string, unknown>> }}
  */
-function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, hasHarnessProvenance) {
+function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, hasHarnessProvenance, tier) {
   function ledgerMatches(childPath, value) {
     if (!hasHarnessProvenance) return false;
     const entry = ledgerByPath.get(pathKey(childPath));
     if (entry === undefined) return false;
+    if (entry.tier2Only === true && tier !== 2) return false;
     return deepEqual(value, entry.historicalValue);
   }
 
@@ -157,7 +181,7 @@ function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, hasHarn
 
     for (const key of Object.keys(newNode)) {
       const childPath = [...path, key];
-      const result = mergeNode(childPath, existingObj[key], newNode[key], ownedObj[key], ledgerByPath, hasHarnessProvenance);
+      const result = mergeNode(childPath, existingObj[key], newNode[key], ownedObj[key], ledgerByPath, hasHarnessProvenance, tier);
       mergedObj[key] = result.value;
       if (result.owned !== undefined) ownedOut[key] = result.owned;
       report.push(...result.report);
@@ -193,6 +217,37 @@ function mergeNode(path, existingNode, newNode, ownedNode, ledgerByPath, hasHarn
     return { value: newNode, owned: newNode, report: [{ path, action: "updated", from: existingNode, to: newNode }] };
   }
   return { value: existingNode, owned: undefined, report: [{ path, action: "kept-custom", value: existingNode }] };
+}
+
+/**
+ * @description Keep project-owned permission keys while restoring the canonical last-match-wins
+ * safety suffix after them. The suffix starts at each canonical map's first deny and includes any
+ * later allow carve-outs whose relative order is load-bearing (for example force-with-lease).
+ * @param {Record<string, unknown>} mergedPermission
+ * @param {Record<string, unknown>} canonicalPermission
+ * @returns {Record<string, unknown>}
+ */
+function reorderCanonicalProtection(mergedPermission, canonicalPermission) {
+  const reorderedPermission = { ...mergedPermission };
+  for (const section of ["edit", "read", "bash"]) {
+    const mergedMap = mergedPermission[section];
+    const canonicalMap = canonicalPermission[section];
+    if (!isPlainObject(mergedMap) || !isPlainObject(canonicalMap)) continue;
+    const canonicalEntries = Object.entries(canonicalMap);
+    const firstDeny = canonicalEntries.findIndex(([, value]) => value === "deny");
+    if (firstDeny < 0) continue;
+    const suffixKeys = canonicalEntries.slice(firstDeny).map(([key]) => key);
+    const suffixSet = new Set(suffixKeys);
+    const map = {};
+    for (const [key, value] of Object.entries(mergedMap)) {
+      if (!suffixSet.has(key)) map[key] = value;
+    }
+    for (const key of suffixKeys) {
+      if (Object.hasOwn(mergedMap, key)) map[key] = mergedMap[key];
+    }
+    reorderedPermission[section] = map;
+  }
+  return reorderedPermission;
 }
 
 /**
@@ -234,10 +289,14 @@ export function migrateOpencodeConfig({
   const newPermission = isPlainObject(newConfig?.permission) ? newConfig.permission : {};
   const hasHarnessProvenance = tier !== 3;
 
-  const merged = mergeNode([], existingPermission, newPermission, ownedRoot, ledgerByPath, hasHarnessProvenance);
+  const merged = mergeNode([], existingPermission, newPermission, ownedRoot, ledgerByPath, hasHarnessProvenance, tier);
+
+  const permission = isPlainObject(merged.value)
+    ? reorderCanonicalProtection(merged.value, newPermission)
+    : merged.value;
 
   return {
-    config: { ...existingConfig, permission: merged.value },
+    config: { ...existingConfig, permission },
     manifest: {
       version: 1,
       harnessVersion: newHarnessVersion ?? previousHarnessVersionStamp ?? manifest?.harnessVersion ?? "unknown",

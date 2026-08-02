@@ -3,6 +3,7 @@ description: Implements HIGH-complexity tasks (band 31+ residual reasoning). Oll
 mode: all
 model: ollama-cloud/kimi-k2.7-code
 temperature: 0.1
+steps: 80
 tools:
   task: false
 permission:
@@ -38,6 +39,8 @@ If a judgment needed to make a decision is **missing**, emit `NEEDS_CONTEXT` imm
 
 ### scope_paths are the boundary
 **BLOCKED** if you need to write outside the declared `scope_paths`. Report `BLOCKED` with the conflicting path; do not write the file.
+
+Never stage, unstage, commit, or otherwise mutate the Git index. Host capture owns Git evidence; use `git status`/`git diff` only for inspection.
 
 ### locked_tests are immutable gates
 Never edit, delete, or rename files that contain `locked_tests`. They are the acceptance gate — your job is to make them pass, not to change them.

@@ -31,7 +31,6 @@ Shared returns Decision; shell maps direction.
 | Reinject after compact | reinject-state SessionStart | `chat.message` / compacting hooks | read state |
 | Version check | version-check | chat.message advisory | compare versions |
 | Loop convergence | prose + idle nudge | `plugin/loop-guard.ts` | counters **on disk** |
-| Harvest buffer presence | — | `plugin/harvest-guard.ts` | — |
 | Codex nudge | codex-eye-nudge | **DROP** → dual task protocol (07) | merge |
 
 ---
@@ -124,7 +123,7 @@ Before executor dispatch (or on plan write):
 
 **MVP in T5:** entry-gate + plan-gate + classify tool/stub + disk gate-state + fidelity special-case for test-author.
 
-**Later (same phase 1, not blocking T5 checkbox if tracked separately):** reinject, version-check, harvest-guard polish — list as T5c optional or fold into T5 notes.
+**Later (same phase 1, not blocking T5 checkbox if tracked separately):** reinject and version-check polish — list as T5c optional or fold into T5 notes.
 
 - [ ] entry-gate + plan-gate under `core/opencode/plugin` use shared + disk state  
 - [ ] `classify` tool (or hook) writes stub via shared `buildClassifyStub` + markers entry-gate reads  

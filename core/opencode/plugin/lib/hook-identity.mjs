@@ -1,6 +1,6 @@
 /** @description Resolve trusted runtime-envelope identity ahead of untrusted tool aliases. */
 
-import { extractSubagentType } from "./task-dispatch-identity.mjs";
+import { extractSubagentType } from "../../lib/task-dispatch-identity.mjs";
 
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 

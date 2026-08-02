@@ -3,10 +3,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validatePlan } from "./validate-plan.mjs";
 
+const expectedModelStrategy = {
+  hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+  planner: "openai/gpt-5.6-sol",
+  "plan-reviewer": "openai/gpt-5.6-sol",
+  compliance: "openai/gpt-5.6-sol",
+  adversary: "openai/gpt-5.6-sol",
+  security: "openai/gpt-5.6-sol",
+  shipper: "openai/gpt-5.6-sol",
+  harvester: "openai/gpt-5.6-sol",
+};
+
 const goldenFull = {
   feature_id: "oc-port-phase-1",
   kind: "full",
   mode: "full",
+  model_strategy: expectedModelStrategy,
   tasks: [
     {
       id: "t0-skeleton",
@@ -24,6 +36,47 @@ const goldenFull = {
     },
   ],
 };
+
+test("r15: full plans require the exact frozen model strategy", () => {
+  const missing = validatePlan({ ...goldenFull, model_strategy: undefined }, { expect: "full" });
+  assert.equal(missing.ok, false);
+  assert.ok(missing.errors.some((error) => error.includes("model_strategy")));
+
+  const legacy = validatePlan({
+    ...goldenFull,
+    model_strategy: { ...expectedModelStrategy, tiers: expectedModelStrategy.hand_tiers },
+  }, { expect: "full", expectedModelStrategy });
+  assert.equal(legacy.ok, false);
+  assert.ok(legacy.errors.some((error) => error.includes("tiers")));
+
+  const wrongHandTier = validatePlan({
+    ...goldenFull,
+    model_strategy: { ...expectedModelStrategy, hand_tiers: { ...expectedModelStrategy.hand_tiers, high: "other" } },
+  }, { expect: "full", expectedModelStrategy });
+  assert.equal(wrongHandTier.ok, false);
+  assert.ok(wrongHandTier.errors.some((error) => error.includes("hand_tiers.high")));
+
+  const wrongEye = validatePlan({
+    ...goldenFull,
+    model_strategy: { ...expectedModelStrategy, planner: "other/planner" },
+  }, { expect: "full", expectedModelStrategy });
+  assert.equal(wrongEye.ok, false);
+  assert.ok(wrongEye.errors.some((error) => error.includes("planner")));
+
+  const explicitUndefined = validatePlan(goldenFull, { expect: "full", expectedModelStrategy: undefined });
+  assert.equal(explicitUndefined.ok, false);
+  assert.ok(explicitUndefined.errors.some((error) => error.includes("expectedModelStrategy")));
+});
+
+test("r15: fallback is opaque and stubs do not require a strategy", () => {
+  for (const fallback of [null, "opaque", ["opaque"], { provider: "opaque" }]) {
+    const plan = { ...goldenFull, model_strategy: { ...expectedModelStrategy, fallback } };
+    const result = validatePlan(plan, { expect: "full", expectedModelStrategy });
+    assert.equal(result.ok, true, result.errors.join("; "));
+    assert.deepEqual(plan.model_strategy.fallback, fallback);
+  }
+  assert.equal(validatePlan({ feature_id: "stub", kind: "stub", mode: "quick", tasks: [] }, { expect: "stub" }).ok, true);
+});
 
 test("t3-full-ok: golden valid full plan returns ok true", () => {
   const res = validatePlan(goldenFull);
@@ -76,26 +129,21 @@ test("t3-stub: stub with empty tasks and expect stub returns ok true; expect ful
 
 test("t3-tiers: legacy Claude tier names yield validation error without throw", () => {
   const legacy = {
-    feature_id: "legacy",
-    kind: "stub",
-    mode: "quick",
-    tasks: [],
+    ...goldenFull,
     model_strategy: {
+      ...expectedModelStrategy,
       tiers: { low: "haiku" },
     },
   };
   assert.doesNotThrow(() => {
     const res = validatePlan(legacy);
     assert.equal(res.ok, false);
-    assert.ok(res.errors.some((e) => /haiku|legacy|sonnet|opus/.test(e)));
+    assert.ok(res.errors.some((e) => e.includes("tiers")));
   });
 
   const badLegacyTiers = {
-    feature_id: "bad",
-    kind: "stub",
-    mode: "quick",
-    tasks: [],
-    model_strategy: { low: "claude-3" },
+    ...goldenFull,
+    model_strategy: { ...expectedModelStrategy, low: "claude-3" },
   };
   const r2 = validatePlan(badLegacyTiers);
   assert.equal(r2.ok, false);
@@ -106,6 +154,7 @@ test("b1-assertion-required: locked_tests without assertion fail", () => {
     feature_id: "no-assert",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     tasks: [
       {
         id: "t1",
@@ -126,6 +175,7 @@ test("b1-test-path-legacy: test_path without path fails with actionable message"
     feature_id: "legacy-lt",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     tasks: [
       {
         id: "t1",
@@ -152,6 +202,7 @@ test("b1-fixture-paths-optional: valid fixture_paths accepted", () => {
     feature_id: "with-fixtures",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     tasks: [
       {
         id: "t1",
@@ -205,6 +256,7 @@ test("b1-complexity-max: task and plan complexity max accepted", () => {
     feature_id: "max-band",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     complexity: "max",
     tasks: [
       {
@@ -281,6 +333,7 @@ function planWithTask(taskOverrides) {
     feature_id: "model-resolved",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     tasks: [
       {
         id: "t1",
@@ -360,6 +413,7 @@ test("#559 #ac-1.2 a key resolved by ANOTHER task is still orphan on this task",
     feature_id: "cross-task",
     kind: "full",
     mode: "full",
+    model_strategy: expectedModelStrategy,
     tasks: [
       {
         id: "t1",

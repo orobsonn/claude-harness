@@ -2,7 +2,7 @@
 import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { execFileSync } from "node:child_process"
 
-export async function createReinjectStateHooks(
+async function createReinjectStateHooks(
   directory?: string,
   worktree?: string,
   options: { retentionMs?: number; now?: () => number; isAncestorFn?: (sha: string) => boolean; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval } = {},
@@ -54,6 +54,7 @@ export async function createReinjectStateHooks(
 
 export const reinjectState: Plugin = async ({ directory, worktree }) =>
   createReinjectStateHooks(directory, worktree)
+Object.defineProperty(reinjectState, "testApi", { value: Object.freeze({ createReinjectStateHooks }) })
 
 /** @description OC load contract — default export required. */
 export default reinjectState;

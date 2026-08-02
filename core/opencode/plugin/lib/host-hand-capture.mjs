@@ -1,163 +1,167 @@
-/** @description OC-native host capture for in-session Task hands (not CC spawn-hand). Never throws. */
+/** @description Host-owned Task completion facts. Capture verification is intentionally a later action. */
 
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
-import { isDoneHandRecord } from "../../../shared/lib/real-file-capture-rail.mjs";
-import { withGateStateLock } from "./gate-state.mjs";
-import { fidelityPassEntry, defaultHeadSha } from "./mark-gate.mjs";
-import { writeHandRecord } from "./hand-records.mjs";
+import { gateStatePath, handRecordPath } from "../../../shared/lib/path-helpers.mjs";
+import { formatFeatureTaskEntry } from "../../../shared/lib/absolution.mjs";
+import { withGateStateLock } from "../../lib/gate-state.mjs";
+import { readDispatchRecord, removeDispatchRecord } from "../../lib/dispatch-scope.mjs";
+import { parseHandStatusFromOutput, writeHandRecord } from "../../lib/hand-records.mjs";
+import { listGitTouchedPaths, pathsChangedSinceBaseline } from "../../lib/worktree-baseline.mjs";
+
+function isDone(outcome) {
+  return outcome === "DONE";
+}
+
+function readHandRecord(projectRoot, sessionId, featureId, taskId) {
+  const resolved = handRecordPath({ projectRoot, runtime: "opencode", sessionId, featureId }, taskId);
+  if (!resolved.ok) return null;
+  try {
+    const value = JSON.parse(fs.readFileSync(resolved.path, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch { return null; }
+}
+
+function removeTaskEntry(entries, bare) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) => entry !== bare);
+}
+
+function scopeViolations(touchedPaths, record) {
+  const allowed = [...(Array.isArray(record.scope_paths) ? record.scope_paths : []), ...(Array.isArray(record.allowed_writes) ? record.allowed_writes : [])];
+  return (Array.isArray(touchedPaths) ? touchedPaths : []).filter((item) => typeof item === "string" && !allowed.some((entry) => item === entry || (typeof entry === "string" && (entry.endsWith("/") || !entry.includes(".")) && item.startsWith(`${entry.replace(/\/$/, "")}/`))));
+}
 
 /**
- * @description Git paths changed since merge-base or last N commits (best-effort).
- * @param {string} cwd
- * @returns {string[]}
+ * @description Persist a terminal host record and, only for DONE, its bare completion stamp.
+ * @param {{ projectRoot: string, sessionId: string, featureId: string, taskId: string, role: string, producerCallId: string, outcome: string, touchedPaths: string[], freezeCommitSha: string | null }} input
+ * @returns {{ ok: boolean, recorded: boolean, reason?: string }}
  */
-export function gitTouchedPaths(cwd) {
+export function recordHandFinished(input) {
   try {
-    const out = execFileSync("git", ["diff", "--name-only", "HEAD~5", "HEAD"], {
-      cwd,
+    const { projectRoot, sessionId, featureId, taskId, role, producerCallId, outcome, touchedPaths, freezeCommitSha } = input ?? {};
+    if (![projectRoot, sessionId, featureId, taskId, role, producerCallId, outcome].every((value) => typeof value === "string" && value)) return { ok: false, recorded: false, reason: "completion identity missing" };
+    const initial = readDispatchRecord(projectRoot, { parentSessionId: sessionId, callId: producerCallId });
+    if (!initial.ok || initial.record.feature_id !== featureId || initial.record.task_id !== taskId || initial.record.role !== role) return { ok: false, recorded: false, reason: "exact producer dispatch record required" };
+    const state = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
+    if (!state.ok) return { ok: false, recorded: false, reason: state.reason };
+    let outcomeResult = { ok: false, recorded: false, reason: "completion record failed" };
+    let supersededProducerCallId = "";
+    const locked = withGateStateLock(state.path, (gateState) => {
+      const producer = readDispatchRecord(projectRoot, { parentSessionId: sessionId, callId: producerCallId });
+      if (!producer.ok || producer.record.feature_id !== featureId || producer.record.task_id !== taskId || producer.record.role !== role) {
+        outcomeResult = { ok: false, recorded: false, reason: "exact producer dispatch record required" };
+        return gateState;
+      }
+      const existing = readHandRecord(projectRoot, sessionId, featureId, taskId);
+      const bare = formatFeatureTaskEntry(featureId, taskId);
+      if (existing?.producerCallId === producerCallId) {
+        const handFinished = removeTaskEntry(gateState.hand_finished, bare);
+        if (isDone(existing.outcome)) handFinished.push(bare);
+        outcomeResult = { ok: true, recorded: false, reason: "completion producer already recorded" };
+        return { ...gateState, hand_finished: handFinished };
+      }
+      const priorClaimedAt = typeof existing?.producerClaimedAt === "string" ? Date.parse(existing.producerClaimedAt) : Number.NEGATIVE_INFINITY;
+      const claimedAt = Date.parse(producer.record.claimed_at);
+      if (!Number.isFinite(claimedAt)) {
+        outcomeResult = { ok: false, recorded: false, reason: "producer claim timestamp invalid" };
+        return gateState;
+      }
+      if (existing?.producerCallId !== producerCallId && Number.isFinite(priorClaimedAt) && priorClaimedAt >= claimedAt) {
+        outcomeResult = { ok: true, recorded: false, reason: "newer completion producer already recorded" };
+        return gateState;
+      }
+      const now = new Date().toISOString();
+      const record = {
+        featureId, taskId, sessionId, producerCallId, producerClaimedAt: producer.record.claimed_at,
+        freezeCommitSha: typeof freezeCommitSha === "string" && freezeCommitSha ? freezeCommitSha : null,
+        outcome, touchedPaths: Array.isArray(touchedPaths) ? touchedPaths.filter((item) => typeof item === "string") : [],
+        scopeViolations: scopeViolations(touchedPaths, producer.record), frozenViolations: [], agent: role,
+        startedAt: existing?.startedAt ?? now, finishedAt: now, writtenBy: "host-hand-finished",
+      };
+      const written = writeHandRecord({ roots: { projectRoot, runtime: "opencode", sessionId, featureId }, taskId, record });
+      if (!written.ok) {
+        outcomeResult = { ok: false, recorded: false, reason: written.reason };
+        return gateState;
+      }
+      if (typeof existing?.producerCallId === "string" && existing.producerCallId !== producerCallId) {
+        supersededProducerCallId = existing.producerCallId;
+      }
+      const handFinished = removeTaskEntry(gateState.hand_finished, bare);
+      if (isDone(outcome)) handFinished.push(bare);
+      outcomeResult = { ok: true, recorded: true };
+      return { ...gateState, hand_finished: handFinished };
+    });
+    if (!locked.ok) return { ok: false, recorded: false, reason: locked.reason };
+    if (supersededProducerCallId) {
+      removeDispatchRecord(projectRoot, { sessionId, callId: supersededProducerCallId });
+    }
+    return outcomeResult;
+  } catch (error) {
+    return { ok: false, recorded: false, reason: error instanceof Error ? error.message : "recordHandFinished failed" };
+  }
+}
+
+/** @description Resolve HEAD from an explicit project root; faults and empty output are non-fatal. */
+export function resolveHeadSha(projectRoot, execFileSyncFn = execFileSync) {
+  if (typeof projectRoot !== "string" || projectRoot.length === 0) return null;
+  try {
+    const sha = String(execFileSyncFn("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }) ?? "").trim();
+    return sha || null;
+  } catch { return null; }
+}
+
+/** @description Resolve whether one SHA is an ancestor of HEAD; git faults are undetermined. */
+export function isAncestorSha(projectRoot, sha, execFileSyncFn = execFileSync) {
+  if (![projectRoot, sha].every((value) => typeof value === "string" && value.length > 0)) return null;
+  try {
+    execFileSyncFn("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd: projectRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
     });
-    return String(out)
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-  } catch {
-    try {
-      const out = execFileSync("git", ["status", "--porcelain"], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 5000,
-      });
-      return String(out)
-        .split(/\r?\n/)
-        .map((l) => l.trim().slice(3).trim())
-        .filter(Boolean);
-    } catch {
-      return [];
-    }
+    return true;
+  } catch (error) {
+    return error && typeof error === "object" && "status" in error && error.status === 1 ? false : null;
   }
 }
 
-/**
- * @description If Status line missing/BLOCKED but git shows work, promote to DONE for OC Task path.
- * @param {string | null} parsedStatus
- * @param {string[]} touched
- * @returns {string}
- */
-export function resolveOcHandOutcome(parsedStatus, touched) {
+/** @description Best-effort staged, unstaged, and untracked paths in the current Task worktree. */
+export function gitTouchedPaths(cwd) {
+  return listGitTouchedPaths(cwd).paths;
+}
+
+/** @description Preserve only the Task's explicit terminal fact; git evidence never promotes it. */
+export function resolveOcHandOutcome(parsedStatus, _touched) {
   if (parsedStatus === "DONE" || parsedStatus === "DONE_WITH_CONCERNS") return parsedStatus;
   if (parsedStatus === "NEEDS_CONTEXT") return "NEEDS_CONTEXT";
-  if (Array.isArray(touched) && touched.length > 0) return "DONE";
-  return parsedStatus || "BLOCKED";
+  return "BLOCKED";
 }
 
-/**
- * @description Persist DONE hand-record + host-stamp hand_finished + capture_verified (sealed).
- * @param {{
- *   projectRoot: string,
- *   sessionId: string,
- *   featureId: string,
- *   taskId: string,
- *   role?: string,
- *   outcome: string,
- *   touchedPaths?: string[],
- *   freezeCommitSha?: string | null,
- * }} input
- * @returns {{ ok: boolean, reason?: string, outcome?: string }}
- */
-export function hostStampOcHandCapture(input) {
-  try {
-    const {
-      projectRoot,
-      sessionId,
-      featureId,
-      taskId,
-      role,
-      outcome,
-      touchedPaths = [],
-      freezeCommitSha = null,
-    } = input;
-    if (!projectRoot || !sessionId || !featureId || !taskId) {
-      return { ok: false, reason: "missing identity" };
-    }
-    const sha = freezeCommitSha || defaultHeadSha(projectRoot) || "";
-    const finalOutcome = outcome;
-    const now = new Date().toISOString();
-    const record = {
-      featureId,
-      taskId,
-      sessionId,
-      freezeCommitSha: sha || null,
-      outcome: finalOutcome,
-      touchedPaths: Array.isArray(touchedPaths) ? touchedPaths : [],
-      scopeViolations: [],
-      frozenViolations: [],
-      agent: role,
-      startedAt: now,
-      finishedAt: now,
-      writtenBy: "obs-hand-task",
-    };
-
-    if (isDoneHandRecord(record) && sha) {
-      record.capturedVerifiedAt = now;
-    }
-
-    const written = writeHandRecord({
-      roots: { projectRoot, runtime: "opencode", sessionId, featureId },
-      taskId,
-      record,
-    });
-    if (!written.ok) return { ok: false, reason: written.reason, outcome: finalOutcome };
-
-    if (!isDoneHandRecord(record) || !sha) {
-      return { ok: true, outcome: finalOutcome, reason: "record-only" };
-    }
-
-    const gs = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
-    if (!gs.ok) return { ok: true, outcome: finalOutcome, reason: "gate-path-skip" };
-
-    const bare = fidelityPassEntry(featureId, taskId, null);
-    const capEntry = fidelityPassEntry(featureId, taskId, sha);
-
-    // This run supersedes every prior SHA for this task: prune the task's prior array
-    // entries (any SHA) before appending — otherwise an old-SHA entry survives alongside
-    // the new one for the same task.
-    const belongsToTask = (payload) => {
-      const s = String(payload ?? "");
-      return s === bare || s.startsWith(`${bare}@`);
-    };
-    const locked = withGateStateLock(gs.path, (prev) => {
-      const hand_finished = (Array.isArray(prev.hand_finished) ? prev.hand_finished : []).filter(
-        (e) => !belongsToTask(e),
-      );
-      hand_finished.push(bare);
-      const capture_verified = (Array.isArray(prev.capture_verified) ? prev.capture_verified : []).filter(
-        (e) => !belongsToTask(e),
-      );
-      capture_verified.push(capEntry);
-      return {
-        ...prev,
-        hand_finished,
-        capture_verified,
-      };
-    });
-    if (!locked.ok) return { ok: true, outcome: finalOutcome, reason: "gate-lock-skip" };
-    return { ok: true, outcome: finalOutcome };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : "hostStampOcHandCapture failed",
-    };
-  }
+/** @description Normalize one terminal Task result and persist it through exact producer authority. */
+export function recordTaskCompletion(input) {
+  const outputText = String(input?.outputText ?? "");
+  if (input?.background === true && /<task\b[^>]*\bstate=["']running["']/i.test(outputText)) return { ok: true, terminal: false, recorded: false, reason: "background task still running" };
+  const producer = readDispatchRecord(input?.projectRoot, { parentSessionId: input?.sessionId, callId: input?.producerCallId });
+  const touched = pathsChangedSinceBaseline(input?.projectRoot, producer.ok ? producer.record.worktree_baseline : null);
+  const outcome = resolveOcHandOutcome(parseHandStatusFromOutput(outputText), touched);
+  const recorded = recordHandFinished({
+    projectRoot: input?.projectRoot,
+    sessionId: input?.sessionId,
+    featureId: input?.featureId,
+    taskId: input?.taskId,
+    role: input?.role,
+    producerCallId: input?.producerCallId,
+    outcome,
+    touchedPaths: touched,
+    freezeCommitSha: resolveHeadSha(input?.projectRoot),
+  });
+  const persisted = readHandRecord(input?.projectRoot, input?.sessionId, input?.featureId, input?.taskId);
+  const capturePending =
+    recorded.ok === true &&
+    persisted?.outcome === "DONE" &&
+    persisted?.producerCallId === input?.producerCallId;
+  return { ...recorded, terminal: true, capturePending };
 }
 
-export default {
-  gitTouchedPaths,
-  hostStampOcHandCapture,
-  resolveOcHandOutcome,
-};
+export default { gitTouchedPaths, isAncestorSha, recordHandFinished, recordTaskCompletion, resolveHeadSha, resolveOcHandOutcome };

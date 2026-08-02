@@ -12,7 +12,6 @@ import {
   readDualStatus,
   validateGateStateDualFields,
 } from "./gate-state-shape.mjs";
-import { isPendingReviewState } from "../../opencode/plugin/lib/session-state.mjs";
 
 function redactedVendoredGateState(fixture) {
   return JSON.parse(fs.readFileSync(new URL(`./fixtures/oc-gate-state/${fixture}/gate-state.json`, import.meta.url), "utf8"));
@@ -24,14 +23,12 @@ test("#584 reads redacted real-shape vendored gate-state maps without treating t
   assert.deepEqual(adversaryOnly.dual_status, { adversary: "both" });
   assert.equal(validateGateStateDualFields(adversaryOnly).ok, true);
   assert.equal(readDualStatus(adversaryOnly), DUAL_STATUS.DONE);
-  assert.equal(isPendingReviewState(adversaryOnly), false);
 
   const bothPhases = redactedVendoredGateState("both-phases-both");
   assert.equal(bothPhases.session_id, "ses_fixture_both_phases");
   assert.deepEqual(bothPhases.dual_status, { plan_review: "both", adversary: "both" });
   assert.equal(validateGateStateDualFields(bothPhases).ok, true);
   assert.equal(readDualStatus(bothPhases), DUAL_STATUS.DONE);
-  assert.equal(isPendingReviewState(bothPhases), false);
 });
 
 test("current dual_status writes are limited to done and pending", () => {
@@ -55,23 +52,6 @@ test("legacy scalar and map values preserve their prior lifecycle decision", () 
   assert.equal(normalizeDualStatus({ plan_review: "both", adversary: "pending" }), "done");
   assert.equal(normalizeDualStatus({ executor: "both" }), undefined);
   assert.equal(normalizeDualStatus("unknown"), undefined);
-});
-
-test("legacy primary_only_error preserves scalar-vs-map lifecycle behavior", () => {
-  assert.equal(isPendingReviewState({ dual_status: "primary_only_error" }), true);
-  assert.equal(isPendingReviewState({ dual_status: { adversary: "primary_only_error" } }), false);
-  assert.equal(isPendingReviewState({ dual_status: { plan_review: "pending" } }), false);
-});
-
-test("orphaned legacy inflight receipts do not change the scalar lifecycle decision", () => {
-  assert.equal(isPendingReviewState({
-    dual_status: "done",
-    review_inflight: [{ canonical_identity: "plan-reviewer", family: 1 }],
-  }), false);
-  assert.equal(isPendingReviewState({
-    review_inflight: [{ canonical_identity: "plan-reviewer", family: 1 }],
-  }), false);
-  assert.equal(isPendingReviewState({ dual_status: "pending", review_inflight: [] }), true);
 });
 
 test("new patches reject legacy writer values and bare booleans", () => {

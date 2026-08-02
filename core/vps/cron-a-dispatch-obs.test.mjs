@@ -228,6 +228,7 @@ function baseOpts({
   obs,
   createForumTopic,
   closeForumTopic,
+  freeMem = () => Number.POSITIVE_INFINITY,
 }) {
   return {
     project,
@@ -244,6 +245,7 @@ function baseOpts({
     obs,
     createForumTopic,
     closeForumTopic,
+    freeMem,
   };
 }
 
@@ -495,6 +497,7 @@ test("assertion 6: run-cron-a.mjs wires the REAL token-bound createForumTopic se
     // dispatch itself becomes async.
     let dispatchPromise;
     const deps = {
+      dispatch: (issue, opts) => dispatch(issue, { ...opts, freeMem: () => Number.POSITIVE_INFINITY }),
       cronASelect: (selectOpts) => {
         dispatchPromise = selectOpts.dispatch(
           { number: 141, title: "fix billing race", body: "some body" },

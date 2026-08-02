@@ -53,6 +53,7 @@ import {
   normalizeOcVersionStamp as normalizeHarnessVersionStamp,
   readHarnessVersionStamp,
 } from "../../../../shared/lib/opencode-config-migration.mjs";
+import { sweepRetiredDispatchCleanup } from "../../../../shared/lib/active-dispatch-cleanup-migration.mjs";
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -80,7 +81,7 @@ const FRAMEWORK_OWNED = ["agents", "skills", "rules", "hooks", "docs"];
 const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 
 /** OpenCode framework-owned dirs (overwritten on every vendor). */
-const OC_FRAMEWORK_OWNED = ["agents", "command", "docs", "skills", "plugin", "tools", "hands", "rules"];
+const OC_FRAMEWORK_OWNED = ["agents", "command", "docs", "skills", "plugin", "tools", "hands", "rules", "lib"];
 const OC_FRAMEWORK_FILES = ["harness.routing.json", "AGENTS.md"];
 
 // Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
@@ -358,17 +359,11 @@ export function pinTargetRoot(targetDir) {
  * @description Rewrite monorepo `core/opencode/** → core/shared` imports to vendored
  * `.opencode/** → .opencode/shared` relative paths. Depth-aware; never produces absolute home paths.
  * @param {string} content
- * @param {string} relFromOpencodeRoot - e.g. `plugin/entry-gate.ts` or `plugin/lib/gate-state.mjs`
+ * @param {string} relFromOpencodeRoot - e.g. `plugin/entry-gate.ts` or `lib/gate-state.mjs`
  * @returns {string}
  */
 export function rewriteSharedImportsForVendor(content, relFromOpencodeRoot) {
   if (typeof content !== "string" || typeof relFromOpencodeRoot !== "string") return content;
-  // Source-checkout marker paths must target the vendored runtime after copy.
-  content = content.split("core/opencode/plugin/lib/mark-gate.mjs").join(".opencode/plugin/lib/mark-gate.mjs");
-  content = content.replace(
-    '  ".opencode/plugin/lib/mark-gate.mjs",\n  ".opencode/plugin/lib/mark-gate.mjs",',
-    '  ".opencode/plugin/lib/mark-gate.mjs",',
-  );
   const parts = relFromOpencodeRoot.replace(/\\/g, "/").split("/").filter(Boolean);
   const depth = Math.max(0, parts.length - 1);
   // monorepo: from core/opencode/<path>, shared is (depth+1) levels up then shared/
@@ -423,16 +418,13 @@ function copyOcTree(srcDir, destDir, relPrefix = "") {
 export function harnessOcPluginFiles() {
   return [
     "./.opencode/plugin/entry-gate.ts",
+    "./.opencode/plugin/lavish-command-gate.ts",
     "./.opencode/plugin/marker-authority.ts",
-    "./.opencode/plugin/ceremony-coordinator.ts",
-    "./.opencode/plugin/second-eye-coordinator.ts",
     "./.opencode/plugin/plan-gate.ts",
     "./.opencode/plugin/planner-recovery.ts",
     "./.opencode/plugin/plan-write-gate.ts",
-    "./.opencode/plugin/review-guard.ts",
     "./.opencode/plugin/reinject-state.ts",
     "./.opencode/plugin/version-check.ts",
-    "./.opencode/plugin/harvest-guard.ts",
     "./.opencode/plugin/obs-plan-write.ts",
     "./.opencode/plugin/obs-eye.ts",
     "./.opencode/plugin/obs-hand.ts",
@@ -817,8 +809,63 @@ export const OC_RETIRED_FILES = [
   "plugin/lib/dual-nudge.mjs",
   "plugin/lib/marker-seal.mjs",
   "plugin/lib/marker-security.test.mjs",
+  "plugin/lib/mark-gate.mjs",
   "skills/orchestrating-delivery/dual-runtime.mjs",
   "skills/orchestrating-delivery/dual-runtime.test.mjs",
+  "plugin/lib/gate-state.mjs",
+  "plugin/lib/entry-decide.mjs",
+  "plugin/lib/dispatch-scope.mjs",
+  "plugin/lib/hand-records.mjs",
+  "plugin/lib/planner-state.mjs",
+  "plugin/lib/obs-emit.mjs",
+  "plugin/lib/plan-hash.mjs",
+  "plugin/lib/planner-artifact.mjs",
+  "plugin/lib/planner-fallback-config.mjs",
+  "lib/planner-fallback-config.mjs",
+  "plugin/lib/regate-arm.mjs",
+  "plugin/lib/regate-arm.test.mjs",
+  "agents/planner-fallback.md",
+  "plugin/lib/roles.mjs",
+  "plugin/lib/task-dispatch-identity.mjs",
+  "plugin/lib/second-eye-authority.mjs",
+  "plugin/lib/second-eye-authority.test.mjs",
+  "plugin/second-eye-coordinator.ts",
+  "plugin/second-eye-coordinator.test.mjs",
+  "skills/orchestrating-delivery/second-eye-runtime.mjs",
+  "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
+  "plugin/lib/loop-decide.mjs",
+  "plugin/lib/plan-and-loop-decide.test.mjs",
+  "plugin/review-guard.ts",
+  "plugin/lib/review-accounting.test.mjs",
+  "plugin/lib/adversary-nudge.mjs",
+  "plugin/lib/adversary-nudge.test.mjs",
+  "plugin/lib/revise-nudge.mjs",
+  "plugin/lib/revise-nudge.test.mjs",
+  "plugin/lib/review-restart.mjs",
+  "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
+  "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
+  "shared/lib/agent-retry.mjs",
+  "shared/lib/agent-retry.test.mjs",
+  "shared/lib/agent-retry-call.mjs",
+  "shared/lib/agent-retry-call.test.mjs",
+  "plugin/ceremony-coordinator.ts",
+  "plugin/ceremony-coordinator.test.mjs",
+  "skills/orchestrating-delivery/ceremony-runtime.mjs",
+  "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
+  "plugin/lib/scope-runtime-composition.mjs",
+  "plugin/lib/bound-plan.mjs",
+  "plugin/lib/bound-plan.test.mjs",
+  "plugin/lib/obs-test-isolation.mjs",
+  "plugin/lib/obs-test-isolation.test.mjs",
+  "plugin/eyes-permission-lockdown.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
+  "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
+  "plugin/harvest-guard.ts",
+  "plugin/lib/harvest-findings.mjs",
+  "plugin/lib/agent-catalog-health.mjs",
+  "plugin/lib/ceremony-binding.mjs",
+  "plugin/lib/ceremony-transition.mjs",
 ];
 
 /**
@@ -874,6 +921,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
   pruneOcRetiredFiles(ocDir, openCodeDir);
+  sweepRetiredDispatchCleanup(targetDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
   if (existsSync(sharedDir)) {

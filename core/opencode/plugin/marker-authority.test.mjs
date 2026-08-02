@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { registerHooks } from "node:module";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { validateCeremonyBinding } from "./lib/ceremony-binding.mjs";
 
 const stub = `
   const schemaValue = { describe() { return this }, optional() { return this } };
@@ -25,8 +25,8 @@ registerHooks({
 });
 
 const { default: MarkerAuthority } = await import("./marker-authority.ts");
-const { writeHandRecord, buildTaskHandRecord } = await import("./lib/hand-records.mjs");
-const { fidelityPassEntry } = await import("./lib/mark-gate.mjs");
+const { writeHandRecord } = await import("../lib/hand-records.mjs");
+const { formatFeatureTaskEntry } = await import("../../shared/lib/absolution.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
 
 function statePath(root, sessionID = "ses-authority") {
@@ -43,31 +43,69 @@ async function markOnce(before, execute, action, extra = {}, callID = `call-${ac
   return execute(args, context(SESSION, callID));
 }
 
-function seedDoneHandRecord(root, outcome = "DONE") {
-  const record = buildTaskHandRecord({
+function ensureGitHead(root) {
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    fs.writeFileSync(path.join(root, "capture-anchor.txt"), "anchor\n");
+    assert.equal(spawnSync("git", ["add", "capture-anchor.txt"], { cwd: root }).status, 0);
+    const committed = spawnSync("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-qm", "test anchor"], { cwd: root });
+    assert.equal(committed.status, 0, committed.stderr?.toString());
+  }
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  assert.equal(head.status, 0, head.stderr);
+  return head.stdout.trim();
+}
+
+function exactDispatchPath(root, callId) {
+  return path.join(root, ".opencode", "plans", ".state", SESSION, "dispatch-records", `${crypto.createHash("sha256").update(callId).digest("hex")}.json`);
+}
+
+function seedProducerDispatch(root, callId = "task-call-one") {
+  const file = exactDispatchPath(root, callId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    parent_session_id: SESSION,
+    dispatch_call_id: callId,
+    child_session_id: "child-task-one",
+    feature_id: FEATURE,
+    task_id: TASK,
+    role: "executor-medium",
+    scope_paths: ["src"],
+    allowed_writes: [],
+    snapshot_hash: "a".repeat(64),
+    claimed_at: "2026-08-01T00:00:00.000Z",
+  }));
+  return file;
+}
+
+function seedDoneHandRecord(root, outcome = "DONE", overrides = {}, dispatchCallId = "task-call-one") {
+  const sha = ensureGitHead(root);
+  const dispatchPath = seedProducerDispatch(root, dispatchCallId);
+  const record = {
     featureId: FEATURE,
     taskId: TASK,
     sessionId: SESSION,
+    producerCallId: "task-call-one",
+    freezeCommitSha: sha,
     outcome,
     agent: "executor-medium",
-  });
+    writtenBy: "host-hand-finished",
+    ...overrides,
+  };
   const written = writeHandRecord({
     roots: { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
     taskId: TASK,
     record,
   });
   assert.equal(written.ok, true, written.reason);
-  return written.path;
+  return { path: written.path, sha, dispatchPath };
 }
 
 function seed(root) {
   const file = statePath(root);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "ceremony_generation": "generation-authority",\n  "classified": true\n}\n';
+  const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature-authority",\n  "classified": true\n}\n';
   fs.writeFileSync(file, bytes);
-  const spec = path.join(root, ".opencode", "plans", "ses-authority-feature-authority", "spec.md");
-  fs.mkdirSync(path.dirname(spec), { recursive: true });
-  fs.writeFileSync(spec, "# Feature\n\n#uj-1\n\n#ac-1.1\n");
   return { file, bytes };
 }
 
@@ -83,7 +121,19 @@ function context(sessionID = "ses-authority", callID = "call-authority") {
   return { sessionID, callID, messageID: "msg-authority", agent: "build", directory: "/ignored", worktree: "/ignored" };
 }
 
-test("real before-hook object identity authorizes one bound mutation", async () => {
+test("marker authority has no ceremony transition, adversary capture, or Task after-hook", async () => {
+  const source = fs.readFileSync(new URL("marker-authority.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /ceremony-transition|transitionCeremony|captureSpecAdversaryResult/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-hooks-"));
+  try {
+    const hooks = await MarkerAuthority({ directory: root, worktree: root });
+    assert.equal(hooks["tool.execute.after"], undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("real before-hook object identity writes only the plain boolean workflow fact", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-ok-"));
   try {
     const { file } = seed(root);
@@ -93,50 +143,41 @@ test("real before-hook object identity authorizes one bound mutation", async () 
     const result = await execute(args, context());
     assert.equal(result.metadata.ok, true, result.output);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.deepEqual(state.brainstormed_binding, {
-      session_id: "ses-authority",
-      feature_id: "feature-authority",
-      operation: "brainstormed",
-    });
+    assert.equal(state.brainstormed, true);
+    assert.equal(state.brainstormed_binding, undefined);
+    assert.equal(state.ceremony_generation, undefined);
+    assert.equal(state.ceremony_evidence, undefined);
     assert.equal(state.marker_seals, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("runtime adversary result plus accepted official transition persists before planner", async () => {
+test("adversary_fired requires brainstormed first and persists only plain booleans", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-adversary-"));
   try {
     const { file } = seed(root);
-    const hooks = await MarkerAuthority({ directory: root, worktree: root });
-    const brainstormArgs = { action: "brainstormed" };
-    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "brainstorm-call" }, { args: brainstormArgs });
-    assert.equal((await hooks.tool.mark.execute(brainstormArgs, context("ses-authority", "brainstorm-call"))).metadata.ok, true);
+    const { before, execute } = await harness(root);
+    const tooEarly = await markOnce(before, execute, "adversary_fired", {}, "early-adversary-call");
+    assert.equal(tooEarly.metadata.ok, false);
+    assert.match(String(tooEarly.metadata.reason ?? tooEarly.output), /brainstormed/i);
+    assert.equal(fs.readFileSync(file, "utf8").includes("adversary_fired"), false);
 
-    await hooks["tool.execute.after"](
-      { tool: "task", sessionID: "ses-authority", callID: "adversary-call" },
-      { args: { subagent_type: "adversary-family-1" }, output: '{"issues":[]}' },
-    );
-    const adversaryArgs = { action: "adversary_fired" };
-    await hooks["tool.execute.before"]({ tool: "mark", sessionID: "ses-authority", callID: "accept-call" }, { args: adversaryArgs });
-    const accepted = await hooks.tool.mark.execute(adversaryArgs, context("ses-authority", "accept-call"));
-    assert.equal(accepted.metadata.ok, true, accepted.output);
+    assert.equal((await markOnce(before, execute, "brainstormed", {}, "brainstorm-call")).metadata.ok, true);
+    assert.equal((await markOnce(before, execute, "adversary_fired", {}, "adversary-call")).metadata.ok, true);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(state.brainstormed, true);
     assert.equal(state.adversary_fired, true);
-    assert.equal(state.ceremony_evidence.adversary_fired.call_id, "adversary-call");
+    assert.equal(state.brainstormed_binding, undefined);
+    assert.equal(state.adversary_fired_binding, undefined);
+    assert.equal(state.ceremony_evidence, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-// #423 / #484: a marker minted by one OS process (e.g. before an OpenCode restart) must
-// remain valid when read back in a brand-new process — the old per-process HMAC seal made
-// this permanently unverifiable and bricked delivery for any resumed session. This test
-// proves the opposite of the old behavior: a marker authorized and written entirely inside
-// a child process is structurally valid (ceremony binding intact) when re-read here, in a
-// different process, with no re-signing step required.
-test("a marker minted entirely in another process is honored here without re-signing (#423, #484)", async () => {
+// A native mark invocation in another process still persists only a durable plain fact.
+test("a marker minted entirely in another process persists as a plain boolean (#423, #484)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-process-"));
   try {
     const { file } = seed(root);
@@ -170,11 +211,8 @@ test("a marker minted entirely in another process is honored here without re-sig
     assert.equal(child.status, 0, child.stderr || child.stdout);
     const childState = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(childState.brainstormed, true);
-    assert.equal(validateCeremonyBinding(childState, {
-      sessionId: "ses-authority",
-      featureId: "feature-authority",
-      required: ["brainstormed"],
-    }).ok, true, "marker minted in a different process must still be a valid binding here");
+    assert.equal(childState.brainstormed_binding, undefined);
+    assert.equal(childState.ceremony_evidence, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -201,6 +239,82 @@ test("direct execute, structural clone, and mismatched runtime IDs fail byte-neu
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("unsafe task_id values are rejected before formatting and remain byte-neutral", async () => {
+  for (const [label, taskId] of [
+    ["at", "@task"],
+    ["slash", "task/child"],
+    ["whitespace", "task one"],
+    ["non-string", 42],
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `marker-authority-task-id-${label}-`));
+    try {
+      const { file, bytes } = seed(root);
+      const { before, execute } = await harness(root);
+      const result = await markOnce(
+        before,
+        execute,
+        "regate-pending",
+        { task_id: taskId },
+        `call-unsafe-task-${label}`,
+      );
+      assert.equal(result.metadata.ok, false, label);
+      assert.match(String(result.metadata.reason ?? result.output), /safe task_id/i, label);
+      assert.equal(fs.readFileSync(file, "utf8"), bytes, label);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("unsafe feature_id in gate-state is denied before authorization and remains byte-neutral", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-feature-id-"));
+  try {
+    const file = statePath(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = '{\n  "session_id": "ses-authority",\n  "feature_id": "feature/escape",\n  "classified": true\n}\n';
+    fs.writeFileSync(file, bytes, "utf8");
+    const { before, execute } = await harness(root);
+    const args = { action: "brainstormed" };
+
+    await assert.rejects(
+      () => before({ tool: "mark", sessionID: SESSION, callID: "call-unsafe-feature" }, { args }),
+      /safe feature_id/i,
+    );
+    const denied = await execute(args, context(SESSION, "call-unsafe-feature"));
+    assert.equal(denied.metadata.ok, false);
+    assert.equal(fs.readFileSync(file, "utf8"), bytes);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("feature change after before-hook authorization denies and preserves the replacement state", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-feature-race-"));
+  try {
+    const { file } = seed(root);
+    const { before, execute } = await harness(root);
+    const args = { action: "brainstormed" };
+    await before({ tool: "mark", sessionID: SESSION, callID: "call-authority" }, { args });
+
+    const replacement = {
+      session_id: SESSION,
+      feature_id: "feature-reclassified",
+      classified: true,
+      unrelated_fact: "preserve-me",
+    };
+    const replacementBytes = `${JSON.stringify(replacement, null, 2)}\n`;
+    fs.writeFileSync(file, replacementBytes, "utf8");
+
+    const result = await execute(args, context());
+    assert.equal(result.metadata.ok, false);
+    assert.match(String(result.metadata.reason ?? result.output), /gate-state identity changed before marker mutation/);
+    assert.equal(fs.readFileSync(file, "utf8"), replacementBytes);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), replacement);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -254,8 +368,9 @@ test("concurrent duplicate before and execute attempts have one winner with no s
     assert.equal(fs.readFileSync(file, "utf8"), bytes);
     const [a, b] = await Promise.all([execute(args, context()), execute(args, context())]);
     assert.equal([a.metadata.ok, b.metadata.ok].filter(Boolean).length, 1);
-    const after = fs.readFileSync(file, "utf8");
-    assert.match(after, /brainstormed_binding/);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(state.brainstormed, true);
+    assert.equal(state.brainstormed_binding, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -265,9 +380,8 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-ok-"));
   try {
     const { file } = seed(root);
-    const recordPath = seedDoneHandRecord(root, "DONE");
+    const { path: recordPath, sha, dispatchPath } = seedDoneHandRecord(root, "DONE");
     const { before, execute } = await harness(root);
-    const sha = "abc123deadbeef";
     const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
     assert.equal(finished.metadata.ok, true, finished.output);
     const captured = await markOnce(
@@ -279,12 +393,99 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
     );
     assert.equal(captured.metadata.ok, true, captured.output);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const expected = fidelityPassEntry(FEATURE, TASK, sha);
+    const expected = formatFeatureTaskEntry(FEATURE, TASK, sha);
     assert.ok(Array.isArray(state.capture_verified), "capture_verified must be array");
     assert.ok(state.capture_verified.includes(expected), `expected ${expected} in ${JSON.stringify(state.capture_verified)}`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     assert.equal(typeof record.capturedVerifiedAt, "string");
     assert.ok(record.capturedVerifiedAt.length > 0);
+    assert.equal(fs.existsSync(dispatchPath), false, "capture consumes its exact producer record");
+    const stableState = fs.readFileSync(file);
+    const stableRecord = fs.readFileSync(recordPath);
+    const replay = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-capture-replay");
+    assert.equal(replay.metadata.ok, true, replay.output);
+    assert.deepEqual(fs.readFileSync(file), stableState);
+    assert.deepEqual(fs.readFileSync(recordPath), stableRecord);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified rejects a DONE record with scope or frozen violations", async () => {
+  for (const violations of [
+    { scopeViolations: ["outside/evil.ts"], frozenViolations: [] },
+    { scopeViolations: [], frozenViolations: ["test/locked.test.ts"] },
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-violation-"));
+    try {
+      const { file } = seed(root);
+      const { path: recordPath, sha } = seedDoneHandRecord(root, "DONE", violations);
+      const { before, execute } = await harness(root);
+      assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished")).metadata.ok, true);
+      const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-capture-violation");
+      assert.equal(captured.metadata.ok, false);
+      assert.match(String(captured.metadata.reason ?? captured.output), /scope|frozen|violation/i);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified ?? [], []);
+      assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).capturedVerifiedAt, undefined);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("hand-finished and capture-verified reject a path-correct record with foreign internal identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-foreign-"));
+  try {
+    const { file } = seed(root);
+    const { path: recordPath, sha } = seedDoneHandRecord(root, "DONE", {
+      featureId: "foreign-feature",
+      taskId: "foreign-task",
+      sessionId: "foreign-session",
+      producerCallId: "foreign-call-nonempty",
+    });
+    const beforeRecord = fs.readFileSync(recordPath, "utf8");
+    const { before, execute } = await harness(root);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-foreign-finished");
+    assert.equal(finished.metadata.ok, false);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha }, "call-foreign-capture");
+    assert.equal(captured.metadata.ok, false);
+    assert.equal(fs.readFileSync(recordPath, "utf8"), beforeRecord);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(state.hand_finished ?? [], []);
+    assert.deepEqual(state.capture_verified ?? [], []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified is parent-only even with a valid record and hand_finished", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-child-"));
+  try {
+    seed(root);
+    const { sha } = seedDoneHandRecord(root);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-parent-finished")).metadata.ok, true);
+    const args = { action: "capture-verified", task_id: TASK, sha };
+    await before({ tool: "mark", sessionID: SESSION, callID: "call-child-capture" }, { args });
+    const captured = await execute(args, { ...context(SESSION, "call-child-capture"), agent: "executor-low" });
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? captured.output), /build|parent/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified rejects a SHA that does not match the real DONE record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-sha-"));
+  try {
+    const { file } = seed(root);
+    seedDoneHandRecord(root);
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-sha-finished")).metadata.ok, true);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha: "abc123deadbeef" }, "call-sha-capture");
+    assert.equal(captured.metadata.ok, false);
+    assert.match(String(captured.metadata.reason ?? captured.output), /SHA mismatch/i);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified ?? [], []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -308,7 +509,7 @@ test("hand-finished without hand-record → ok:false (blocks capture path)", asy
     assert.equal(captured.metadata.ok, false);
     assert.match(String(captured.metadata.reason ?? ""), /hand_finished does not contain|hand-record missing/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const expected = fidelityPassEntry(FEATURE, TASK, "abc123deadbeef");
+    const expected = formatFeatureTaskEntry(FEATURE, TASK, "abc123deadbeef");
     assert.equal(Array.isArray(state.capture_verified) ? state.capture_verified.includes(expected) : false, false);
     const resolved = handRecordPath(
       { projectRoot: root, runtime: "opencode", sessionId: SESSION, featureId: FEATURE },
@@ -382,13 +583,13 @@ test("hand-finished rejects forged writtenBy (not host adapter)", async () => {
   try {
     const { file } = seed(root);
     const forged = {
-      ...buildTaskHandRecord({
-        featureId: FEATURE,
-        taskId: TASK,
-        sessionId: SESSION,
-        outcome: "DONE",
-        agent: "executor-medium",
-      }),
+      featureId: FEATURE,
+      taskId: TASK,
+      sessionId: SESSION,
+      producerCallId: "task-call-one",
+      freezeCommitSha: "abc123deadbeef",
+      outcome: "DONE",
+      agent: "executor-medium",
       writtenBy: "model-bash",
     };
     const written = writeHandRecord({

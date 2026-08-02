@@ -24,10 +24,10 @@ import {
   subtractUnchanged,
 } from "../../shared/lib/capture-oracle.mjs";
 import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
-import { mergeGateState } from "../plugin/lib/gate-state.mjs";
-import { hasFidelityPass } from "../plugin/lib/entry-decide.mjs";
-import { claimActiveDispatch, finishActiveDispatch, reconcileCleanupPending } from "../plugin/lib/dispatch-scope.mjs";
-import { writeHandRecord } from "../plugin/lib/hand-records.mjs";
+import { mergeGateState } from "../lib/gate-state.mjs";
+import { hasFidelityPass } from "../lib/entry-decide.mjs";
+import { claimDispatchForRuntime, removeDispatchRecord } from "../lib/dispatch-scope.mjs";
+import { writeHandRecord } from "../lib/hand-records.mjs";
 
 export { writeHandRecord };
 
@@ -686,12 +686,14 @@ export function buildHandRunRecord({
   timestamps = {},
   hand_quarantine = false,
   worktree = {},
+  producerCallId,
 }) {
   const now = timestamps.finishedAt ?? new Date().toISOString();
   return {
     featureId,
     taskId,
     sessionId,
+    ...(typeof producerCallId === "string" && producerCallId ? { producerCallId } : {}),
     freezeCommitSha,
     outcome,
     touchedPaths,
@@ -768,16 +770,17 @@ export async function runHand(descriptor, deps = {}) {
     markHandQuarantine = null,
     checkFidelityPass = null,
     now = () => new Date().toISOString(),
-    dispatchToken = () => randomUUID(),
     dispatchCallId = () => `run-hand:${randomUUID()}`,
-    finishDispatch = finishActiveDispatch,
+    finishDispatch = removeDispatchRecord,
+    dispatchEnvironment = process.env,
+    isReviewedShaAncestor = null,
   } = deps;
 
   const featureId = descriptor?.feature_id ?? descriptor?.featureId;
   const taskId = descriptor?.task_id ?? descriptor?.taskId;
   const sessionId = descriptor?.session_id ?? descriptor?.sessionId;
   const projectRoot = descriptor?.project_root ?? descriptor?.projectRoot ?? process.cwd();
-  const freezeCommitSha = descriptor?.freeze_commit_sha ?? descriptor?.freezeCommitSha;
+  let freezeCommitSha = descriptor?.freeze_commit_sha ?? descriptor?.freezeCommitSha;
   const role = descriptor?.role ?? descriptor?.agent ?? "executor-medium";
   const agent = spawnAgentName(role);
   const no_tests = descriptor?.no_tests === true;
@@ -931,26 +934,40 @@ export async function runHand(descriptor, deps = {}) {
   );
 
   const callId = dispatchCallId();
-  const claimToken = dispatchToken();
-  const reconciledCleanup = reconcileCleanupPending(projectRoot, sessionId);
-  if (!reconciledCleanup.ok) {
-    return failConfig(`cleanup_pending blocks dispatch: ${reconciledCleanup.reason}`, {
-      preUntracked: preSnap.paths,
-      preUntrackedContents: preSnap.contents,
-    });
-  }
-  const claimed = claimActiveDispatch(projectRoot, {
+  const claimed = claimDispatchForRuntime(projectRoot, {
     sessionId,
     callId,
     role,
     taskId,
-    token: claimToken,
+    featureId,
+  }, {
+    env: dispatchEnvironment,
+    isAncestorFn: isReviewedShaAncestor ?? ((sha) => {
+      try {
+        const status = spawnSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+          cwd: projectRoot,
+          stdio: "ignore",
+        }).status;
+        return status === 0 ? true : status === 1 ? false : null;
+      } catch { return null; }
+    }),
   });
   if (!claimed.ok) {
-    return failConfig(`active_dispatch claim failed: ${claimed.reason}`, {
+    return failConfig(`dispatch record claim failed: ${claimed.reason}`, {
       preUntracked: preSnap.paths,
       preUntrackedContents: preSnap.contents,
     });
+  }
+  if (typeof claimed.reviewedSha === "string" && freezeCommitSha !== claimed.reviewedSha) {
+    const suppliedFreezeCommitSha = freezeCommitSha;
+    freezeCommitSha = claimed.reviewedSha;
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
+    return failConfig(
+      finished.ok
+        ? `descriptor freeze sha conflicts with fix-mode authority: ${suppliedFreezeCommitSha}`
+        : `descriptor freeze sha conflicts with fix-mode authority and ${finished.reason}`,
+      { preUntracked: preSnap.paths, preUntrackedContents: preSnap.contents },
+    );
   }
   const dispatchScope = claimed.claim;
 
@@ -967,11 +984,10 @@ export async function runHand(descriptor, deps = {}) {
       dispatchAuthority: {
         sessionId,
         callId,
-        claimToken,
       },
     });
   } catch (err) {
-    const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
     if (!finished.ok) {
       return failConfig(`spawn failed and ${finished.reason}`, {
         preUntracked: preSnap.paths,
@@ -983,14 +999,6 @@ export async function runHand(descriptor, deps = {}) {
       preUntrackedContents: preSnap.contents,
     });
   }
-  const finished = finishDispatch(projectRoot, { sessionId, callId, token: claimToken });
-  if (!finished.ok) {
-    return failConfig(finished.reason, {
-      preUntracked: preSnap.paths,
-      preUntrackedContents: preSnap.contents,
-    });
-  }
-
   // Capture
   const gitAdapter =
     git ??
@@ -1116,6 +1124,7 @@ export async function runHand(descriptor, deps = {}) {
     timestamps: { startedAt, finishedAt: now() },
     hand_quarantine: worktree.hand_quarantine === true,
     worktree,
+    producerCallId: callId,
   });
 
   const written = writeRecord({
@@ -1128,6 +1137,16 @@ export async function runHand(descriptor, deps = {}) {
     taskId,
     record,
   });
+
+  if (outcome !== OUTCOME.DONE || !written.ok) {
+    const finished = finishDispatch(projectRoot, { sessionId, callId });
+    if (!finished.ok) {
+      return failConfig(finished.reason, {
+        preUntracked: preSnap.paths,
+        preUntrackedContents: preSnap.contents,
+      });
+    }
+  }
 
   return {
     ok: outcome === OUTCOME.DONE,
@@ -1205,8 +1224,8 @@ function defaultSpawnOpencode({ projectDir, agent, model, title, prompt, dispatc
     maxBuffer: 20 * 1024 * 1024,
     env: {
       ...process.env,
-      HARNESS_ACTIVE_DISPATCH_SESSION_ID: dispatchAuthority?.sessionId ?? "",
-      HARNESS_ACTIVE_DISPATCH_CLAIM_TOKEN: dispatchAuthority?.claimToken ?? "",
+      HARNESS_DISPATCH_PARENT_SESSION_ID: dispatchAuthority?.sessionId ?? "",
+      HARNESS_DISPATCH_CALL_ID: dispatchAuthority?.callId ?? "",
     },
   });
   return {

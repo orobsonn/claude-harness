@@ -1,14 +1,9 @@
 /**
- * @description OC entry-gate plugin — ceremony + bash delivery/forge.
+ * @description OC entry-gate plugin — plain persisted planner facts + bash delivery/forge.
  * On tool.execute.before:
  * - bash/shell: decideBashAdvisory (allow + advisory, never denies) then decideBashDelivery
  *   (gate-state from disk via lib/gate-state.mjs)
- * - task: decideEntryTask for executor/sniper. Dual/plan_verdict classification (ADR-003) is
- *   record-only as of #483 and lives entirely in plan-gate.ts, which runs earlier in the
- *   plugin chain (review-guard → planner-recovery → plan-gate → obs-hand → entry-gate) — a
- *   second call here would be dead code, never reached first. Shared utils used by this
- *   gate (isTaskTool, extractHookTaskContext, loadGateStateFromDisk) live outside
- *   dual-enforcement (#580); #583 removes the dual block from plan-gate.
+ * - task: decideEntryTask for factual delivery, re-gate, fidelity, and planner rails.
  * Deny throws [entry-gate]. Bash delivery is fail-OPEN on unreadable/missing gate-state and
  * on a missing/unsafe sessionId (Claude Code parity) — decideBashDelivery's own rails
  * (branch/zero-commits, regate, capture, real-file) still apply against the resulting {}.
@@ -22,7 +17,7 @@
  * closures; decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
  * dispatches, and the freeze-commit early trigger); gitState (a real git probe) is injected
  * only for delivery commands.
- * Load shape matches review-guard: dynamic import of pure mjs inside factory
+ * Load shape uses dynamic imports of pure mjs inside the factory.
  * (static import of mjs breaks OC plugin loader — "export is not a function").
  */
 
@@ -41,12 +36,15 @@ export type EntryGateDeps = {
     defaultBranch?: string | null
   } | null
   isAncestorFn?: (sha: string) => boolean | null
+  /** Session environment carrying host-frozen fix-mode authority (injectable in tests). */
+  dispatchEnvironment?: Record<string, string | undefined>
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
-  ceremonyPersistFn?: (statePath: string, mutate: (state: Record<string, unknown>) => Record<string, unknown> | { ok: false; reason: string }) => { ok: boolean; reason?: string }
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
   resolveActingAgentFn?: (input: unknown, output: unknown) => string | null
+  /** Official SDK client used only to bind factual child Task metadata. */
+  client?: any
 }
 
 /**
@@ -65,7 +63,7 @@ function isBashOrShellTool(toolName: unknown): boolean {
   )
 }
 
-/** @description Native classify tool (ceremony stamp) — top-level build only. */
+/** @description Native classify tool — top-level build only. */
 function isClassifyTool(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false
   const n = toolName.toLowerCase()
@@ -81,16 +79,6 @@ function extractBashCommand(toolArgs: unknown): unknown {
   }
   const a = toolArgs as Record<string, unknown>
   return a.command ?? a.cmd
-}
-
-/** @description Detect shell forms that can replace or mutate execution-plan.json. */
-function mutatesExecutionPlan(command: unknown): boolean {
-  if (typeof command !== "string" || !/execution-plan\.json/i.test(command)) return false
-  return (
-    /(?:>|>>)\s*["']?[^\s"']*execution-plan\.json/i.test(command) ||
-    /\b(?:cp|mv|rsync|tee|rm|truncate)\b[^\n]*execution-plan\.json/i.test(command) ||
-    /\bsed\b[^\n]*\s-i(?:\s|$)[^\n]*execution-plan\.json/i.test(command)
-  )
 }
 
 /**
@@ -152,9 +140,10 @@ function defaultGitState(
 /**
  * @description git merge-base --is-ancestor sha HEAD → true / false / null.
  */
-function defaultIsAncestor(sha: string): boolean | null {
+function defaultIsAncestor(sha: string, cwd = process.cwd()): boolean | null {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd,
       stdio: ["ignore", "ignore", "ignore"],
     })
     return true
@@ -172,20 +161,17 @@ function defaultIsAncestor(sha: string): boolean | null {
  * @description Builds entry-gate hooks (async load of pure decide mjs).
  * Optional deps override git/list/ancestor seams for tests.
  */
-export async function createEntryGateHooks(
+async function createEntryGateHooks(
   projectRoot: string,
   deps: EntryGateDeps = {},
-): Promise<Pick<Hooks, "tool.execute.before">> {
+): Promise<Pick<Hooks, "tool.execute.before" | "tool.execute.after" | "event">> {
   const root =
     typeof projectRoot === "string" && projectRoot.length > 0
       ? projectRoot
       : process.cwd()
-  const { isTaskTool, parseTaskDispatchIdentity } = await import("./lib/task-dispatch-identity.mjs")
+  const { isTaskTool, parseTaskDispatchIdentity } = await import("../lib/task-dispatch-identity.mjs")
   const { extractHookTaskContext, resolveHookIdentity } = await import("./lib/hook-identity.mjs")
-  const { validateCeremonyBinding } = await import("./lib/ceremony-binding.mjs")
-  const { recoverCeremony } = await import("./lib/ceremony-transition.mjs")
-  const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { loadGateStateFromDisk, withGateStateLock } = await import("./lib/gate-state.mjs")
+  const { loadGateStateFromDisk } = await import("../lib/gate-state.mjs")
   const {
     decideBashAdvisory,
     applyAdvisory,
@@ -196,14 +182,18 @@ export async function createEntryGateHooks(
   const {
     decideEntryTask,
     throwIfDenied: throwIfEntryDenied,
-  } = await import("./lib/entry-decide.mjs")
-  const { isDeliveryRole, isPlannerRole } = await import("./lib/roles.mjs")
+  } = await import("../lib/entry-decide.mjs")
+  const { isDeliveryRole } = await import("../lib/roles.mjs")
+  const { isExecutorRole, isSniperRole, isTestAuthorRole } = await import("../lib/roles.mjs")
+  const { claimDispatchForRuntime, bindChildSession, removeDispatchRecord } = await import("../lib/dispatch-scope.mjs")
+  const { recordTaskCompletion } = await import("./lib/host-hand-capture.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
-  const { listHandRecordsForFeature } = await import("./lib/hand-records.mjs")
+  const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
   const gitStateFn =
     deps.gitStateFn ?? (() => defaultGitState(computeGitState))
-  const isAncestorFn = deps.isAncestorFn ?? defaultIsAncestor
+  const isAncestorFn = deps.isAncestorFn ?? ((sha: string) => defaultIsAncestor(sha, root))
+  const dispatchEnvironment = deps.dispatchEnvironment ?? process.env
   const listHandRecordsForFeatureFn =
     deps.listHandRecordsForFeatureFn ??
     ((featureId: string) => listHandRecordsForFeature(root, featureId))
@@ -219,6 +209,9 @@ export async function createEntryGateHooks(
         null
       return typeof a === "string" && a.trim() ? a.trim() : null
     })
+
+  const writingHand = (role: unknown) => isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role)
+  const client = deps.client
 
   return {
     "tool.execute.before": async (input: any, output: any) => {
@@ -238,7 +231,7 @@ export async function createEntryGateHooks(
       const sessionId = identity.sessionIdSource === "runtime-envelope" ? identity.sessionId : null
       const subagentType = extractHookTaskContext(input, output).subagentType
 
-      // classify: top-level build only — hands/eyes/child sessions never start ceremony
+      // classify: top-level build only — hands/eyes/child sessions never classify
       if (isClassifyTool(toolName)) {
         const { decideClassifyAuthority } = await import(
           "../../shared/lib/classify-authority.mjs"
@@ -276,7 +269,7 @@ export async function createEntryGateHooks(
         // which is merged AFTER the global ruleset and therefore shadowed every deny in the
         // denylist for that agent. Part 1 of #516 removed those redundant per-agent overrides;
         // this check survives even if a future agent is authored with `bash: allow` again, before
-        // the anti-drift test (eyes-permission-lockdown.test.mjs) catches it in CI.
+        // the agents permission-lockdown test catches it in CI.
         // Deliberately scoped to fleet dispatch only, keyed SOLELY on HARNESS_NOTIFY_PROJECT — the
         // one signal `core/vps/cron-a-dispatch.mjs` sets UNCONDITIONALLY for every VPS dispatch
         // (never guarded by an `if`). HARNESS_OC_DATA_HOME was deliberately dropped from this check
@@ -333,20 +326,6 @@ export async function createEntryGateHooks(
         // unreadable gate-state is not itself grounds to block delivery — decideBashDelivery's
         // own rails (branch/commits, regate, capture, real-file) still apply against {}.
         const gateState = loaded.ok ? loaded.state : {}
-        // Marker-seal validation is not applied anywhere on the Task or bash branches (#484):
-        // the seal secret was per-process-instance (marker-seal.mjs), so validating it bricked
-        // every marker sealed before an OpenCode restart, permanently (incident #423). Claude
-        // Code has no marker-seal concept at all (grep marker-seal core/claude-code = 0).
-        if (
-          gateState != null &&
-          typeof gateState === "object" &&
-          !Array.isArray(gateState) &&
-          (gateState as Record<string, unknown>).planner_status === "usable" &&
-          mutatesExecutionPlan(command)
-        ) {
-          throw new Error(`${PREFIX} Blocked: bound execution-plan.json is immutable until a new planner claim.`)
-        }
-
         /** git branch/commit probe is delivery-only (a real git shellout, fail-open on throw);
          * isAncestorFn and listHandRecordsForFeatureFn are cheap lazy closures always safe to
          * pass — decideBashDelivery only invokes them for delivery commands, spawn-hand.mjs
@@ -387,7 +366,7 @@ export async function createEntryGateHooks(
       // dispatch itself is unsafe, and the real cost ceiling lives in the fleet engine
       // (cron-a-exit.mjs/cron-review.mjs), outside the session. A missing/unsafe SESSION
       // IDENTITY ("sessionId required…", "unsafe sessionId") is a different, foundational
-      // problem — we cannot know whose ceremony to even check — and stays fail-closed.
+      // problem — we cannot know whose state to check — and stays fail-closed.
       const gateStateUnreadable =
         !loaded.ok && typeof loaded.reason === "string" && loaded.reason.startsWith("gate-state")
       if (!loaded.ok && isDeliveryRole(subagentType)) {
@@ -397,29 +376,7 @@ export async function createEntryGateHooks(
           throw new Error(`${PREFIX} ${loaded.reason}`)
         }
       }
-      let gateState = loaded.ok ? loaded.state : {}
-
-      if (loaded.ok && isPlannerRole(subagentType) && sid) {
-        const stateFile = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId: sid })
-        if (!stateFile.ok) throw new Error(`${PREFIX} ${stateFile.reason}`)
-        const persist = deps.ceremonyPersistFn ?? ((file, mutate) => withGateStateLock(file, mutate))
-        // One atomic recovery pass (no cross-call retry loop): recoverCeremony already advances
-        // every provable phase in one in-memory pass, so a single lock round-trip persists whatever
-        // recovered before the first missing/invalid proof, then reports that proof — instead of the
-        // old per-phase while(true) that re-acquired the lock once per phase and left the planner's
-        // own gate CEREMONY_PROOF_REQUIRED denial unreachable in decideEntryTask.
-        let recoveryError: Record<string, unknown> | null = null
-        const persisted = persist(stateFile.path, (previous) => {
-          const recovery = recoverCeremony(root, previous)
-          if (!recovery.ok) recoveryError = recovery.error
-          return recovery.changed ? recovery.state : previous
-        })
-        if (!persisted.ok) {
-          throw new Error(`${PREFIX} ${JSON.stringify({ code: "CEREMONY_PERSIST_FAILED", missing_proof: null, next_transition: null, reason: persisted.reason ?? "gate-state persistence failed" })}`)
-        }
-        if (recoveryError) throw new Error(`${PREFIX} ${JSON.stringify(recoveryError)}`)
-        gateState = persisted.state ?? gateState
-      }
+      const gateState = loaded.ok ? loaded.state : {}
       const optionalIds = extractFeatureTaskIds(toolArgs)
       const featureId = identity.featureIdSource === "runtime-envelope"
         ? identity.featureId
@@ -429,23 +386,11 @@ export async function createEntryGateHooks(
       // (possibly stale) feature_id. `featureId` above always collapses to gateState.feature_id
       // once one exists, which would make decideEntryTask's planner featureMismatch check a
       // tautology (always comparing gateState.feature_id to itself); this stays independent so a
-      // genuine mismatch — a planner Task declaring a DIFFERENT feature than the one whose
-      // ceremony gate-state already carries — is actually reachable.
+      // genuine mismatch — a planner Task declaring a DIFFERENT feature than gate-state —
+      // is actually reachable.
       const dispatchFeatureId = identity.featureIdSource === "runtime-envelope"
         ? identity.featureId
         : optionalIds.featureId
-      const binding = validateCeremonyBinding(gateState, {
-        sessionId: sid,
-        featureId,
-        required: isDeliveryRole(subagentType) ? ["brainstormed", "adversary_fired"] : [],
-      })
-      if (!binding.ok) throw new Error(`${PREFIX} ${binding.reason}`)
-
-      // review_cap_reached / primary_failure_cap_reached no longer freeze writing hands (#482):
-      // decideReviewCapBeforeWriting is removed. The review reservation budget itself (reserved
-      // in loop-decide.mjs) still requires a verified restart before another review round — that
-      // is a separate, still-enforced concern — but executor/sniper/test-author dispatch proceeds.
-
       throwIfEntryDenied(
         decideEntryTask({
           subagentType,
@@ -453,8 +398,92 @@ export async function createEntryGateHooks(
           featureId,
           dispatchFeatureId,
           taskId,
+          isAncestorFn,
         }),
       )
+      if (writingHand(subagentType)) {
+        const callId = typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : ""
+        if (!sid || !callId || !taskId) {
+          if (dispatchEnvironment.HARNESS_FIX_MODE === "1") throw new Error(`${PREFIX} exact dispatch identity required in fix mode`)
+          return
+        }
+        const claimed = claimDispatchForRuntime(root, {
+          sessionId: sid,
+          callId,
+          role: subagentType,
+          taskId,
+          featureId,
+        }, { env: dispatchEnvironment, isAncestorFn })
+        if (!claimed.ok) throw new Error(`${PREFIX} exact dispatch record rejected: ${claimed.reason}`)
+      }
+    },
+    "tool.execute.after": async (input: any, output: any) => {
+      let sessionId = ""
+      let callId = ""
+      let cleanupExactRecord = false
+      try {
+        const { toolName, toolArgs, subagentType } = extractHookTaskContext(input, output)
+        if (!isTaskTool(toolName) || !writingHand(subagentType)) return
+        sessionId = typeof input?.sessionID === "string" ? input.sessionID : ""
+        callId = typeof input?.callID === "string" ? input.callID : ""
+        const prompt = toolArgs && typeof toolArgs === "object" && !Array.isArray(toolArgs) ? (toolArgs as Record<string, unknown>).prompt : undefined
+        const promptMarker = parseTaskDispatchIdentity(prompt)
+        const identity = resolveHookIdentity({ input, toolArgs, promptTaskId: promptMarker.ok ? promptMarker.taskId : "" })
+        if (!identity.ok || !sessionId || !callId) return
+        const loaded = loadGateStateFromDisk(root, { sessionId })
+        const optionalIds = extractFeatureTaskIds(toolArgs)
+        const featureId = identity.featureIdSource === "runtime-envelope"
+          ? identity.featureId
+          : loaded.ok && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : optionalIds.featureId
+        const taskId = identity.taskId || optionalIds.taskId
+        if (featureId && taskId) {
+          const completion = recordTaskCompletion({
+          projectRoot: root,
+          sessionId,
+          featureId,
+          taskId,
+          role: subagentType,
+          producerCallId: callId,
+          outputText: String(output?.output ?? output?.content ?? output?.result ?? ""),
+          background: output?.metadata?.background === true,
+          })
+          cleanupExactRecord = completion.ok === true && completion.terminal === true && completion.capturePending !== true
+        }
+      } catch { /* terminal completion observation is best-effort */ }
+      finally {
+        if (cleanupExactRecord && sessionId && callId) removeDispatchRecord(root, { sessionId, callId })
+      }
+    },
+    event: async ({ event }: any) => {
+      try {
+        if (event?.type === "message.part.updated") {
+          const part = event?.properties?.part ?? event?.part
+          if (part?.type === "tool" && isTaskTool(part?.tool) && part?.state?.status === "error" && typeof part?.sessionID === "string" && typeof part?.callID === "string") {
+            removeDispatchRecord(root, { sessionId: part.sessionID, callId: part.callID })
+            return
+          }
+        }
+        if (event?.type !== "message.updated" || typeof client?.session?.get !== "function" || typeof client?.session?.messages !== "function") return
+        const info = event?.properties?.info
+        const childSessionId = typeof info?.sessionID === "string" ? info.sessionID : ""
+        if (!childSessionId || !writingHand(info?.agent)) return
+        const sessionResult = await client.session.get({ path: { id: childSessionId }, query: { directory: root } })
+        const session = sessionResult && typeof sessionResult === "object" && "data" in sessionResult ? (sessionResult as any).data : sessionResult
+        if (session?.id !== childSessionId) return
+        const parentSessionId = typeof session?.parentID === "string" ? session.parentID : ""
+        if (!parentSessionId) return
+        const messagesResult = await client.session.messages({ path: { id: parentSessionId }, query: { directory: root } })
+        const messages = messagesResult && typeof messagesResult === "object" && "data" in messagesResult ? (messagesResult as any).data : messagesResult
+        const matches: Array<{ callId: string, role: string }> = []
+        for (const bundle of Array.isArray(messages) ? messages : []) {
+          for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
+            const role = part?.state?.input?.subagent_type
+            if (bundle?.info?.role === "assistant" && bundle?.info?.sessionID === parentSessionId && part?.type === "tool" && isTaskTool(part?.tool) && part?.sessionID === parentSessionId && part?.messageID === bundle?.info?.id && part?.state?.status === "running" && part?.state?.metadata?.sessionId === childSessionId && typeof part?.callID === "string" && writingHand(role)) matches.push({ callId: part.callID, role })
+          }
+        }
+        if (matches.length !== 1) return
+        bindChildSession(root, { parentSessionId, childSessionId, role: matches[0].role, callId: matches[0].callId })
+      } catch { /* SDK faults leave scope unavailable; plan-write opens diagnostically */ }
     },
   }
 }
@@ -501,7 +530,8 @@ export const EntryGate: Plugin = async ({ directory, worktree, client }: any) =>
       return null
     }
   }
-  return createEntryGateHooks(root, { getSessionParentIdFn })
+  return createEntryGateHooks(root, { getSessionParentIdFn, client })
 }
+Object.defineProperty(EntryGate, "testApi", { value: Object.freeze({ createEntryGateHooks }) })
 
 export default EntryGate

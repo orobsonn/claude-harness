@@ -11,6 +11,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultRouting = JSON.parse(
   readFileSync(join(__dirname, "../../opencode/harness.routing.json"), "utf8"),
 );
+const routingSchema = JSON.parse(
+  readFileSync(join(__dirname, "../schemas/harness-routing.schema.json"), "utf8"),
+);
 
 describe("routing-validate", () => {
   it("t1-ok: default operator JSON validates", () => {
@@ -18,16 +21,52 @@ describe("routing-validate", () => {
     assert.equal(res.ok, true);
   });
 
-  it("t1-planner-fallback: optional valid route passes and malformed route fails", () => {
+  it("t1-planner-fallback: retired v2 planner fallback rejects before routing can be used", () => {
     const configured = structuredClone(defaultRouting);
     configured.roles.planner.fallback = { model: "ollama-cloud/kimi-k2.7-code" };
-    assert.equal(validateRouting(configured).ok, true);
+    const configuredResult = validateRouting(configured);
+    assert.equal(configuredResult.ok, false);
+    assert.match(configuredResult.reason, /planner fallback.*retired|retired.*planner fallback/i);
 
     const malformed = structuredClone(defaultRouting);
     malformed.roles.planner.fallback = {};
     const result = validateRouting(malformed);
     assert.equal(result.ok, false);
-    assert.match(result.reason, /invalid fallback model route on planner/);
+    assert.match(result.reason, /planner fallback.*retired|retired.*planner fallback/i);
+  });
+
+  it("t1-planner-fallback: own fallback property rejects even when its value is undefined", () => {
+    const configured = structuredClone(defaultRouting);
+    configured.roles.planner.fallback = undefined;
+    const result = validateRouting(configured);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /planner fallback.*retired|retired.*planner fallback/i);
+  });
+
+  it("t1-planner-fallback: v2 top-level planner-fallback remains an unknown role", () => {
+    const cfg = structuredClone(defaultRouting);
+    cfg.roles["planner-fallback"] = { model: "ollama-cloud/kimi-k2.7-code" };
+    assert.deepEqual(validateRouting(cfg), { ok: false, reason: "unknown role planner-fallback" });
+  });
+
+  it("t1-planner-fallback: v1 nested fallback migrates away while top-level role remains invalid", () => {
+    const nested = structuredClone(defaultRouting);
+    nested.version = 1;
+    nested.roles.planner.fallback = { model: "ollama-cloud/kimi-k2.7-code" };
+    const adapted = adaptRoutingV1(nested);
+    assert.deepEqual(adapted.roles.planner, { model: "openai/gpt-5.6-sol" });
+    assert.equal(validateRouting(adapted).ok, true);
+
+    const topLevel = structuredClone(defaultRouting);
+    topLevel.version = 1;
+    topLevel.roles["planner-fallback"] = { model: "ollama-cloud/kimi-k2.7-code" };
+    const invalid = adaptRoutingV1(topLevel);
+    assert.equal(validateRouting(invalid).ok, false);
+    assert.match(validateRouting(invalid).reason, /unknown role planner-fallback/);
+  });
+
+  it("t1-planner-fallback: published schema explicitly forbids a planner fallback extension", () => {
+    assert.deepEqual(routingSchema.definitions.rolePlanner.allOf[1].not, { required: ["fallback"] });
   });
 
   it("t1-single-evaluator: default routing is flat { model } without families/constraints", () => {
