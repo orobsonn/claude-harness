@@ -429,6 +429,7 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/obs-eye.ts",
     "./.opencode/plugin/obs-hand.ts",
     "./.opencode/plugin/agent-idle-nudge.ts",
+    "./.opencode/plugin/autonomy-controller.ts",
   ];
 }
 

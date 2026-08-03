@@ -37,6 +37,7 @@ const CANONICAL_STUBS = [
   "obs-eye.ts",
   "obs-hand.ts",
   "agent-idle-nudge.ts",
+  "autonomy-controller.ts",
 ];
 
 const CLOSURE_LIBS = [

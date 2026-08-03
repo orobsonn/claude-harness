@@ -352,6 +352,7 @@ function plantMonorepoOcPlugins(root) {
     "obs-eye.ts",
     "obs-hand.ts",
     "agent-idle-nudge.ts",
+    "autonomy-controller.ts",
   ]) {
     writeFileSync(join(dir, name), `// stub ${name}\n`, "utf8");
   }
