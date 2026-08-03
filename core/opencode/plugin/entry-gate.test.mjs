@@ -1095,6 +1095,7 @@ test("entry-gate claims one exact dispatch record after allowing a writing Task"
       role: "executor-low",
       scope_paths: ["src"],
       allowed_writes: [],
+      frozen_paths: ["tests/a.test.mjs"],
       snapshot_hash: record.snapshot_hash,
       claimed_at: record.claimed_at,
     })

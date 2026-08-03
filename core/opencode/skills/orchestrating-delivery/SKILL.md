@@ -34,8 +34,8 @@ The operator is a product manager, not a developer. Engineering problems are sol
 ## Autonomy directive
 
 When the operator says **"sem parar"**, **"sem me perguntar"**, **"siga autonomamente"**, **"siga a
-implementacao"**, or an equivalent instruction, the native autonomy controller persists and retains
-`autonomy_directive: enabled` in session gate-state; mirror it in the feature runtime spec/decision ledger.
+implementacao"**, or an equivalent instruction, the native autonomy controller persists for the session
+as `autonomy_directive: enabled` in gate-state; mirror it in the feature runtime spec/decision ledger.
 On an idle non-terminal build session, that controller re-prompts the same session with its next lawful
 phase. Never answer that continuation with status prose: execute the phase. This is a live-session mode,
 distinct from HEADLESS, and replaces interactive approval waits with the same evidence gates used by HEADLESS.

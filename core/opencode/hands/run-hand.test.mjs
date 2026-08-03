@@ -630,7 +630,7 @@ test("runHand: DONE retains its exact producer dispatch until parent capture", a
       spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
       git: {
         headSha: () => "freeze-done",
-        diffNameOnly: () => ["src/done.ts"],
+        diffNameOnly: () => ["tests/foo.test.mjs"],
         lsFilesOthers: () => [],
       },
       lsUntracked: () => [],
