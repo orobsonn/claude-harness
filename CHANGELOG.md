@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.5](https://github.com/orobsonn/claude-harness/compare/v0.53.4...v0.53.5) (2026-08-03)
+
+
+### Bug Fixes
+
+* preserva modelo do operador no autonomy continue ([#618](https://github.com/orobsonn/claude-harness/issues/618)) ([337856d](https://github.com/orobsonn/claude-harness/commit/337856df174f4178ccbb6be64584fdc98dae66c8))
+
 ## [0.53.4](https://github.com/orobsonn/claude-harness/compare/v0.53.3...v0.53.4) (2026-08-03)
 
 
