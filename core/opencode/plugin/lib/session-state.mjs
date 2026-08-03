@@ -6,9 +6,36 @@ import path from "node:path";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../../shared/lib/feature-id.mjs";
 import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
 import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/path-helpers.mjs";
+import { isCompleteExpectedModelStrategy } from "../../../shared/lib/model-strategy-projection.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
 import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
 import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
+
+/**
+ * @description Resolve frozen R15 strategy from binding, then last attempt (dispatch-scope/plan-gate parity).
+ * @param {Record<string, unknown> | null | undefined} state
+ */
+function resolveExpectedModelStrategy(state) {
+  const binding = state?.planner_plan_binding;
+  if (isCompleteExpectedModelStrategy(binding?.expected_model_strategy)) {
+    return binding.expected_model_strategy;
+  }
+  if (isCompleteExpectedModelStrategy(state?.planner_last_attempt?.expected_model_strategy)) {
+    return state.planner_last_attempt.expected_model_strategy;
+  }
+  return undefined;
+}
+
+/**
+ * @description Full-plan validate options: pin to freeze when complete; omit key to keep ladder fallback.
+ * @param {Record<string, unknown> | null | undefined} state
+ */
+function fullPlanValidationOptions(state) {
+  const expectedModelStrategy = resolveExpectedModelStrategy(state);
+  return expectedModelStrategy === undefined
+    ? { expect: "full" }
+    : { expect: "full", expectedModelStrategy };
+}
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_REINJECT_BYTES = 8 * 1024;
@@ -142,7 +169,7 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
   if (binding == null) {
     const tasks = canonical.value.tasks;
     if (Array.isArray(tasks) && tasks.length > 0) {
-      const full = validatePlan(canonical.value, { expect: "full" });
+      const full = validatePlan(canonical.value, fullPlanValidationOptions(state));
       if (!full.ok) return { ok: false, reason: "canonical full plan failed validation" };
       return { ok: false, reason: "full plan recovery requires planner snapshot binding" };
     }
@@ -181,7 +208,7 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
       semanticPlanHash(canonical.value) !== binding.snapshot_hash || binding.semantic_hash !== binding.snapshot_hash) {
     return { ok: false, reason: "planner snapshot integrity mismatch" };
   }
-  const full = validatePlan(snapshot.value, { expect: "full" });
+  const full = validatePlan(snapshot.value, fullPlanValidationOptions(state));
   if (!full.ok) return { ok: false, reason: "planner snapshot full plan failed validation" };
   return { ok: true, plan: snapshot.value, canonicalPath, canonicalRelativePath };
 }
@@ -253,7 +280,7 @@ function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAnce
   const featureId = state.feature_id;
   if (!isSafeFeatureId(featureId)) return false;
   const resolved = currentPlan(projectRoot, sessionId, featureId, state);
-  if (!resolved.ok || !validatePlan(resolved.plan, { expect: "full" }).ok || !Array.isArray(resolved.plan.tasks)) return false;
+  if (!resolved.ok || !validatePlan(resolved.plan, fullPlanValidationOptions(state)).ok || !Array.isArray(resolved.plan.tasks)) return false;
   if (!Array.isArray(state.hand_finished) || !Array.isArray(state.capture_verified)) return false;
   const taskIds = new Set();
   for (const task of resolved.plan.tasks) {
