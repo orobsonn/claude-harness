@@ -65,13 +65,18 @@ function buildFullPlan() {
 
 /**
  * @param {{
- *   expectedOn?: "binding" | "last_attempt" | "none",
+ *   expectedOn?: "binding" | "last_attempt" | "none" | "incomplete_binding_then_last_attempt",
+ *   mutatePlanStrategy?: (strategy: Record<string, unknown>) => void,
+ *   mutateExpected?: (strategy: Record<string, unknown>) => void,
  * }} [opts]
  */
 function setupTerminalFixture(opts = {}) {
   const expectedOn = opts.expectedOn ?? "binding";
   const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "session-state-terminal-")));
   const plan = buildFullPlan();
+  if (typeof opts.mutatePlanStrategy === "function") {
+    opts.mutatePlanStrategy(/** @type {Record<string, unknown>} */ (plan.model_strategy));
+  }
   const planRaw = `${JSON.stringify(plan, null, 2)}\n`;
   const fileHash = crypto.createHash("sha256").update(planRaw, "utf8").digest("hex");
   const semanticHash = semanticPlanHash(plan);
@@ -102,8 +107,14 @@ function setupTerminalFixture(opts = {}) {
   /** @type {Record<string, unknown>} */
   const lastAttempt = { result: "bound" };
   if (expectedOn === "binding") {
-    binding.expected_model_strategy = structuredClone(OPENAI_MODEL_STRATEGY);
+    const expected = structuredClone(OPENAI_MODEL_STRATEGY);
+    if (typeof opts.mutateExpected === "function") opts.mutateExpected(expected);
+    binding.expected_model_strategy = expected;
   } else if (expectedOn === "last_attempt") {
+    lastAttempt.expected_model_strategy = structuredClone(OPENAI_MODEL_STRATEGY);
+  } else if (expectedOn === "incomplete_binding_then_last_attempt") {
+    // Truthy but incomplete — must NOT poison cascade (isComplete gate, not truthy check).
+    binding.expected_model_strategy = { hand_tiers: { low: "openai/gpt-5.6-luna" } };
     lastAttempt.expected_model_strategy = structuredClone(OPENAI_MODEL_STRATEGY);
   }
 
@@ -212,6 +223,58 @@ test("compaction recovery rejects bound OpenAI plan without expected freeze", ()
     });
     assert.equal(recovered.ok, false);
     assert.equal(recovered.reason, "planner snapshot full plan failed validation");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("incomplete binding freeze falls through to complete last_attempt", () => {
+  const fixture = setupTerminalFixture({ expectedOn: "incomplete_binding_then_last_attempt" });
+  try {
+    const result = recordSessionCompletion(fixture.projectRoot, fixture.sessionId, {
+      eventType: "session.idle",
+      now: Date.UTC(2026, 7, 3, 18, 0, 0),
+      isAncestor: () => true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.recorded, true);
+    assert.equal(JSON.parse(fs.readFileSync(fixture.gateStatePath, "utf8")).session_status, "completed");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("complete freeze that differs from plan hand_tiers fails closed", () => {
+  const fixture = setupTerminalFixture({
+    expectedOn: "binding",
+    mutateExpected: (expected) => {
+      expected.hand_tiers = {
+        low: "openai/gpt-5.6-terra",
+        medium: "openai/gpt-5.6-terra",
+        high: "openai/gpt-5.6-terra",
+      };
+    },
+  });
+  try {
+    const result = recordSessionCompletion(fixture.projectRoot, fixture.sessionId, {
+      eventType: "session.idle",
+      now: Date.UTC(2026, 7, 3, 18, 0, 0),
+      isAncestor: () => true,
+    });
+    assert.equal(result.recorded, false);
+    assert.notEqual(JSON.parse(fs.readFileSync(fixture.gateStatePath, "utf8")).session_status, "completed");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("compaction recovery accepts last_attempt freeze when binding has none", () => {
+  const fixture = setupTerminalFixture({ expectedOn: "last_attempt" });
+  try {
+    const recovered = buildSessionRecovery(fixture.projectRoot, fixture.sessionId, {
+      isAncestor: () => true,
+    });
+    assert.equal(recovered.ok, true, recovered.reason);
   } finally {
     fixture.cleanup();
   }
