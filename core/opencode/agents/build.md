@@ -98,7 +98,7 @@ On the **first request of every session**, **load and follow the `oc-triaging-re
 
 Your **FIRST action of the top-level session is the tool call `skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
-**Classify once per session+feature.** Call `classify` only from triaging at entry (or escalate-only up). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
+**Classify once per delivery session+feature.** Call `classify` only from triaging for QUICK/LIGHT/FULL (or escalate-only up). **Never** call `classify` for no-ceremony (chat/read) — it does not pin `feature_id`. Feature-switch mid LIGHT/FULL stays denied (new session only if already in delivery). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
 
 **Planner:** always dispatch `planner` (primary model only). REVISE → re-dispatch `planner` again — never swap models.
 

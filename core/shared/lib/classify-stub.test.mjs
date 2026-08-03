@@ -112,6 +112,109 @@ test("decideClassifyTransition denies feature switch mid-session", () => {
   assert.match(r.reason, /feature switch denied/);
 });
 
+// #620 #ac-1.1 — no-ceremony stamp must not pin feature_id across a later delivery classify
+test("decideClassifyTransition no-ceremony+feat-a → LIGHT feat-b is fresh", () => {
+  const r = decideClassifyTransition({
+    requestedMode: "LIGHT",
+    requestedFeatureId: "feat-b",
+    currentMode: "no-ceremony",
+    currentFeatureId: "feat-a",
+    classified: true,
+    peakMode: "no-ceremony",
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.action, "fresh");
+  assert.equal(r.mode, "LIGHT");
+  assert.equal(r.featureId, "feat-b");
+  assert.equal(r.peakMode, "LIGHT");
+});
+
+// residual peak from prior stamp must not poison the unbound feature's peak
+test("decideClassifyTransition no-ceremony unbind resets peak to requested mode", () => {
+  const r = decideClassifyTransition({
+    requestedMode: "LIGHT",
+    requestedFeatureId: "feat-b",
+    currentMode: "no-ceremony",
+    currentFeatureId: "feat-a",
+    classified: true,
+    peakMode: "FULL",
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.action, "fresh");
+  assert.equal(r.peakMode, "LIGHT");
+});
+
+// cannot launder feature-switch by downgrading delivery → no-ceremony first
+test("decideClassifyTransition denies LIGHT→no-ceremony (same or other feature)", () => {
+  const same = decideClassifyTransition({
+    requestedMode: "no-ceremony",
+    requestedFeatureId: "feat-a",
+    currentMode: "LIGHT",
+    currentFeatureId: "feat-a",
+    classified: true,
+  });
+  assert.equal(same.ok, false);
+  assert.match(same.reason, /downgrade denied/);
+
+  const other = decideClassifyTransition({
+    requestedMode: "no-ceremony",
+    requestedFeatureId: "feat-b",
+    currentMode: "LIGHT",
+    currentFeatureId: "feat-a",
+    classified: true,
+  });
+  assert.equal(other.ok, false);
+  assert.match(other.reason, /feature switch denied/);
+});
+
+// #620 #ac-1.2 — same feature escalate from no-ceremony still works
+test("decideClassifyTransition no-ceremony+feat-a → LIGHT feat-a is escalate", () => {
+  const r = decideClassifyTransition({
+    requestedMode: "LIGHT",
+    requestedFeatureId: "feat-a",
+    currentMode: "no-ceremony",
+    currentFeatureId: "feat-a",
+    classified: true,
+    peakMode: "no-ceremony",
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.action, "escalate");
+  assert.equal(r.mode, "LIGHT");
+  assert.equal(r.featureId, "feat-a");
+  assert.equal(r.peakMode, "LIGHT");
+});
+
+// #620 #ac-1.3 — delivery modes still deny feature switch (anti-launder #403)
+test("decideClassifyTransition QUICK/LIGHT/FULL feature switch stays denied", () => {
+  for (const currentMode of ["QUICK", "LIGHT", "FULL"]) {
+    for (const requestedMode of ["LIGHT", "FULL"]) {
+      const r = decideClassifyTransition({
+        requestedMode,
+        requestedFeatureId: "feat-b",
+        currentMode,
+        currentFeatureId: "feat-a",
+        classified: true,
+        peakMode: currentMode,
+      });
+      assert.equal(r.ok, false, `${currentMode}→${requestedMode}`);
+      assert.match(r.reason, /feature switch denied/);
+    }
+  }
+});
+
+test("decideClassifyTransition no-ceremony does not launder downgrade on same feature", () => {
+  // no-ceremony is rank 0; escalate path only applies when req > cur. Same feature noop/escalate only.
+  const r = decideClassifyTransition({
+    requestedMode: "no-ceremony",
+    requestedFeatureId: "feat-a",
+    currentMode: "no-ceremony",
+    currentFeatureId: "feat-a",
+    classified: true,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.action, "noop");
+});
+
 test("MODE_RANK is monotonic no-ceremony < QUICK < LIGHT < FULL", () => {
   assert.ok(MODE_RANK["no-ceremony"] < MODE_RANK.QUICK);
   assert.ok(MODE_RANK.QUICK < MODE_RANK.LIGHT);

@@ -15,7 +15,10 @@ export const MODE_RANK = Object.freeze({
 
 /**
  * @description Pure classify transition. Replay same session+feature+mode is no-op;
- * same feature may only escalate; downgrade and feature-switch are denied once classified.
+ * same feature may only escalate; downgrade is denied once classified.
+ * Feature-switch is denied under QUICK/LIGHT/FULL (anti-launder). A prior no-ceremony
+ * stamp does not bind feature_id — next classify with a different feature is fresh
+ * (chat/read must not pin the session; parity with CC free reclassify after no-ceremony).
  * @param {{
  *   requestedMode?: unknown,
  *   requestedFeatureId?: unknown,
@@ -61,6 +64,18 @@ export function decideClassifyTransition(input = {}) {
         mode: requestedMode,
         featureId: requestedFeatureId,
         peakMode: rankMax(peakBase, requestedMode),
+      };
+    }
+
+    // no-ceremony never binds feature_id — chat/read stamp must not block a later delivery feature.
+    // New feature = true fresh peak (do not inherit residual peak_mode from the unbound chat stamp).
+    if (currentMode === "no-ceremony" && requestedFeatureId !== currentFeatureId) {
+      return {
+        ok: true,
+        action: "fresh",
+        mode: requestedMode,
+        featureId: requestedFeatureId,
+        peakMode: requestedMode,
       };
     }
 

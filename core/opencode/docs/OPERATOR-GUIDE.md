@@ -93,6 +93,8 @@ Três coisas que mudam o resultado:
 
 **Só sobe de modo, nunca rebaixa** pedido sensível com “faz rápido”.
 
+Leitura/chat (sem cerimônia) **não prende** feature; troca de feature no meio de LIGHT/FULL continua negada — use sessão nova só se já estiver em entrega.
+
 **Paths que forçam FULL** (allowlist no `AGENTS.md`): auth, payment, billing, SQL, migrations, `.env*`, e `package.json` quando mexe em deps.
 
 ---
