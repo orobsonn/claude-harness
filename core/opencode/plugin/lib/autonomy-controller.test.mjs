@@ -45,59 +45,17 @@ test("autonomy continuation stays silent only for a product decision or a comple
   );
 });
 
-test("continuation prompt pins the operator session model so agent frontmatter cannot overwrite it", async () => {
-  const {
-    continuationPromptModelFields,
-    normalizeOperatorSessionModel,
-    resolveContinuationSessionModel,
-  } = await import(MODULE_URL);
+test("readOperatorModel accepts any provider the operator is already using", async () => {
+  const { readOperatorModel } = await import(MODULE_URL);
 
   assert.deepEqual(
-    normalizeOperatorSessionModel({ providerID: "xai", modelID: "grok-4.5", variant: "high" }),
+    readOperatorModel({ providerID: "xai", modelID: "grok-4.5" }, "high"),
     { providerID: "xai", modelID: "grok-4.5", variant: "high" },
   );
-  assert.equal(normalizeOperatorSessionModel({ providerID: "xai" }), null);
   assert.deepEqual(
-    continuationPromptModelFields({ providerID: "xai", modelID: "grok-4.5", variant: "high" }),
-    {
-      model: { providerID: "xai", modelID: "grok-4.5" },
-      agent: "build",
-      variant: "high",
-    },
+    readOperatorModel({ providerID: "openai", modelID: "gpt-5.6-terra" }),
+    { providerID: "openai", modelID: "gpt-5.6-terra" },
   );
-  assert.deepEqual(continuationPromptModelFields(null), {});
-
-  const fromMessages = resolveContinuationSessionModel({
-    messages: [
-      {
-        info: {
-          role: "user",
-          model: { providerID: "xai", modelID: "grok-4.5" },
-          variant: "high",
-        },
-        parts: [{ type: "text", text: "siga a implementacao de forma autonoma" }],
-      },
-      {
-        info: {
-          role: "user",
-          model: { providerID: "openai", modelID: "gpt-5.6-terra" },
-        },
-        parts: [{ type: "text", text: "[HARNESS_AUTONOMY_CONTINUE]\nresume" }],
-      },
-    ],
-  });
-  assert.deepEqual(fromMessages, { providerID: "xai", modelID: "grok-4.5", variant: "high" });
-
-  assert.deepEqual(
-    resolveContinuationSessionModel({
-      operatorModel: { providerID: "xai", modelID: "grok-4.5" },
-      messages: [
-        {
-          info: { role: "user", model: { providerID: "openai", modelID: "gpt-5.6-terra" } },
-          parts: [{ type: "text", text: "hello" }],
-        },
-      ],
-    }),
-    { providerID: "xai", modelID: "grok-4.5" },
-  );
+  assert.equal(readOperatorModel(null), null);
+  assert.equal(readOperatorModel({ providerID: "xai" }), null);
 });

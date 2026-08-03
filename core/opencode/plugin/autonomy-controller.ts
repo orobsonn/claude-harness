@@ -18,42 +18,22 @@ function taskOutput(output: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
-function sdkData(result: unknown): unknown {
-  if (result && typeof result === "object" && "data" in result) return (result as { data?: unknown }).data
-  return result
-}
-
 async function createAutonomyControllerHooks(projectRoot: string, client: any): Promise<Pick<Hooks, "chat.message" | "tool.execute.after" | "event">> {
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { mergeGateState, readGateState } = await import("../lib/gate-state.mjs")
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs")
   const {
     autonomyContinuationPrompt,
-    continuationPromptModelFields,
     decideAutonomyContinuation,
     detectsAutonomyDirective,
-    normalizeOperatorSessionModel,
+    readOperatorModel,
     readPlanReviewVerdict,
-    resolveContinuationSessionModel,
   } = await import("./lib/autonomy-controller.mjs")
 
   const statePath = (sessionID: unknown) => gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })
   const readState = (sessionID: unknown) => {
     const resolved = statePath(sessionID)
     return resolved.ok ? { path: resolved.path, state: readGateState(resolved.path) } : null
-  }
-
-  async function loadSessionMessages(sessionID: string): Promise<unknown[]> {
-    if (typeof client?.session?.messages !== "function") return []
-    try {
-      const raw = sdkData(await client.session.messages({
-        path: { id: sessionID },
-        query: { directory: projectRoot },
-      }))
-      return Array.isArray(raw) ? raw : []
-    } catch {
-      return []
-    }
   }
 
   return {
@@ -68,16 +48,8 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
           mergeGateState(loaded.path, { autonomy_continuation: null })
           return
         }
-        const fromInput = normalizeOperatorSessionModel({
-          ...(input?.model && typeof input.model === "object" ? input.model : {}),
-          variant: input?.variant,
-        })
-        const messageModel = output?.message?.model
-        const fromMessage = normalizeOperatorSessionModel({
-          ...(messageModel && typeof messageModel === "object" ? messageModel : {}),
-          variant: output?.message?.variant ?? input?.variant,
-        })
-        const operatorModel = fromInput ?? fromMessage
+        const operatorModel = readOperatorModel(input?.model, input?.variant)
+          ?? readOperatorModel(output?.message?.model, output?.message?.variant ?? input?.variant)
         /** @type {Record<string, unknown>} */
         const patch: Record<string, unknown> = {}
         if (operatorModel) patch.operator_session_model = operatorModel
@@ -116,19 +88,18 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
         })
         if (!claimed.ok) return
         try {
-          const operatorModel = resolveContinuationSessionModel({
-            operatorModel: loaded.state.operator_session_model,
-            messages: await loadSessionMessages(sessionID),
-          })
-          const modelFields = continuationPromptModelFields(operatorModel)
-          if (operatorModel && !loaded.state.operator_session_model) {
-            mergeGateState(loaded.path, { operator_session_model: operatorModel })
-          }
+          const operatorModel = readOperatorModel(loaded.state.operator_session_model)
           await client.session.promptAsync({
             path: { id: sessionID },
             query: { directory: projectRoot },
             body: {
-              ...modelFields,
+              ...(operatorModel
+                ? {
+                    model: { providerID: operatorModel.providerID, modelID: operatorModel.modelID },
+                    agent: "build",
+                    ...(operatorModel.variant ? { variant: operatorModel.variant } : {}),
+                  }
+                : {}),
               parts: [{ type: "text", text: autonomyContinuationPrompt(next.phase) }],
             },
           })

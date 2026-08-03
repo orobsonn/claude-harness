@@ -80,76 +80,19 @@ export function autonomyContinuationPrompt(phase) {
 }
 
 /**
- * @description Normalize the operator-selected session model used by autonomy continuation.
- * OpenCode's promptAsync falls back to the agent frontmatter model when body.model is omitted —
- * that silently overwrites a live operator override (e.g. grok → gpt-5.6-terra on build).
- * @param {unknown} value
+ * @description Operator model from a chat.message hook input — whatever they are already using.
+ * @param {unknown} model
+ * @param {unknown} [variant]
  * @returns {{ providerID: string, modelID: string, variant?: string } | null}
  */
-export function normalizeOperatorSessionModel(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = /** @type {Record<string, unknown>} */ (value);
-  const providerID = typeof record.providerID === "string" ? record.providerID.trim() : "";
-  const modelID = typeof record.modelID === "string" ? record.modelID.trim() : "";
-  if (!providerID || !modelID || providerID.includes("/") || modelID.includes("..")) return null;
+export function readOperatorModel(model, variant) {
+  if (!model || typeof model !== "object" || Array.isArray(model)) return null;
+  const providerID = typeof model.providerID === "string" ? model.providerID.trim() : "";
+  const modelID = typeof model.modelID === "string" ? model.modelID.trim() : "";
+  if (!providerID || !modelID) return null;
   /** @type {{ providerID: string, modelID: string, variant?: string }} */
   const out = { providerID, modelID };
-  if (typeof record.variant === "string" && record.variant.trim()) {
-    out.variant = record.variant.trim();
-  }
+  const resolvedVariant = typeof variant === "string" ? variant : model.variant;
+  if (typeof resolvedVariant === "string" && resolvedVariant.trim()) out.variant = resolvedVariant.trim();
   return out;
-}
-
-/**
- * @description Fields that pin promptAsync to the operator's live model instead of agent defaults.
- * @param {unknown} operatorModel
- * @returns {{ model: { providerID: string, modelID: string }, agent: "build", variant?: string } | Record<string, never>}
- */
-export function continuationPromptModelFields(operatorModel) {
-  const model = normalizeOperatorSessionModel(operatorModel);
-  if (!model) return {};
-  /** @type {{ model: { providerID: string, modelID: string }, agent: "build", variant?: string }} */
-  const fields = {
-    model: { providerID: model.providerID, modelID: model.modelID },
-    agent: "build",
-  };
-  if (model.variant) fields.variant = model.variant;
-  return fields;
-}
-
-/**
- * @description Prefer the gate-state snapshot; else the last non-continuation user message model.
- * @param {{ operatorModel?: unknown, messages?: unknown }} input
- * @returns {{ providerID: string, modelID: string, variant?: string } | null}
- */
-export function resolveContinuationSessionModel(input) {
-  const fromState = normalizeOperatorSessionModel(input?.operatorModel);
-  if (fromState) return fromState;
-  if (!Array.isArray(input?.messages)) return null;
-  for (let index = input.messages.length - 1; index >= 0; index -= 1) {
-    const bundle = input.messages[index];
-    const info = bundle && typeof bundle === "object" ? /** @type {Record<string, unknown>} */ (bundle).info ?? bundle : null;
-    if (!info || typeof info !== "object" || Array.isArray(info)) continue;
-    const record = /** @type {Record<string, unknown>} */ (info);
-    if (record.role !== "user") continue;
-    const parts = Array.isArray(/** @type {Record<string, unknown>} */ (bundle)?.parts)
-      ? /** @type {unknown[]} */ (/** @type {Record<string, unknown>} */ (bundle).parts)
-      : [];
-    const text = parts
-      .map((part) => (part && typeof part === "object" && typeof /** @type {Record<string, unknown>} */ (part).text === "string"
-        ? /** @type {string} */ (/** @type {Record<string, unknown>} */ (part).text)
-        : ""))
-      .join("\n");
-    if (text.includes("[HARNESS_AUTONOMY_CONTINUE]")) continue;
-    const model = record.model && typeof record.model === "object" && !Array.isArray(record.model)
-      ? /** @type {Record<string, unknown>} */ (record.model)
-      : record;
-    const normalized = normalizeOperatorSessionModel({
-      providerID: model.providerID,
-      modelID: model.modelID ?? model.id,
-      variant: record.variant ?? model.variant,
-    });
-    if (normalized) return normalized;
-  }
-  return null;
 }
