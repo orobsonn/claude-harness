@@ -18,16 +18,42 @@ function taskOutput(output: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
+function sdkData(result: unknown): unknown {
+  if (result && typeof result === "object" && "data" in result) return (result as { data?: unknown }).data
+  return result
+}
+
 async function createAutonomyControllerHooks(projectRoot: string, client: any): Promise<Pick<Hooks, "chat.message" | "tool.execute.after" | "event">> {
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { mergeGateState, readGateState } = await import("../lib/gate-state.mjs")
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs")
-  const { autonomyContinuationPrompt, decideAutonomyContinuation, detectsAutonomyDirective, readPlanReviewVerdict } = await import("./lib/autonomy-controller.mjs")
+  const {
+    autonomyContinuationPrompt,
+    continuationPromptModelFields,
+    decideAutonomyContinuation,
+    detectsAutonomyDirective,
+    normalizeOperatorSessionModel,
+    readPlanReviewVerdict,
+    resolveContinuationSessionModel,
+  } = await import("./lib/autonomy-controller.mjs")
 
   const statePath = (sessionID: unknown) => gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })
   const readState = (sessionID: unknown) => {
     const resolved = statePath(sessionID)
     return resolved.ok ? { path: resolved.path, state: readGateState(resolved.path) } : null
+  }
+
+  async function loadSessionMessages(sessionID: string): Promise<unknown[]> {
+    if (typeof client?.session?.messages !== "function") return []
+    try {
+      const raw = sdkData(await client.session.messages({
+        path: { id: sessionID },
+        query: { directory: projectRoot },
+      }))
+      return Array.isArray(raw) ? raw : []
+    } catch {
+      return []
+    }
   }
 
   return {
@@ -42,9 +68,24 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
           mergeGateState(loaded.path, { autonomy_continuation: null })
           return
         }
+        const fromInput = normalizeOperatorSessionModel({
+          ...(input?.model && typeof input.model === "object" ? input.model : {}),
+          variant: input?.variant,
+        })
+        const messageModel = output?.message?.model
+        const fromMessage = normalizeOperatorSessionModel({
+          ...(messageModel && typeof messageModel === "object" ? messageModel : {}),
+          variant: output?.message?.variant ?? input?.variant,
+        })
+        const operatorModel = fromInput ?? fromMessage
+        /** @type {Record<string, unknown>} */
+        const patch: Record<string, unknown> = {}
+        if (operatorModel) patch.operator_session_model = operatorModel
         if (detectsAutonomyDirective(text)) {
-          mergeGateState(loaded.path, { autonomy_directive: "enabled", autonomy_continuation: null })
+          patch.autonomy_directive = "enabled"
+          patch.autonomy_continuation = null
         }
+        if (Object.keys(patch).length > 0) mergeGateState(loaded.path, patch)
       } catch {
         /* Autonomy must not make a normal operator message fail. */
       }
@@ -75,10 +116,21 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
         })
         if (!claimed.ok) return
         try {
+          const operatorModel = resolveContinuationSessionModel({
+            operatorModel: loaded.state.operator_session_model,
+            messages: await loadSessionMessages(sessionID),
+          })
+          const modelFields = continuationPromptModelFields(operatorModel)
+          if (operatorModel && !loaded.state.operator_session_model) {
+            mergeGateState(loaded.path, { operator_session_model: operatorModel })
+          }
           await client.session.promptAsync({
             path: { id: sessionID },
             query: { directory: projectRoot },
-            body: { parts: [{ type: "text", text: autonomyContinuationPrompt(next.phase) }] },
+            body: {
+              ...modelFields,
+              parts: [{ type: "text", text: autonomyContinuationPrompt(next.phase) }],
+            },
           })
         } catch {
           mergeGateState(loaded.path, { autonomy_continuation: null })
