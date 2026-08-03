@@ -68,13 +68,14 @@ export function decideClassifyTransition(input = {}) {
     }
 
     // no-ceremony never binds feature_id — chat/read stamp must not block a later delivery feature.
+    // New feature = true fresh peak (do not inherit residual peak_mode from the unbound chat stamp).
     if (currentMode === "no-ceremony" && requestedFeatureId !== currentFeatureId) {
       return {
         ok: true,
         action: "fresh",
         mode: requestedMode,
         featureId: requestedFeatureId,
-        peakMode: rankMax(peakBase, requestedMode),
+        peakMode: requestedMode,
       };
     }
 
