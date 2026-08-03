@@ -1500,10 +1500,11 @@ test("defaultOcPluginPaths() / example / root opencode.json plugin[] are empty (
   assert.deepStrictEqual(fromRoot, []);
 });
 
-test("harnessOcPluginFiles lists obs-eye and agent-idle-nudge on disk (auto-load carriers)", () => {
+test("harnessOcPluginFiles lists autonomy controller and observability carriers on disk", () => {
   const files = harnessOcPluginFiles();
   assert.ok(files.includes("./.opencode/plugin/obs-eye.ts"));
   assert.ok(files.includes("./.opencode/plugin/agent-idle-nudge.ts"));
+  assert.ok(files.includes("./.opencode/plugin/autonomy-controller.ts"));
   assert.ok(files.every((p) => isHarnessAutoloadPluginPath(p)));
 });
 

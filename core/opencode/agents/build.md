@@ -106,6 +106,11 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 has given its autonomy directive, never ask about provider/tool failure, scope decomposition, or rail
 repair; only surface an unresolved decision that changes product behavior or contract.
 
+**Native autonomy continuation:** when the runtime sends `[HARNESS_AUTONOMY_CONTINUE]`, it has observed
+an idle non-terminal session with a required delivery phase. Do not answer with an acknowledgement,
+progress message, or engineering question. Execute that exact lawful phase now. The runtime may re-prompt
+after a later idle turn; it does not grant authority to skip plan, fidelity, capture, review, or ship rails.
+
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 
 **OC ship:** after a DONE Task hand, the host records completion; capture is stamped separately by native `mark` only after the parent independently inspects the read-back, diff and locked-test result. Run `git push` / `gh pr create` **yourself on this parent session** (not inside shipper Task). Shipper may only draft title/body. Specs may be edited only where the active lane permits it. The canonical execution plan is never a direct model edit: planner returns JSON and `planner-recovery` alone persists it. The `plan-write-gate` plugin still denies Write/Edit on `gate-state.json`, `triage.json`, any JSON under `.opencode/plans/.state/`, the canonical `execution-plan.json`, and the harness marker scripts (`mark.mjs`, `classify.mjs`) — those stay host/marker-only, never a direct edit.
