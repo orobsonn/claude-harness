@@ -494,10 +494,14 @@ export function pluginsAreRelative(plugins) {
  * shape-check alone satisfies the gate without that operational risk.) When a tier-2 migration
  * actually removes a retired key, the pre-migration file is preserved once at
  * `opencode.json.pre-migration.bak`.
+ * Issue #441: when an existing file needs no semantic mutation (plugin[] already clean of harness
+ * autoload paths AND permission migration is a no-op including key order), skip the write entirely
+ * and return `"unchanged"` so project formatters (Biome/Prettier) are not destroyed by a cosmetic
+ * `JSON.stringify(..., null, 2)` rewrite. Real mutations still rewrite with the canonical indent.
  * @param {string} openCodeDir - source core/opencode
  * @param {string} targetDir - project root
  * @param {string} [version] - harness version currently being vendored (stamped into the manifest)
- * @returns {string} status
+ * @returns {string} status — `"created"` | `"unchanged"` | update/repair strings
  */
 export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   const example = join(openCodeDir, "opencode.json.example");
@@ -530,7 +534,10 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   // preserving every operator top-level customization untouched.
   let existing = cfg;
   let existingRaw = null;
+  /** @type {Record<string, unknown> | null} pre-mutation snapshot for #441 no-op detection */
+  let originalSnapshot = null;
   if (wasPresent) {
+    // Read bytes first (#441) — only this string can prove byte-identity after a no-op path.
     existingRaw = readFileSync(dest, "utf8");
     try {
       existing = JSON.parse(existingRaw);
@@ -540,6 +547,8 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
       writeFileSync(join(targetDir, "opencode.harness.json"), `${JSON.stringify(cfg, null, 2)}\n`);
       return "invalid existing config → wrote opencode.harness.json for manual repair";
     }
+    // Snapshot BEFORE plugin strip / migration so we can detect a true no-op vs cosmetic rewrite.
+    originalSnapshot = JSON.parse(JSON.stringify(existing));
     // Never re-inject harness paths into plugin[] — OC auto-loads .opencode/plugin/*.ts
     existing.plugin = Array.isArray(existing.plugin)
       ? existing.plugin.filter((entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry))
@@ -547,12 +556,16 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   }
 
   let manifest = null;
+  let existingManifestRaw = null;
   if (existsSync(manifestPath)) {
     try {
-      const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      existingManifestRaw = readFileSync(manifestPath, "utf8");
+      const parsed = JSON.parse(existingManifestRaw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) manifest = parsed;
+      else existingManifestRaw = null;
     } catch {
       manifest = null;
+      existingManifestRaw = null;
     }
   }
   const previousHarnessVersionStamp = existsSync(versionPath)
@@ -577,22 +590,48 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   const removedEntries = migrated.report.filter((r) => r.action === "removed-retired");
   const keptEntries = migrated.report.filter((r) => r.action === "kept-custom");
 
+  const nextConfigText = `${JSON.stringify(migrated.config, null, 2)}\n`;
+  const nextManifestText = `${JSON.stringify(migrated.manifest, null, 2)}\n`;
+
+  // #441: skip rewriting opencode.json when nothing semantic changed — including permission key
+  // order (last-match-wins). Object JSON.stringify is order-sensitive; byte equality covers the
+  // already-canonical file; structural equality covers Biome/Prettier-formatted equivalents.
+  const configUnchanged =
+    wasPresent &&
+    originalSnapshot !== null &&
+    existingRaw !== null &&
+    (existingRaw === nextConfigText ||
+      JSON.stringify(originalSnapshot) === JSON.stringify(migrated.config));
+  const manifestUnchanged = existingManifestRaw !== null && existingManifestRaw === nextManifestText;
+
   // Rollback layer 2 (layer 1 is git itself): once, only when a tier-2 ledger match actually
   // dropped something — preserves the exact pre-migration bytes, never overwritten by a later run.
-  if (wasPresent && migrated.tier === 2 && removedEntries.length > 0 && existingRaw !== null && !existsSync(backupPath)) {
+  if (
+    wasPresent &&
+    !configUnchanged &&
+    migrated.tier === 2 &&
+    removedEntries.length > 0 &&
+    existingRaw !== null &&
+    !existsSync(backupPath)
+  ) {
     writeFileSync(backupPath, existingRaw);
   }
 
-  const temp = `${dest}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(migrated.config, null, 2)}\n`);
-  renameSync(temp, dest);
+  if (!configUnchanged) {
+    const temp = `${dest}.${process.pid}.tmp`;
+    writeFileSync(temp, nextConfigText);
+    renameSync(temp, dest);
+  }
 
   mkdirSync(ocDir, { recursive: true });
-  const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
-  writeFileSync(manifestTemp, `${JSON.stringify(migrated.manifest, null, 2)}\n`);
-  renameSync(manifestTemp, manifestPath);
+  if (!manifestUnchanged) {
+    const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
+    writeFileSync(manifestTemp, nextManifestText);
+    renameSync(manifestTemp, manifestPath);
+  }
 
   if (!wasPresent) return "created";
+  if (configUnchanged) return "unchanged";
   if (removedEntries.length === 0 && keptEntries.length === 0) {
     return "updated existing opencode.json plugins (stripped harness autoload paths)";
   }

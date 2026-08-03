@@ -1563,6 +1563,90 @@ test("writeOpencodeConfig strips harness autoload paths; keeps external plugins"
   }
 });
 
+/** @description Collapse single-element pretty arrays onto one line (Biome/Prettier short-array style). */
+function biomeInlineShortArrays(prettyJson) {
+  return prettyJson.replace(/\[\n\s*("[^"\n]*")\n\s*\]/g, "[$1]");
+}
+
+test("writeOpencodeConfig (issue #441 ac-1.1/ac-1.2): clean plugin[] is byte-identical no-op with status unchanged", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-441-noop-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v0.50.0"), "created");
+
+    const dest = join(tempDir, "opencode.json");
+    const before = readFileSync(dest, "utf8");
+    const status = writeOpencodeConfig(oc, tempDir, "v0.50.0");
+
+    assert.equal(status, "unchanged", "ac-1.2: no-op must return a distinct unchanged status");
+    assert.equal(readFileSync(dest, "utf8"), before, "ac-1.1: file must stay byte-identical");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig (issue #441 ac-1.3): Biome-style inline arrays survive a no-op re-sync", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-441-biome-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v0.50.0"), "created");
+
+    const dest = join(tempDir, "opencode.json");
+    const obj = JSON.parse(readFileSync(dest, "utf8"));
+    // Guarantee a short array the formatter would keep inline, even if the example drops it later.
+    obj.instructions = ["AGENTS.md"];
+    const biomeFormatted = `${biomeInlineShortArrays(JSON.stringify(obj, null, 2))}\n`;
+    assert.match(biomeFormatted, /"instructions": \["AGENTS.md"\]/, "fixture must carry an inline array");
+    writeFileSync(dest, biomeFormatted);
+
+    const before = readFileSync(dest, "utf8");
+    const status = writeOpencodeConfig(oc, tempDir, "v0.50.0");
+
+    assert.equal(status, "unchanged");
+    assert.equal(readFileSync(dest, "utf8"), before, "ac-1.3: project formatting must not be destroyed");
+    assert.match(before, /"instructions": \["AGENTS.md"\]/);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig (issue #441 ac-1.4): still strips harness autoload plugin paths on real mutation", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-441-strip-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    writeFileSync(
+      join(tempDir, "opencode.json"),
+      `${JSON.stringify(
+        {
+          model: "project/model",
+          instructions: ["AGENTS.md"],
+          plugin: [
+            "project-plugin",
+            "./local/plugin.ts",
+            "./.opencode/plugin/entry-gate.ts",
+            ".opencode/plugin/planner-recovery.ts",
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const before = readFileSync(join(tempDir, "opencode.json"), "utf8");
+    const status = writeOpencodeConfig(oc, tempDir, "v0.50.0");
+
+    assert.match(status, /updated existing/, "ac-1.4: real plugin strip must still report update");
+    assert.notEqual(status, "unchanged");
+    const after = readFileSync(join(tempDir, "opencode.json"), "utf8");
+    assert.notEqual(after, before, "ac-1.4: file must be rewritten when autoload paths remain");
+    const config = JSON.parse(after);
+    assert.deepEqual(config.plugin, ["project-plugin", "./local/plugin.ts"]);
+    assert.equal(config.plugin.some((p) => String(p).includes(".opencode/plugin/")), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("writeOpencodeConfig preserves malformed project config and emits repair sidecar", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-invalid-config-"));
   try {
