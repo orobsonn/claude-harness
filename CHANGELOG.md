@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.4](https://github.com/orobsonn/claude-harness/compare/v0.53.3...v0.53.4) (2026-08-03)
+
+
+### Bug Fixes
+
+* completa sessão OC com freeze de model_strategy ([#616](https://github.com/orobsonn/claude-harness/issues/616)) ([24de21b](https://github.com/orobsonn/claude-harness/commit/24de21b748e069751d989cfbe25889fa30bed57d))
+
 ## [0.53.3](https://github.com/orobsonn/claude-harness/compare/v0.53.2...v0.53.3) (2026-08-03)
 
 
