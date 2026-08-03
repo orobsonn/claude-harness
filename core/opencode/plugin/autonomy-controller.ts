@@ -22,7 +22,13 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { mergeGateState, readGateState } = await import("../lib/gate-state.mjs")
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs")
-  const { autonomyContinuationPrompt, decideAutonomyContinuation, detectsAutonomyDirective, readPlanReviewVerdict } = await import("./lib/autonomy-controller.mjs")
+  const {
+    autonomyContinuationPrompt,
+    decideAutonomyContinuation,
+    detectsAutonomyDirective,
+    readOperatorModel,
+    readPlanReviewVerdict,
+  } = await import("./lib/autonomy-controller.mjs")
 
   const statePath = (sessionID: unknown) => gateStatePath({ projectRoot, runtime: "opencode", sessionId: sessionID })
   const readState = (sessionID: unknown) => {
@@ -42,9 +48,16 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
           mergeGateState(loaded.path, { autonomy_continuation: null })
           return
         }
+        const operatorModel = readOperatorModel(input?.model, input?.variant)
+          ?? readOperatorModel(output?.message?.model, output?.message?.variant ?? input?.variant)
+        /** @type {Record<string, unknown>} */
+        const patch: Record<string, unknown> = {}
+        if (operatorModel) patch.operator_session_model = operatorModel
         if (detectsAutonomyDirective(text)) {
-          mergeGateState(loaded.path, { autonomy_directive: "enabled", autonomy_continuation: null })
+          patch.autonomy_directive = "enabled"
+          patch.autonomy_continuation = null
         }
+        if (Object.keys(patch).length > 0) mergeGateState(loaded.path, patch)
       } catch {
         /* Autonomy must not make a normal operator message fail. */
       }
@@ -75,10 +88,20 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
         })
         if (!claimed.ok) return
         try {
+          const operatorModel = readOperatorModel(loaded.state.operator_session_model)
           await client.session.promptAsync({
             path: { id: sessionID },
             query: { directory: projectRoot },
-            body: { parts: [{ type: "text", text: autonomyContinuationPrompt(next.phase) }] },
+            body: {
+              ...(operatorModel
+                ? {
+                    model: { providerID: operatorModel.providerID, modelID: operatorModel.modelID },
+                    agent: "build",
+                    ...(operatorModel.variant ? { variant: operatorModel.variant } : {}),
+                  }
+                : {}),
+              parts: [{ type: "text", text: autonomyContinuationPrompt(next.phase) }],
+            },
           })
         } catch {
           mergeGateState(loaded.path, { autonomy_continuation: null })

@@ -44,3 +44,18 @@ test("autonomy continuation stays silent only for a product decision or a comple
     { action: "none", reason: "completed" },
   );
 });
+
+test("readOperatorModel accepts any provider the operator is already using", async () => {
+  const { readOperatorModel } = await import(MODULE_URL);
+
+  assert.deepEqual(
+    readOperatorModel({ providerID: "xai", modelID: "grok-4.5" }, "high"),
+    { providerID: "xai", modelID: "grok-4.5", variant: "high" },
+  );
+  assert.deepEqual(
+    readOperatorModel({ providerID: "openai", modelID: "gpt-5.6-terra" }),
+    { providerID: "openai", modelID: "gpt-5.6-terra" },
+  );
+  assert.equal(readOperatorModel(null), null);
+  assert.equal(readOperatorModel({ providerID: "xai" }), null);
+});

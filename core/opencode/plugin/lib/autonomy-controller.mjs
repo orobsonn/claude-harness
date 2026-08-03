@@ -78,3 +78,21 @@ export function autonomyContinuationPrompt(phase) {
     "Do not stop before the next lawful action. Stop only for an unresolved product decision that changes the delivered user behavior or after the delivery rails are terminal.",
   ].join("\n");
 }
+
+/**
+ * @description Operator model from a chat.message hook input — whatever they are already using.
+ * @param {unknown} model
+ * @param {unknown} [variant]
+ * @returns {{ providerID: string, modelID: string, variant?: string } | null}
+ */
+export function readOperatorModel(model, variant) {
+  if (!model || typeof model !== "object" || Array.isArray(model)) return null;
+  const providerID = typeof model.providerID === "string" ? model.providerID.trim() : "";
+  const modelID = typeof model.modelID === "string" ? model.modelID.trim() : "";
+  if (!providerID || !modelID) return null;
+  /** @type {{ providerID: string, modelID: string, variant?: string }} */
+  const out = { providerID, modelID };
+  const resolvedVariant = typeof variant === "string" ? variant : model.variant;
+  if (typeof resolvedVariant === "string" && resolvedVariant.trim()) out.variant = resolvedVariant.trim();
+  return out;
+}
