@@ -80,15 +80,29 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
         const sessionID = event?.properties?.sessionID
         if (typeof sessionID !== "string" || typeof client?.session?.promptAsync !== "function") return
         const loaded = readState(sessionID)
-        if (!loaded || loaded.state.autonomy_continuation != null) return
+        if (!loaded) return
         const next = decideAutonomyContinuation(loaded.state)
-        if (next.action !== "continue") return
+        if (next.action !== "continue") {
+          // Clear a stuck claim when the motor has nothing left to drive (e.g. final-review-done).
+          if (loaded.state.autonomy_continuation != null) {
+            mergeGateState(loaded.path, { autonomy_continuation: null })
+          }
+          return
+        }
+        if (loaded.state.autonomy_continuation != null) return
         const claimed = mergeGateState(loaded.path, {
           autonomy_continuation: { phase: next.phase, queued_at: new Date().toISOString() },
         })
         if (!claimed.ok) return
         try {
-          const operatorModel = readOperatorModel(loaded.state.operator_session_model)
+          // Re-read under the claim: a concurrent final-review stamp must abort the prompt.
+          const latest = readState(sessionID)
+          const still = latest ? decideAutonomyContinuation(latest.state) : { action: "none" as const }
+          if (still.action !== "continue" || still.phase !== next.phase) {
+            mergeGateState(loaded.path, { autonomy_continuation: null })
+            return
+          }
+          const operatorModel = readOperatorModel(latest?.state.operator_session_model ?? loaded.state.operator_session_model)
           await client.session.promptAsync({
             path: { id: sessionID },
             query: { directory: projectRoot },
