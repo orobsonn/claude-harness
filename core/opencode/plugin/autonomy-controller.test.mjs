@@ -114,11 +114,86 @@ test("autonomy controller does not re-prompt a completed or product-blocked sess
     for (const state of [
       { session_status: "completed" },
       { product_decision_pending: true },
+      {
+        mode: "LIGHT",
+        planner_status: "usable",
+        plan_review_verdict: "APPROVE",
+        final_review_done: true,
+      },
+      { mode: "no-ceremony", planner_status: "not_started" },
     ]) {
       fs.writeFileSync(file, JSON.stringify({ session_id: sessionID, feature_id: "autonomy-fix", classified: true, autonomy_directive: "enabled", ...state }));
       await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
     }
     assert.equal(prompts.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("idle clears a stuck autonomy_continuation claim when the motor has nothing left to drive", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-autonomy-claim-clear-"));
+  const sessionID = "ses-autonomy-claim";
+  const file = statePath(root, sessionID);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    session_id: sessionID,
+    feature_id: "autonomy-claim",
+    classified: true,
+    mode: "LIGHT",
+    autonomy_directive: "enabled",
+    planner_status: "usable",
+    plan_review_verdict: "APPROVE",
+    final_review_done: true,
+    autonomy_continuation: { phase: "delivery-close", queued_at: "2026-08-03T15:57:29.981Z" },
+  }));
+  const prompts = [];
+  try {
+    const mod = await import(`${PLUGIN_URL.href}?t=${Date.now()}-claim`);
+    const hooks = await mod.default({
+      directory: root,
+      client: { session: { async promptAsync(input) { prompts.push(input); } } },
+    });
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+    assert.equal(prompts.length, 0);
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).autonomy_continuation, null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("after final_review_done a stuck claim is cleared and idle does not re-prompt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-autonomy-reread-"));
+  const sessionID = "ses-autonomy-reread";
+  const file = statePath(root, sessionID);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    session_id: sessionID,
+    feature_id: "autonomy-reread",
+    classified: true,
+    mode: "LIGHT",
+    autonomy_directive: "enabled",
+    planner_status: "usable",
+    plan_review_verdict: "APPROVE",
+  }));
+  const prompts = [];
+  try {
+    const mod = await import(`${PLUGIN_URL.href}?t=${Date.now()}-reread`);
+    const hooks = await mod.default({
+      directory: root,
+      client: { session: { async promptAsync(input) { prompts.push(input); } } },
+    });
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+    assert.equal(prompts.length, 1);
+    const after = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({
+      ...after,
+      final_review_done: true,
+      autonomy_continuation: { phase: "delivery-loop", queued_at: "2026-08-04T00:00:00.000Z" },
+    }));
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+    assert.equal(prompts.length, 1, "no second prompt after final_review_done");
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).autonomy_continuation, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

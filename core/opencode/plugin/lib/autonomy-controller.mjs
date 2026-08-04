@@ -54,11 +54,17 @@ export function decideAutonomyContinuation(state) {
   if (state.session_status === "completed") return { action: "none", reason: "completed" };
   if (state.product_decision_pending === true) return { action: "none", reason: "product-decision" };
   if (state.classified !== true) return { action: "none", reason: "unclassified" };
+  // no-ceremony / QUICK have no multi-phase plan loop for the idle motor to drive
+  if (state.mode === "no-ceremony" || state.mode === "QUICK") {
+    return { action: "none", reason: "mode-without-delivery-loop" };
+  }
   if (state.planner_status !== "usable") return { action: "continue", phase: "planner-recovery" };
   if (state.plan_review_verdict === "REVISE") return { action: "continue", phase: "plan-revision" };
   if (state.plan_review_verdict !== "APPROVE") return { action: "continue", phase: "plan-review" };
-  if (state.final_review_done !== true) return { action: "continue", phase: "delivery-loop" };
-  return { action: "continue", phase: "delivery-close" };
+  // final_review_done is the last host-stamped engineering tick the idle motor trusts;
+  // harvest/ship stay same-turn prose after mark final-review — do not re-prompt forever
+  if (state.final_review_done === true) return { action: "none", reason: "final-review-done" };
+  return { action: "continue", phase: "delivery-loop" };
 }
 
 /** @description Fixed continuation instruction; it delegates only the already-authorized delivery loop. */
@@ -67,15 +73,14 @@ export function autonomyContinuationPrompt(phase) {
     "planner-recovery": "Repair or complete the planner lifecycle through its existing bounded rail before any downstream dispatch.",
     "plan-review": "Dispatch the required plan-reviewer now. Do not implement before its APPROVE verdict is recorded.",
     "plan-revision": "Use the recorded plan-review result to re-dispatch planner, then re-run plan review through the existing rail.",
-    "delivery-loop": "Resume the next mandatory phase of the approved delivery loop. Dispatch the lawful hand or eye; do not skip fidelity, capture, review, or deterministic gates.",
-    "delivery-close": "Finish the remaining autonomous demo, harvest, and authorized delivery steps through their existing rails.",
+    "delivery-loop": "Resume the next mandatory phase of the approved delivery loop. Dispatch the lawful hand or eye; do not skip fidelity, capture, review, or deterministic gates. After mark final-review, finish autonomous demo validation, harvest, and authorized delivery in this same turn before idle — the motor will not re-prompt once final_review_done is stamped.",
   }[phase] ?? "Resume the next mandatory phase of the approved delivery loop.";
   return [
     "[HARNESS_AUTONOMY_CONTINUE]",
     "Autonomy is active for this already-classified feature.",
     action,
     "Do not emit an acknowledgement, status update, or question about engineering. Execute the next lawful action now.",
-    "Do not stop before the next lawful action. Stop only for an unresolved product decision that changes the delivered user behavior or after the delivery rails are terminal.",
+    "Do not stop before the next lawful action. Stop only for an unresolved product decision that changes the delivered user behavior, or once final_review_done is stamped (then finish harvest/ship in-turn if still open).",
   ].join("\n");
 }
 

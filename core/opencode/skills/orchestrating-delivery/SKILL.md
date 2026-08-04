@@ -40,6 +40,12 @@ On an idle non-terminal build session, that controller re-prompts the same sessi
 phase. Never answer that continuation with status prose: execute the phase. This is a live-session mode,
 distinct from HEADLESS, and replaces interactive approval waits with the same evidence gates used by HEADLESS.
 
+**Autonomy idle stop (deterministic):** once gate-state has `final_review_done: true`, the idle motor
+**does not** re-prompt. After you stamp `mark final-review`, finish autonomous demo validation, harvest,
+and authorized ship **in the same turn** before going idle. no-ceremony / QUICK never enter the multi-phase
+idle loop. If harvest/ship still need a human nudge after stop, the operator sends one follow-up — that is
+cheaper than an infinite `delivery-close` tick.
+
 **Question filter — apply before every question:** ask only when the available choices change the
 **observable product behavior or contract** — what a user receives, can do, or integrates against. If
 the choices preserve the **same observable contract**, decide, execute, verify, and record the rationale
