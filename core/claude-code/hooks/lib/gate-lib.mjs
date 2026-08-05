@@ -337,14 +337,16 @@ export function mergeGateState(sessionId, patch) {
  * Atomically OVERWRITES gate-state.json on (re)classify, discarding the per-feature
  * ceremony flags (brainstormed/adversary_fired) so they never carry stale across features.
  *
- * Delivery-obligation rail invariant: regate_pending/regate_passed AND hand_finished/
- * capture_verified are preserved UNCONDITIONALLY — including across a genuine feature SWITCH.
- * Both are SESSION-level delivery obligations on the un-pushed branch (a HIGH sniper fix still
- * awaiting its re-gate; a finished cheap hand still awaiting its independent capture), so a
- * grave fix or an un-captured hand on feature A must never ship just because the session
- * reclassified to feature B. Dropping hand_finished/capture_verified here would let a re-triage
- * launder the capture rail. Only the per-feature ceremony flags (brainstormed/adversary_fired)
- * are discarded on reclassify.
+ * Delivery-obligation rail invariant: regate_pending/regate_passed are preserved
+ * UNCONDITIONALLY — including across a genuine feature SWITCH. They are a SESSION-level delivery
+ * obligation on the un-pushed branch (a HIGH sniper fix still awaiting its re-gate), so a grave
+ * fix on feature A must never ship just because the session reclassified to feature B.
+ * hand_finished/capture_verified are preserved alongside them for shape stability, but they no
+ * longer gate delivery on this lane (the array-diff rail was removed from entry-gate — capture is
+ * guarded by the real-file rail instead), so preserving them across a reclassify is no longer what
+ * stops a re-triage from laundering the capture rail. What stops it is that the real-file rail
+ * reads run-records keyed by feature, written by spawn-hand's own code.
+ * Only the per-feature ceremony flags (brainstormed/adversary_fired) are discarded on reclassify.
  *
  * Writes to <path>.<pid>.tmp then fs.renameSync to target (atomic; pid-suffixed temp
  * avoids concurrent-process collision). Never throws. Returns true on success, false otherwise.

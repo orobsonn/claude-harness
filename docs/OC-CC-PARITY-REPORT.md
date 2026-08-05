@@ -342,8 +342,23 @@ Capacidades que o Claude Code TEM e o OpenCode não:
 
 ## 6. O que fica DIFERENTE de propósito
 
-Três divergências sobrevivem. A primeira por diferença mecânica de host, provada em código; as
-outras duas por decisão consciente da frota (seção 3d), não por herança:
+Quatro divergências sobrevivem. A primeira por diferença mecânica de host, provada em código; as
+outras por decisão consciente da frota (seção 3d), não por herança:
+
+- **Array-diff `hand_finished` × `capture_verified` no gate de entrega (OC-only).** O CC **removeu**
+  esse rail; o OC **mantém**. Não é drift — não reconvergir. Na CC os dois carimbos viajam no stdout
+  do `mark.mjs`, que o orquestrador destrói de duas formas medidas: `>/dev/null` (33 de 144 chamadas)
+  e encadeamento de marcadores num só comando bash (34) — e como `decide()` roteia por substring do
+  comando com early-return, avaliando `hand-finished` **antes** de `capture-verified`, a perda é
+  assimétrica e sempre cai no lado que bloqueia: a obrigação é carimbada, a quitação não. Em 6
+  sessões reais, 2 tiveram entrega negada e **100% dos denies eram falso-positivo** — os run-records
+  em disco estavam 9/9 verdes. Na OC o defeito não existe: o marcador é ferramenta nativa com args
+  tipados (marker-authority.ts), imune a redirect e encadeamento — e os arrays têm consumidor real
+  (`session-state.mjs::terminalDeliveryProof`, o predicado de entrega terminal do autonomy
+  controller), enquanto na CC não sobrou nenhum leitor externo. Custo aceito na CC: pós-rebase o
+  rail real-file fail-opena em linhagem não-ancestral (real-file-capture-rail.mjs) onde o array-diff
+  bloquearia; aceito porque essa defesa só era acionada quando o próprio canal do marcador falhava
+  pela metade.
 
 - **Rail de hand backgrounded (CC-only).** O CC nega dispatch de spawn-hand com
   `run_in_background: true` porque um Bash job em background não re-invoca o assistente sob
