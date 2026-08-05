@@ -176,19 +176,18 @@ test("healthy-run guard via decideBash: ancestor-sha regate_passed → git push 
   assert.equal(verdict.allow, true);
 });
 
-// #ac-2.1 for the capture rail (hand_finished / capture_verified)
-test("#ac-2.1 decideBash: divergent-sha capture_verified → git push denied", () => {
-  const payload = makeBashPayload("ses_capdiv", "git push origin main");
+// The capture rail no longer array-diffs hand_finished against capture_verified: both stamps ride
+// on mark.mjs stdout, which the orchestrator silences (`>/dev/null`) or clobbers (chained markers),
+// and the loss is always asymmetric toward denying. Sha-qualified absolution semantics still govern
+// the RE-GATE rail above; delivery capture is guarded by the real-file rail, which reads the
+// on-disk run-record. The OC lane keeps its array-diff — see entry-gate.mjs for why.
+test("capture arrays no longer gate delivery, whatever the sha lineage says", () => {
   const readGateStateFn = () => ({ hand_finished: ["feat/t"], capture_verified: ["feat/t@X"] });
-  const verdict = entryDecide(payload, { readGateStateFn, isAncestorFn: () => false });
-  assert.equal(verdict.allow, false);
-});
-
-test("capture rail: ancestor-sha capture_verified → git push allowed", () => {
-  const payload = makeBashPayload("ses_capanc", "git push origin main");
-  const readGateStateFn = () => ({ hand_finished: ["feat/t"], capture_verified: ["feat/t@X"] });
-  const verdict = entryDecide(payload, { readGateStateFn, isAncestorFn: () => true });
-  assert.equal(verdict.allow, true);
+  for (const isAncestor of [true, false]) {
+    const payload = makeBashPayload(`ses_cap_${isAncestor}`, "git push origin main");
+    const verdict = entryDecide(payload, { readGateStateFn, isAncestorFn: () => isAncestor });
+    assert.equal(verdict.allow, true, `isAncestor=${isAncestor} must not gate on the capture arrays`);
+  }
 });
 
 // fidelity_pass consumer stays PREFIX-lenient (sha ignored) — a sha-qualified entry still allows.

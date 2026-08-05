@@ -1409,23 +1409,18 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "trilho-4 #1: Bash 'git push' with hand_finished unmatched by capture_verified → deny naming the pending capture",
+  "trilho-4 #1: Bash 'git push' with hand_finished unmatched by capture_verified → allow (array-diff rail removed)",
   () => {
     const payload = makeBashPayload("ses_cap_blocked", "git push origin main");
     const readGateStateFn = () => ({ hand_finished: ["feat-a/task-1"] }); // no capture_verified
 
     const verdict = decide(payload, { readGateStateFn });
 
-    assert.equal(verdict.allow, false, "git push must be denied while a capture is pending");
-    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
-    assert.ok(
-      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/task-1"),
-      `deny reason must name the pending capture — got: "${verdict.hookSpecificOutput.permissionDecisionReason}"`,
-    );
-    assert.ok(
-      verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase().includes("capture-verified"),
-      "deny reason must reference capture-verified",
-    );
+    // Both stamps ride on mark.mjs stdout; chaining them into one Bash command loses the
+    // capture-verified one, so this state means "the marker was swallowed", never "the hand was
+    // not captured". The real-file rail reads the run-record spawn-hand's code writes and is what
+    // actually guards delivery. Measured: every deny this rail ever produced was a false positive.
+    assert.equal(verdict.allow, true, "a swallowed marker must not block delivery on its own");
   },
 );
 
@@ -1474,22 +1469,21 @@ test(
 );
 
 test(
-  "trilho-4 #5: Bash 'git push' with regate matched but hand_finished unmatched → deny (capture rail fires independently)",
+  "trilho-4 #5: the re-gate rail still denies on its own — removing the capture array-diff did not weaken it",
   () => {
     const payload = makeBashPayload("ses_cap_independent", "git push origin main");
     const readGateStateFn = () => ({
-      regate_pending: ["feat-a/x"],
-      regate_passed: ["feat-a/x@abc123"], // regate rail satisfied (ancestor-sha absolution)
-      hand_finished: ["feat-a/task-1"], // but capture rail unmatched
+      regate_pending: ["feat-a/x"], // no regate_passed → the re-gate rail must still fire
+      hand_finished: ["feat-a/task-1"],
     });
 
     const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
 
-    assert.equal(verdict.allow, false, "capture rail must deny even when the regate rail is satisfied");
+    assert.equal(verdict.allow, false, "an unmatched re-gate must still deny delivery");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
     assert.ok(
-      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/task-1"),
-      "deny reason must name the pending capture",
+      verdict.hookSpecificOutput.permissionDecisionReason.includes("feat-a/x"),
+      "deny reason must name the pending re-gate",
     );
   },
 );

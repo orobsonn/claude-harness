@@ -16,10 +16,10 @@
  *
  * Bash gate (delivery-bash-gate + issue-form advisory):
  *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
- *   EITHER (a) any unmatched regate_pending (a regate_pending task_id with no matching
- *   regate_passed), OR (b) any unmatched hand_finished (a hand_finished task_id with no
- *   matching capture_verified — a finished cheap-hand whose output was not independently
- *   captured/verified). The two rails fire independently. Read-only commands (git status,
+ *   any unmatched regate_pending (a regate_pending task_id with no matching regate_passed).
+ *   Capture is guarded by the real-file rail (the on-disk run-record), NOT by an
+ *   hand_finished-vs-capture_verified array-diff — that rail was removed; see the comment at
+ *   its former site in decideBash for why. Read-only commands (git status,
  *   git diff, git log, gh pr view/list) always pass. This closes the second delivery door:
  *   a direct Bash delivery command bypasses the PreToolUse(Agent) shipper gate.
  *   Additionally, a non-blocking issue-form advisory is emitted on bare `gh issue create`
@@ -378,8 +378,8 @@ export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists)
  * Decides whether to allow or deny a Bash tool dispatch.
  * Only delivery commands (git push, gh pr create, gh pr merge) are gated; all other
  * Bash commands pass freely. A delivery command passes ONLY when BOTH rails are clear:
- * no unmatched regate (regate_pending without regate_passed) AND no unmatched capture
- * (hand_finished without capture_verified). Fail-open on any infra error (never brick
+ * no unmatched regate (regate_pending without regate_passed) AND the real-file capture rail
+ * (on-disk run-records) finds nothing wrong. Fail-open on any infra error (never brick
  * read-only work).
  *
  * Additionally, spawn-hand.mjs dispatches are gated by the fidelity rail: the task's
@@ -649,29 +649,19 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
       },
     };
   }
-  // Capture rail — independent of the re-gate rail. A finished cheap-hand (hand_finished)
-  // whose output has not been independently captured/verified (no matching capture_verified)
-  // blocks delivery. Same qualified ${feature_id}/${task_id} shape and array-diff style.
-  const handFinished = Array.isArray(gateState.hand_finished) ? gateState.hand_finished : [];
-  const captureVerified = Array.isArray(gateState.capture_verified) ? gateState.capture_verified : [];
-  // Same sha-qualified-absolution semantics as the re-gate rail above: a capture_verified clears a
-  // finished hand only when its sha is an ancestor of HEAD (unqualified/divergent → absent).
-  const unmatchedCapture = handFinished.filter((t) => !matchesAbsolution(t, captureVerified, isAncestorFn));
-  if (unmatchedCapture.length > 0) {
-    return {
-      allow: false,
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason:
-          "[entry-gate] Blocked: delivery command denied — finished cheap-hand task(s) " +
-          `${unmatchedCapture.join(", ")} still await independent capture/verification ` +
-          "(hand-finished without capture-verified). Independently capture the hand output and " +
-          "stamp capture-verified before running any delivery command " +
-          "(git push / gh pr create / gh pr merge).",
-      },
-    };
-  }
+  // NO hand_finished-vs-capture_verified array-diff rail here (removed deliberately — do NOT
+  // reintroduce it when reconciling with the OC lane's bash-decide.mjs, which still carries it).
+  // Both stamps ride on `mark.mjs` stdout, which the orchestrator routinely destroys: `>/dev/null`
+  // silences it, and chaining both markers into one Bash command loses the second (decide() routes
+  // by command substring and early-returns on the first match — and `hand-finished` is evaluated
+  // BEFORE `capture-verified`). So the loss is asymmetric and always lands on the blocking side:
+  // the obligation gets stamped, its discharge does not. Measured across six real sessions, every
+  // delivery this rail ever denied was a false positive whose run-records were green on disk.
+  // A rail that only fires when its own input half-fails is a false-positive generator, not a
+  // defense. The real-file rail below reads what spawn-hand's code writes and is the guarantee.
+  // The OC lane keeps its copy on purpose: there the marker is a typed native tool (immune to
+  // redirection and chaining) and the arrays have a real consumer (session-state.mjs's
+  // terminal-delivery predicate). See docs/OC-CC-PARITY-REPORT.md.
   // Real-file capture rail — independent of hand_finished/capture_verified (a session-scoped,
   // manually-stamped pair that a prior incident showed can be skipped for EVERY dispatch in a
   // run, leaving the array-diff above with nothing to compare). This reads the run-record

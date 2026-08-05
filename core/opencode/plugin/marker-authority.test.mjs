@@ -475,17 +475,63 @@ test("capture-verified is parent-only even with a valid record and hand_finished
   }
 });
 
-test("capture-verified rejects a SHA that does not match the real DONE record", async () => {
+test("capture-verified ignores args.sha and stamps the record's own freeze SHA", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-sha-"));
   try {
     const { file } = seed(root);
-    seedDoneHandRecord(root);
+    const { sha } = seedDoneHandRecord(root);
     const { before, execute } = await harness(root);
     assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-sha-finished")).metadata.ok, true);
     const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK, sha: "abc123deadbeef" }, "call-sha-capture");
-    assert.equal(captured.metadata.ok, false);
-    assert.match(String(captured.metadata.reason ?? captured.output), /SHA mismatch/i);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified ?? [], []);
+    assert.equal(captured.metadata.ok, true, captured.metadata.reason);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified, [`${FEATURE}/${TASK}@${sha}`]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified survives HEAD advancing between the hand finishing and the stamp", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-head-moved-"));
+  try {
+    const { file } = seed(root);
+    const { sha } = seedDoneHandRecord(root);
+    // The freeze commit of the NEXT task lands before the orchestrator stamps this one — the exact
+    // shape that used to invalidate the record permanently.
+    fs.writeFileSync(path.join(root, "next-task-freeze.txt"), "freeze\n");
+    assert.equal(spawnSync("git", ["add", "next-task-freeze.txt"], { cwd: root }).status, 0);
+    assert.equal(
+      spawnSync("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-qm", "next freeze"], { cwd: root }).status,
+      0,
+    );
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-moved-finished")).metadata.ok, true);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-moved-capture");
+    assert.equal(captured.metadata.ok, true, captured.metadata.reason);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified, [`${FEATURE}/${TASK}@${sha}`]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture-verified revalidates the producer when a later hand rewrote the record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-rewritten-"));
+  try {
+    const { file, path: recordPath, sha } = { ...seed(root), ...seedDoneHandRecord(root) };
+    const { before, execute } = await harness(root);
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-rw-finished")).metadata.ok, true);
+    assert.equal((await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-rw-capture")).metadata.ok, true);
+    const entry = `${FEATURE}/${TASK}@${sha}`;
+    assert.deepEqual(JSON.parse(fs.readFileSync(statePath(root), "utf8")).capture_verified, [entry]);
+
+    // A later hand on the same task rewrites the record from scratch: same freeze SHA (no commit in
+    // between), so the payload still collides — but `capturedVerifiedAt` is gone. This must NOT be
+    // treated as a replay; the fresh producer has to be validated and the record re-stamped.
+    seedDoneHandRecord(root, "DONE", {}, "task-call-one");
+    assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).capturedVerifiedAt, undefined);
+    const recaptured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-rw-capture-2");
+    assert.equal(recaptured.metadata.ok, true, recaptured.metadata.reason);
+    assert.match(String(JSON.parse(fs.readFileSync(recordPath, "utf8")).capturedVerifiedAt), /^\d{4}-/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).capture_verified, [entry]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
