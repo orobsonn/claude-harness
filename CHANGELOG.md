@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.53.9](https://github.com/orobsonn/claude-harness/compare/v0.53.8...v0.53.9) (2026-08-05)
+
+
+### Bug Fixes
+
+* destrava o contrato das tasks nas duas lanes ([#627](https://github.com/orobsonn/claude-harness/issues/627)) ([f0a7632](https://github.com/orobsonn/claude-harness/commit/f0a7632513c5bcbe08a7a3065b14660f90bd6652))
+
 ## [0.53.8](https://github.com/orobsonn/claude-harness/compare/v0.53.7...v0.53.8) (2026-08-04)
 
 
