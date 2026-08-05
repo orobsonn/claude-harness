@@ -159,8 +159,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
           patch = { regate_passed: [payload] }
         } else if (action === "capture-verified") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot)
-          if (!sha) return { ok: false, reason: "capture-verified requires a resolved commit SHA" }
           if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
             return { ok: false, reason: "hand_finished does not contain feature/task" }
           }
@@ -178,8 +176,27 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           if (violations.scope.length > 0 || violations.frozen.length > 0) {
             return { ok: false, reason: "hand-record contains scope or frozen violations" }
           }
+          // The host-written record — not HEAD at stamp time — is the SHA authority. Anchoring on
+          // HEAD made the stamp a race: any commit landing between the hand finishing and the
+          // marker firing invalidated the record permanently (HEAD never rewinds), and the only
+          // escape was re-dispatching a no-op hand to mint a record carrying the newer HEAD.
+          // Lineage is what the absolution rail actually needs, and isAncestorSha below asserts it.
+          // `args.sha` is deliberately ignored: the model can no longer choose which commit a
+          // capture certifies.
+          const sha = typeof record.freezeCommitSha === "string" ? record.freezeCommitSha : ""
+          if (!sha) return { ok: false, reason: "capture-verified requires a resolved commit SHA" }
           payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
-          if (Array.isArray(previous.capture_verified) && previous.capture_verified.includes(payload)) {
+          // Replay is a property of the RECORD (already stamped), never of the payload string.
+          // A later hand on the same task rewrites the record from scratch and drops
+          // `capturedVerifiedAt`, yet keeps the same freeze SHA — so a payload-keyed test would
+          // route that brand-new producer into the replay branch, which never validates it.
+          const alreadyStamped =
+            typeof record.capturedVerifiedAt === "string" && record.capturedVerifiedAt.length > 0
+          if (
+            alreadyStamped &&
+            Array.isArray(previous.capture_verified) &&
+            previous.capture_verified.includes(payload)
+          ) {
             const replayIdentity = validateOcDoneHandRecord(record, {
               featureId: authorization.featureID,
               taskId,
@@ -187,9 +204,6 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
               sha,
             })
             if (!replayIdentity.ok) return replayIdentity
-            if (typeof record.capturedVerifiedAt !== "string" || record.capturedVerifiedAt.length === 0) {
-              return { ok: false, reason: "captured hand-record stamp missing" }
-            }
             if (isAncestorSha(projectRoot, sha) !== true) {
               return { ok: false, reason: "capture-verified requires the matching record SHA to be ancestral to HEAD" }
             }
