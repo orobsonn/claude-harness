@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wireframe do console</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0d10; color: #e9edf2; }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 28px; background: #0b0d10; }
+      main { max-width: 1180px; margin: 0 auto; }
+      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #30363d; padding-bottom: 18px; }
+      h1, h2, h3, p { margin: 0; }
+      h1 { font-size: 18px; letter-spacing: .04em; }
+      h2 { font-size: 14px; color: #aab6c4; font-weight: 500; }
+      h3 { font-size: 13px; }
+      .badge, button { border: 1px solid #45505d; border-radius: 5px; padding: 5px 8px; font: inherit; font-size: 11px; }
+      .badge { color: #9bd5af; background: #11251a; }
+      .alert-badge { color: #ffc982; background: #251b11; border-color: #835927; }
+      button { background: #171c22; color: #e9edf2; }
+      button.warn { color: #ffc982; border-color: #835927; }
+      .crumb { margin: 24px 0 12px; color: #93a2b4; font-size: 12px; }
+      .screen { border: 1px solid #30363d; background: #101419; margin: 20px 0 42px; box-shadow: 0 12px 30px #0004; }
+      .screen-title { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #30363d; }
+      .attention { display: grid; grid-template-columns: 9px 1fr auto; gap: 10px; align-items: center; margin: 16px 16px 0; padding: 11px 12px; border: 1px solid #8b5b29; border-radius: 5px; background: #251b11; font-size: 12px; }
+      .attention-mark { width: 9px; height: 9px; border-radius: 50%; background: #f0a94a; }
+      .attention p { color: #d9c4a7; font-size: 11px; margin-top: 3px; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 16px; }
+      .card { border: 1px solid #30363d; border-radius: 6px; padding: 15px; min-height: 135px; background: #141a20; }
+      .card p { margin-top: 12px; color: #9aa8b8; font-size: 12px; line-height: 1.55; }
+      .card footer { display: flex; justify-content: space-between; align-items: center; margin-top: 17px; font-size: 11px; color: #7e8b99; }
+      .layout { display: grid; grid-template-columns: 1.1fr .9fr; min-height: 260px; }
+      .pane { padding: 16px; }
+      .pane + .pane { border-left: 1px solid #30363d; }
+      .row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid #242c34; font-size: 12px; }
+      .muted { color: #8190a0; font-size: 11px; }
+      .timeline { padding: 16px; }
+      .event { display: grid; grid-template-columns: 70px 14px 1fr; gap: 10px; min-height: 44px; font-size: 12px; }
+      .dot { width: 10px; height: 10px; margin-top: 2px; border-radius: 50%; background: #6da8e8; box-shadow: 0 0 0 3px #1b334a; }
+      .event:last-child .dot { background: #e8b46d; box-shadow: 0 0 0 3px #3e2c17; }
+      .event p { color: #aab6c4; line-height: 1.45; }
+      .log { margin: 0 16px 16px; padding: 12px; border: 1px solid #30363d; border-radius: 5px; background: #090c0f; color: #aab6c4; font-size: 11px; line-height: 1.6; }
+      .confirm { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 16px 16px; padding: 13px; border: 1px solid #835927; border-radius: 5px; background: #1d1711; }
+      .confirm p { margin-top: 4px; color: #b9a78f; font-size: 11px; line-height: 1.4; }
+      .confirm-actions { display: flex; gap: 8px; white-space: nowrap; }
+      .retention { margin: 0 16px 16px; padding: 12px; border-left: 3px solid #6da8e8; background: #101a22; }
+      .retention p { margin-top: 5px; color: #aab6c4; font-size: 11px; line-height: 1.4; }
+      .direction { display: inline-block; margin: 30px 0 -4px; border: 1px solid #45505d; border-radius: 999px; padding: 5px 9px; color: #c3ceda; font-size: 11px; }
+      .board { display: grid; grid-template-columns: 175px 1fr; min-height: 360px; background: #f5f0e8; color: #23211e; }
+      .rail { padding: 18px; background: #202b39; color: #f4f0e9; }
+      .rail h2 { color: #f4f0e9; margin-bottom: 26px; }
+      .nav-item { padding: 10px 8px; margin: 5px 0; border-radius: 4px; font-size: 11px; }
+      .nav-item.active { background: #e57a44; color: #1e1712; font-weight: 700; }
+      .board-content { padding: 22px; }
+      .board-head { display: flex; justify-content: space-between; align-items: end; border-bottom: 2px solid #23211e; padding-bottom: 12px; }
+      .board-head h2 { color: #23211e; font-size: 17px; }
+      .columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-top: 18px; }
+      .column { border-top: 5px solid #607890; background: #e6dfd4; padding: 10px; }
+      .column:nth-child(2) { border-color: #e57a44; }
+      .column:nth-child(3) { border-color: #8d5a78; }
+      .column h3 { color: #34302c; margin-bottom: 11px; }
+      .ticket { background: #fffdf8; border: 1px solid #c8bfb2; padding: 11px; margin: 8px 0; box-shadow: 2px 2px 0 #c8bfb2; font-size: 11px; line-height: 1.55; }
+      .ticket small { display: block; color: #6f6960; margin-top: 7px; }
+      .calm { color: #1e2935; background: #e8edf0; padding: 22px; min-height: 360px; }
+      .calm-top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 22px; }
+      .calm-title { font-family: Georgia, serif; font-size: 26px; letter-spacing: -.04em; }
+      .calm-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+      .story { background: #fafbfa; border-radius: 12px; padding: 20px; }
+      .story h2 { color: #1e2935; font-size: 16px; }
+      .step { display: grid; grid-template-columns: 30px 1fr; gap: 10px; padding: 14px 0; border-bottom: 1px solid #d7dee2; font-size: 12px; }
+      .step b { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #1e7d77; color: white; font-size: 10px; }
+      .side-note { padding: 17px; border-radius: 12px; background: #d7e6df; }
+      .side-note h3 { margin-bottom: 14px; }
+      .metric { font-family: Georgia, serif; font-size: 34px; margin: 22px 0 4px; }
+      @media (max-width: 760px) { body { padding: 14px; } .grid, .layout { grid-template-columns: 1fr; } .pane + .pane { border-left: 0; border-top: 1px solid #30363d; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>CONSOLE / AMBIENTE LOCAL</h1>
+        <span class="badge">ROTINA ATIVA</span>
+      </header>
+
+      <p class="direction">DIREÇÃO A · terminal técnico</p>
+      <p class="crumb">01 / repositórios</p>
+      <section class="screen" aria-label="Lista de repositórios">
+        <div class="screen-title"><h2>Repositórios configurados</h2><span class="muted">3 disponíveis</span></div>
+        <div class="attention"><i class="attention-mark"></i><div><strong>ATENÇÃO NECESSÁRIA</strong><p>1 repositório precisa de decisão antes de continuar.</p></div><button>Ver lista</button></div>
+        <div class="grid">
+          <article class="card"><h3>REPOSITÓRIO ALFA</h3><p>1 sessão em andamento<br>2 itens aguardando</p><footer><span class="badge">CONSUMO ATIVO</span><button>Abrir</button></footer></article>
+          <article class="card"><h3>REPOSITÓRIO BETA</h3><p>Nenhuma sessão em andamento<br>1 item aguardando</p><footer><span class="badge">CONSUMO ATIVO</span><button>Abrir</button></footer></article>
+          <article class="card"><h3>REPOSITÓRIO GAMA</h3><p>1 sinal exige revisão<br>0 itens aguardando</p><footer><span class="badge alert-badge">ATENÇÃO</span><button>Abrir</button></footer></article>
+          <article class="card"><h3>REPOSITÓRIO DELTA</h3><p>Execução pausada<br>limpeza em 41h 12m</p><footer><span class="badge alert-badge">PAUSADA</span><button>Abrir</button></footer></article>
+        </div>
+      </section>
+
+      <p class="crumb">02 / repositório / fila e sessões</p>
+      <section class="screen" aria-label="Fila e sessões">
+        <div class="screen-title"><h2>REPOSITÓRIO ALFA</h2><button class="warn">Desativar consumo</button></div>
+        <div class="layout">
+          <section class="pane"><h3>FILA</h3><div class="row"><span>ITEM DE TRABALHO A</span><span class="muted">elegível</span><button>Retirar</button></div><div class="row"><span>ITEM DE TRABALHO B</span><span class="muted">aguardando</span><button>Retirar</button></div><div class="row"><span>ITEM DE TRABALHO C</span><span class="muted">fora da fila</span><button>Enfileirar</button></div></section>
+          <section class="pane"><h3>SESSÕES</h3><div class="row"><span>SESSÃO EM CURSO</span><span class="badge">ATIVA</span><button>Abrir</button></div><div class="row"><span>SESSÃO ANTERIOR</span><span class="muted">concluída</span><button>Abrir</button></div></section>
+        </div>
+      </section>
+
+      <p class="crumb">03 / sessão / detalhe</p>
+      <section class="screen" aria-label="Detalhe da sessão">
+        <div class="screen-title"><h2>SESSÃO EM CURSO · ITEM DE TRABALHO A</h2><button class="warn">Parar sessão</button></div>
+        <div class="timeline">
+          <div class="event"><span class="muted">09:12</span><i class="dot"></i><p><strong>Iniciada</strong><br>Ambiente preparado e trabalho assumido.</p></div>
+          <div class="event"><span class="muted">09:14</span><i class="dot"></i><p><strong>Em progresso</strong><br>Etapa atual apresentada em linguagem de operação.</p></div>
+          <div class="event"><span class="muted">agora</span><i class="dot"></i><p><strong>Revisão necessária</strong><br>Um sinal pede atenção antes de avançar.</p></div>
+        </div>
+        <pre class="log">ÚLTIMAS LINHAS SEGURAS&#10;[hora] mensagem resumida da execução&#10;[hora] mensagem resumida da execução&#10;[hora] alerta visível para investigação</pre>
+        <div class="confirm"><div><strong>APÓS CLICAR EM PARAR · CONFIRMAR ESTA SESSÃO?</strong><p>O trabalho parcial será preservado para inspeção. A execução, a revisão, o merge e a fila deste repositório não avançam sozinhos.</p></div><div class="confirm-actions"><button>Cancelar</button><button class="warn">Confirmar parada</button></div></div>
+        <div class="retention"><strong>ESTADO APÓS PARADA · PAUSADA · RESTAM 41H 12M</strong><p>Branch, worktree e histórico continuam disponíveis até a limpeza automática.</p></div>
+      </section>
+
+      <p class="direction">DIREÇÃO B · central de operações</p>
+      <section class="screen" aria-label="Central de operações">
+        <div class="board">
+          <aside class="rail"><h2>PAINEL</h2><div class="nav-item active">Visão geral</div><div class="nav-item">Área alfa</div><div class="nav-item">Área beta</div><div class="nav-item">Histórico</div></aside>
+          <div class="board-content"><div class="board-head"><div><h2>TRABALHO EM ANDAMENTO</h2><span class="muted">visão por prioridade</span></div><button>Atualizar</button></div><div class="columns"><section class="column"><h3>AGUARDANDO</h3><div class="ticket">ITEM A<small>pronto para começar</small></div><div class="ticket">ITEM B<small>requer atenção</small></div></section><section class="column"><h3>EM CURSO</h3><div class="ticket">ITEM C<small>último sinal: agora</small></div></section><section class="column"><h3>REVISAR</h3><div class="ticket">ITEM D<small>decisão pendente</small></div></section></div></div>
+        </div>
+      </section>
+
+      <p class="direction">DIREÇÃO C · leitura calma</p>
+      <section class="screen" aria-label="Linha do tempo calma">
+        <div class="calm"><div class="calm-top"><div class="calm-title">Visão do dia</div><button>Ver todas</button></div><div class="calm-layout"><section class="story"><h2>ATIVIDADE MAIS RELEVANTE</h2><div class="step"><b>1</b><div><strong>Preparação concluída</strong><br><span class="muted">O próximo passo está em andamento.</span></div></div><div class="step"><b>2</b><div><strong>Revisão em curso</strong><br><span class="muted">Um ponto pede confirmação antes de continuar.</span></div></div><div class="step"><b>3</b><div><strong>Resultado esperado</strong><br><span class="muted">O desfecho será registrado aqui.</span></div></div></section><aside class="side-note"><h3>RESUMO</h3><div class="metric">03</div><span class="muted">itens acompanhados</span><div class="metric">01</div><span class="muted">precisa de atenção</span><div style="margin-top: 24px"><button>Ir para o item</button></div></aside></div></div>
+      </section>
+    </main>
+  </body>
+</html>
