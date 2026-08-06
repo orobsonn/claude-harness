@@ -18,3 +18,6 @@
 
 # Material de trabalho com paths locais / dados pessoais — não distribuir
 docs/raw/
+
+# Transcripts de sessão do Claude Code (path local + conteúdo da conversa)
+projects/
