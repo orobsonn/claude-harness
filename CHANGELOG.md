@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.54.0](https://github.com/orobsonn/claude-harness/compare/v0.53.9...v0.54.0) (2026-08-08)
+
+
+### Features
+
+* **opencode:** override por papel + reasoningEffort no routing ([#631](https://github.com/orobsonn/claude-harness/issues/631)) ([1b7c57e](https://github.com/orobsonn/claude-harness/commit/1b7c57e67992be41be462814de3b0dc1f0bdbc63))
+
 ## [0.53.9](https://github.com/orobsonn/claude-harness/compare/v0.53.8...v0.53.9) (2026-08-05)
 
 
