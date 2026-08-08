@@ -61,13 +61,15 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 2. Elicit: preset dual-safe **or** custom slots (product language first).
 3. **When the operator brings a custom model slug, confirm it exists first:** run `opencode models` (optionally `opencode models <provider>`) and check the slug is in the list. Catch the typo (`gpt-5.6-tera`) here, in product language, before applying. This is the primary check — the model is capable, use it. (Auth state is the operator's responsibility; do not try to verify logins.)
 4. Apply via `configure-routing({ action: "apply", preset })` (primary) or `({ action: "apply", slots })` (escape hatch). The tool validates, stages, and rolls back on mid-fail; on `ok:false` it wrote nothing — explain the reason in pt-br and re-ask. **Backstop:** the tool independently re-checks every routing model against `opencode models` and rejects an unknown slug before writing — the deterministic net for when this skill isn't loaded (headless/cloud, compaction). Fail-open if the binary can't be listed.
-5. Report changed files + warnings; demand **session restart**.
+5. **Ship to main** (default, same session) — follow `skills/lifecycle-ship-to-main.md`.
+6. Report PR URL + what changed; demand **session restart**.
 
 ## Does not
 
 - Force a second eye on by default — `secondEyeModel` is opt-in and fail-open.
 - Confuse runtime `primary_only` with a config toggle.
-- Invent roles, touch hand auth tokens, or auto-commit.
+- Invent roles or touch hand auth tokens.
+- Leave the operator to open a second session just to commit/PR (ship is the default close-out).
 - Write invalid config (zero partial write on validate fail).
 
 ---
@@ -157,12 +159,27 @@ On `ok:true` → list `changed` + `warnings`.
 - `targetRoot` = cwd sempre; `opencode.json` só sob cwd/ocRoot (nunca `../`)  
 - AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 
-### 4. Close
+### 4. Ship to main (default, same session)
 
-- Resumo pt-br do que mudou (papéis, não slugs só).
+**Do not stop at "commit when you want".** After `ok:true` with dirty harness paths, follow
+`skills/lifecycle-ship-to-main.md` end-to-end: branch → selective stage → commit → push → PR →
+squash merge → pull main.
+
+Skip ship only if the tree is clean, or the operator explicitly said not to ship. Prefer:
+
+```bash
+git commit -m "chore: reconfigura model routing do harness"
+```
+
+(Other ship commands: exact list in `lifecycle-ship-to-main.md` — allowlisted on this lane.)
+
+Never stage secrets. If apply targeted harness **source** (`core/opencode`), remember CI
+`model-routing.test.mjs` bans xAI/Grok on required committed slots.
+
+### 5. Close
+
+- Resumo pt-br do que mudou (papéis) + URL do PR mergeado.
 - **Obrigatório:** reiniciar a sessão OpenCode (agents carregam no boot).
-- Se aplicou em source do harness: lembrar CI `model-routing.test.mjs` banne xAI/Grok em surfaces committed.
-- Não commitar secrets. Commit só se o operador pedir.
 
 ---
 

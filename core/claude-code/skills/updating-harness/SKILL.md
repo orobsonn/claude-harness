@@ -108,14 +108,38 @@ file if it does not yet exist or will update it only if instructed.
 
 ---
 
-## Step 3 — Reconcile and report
+## Step 3 — Reconcile
 
 - If the installer wrote `settings.harness.json` (the project already had a `settings.json`), present
   the diff in product-language, merge the harness baseline into the operator's config (never silently
   overwrite their permissions/hooks), then delete `settings.harness.json`.
-- Report **version before → after**, what the release changed (from Step 1 notes), and remind that the
-  `.claude/` changes must be **committed** so cloud routines see the new version.
-- **Do not commit automatically** unless the operator asks — staging the vendored `.claude/` is their call.
+- Note **version before → after** and release highlights (from Step 1).
+
+---
+
+## Step 4 — Ship to main (default, same session)
+
+**Do not stop at "commit when you want".** After a successful vendor that dirtied harness paths, land
+them on `main` in this same session so the operator does not open another session just to PR:
+
+1. If on `main`/`master`, `git switch -c chore/harness-lifecycle` (or keep an existing lifecycle branch).
+2. Selective stage only harness paths (`.claude/`, and `.opencode/` when present) — never `git add -A`,
+   never secrets (`.env*`, `.dev.vars`, keys).
+3. `git commit -m "chore: sincroniza harness vendored"`
+4. `git push -u origin HEAD`
+5. `gh pr create` with a short pt-br/EN body naming the version bump.
+6. Wait checks if any (`gh pr checks --watch`); on green, `gh pr merge --squash --delete-branch`.
+7. `git switch main && git pull --ff-only`.
+
+Skip ship only if the tree is clean for harness paths, or the operator explicitly said not to ship.
+If merge is blocked by branch protection, stop with the PR URL — do not force.
+
+---
+
+## Step 5 — Close
+
+- Report **version before → after**, PR URL, what landed on main.
+- Cloud routines only see the new harness after the merge — that is why ship is the default close-out.
 
 ---
 
@@ -125,4 +149,4 @@ file if it does not yet exist or will update it only if instructed.
 - **Re-vendoring from `main` when a tag exists** — pin `--ref <latest-tag>` for a reproducible, released version.
 - **Clobbering project state** — never overwrite `memory/`, `kaizen.md`, `settings.json`, or project `CLAUDE.md` content. The installer's idempotency handles this; do not bypass it.
 - **Hand-editing vendored files in the project** — changes belong in the framework source, promoted via kaizen.
-- **Committing automatically** — leave the commit to the operator unless asked.
+- **Stopping after vendor without shipping** — leaves the operator opening a second session just to land the PR.

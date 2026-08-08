@@ -9,7 +9,7 @@ Nomes de skills, agents e arquivos ficam em inglês (como no disco).
 |---|---|
 | `core/opencode/docs/OPERATOR-GUIDE.md` | `.opencode/docs/OPERATOR-GUIDE.md` |
 
-Atualiza com o harness (`oc-updating-harness`). Depois de update: **reinicie a sessão** OpenCode.
+Atualiza com o harness (`/updating-harness`) — a lane já abre PR e mergeia na main. Depois: **reinicie a sessão** OpenCode.
 
 **Não é** o README do repo (mistura Claude Code + VPS). **Este** guia cobre **só o shell OpenCode**.
 
@@ -183,8 +183,8 @@ As duas de lifecycle são **comandos** — não peça em prosa (o `build` recusa
 
 | Comando | Quando | O que faz |
 |---|---|---|
-| **`/updating-harness`** | Instalar, atualizar ou sincronizar o harness | Vendor `.opencode/` da release (roda no `harness-config`) |
-| **`/configuring-model-routing`** | Trocar os modelos dos papéis | Reescreve routing + agents + AGENTS §8 (roda no `harness-config`) |
+| **`/updating-harness`** | Instalar, atualizar ou sincronizar o harness | Vendor `.opencode/` da release + PR mergeado na main (lane `harness-config`) |
+| **`/configuring-model-routing`** | Trocar os modelos dos papéis | Reescreve routing + agents + AGENTS §8 + PR mergeado na main (lane `harness-config`) |
 
 As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 
@@ -231,7 +231,8 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
    - `xai-ollama-dual` — olhos Grok + second eye opt-in/hands Ollama  
 4. Aplica em **todos** os pontos:  
    `harness.routing.json` · frontmatter de **todos** os agents · `AGENTS.md` §8 · `opencode.json`  
-5. **Reinicia a sessão.**
+5. **Ship automático:** abre PR, espera checks, squash-merge na `main` (mesma sessão — não precisa abrir outra).  
+6. **Reinicia a sessão.**
 
 **Regras duras (não são “dica”):**
 
@@ -258,7 +259,7 @@ npx -y "github:orobsonn/claude-harness#<tag>" init --target opencode
 
 - Detecta install vs update por `.opencode/.harness-version`.  
 - **Não** use `@latest` do npm (pode vendorar shell errado/stale).  
-- Commita `.opencode/` (cron/cloud só enxerga o repo).  
+- **Ship automático:** PR + squash-merge na `main` na mesma sessão (cron/cloud só enxerga o repo commitado).  
 - **Reinicia a sessão.**  
 - Headless: a skill **recusa** (não mexe no harness sozinha).
 

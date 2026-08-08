@@ -25,8 +25,8 @@ This is a top-level, interactive lifecycle operation, not a delivery. Run only f
 request and only when no delivery is active. Do not call `classify`, create or modify a plan/spec,
 load `oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. This runs in the
 `harness-config` lane, which the operator reaches by typing `/updating-harness` — never from `build`.
-Run the exact release CLI command, report the result, and require a session restart. In headless or
-relayed input, stop without modifying the harness.
+Run the exact release CLI command, ship the result to main via PR (see Step 4), and require a session
+restart. In headless or relayed input, stop without modifying the harness.
 </HARD-GATE>
 
 ---
@@ -96,7 +96,7 @@ paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/
 
 ---
 
-## Step 3 — Reconcile and report
+## Step 3 — Reconcile
 
 - If the CLI wrote `opencode.harness.json`, the project's existing `opencode.json` could **not** be
   parsed (invalid JSON, or not a JSON object) — the CLI refused to touch it and dropped the harness
@@ -104,12 +104,34 @@ paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/
   operator — the lane cannot write files, and repairing a broken config unattended is exactly the
   move that loses their settings. A valid `opencode.json` never produces this file: it is updated in
   place.
-- Report **version before → after** and remind that the `.opencode/` changes must be **committed** so
-  cloud routines see the new version.
-- Stop after the update and tell the operator to restart the session. Plugins already loaded in the
-  current process still run the previous version and must not continue as a hybrid runtime.
-- Point the operator to the human guide: `.opencode/docs/OPERATOR-GUIDE.md` (skills, plan vs build, routing).
-- **Do not commit automatically** unless the operator asks.
+- Note **version before → after** (for the final report).
+
+---
+
+## Step 4 — Ship to main (default, same session)
+
+**Do not stop at "commit when you want".** After a successful update that dirtied harness paths, follow
+`skills/lifecycle-ship-to-main.md` end-to-end in this same session: branch → selective stage → commit →
+push → PR → squash merge → pull main.
+
+Skip ship only if the tree is already clean for harness paths, or the operator explicitly said not to
+ship. Prefer commit message:
+
+```bash
+git commit -m "chore: sincroniza harness vendored"
+```
+
+(Use the other commands exactly as listed in `lifecycle-ship-to-main.md` — they are allowlisted on
+this lane.)
+
+---
+
+## Step 5 — Close
+
+- Report in pt-br: version before → after, PR URL, what landed on main.
+- **Mandatory:** operator must **restart the OpenCode session** — plugins already loaded still run the
+  previous version; a hybrid runtime is forbidden.
+- Point to `.opencode/docs/OPERATOR-GUIDE.md` when useful.
 
 ---
 
@@ -121,4 +143,5 @@ paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/
 - **Passing a runtime word to the low-level engine's `--target`** — from OpenCode you drive the CLI, whose
   `--target` IS the runtime. Never hand-invoke the engine's directory-`--target` with `opencode`/`both`.
 - **Inferring "add a runtime" from detection** — detection is blind to a shell that isn't there yet; adding one needs explicit operator intent (`both`).
-- **Committing automatically** — leave the commit to the operator unless asked.
+- **Stopping after vendor without shipping** — leaves the operator opening a second session just to land the PR. Ship is the default close-out.
+- **Shipping unrelated project files** — only harness lifecycle paths (see ship procedure).

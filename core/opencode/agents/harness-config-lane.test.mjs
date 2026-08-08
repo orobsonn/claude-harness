@@ -32,13 +32,34 @@ const VENDOR_CORE = join(
 const LIFECYCLE_OPERATIONS = ["configuring-model-routing", "updating-harness"];
 const LIFECYCLE_SKILL_NAMES = LIFECYCLE_OPERATIONS.map((op) => `oc-${op}`);
 
-/** Command heads the lane's shell allowlist may grant — derived from the two skills' own commands. */
+/** Command heads the lane's shell allowlist may grant — lifecycle engines + ship-to-main. */
 const ALLOWED_BASH_HEADS = [
   "test -f .opencode/.harness-version",
   "echo ",
   "gh release view --repo orobsonn/claude-harness",
   'npx -y "github:orobsonn/claude-harness#v',
   "opencode models",
+  "git status",
+  "git branch",
+  "git diff",
+  "git rev-parse",
+  "git switch",
+  "git checkout main",
+  "git pull",
+  "git add .opencode",
+  "git add .claude",
+  "git add opencode.json",
+  "git add AGENTS.md",
+  "git add harness.routing.json",
+  "git add core/opencode",
+  "git commit -m ",
+  "git push -u origin HEAD",
+  "git push -u origin ",
+  "gh pr create ",
+  "gh pr merge ",
+  "gh pr view ",
+  "gh pr checks ",
+  "gh pr list ",
 ];
 
 function frontmatter(content) {
@@ -107,23 +128,32 @@ test("harness-config shell allowlist is closed and holds no open wildcard", () =
 });
 
 /**
- * @description Every shell command a SKILL.md fences in a ```bash block, split into the sub-commands
- * OpenCode actually matches. The permission layer walks the tree-sitter `command` nodes, so a
- * composite line grants nothing unless each of its parts is allowed on its own.
+ * @description Every shell command a markdown file fences in a ```bash block, split into the
+ * sub-commands OpenCode actually matches. The permission layer walks the tree-sitter `command`
+ * nodes, so a composite line grants nothing unless each of its parts is allowed on its own.
  */
-function skillSubCommands(skillName) {
-  const body = readFileSync(join(SKILLS_DIR, skillName, "SKILL.md"), "utf8");
+function bashSubCommandsFrom(filePath) {
+  const body = readFileSync(filePath, "utf8");
   return [...body.matchAll(/^```bash\r?\n([\s\S]*?)^```/gm)]
     .flatMap((block) => block[1].split(/\r?\n/))
     // Trailing `# comment`, never the `#tag` fragment inside a git URL.
     .map((line) => line.replace(/\s+#\s.*$/, "").trim())
     .filter((line) => line && !line.startsWith("#"))
-    .flatMap((line) => line.split(/&&|\|\||[;|]/))
+    .flatMap((line) => line.split(/&&|\|\||;/))
     .map((part) => part.trim())
     .filter(Boolean)
-    // `core/` paths exist only in the harness source repo, which never vendors the lane into itself.
-    .filter((part) => !part.includes(" core/"));
+    // Smoke-only `node --test core/...` fences in skills are not run by the lane.
+    .filter((part) => !part.includes(" core/") && !part.startsWith("node --test"));
 }
+
+/** Lifecycle skills + shared ship-to-main procedure (same session close-out). */
+const LIFECYCLE_BASH_SOURCES = [
+  ...LIFECYCLE_OPERATIONS.map((name) => ({ label: name, path: join(SKILLS_DIR, name, "SKILL.md") })),
+  {
+    label: "lifecycle-ship-to-main",
+    path: join(SKILLS_DIR, "lifecycle-ship-to-main.md"),
+  },
+];
 
 test("every command the lifecycle skills run is covered by the lane's allowlist", () => {
   const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
@@ -133,12 +163,13 @@ test("every command the lifecycle skills run is covered by the lane's allowlist"
     .slice(1)
     .map((rule) => splitRule(rule).pattern.split("*")[0]);
 
-  for (const skillName of LIFECYCLE_OPERATIONS) {
-    for (const command of skillSubCommands(skillName)) {
+  for (const source of LIFECYCLE_BASH_SOURCES) {
+    assert.ok(existsSync(source.path), `missing lifecycle bash source ${source.label}`);
+    for (const command of bashSubCommandsFrom(source.path)) {
       const stem = command.split("<")[0];
       assert.ok(
         grantedStems.some((granted) => stem.startsWith(granted) || granted.startsWith(stem)),
-        `${skillName} runs "${command}", which no allowlist entry grants — the lane would deny it`,
+        `${source.label} runs "${command}", which no allowlist entry grants — the lane would deny it`,
       );
     }
   }
