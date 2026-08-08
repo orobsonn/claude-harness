@@ -12,7 +12,9 @@ import {
   CANONICAL_DEFAULT_ROUTING,
   listPresets,
   listRoutingTouchpoints,
+  parseRouteValue,
   replaceFrontmatterModel,
+  replaceFrontmatterRoute,
   rewriteAgentsModelTable,
   routingFromPreset,
   validateRouting,
@@ -86,6 +88,129 @@ test("HARDENING: buildRoutingFromSlots still accepts the full valid slot set", (
     testAuthor: "ollama-cloud/glm-5.2",
   });
   assert.equal(ok.ok, true, ok.reason);
+});
+
+test("parseRouteValue accepts slug or {model, reasoningEffort?}", () => {
+  assert.deepEqual(parseRouteValue("openai/gpt-5.5", "x"), { ok: true, route: { model: "openai/gpt-5.5" } });
+  assert.deepEqual(parseRouteValue({ model: "openai/gpt-5.5", reasoningEffort: "high" }, "x"), {
+    ok: true,
+    route: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+  });
+  assert.equal(parseRouteValue({ model: "openai/gpt-5.5", temperature: 0.1 }, "x").ok, false);
+  assert.equal(parseRouteValue("nope", "x").ok, false);
+});
+
+test("buildRoutingFromSlots roles overlay + hands effort (extreme malleability)", () => {
+  const built = buildRoutingFromSlots({
+    primaryEye: "xai/grok-4.5",
+    supportEye: "xai/grok-4.5",
+    testAuthor: "xai/grok-4.5",
+    roles: {
+      planner: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+      "plan-reviewer": { model: "openai/gpt-5.5", reasoningEffort: "high" },
+      adversary: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+      harvester: { model: "openai/gpt-5.6-luna", reasoningEffort: "medium" },
+      shipper: { model: "openai/gpt-5.6-luna", reasoningEffort: "medium" },
+    },
+    hands: {
+      low: { model: "openai/gpt-5.6-luna", reasoningEffort: "low" },
+      medium: { model: "openai/gpt-5.6-luna", reasoningEffort: "medium" },
+      high: { model: "openai/gpt-5.6-terra", reasoningEffort: "medium" },
+    },
+    supportsReasoningEffort: { xai: true },
+  });
+  assert.equal(built.ok, true, built.reason);
+  const r = built.routing.roles;
+  assert.equal(r.build.model, "xai/grok-4.5");
+  assert.equal(r.compliance.model, "xai/grok-4.5");
+  assert.equal(r.security.model, "xai/grok-4.5");
+  assert.equal(r.planner.model, "openai/gpt-5.5");
+  assert.equal(r.planner.reasoningEffort, "high");
+  assert.equal(r["plan-reviewer"].reasoningEffort, "high");
+  assert.equal(r.adversary.reasoningEffort, "high");
+  assert.equal(r.harvester.model, "openai/gpt-5.6-luna");
+  assert.equal(r.harvester.reasoningEffort, "medium");
+  assert.equal(r.shipper.reasoningEffort, "medium");
+  assert.equal(r.executor.tiers.low.reasoningEffort, "low");
+  assert.equal(r.executor.tiers.medium.reasoningEffort, "medium");
+  assert.equal(r.executor.tiers.high.model, "openai/gpt-5.6-terra");
+  assert.equal(r.sniper.tiers.high.reasoningEffort, "medium");
+  assert.equal(r["test-author"].model, "xai/grok-4.5");
+});
+
+test("buildRoutingFromSlots rejects effort when modelCapabilities say no", () => {
+  const bad = buildRoutingFromSlots({
+    primaryEye: "ollama-cloud/glm-5.2",
+    supportEye: "openai/gpt-5.5",
+    roles: {
+      planner: { model: "ollama-cloud/glm-5.2", reasoningEffort: "high" },
+    },
+  });
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /does not support reasoningEffort/i);
+});
+
+test("buildRoutingFromSlots routing escape hatch is exclusive and validated", () => {
+  const mixed = buildRoutingFromSlots({
+    primaryEye: "openai/gpt-5.6-sol",
+    routing: { version: 2, roles: {}, modelCapabilities: {} },
+  });
+  assert.equal(mixed.ok, false);
+  assert.match(mixed.reason, /exclusive/i);
+
+  const fromPreset = routingFromPreset("openai-ollama-default");
+  assert.equal(fromPreset.ok, true);
+  const ok = buildRoutingFromSlots({ routing: fromPreset.routing });
+  assert.equal(ok.ok, true, ok.reason);
+  assert.equal(ok.routing.roles.build.model, "openai/gpt-5.6-terra");
+});
+
+test("replaceFrontmatterRoute sets and clears reasoningEffort", () => {
+  const body = "---\ndescription: x\nmodel: old/provider\nmode: subagent\n---\n\n# Hi\n";
+  const withEffort = replaceFrontmatterRoute(body, { model: "openai/gpt-5.5", reasoningEffort: "high" });
+  assert.equal(withEffort.ok, true);
+  assert.match(withEffort.body, /^model: openai\/gpt-5\.5$/m);
+  assert.match(withEffort.body, /^reasoningEffort: high$/m);
+
+  const cleared = replaceFrontmatterRoute(withEffort.body, { model: "openai/gpt-5.5" });
+  assert.equal(cleared.ok, true);
+  assert.match(cleared.body, /^model: openai\/gpt-5\.5$/m);
+  assert.doesNotMatch(cleared.body, /^reasoningEffort:/m);
+
+  // model-only helper must not strip effort
+  const modelOnly = replaceFrontmatterModel(withEffort.body, "openai/gpt-5.6-sol");
+  assert.match(modelOnly.body, /^reasoningEffort: high$/m);
+});
+
+test("applyRoutingToDisk writes reasoningEffort into agent frontmatter", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "apply-routing-effort-"));
+  try {
+    seedMiniOcRoot(root);
+    const built = buildRoutingFromSlots({
+      primaryEye: "openai/gpt-5.6-sol",
+      supportEye: "openai/gpt-5.6-terra",
+      roles: {
+        planner: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+      },
+      hands: {
+        low: { model: "openai/gpt-5.6-luna", reasoningEffort: "low" },
+        medium: "openai/gpt-5.6-luna",
+        high: "openai/gpt-5.6-terra",
+      },
+    });
+    assert.equal(built.ok, true, built.reason);
+    const applied = applyRoutingToDisk({ targetRoot: root, routing: built.routing, updateOpencodeJson: false });
+    assert.equal(applied.ok, true, applied.reason);
+    const plannerMd = fs.readFileSync(path.join(root, "agents", "planner.md"), "utf8");
+    assert.match(plannerMd, /^model: openai\/gpt-5\.5$/m);
+    assert.match(plannerMd, /^reasoningEffort: high$/m);
+    const execLow = fs.readFileSync(path.join(root, "agents", "executor-low.md"), "utf8");
+    assert.match(execLow, /^reasoningEffort: low$/m);
+    const buildMd = fs.readFileSync(path.join(root, "agents", "build.md"), "utf8");
+    assert.doesNotMatch(buildMd, /^reasoningEffort:/m);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("listRoutingTouchpoints covers routing agents AGENTS opencode", () => {

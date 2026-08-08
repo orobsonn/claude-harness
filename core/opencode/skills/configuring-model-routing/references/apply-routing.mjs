@@ -8,38 +8,76 @@ import { validateRouting } from "../../../../shared/lib/routing-validate.mjs";
 
 export { validateRouting };
 
-/** @description Agent basename (no .md) → resolver of model string from routing roles. */
-export const AGENT_MODEL_RESOLVERS = Object.freeze({
-  build: (r) => r.build?.model,
-  plan: (r) => r.build?.model,
-  "harness-config": (r) => r.build?.model,
-  planner: (r) => r.planner?.model,
-  compliance: (r) => r.compliance?.model,
-  security: (r) => r.security?.model,
-  harvester: (r) => r.harvester?.model,
-  shipper: (r) => r.shipper?.model,
-  "test-author": (r) => r["test-author"]?.model,
-  "plan-reviewer": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
-  "plan-reviewer-family-1": (r) => r["plan-reviewer"]?.model ?? r["plan-reviewer"]?.families?.["family-1"]?.model,
-  // family-2 / openai: second-eye slot. Only rewrite when secondEyeModel (or legacy family-2) is set —
-  // never hardcode Grok when the opt-in is off (absence must leave the stub inert).
+/**
+ * @description Agent basename (no .md) → resolver of route `{ model, reasoningEffort? }` from routing roles.
+ * Second-eye stubs return undefined when secondEyeModel is absent (leave frontmatter inert).
+ */
+export const AGENT_ROUTE_RESOLVERS = Object.freeze({
+  build: (r) => asAgentRoute(r.build),
+  plan: (r) => asAgentRoute(r.build),
+  "harness-config": (r) => asAgentRoute(r.build),
+  planner: (r) => asAgentRoute(r.planner),
+  compliance: (r) => asAgentRoute(r.compliance),
+  security: (r) => asAgentRoute(r.security),
+  harvester: (r) => asAgentRoute(r.harvester),
+  shipper: (r) => asAgentRoute(r.shipper),
+  "test-author": (r) => asAgentRoute(r["test-author"]),
+  "plan-reviewer": (r) => asAgentRoute(r["plan-reviewer"]) ?? asAgentRoute(r["plan-reviewer"]?.families?.["family-1"]),
+  "plan-reviewer-family-1": (r) =>
+    asAgentRoute(r["plan-reviewer"]) ?? asAgentRoute(r["plan-reviewer"]?.families?.["family-1"]),
+  // family-2 / openai: second-eye slot. Only rewrite when secondEyeModel (or legacy family-2) is set.
   "plan-reviewer-family-2": (r) =>
-    r["plan-reviewer"]?.secondEyeModel ?? r["plan-reviewer"]?.families?.["family-2"]?.model,
+    secondEyeRoute(r["plan-reviewer"]) ?? asAgentRoute(r["plan-reviewer"]?.families?.["family-2"]),
   "plan-reviewer-openai": (r) =>
-    r["plan-reviewer"]?.secondEyeModel ?? r["plan-reviewer"]?.families?.["family-2"]?.model,
-  adversary: (r) => r.adversary?.model ?? r.adversary?.families?.["family-1"]?.model,
-  "adversary-family-1": (r) => r.adversary?.model ?? r.adversary?.families?.["family-1"]?.model,
-  "adversary-family-2": (r) =>
-    r.adversary?.secondEyeModel ?? r.adversary?.families?.["family-2"]?.model,
-  "adversary-openai": (r) =>
-    r.adversary?.secondEyeModel ?? r.adversary?.families?.["family-2"]?.model,
-  "executor-low": (r) => r.executor?.tiers?.low?.model,
-  "executor-medium": (r) => r.executor?.tiers?.medium?.model,
-  "executor-high": (r) => r.executor?.tiers?.high?.model,
-  "sniper-low": (r) => r.sniper?.tiers?.low?.model,
-  "sniper-medium": (r) => r.sniper?.tiers?.medium?.model,
-  "sniper-high": (r) => r.sniper?.tiers?.high?.model,
+    secondEyeRoute(r["plan-reviewer"]) ?? asAgentRoute(r["plan-reviewer"]?.families?.["family-2"]),
+  adversary: (r) => asAgentRoute(r.adversary) ?? asAgentRoute(r.adversary?.families?.["family-1"]),
+  "adversary-family-1": (r) => asAgentRoute(r.adversary) ?? asAgentRoute(r.adversary?.families?.["family-1"]),
+  "adversary-family-2": (r) => secondEyeRoute(r.adversary) ?? asAgentRoute(r.adversary?.families?.["family-2"]),
+  "adversary-openai": (r) => secondEyeRoute(r.adversary) ?? asAgentRoute(r.adversary?.families?.["family-2"]),
+  "executor-low": (r) => asAgentRoute(r.executor?.tiers?.low),
+  "executor-medium": (r) => asAgentRoute(r.executor?.tiers?.medium),
+  "executor-high": (r) => asAgentRoute(r.executor?.tiers?.high),
+  "sniper-low": (r) => asAgentRoute(r.sniper?.tiers?.low),
+  "sniper-medium": (r) => asAgentRoute(r.sniper?.tiers?.medium),
+  "sniper-high": (r) => asAgentRoute(r.sniper?.tiers?.high),
 });
+
+/** @description Backward-compat: basename → model string only. */
+export const AGENT_MODEL_RESOLVERS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(AGENT_ROUTE_RESOLVERS).map(([name, resolve]) => [
+      name,
+      (r) => resolve(r)?.model,
+    ]),
+  ),
+);
+
+/**
+ * @description Extract `{ model, reasoningEffort? }` from a role/tier node (drops secondEyeModel etc).
+ * @param {unknown} node
+ * @returns {{ model: string, reasoningEffort?: unknown } | undefined}
+ */
+function asAgentRoute(node) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+  if (typeof node.model !== "string" || !node.model.includes("/")) return undefined;
+  /** @type {{ model: string, reasoningEffort?: unknown }} */
+  const route = { model: node.model };
+  if (Object.hasOwn(node, "reasoningEffort") && node.reasoningEffort !== undefined && node.reasoningEffort !== null && node.reasoningEffort !== "") {
+    route.reasoningEffort = node.reasoningEffort;
+  }
+  return route;
+}
+
+/**
+ * @description Second-eye route carries model only (no effort field on secondEyeModel slot).
+ * @param {unknown} node
+ * @returns {{ model: string } | undefined}
+ */
+function secondEyeRoute(node) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+  if (typeof node.secondEyeModel !== "string" || !node.secondEyeModel.includes("/")) return undefined;
+  return { model: node.secondEyeModel };
+}
 
 /**
  * @description Touchpoints the skill must update (documentation + apply surface).
@@ -47,8 +85,8 @@ export const AGENT_MODEL_RESOLVERS = Object.freeze({
  */
 export function listRoutingTouchpoints() {
   return Object.freeze([
-    "harness.routing.json (roles + modelCapabilities; optional secondEyeModel)",
-    "agents/*.md frontmatter model: (all agents with model field — see AGENT_MODEL_RESOLVERS)",
+    "harness.routing.json (roles + modelCapabilities; optional secondEyeModel + reasoningEffort)",
+    "agents/*.md frontmatter model: + reasoningEffort: (all agents with model — see AGENT_ROUTE_RESOLVERS)",
     "AGENTS.md §8 Model routing table",
     "opencode.json / opencode.json.example model + small_model (when present next to root)",
   ]);
@@ -117,15 +155,12 @@ export function withCapabilitiesForModels(routing, defaults = {}) {
 
 /**
  * @description Build a single-evaluator routing config from product slots.
- * secondaryEye is optional (maps to secondEyeModel); absent → no second eye.
- * @param {{
- *   primaryEye: string,
- *   secondaryEye?: string,
- *   supportEye?: string,
- *   hands?: { low: string, medium: string, high: string },
- *   testAuthor?: string,
- *   supportsReasoningEffort?: Record<string, boolean>,
- * }} slots
+ *
+ * Coarse slots still fill clusters; optional `roles` overlays any role afterward.
+ * Every model-bearing value accepts a slug string OR `{ model, reasoningEffort? }`.
+ * Power-user escape hatch: pass a complete `routing` document and skip slot assembly.
+ *
+ * @param {object} slots
  * @returns {{ ok: true, routing: object } | { ok: false, reason: string }}
  */
 const ALLOWED_SLOT_KEYS = Object.freeze([
@@ -135,8 +170,102 @@ const ALLOWED_SLOT_KEYS = Object.freeze([
   "hands",
   "testAuthor",
   "supportsReasoningEffort",
+  "roles",
+  "routing",
 ]);
 const ALLOWED_HAND_TIERS = Object.freeze(["low", "medium", "high"]);
+const ALLOWED_ROLE_OVERRIDES = Object.freeze([
+  "build",
+  "planner",
+  "plan-reviewer",
+  "adversary",
+  "compliance",
+  "security",
+  "test-author",
+  "harvester",
+  "shipper",
+  "executor",
+  "sniper",
+]);
+const ROUTE_KEYS = Object.freeze(["model", "reasoningEffort"]);
+
+/**
+ * @description Parse a model slug or `{ model, reasoningEffort? }` into a route object.
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {{ ok: true, route: { model: string, reasoningEffort?: unknown } } | { ok: false, reason: string }}
+ */
+export function parseRouteValue(value, label) {
+  if (typeof value === "string") {
+    const model = value.trim();
+    if (!model.includes("/")) {
+      return { ok: false, reason: `${label} must be a provider/model slug` };
+    }
+    return { ok: true, route: { model } };
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const unknown = Object.keys(value).filter((k) => !ROUTE_KEYS.includes(k));
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        reason: `${label}: unknown key(s): ${unknown.join(", ")} — valid keys: ${ROUTE_KEYS.join(", ")}`,
+      };
+    }
+    if (typeof value.model !== "string" || !value.model.trim().includes("/")) {
+      return { ok: false, reason: `${label}.model must be a provider/model slug` };
+    }
+    /** @type {{ model: string, reasoningEffort?: unknown }} */
+    const route = { model: value.model.trim() };
+    if (value.reasoningEffort !== undefined && value.reasoningEffort !== null && value.reasoningEffort !== "") {
+      route.reasoningEffort = value.reasoningEffort;
+    }
+    return { ok: true, route };
+  }
+  return { ok: false, reason: `${label} must be a provider/model slug or { model, reasoningEffort? }` };
+}
+
+/**
+ * @description Overlay a role override onto assembled roles. Accepts simple route or tiered executor/sniper.
+ * @param {object} roles
+ * @param {string} roleName
+ * @param {unknown} value
+ * @returns {{ ok: true } | { ok: false, reason: string }}
+ */
+function applyRoleOverride(roles, roleName, value) {
+  if (roleName === "executor" || roleName === "sniper") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: false, reason: `roles.${roleName} must be { tiers: { low|medium|high: route } }` };
+    }
+    const tiersIn = value.tiers && typeof value.tiers === "object" && !Array.isArray(value.tiers) ? value.tiers : value;
+    const unknownTiers = Object.keys(tiersIn).filter((t) => !ALLOWED_HAND_TIERS.includes(t));
+    if (unknownTiers.length > 0) {
+      return {
+        ok: false,
+        reason: `roles.${roleName}: unknown tier(s): ${unknownTiers.join(", ")} — valid tiers: ${ALLOWED_HAND_TIERS.join(", ")}`,
+      };
+    }
+    if (!roles[roleName]?.tiers) {
+      roles[roleName] = { tiers: { low: { model: "" }, medium: { model: "" }, high: { model: "" } } };
+    }
+    for (const tier of ALLOWED_HAND_TIERS) {
+      if (!Object.hasOwn(tiersIn, tier)) continue;
+      const parsed = parseRouteValue(tiersIn[tier], `roles.${roleName}.${tier}`);
+      if (!parsed.ok) return parsed;
+      roles[roleName].tiers[tier] = { ...parsed.route };
+    }
+    return { ok: true };
+  }
+
+  const parsed = parseRouteValue(value, `roles.${roleName}`);
+  if (!parsed.ok) return parsed;
+  const prev = roles[roleName] && typeof roles[roleName] === "object" ? roles[roleName] : {};
+  /** @type {Record<string, unknown>} */
+  const next = { ...parsed.route };
+  // Preserve optional secondEyeModel when only model/effort is overridden.
+  if (typeof prev.secondEyeModel === "string") next.secondEyeModel = prev.secondEyeModel;
+  roles[roleName] = next;
+  return { ok: true };
+}
 
 export function buildRoutingFromSlots(slots) {
   try {
@@ -152,6 +281,29 @@ export function buildRoutingFromSlots(slots) {
         reason: `unknown slot key(s): ${unknownKeys.join(", ")} — valid keys: ${ALLOWED_SLOT_KEYS.join(", ")}`,
       };
     }
+
+    // Full-document escape hatch: operator supplies a complete routing object.
+    if (slots.routing !== undefined) {
+      if (slots.routing == null || typeof slots.routing !== "object" || Array.isArray(slots.routing)) {
+        return { ok: false, reason: "routing must be an object" };
+      }
+      const other = Object.keys(slots).filter((k) => k !== "routing" && k !== "supportsReasoningEffort");
+      if (other.length > 0) {
+        return {
+          ok: false,
+          reason: `routing escape hatch is exclusive — remove: ${other.join(", ")}`,
+        };
+      }
+      const perProvider = slots?.supportsReasoningEffort ?? {};
+      const withCaps = withCapabilitiesForModels(structuredClone(slots.routing), {
+        supportsReasoningEffort: false,
+        perProvider: { openai: true, ...perProvider },
+      });
+      const v = validateRouting(withCaps);
+      if (!v.ok) return { ok: false, reason: v.reason };
+      return { ok: true, routing: withCaps };
+    }
+
     if (slots.hands && typeof slots.hands === "object" && !Array.isArray(slots.hands)) {
       const unknownTiers = Object.keys(slots.hands).filter((t) => !ALLOWED_HAND_TIERS.includes(t));
       if (unknownTiers.length > 0) {
@@ -161,16 +313,29 @@ export function buildRoutingFromSlots(slots) {
         };
       }
     }
-    const primaryEye = String(slots?.primaryEye ?? "").trim();
+    if (slots.roles !== undefined) {
+      if (!slots.roles || typeof slots.roles !== "object" || Array.isArray(slots.roles)) {
+        return { ok: false, reason: "roles must be an object of per-role overrides" };
+      }
+      const unknownRoles = Object.keys(slots.roles).filter((r) => !ALLOWED_ROLE_OVERRIDES.includes(r));
+      if (unknownRoles.length > 0) {
+        return {
+          ok: false,
+          reason: `unknown roles override(s): ${unknownRoles.join(", ")} — valid roles: ${ALLOWED_ROLE_OVERRIDES.join(", ")}`,
+        };
+      }
+    }
+
+    const primaryParsed = parseRouteValue(slots?.primaryEye ?? "", "primaryEye");
+    if (!primaryParsed.ok) return primaryParsed;
+    const primaryEye = primaryParsed.route.model;
+    const primaryRoute = primaryParsed.route;
+
     const secondaryEyeRaw = slots?.secondaryEye;
     const secondaryEye =
       secondaryEyeRaw === undefined || secondaryEyeRaw === null || secondaryEyeRaw === ""
         ? ""
         : String(secondaryEyeRaw).trim();
-    const supportEye = String(slots?.supportEye ?? primaryEye).trim();
-    if (!primaryEye.includes("/")) {
-      return { ok: false, reason: "primaryEye must be a provider/model slug" };
-    }
     if (secondaryEye && !secondaryEye.includes("/")) {
       return { ok: false, reason: "secondaryEye must be a provider/model slug when set" };
     }
@@ -180,52 +345,69 @@ export function buildRoutingFromSlots(slots) {
         reason: "second eye exige provider diferente do avaliador único. Escolha um secondaryEye de outro provider.",
       };
     }
-    const hands = slots?.hands ?? {
+
+    const supportParsed = parseRouteValue(slots?.supportEye ?? primaryRoute, "supportEye");
+    if (!supportParsed.ok) return supportParsed;
+    const supportRoute = supportParsed.route;
+
+    const handsIn = slots?.hands ?? {
       low: "openai/gpt-5.6-luna",
       medium: "openai/gpt-5.6-luna",
       high: "openai/gpt-5.6-terra",
     };
-    for (const t of ["low", "medium", "high"]) {
-      if (typeof hands[t] !== "string" || !hands[t].includes("/")) {
-        return { ok: false, reason: `hands.${t} must be provider/model slug` };
-      }
+    /** @type {Record<string, { model: string, reasoningEffort?: unknown }>} */
+    const hands = {};
+    for (const t of ALLOWED_HAND_TIERS) {
+      const parsed = parseRouteValue(handsIn[t], `hands.${t}`);
+      if (!parsed.ok) return parsed;
+      hands[t] = parsed.route;
     }
+
     // test-author rides the eyes tier by default (oracle that makes cheap hands safe).
-    const testAuthor = String(slots?.testAuthor ?? primaryEye).trim();
-    const reviewRole = secondaryEye
-      ? { model: primaryEye, secondEyeModel: secondaryEye }
-      : { model: primaryEye };
+    const testAuthorParsed = parseRouteValue(slots?.testAuthor ?? primaryRoute, "testAuthor");
+    if (!testAuthorParsed.ok) return testAuthorParsed;
+
+    /** @type {Record<string, unknown>} */
+    const reviewRole = { ...primaryRoute };
+    if (secondaryEye) reviewRole.secondEyeModel = secondaryEye;
 
     /** @type {object} */
     const routing = {
       version: 2,
       roles: {
-        build: { model: primaryEye },
-        planner: { model: primaryEye },
+        build: { ...primaryRoute },
+        planner: { ...primaryRoute },
         "plan-reviewer": { ...reviewRole },
         adversary: { ...reviewRole },
-        compliance: { model: supportEye },
-        security: { model: supportEye },
+        compliance: { ...supportRoute },
+        security: { ...supportRoute },
         executor: {
           tiers: {
-            low: { model: hands.low },
-            medium: { model: hands.medium },
-            high: { model: hands.high },
+            low: { ...hands.low },
+            medium: { ...hands.medium },
+            high: { ...hands.high },
           },
         },
         sniper: {
           tiers: {
-            low: { model: hands.low },
-            medium: { model: hands.medium },
-            high: { model: hands.high },
+            low: { ...hands.low },
+            medium: { ...hands.medium },
+            high: { ...hands.high },
           },
         },
-        "test-author": { model: testAuthor },
-        harvester: { model: supportEye },
-        shipper: { model: supportEye },
+        "test-author": { ...testAuthorParsed.route },
+        harvester: { ...supportRoute },
+        shipper: { ...supportRoute },
       },
       modelCapabilities: {},
     };
+
+    if (slots.roles) {
+      for (const [roleName, value] of Object.entries(slots.roles)) {
+        const applied = applyRoleOverride(routing.roles, roleName, value);
+        if (!applied.ok) return applied;
+      }
+    }
 
     const perProvider = slots?.supportsReasoningEffort ?? {};
     const withCaps = withCapabilitiesForModels(routing, {
@@ -374,7 +556,7 @@ export function routingFromPreset(presetId) {
 }
 
 /**
- * @description Replace frontmatter `model:` line in agent markdown.
+ * @description Replace frontmatter `model:` line in agent markdown (effort untouched).
  * @param {string} body
  * @param {string} model
  * @returns {{ ok: true, body: string, changed: boolean } | { ok: false, reason: string }}
@@ -395,6 +577,65 @@ export function replaceFrontmatterModel(body, model) {
   }
   const nextFm = fm.replace(/^model:\s*\S+/m, `model: ${model}`);
   return { ok: true, body: nextFm + rest, changed: nextFm !== fm };
+}
+
+/**
+ * @description Replace frontmatter `model:` and sync `reasoningEffort:` from a route.
+ * When route has no reasoningEffort, any existing frontmatter effort line is removed
+ * so stale effort cannot stick after a reconfigure.
+ * OpenCode passes unknown agent frontmatter keys through to the provider (reasoningEffort).
+ * @param {string} body
+ * @param {{ model: string, reasoningEffort?: unknown }} route
+ * @returns {{ ok: true, body: string, changed: boolean } | { ok: false, reason: string }}
+ */
+export function replaceFrontmatterRoute(body, route) {
+  const modelOnly = replaceFrontmatterModel(body, route?.model);
+  if (!modelOnly.ok) return modelOnly;
+
+  const end = modelOnly.body.indexOf("\n---", 3);
+  if (end < 0) return { ok: false, reason: "agent frontmatter not closed" };
+  const fm = modelOnly.body.slice(0, end + 4);
+  const rest = modelOnly.body.slice(end + 4);
+
+  const hasEffort = route
+    && Object.hasOwn(route, "reasoningEffort")
+    && route.reasoningEffort !== undefined
+    && route.reasoningEffort !== null
+    && route.reasoningEffort !== "";
+  const effortLineRe = /^reasoningEffort:\s*.+$/m;
+  let nextFm = fm;
+
+  if (hasEffort) {
+    const effortLine = `reasoningEffort: ${stringifyFrontmatterScalar(route.reasoningEffort)}`;
+    if (effortLineRe.test(nextFm)) {
+      nextFm = nextFm.replace(effortLineRe, effortLine);
+    } else {
+      // Insert immediately after the model line so provider options stay grouped.
+      nextFm = nextFm.replace(/^(model:\s*\S+)(\r?\n)/m, `$1$2${effortLine}$2`);
+    }
+  } else if (effortLineRe.test(nextFm)) {
+    nextFm = nextFm.replace(/^reasoningEffort:\s*.+(\r?\n)?/m, "");
+  }
+
+  const nextBody = nextFm + rest;
+  return { ok: true, body: nextBody, changed: nextBody !== body };
+}
+
+/**
+ * @description YAML-ish scalar for frontmatter (strings unquoted when safe).
+ * @param {unknown} value
+ * @returns {string}
+ */
+function stringifyFrontmatterScalar(value) {
+  if (typeof value === "string") {
+    // Quote only when the value would be ambiguous in YAML.
+    if (value === "" || /[:#{}[\],&*!|>'"%@`]|^\s|\s$/.test(value)) {
+      return JSON.stringify(value);
+    }
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
 }
 
 /**
@@ -661,17 +902,17 @@ export function applyRoutingToDisk(args) {
     }
 
     const agentsDir = path.join(ocRoot, "agents");
-    for (const [basename, resolveModel] of Object.entries(AGENT_MODEL_RESOLVERS)) {
+    for (const [basename, resolveRoute] of Object.entries(AGENT_ROUTE_RESOLVERS)) {
       const file = path.join(agentsDir, `${basename}.md`);
       if (!fs.existsSync(file)) continue;
-      const model = resolveModel(routing.roles);
-      if (typeof model !== "string" || !model.includes("/")) {
+      const route = resolveRoute(routing.roles);
+      if (!route || typeof route.model !== "string" || !route.model.includes("/")) {
         // Optional second-eye stubs: leave frontmatter untouched when secondEyeModel is absent.
         if (/-family-2$|-openai$/.test(basename)) continue;
         return { ok: false, reason: `no model resolved for agent ${basename}.md` };
       }
       const body = fs.readFileSync(file, "utf8");
-      const replaced = replaceFrontmatterModel(body, model);
+      const replaced = replaceFrontmatterRoute(body, route);
       if (!replaced.ok) {
         return { ok: false, reason: `${basename}.md: ${replaced.reason}` };
       }
@@ -748,9 +989,12 @@ export function applyRoutingToDisk(args) {
 export default {
   listRoutingTouchpoints,
   AGENT_MODEL_RESOLVERS,
+  AGENT_ROUTE_RESOLVERS,
+  parseRouteValue,
   buildRoutingFromSlots,
   listPresets,
   routingFromPreset,
   applyRoutingToDisk,
+  replaceFrontmatterRoute,
   validateRouting,
 };
