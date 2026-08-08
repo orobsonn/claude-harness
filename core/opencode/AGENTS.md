@@ -39,7 +39,8 @@ in the `harness-config` primary agent, not in `build`. The operator reaches it b
 `/updating-harness` or `/configuring-model-routing`; the command switches the session agent, and the
 lane's frontmatter denies `classify`, ceremony markers, `task`, `edit`, and every skill except the two
 lifecycle ones. It does not call `classify`, create a spec, or enter the delivery loop. It is denied for
-headless/relayed input, and an update ends with a mandatory session restart.
+headless/relayed input. After a successful write it **ships to `main` via PR** in the same session
+(branch → selective stage → squash-merge), then ends with a mandatory session restart.
 
 ### Conversational Plan lane
 

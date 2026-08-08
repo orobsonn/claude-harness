@@ -108,14 +108,45 @@ file if it does not yet exist or will update it only if instructed.
 
 ---
 
-## Step 3 — Reconcile and report
+## Step 3 — Reconcile
 
 - If the installer wrote `settings.harness.json` (the project already had a `settings.json`), present
   the diff in product-language, merge the harness baseline into the operator's config (never silently
   overwrite their permissions/hooks), then delete `settings.harness.json`.
-- Report **version before → after**, what the release changed (from Step 1 notes), and remind that the
-  `.claude/` changes must be **committed** so cloud routines see the new version.
-- **Do not commit automatically** unless the operator asks — staging the vendored `.claude/` is their call.
+- Note **version before → after** and release highlights (from Step 1).
+
+---
+
+## Step 4 — Ship to main (default, same session)
+
+**Do not stop at "commit when you want".** After a successful vendor that dirtied harness paths, land
+them on the default branch in this same session so the operator does not open another session just to PR.
+
+**Hard rules:** never branch off a product feature branch; refuse if `git status` shows non-harness
+paths; never `git add -A` / force-push / `--no-verify` / `gh pr merge --admin`.
+
+1. `git fetch origin` + switch to default (`main`/`master`) tip (`git pull --ff-only`).
+2. `git switch -c chore/harness-lifecycle` (from default tip only — never from `feat/*`).
+3. Selective stage **one path per call**, only what changed among:
+   - `.claude`
+   - `.opencode` (when present)
+   - `opencode.json` (when present/changed)
+   - **`AGENTS.md` at project root** (vendor merges harness markers here — do not skip)
+4. `git commit -m "chore: sincroniza harness vendored"`
+5. `git push -u origin HEAD` (HEAD only — never `git push origin main`)
+6. `gh pr create` with a short body naming the version bump; confirm PR base is default branch.
+7. Wait checks if any (`gh pr checks --watch`); on green, `gh pr merge --squash --delete-branch`.
+8. `git switch main` (or `master`) && `git pull --ff-only`.
+
+Skip ship only if the tree is clean for harness paths, or the operator explicitly said not to ship.
+If merge is blocked by branch protection, stop with the PR URL — do not force.
+
+---
+
+## Step 5 — Close
+
+- Report **version before → after**, PR URL, what landed on main.
+- Cloud routines only see the new harness after the merge — that is why ship is the default close-out.
 
 ---
 
@@ -125,4 +156,4 @@ file if it does not yet exist or will update it only if instructed.
 - **Re-vendoring from `main` when a tag exists** — pin `--ref <latest-tag>` for a reproducible, released version.
 - **Clobbering project state** — never overwrite `memory/`, `kaizen.md`, `settings.json`, or project `CLAUDE.md` content. The installer's idempotency handles this; do not bypass it.
 - **Hand-editing vendored files in the project** — changes belong in the framework source, promoted via kaizen.
-- **Committing automatically** — leave the commit to the operator unless asked.
+- **Stopping after vendor without shipping** — leaves the operator opening a second session just to land the PR.
