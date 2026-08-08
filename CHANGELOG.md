@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.54.1](https://github.com/orobsonn/claude-harness/compare/v0.54.0...v0.54.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **opencode:** lifecycle ship-to-main na mesma sessão ([1f4ffa4](https://github.com/orobsonn/claude-harness/commit/1f4ffa496d19d9be965f773bc6dce69f2950e243))
+
 ## [0.54.0](https://github.com/orobsonn/claude-harness/compare/v0.53.9...v0.54.0) (2026-08-08)
 
 
