@@ -32,8 +32,8 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 | # | Touchpoint | O que muda |
 |---|---|---|
-| 1 | `harness.routing.json` | `roles.*`, `constraints`, `modelCapabilities` |
-| 2 | `agents/*.md` frontmatter `model:` | **Todos** os agents com `model:` — catálogo em `AGENT_MODEL_RESOLVERS` |
+| 1 | `harness.routing.json` | `roles.*` (model + optional reasoningEffort), `constraints`, `modelCapabilities` |
+| 2 | `agents/*.md` frontmatter `model:` + `reasoningEffort:` | **Todos** os agents com `model:` — catálogo em `AGENT_ROUTE_RESOLVERS` |
 | 3 | `AGENTS.md` §8 | Tabela "Model routing (operator default)" |
 | 4 | `opencode.json` / `opencode.json.example` | `model` (= build) + `small_model` (= compliance/security) quando presentes |
 
@@ -41,14 +41,14 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 | Agent file(s) | Routing path |
 |---|---|
-| `build.md`, `plan.md`, `harness-config.md` | `roles.build.model` |
-| `planner.md` | `roles.planner.model` |
-| `plan-reviewer.md` | `roles.plan-reviewer.model` (+ optional `secondEyeModel`) |
-| `adversary.md` | `roles.adversary.model` (+ optional `secondEyeModel`) |
-| `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*.model` |
+| `build.md`, `plan.md`, `harness-config.md` | `roles.build` (model + optional reasoningEffort) |
+| `planner.md` | `roles.planner` |
+| `plan-reviewer.md` | `roles.plan-reviewer` (+ optional `secondEyeModel`) |
+| `adversary.md` | `roles.adversary` (+ optional `secondEyeModel`) |
+| `compliance.md`, `security.md`, `harvester.md`, `shipper.md` | respectivos `roles.*` |
 | `executor-{low,medium,high}.md` | `executor.tiers.*` |
 | `sniper-{low,medium,high}.md` | `sniper.tiers.*` |
-| `test-author.md` | `roles.test-author.model` |
+| `test-author.md` | `roles.test-author` |
 | `discussion-adversary.md` | sem `model:` (herda host) — **não** reescrever |
 
 `listRoutingTouchpoints()` no módulo devolve a lista estável pra o operador.
@@ -109,13 +109,25 @@ O preset `openai-ollama-default` **deriva de `CANONICAL_DEFAULT_ROUTING`** (font
 
 Se OpenAI estiver indisponível: preferir `xai-ollama-dual` **no projeto** (não no core sem atualizar testes CI).
 
-**Custom slots** (escape hatch de baixo nível — o caminho primário é linguagem natural → preset). Chave desconhecida/typo é **rejeitada** (falha alto, nunca grava routing degradado):
-1. `primaryEye` — build, planner, plan-reviewer, adversary, test-author (default)  
-2. `secondaryEye` — optional `secondEyeModel` on review roles (**outro provider**, fail-open)  
-3. `supportEye` — compliance, security, harvester, shipper (default = primaryEye)  
-4. `hands` low/medium/high (default Luna → Terra ladder)
-5. `testAuthor`, `supportsReasoningEffort` (opcionais)
-6. Auth: “você já autenticou provider X no OpenCode?”
+**Custom slots** (escape hatch de baixo nível — o caminho primário é linguagem natural → preset). Chave desconhecida/typo é **rejeitada** (falha alto, nunca grava routing degradado).
+
+Valores de modelo (primaryEye, supportEye, testAuthor, hands.*, roles.*) aceitam **slug** (`openai/gpt-5.5`) **ou** rota `{ "model": "…", "reasoningEffort": "high" }`. Effort é opcional; o engine valida contra `modelCapabilities[model].supportsReasoningEffort` e grava/limpa `reasoningEffort:` no frontmatter do agent (OpenCode passa pro provider).
+
+1. `primaryEye` — default de build, planner, plan-reviewer, adversary, test-author  
+2. `secondaryEye` — **slug-only** (sem effort): optional `secondEyeModel` nos review roles (**outro provider**, fail-open)  
+3. `supportEye` — default de compliance, security, harvester, shipper (default = primaryEye)  
+4. `hands` low/medium/high — slug ou rota (default Luna → Terra ladder)
+5. `testAuthor` — slug ou rota (default = primaryEye)
+6. `roles` — overlay por papel (`build`, `planner`, `plan-reviewer`, `adversary`, `compliance`, `security`, `test-author`, `harvester`, `shipper`, ou `executor`/`sniper` com tiers). Ganha do default grosso; preserva `secondEyeModel` se já setado.  
+7. `routing` — escape hatch total: documento `harness.routing.json` completo (exclusivo — não misturar com os outros slots, salvo `supportsReasoningEffort`)
+8. `supportsReasoningEffort` — mapa opcional provider→boolean pra preencher capabilities
+9. Auth: “você já autenticou provider X no OpenCode?”
+
+Exemplo maleável (build Grok · julgamento GPT high · support misto · hands com effort):
+
+```
+configure-routing({ action: "apply", slots: '{"primaryEye":"xai/grok-4.5","supportEye":"xai/grok-4.5","testAuthor":"xai/grok-4.5","roles":{"planner":{"model":"openai/gpt-5.5","reasoningEffort":"high"},"plan-reviewer":{"model":"openai/gpt-5.5","reasoningEffort":"high"},"adversary":{"model":"openai/gpt-5.5","reasoningEffort":"high"},"harvester":{"model":"openai/gpt-5.6-luna","reasoningEffort":"medium"},"shipper":{"model":"openai/gpt-5.6-luna","reasoningEffort":"medium"}},"hands":{"low":{"model":"openai/gpt-5.6-luna","reasoningEffort":"low"},"medium":{"model":"openai/gpt-5.6-luna","reasoningEffort":"medium"},"high":{"model":"openai/gpt-5.6-terra","reasoningEffort":"medium"}},"supportsReasoningEffort":{"xai":true}}' })
+```
 
 **Aviso de produto (sempre se eye forte → modelo fraco):**  
 olhos de plan-review / adversary / security em modelo barato enfraquecem o safety net — confirmar override explícito.
