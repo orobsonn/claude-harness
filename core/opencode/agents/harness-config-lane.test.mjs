@@ -32,7 +32,10 @@ const VENDOR_CORE = join(
 const LIFECYCLE_OPERATIONS = ["configuring-model-routing", "updating-harness"];
 const LIFECYCLE_SKILL_NAMES = LIFECYCLE_OPERATIONS.map((op) => `oc-${op}`);
 
-/** Command heads the lane's shell allowlist may grant — lifecycle engines + ship-to-main. */
+/**
+ * Command heads the lane's shell allowlist may grant — lifecycle engines + ship-to-main.
+ * Deny rules are separate (see MUST_DENY_COMMANDS).
+ */
 const ALLOWED_BASH_HEADS = [
   "test -f .opencode/.harness-version",
   "echo ",
@@ -43,9 +46,15 @@ const ALLOWED_BASH_HEADS = [
   "git branch",
   "git diff",
   "git rev-parse",
-  "git switch",
+  "git fetch origin",
+  "git switch main",
+  "git switch master",
+  "git switch -c chore/harness-lifecycle",
+  "git switch -c chore/harness-update",
+  "git switch -c chore/harness-routing",
   "git checkout main",
-  "git pull",
+  "git checkout master",
+  "git pull --ff-only",
   "git add .opencode",
   "git add .claude",
   "git add opencode.json",
@@ -54,12 +63,12 @@ const ALLOWED_BASH_HEADS = [
   "git add core/opencode",
   "git commit -m ",
   "git push -u origin HEAD",
-  "git push -u origin ",
-  "gh pr create ",
-  "gh pr merge ",
+  "gh pr create --title ",
   "gh pr view ",
+  "gh pr checks --watch",
   "gh pr checks ",
   "gh pr list ",
+  "gh pr merge --squash --delete-branch",
 ];
 
 function frontmatter(content) {
@@ -86,6 +95,31 @@ function splitRule(rule) {
   const match = rule.match(/^"((?:[^"\\]|\\.)*)":\s*(\S+)$/);
   assert.ok(match, `unparseable permission rule: ${rule}`);
   return { pattern: match[1].replace(/\\"/g, '"'), action: match[2] };
+}
+
+/**
+ * @description OpenCode-style wildcard → RegExp (`*` → `.*`), anchored. Mirrors plan-conversation-contract.
+ * @param {string} pattern
+ * @returns {RegExp}
+ */
+function patternToRegExp(pattern) {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * @description Last-match-wins resolution over bash rules (same as OpenCode permission maps).
+ * @param {string[]} rules
+ * @param {string} command
+ * @returns {"allow" | "deny" | undefined}
+ */
+function resolveBash(rules, command) {
+  let hit;
+  for (const rule of rules) {
+    const { pattern, action } = splitRule(rule);
+    if (patternToRegExp(pattern).test(command)) hit = action;
+  }
+  return hit;
 }
 
 test("harness-config is a primary lane that cannot open ceremony, delegate, or write", () => {
@@ -118,12 +152,14 @@ test("harness-config shell allowlist is closed and holds no open wildcard", () =
   assert.equal(rules[0], '"*": deny', "bash must deny by default before any grant");
   for (const rule of rules.slice(1)) {
     const { pattern, action } = splitRule(rule);
-    assert.equal(action, "allow", `unexpected action in bash allowlist: ${rule}`);
-    assert.ok(!pattern.startsWith("*"), `bash pattern must not open with a wildcard: ${pattern}`);
-    assert.ok(
-      ALLOWED_BASH_HEADS.some((head) => pattern.startsWith(head)),
-      `bash pattern outside the lifecycle command set: ${pattern}`,
-    );
+    assert.ok(action === "allow" || action === "deny", `unexpected action in bash map: ${rule}`);
+    if (action === "allow") {
+      assert.ok(!pattern.startsWith("*"), `bash allow pattern must not open with a wildcard: ${pattern}`);
+      assert.ok(
+        ALLOWED_BASH_HEADS.some((head) => pattern === head || pattern.startsWith(head) || head.startsWith(pattern.replace(/\*$/, ""))),
+        `bash allow pattern outside the lifecycle command set: ${pattern}`,
+      );
+    }
   }
 });
 
@@ -157,22 +193,82 @@ const LIFECYCLE_BASH_SOURCES = [
 
 test("every command the lifecycle skills run is covered by the lane's allowlist", () => {
   const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
-  // Both sides carry an unresolvable tail — `<placeholder>` in the skill, `*` in the pattern — so
-  // each is compared by its literal stem. Neither is the hand-kept mirror above.
-  const grantedStems = permissionRules(fm, "bash")
-    .slice(1)
-    .map((rule) => splitRule(rule).pattern.split("*")[0]);
+  const rules = permissionRules(fm, "bash");
 
   for (const source of LIFECYCLE_BASH_SOURCES) {
     assert.ok(existsSync(source.path), `missing lifecycle bash source ${source.label}`);
     for (const command of bashSubCommandsFrom(source.path)) {
-      const stem = command.split("<")[0];
-      assert.ok(
-        grantedStems.some((granted) => stem.startsWith(granted) || granted.startsWith(stem)),
-        `${source.label} runs "${command}", which no allowlist entry grants — the lane would deny it`,
+      // Placeholders like <latest-tag> → concrete-shaped stand-in for match.
+      const concrete = command
+        .replace(/<latest-tag>/g, "v0.54.0")
+        .replace(/<resolved-runtime>/g, "opencode")
+        .replace(/<tag>/g, "v0.54.0");
+      const action = resolveBash(rules, concrete);
+      assert.equal(
+        action,
+        "allow",
+        `${source.label} runs "${command}" (as "${concrete}"), resolve=${action} — lane would deny it`,
       );
     }
   }
+});
+
+test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
+  const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
+  const rules = permissionRules(fm, "bash");
+
+  const mustDeny = [
+    "git push -u origin HEAD --force",
+    "git push -u origin main --force",
+    "git push --force origin HEAD",
+    "git commit -m \"x\" --no-verify",
+    "git commit -m x --no-gpg-sign",
+    "gh pr merge --squash --delete-branch --admin",
+    "gh pr merge --merge",
+    "gh pr merge --rebase --delete-branch",
+    "git add .opencode package.json",
+    "git add .opencode/../.env",
+    "git add -A",
+    "git add .",
+    "git push -u origin main",
+  ];
+
+  for (const command of mustDeny) {
+    const action = resolveBash(rules, command);
+    assert.notEqual(action, "allow", `dangerous command must not allow: ${command} (got ${action})`);
+  }
+
+  const mustAllow = [
+    'git commit -m "chore: sincroniza harness vendored"',
+    "git push -u origin HEAD",
+    "gh pr merge --squash --delete-branch",
+    "git add .opencode",
+    "git add AGENTS.md",
+    "git fetch origin",
+    "git switch -c chore/harness-lifecycle",
+    'gh pr create --title "chore: lifecycle harness" --body "x"',
+    "gh pr view --json url,baseRefName,headRefName",
+  ];
+
+  for (const command of mustAllow) {
+    assert.equal(resolveBash(rules, command), "allow", `expected allow: ${command}`);
+  }
+});
+
+test("lifecycle-ship procedure refuses product feature branches and stages root AGENTS.md", () => {
+  const body = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
+  assert.match(body, /Never create it from a product feature branch tip/i);
+  assert.match(body, /Never\*\* run `git switch -c chore/i);
+  assert.match(body, /\.opencode\/plans/);
+  assert.match(body, /git add AGENTS\.md/);
+  assert.match(body, /baseRefName/);
+  assert.match(body, /git fetch origin/);
+  // Prose may name the forbidden forms; fenced bash must never invoke them.
+  const fenced = [...body.matchAll(/^```bash\r?\n([\s\S]*?)^```/gm)].map((m) => m[1]).join("\n");
+  assert.doesNotMatch(fenced, /^git add -A\s*$/m);
+  assert.doesNotMatch(fenced, /^git add \.\s*$/m);
+  assert.doesNotMatch(fenced, /--force|--no-verify|--admin/);
+  assert.match(fenced, /^git add AGENTS\.md\s*$/m);
 });
 
 test("each lifecycle command routes to harness-config in the same session", () => {

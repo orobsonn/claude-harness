@@ -120,16 +120,23 @@ file if it does not yet exist or will update it only if instructed.
 ## Step 4 — Ship to main (default, same session)
 
 **Do not stop at "commit when you want".** After a successful vendor that dirtied harness paths, land
-them on `main` in this same session so the operator does not open another session just to PR:
+them on the default branch in this same session so the operator does not open another session just to PR.
 
-1. If on `main`/`master`, `git switch -c chore/harness-lifecycle` (or keep an existing lifecycle branch).
-2. Selective stage only harness paths (`.claude/`, and `.opencode/` when present) — never `git add -A`,
-   never secrets (`.env*`, `.dev.vars`, keys).
-3. `git commit -m "chore: sincroniza harness vendored"`
-4. `git push -u origin HEAD`
-5. `gh pr create` with a short pt-br/EN body naming the version bump.
-6. Wait checks if any (`gh pr checks --watch`); on green, `gh pr merge --squash --delete-branch`.
-7. `git switch main && git pull --ff-only`.
+**Hard rules:** never branch off a product feature branch; refuse if `git status` shows non-harness
+paths; never `git add -A` / force-push / `--no-verify` / `gh pr merge --admin`.
+
+1. `git fetch origin` + switch to default (`main`/`master`) tip (`git pull --ff-only`).
+2. `git switch -c chore/harness-lifecycle` (from default tip only — never from `feat/*`).
+3. Selective stage **one path per call**, only what changed among:
+   - `.claude`
+   - `.opencode` (when present)
+   - `opencode.json` (when present/changed)
+   - **`AGENTS.md` at project root** (vendor merges harness markers here — do not skip)
+4. `git commit -m "chore: sincroniza harness vendored"`
+5. `git push -u origin HEAD` (HEAD only — never `git push origin main`)
+6. `gh pr create` with a short body naming the version bump; confirm PR base is default branch.
+7. Wait checks if any (`gh pr checks --watch`); on green, `gh pr merge --squash --delete-branch`.
+8. `git switch main` (or `master`) && `git pull --ff-only`.
 
 Skip ship only if the tree is clean for harness paths, or the operator explicitly said not to ship.
 If merge is blocked by branch protection, stop with the PR URL — do not force.

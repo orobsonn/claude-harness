@@ -8,17 +8,18 @@ Goal: same session ends with **PR squash-merged on `main`** — operator must no
 
 ## Rules
 
-- Never commit on `main`/`master` directly — branch → selective stage → commit → push → PR → squash merge → return to main.
-- Never `git add -A` / `git add .`. Stage only harness lifecycle paths.
+- **Always create the chore branch from the updated default-branch tip** (`main` or `master`). Never create it from a product feature branch tip — product commits would ride the squash PR.
+- Carry **uncommitted** lifecycle edits onto the default branch with `git switch <default>` (Git keeps the dirty worktree when paths do not conflict). Then `git switch -c chore/…`.
+- Never commit on the default branch directly.
+- Never `git add -A` / `git add .`. Stage only harness lifecycle paths, one path per `git add` call.
 - Never stage secrets: `.env*`, `.dev.vars`, `*.pem`, `*.key`, credentials.
-- Never force-push. Never `--no-verify`.
+- Never stage runtime ephemera: `.opencode/plans/**`, `.opencode/**/.state/**`, `.claude/plans/**` if present.
+- Never force-push. Never `--no-verify`. Never `gh pr merge --admin`.
 - No `Co-Authored-By` trailer.
 - Interactive lane only (already enforced by `harness-config`).
 - After merge: **session restart is mandatory** (agents/plugins load at boot).
 
-## Procedure (each command = its own bash call)
-
-### 1. Inspect
+## Preconditions (fail closed)
 
 ```bash
 git status --short
@@ -32,28 +33,71 @@ git branch --show-current
 git diff --stat
 ```
 
-If nothing to ship under harness paths → report and stop (still demand restart if files on disk already match the new config from this session).
+1. If nothing dirty under harness paths → report and stop (still demand restart if this session already wrote config on disk).
+2. If `git status --short` shows **any path outside** the lifecycle allowlist below → **stop**. Tell the operator in pt-br to finish/stash product work (or open a clean session) and re-run. Do not ship a mixed tree.
+3. If status shows `.opencode/plans`, any `.state/`, or other run-ephemeral paths → **stop**. Those are not lifecycle ship cargo.
+4. If entry-gate / host later denies push/PR because a delivery is mid-flight on this session → stop with that reason; do not reshape commands. Operator opens a clean session or finishes delivery first.
 
-### 2. Branch off main when needed
+Lifecycle paths only (stage subset of these, and only if changed):
 
-If current branch is `main` or `master`:
+- `.opencode` (framework trees only — never `plans/` / `.state/`)
+- `.claude` (framework trees only — never plans/state if present)
+- `opencode.json`
+- `AGENTS.md` (project **root** — `vendor-core` merges harness markers here)
+- `harness.routing.json` (rare root copy)
+- `core/opencode` (harness **source** repo only)
+
+## Procedure (each command = its own bash call)
+
+### 1. Default-branch tip + chore branch
+
+```bash
+git fetch origin
+```
+
+```bash
+git rev-parse --abbrev-ref origin/HEAD
+```
+
+Use the result (`origin/main` → `main`, or `origin/master` → `master`) as `<default>` below.
+
+Move the uncommitted lifecycle worktree onto the default branch (does **not** bring product commits from a feature branch — only dirty files travel):
+
+```bash
+git switch main
+```
+
+(or `git switch master` when that is the default)
+
+If switch refuses (local changes would be overwritten) → **stop**. Operator must clear the conflict; do not force, do not branch from the feature tip.
+
+```bash
+git pull --ff-only
+```
+
+If pull fails with local changes → **stop** and report (do not rebase product history).
+
+Confirm you are on the default branch with lifecycle-only dirty files, then:
 
 ```bash
 git switch -c chore/harness-lifecycle
 ```
 
-If already on another branch that only carries this lifecycle work, keep it.
-If `chore/harness-lifecycle` already exists and is wrong, use:
+If that name already exists locally:
+
+```bash
+git switch -c chore/harness-update
+```
 
 ```bash
 git switch -c chore/harness-routing
 ```
 
-(or `chore/harness-update` for an update-only run).
+**Never** run `git switch -c chore/…` while still on a product feature branch.
 
-### 3. Selective stage
+### 2. Selective stage (one path per call)
 
-Stage only what this operation changed. Typical sets:
+Stage only what this operation changed:
 
 **updating-harness (vendored project):**
 
@@ -69,6 +113,10 @@ git add .claude
 git add opencode.json
 ```
 
+```bash
+git add AGENTS.md
+```
+
 **configuring-model-routing (vendored project):**
 
 ```bash
@@ -79,7 +127,11 @@ git add .opencode
 git add opencode.json
 ```
 
-**configuring-model-routing / source repo (`core/opencode`):**
+```bash
+git add AGENTS.md
+```
+
+**source repo (`core/opencode`):**
 
 ```bash
 git add core/opencode
@@ -89,9 +141,13 @@ git add core/opencode
 git add opencode.json
 ```
 
-Skip any path that does not exist or did not change. Never stage unrelated project files.
+```bash
+git add AGENTS.md
+```
 
-### 4. Commit
+Skip any path that does not exist or did not change. Never multi-path `git add`. Never stage unrelated project files. Precondition 3 already refused ephemeral plans/state — if `git status` after add shows them staged, unstage is not allowlisted → **stop** and report.
+
+### 3. Commit
 
 One-line Conventional Commit (pt-br description). Pick the matching message:
 
@@ -105,7 +161,7 @@ git commit -m "chore: reconfigura model routing do harness"
 
 If commit says nothing to commit → continue only if remote already has the change; otherwise stop.
 
-### 5. Push + PR + merge
+### 4. Push + PR + merge
 
 ```bash
 git push -u origin HEAD
@@ -118,6 +174,12 @@ gh pr create --title "chore: lifecycle harness" --body "Lifecycle do harness (up
 Prefer a concrete title when you know which op ran (`chore: sincroniza harness vendored` / `chore: reconfigura model routing`).
 
 ```bash
+gh pr view --json url,baseRefName,headRefName
+```
+
+Confirm `baseRefName` is the repo default (`main` or `master`). If base is a feature branch → **stop**, do not merge.
+
+```bash
 gh pr checks --watch
 ```
 
@@ -127,19 +189,21 @@ If checks are absent or the repo has none, continue. If a required check fails, 
 gh pr merge --squash --delete-branch
 ```
 
-If merge is blocked (review required, ruleset), stop with the PR URL and what the operator must click. Do not force.
+If merge is blocked (review required, ruleset), stop with the PR URL and what the operator must click. Do not force. Do not pass `--admin`.
 
-### 6. Sync local main
+### 5. Sync local default branch
 
 ```bash
 git switch main
 ```
 
+(or `git switch master`)
+
 ```bash
 git pull --ff-only
 ```
 
-### 7. Close (operator language)
+### 6. Close (operator language)
 
 - One line: what landed on main (version and/or routing map).
 - PR URL.

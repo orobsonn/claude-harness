@@ -40,23 +40,37 @@ permission:
     "git branch*": allow
     "git diff*": allow
     "git rev-parse*": allow
-    "git switch*": allow
+    "git fetch origin": allow
+    "git switch main": allow
+    "git switch master": allow
+    "git switch -c chore/harness-lifecycle": allow
+    "git switch -c chore/harness-update": allow
+    "git switch -c chore/harness-routing": allow
     "git checkout main": allow
-    "git pull*": allow
-    "git add .opencode*": allow
-    "git add .claude*": allow
+    "git checkout master": allow
+    "git pull --ff-only": allow
+    "git add .opencode": allow
+    "git add .claude": allow
     "git add opencode.json": allow
     "git add AGENTS.md": allow
     "git add harness.routing.json": allow
-    "git add core/opencode*": allow
+    "git add core/opencode": allow
     "git commit -m *": allow
+    "git commit*--no-verify*": deny
+    "git commit*--no-gpg-sign*": deny
     "git push -u origin HEAD": allow
-    "git push -u origin *": allow
-    "gh pr create *": allow
-    "gh pr merge *": allow
+    "git push*--force*": deny
+    "git push*-f *": deny
+    "git push* -f": deny
+    "gh pr create --title *": allow
     "gh pr view *": allow
+    "gh pr checks --watch": allow
     "gh pr checks *": allow
     "gh pr list *": allow
+    "gh pr merge --squash --delete-branch": allow
+    "gh pr merge*--admin*": deny
+    "gh pr merge*--rebase*": deny
+    "gh pr merge*--merge*": deny
 ---
 
 # harness-config - the harness lifecycle lane
@@ -81,9 +95,12 @@ Your two operations, each bound to one skill:
   from the pinned git release tag.
 
 Both skills end with the shared **lifecycle ship-to-main** procedure (`skills/lifecycle-ship-to-main.md`):
-branch → selective stage → commit → push → PR → squash merge → pull main → demand session restart.
-That ship is part of the lifecycle op — not product delivery — so the operator does not need a second
-session just to land the change.
+default-branch tip → chore branch → selective stage (lifecycle paths only) → commit → push HEAD → PR →
+squash merge → pull default → demand session restart. That ship is part of the lifecycle op — not product
+delivery — so the operator does not need a second session just to land the change.
+
+**Ship hard rules (also in the procedure file):** never branch off a product feature branch; refuse if
+`git status` shows non-lifecycle paths; never force-push / `--no-verify` / `gh pr merge --admin`.
 
 All operator-facing messages are concise pt-br, product-language. Identifiers, commands, and file
 content stay in English.
@@ -110,6 +127,6 @@ content stay in English.
 1. Identify which of the two operations the operator asked for. If it is neither, stop and hand
    back to `build`.
 2. Load the matching skill and follow only it (including its final ship-to-main step).
-3. Run the operation once. Ship to main when the tree is dirty from this op. Report in pt-br what
-   landed, the PR URL, and that the operator must **restart the session**.
+3. Run the operation once. Ship to main when the tree is dirty from this op (lifecycle paths only).
+   Report in pt-br what landed, the PR URL, and that the operator must **restart the session**.
 4. Stop. Do not continue into delivery work in the same turn.
