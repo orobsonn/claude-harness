@@ -429,19 +429,63 @@ certo, dentro do projeto certo, na VPS.
 
 ### 5.5 — Pareando o celular
 
+**Correção importante em relação a versões anteriores deste documento:** a tela **Settings → Set
+up → Mobile → Generate QR Code**, dentro do app Orca do computador, pareia o celular com **o
+computador**, não com a VPS — dá pra confirmar isso pelo campo "This computer's address" naquela
+tela, que mostra o IP Tailscale do computador, não o da VPS. Usar esse caminho quebra o objetivo
+inteiro (celular sempre ativo, independente do computador ligado). **O jeito certo é gerar o
+código de pareamento direto na VPS.**
+
 O celular precisa estar **na mesma rede Tailscale que a VPS** (exigência da documentação oficial
-do Orca — sem atalho por nuvem/relay). A conexão é direta celular→VPS; não depende do computador
-estar ligado.
+do Orca — sem atalho por nuvem/relay).
 
 🧑 **Você:**
 1. Instala o app **Tailscale** no celular (App Store / Google Play), loga com a mesma conta usada
-   no computador e na VPS.
+   no computador e na VPS. **No iOS, confirma que a VPN está de fato conectada** — em Ajustes →
+   VPN, ou dentro do próprio app Tailscale em "VPN On Demand" (liga pra Wi-Fi e Celular). Ter o app
+   instalado e logado não é suficiente; o túnel precisa estar ativo de verdade.
 2. Instala o app **Orca Mobile** no celular (App Store / Google Play).
-3. No app Orca do **computador** (já pareado): **Settings → Set up → Mobile → Generate QR Code.**
-4. Escaneia esse QR com o app Orca do celular.
 
-Depois de parear uma vez, o celular reconecta sozinho da próxima vez que abrir o app. Trate esse QR
-como senha, mesma lógica do pareamento do computador.
+🤖 **A IA gera o código de pareamento mobile-scoped direto no host da VPS** (não dá pra pedir isso
+pro serviço já rodando sem parar ele por um instante — é rápido, ~5 segundos, e o serviço volta
+sozinho):
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
+systemctl stop orca-serve.service
+sleep 2
+timeout 8 sudo -u orca /opt/orca/orca-linux.AppImage serve --mobile-pairing --port 6768 --pairing-address <TAILSCALE_IP_DA_VPS>
+'
+```
+No final do output, tem uma linha `Pairing URL: orca://pair?code=...` — é esse link (não o QR ASCII
+que aparece no terminal, ignora ele). O `timeout 8` mata o processo de propósito depois de capturar
+o link; a IA restaura o serviço normal logo em seguida:
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
+pkill -9 -u orca
+sleep 2
+rm -f /home/orca/.config/orca/Singleton{Lock,Socket,Cookie}
+systemctl reset-failed orca-serve.service
+systemctl start orca-serve.service
+'
+```
+
+🧑 **Você:** abre o link `orca://pair?code=...` **no próprio celular** (manda pra você mesmo por
+Notas, WhatsApp, o que for mais fácil de abrir lá — o iOS/Android reconhece o esquema `orca://` e
+abre direto no app Orca Mobile). Trate esse link como senha.
+
+A IA confirma que funcionou checando se rolou handshake de verdade entre a VPS e o celular
+(não só "Online" — isso só significa logado na conta Tailscale, não que o túnel está ativo):
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'tailscale status --json' | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); [print(p.get(\"HostName\"),p.get(\"Active\"),p.get(\"LastHandshake\")) for p in d[\"Peer\"].values()]"
+```
+Handshake recente + `Active: true` = celular realmente conectado na VPS, não só "logado" no
+Tailscale. Depois de parear uma vez, o celular reconecta sozinho nas próximas vezes.
+
+**Se o handshake nunca acontece mesmo com Tailscale "Online":** teste de diagnóstico —
+`tailscale ping --c 3 <IP_TAILSCALE_DO_CELULAR>` rodado na VPS. Se voltar `pong ... via DERP`, a
+rede funciona (só não é conexão direta, é via relay — normal em rede celular, não é problema). Se
+não voltar nada, o problema é mesmo de rede/Tailscale no celular, não do Orca.
 
 ---
 
@@ -453,7 +497,10 @@ como senha, mesma lógica do pareamento do computador.
 - [ ] Tailscale conectando VPS + computador + celular
 - [ ] `orca-serve.service` ativo e habilitado (sobrevive a reboot)
 - [ ] App Orca pareado no computador (via `orca environment add`, sem passar por diálogo manual) e
-      no celular (via QR gerado pelo app do computador)
+      no celular (via link `orca://pair` gerado **direto na VPS** com `--mobile-pairing` — não pela
+      tela Settings do app do computador, que pareia com o computador, não com a VPS)
+- [ ] Handshake real confirmado entre VPS e celular (`tailscale status --json` mostrando
+      `Active: true` e `LastHandshake` recente pro celular, não só "Online")
 - [ ] OpenCode instalado **pro usuário `orca`** (não só root) e autenticado
 - [ ] Chave SSH dedicada do `orca` no GitHub (separada da do root, cadastrada via `gh ssh-key add`,
       sem colar nada manualmente)
