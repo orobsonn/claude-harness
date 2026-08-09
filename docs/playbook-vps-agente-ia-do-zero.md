@@ -12,6 +12,23 @@
 > seu celular/computador.** Tudo o mais (gerar chave, instalar pacote, configurar serviço, subir
 > projeto) é a IA que faz.
 
+## Specs da VPS
+
+**Mínimo recomendado: 2 vCPU / 8GB RAM, com swap habilitado.** Testamos com 1 vCPU/4GB/sem swap e
+a VPS **travou por completo sob carga real** — 6 agentes rodando ao mesmo tempo derrubaram a
+máquina a ponto de nem SSH conseguir conectar (precisou do console web do provedor pra recuperar).
+Com 2 vCPU/8GB + swap, o mesmo tipo de carga só fica lento, não trava. Se a VPS que você comprou
+não veio com swap, a IA configura antes de seguir:
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
+free -h | grep -i swap   # se mostrar 0B, cria um swapfile:
+[ "$(swapon --show)" ] || (
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo "/swapfile none swap sw 0 0" >> /etc/fstab
+)
+'
+```
+
 ## O que só você precisa fazer (visão geral)
 
 Antes de mergulhar nos passos, aqui está a lista **completa** das coisas que exigem você — o resto
@@ -489,8 +506,30 @@ não voltar nada, o problema é mesmo de rede/Tailscale no celular, não do Orca
 
 ---
 
+## Cuidado com capacidade (memória/CPU)
+
+**Cada agente rodando (OpenCode, ou qualquer subagente que ele dispare) é um processo pesado** —
+na prática vimos ~300-400MB de RAM por processo, e CPU é o gargalo mais cedo que memória num VPS
+de poucos núcleos. Regra prática pra 2 vCPU/8GB: **2-3 agentes ativos ao mesmo tempo é confortável;
+6+ é quando a coisa trava de verdade** (aconteceu nesta VPS, load average passou de 18 num núcleo
+só, o OOM killer começou a matar processo — inclusive sessões importantes no meio do trabalho).
+
+**Se a VPS ficar completamente inacessível** (SSH não conecta, nem ping/porta respondem):
+1. Isso é diferente de "SSH lento" — teste `nc -zv <IP> 22` primeiro. Se a porta responde mas o
+   handshake do SSH nunca fecha, é sobrecarga de CPU (o sistema não consegue nem escalonar o
+   `sshd`), não queda de rede.
+2. **Acesse pelo console web do provedor** (toda VPS tem isso no painel — procura por "Console" ou
+   "VNC"). É o único jeito de entrar quando o SSH está inacessível por sobrecarga.
+3. De dentro do console, mata os processos mais pesados — geralmente os agentes de fundo:
+   ```bash
+   pkill -TERM -f -- "--agent-id"   # mata subagentes específicos, preserva a sessão principal
+   free -h                           # confirma que liberou memória
+   ```
+4. Espera a `load average` (comando `uptime`) descer antes de tentar SSH de novo.
+
 ## Checklist final
 
+- [ ] VPS com 2 vCPU/8GB mínimo e swap habilitado
 - [ ] Login por chave SSH funcionando, senha desativada
 - [ ] `gh auth login` feito uma vez, com escopo `admin:public_key`
 - [ ] Node.js, git configurados (**pro `root` e pro `orca`**, os dois — é fácil esquecer o segundo)
