@@ -98,7 +98,7 @@ test("a bound baseline returned unchanged by a revision is rejected", async () =
   });
 });
 
-test("a resumed approved plan may be revised when delivery discovers a plan defect", async () => {
+test("a resumed approved plan revision invalidates the preceding review and delivery proof", async () => {
   await withRun(async (root, state) => {
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
     const initialArgs = { subagent_type: "planner", prompt: "Plan." };
@@ -108,9 +108,32 @@ test("a resumed approved plan may be revised when delivery discovers a plan defe
       path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"),
       JSON.stringify({ ...state(), resumed_from_session_id: "ses_previous", plan_review_verdict: "APPROVE" }),
     );
+    fs.writeFileSync(
+      path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"),
+      JSON.stringify({
+        ...state(),
+        resumed_from_session_id: "ses_previous",
+        plan_review_verdict: "APPROVE",
+        fidelity_pass: [`${featureId}/task-1@abc`],
+        hand_finished: [`${featureId}/task-1`],
+        capture_verified: [`${featureId}/task-1@abc`],
+        regate_pending: [`${featureId}/task-1`],
+        regate_passed: [`${featureId}/task-1@abc`],
+        final_review_done: true,
+      }),
+    );
+    const revisedPlan = { ...plan, tasks: [{ ...plan.tasks[0], scope_paths: ["src/y.ts"] }] };
     const revisionArgs = { subagent_type: "planner", prompt: "Repair the plan defect." };
     await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "revision" }, { args: revisionArgs }));
     assert.equal(state().planner_active_attempt.call_id, "revision");
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "revision", args: revisionArgs }, { output: JSON.stringify(revisedPlan), metadata: {} });
+    assert.equal(state().plan_review_verdict, null);
+    assert.deepEqual(state().fidelity_pass, []);
+    assert.deepEqual(state().hand_finished, []);
+    assert.deepEqual(state().capture_verified, []);
+    assert.deepEqual(state().regate_pending, []);
+    assert.deepEqual(state().regate_passed, []);
+    assert.equal(state().final_review_done, false);
   });
 });
 

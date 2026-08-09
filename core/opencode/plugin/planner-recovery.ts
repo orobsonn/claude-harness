@@ -294,8 +294,21 @@ async function createPlannerRecoveryHooks(
           return { ...state, planner_status: "plan_invalid", planner_active_attempt: null, planner_binding_error: writeError }
         }
         canonicalPath = written.path
+        const revised = active.baseline_plan?.bound === true
         return {
           ...bound.state,
+          // A different bound plan invalidates its predecessor's review and delivery proof.
+          ...(revised
+            ? {
+                plan_review_verdict: null,
+                fidelity_pass: [],
+                hand_finished: [],
+                capture_verified: [],
+                regate_pending: [],
+                regate_passed: [],
+                final_review_done: false,
+              }
+            : {}),
           planner_plan_binding: {
             ...bound.state.planner_plan_binding,
             snapshot_path: stagedSnapshot.relativePath,
