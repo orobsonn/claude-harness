@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.1](https://github.com/orobsonn/claude-harness/compare/v0.55.0...v0.55.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **opencode:** aceita bootstrap ao retomar feature ([#642](https://github.com/orobsonn/claude-harness/issues/642)) ([81d48ce](https://github.com/orobsonn/claude-harness/commit/81d48ce3692cc00162abbb725e56af3bdc8c07d9))
+
 ## [0.55.0](https://github.com/orobsonn/claude-harness/compare/v0.54.2...v0.55.0) (2026-08-09)
 
 
