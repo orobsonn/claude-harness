@@ -5,10 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../../shared/lib/feature-id.mjs";
 import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
-import { gateStatePath, planDir, sharedContextPath } from "../../../shared/lib/path-helpers.mjs";
+import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { isCompleteExpectedModelStrategy } from "../../../shared/lib/model-strategy-projection.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
-import { semanticPlanHash } from "../../lib/planner-artifact.mjs";
+import { resolvePlannerArtifactPath, semanticPlanHash } from "../../lib/planner-artifact.mjs";
 import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
 
 /**
@@ -156,16 +156,16 @@ export function encodeRecoveryPayload(payload, maxBytes = MAX_REINJECT_BYTES) {
 }
 
 function currentPlan(projectRoot, sessionId, featureId, state) {
-  const pd = planDir({ projectRoot, runtime: "opencode", sessionId, featureId });
-  if (!pd.ok) return pd;
-  const canonicalPath = path.join(pd.path, "execution-plan.json");
+  const canonicalPath = resolvePlannerArtifactPath(projectRoot, sessionId, featureId, state.resumed_from_session_id);
+  if (!canonicalPath) return { ok: false, reason: "canonical plan path unresolved" };
   const canonical = readSafeJson(projectRoot, canonicalPath);
-  if (!canonical.ok || (canonical.value.session_id && canonical.value.session_id !== sessionId) || canonical.value.feature_id !== featureId) {
+  const sourceSessionId = isSafeSessionId(state.resumed_from_session_id) ? state.resumed_from_session_id : "";
+  if (!canonical.ok || (canonical.value.session_id && canonical.value.session_id !== sessionId && canonical.value.session_id !== sourceSessionId) || canonical.value.feature_id !== featureId) {
     return { ok: false, reason: "canonical plan identity mismatch" };
   }
 
   const binding = state.planner_plan_binding;
-  const canonicalRelativePath = `.opencode/plans/${sessionId}-${featureId}/execution-plan.json`;
+  const canonicalRelativePath = path.relative(projectRoot, canonicalPath);
   if (binding == null) {
     const tasks = canonical.value.tasks;
     if (Array.isArray(tasks) && tasks.length > 0) {
@@ -174,7 +174,7 @@ function currentPlan(projectRoot, sessionId, featureId, state) {
       return { ok: false, reason: "full plan recovery requires planner snapshot binding" };
     }
     const stub = validatePlan(canonical.value, { expect: "stub" });
-    if (!stub.ok || canonical.value.kind !== "stub" || canonical.value.session_id !== sessionId ||
+    if (!stub.ok || canonical.value.kind !== "stub" || (canonical.value.session_id !== sessionId && canonical.value.session_id !== sourceSessionId) ||
         !Array.isArray(tasks) || tasks.length !== 0) {
       return { ok: false, reason: "canonical classify stub failed validation" };
     }
@@ -241,15 +241,14 @@ export function buildSessionRecovery(projectRoot, sessionId, options = {}) {
   const isAncestor = typeof options.isAncestor === "function" ? options.isAncestor : () => false;
   const unmatched = pending.value.filter((item) => !matchesAbsolution(item, state.regate_passed, isAncestor));
   const completed = tasks.filter((task) => matchesAbsolution(`${featureId}/${task.id}`, state.capture_verified, isAncestor)).length;
-  const shared = sharedContextPath({ projectRoot, runtime: "opencode", sessionId, featureId });
-  if (!shared.ok) return shared;
+  const sharedContextPath = path.join(path.dirname(resolvedPlan.canonicalPath), "shared_context.md");
   const context = encodeRecoveryPayload({
     schema: "harness.compaction-recovery.v1",
     mode,
     feature_id: featureId,
     canonical_plan_path: resolvedPlan.canonicalRelativePath,
     progress: { capture_verified: completed, total_tasks: tasks.length },
-    shared_context_path: `.opencode/plans/${sessionId}-${featureId}/shared_context.md`,
+    shared_context_path: path.relative(projectRoot, sharedContextPath),
     unmatched_regates: unmatched.slice(0, MAX_LIST_ITEMS),
   });
   if (!context) return { ok: false, reason: "recovery payload byte budget too small" };

@@ -163,6 +163,12 @@ result — do not pre-empt that with a manual write.
 
 ---
 
+## Todo projection
+
+After every durable phase transition (a successful `classify`, planner artifact write, native `mark`, or delivery completion), call `sync-harness-todo`, then immediately call native `todowrite` with its returned `todos`. This is a best-effort visual projection only: never write workflow state to make a todo look complete, and never block, retry, or alter delivery because either todo tool is unavailable. The projection is deterministic from the canonical plan and gate-state, so it is safe to replace the entire todo list on every update and after recovery.
+
+---
+
 ## Phase 0 — Brainstorm + spec
 
 1. Read the native durable index — global/project `AGENTS.md` and any root router table (folder → what lives there). This is your macro view.
