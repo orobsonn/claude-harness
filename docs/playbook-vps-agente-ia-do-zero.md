@@ -278,6 +278,7 @@ Esperado: `active` e `enabled`.
 | `dlopen(): error loading libfuse.so.2` | falta libfuse | Ubuntu 22.04: `apt-get install libfuse2`; 24.04/Debian: `libfuse2t64` |
 | `Missing X server or $DISPLAY` | `xvfb` não instalado | `apt-get install -y xvfb` |
 | Diálogo "Create worktree" no app só mostra "Blank Terminal", nunca "OpenCode" mesmo já instalado | o app cacheia os agentes detectados no host desde que conectou | fecha e abre o app Orca de novo — ou usa Blank Terminal e digita `opencode` manualmente, funciona igual |
+| Um projeto que você criou "some" da lista do app, mas você tem certeza que existia | mesma causa: cache da UI dessincronizado do estado real da VPS — **não é perda de dado** | confirma antes de entrar em pânico: `orca repo list --environment <nome> --json` mostra o projeto normalmente mesmo quando o app não mostra. Fecha e abre o app (ou desconecta/reconecta o host) e ele reaparece |
 
 Comando de recuperação de lock obsoleto (roda sempre nessa ordem):
 ```bash
