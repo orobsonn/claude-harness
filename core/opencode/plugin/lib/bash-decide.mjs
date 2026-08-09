@@ -350,6 +350,10 @@ export function decideBashDelivery(input = {}) {
     const gs = normalizeGateState(input.gateState);
     const isAncestorFn = typeof input.isAncestorFn === "function" ? input.isAncestorFn : () => null;
 
+    if (gs.autonomy_adversary_hold === true) {
+      return { ok: false, decision: "deny", reason: "[entry-gate] Blocked: delivery command denied — high adversary finding requires sniper remediation and an authorized re-gate." };
+    }
+
     // 4. corrupt regate_pending → deny (never "stamp regate-passed") — the sole deliberate
     // fail-closed exception (readable-but-malformed content, not an infra error).
     const regate = classifyRegatePending(gs);

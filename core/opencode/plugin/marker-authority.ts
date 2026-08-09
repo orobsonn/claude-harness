@@ -157,7 +157,8 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             return { ok: false, reason: "regate_pending does not contain feature/task" }
           }
           payload = formatFeatureTaskEntry(authorization.featureID, taskId, sha)
-          patch = { regate_passed: [payload] }
+          // A fresh, authorized re-gate is the only operation that resolves this safety hold.
+          patch = { regate_passed: [payload], autonomy_adversary_hold: false }
         } else if (action === "capture-verified") {
           if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
             return { ok: false, reason: "hand_finished does not contain feature/task" }

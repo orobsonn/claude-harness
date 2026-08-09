@@ -49,24 +49,25 @@ export function readPlanReviewVerdict(value) {
 /** @description Detect whether an adversary report contains a high-severity finding. */
 export function hasHighAdversaryFinding(value) {
   if (typeof value !== "string") return false;
-  const start = value.indexOf("{");
-  if (start < 0) return false;
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = start; index < value.length; index += 1) {
+  for (let start = value.indexOf("{"); start >= 0; start = value.indexOf("{", start + 1)) {
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < value.length; index += 1) {
     const char = value[index];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quoted = false;
-    } else if (char === '"') quoted = true;
-    else if (char === "{") depth += 1;
-    else if (char === "}" && --depth === 0) {
-      try {
-        const issues = JSON.parse(value.slice(start, index + 1))?.issues;
-        return Array.isArray(issues) && issues.some((issue) => issue?.severity === "high" || issue?.severity === "max");
-      } catch { return false; }
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}" && --depth === 0) {
+        try {
+          const issues = JSON.parse(value.slice(start, index + 1))?.issues;
+          if (Array.isArray(issues) && issues.some((issue) => issue?.severity === "high" || issue?.severity === "max")) return true;
+        } catch { /* Continue scanning after prose or malformed JSON. */ }
+        break;
+      }
     }
   }
   return false;

@@ -102,9 +102,10 @@ async function createPlanGateHooks(
         isTestAuthorRole(role) ||
         isExecutorRole(role) ||
         isSniperRole(role)
+      const blocksForAdversaryHold = isExecutorRole(role) || isTestAuthorRole(role) || role === "shipper"
       // No planner lifecycle means operator/fix-mode and remains the narrow fail-open branch.
       // Once a planner attempt exists, only a usable bound snapshot may pass.
-      if (requiresFullPlan) {
+      if (requiresFullPlan || blocksForAdversaryHold) {
         const sid = sessionId ?? undefined
         if (sid) {
           const reconciled = reconcilePlannerStateFromDisk(root, sid, Date.now(), { validatePlanFn: deps.validatePlanFn })
@@ -127,7 +128,7 @@ async function createPlanGateHooks(
               !Array.isArray(reconciled.state)
                 ? (reconciled.state as Record<string, unknown>)
                 : {}
-            if (state.autonomy_adversary_hold === true && !isSniperRole(role)) {
+            if (state.autonomy_adversary_hold === true && blocksForAdversaryHold) {
               throw new Error(`${PREFIX} denied: high adversary finding requires sniper remediation`)
             }
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined

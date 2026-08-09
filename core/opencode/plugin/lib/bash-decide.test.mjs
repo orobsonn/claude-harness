@@ -21,6 +21,18 @@ const emptyList = () => [];
 const ancestorTrue = () => true;
 const ancestorFalse = () => false;
 
+test("high adversary hold denies delivery until the authorized re-gate clears it", () => {
+  const decision = decideBashDelivery({
+    command: "git push origin feat/x",
+    sessionId: SID,
+    gateState: { autonomy_adversary_hold: true },
+    gitState: CLEAN_GIT,
+    listHandRecordsForFeatureFn: emptyList,
+  });
+  assert.equal(decision.decision, "deny");
+  assert.match(decision.reason, /high adversary finding/);
+});
+
 /** Green on-disk DONE+stamp fixture — used to prove the real-file rail still fires. */
 const stampedDoneList = () => [
   {

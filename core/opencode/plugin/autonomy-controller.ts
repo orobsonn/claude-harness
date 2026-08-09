@@ -6,12 +6,6 @@ function textFromParts(parts: unknown): string {
   return parts.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n")
 }
 
-function taskRole(args: unknown): string {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return ""
-  const value = (args as Record<string, unknown>).subagent_type ?? (args as Record<string, unknown>).subagentType
-  return typeof value === "string" ? value.trim().toLowerCase() : ""
-}
-
 function taskOutput(output: unknown): string {
   if (!output || typeof output !== "object" || Array.isArray(output)) return ""
   const value = (output as Record<string, unknown>).output ?? (output as Record<string, unknown>).content ?? (output as Record<string, unknown>).result
@@ -22,6 +16,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { mergeGateState, readGateState } = await import("../lib/gate-state.mjs")
   const { bareRole } = await import("../lib/roles.mjs")
+  const { extractSubagentType } = await import("../lib/task-dispatch-identity.mjs")
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs")
   const {
     autonomyContinuationPrompt,
@@ -67,7 +62,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
     "tool.execute.after": async (input: any, output: any) => {
       try {
         const args = resolveHookArgs(input, output) ?? (input?.tool_input && typeof input.tool_input === "object" ? input.tool_input : null)
-        const role = bareRole(taskRole(args))
+        const role = bareRole(extractSubagentType(args))
         if (typeof input?.sessionID !== "string") return
         const loaded = readState(input.sessionID)
         if (loaded?.state.classified !== true) return
@@ -78,7 +73,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
           return
         }
         if (role === "adversary" || role === "adversary-family-1") {
-          mergeGateState(loaded.path, { autonomy_adversary_hold: hasHighAdversaryFinding(report) })
+          if (hasHighAdversaryFinding(report)) mergeGateState(loaded.path, { autonomy_adversary_hold: true })
         }
       } catch {
         /* Eye observation is advisory to continuation and must fail open. */
