@@ -1,53 +1,59 @@
 # Playbook — VPS com agente de IA sempre ativo, do zero
 
-> **Pra quem é este documento:** você (ou a pessoa que está te ajudando) tem uma VPS nova e quer
-> chegar num ponto onde: (1) roda um agente de IA (OpenCode) numa máquina sempre ligada, não no seu
-> PC pessoal; (2) consegue orquestrar isso visualmente pelo app Orca, do seu computador ou do
-> celular; (3) seus projetos (novos ou já existentes) estão prontos pra trabalhar lá. Testado de
-> ponta a ponta em Ubuntu 24.04 / x86_64.
+> **Pra quem é este documento:** você tem (ou vai comprar) uma VPS nova e quer chegar num ponto
+> onde: (1) roda um agente de IA (OpenCode) numa máquina sempre ligada, não no seu PC pessoal;
+> (2) orquestra isso visualmente pelo app Orca, do computador ou do celular; (3) seus projetos
+> (novos ou já existentes) estão prontos pra trabalhar lá. Testado de ponta a ponta em Ubuntu
+> 24.04 / x86_64.
 >
-> **Como usar:** se você tem uma IA te ajudando (Claude Code, Codex, Cursor, etc.), pode colar este
-> documento inteiro pra ela e pedir pra executar os passos, com acesso SSH root na sua VPS. Cada
-> passo tem o comando exato e o resultado esperado — uma IA com acesso SSH consegue seguir isso sem
-> supervisão, mas os pontos marcados **[MANUAL]** exigem uma pessoa de verdade (login em conta,
-> aprovar prompt do sistema operacional).
+> **Como usar:** cole este documento inteiro pra sua IA (Claude Code, Codex, etc.) rodando local no
+> seu computador, com acesso SSH root na VPS. Ela executa quase tudo sozinha — o filtro de cada
+> passo é: **só é seu se envolver login numa conta, digitar uma senha, ou aprovar algo na tela do
+> seu celular/computador.** Tudo o mais (gerar chave, instalar pacote, configurar serviço, subir
+> projeto) é a IA que faz.
 
-## O que você precisa antes de começar
+## O que só você precisa fazer (visão geral)
 
-- Uma VPS nova, Ubuntu 24.04 (ou 20.04/22.04/Debian stable), acesso root via SSH com senha.
-  - **Specs mínimas recomendadas: 2 vCPU / 8GB RAM.** Testamos com 1 vCPU/4GB e a máquina trava sob
-    carga (rodar vários agentes ao mesmo tempo derruba um núcleo só) — não é hipotético, aconteceu
-    na prática. 2 vCPU/8GB com swap habilitado é o piso confortável.
-- Uma conta [Tailscale](https://tailscale.com) (grátis pra uso pessoal).
-- Uma conta GitHub (se for versionar os projetos por lá).
-- Alguns minutos onde você mesmo vai precisar clicar em links de autenticação — não dá pra
-  automatizar 100%, e não deveria: login em conta é sempre um passo seu.
+Antes de mergulhar nos passos, aqui está a lista **completa** das coisas que exigem você — o resto
+do documento é a IA executando. São ~10 ações rápidas, a maioria "clicar em um link":
+
+1. Comprar a VPS e pegar IP + senha root no painel do provedor.
+2. Rodar **um único comando** (`ssh-copy-id`) você mesmo, digitando a senha — é a única vez que a
+   senha aparece, e só no seu terminal, nunca pra IA.
+3. Criar uma conta [Tailscale](https://tailscale.com/) — grátis, uso pessoal.
+4. Clicar no link de autorização quando a VPS entrar na sua rede Tailscale.
+5. Aprovar o login do `gh` (GitHub CLI) uma vez — depois disso a IA cadastra todas as chaves SSH
+   sozinha, sem você colar nada no GitHub manualmente.
+6. Instalar o app **Tailscale** no seu computador e aprovar a extensão de sistema (prompt do
+   macOS/Windows) + logar.
+7. Instalar o app **Orca** no seu computador e logar.
+8. Rodar `opencode auth login` você mesmo e colar sua chave de API (é sua credencial, só você tem).
+9. Instalar **Tailscale** e **Orca Mobile** no celular, logar nos dois com a mesma conta.
+10. Escanear o QR de pareamento mobile (gerado dentro do app Orca do computador).
+
+**Dica pro Tailscale (passo 3):** usa um e-mail que você acessa fácil de qualquer lugar — vai
+logar com essa mesma conta em **3 dispositivos** (VPS, computador, celular).
 
 ---
 
 ## Fase 0 — Primeiro acesso e endurecimento do SSH
 
-**[MANUAL]** Anota o IP da VPS e a senha root que o provedor te deu.
+🧑 **Você:** compra a VPS, pega o IP e a senha root no painel do provedor, e passa isso pra sua IA.
 
-No seu computador local, gera uma chave SSH dedicada pra essa VPS (não reusa uma chave que já
-tenha outro propósito):
-
+🤖 **A IA gera a chave** (no seu computador, não na VPS ainda):
 ```bash
 ssh-keygen -t ed25519 -C "acesso-vps" -f ~/.ssh/id_ed25519_vps -N ""
+```
+
+🧑 **Você roda isso** (é o único momento em que uma senha entra em jogo — por isso é manual):
+```bash
 ssh-copy-id -i ~/.ssh/id_ed25519_vps.pub root@<IP_DA_VPS>
 ```
 
-(`-N ""` já cria sem passphrase — mais simples pra uso do dia a dia; `ssh-copy-id` vai pedir a
-senha root uma última vez pra copiar a chave)
-
-Testa o login por chave:
-
+🤖 **A IA testa e endurece o acesso** a partir daqui:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'echo login-por-chave-ok'
 ```
-
-**Desativa a autenticação por senha** — só depois de confirmar que o login por chave funciona:
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication no/" /etc/ssh/sshd_config
@@ -56,11 +62,10 @@ systemctl restart ssh
 '
 ```
 
-**Gotcha comum:** imagens de VPS de alguns provedores (cloud-init) têm um arquivo separado em
-`/etc/ssh/sshd_config.d/*.conf` que pode reescrever `PasswordAuthentication` de volta pra `yes`,
-sobrescrevendo o que você acabou de mudar (porque é lido *antes* do arquivo principal). Se depois
-de reiniciar o `ssh` a senha ainda funcionar, roda:
-
+**Gotcha comum:** imagens de VPS com cloud-init têm um arquivo separado em
+`/etc/ssh/sshd_config.d/*.conf` que pode reescrever `PasswordAuthentication` de volta pra `yes`
+(porque é lido *antes* do arquivo principal). Se depois de reiniciar o `ssh` a senha ainda
+funcionar:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 grep -rl "PasswordAuthentication yes" /etc/ssh/sshd_config.d/ 2>/dev/null | \
@@ -69,15 +74,35 @@ systemctl restart ssh
 '
 ```
 
-Depois disso, teste de novo uma conexão nova por chave **antes de fechar a sessão atual** — só pra
-garantir que não travou o próprio acesso.
+A IA testa uma conexão nova por chave antes de considerar esse passo concluído, pra garantir que
+não travou o próprio acesso.
 
 ---
 
-## Fase 1 — Ambiente base
+## Fase 1 — GitHub CLI (libera automação de chave SSH pro resto do playbook)
 
-Atualiza o sistema e instala o essencial:
+Esse passo vem cedo de propósito: fazendo isso uma vez agora, a IA nunca mais precisa pedir pra
+você colar chave pública no site do GitHub — ela cadastra tudo sozinha via API dali em diante
+(Fase 1.2 e Fase 5).
 
+🤖 **A IA verifica se o `gh` já está instalado e autenticado no seu computador:**
+```bash
+gh auth status
+```
+
+Se não estiver instalado: `brew install gh` (Mac) ou equivalente. Se não estiver autenticado:
+
+🧑 **Você aprova uma vez:**
+```bash
+gh auth login --scopes admin:public_key
+```
+Isso imprime um código de 4 letras e um link (`https://github.com/login/device`). Você abre o
+link, cola o código, aprova. **`admin:public_key` no comando é o que permite a IA cadastrar
+chaves SSH automaticamente depois** — sem esse escopo, teria que voltar a colar manualmente.
+
+### 1.1 — Ambiente base na VPS
+
+🤖 **A IA faz tudo daqui:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 apt-get update && apt-get upgrade -y
@@ -86,7 +111,6 @@ apt-get install -y curl git jq build-essential
 ```
 
 Node.js (via NodeSource, versão 22 LTS):
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -95,8 +119,7 @@ node -v && npm -v
 '
 ```
 
-Git — configura identidade global (troque pelos seus dados):
-
+Git — identidade global (a IA já sabe seu nome/email da conversa, ou pergunta uma vez):
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 git config --global user.name "<SEU_NOME>"
@@ -104,18 +127,20 @@ git config --global user.email "<SEU_EMAIL>"
 '
 ```
 
-**Chave SSH da VPS pro GitHub** (pra clonar/dar push nos seus repos):
+### 1.2 — Chave SSH da VPS pro GitHub (sem colar nada manualmente)
 
+🤖 **A IA gera a chave na VPS e cadastra direto no GitHub via `gh`, num só fluxo:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
-ssh-keygen -t ed25519 -C "<SEU_EMAIL>" -f ~/.ssh/id_ed25519 -N ""
-cat ~/.ssh/id_ed25519.pub
+[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -C "<SEU_EMAIL>" -f ~/.ssh/id_ed25519 -N ""
 '
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'cat ~/.ssh/id_ed25519.pub' | \
+  gh ssh-key add - --title "vps-root-<NOME_DA_VPS>"
 ```
+(o `gh ssh-key add` roda no seu computador, usando o login do passo anterior — lê o conteúdo da
+chave pública direto da VPS via SSH, sem passar por copiar/colar em navegador)
 
-**[MANUAL]** Copia a chave pública impressa e cola em GitHub → Settings → SSH and GPG keys → New
-SSH key. Depois testa:
-
+Confirma:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'ssh -o StrictHostKeyChecking=accept-new -T git@github.com'
 ```
@@ -125,69 +150,63 @@ Esperado: `Hi <seu-usuário>! You've successfully authenticated...`
 
 ## Fase 2 — Tailscale (a rede privada que conecta tudo)
 
-O Tailscale cria uma VPN privada (WireGuard) só entre os seus dispositivos — VPS, seu computador,
-seu celular — como se todos estivessem na mesma rede local, com IPs fixos (`100.x.x.x`) que só
-você enxerga. É o que permite expor o servidor de agente sem nunca abrir porta pra internet
-pública.
+O Tailscale cria uma VPN privada (WireGuard) só entre os seus dispositivos — VPS, computador,
+celular — como se todos estivessem na mesma rede local, com IPs fixos (`100.x.x.x`) que só você
+enxerga. É o que permite acessar o servidor de agente sem nunca abrir porta pra internet pública.
 
-**Na VPS:**
+🧑 **Você:** cria a conta em [tailscale.com](https://tailscale.com/) (se ainda não tiver) — use um
+e-mail fácil de acessar de qualquer lugar, vai logar nos 3 dispositivos com essa conta.
 
+🤖 **A IA instala e conecta a VPS:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'curl -fsSL https://tailscale.com/install.sh | sh'
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'tailscale up --hostname=<NOME_DA_VPS>'
 ```
-
 O segundo comando imprime um link `https://login.tailscale.com/a/...`.
 
-**[MANUAL]** Abre esse link no navegador e autoriza com sua conta Tailscale.
+🧑 **Você clica** nesse link e autoriza com sua conta Tailscale.
 
-Confirma e guarda o IP da tailnet (formato `100.x.x.x`) — vai ser usado em quase todos os passos
-seguintes:
-
+🤖 **A IA confirma e guarda o IP da tailnet** (formato `100.x.x.x` — vai ser usado no resto do
+playbook):
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'tailscale ip -4'
 ```
 
-**No seu computador** (Mac): `brew install --cask tailscale-app` e abre o app.
-**[MANUAL]** Aprovar qualquer prompt de extensão de sistema (Ajustes → Privacidade e Segurança) e
-logar com a mesma conta — isso é um passo de UI do sistema operacional, não dá pra scriptar.
+🧑 **Você instala o app Tailscale no computador** (`brew install --cask tailscale-app` no Mac, ou
+baixa em tailscale.com/download) — precisa abrir o app e **aprovar manualmente um prompt de
+extensão de sistema** (Ajustes → Privacidade e Segurança no Mac). Esse prompt de SO não dá pra
+automatizar de jeito nenhum, nem por script nem por IA. Loga com a mesma conta.
 
-**No celular:** instalar o app Tailscale (App Store / Play Store), logar na mesma conta.
-
-Confirma que os dispositivos se enxergam:
+A IA confirma que os dispositivos se enxergam:
 ```bash
 tailscale status
 ```
-Deve listar seu computador, seu celular (se já configurado) e a VPS.
+Deve listar seu computador e a VPS (o celular entra na Fase 5).
 
 ---
 
 ## Fase 3 — Orca headless (servidor sempre ativo)
 
-O [Orca](https://onorca.dev) é o "painel de controle" visual pra orquestrar agentes de IA —
-worktrees isolados, terminais, múltiplos agentes em paralelo. Rodando como serviço na VPS, ele fica
-disponível 24/7, e você acessa de qualquer dispositivo pareado — desligar seu computador não afeta
-nada, porque quem processa é a VPS, seu app é só o controle remoto.
+O [Orca](https://onorca.dev) é o painel visual pra orquestrar agentes de IA — worktrees isolados,
+terminais, múltiplos agentes em paralelo. Rodando como serviço na VPS, fica disponível 24/7:
+desligar seu computador não afeta nada, porque quem processa é a VPS.
+
+🤖 **A IA faz toda essa fase.**
 
 ### 3.1 — Dependências de sistema
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 apt-get install -y curl file jq xvfb zlib1g-dev libfuse2t64 libgtk-3-0t64
 '
 ```
-
 Notas:
-- `libfuse2t64` é o nome certo em Ubuntu 24.04/Debian (era `libfuse2` em versões antigas do
-  Ubuntu — usar esse nome no 22.04).
+- `libfuse2t64` é o nome certo em Ubuntu 24.04/Debian (era `libfuse2` no 22.04).
 - **`libgtk-3-0t64` não está no guia oficial da Orca, mas é obrigatório** — sem ele o binário falha
-  com `error while loading shared libraries: libgtk-3.so.0`. Achado na prática, não na
-  documentação.
+  com `error while loading shared libraries: libgtk-3.so.0`. Achado na prática.
 - Xvfb só precisa estar **instalado** — o Orca sobe um display virtual sozinho quando não há
   `$DISPLAY`.
 
 ### 3.2 — Baixar o binário (versão pinada)
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 ORCA_VERSION=$(curl -s https://api.github.com/repos/stablyai/orca/releases/latest | grep tag_name | cut -d\" -f4)
@@ -198,16 +217,13 @@ chmod 755 /opt/orca/orca-linux.AppImage
 echo "instalado: ${ORCA_VERSION}"
 '
 ```
-
-Pinar a versão (em vez de sempre puxar "latest" num script futuro) evita atualização silenciosa
-sem aviso — prática padrão pra qualquer ferramenta de terceiro com esse nível de acesso.
+Pinar a versão evita atualização silenciosa de uma ferramenta de terceiro num script futuro.
 
 ### 3.3 — Usuário dedicado, não-root
 
-Todo o trabalho de agente (worktrees, terminais, projetos) vai rodar sob um usuário de sistema
-próprio — isola do `root` (que segue guardando o acesso administrativo da VPS) e preserva o
-sandbox do Chromium do Electron (rodar como root desativaria isso).
-
+Todo o trabalho de agente (worktrees, terminais, projetos) roda sob um usuário de sistema próprio —
+isola do `root` (que segue com o acesso administrativo da VPS) e preserva o sandbox do Chromium do
+Electron.
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 useradd --system --create-home --shell /usr/sbin/nologin orca
@@ -215,13 +231,10 @@ chown root:root /opt/orca /opt/orca/orca-linux.AppImage
 chmod 755 /opt/orca /opt/orca/orca-linux.AppImage
 '
 ```
-
-`--shell /usr/sbin/nologin` bloqueia login interativo direto como esse usuário — mas comandos via
-`sudo -u orca <comando>` funcionam normalmente (é assim que a IA/você vai configurar tudo pra esse
-usuário sem precisar mudar isso).
+`--shell /usr/sbin/nologin` bloqueia login interativo direto — mas `sudo -u orca <comando>`
+funciona normal (é assim que a IA configura tudo pra esse usuário sem precisar mudar isso).
 
 ### 3.4 — Serviço systemd
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> "cat > /etc/systemd/system/orca-serve.service << 'EOF'
 [Unit]
@@ -249,7 +262,6 @@ EOF
 systemctl daemon-reload
 systemctl enable --now orca-serve.service"
 ```
-
 Confirma:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'systemctl is-active orca-serve.service && systemctl is-enabled orca-serve.service'
@@ -265,8 +277,9 @@ Esperado: `active` e `enabled`.
 | `[ws-transport] Failed to bind port ... EADDRINUSE` e a porta anunciada muda sozinha | processo zumbi de teste anterior ainda preso na porta (o AppImage se extrai como `orca-ide` num `/tmp/.mount_orca-*` — `pkill -f orca-linux` não mata os filhos) | `pkill -9 -u orca` (mata por usuário, não por nome) |
 | `dlopen(): error loading libfuse.so.2` | falta libfuse | Ubuntu 22.04: `apt-get install libfuse2`; 24.04/Debian: `libfuse2t64` |
 | `Missing X server or $DISPLAY` | `xvfb` não instalado | `apt-get install -y xvfb` |
+| Diálogo "Create worktree" no app só mostra "Blank Terminal", nunca "OpenCode" mesmo já instalado | o app cacheia os agentes detectados no host desde que conectou | fecha e abre o app Orca de novo — ou usa Blank Terminal e digita `opencode` manualmente, funciona igual |
 
-Comando de recuperação de lock obsoleto (roda os dois primeiros passos sempre juntos, na ordem):
+Comando de recuperação de lock obsoleto (roda sempre nessa ordem):
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 systemctl stop orca-serve.service
@@ -280,72 +293,38 @@ systemctl start orca-serve.service
 
 ### 3.6 — Parear seu computador
 
-Pega a URL de pareamento mais recente do log do serviço:
+🤖 **A IA pega a URL de pareamento e registra o ambiente localmente — sem você precisar clicar em
+nada no app:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'journalctl -u orca-serve.service --no-pager | grep "Pairing URL" | tail -1'
 ```
-
-**[MANUAL]** Abre o app Orca no seu computador → Add a project → Host → Add remote host → cola o
-código de pareamento (a parte depois de `code=` na URL, ou escaneia o QR se estiver usando a versão
-web). **Trate esse código como senha** — dá controle total do servidor pra quem tiver.
-
-Ou via CLI:
 ```bash
-orca environment add --name <nome-que-quiser> --pairing-code "<código>"
-orca status --environment <nome> --json   # confirma: "reachable": true, "state": "ready"
+orca environment add --name <NOME_DA_VPS> --pairing-code "<código, a parte depois de code=>"
+orca status --environment <NOME_DA_VPS> --json   # confirma: "reachable": true, "state": "ready"
 ```
+Isso grava a configuração no mesmo lugar que o app Orca lê — 🧑 **você só precisa abrir o app** e
+o host já aparece disponível, pareado, sem passar por nenhum diálogo de "Add remote host".
 
-### 3.7 — Parear o celular
-
-O celular precisa estar **na mesma rede Tailscale que a VPS** — isso é exigência da própria
-documentação oficial do Orca, não tem atalho por nuvem/relay. A conexão é direta celular→VPS; não
-depende do seu computador estar ligado.
-
-**[MANUAL] Passo 1 — Tailscale no celular:**
-1. Instala o app **Tailscale** (App Store / Google Play).
-2. Abre, loga com a **mesma conta** usada na VPS e no computador.
-3. Confirma que o celular apareceu na lista: `tailscale status` (rodado em qualquer dispositivo já
-   conectado) deve listar o celular junto com a VPS e o computador.
-
-**[MANUAL] Passo 2 — App Orca no celular:**
-1. Instala o app **Orca Mobile** (App Store / Google Play).
-2. Abre o app → **Pair** (ou "Add host" / ícone de scanner, dependendo da versão).
-
-**Passo 3 — gerar o código de pareamento** (na VPS):
-```bash
-ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> \
-  '/opt/orca/orca-linux.AppImage serve --mobile-pairing --port 6768 --pairing-address <TAILSCALE_IP_DA_VPS>'
-```
-Isso imprime um QR code (em texto) e um link de pareamento escopado pra mobile. **Ctrl+C depois de
-capturar** — esse comando é só pra imprimir o código; o serviço de verdade (`orca-serve.service`)
-já está rodando full-time via systemd desde a Fase 3.4, não precisa deixar esse rodando.
-
-**[MANUAL] Passo 4:** no app Orca do celular, escaneia o QR (ou cola o link) impresso no passo
-anterior. Depois de parear uma vez, o celular reconecta sozinho da próxima vez que abrir o app —
-não precisa repetir o pareamento.
-
-Trate o link/QR de pareamento como senha, igual no pareamento do computador (Fase 3.6) — dá
-controle total do servidor pra quem escanear.
+Instala o app se ainda não tiver: `brew install --cask orca` (Mac) ou baixa em onorca.dev/download.
+Trate o link/código de pareamento como senha — dá controle total do servidor pra quem tiver.
 
 ---
 
 ## Fase 4 — OpenCode (o agente de IA)
 
 **Ponto crítico que não está em nenhuma documentação oficial:** o Orca cria worktrees e terminais
-que rodam como o usuário **`orca`**, não como `root`. Se você instalar o OpenCode só pra root (jeito
-mais óbvio de instalar logo que entra na VPS), ele **não vai aparecer** dentro dos
-terminais/worktrees do Orca — vai dar `command not found`. **Precisa instalar pro usuário `orca`
-especificamente.**
+que rodam como o usuário **`orca`**, não como `root`. Instalar o OpenCode só pra root não aparece
+dentro dos terminais/worktrees do Orca — dá `command not found`. **Precisa instalar pro usuário
+`orca` especificamente.**
 
+🤖 **A IA instala:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 sudo -u orca bash -c "curl -fsSL https://opencode.ai/install | bash"
 '
 ```
-
-O instalador nem sempre ajusta o `PATH` no `.bashrc` do usuário `orca` (não tem o mesmo tratamento
-que dá pro root). Confirma e corrige se precisar:
-
+O instalador nem sempre ajusta o `PATH` no `.bashrc` do usuário `orca`. A IA confirma e corrige se
+precisar:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 grep -q "opencode/bin" /home/orca/.bashrc || \
@@ -353,57 +332,37 @@ grep -q "opencode/bin" /home/orca/.bashrc || \
 '
 ```
 
-**Autenticação — precisa ser feita por você, dentro de um terminal de verdade** (não dá pra
-automatizar sem sua própria chave de API). Duas formas — a primeira é a mais simples, não exige
-saber usar SSH:
+**Autenticação — só você tem a chave de API, então esse passo é seu.** Caminho mais simples: pelo
+próprio app Orca (sem precisar de SSH/Termius).
 
-**Opção A — pelo próprio app Orca (recomendado, sem precisar de SSH/Termius):** depois de parear o
-Orca (Fase 3.6) e trazer pelo menos um projeto (Fase 5), abre qualquer worktree no app e cria um
-terminal por lá (é um terminal remoto embutido, já rodando na VPS como o usuário `orca` — o app É
-o seu acesso remoto, não precisa abrir mais nada). Dentro desse terminal, roda:
-```
-opencode auth login
-```
-Menu interativo aparece na tela do próprio app: escolhe o provedor (OpenCode Zen é o recomendado
-pra começar — tem modelos grátis) e cola sua API key quando pedir. A credencial fica salva pro
-usuário `orca` — funciona daí em diante em qualquer projeto/worktree que você abrir.
+🧑 **Você:**
+1. No app Orca (já pareado na Fase 3.6), abre qualquer worktree e cria um terminal — é um terminal
+   remoto embutido, já rodando na VPS como o usuário `orca`.
+2. Roda `opencode auth login` nesse terminal. Escolhe o provedor (OpenCode Zen é o recomendado pra
+   começar — tem modelos grátis) e cola sua chave de API quando pedir.
 
-**Opção B — direto por SSH** (se preferir, ou pra automatizar via IA com acesso SSH):
+Se preferir por SSH direto em vez do app:
 ```bash
 ssh -t -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS>
 sudo -u orca -i
 opencode auth login
 ```
-Mesmo menu interativo, mesmo resultado — só muda a porta de entrada.
 
-Confirma que autenticou:
+🤖 **A IA confirma que autenticou:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'sudo -u orca /home/orca/.opencode/bin/opencode auth list'
 ```
 
-**Gotcha: o app Orca não percebe o OpenCode instalado na hora.** No diálogo "Create worktree", o
-campo **Agent** só mostra "Blank Terminal" mesmo com o OpenCode já instalado e funcionando (dá pra
-confirmar isso via CLI: `orca worktree create --agent opencode ...` já reconhece e funciona
-perfeitamente, o problema é só o app não ter re-escaneado o host ainda). **Fecha e abre o app Orca
-de novo** depois de instalar o OpenCode (Fase 4) — na próxima vez que abrir o diálogo de criar
-worktree, "OpenCode" aparece como opção no dropdown Agent. Se mesmo assim não aparecer, funciona
-igual selecionando "Blank Terminal" e digitando `opencode` manualmente dentro do terminal criado.
-
 ---
 
-## Fase 5 — Trazendo seus projetos
-
-**Decisão de segurança importante:** o usuário `orca` deve ter **sua própria chave SSH**, separada
-da chave que o `root` usa — nunca reaproveitar. Isso limita o estrago se algum dia o Orca (app
-ainda jovem, sem histórico longo de segurança auditada) for comprometido: um problema no ambiente
-gerenciado pelo Orca não some junto com credenciais administrativas da VPS inteira.
+## Fase 5 — Trazendo seus projetos e pareando o celular
 
 ### 5.0 — Identidade git pro usuário orca
 
-**Mesmo padrão de novo: a Fase 1 configurou o git só pro `root`. O usuário `orca` precisa da sua
-própria configuração** — sem isso, o próprio app Orca bloqueia a criação de projeto pela interface
-com o erro `Git author identity is not configured`.
+Mesmo padrão da Fase 1.1: aquela configuração foi só pro `root`. Sem isso, o próprio app Orca
+bloqueia a criação de projeto pela interface com `Git author identity is not configured`.
 
+🤖 **A IA:**
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 sudo -u orca git config --global user.name "<SEU_NOME>"
@@ -413,17 +372,21 @@ sudo -u orca git config --global user.email "<SEU_EMAIL>"
 
 ### 5.1 — Chave de git dedicada pro usuário orca
 
+**Decisão de segurança:** o usuário `orca` tem **sua própria chave SSH**, separada da que o `root`
+usa — nunca reaproveitar. Limita o estrago se algum dia o Orca (app ainda jovem, sem histórico
+longo de segurança auditada) for comprometido: um problema no ambiente gerenciado por ele não some
+junto com credenciais administrativas da VPS inteira.
+
+🤖 **A IA gera e cadastra no GitHub no mesmo fluxo automático da Fase 1.2** (sem colar nada
+manualmente, já que o `gh` foi autorizado uma vez lá atrás):
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 sudo -u orca mkdir -p -m 700 /home/orca/.ssh
 sudo -u orca ssh-keygen -t ed25519 -C "orca@<NOME_DA_VPS>" -f /home/orca/.ssh/id_ed25519 -N ""
-cat /home/orca/.ssh/id_ed25519.pub
 '
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'sudo -u orca cat /home/orca/.ssh/id_ed25519.pub' | \
+  gh ssh-key add - --title "orca-<NOME_DA_VPS>"
 ```
-
-**[MANUAL]** Cola essa chave pública em GitHub → Settings → SSH and GPG keys → New SSH key (uma
-entrada nova, **não** reusa a chave do root).
-
 Testa:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'sudo -u orca ssh -o StrictHostKeyChecking=accept-new -T git@github.com'
@@ -431,55 +394,71 @@ ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> 'sudo -u orca ssh -o StrictHostKey
 
 ### 5.2 — Trazer um projeto (novo ou já existente — mesmo mecanismo)
 
-Clona **sempre como o usuário `orca`**, numa pasta dele (`/home/orca/dev/`) — mesmo que esse
-projeto já exista em algum outro lugar da VPS (ex: sob `/root`). Não reusa o checkout do root; o
+🤖 **A IA clona sempre como o usuário `orca`**, numa pasta dele (`/home/orca/dev/`) — mesmo que
+esse projeto já exista em outro lugar da VPS (ex: sob `/root`). Não reusa o checkout do root; o
 `orca` faz sua própria cópia independente.
-
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
 sudo -u orca mkdir -p /home/orca/dev
 sudo -u orca git clone git@github.com:<SEU_USUARIO>/<SEU_REPO>.git /home/orca/dev/<SEU_REPO>
 '
 ```
-
 Se for um projeto **novo que ainda não existe em lugar nenhum**: cria o repositório vazio no
-GitHub primeiro (ou local com `git init`), depois clona do mesmo jeito.
+GitHub primeiro (ou local com `git init`), depois clona do mesmo jeito. Ou usa o próprio app Orca
+→ "Create a new project" (a IA já resolveu a identidade git na Fase 5.0, então esse fluxo funciona
+direto pela interface também).
 
 ### 5.3 — Registrar no Orca
-
 ```bash
-orca repo add --path /home/orca/dev/<SEU_REPO> --environment <nome-do-environment>
+orca repo add --path /home/orca/dev/<SEU_REPO> --environment <NOME_DA_VPS>
 ```
+Repete pra cada projeto. Depois disso ele aparece no app pra criar worktrees, disparar o OpenCode
+dentro, tudo rodando na VPS.
 
-Repete pra cada projeto que quiser disponível no Orca. Depois disso, o projeto aparece no app pra
-criar worktrees, disparar o OpenCode (ou qualquer agente) dentro dele, tudo rodando na VPS.
+### 5.4 — Confirmação: tudo funcionando junto
 
-### 5.4 — Confirmação final: tudo funcionando junto
-
-Cria um worktree de teste e roda o OpenCode dentro pra confirmar que a cadeia inteira fecha:
+🤖 **A IA cria um worktree de teste com o OpenCode já disparado como agente inicial** (`--agent
+opencode` já é reconhecido pelo Orca, dispara o OpenCode automaticamente no primeiro terminal):
 ```bash
-orca worktree create --repo <id-do-repo-do-passo-anterior> --name teste --environment <nome> --setup skip
-orca terminal create --worktree "<worktree-id-retornado>" --environment <nome> --command "opencode --version"
-# espera alguns segundos, depois:
-orca terminal read --terminal "<handle-retornado>" --environment <nome>
+orca worktree create --repo <id-do-repo> --name teste --agent opencode --environment <NOME_DA_VPS> --setup skip --json
 ```
-Esperado: o número da versão do OpenCode aparece no output — confirma que o binário está acessível
-e rodando como o usuário certo, dentro do projeto certo, na VPS.
+Esperado no JSON de retorno: `"createdWithAgent": "opencode"` e um `startupTerminal` com
+`"spawned": true` — confirma que o binário está acessível, autenticado, e rodando como o usuário
+certo, dentro do projeto certo, na VPS.
+
+### 5.5 — Pareando o celular
+
+O celular precisa estar **na mesma rede Tailscale que a VPS** (exigência da documentação oficial
+do Orca — sem atalho por nuvem/relay). A conexão é direta celular→VPS; não depende do computador
+estar ligado.
+
+🧑 **Você:**
+1. Instala o app **Tailscale** no celular (App Store / Google Play), loga com a mesma conta usada
+   no computador e na VPS.
+2. Instala o app **Orca Mobile** no celular (App Store / Google Play).
+3. No app Orca do **computador** (já pareado): **Settings → Set up → Mobile → Generate QR Code.**
+4. Escaneia esse QR com o app Orca do celular.
+
+Depois de parear uma vez, o celular reconecta sozinho da próxima vez que abrir o app. Trate esse QR
+como senha, mesma lógica do pareamento do computador.
 
 ---
 
 ## Checklist final
 
 - [ ] Login por chave SSH funcionando, senha desativada
-- [ ] Node.js, git configurados
+- [ ] `gh auth login` feito uma vez, com escopo `admin:public_key`
+- [ ] Node.js, git configurados (**pro `root` e pro `orca`**, os dois — é fácil esquecer o segundo)
 - [ ] Tailscale conectando VPS + computador + celular
 - [ ] `orca-serve.service` ativo e habilitado (sobrevive a reboot)
-- [ ] App Orca pareado no computador E no celular
+- [ ] App Orca pareado no computador (via `orca environment add`, sem passar por diálogo manual) e
+      no celular (via QR gerado pelo app do computador)
 - [ ] OpenCode instalado **pro usuário `orca`** (não só root) e autenticado
-- [ ] Identidade git (`user.name`/`user.email`) configurada pro usuário `orca`, não só root
-- [ ] Chave SSH dedicada do `orca` no GitHub (separada da do root)
+- [ ] Chave SSH dedicada do `orca` no GitHub (separada da do root, cadastrada via `gh ssh-key add`,
+      sem colar nada manualmente)
 - [ ] Projetos clonados sob `/home/orca/dev/` e registrados no Orca
-- [ ] Teste de ponta a ponta: worktree → terminal → `opencode --version` retornando certo
+- [ ] Teste de ponta a ponta: worktree criado com `--agent opencode` retornando
+      `createdWithAgent: "opencode"` e terminal disparado
 
 Com isso, desligar seu computador ou celular não afeta nada — o trabalho continua rodando na VPS, e
 você reconecta de onde quiser pra ver o estado exato de onde parou.
