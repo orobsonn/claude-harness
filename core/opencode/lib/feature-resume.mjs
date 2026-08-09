@@ -89,12 +89,22 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
         return { ok: false, reason: "source planner snapshot missing" };
       }
       fs.mkdirSync(path.dirname(targetSnapshot), { recursive: true });
-      fs.copyFileSync(sourceSnapshot, targetSnapshot, fs.constants.COPYFILE_EXCL);
+      if (fs.existsSync(targetSnapshot)) {
+        if (!fs.readFileSync(sourceSnapshot).equals(fs.readFileSync(targetSnapshot))) {
+          return { ok: false, reason: "target planner snapshot conflicts" };
+        }
+      } else {
+        fs.copyFileSync(sourceSnapshot, targetSnapshot, fs.constants.COPYFILE_EXCL);
+      }
       adopted.planner_plan_binding = { ...binding, session_id: targetSessionId, snapshot_path: targetRelative };
     }
     const persisted = withGateStateLock(target.path, (current) => {
-      if (Object.keys(current).length > 0) return { ok: false, reason: "target session already has state" };
-      return adopted;
+      const bootstrapKeys = new Set(["operator_session_model", "session_reopened_at", "session_status"]);
+      if (Object.keys(current).some((key) => !bootstrapKeys.has(key))) {
+        return { ok: false, reason: "target session already has harness state" };
+      }
+      // The host creates these session-local facts before classify. They are not delivery state.
+      return { ...adopted, ...current, session_id: targetSessionId, session_status: "active" };
     });
     if (!persisted.ok) return { ok: false, reason: persisted.reason };
     return { ok: true, statePath: target.path, planPath: resume.planPath, sourceSessionId: resume.sessionId };
