@@ -119,6 +119,31 @@ export async function executeClassify(
   const finalFeatureId = transition.featureId
   const peakMode = transition.peakMode
 
+  // A feature outlives a chat session. On a fresh session, adopt its most recent durable
+  // workflow state before creating a stub so planner/review/task progress is not discarded.
+  if (transition.action === "fresh") {
+    const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
+    const resume = findFeatureResume(context.directory, finalFeatureId)
+    if (resume && resume.sessionId !== sessionID) {
+      const adopted = adoptFeatureResume(context.directory, sessionID, resume, finalMode)
+      if (!adopted.ok) {
+        return errorResult("feature resume failed", adopted.reason, finalFeatureId)
+      }
+      const metadata = {
+        plan_path: adopted.planPath,
+        mode: resume.state.mode,
+        feature_id: finalFeatureId,
+        action: "resume",
+        source_session_id: resume.sessionId,
+      }
+      return {
+        title: `classify: resumed ${finalFeatureId}`,
+        output: JSON.stringify(metadata, null, 2),
+        metadata,
+      }
+    }
+  }
+
   const built = buildClassifyStub({
     mode: finalMode,
     featureId: finalFeatureId,

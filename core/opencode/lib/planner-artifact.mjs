@@ -8,8 +8,26 @@ import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { isCompleteExpectedModelStrategy } from "../../shared/lib/model-strategy-projection.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
 import { semanticPlanHash } from "./plan-hash.mjs";
+import { findFeatureResume } from "./feature-resume.mjs";
 
 export { semanticPlanHash };
+
+/** @description Resolve this session's canonical path, falling back to the latest persisted feature run. */
+export function resolvePlannerArtifactPath(projectRoot, sessionId, featureId, sourceSessionId) {
+  const pd = planDir({ projectRoot, runtime: "opencode", sessionId, featureId });
+  if (!pd.ok) return null;
+  const current = path.join(pd.path, "execution-plan.json");
+  if (fs.existsSync(current)) return current;
+  if (typeof sourceSessionId === "string") {
+    const source = planDir({ projectRoot, runtime: "opencode", sessionId: sourceSessionId, featureId });
+    if (source.ok) {
+      const pinned = path.join(source.path, "execution-plan.json");
+      return fs.existsSync(pinned) ? pinned : null;
+    }
+    return null;
+  }
+  return findFeatureResume(projectRoot, featureId)?.planPath ?? null;
+}
 
 /** @description Preserve an explicitly frozen routing strategy through artifact validation. */
 function validationOptions(options) {
@@ -20,9 +38,8 @@ function validationOptions(options) {
 
 /** @description Read and fingerprint the one canonical plan artifact for a session/feature. */
 export function readPlannerArtifact(projectRoot, sessionId, featureId, options = {}) {
-  const pd = planDir({ projectRoot, runtime: "opencode", sessionId, featureId });
-  if (!pd.ok) return { exists: false, valid: false, fingerprint: "missing" };
-  const planPath = path.join(pd.path, "execution-plan.json");
+  const planPath = resolvePlannerArtifactPath(projectRoot, sessionId, featureId, options.sourceSessionId);
+  if (!planPath) return { exists: false, valid: false, fingerprint: "missing" };
   try {
     const raw = fs.readFileSync(planPath);
     const stat = fs.statSync(planPath);
@@ -260,7 +277,7 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, _now = Dat
               : undefined;
         const validation = boundExpected === undefined ? options : { ...options, expectedModelStrategy: boundExpected };
         snapshot = readBoundPlanSnapshot(snapshotPath, validation);
-        const canonical = readPlannerArtifact(projectRoot, sessionId, featureId, validation);
+        const canonical = readPlannerArtifact(projectRoot, sessionId, featureId, { ...validation, sourceSessionId: state.resumed_from_session_id });
         if (
           !snapshot.plan ||
           !canonical.plan ||
@@ -288,6 +305,7 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, _now = Dat
 
 export default {
   readBoundPlanSnapshot,
+  resolvePlannerArtifactPath,
   readPlannerArtifact,
   reconcilePlannerStateFromDisk,
   semanticPlanHash,
