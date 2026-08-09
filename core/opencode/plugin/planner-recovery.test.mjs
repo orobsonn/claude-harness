@@ -98,6 +98,22 @@ test("a bound baseline returned unchanged by a revision is rejected", async () =
   });
 });
 
+test("a resumed approved plan may be revised when delivery discovers a plan defect", async () => {
+  await withRun(async (root, state) => {
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
+    const initialArgs = { subagent_type: "planner", prompt: "Plan." };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "initial" }, { args: initialArgs });
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "initial", args: initialArgs }, { output: JSON.stringify(plan), metadata: {} });
+    fs.writeFileSync(
+      path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"),
+      JSON.stringify({ ...state(), resumed_from_session_id: "ses_previous", plan_review_verdict: "APPROVE" }),
+    );
+    const revisionArgs = { subagent_type: "planner", prompt: "Repair the plan defect." };
+    await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "revision" }, { args: revisionArgs }));
+    assert.equal(state().planner_active_attempt.call_id, "revision");
+  });
+});
+
 test("a planner boundary failure records only the active call identity", async () => {
   await withRun(async (root, state) => {
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
