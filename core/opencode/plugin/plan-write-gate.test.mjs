@@ -1073,9 +1073,29 @@ test("Bash during an active writing-hand dispatch is never shadow-recorded or bl
       { tool: "bash", sessionID: session, agent: "executor-high" },
       { args: { command: "python tool.py" } },
     ));
-    // Bash is out of scope for the anti-forge/scope rail entirely — no shadow event file.
+    // Bash skips identity/scope resolution, but its literal anti-forge check still runs.
     assert.equal(fs.existsSync(path.join(stateDir, "scope-events.jsonl")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Bash verification bypasses a conflicting writing-hand identity", async () => {
+  const hooks = await createPlanWriteGateHooks("/workspace", {
+    resolveRuntimeIdentity: async () => ({
+      ok: false,
+      conflict: true,
+      reason: "official writing-hand message relationship conflicts",
+    }),
+  });
+  const before = hooks["tool.execute.before"];
+
+  await assert.doesNotReject(() => before(
+    { tool: "bash", sessionID: "ses-review", agent: "compliance" },
+    { args: { command: "node --test tests/domain-migrations.test.mjs" } },
+  ));
+  await assert.rejects(() => before(
+    { tool: "write", sessionID: "ses-review", agent: "executor-medium" },
+    { args: { filePath: "src/outside-scope.ts", content: "x" } },
+  ), /identity conflicts/);
 });
 
 test("apply_patch denies an unsafe path without a composition shadow registry", async () => {

@@ -112,6 +112,9 @@ async function createPlanWriteGateHooks(
       // scope, heartbeat, or gate-state. Bash matching is deliberately literal best-effort.
       if (bashTool) {
         throwIfDenied(decide({ args }));
+        // Bash has only literal anti-forge friction. Resolving a writing-hand
+        // identity here can reject read-only verification commands in eye sessions.
+        return;
       } else {
         for (const rawPath of rawPaths) {
           throwIfDenied(decide({ args: { filePath: rawPath } }));
@@ -161,10 +164,6 @@ async function createPlanWriteGateHooks(
       const isSubagent = trusted.ok;
       const record = trusted.ok ? trusted.record : null;
 
-      // After the early canonical-path friction, ordinary Bash remains outside the scope rail —
-      // Claude Code parity (#484). The removed OC-only blanket deny caused blocked hands and
-      // rework on normal git/node commands.
-      if (bashTool) return;
       if ((writeTool || patchTool) && rawPaths.length === 0) {
         throw new Error("[plan-write-gate] Blocked: official write/patch tool exposed no parseable target paths.");
       }
