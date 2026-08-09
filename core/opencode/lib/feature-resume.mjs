@@ -55,11 +55,10 @@ export function findFeatureResume(projectRoot, featureId) {
               !validatePlan(plan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
         }
         const mtimeMs = Math.max(fs.statSync(planPath).mtimeMs, fs.statSync(statePath.path).mtimeMs);
-        const approved = state.planner_status === "usable" && state.plan_review_verdict === "APPROVE";
-        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs, approved };
+        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs };
       })
       .filter(Boolean)
-      .sort((a, b) => Number(b.approved) - Number(a.approved) || b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId));
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId));
     return candidates[0] ?? null;
   } catch {
     return null;

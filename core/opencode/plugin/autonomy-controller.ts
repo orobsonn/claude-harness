@@ -21,6 +21,7 @@ function taskOutput(output: unknown): string {
 async function createAutonomyControllerHooks(projectRoot: string, client: any): Promise<Pick<Hooks, "chat.message" | "tool.execute.after" | "event">> {
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
   const { mergeGateState, readGateState } = await import("../lib/gate-state.mjs")
+  const { bareRole } = await import("../lib/roles.mjs")
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs")
   const {
     autonomyContinuationPrompt,
@@ -66,7 +67,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
     "tool.execute.after": async (input: any, output: any) => {
       try {
         const args = resolveHookArgs(input, output) ?? (input?.tool_input && typeof input.tool_input === "object" ? input.tool_input : null)
-        const role = taskRole(args)
+        const role = bareRole(taskRole(args))
         if (typeof input?.sessionID !== "string") return
         const loaded = readState(input.sessionID)
         if (loaded?.state.classified !== true) return
@@ -76,7 +77,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
           if (verdict) mergeGateState(loaded.path, { plan_review_verdict: verdict })
           return
         }
-        if (role.startsWith("adversary")) {
+        if (role === "adversary" || role === "adversary-family-1") {
           mergeGateState(loaded.path, { autonomy_adversary_hold: hasHighAdversaryFinding(report) })
         }
       } catch {
