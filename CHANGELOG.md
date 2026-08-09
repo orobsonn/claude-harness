@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.54.2](https://github.com/orobsonn/claude-harness/compare/v0.54.1...v0.54.2) (2026-08-09)
+
+
+### Bug Fixes
+
+* **opencode:** libera verificacao bash ([#638](https://github.com/orobsonn/claude-harness/issues/638)) ([fecdaea](https://github.com/orobsonn/claude-harness/commit/fecdaeab373ba51e86872d36d5a3e2fa498c8d0a))
+
 ## [0.54.1](https://github.com/orobsonn/claude-harness/compare/v0.54.0...v0.54.1) (2026-08-08)
 
 
