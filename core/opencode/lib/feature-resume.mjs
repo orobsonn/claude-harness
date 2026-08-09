@@ -99,7 +99,13 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
       adopted.planner_plan_binding = { ...binding, session_id: targetSessionId, snapshot_path: targetRelative };
     }
     const persisted = withGateStateLock(target.path, (current) => {
-      const bootstrapKeys = new Set(["operator_session_model", "session_reopened_at", "session_status"]);
+      const bootstrapKeys = new Set([
+        "operator_session_model",
+        "autonomy_directive",
+        "autonomy_continuation",
+        "session_reopened_at",
+        "session_status",
+      ]);
       if (Object.keys(current).some((key) => !bootstrapKeys.has(key))) {
         return { ok: false, reason: "target session already has harness state" };
       }
