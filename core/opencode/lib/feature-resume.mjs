@@ -2,9 +2,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { isSafeFeatureId, isSafeSessionId } from "../../shared/lib/feature-id.mjs";
 import { gateStatePath, plansRoot } from "../../shared/lib/path-helpers.mjs";
 import { withGateStateLock } from "./gate-state.mjs";
+import { validatePlan } from "../../shared/lib/validate-plan.mjs";
+import { semanticPlanHash } from "./plan-hash.mjs";
 
 function readJson(file) {
   try {
@@ -35,12 +38,18 @@ export function findFeatureResume(projectRoot, featureId) {
         if (!Array.isArray(plan.tasks) || (plan.kind === "stub" && plan.tasks.length !== 0)) return null;
         if (state.planner_status === "usable") {
           const binding = state.planner_plan_binding;
-          if (!binding || typeof binding !== "object" || typeof binding.snapshot_path !== "string") return null;
+          if (!binding || typeof binding !== "object" || typeof binding.snapshot_path !== "string" || typeof binding.snapshot_file_hash !== "string") return null;
           const snapshot = path.resolve(projectRoot, binding.snapshot_path);
-          if (!snapshot.startsWith(path.resolve(projectRoot) + path.sep) || readJson(snapshot) === null) return null;
+          if (!snapshot.startsWith(path.resolve(projectRoot) + path.sep)) return null;
+          const snapshotRaw = fs.readFileSync(snapshot);
+          const canonicalRaw = fs.readFileSync(planPath);
+          const snapshotPlan = readJson(snapshot);
+          if (!snapshotPlan || crypto.createHash("sha256").update(snapshotRaw).digest("hex") !== binding.snapshot_file_hash ||
+              !snapshotRaw.equals(canonicalRaw) || semanticPlanHash(plan) !== binding.snapshot_hash ||
+              !validatePlan(plan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
         }
-        const stat = fs.statSync(planPath);
-        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs: stat.mtimeMs };
+        const mtimeMs = Math.max(fs.statSync(planPath).mtimeMs, fs.statSync(statePath.path).mtimeMs);
+        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs };
       })
       .filter(Boolean)
       .sort((a, b) => b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId));
