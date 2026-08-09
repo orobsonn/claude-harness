@@ -329,7 +329,7 @@ Two distinct concerns, never mixed: **transient failure** (the dispatch itself b
 
 **Hand CONFIG_ERROR → repair rail (NOT a tier escalation):** when a hand dispatch fails precondition / never ran (e.g. missing fidelity_pass stamp, CONFIG_ERROR), repair its recorded precondition through the owning legal rail, then re-dispatch only after that rail is green. Do not bypass, weaken, or spoof a gate; do not surface this engineering fault to the operator.
 
-A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. Available **at most once per task**, and only when the failure is a plan defect. **Any split/re-plan that re-runs `planner` → `planner-recovery` persists the revised plan** (§ Phase 1). Never hand-write `execution-plan.json`. Re-run `validate-plan` before resuming executors.
+A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. Available **at most once per task**, and only when the failure is a plan defect. A security, tenancy, credential, concurrency, or runtime-integration finding is an engineering plan defect, never a product decision merely because it needs additional files. Under autonomy, dispatch `planner` with the finding and revise/review the plan; do not ask the operator or stop. **Any split/re-plan that re-runs `planner` → `planner-recovery` persists the revised plan** (§ Phase 1). Never hand-write `execution-plan.json`. Re-run `validate-plan` before resuming executors.
 
 For a transient dispatch failure, make the bounded continuation decision inside the pipeline; never let a numeric OpenCode retry rule declare a pass or terminal outcome.
 
