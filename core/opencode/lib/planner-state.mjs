@@ -124,7 +124,7 @@ export function bindPlannerArtifact(previous, input = {}) {
   if (!isCompleteExpectedModelStrategy(input.expectedModelStrategy)) {
     return { ok: false, reason: "canonical plan binding requires the frozen model strategy", state };
   }
-  if (active.baseline_plan?.fingerprint && active.baseline_plan.fingerprint === artifact.fingerprint) {
+  if (active.baseline_plan?.bound === true && active.baseline_plan.semanticHash === artifact.semanticHash) {
     return { ok: false, reason: "planner returned the canonical plan unchanged", state };
   }
   return {

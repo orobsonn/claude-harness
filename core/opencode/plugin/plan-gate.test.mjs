@@ -646,3 +646,13 @@ test("snapshot validator failure emits a warning even when a contradictory third
     assert.deepEqual(fs.readFileSync(statePath), stateBytes)
   })
 })
+
+test("high adversary finding blocks another executor but permits sniper remediation", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath } = seedUsableBoundProject(root)
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, autonomy_adversary_hold: true }))
+    await assert.rejects(() => runHook(root, "executor-high"), /requires sniper remediation/)
+    await assert.doesNotReject(() => runHook(root, "sniper-high"))
+  })
+})

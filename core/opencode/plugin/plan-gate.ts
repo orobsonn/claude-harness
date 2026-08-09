@@ -127,6 +127,9 @@ async function createPlanGateHooks(
               !Array.isArray(reconciled.state)
                 ? (reconciled.state as Record<string, unknown>)
                 : {}
+            if (state.autonomy_adversary_hold === true && !isSniperRole(role)) {
+              throw new Error(`${PREFIX} denied: high adversary finding requires sniper remediation`)
+            }
             const binding = state.planner_plan_binding as Record<string, unknown> | undefined
             const expectedModelStrategy = isCompleteExpectedModelStrategy(binding?.expected_model_strategy)
               ? binding.expected_model_strategy

@@ -265,3 +265,18 @@ test("reconciliation rejects every non-exact snapshot_path spelling", () => {
     assert.match(reconciled.state.planner_binding_error, /snapshot path/);
   }
 });
+
+test("reconciliation keeps a bound plan usable when only filesystem timestamps change", () => {
+  const dir = root();
+  const seeded = seedUsableBinding(dir);
+  const before = fs.statSync(planPath(dir));
+
+  fs.utimesSync(planPath(dir), before.atime, new Date(before.mtimeMs + 1000));
+  const after = fs.statSync(planPath(dir));
+  assert.notEqual(after.mtimeMs, before.mtimeMs);
+
+  const reconciled = reconcilePlannerStateFromDisk(dir, SESSION);
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.state.planner_status, "usable");
+  assert.equal(reconciled.state.planner_plan_binding.file_hash, seeded.binding.file_hash);
+});

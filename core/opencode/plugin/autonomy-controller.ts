@@ -26,6 +26,7 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
     autonomyContinuationPrompt,
     decideAutonomyContinuation,
     detectsAutonomyDirective,
+    hasHighAdversaryFinding,
     readOperatorModel,
     readPlanReviewVerdict,
   } = await import("./lib/autonomy-controller.mjs")
@@ -65,11 +66,19 @@ async function createAutonomyControllerHooks(projectRoot: string, client: any): 
     "tool.execute.after": async (input: any, output: any) => {
       try {
         const args = resolveHookArgs(input, output) ?? (input?.tool_input && typeof input.tool_input === "object" ? input.tool_input : null)
-        if (taskRole(args) !== "plan-reviewer") return
-        const verdict = readPlanReviewVerdict(taskOutput(output))
-        if (!verdict || typeof input?.sessionID !== "string") return
+        const role = taskRole(args)
+        if (typeof input?.sessionID !== "string") return
         const loaded = readState(input.sessionID)
-        if (loaded?.state.classified === true) mergeGateState(loaded.path, { plan_review_verdict: verdict })
+        if (loaded?.state.classified !== true) return
+        const report = taskOutput(output)
+        if (role === "plan-reviewer") {
+          const verdict = readPlanReviewVerdict(report)
+          if (verdict) mergeGateState(loaded.path, { plan_review_verdict: verdict })
+          return
+        }
+        if (role.startsWith("adversary")) {
+          mergeGateState(loaded.path, { autonomy_adversary_hold: hasHighAdversaryFinding(report) })
+        }
       } catch {
         /* Eye observation is advisory to continuation and must fail open. */
       }

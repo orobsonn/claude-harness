@@ -46,6 +46,20 @@ export function readPlanReviewVerdict(value) {
   return null;
 }
 
+/** @description Detect whether an adversary report contains a high-severity finding. */
+export function hasHighAdversaryFinding(value) {
+  if (typeof value !== "string") return false;
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  if (start < 0 || end < start) return false;
+  try {
+    const issues = JSON.parse(value.slice(start, end + 1))?.issues;
+    return Array.isArray(issues) && issues.some((issue) => issue?.severity === "high" || issue?.severity === "max");
+  } catch {
+    return false;
+  }
+}
+
 /** @description Derive one next legal delivery phase without creating a second workflow engine. */
 export function decideAutonomyContinuation(state) {
   if (!state || typeof state !== "object" || Array.isArray(state) || state.autonomy_directive !== "enabled") {
@@ -53,6 +67,7 @@ export function decideAutonomyContinuation(state) {
   }
   if (state.session_status === "completed") return { action: "none", reason: "completed" };
   if (state.product_decision_pending === true) return { action: "none", reason: "product-decision" };
+  if (state.autonomy_adversary_hold === true) return { action: "none", reason: "high-adversary-finding" };
   if (state.classified !== true) return { action: "none", reason: "unclassified" };
   // no-ceremony / QUICK have no multi-phase plan loop for the idle motor to drive
   if (state.mode === "no-ceremony" || state.mode === "QUICK") {

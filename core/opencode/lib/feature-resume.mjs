@@ -39,20 +39,27 @@ export function findFeatureResume(projectRoot, featureId) {
         if (state.planner_status === "usable") {
           const binding = state.planner_plan_binding;
           if (!binding || typeof binding !== "object" || typeof binding.snapshot_path !== "string" || typeof binding.snapshot_file_hash !== "string") return null;
+          const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_file_hash}.json`;
+          if (binding.session_id !== sessionId || binding.feature_id !== featureId ||
+              binding.snapshot_path !== expectedSnapshotPath || typeof binding.snapshot_hash !== "string" ||
+              typeof binding.semantic_hash !== "string" || typeof binding.file_hash !== "string") return null;
           const snapshot = path.resolve(projectRoot, binding.snapshot_path);
           if (!snapshot.startsWith(path.resolve(projectRoot) + path.sep)) return null;
           const snapshotRaw = fs.readFileSync(snapshot);
           const canonicalRaw = fs.readFileSync(planPath);
+          const fileHash = crypto.createHash("sha256").update(canonicalRaw).digest("hex");
           const snapshotPlan = readJson(snapshot);
           if (!snapshotPlan || crypto.createHash("sha256").update(snapshotRaw).digest("hex") !== binding.snapshot_file_hash ||
               !snapshotRaw.equals(canonicalRaw) || semanticPlanHash(plan) !== binding.snapshot_hash ||
+              binding.semantic_hash !== binding.snapshot_hash || binding.file_hash !== fileHash || fileHash !== binding.snapshot_file_hash ||
               !validatePlan(plan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
         }
         const mtimeMs = Math.max(fs.statSync(planPath).mtimeMs, fs.statSync(statePath.path).mtimeMs);
-        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs };
+        const approved = state.planner_status === "usable" && state.plan_review_verdict === "APPROVE";
+        return { sessionId, planPath, statePath: statePath.path, plan, state, mtimeMs, approved };
       })
       .filter(Boolean)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId));
+      .sort((a, b) => Number(b.approved) - Number(a.approved) || b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId));
     return candidates[0] ?? null;
   } catch {
     return null;

@@ -74,6 +74,16 @@ test("autonomy continuation stays silent for product hold, completed session, fi
   );
 });
 
+test("high adversary finding pauses autonomous continuation", async () => {
+  const { decideAutonomyContinuation, hasHighAdversaryFinding } = await import(MODULE_URL);
+  assert.equal(hasHighAdversaryFinding('{"issues":[{"severity":"high"}]}'), true);
+  assert.equal(hasHighAdversaryFinding('{"issues":[{"severity":"medium"}]}'), false);
+  assert.deepEqual(
+    decideAutonomyContinuation({ autonomy_directive: "enabled", classified: true, autonomy_adversary_hold: true }),
+    { action: "none", reason: "high-adversary-finding" },
+  );
+});
+
 test("autonomy continues the delivery loop only until final_review_done is stamped", async () => {
   const { decideAutonomyContinuation } = await import(MODULE_URL);
 

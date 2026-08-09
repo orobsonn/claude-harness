@@ -154,8 +154,7 @@ async function createPlannerRecoveryHooks(
         const binding = previous.planner_plan_binding as Record<string, unknown> | undefined
         const bound = previous.planner_status === "usable" &&
           binding?.semantic_hash === baselinePlan.semanticHash &&
-          binding?.file_hash === baselinePlan.fileHash &&
-          binding?.fingerprint === baselinePlan.fingerprint
+          binding?.file_hash === baselinePlan.fileHash
         const transition = claimPlannerAttempt(previous, {
           role,
           callId,
@@ -246,7 +245,6 @@ async function createPlannerRecoveryHooks(
           classified.kind === "usable_plan" &&
           baseline.bound === true &&
           existingBinding?.semantic_hash === baseline.semanticHash &&
-          existingBinding?.fingerprint === baseline.fingerprint &&
           typeof baseline.semanticHash === "string" &&
           baseline.semanticHash === planHash
         const transition = completePlannerAttempt(previous, {
