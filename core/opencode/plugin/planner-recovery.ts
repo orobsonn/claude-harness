@@ -116,6 +116,14 @@ async function createPlannerRecoveryHooks(
       const attemptToken = token()
       let claimError = ""
       const claimed = withGateStateLock(sp, (previous: Record<string, unknown>) => {
+        if (
+          typeof previous.resumed_from_session_id === "string" &&
+          previous.planner_status === "usable" &&
+          previous.plan_review_verdict === "APPROVE"
+        ) {
+          claimError = "resumed approved plan must continue delivery; do not dispatch planner"
+          return previous
+        }
         const active = previous.planner_active_attempt as Record<string, unknown> | undefined
         // OC may invoke before twice for one Task. The first claim freezes the strategy;
         // duplicate delivery must never reread or revalidate routing from disk.
