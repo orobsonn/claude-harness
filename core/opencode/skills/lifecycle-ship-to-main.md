@@ -28,6 +28,8 @@ Run exactly one matching command. It fetches the default branch, then does one o
 - `committed`: starts from the updated default branch, stages only changed owned paths, and makes a
   lifecycle-only commit with `git commit --only` so unrelated staged product work cannot leak in.
 - `noop`: no lifecycle change exists; report that result and stop.
+- `merged`: the helper completed the narrow first-update compatibility path. It is already on
+  the default branch and the result is final: **stop here**; do not run any push/PR/merge command.
 
 The matching `snapshot` command must already have run immediately before the lifecycle write. It
 records unrelated product paths but rejects a pre-existing tracked change to a vendor-owned file;
@@ -62,6 +64,15 @@ node .opencode/tools/lifecycle-ship.mjs adopt updating-harness
 It creates the same isolated lifecycle branch and stages only paths in the vendor manifest. It never
 stages a product path, plans, run state, a local plugin absent from the manifest, or
 `opencode.harness.json`.
+
+### First-update compatibility
+
+An OpenCode process keeps its plugin loaded for the life of the session. When an older installed
+harness vendors the first release containing a new merge gate, the old process cannot evaluate that
+new gate. For this one compatibility case the helper may report `merged`: it verifies the commit's
+exact manifest paths, verifies the PR base/head/SHA, and uses GitHub's normal squash-merge API only
+when the repository has **zero GitHub Actions workflows**. GitHub still enforces rules, approvals and
+required checks. Any repository with a workflow stays on the ordinary procedure below.
 
 ### 2. Push + PR + merge
 

@@ -11,6 +11,7 @@ import {
   assertLifecycleOnly,
   decideLifecyclePreparation,
   legacyTrackedOwnership,
+  shouldBootstrapMergeWithoutCi,
   selectOwnedPaths,
   selectLifecyclePaths,
 } from "./lifecycle-ship.mjs";
@@ -51,6 +52,46 @@ test("selectOwnedPaths excludes a local plugin that is absent from the vendor ma
   assert.deepEqual(
     selectOwnedPaths([".opencode/plugin/entry-gate.ts", ".opencode/plugin/local-plugin.ts"], new Set([".opencode/plugin/entry-gate.ts"])),
     [".opencode/plugin/entry-gate.ts"],
+  );
+});
+
+test("bootstrap may finish only an exact update commit when the repository has no workflows", () => {
+  const owned = new Set([".opencode/.harness-version"]);
+  assert.equal(
+    shouldBootstrapMergeWithoutCi({
+      operation: "updating-harness",
+      committedPaths: [".opencode/.harness-version"],
+      owned,
+      workflowCount: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldBootstrapMergeWithoutCi({
+      operation: "updating-harness",
+      committedPaths: [".opencode/.harness-version", "src/product.js"],
+      owned,
+      workflowCount: 0,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldBootstrapMergeWithoutCi({
+      operation: "updating-harness",
+      committedPaths: [".opencode/.harness-version"],
+      owned,
+      workflowCount: 1,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldBootstrapMergeWithoutCi({
+      operation: "configuring-model-routing",
+      committedPaths: [".opencode/.harness-version"],
+      owned,
+      workflowCount: 0,
+    }),
+    false,
   );
 });
 
