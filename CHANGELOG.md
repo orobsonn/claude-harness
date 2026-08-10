@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.6](https://github.com/orobsonn/claude-harness/compare/v0.55.5...v0.55.6) (2026-08-10)
+
+
+### Bug Fixes
+
+* **opencode:** limita routing à lane autorizada ([#446](https://github.com/orobsonn/claude-harness/issues/446)) ([#657](https://github.com/orobsonn/claude-harness/issues/657)) ([7958dfd](https://github.com/orobsonn/claude-harness/commit/7958dfd96a689928b5ff3ae2e8522e5908d35493))
+
 ## [0.55.5](https://github.com/orobsonn/claude-harness/compare/v0.55.4...v0.55.5) (2026-08-10)
 
 
