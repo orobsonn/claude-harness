@@ -8,7 +8,9 @@ import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } fro
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OWNED_PREFIXES = [
+// Only used to protect an old install before it has the exact vendor manifest. New lifecycle
+// commits MUST use the manifest below; a directory prefix could capture a local plugin.
+const LEGACY_OWNED_PREFIXES = [
   ".opencode/agents/",
   ".opencode/command/",
   ".opencode/docs/",
@@ -26,7 +28,7 @@ const OWNED_PREFIXES = [
   ".claude/docs/",
 ];
 
-const OWNED_FILES = new Set([
+const LEGACY_OWNED_FILES = new Set([
   ".opencode/.gitignore",
   ".opencode/.harness-version",
   ".opencode/.harness-config-manifest.json",
@@ -57,7 +59,7 @@ function normalizedPath(value) {
 /** @param {string} value */
 export function isLifecyclePath(value) {
   const path = normalizedPath(value);
-  return OWNED_FILES.has(path) || OWNED_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return LEGACY_OWNED_FILES.has(path) || LEGACY_OWNED_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 /** @param {string[]} paths */
@@ -201,15 +203,17 @@ export function prepareLifecycleShip(operation) {
   if (current.includes("opencode.harness.json")) {
     throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
   }
+  const owned = ownershipManifest();
   const resumedPaths = existingLifecycleCommit(branch) ?? [];
-  const decision = decideLifecyclePreparation(resumedPaths, current);
-  if (decision.action === "resume") {
-    assertOwnedOnly(decision.paths, ownershipManifest(), "existing lifecycle branch");
-    return { action: "resume", branch: git(["branch", "--show-current"]).trim(), paths: decision.paths };
+  // A restart may leave unrelated product work in the tree. It is harmless to resume an already
+  // committed lifecycle branch, but only if neither the branch nor the working tree has an
+  // uncommitted manifest-owned change that could be confused with the prior lifecycle result.
+  if (resumedPaths.length > 0 && selectOwnedPaths(current, owned).length === 0) {
+    assertOwnedOnly(resumedPaths, owned, "existing lifecycle branch");
+    return { action: "resume", branch: git(["branch", "--show-current"]).trim(), paths: resumedPaths };
   }
   const baseline = readBaseline(operation);
   const afterSnapshot = current.filter((path) => !baseline.paths.has(path));
-  const owned = ownershipManifest();
   const { paths } = { paths: selectOwnedPaths(afterSnapshot, owned) };
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
 

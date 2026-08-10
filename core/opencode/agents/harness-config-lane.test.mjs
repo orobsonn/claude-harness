@@ -196,7 +196,6 @@ test("every command the lifecycle skills run is covered by the lane's allowlist"
       // Placeholders like <latest-tag> → concrete-shaped stand-in for match.
       const concrete = command
         .replace(/<latest-tag>/g, "v0.54.0")
-        .replace(/<resolved-runtime>/g, "opencode")
         .replace(/<tag>/g, "v0.54.0");
       const action = resolveBash(rules, concrete);
       assert.equal(
@@ -212,7 +211,7 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
   const skill = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
   assert.match(
     skill,
-    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>/,
+    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target opencode/,
   );
   assert.doesNotMatch(skill, /npx -y "github:orobsonn\/claude-harness#<latest-tag>" init/);
 });
