@@ -50,7 +50,10 @@ function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, 
   const start = (open.index ?? -1) + (open[0].startsWith("\n") ? 1 : 0)
   const close = closes[0]
   const closeStart = (close.index ?? -1) + (close[0].startsWith("\n") ? 1 : 0)
-  if (start < 0 || closeStart < start || closeStart + "[/HARNESS_BOUND_PLAN]".length !== existingPrompt.length || open[1] !== snapshotHash) return { ok: false }
+  // A re-review can reuse the prior Task prompt after the planner has bound a revised snapshot.
+  // The binding/artifact above is authoritative; replace this one complete stale transport block
+  // rather than rejecting a valid review solely because its old hash no longer matches.
+  if (start < 0 || closeStart < start || closeStart + "[/HARNESS_BOUND_PLAN]".length !== existingPrompt.length) return { ok: false }
   return { ok: true, prompt: `${existingPrompt.slice(0, start)}${planBlock}` }
 }
 
