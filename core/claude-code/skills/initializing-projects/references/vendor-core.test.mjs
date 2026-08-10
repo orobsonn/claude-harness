@@ -76,6 +76,23 @@ const RETIRED_NPX_WILDCARDS = [
 const CC_CORE_DIR = join(harnessRoot, "core/claude-code");
 const CC_SETTINGS_PATH = join(CC_CORE_DIR, "settings.json");
 
+test("vendor-core CLI stamps the release package version, not an older git-describe ancestor", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-package-version-"));
+  try {
+    const expected = `v${JSON.parse(readFileSync(join(harnessRoot, "package.json"), "utf8")).version}`;
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const stamp = readFileSync(join(target, ".opencode", ".harness-version"), "utf8").split(/\r?\n/)[0];
+    assert.equal(stamp, expected);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 function createIssueAuthoringSourceFixture() {
   const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-source-fixture-"));
   const copies = [
