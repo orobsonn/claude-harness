@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.20](https://github.com/orobsonn/claude-harness/compare/v0.55.19...v0.55.20) (2026-08-10)
+
+
+### Bug Fixes
+
+* **opencode:** restrict lifecycle cargo to manifest ([#689](https://github.com/orobsonn/claude-harness/issues/689)) ([86d5a2a](https://github.com/orobsonn/claude-harness/commit/86d5a2adf74f3a15d11ceb2fea0d9bc484cb1329))
+
 ## [0.55.19](https://github.com/orobsonn/claude-harness/compare/v0.55.18...v0.55.19) (2026-08-10)
 
 
