@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.5](https://github.com/orobsonn/claude-harness/compare/v0.55.4...v0.55.5) (2026-08-10)
+
+
+### Bug Fixes
+
+* **opencode:** injeta plano canônico no shipper ([#568](https://github.com/orobsonn/claude-harness/issues/568)) ([#655](https://github.com/orobsonn/claude-harness/issues/655)) ([28e2423](https://github.com/orobsonn/claude-harness/commit/28e2423bb8ce44d8021f84c0ff7d56a741f7a15b))
+
 ## [0.55.4](https://github.com/orobsonn/claude-harness/compare/v0.55.3...v0.55.4) (2026-08-10)
 
 
