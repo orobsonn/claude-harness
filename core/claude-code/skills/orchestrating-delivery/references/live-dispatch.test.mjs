@@ -37,6 +37,7 @@ function makeDescriptor(overrides = {}) {
   const descriptor = {
     feature_id: "cheap-hands-wiring",
     task_id: "task-1",
+    role: "executor",
     model: "glm-5.2",
     brief_file: briefFile,
     scope_paths: ["core/"],
@@ -128,8 +129,8 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       // A run-record was written, nested under a per-feature directory.
       assert.ok(writtenRecord, "a run-record must be written to disk");
       assert.ok(
-        writtenRecord.path.endsWith(join("cheap-hands-wiring", "task-1.json")),
-        "the run-record path must nest under <feature_id>/<task_id>.json"
+        writtenRecord.path.endsWith(join("cheap-hands-wiring", "executor", "task-1.json")),
+        "the run-record path must nest under <feature_id>/<role>/<task_id>.json"
       );
       assert.ok(!writtenRecord.content.includes(token), "the run-record must never contain the token literal");
 
