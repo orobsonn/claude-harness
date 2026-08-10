@@ -74,9 +74,9 @@
     "bash": {
       "*": "allow",
       "npx tsc --noEmit": "allow",
-      "npx -y \"github:orobsonn/claude-harness#v*\" init --target opencode": "allow",
-      "npx -y \"github:orobsonn/claude-harness#v*\" init --target claude": "allow",
-      "npx -y \"github:orobsonn/claude-harness#v*\" init --target both": "allow",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target opencode": "allow",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target claude": "allow",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target both": "allow",
       "npm test": "allow",
       "npm test*": "allow",
       "npm run*": "allow",

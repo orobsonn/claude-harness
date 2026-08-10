@@ -40,7 +40,7 @@ const ALLOWED_BASH_HEADS = [
   "test -f .opencode/.harness-version",
   "echo ",
   "gh release view --repo orobsonn/claude-harness",
-  'npx -y "github:orobsonn/claude-harness#v',
+  "npx --yes --package=github:orobsonn/claude-harness#v",
   "opencode models",
   "git status",
   "git branch",
@@ -206,6 +206,15 @@ test("every command the lifecycle skills run is covered by the lane's allowlist"
       );
     }
   }
+});
+
+test("updating-harness invokes the named CLI from its pinned GitHub package", () => {
+  const skill = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
+  assert.match(
+    skill,
+    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>/,
+  );
+  assert.doesNotMatch(skill, /npx -y "github:orobsonn\/claude-harness#<latest-tag>" init/);
 });
 
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
