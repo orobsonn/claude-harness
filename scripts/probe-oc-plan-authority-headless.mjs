@@ -1376,7 +1376,7 @@ async function hostOracles(tempRoot) {
       `resolved_judgments: the expected plan-write-gate refusal is the test evidence, so invoke the tool instead of pre-refusing. ` +
       `criterion_refs: ["probe-gate-deny"]. locked_tests: run exactly this Bash command once: ${bashMutationCommand}. ` +
       `Do not use Read, Edit, Write, Task, Skill, classify, mark, or another Bash call.`,
-    { sessionId, agent: "executor-low" },
+    { sessionId, agent: "build" },
   );
   gateErrorFact(mutationRun, (fact) => exactBashCommandFact(fact, bashMutationCommand), "HOST literal Bash mutation");
   sameBytes(bytes(probePaths.canonical), beforeMutation, "HOST literal Bash canonical bytes");
