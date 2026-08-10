@@ -36,7 +36,7 @@ import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity
  *   project's selected test-runner adapter id (`runner-adapters.mjs`). Defaults to reading
  *   `.claude/hand-config/test-runner.json` from `process.cwd()` (→ `node-test` when absent).
  * @returns {{ feature_id: string, task_id: string, model: string, brief_file: string,
- *   scope_paths: string[], locked_test: string, allowed_writes: string[], freeze_commit_sha: string,
+ *   role: "executor"|"sniper", scope_paths: string[], locked_test: string, allowed_writes: string[], freeze_commit_sha: string,
  *   test_runner: string }}
  *   The fully resolved spawn-hand descriptor.
  */
@@ -53,6 +53,10 @@ export function emitDescriptor({
   headSha,
   readRunnerConfig,
 }) {
+  const role = modelResolution?.role;
+  if (role !== "executor" && role !== "sniper") {
+    throw new Error("descriptor-emitter: modelResolution.role must be executor or sniper");
+  }
   // Resolve the freeze commit SHA via the injectable seam or default git call.
   const resolveHeadSha = headSha ?? defaultHeadSha;
   const freeze_commit_sha = resolveHeadSha();
@@ -77,6 +81,9 @@ export function emitDescriptor({
   return {
     feature_id: featureId,
     task_id: taskId,
+    // A durable record is role-scoped. Keep this primary identity explicit rather than asking
+    // the runtime to infer it from the model tier (executor and sniper may share a tier/task).
+    role,
     model,
     // #361: the fallback always announces itself, on the descriptor as well as the run-record.
     modelFallbackUsed: modelFallbackUsed === true,

@@ -16,6 +16,7 @@ test('freeze_commit_sha is captured verbatim from the injected headSha() fn, not
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs', 'test/fix.json'],
     lockedTest: 'test/a.test.mjs',
@@ -34,6 +35,7 @@ test('allowed_writes deep-equals scopePaths minus the manifest frozen closure', 
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs', 'test/fix.json'],
     lockedTest: 'test/a.test.mjs',
@@ -52,6 +54,7 @@ test('allowed_writes does NOT include the lockedTest path when it is in manifest
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs', 'test/fix.json'],
     lockedTest: 'test/a.test.mjs',
@@ -72,6 +75,7 @@ test('frozen path absent from scopePaths does not throw and is simply omitted fr
       featureId: 'F',
       taskId: 'T',
       model: 'glm-5.2',
+      modelResolution: { role: 'executor' },
       briefFile: '/tmp/brief.md',
       scopePaths: ['src/', 'test/a.test.mjs'],
       lockedTest: 'test/a.test.mjs',
@@ -93,6 +97,7 @@ test('returned descriptor satisfies runLiveDispatch schema: required string fiel
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs'],
     lockedTest: 'test/a.test.mjs',
@@ -100,7 +105,7 @@ test('returned descriptor satisfies runLiveDispatch schema: required string fiel
     headSha,
   });
 
-  const requiredStrings = ['feature_id', 'task_id', 'model', 'brief_file', 'locked_test', 'freeze_commit_sha'];
+  const requiredStrings = ['feature_id', 'task_id', 'role', 'model', 'brief_file', 'locked_test', 'freeze_commit_sha'];
   for (const field of requiredStrings) {
     assert.equal(typeof descriptor[field], 'string', `field "${field}" must be a string`);
     assert.notEqual(descriptor[field].length, 0, `field "${field}" must be non-empty`);
@@ -120,6 +125,7 @@ test('test_runner is read from the injected readRunnerConfig seam, not a caller 
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs'],
     lockedTest: 'test/a.test.mjs',
@@ -139,6 +145,7 @@ test('test_runner defaults to node-test (the real readRunnerConfig default) when
     featureId: 'F',
     taskId: 'T',
     model: 'glm-5.2',
+    modelResolution: { role: 'executor' },
     briefFile: '/tmp/brief.md',
     scopePaths: ['src/', 'test/a.test.mjs'],
     lockedTest: 'test/a.test.mjs',
@@ -148,4 +155,15 @@ test('test_runner defaults to node-test (the real readRunnerConfig default) when
 
   assert.equal(typeof descriptor.test_runner, 'string');
   assert.notEqual(descriptor.test_runner.length, 0);
+});
+
+test('refuses to emit a descriptor without an explicit executor or sniper role', () => {
+  assert.throws(
+    () => emitDescriptor({
+      featureId: 'F', taskId: 'T', model: 'glm-5.2', briefFile: '/tmp/brief.md',
+      scopePaths: ['src/'], lockedTest: 'test/a.test.mjs', manifest: { frozen_paths: [] },
+      headSha: () => '4444444444444444444444444444444444444444',
+    }),
+    /modelResolution\.role must be executor or sniper/,
+  );
 });

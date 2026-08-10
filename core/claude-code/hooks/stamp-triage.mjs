@@ -954,18 +954,34 @@ export function handle(payload, opts = {}) {
       try { console.error(`[stamp-triage] capture-verified precondition: ${remediation}`); } catch { /* never throw */ }
       return { ok: false, reason: "no-hand-finished" };
     }
+    // The run-record is role-scoped. Resolve the role only from the hook-owned active
+    // dispatch that was stamped before spawning; never guess executor as a fallback.
+    const active = current.active_dispatch;
+    const role =
+      active &&
+      typeof active === "object" &&
+      active.feature_id === decision.task_id.split("/")[0] &&
+      active.task_id === decision.task_id.split("/")[1] &&
+      (active.role === "executor" || active.role === "sniper")
+        ? active.role
+        : null;
+    if (!role) {
+      const remediation = `no matching active dispatch role for ${decision.task_id}; capture-verified cannot choose a hand-record`;
+      try { console.error(`[stamp-triage] capture-verified precondition: ${remediation}`); } catch { /* never throw */ }
+      return { ok: false, reason: "no-hand-role" };
+    }
     // Second, independent guard: a real on-disk run-record must exist for this qualified id.
     // hand_finished is a manually-stamped array (prose-driven, proven skippable); the run-record
     // is written unconditionally by spawn-hand.mjs's runLiveDispatch, so requiring BOTH means a
     // forged marker with no genuine dispatch behind it stamps nothing anywhere, ever.
-    if (readHandRecord(decision.task_id) === null) {
+    if (readHandRecord(decision.task_id, role) === null) {
       const remediation = `no hand-record on disk for ${decision.task_id} (dispatch never wrote run-record); capture-verified cannot authorize`;
       try { console.error(`[stamp-triage] capture-verified precondition: ${remediation}`); } catch { /* never throw */ }
       return { ok: false, reason: "no-hand-record" };
     }
     // Durable stamp runs unconditionally AFTER both guards pass — it is idempotent (overwrites
     // the timestamp) so it self-heals a prior partial failure on every retry.
-    const recordOk = markCapturedFn(decision.task_id, new Date().toISOString());
+    const recordOk = markCapturedFn(decision.task_id, role, new Date().toISOString());
     // Append the SHA-QUALIFIED entry to capture_verified (the durable run-record stamp above stays
     // keyed by the UNqualified id — it is the per-task file, not an absolution). Dedup on the full
     // `<feature>/<task>@<sha>` string.

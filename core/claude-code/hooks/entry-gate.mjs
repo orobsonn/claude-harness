@@ -1141,7 +1141,9 @@ export function decide(payload, deps = {}) {
     const authorized = tickets.some((qualifiedId) => {
       let record = null;
       try {
-        record = readHandRecordFn(qualifiedId);
+        // The K=1 ticket is role-specific: a sniper failure must never authorize an
+        // executor fallback for the same task (and vice versa).
+        record = readHandRecordFn(qualifiedId, role);
       } catch {
         record = null;
       }
