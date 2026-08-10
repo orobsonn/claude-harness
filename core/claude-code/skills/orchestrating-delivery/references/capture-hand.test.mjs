@@ -109,6 +109,67 @@ test("touchedPaths unions untracked files: new file captured even when diff is e
   assert.deepEqual(result.child.touchedPaths, ["core/x/new.mjs"]);
 });
 
+// ---- Main-worktree attribution (#470) ----
+
+test("captureResult: a write in the distinct main worktree fails even when its path is allowed in the hand worktree", () => {
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ diffNameOnly: () => ["core/x/new.mjs"] }),
+      mainWorktreeSnapshot: {
+        before: new Map(),
+        readCurrent: () => new Map([["core/x/new.mjs", " M:changed"]]),
+      },
+    })
+  );
+
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, ["core/x/new.mjs"]);
+  assert.match(result.outcome.reasons.join("\n"), /main worktree violation: core\/x\/new\.mjs/);
+});
+
+test("captureResult: unchanged dirt already in the main worktree is not attributed to the hand", () => {
+  const before = new Map([["operator-notes.txt", " M:operator-hash"]]);
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ diffNameOnly: () => ["core/x/new.mjs"] }),
+      mainWorktreeSnapshot: { before, readCurrent: () => new Map(before) },
+    })
+  );
+
+  assert.equal(result.outcome.status, OUTCOME.DONE);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, []);
+});
+
+test("captureResult: changing pre-existing main-worktree dirt is still a violation", () => {
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ diffNameOnly: () => ["core/x/new.mjs"] }),
+      mainWorktreeSnapshot: {
+        before: new Map([["operator-notes.txt", " M:before"]]),
+        readCurrent: () => new Map([["operator-notes.txt", " M:after"]]),
+      },
+    })
+  );
+
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, ["operator-notes.txt"]);
+});
+
+test("captureResult: an unreadable main-worktree snapshot degrades without inventing a violation", () => {
+  const result = captureResult(
+    baseArgs({
+      git: fakeGit({ diffNameOnly: () => ["core/x/new.mjs"] }),
+      mainWorktreeSnapshot: {
+        before: new Map(),
+        readCurrent: () => { throw new Error("git unavailable"); },
+      },
+    })
+  );
+
+  assert.equal(result.outcome.status, OUTCOME.DONE);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, []);
+});
+
 // ---- 2. zero collected tests is NEVER a pass (vacuous-green guard) ----
 
 test("vacuous-green guard: `# tests 0` exit 0 yields a FAILED outcome", () => {

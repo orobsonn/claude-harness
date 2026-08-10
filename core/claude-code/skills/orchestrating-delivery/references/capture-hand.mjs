@@ -43,6 +43,8 @@ import {
   writeFileSync,
   readFileSync,
   rmSync,
+  realpathSync,
+  lstatSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -97,6 +99,127 @@ export function excludeNodeModules(paths = []) {
  * to a sha that differs → kept and accused.
  */
 export const UNHASHABLE = "unhashable";
+
+/** Maximum dirty paths tracked for the optional #470 attribution sidecar. */
+export const MAIN_WORKTREE_SNAPSHOT_PATH_LIMIT = 200;
+
+/**
+ * @description Builds a bounded, NUL-safe pathname→status/content fingerprint for dirty paths.
+ * Any malformed/oversized/error result is null: an incomplete baseline must disable this optional
+ * probe instead of accusing a valid hand run.
+ * @param {string} cwd
+ * @returns {Map<string,string>|null}
+ */
+function readDirtyWorktreeFingerprint(cwd) {
+  try {
+    const output = execFileSync(
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 }
+    );
+    const fields = output.split("\0");
+    const statusByPath = new Map();
+    for (let i = 0; i < fields.length; i += 1) {
+      const entry = fields[i];
+      if (!entry) continue;
+      if (entry.length < 4) return null;
+      const status = entry.slice(0, 2);
+      const path = entry.slice(3);
+      if (!path) return null;
+      statusByPath.set(path, status);
+      if (status.includes("R") || status.includes("C")) {
+        const previous = fields[++i];
+        if (!previous) return null;
+        statusByPath.set(previous, status);
+      }
+      if (statusByPath.size > MAIN_WORKTREE_SNAPSHOT_PATH_LIMIT) return null;
+    }
+
+    const fingerprint = new Map();
+    for (const [path, status] of statusByPath) {
+      let hash;
+      let stat;
+      try {
+        hash = execFileSync("git", ["hash-object", "--", path], {
+          cwd,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024,
+        }).trim();
+        stat = lstatSync(join(cwd, path));
+      } catch {
+        // A deletion has no bytes/mode to read; its porcelain status is sufficient because a
+        // restore changes that status. Every other unreadable entry invalidates the WHOLE probe:
+        // treating a nested repo/directory as a stable "unhashable" value would hide writes in it.
+        if (status.includes("D")) {
+          fingerprint.set(path, `${status}:deleted`);
+          continue;
+        }
+        return null;
+      }
+      if (!hash) return null;
+      fingerprint.set(path, `${status}:${hash}:${stat.mode}:${stat.size}:${stat.mtimeMs}`);
+    }
+    return fingerprint;
+  } catch {
+    return null;
+  }
+}
+
+/** @description Returns a stable fingerprint only when two complete bounded reads agree. */
+function dirtyWorktreeFingerprint(cwd) {
+  const before = readDirtyWorktreeFingerprint(cwd);
+  if (!before) return null;
+  const after = readDirtyWorktreeFingerprint(cwd);
+  if (!after || before.size !== after.size) return null;
+  for (const [path, fingerprint] of before) {
+    if (after.get(path) !== fingerprint) return null;
+  }
+  return after;
+}
+
+/**
+ * @description Snapshots the canonical primary worktree only when it is distinct from `cwd`.
+ * Primary root comes from `git worktree list`, never from model input or a parent-directory guess.
+ * @param {string} cwd
+ * @returns {{ before: Map<string,string>, readCurrent: () => Map<string,string>|null }|null}
+ */
+export function snapshotMainWorktree(cwd = process.cwd()) {
+  try {
+    const output = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024,
+    });
+    const primaryLine = output.split(/\r?\n/).find((line) => line.startsWith("worktree "));
+    if (!primaryLine) return null;
+    const primary = realpathSync(primaryLine.slice("worktree ".length));
+    if (primary === realpathSync(cwd)) return null;
+    const before = dirtyWorktreeFingerprint(primary);
+    if (!before) return null;
+    return { before, readCurrent: () => dirtyWorktreeFingerprint(primary) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description Returns paths whose main-worktree fingerprint changed since the dispatch snapshot.
+ * Operational failure is deliberately fail-open for this supplementary attribution probe.
+ * @param {{ before: Map<string,string>, readCurrent: () => Map<string,string>|null }|null|undefined} snapshot
+ * @returns {string[]}
+ */
+export function changedMainWorktreePaths(snapshot) {
+  if (!snapshot?.before || typeof snapshot.readCurrent !== "function") return [];
+  try {
+    const after = snapshot.readCurrent();
+    if (!(after instanceof Map)) return [];
+    return [...new Set([...snapshot.before.keys(), ...after.keys()])]
+      .filter((path) => snapshot.before.get(path) !== after.get(path))
+      .sort();
+  } catch {
+    return [];
+  }
+}
 
 /**
  * @description Real git adapter (only the `hashObject` seam is exercised by `node --test`, via
@@ -257,6 +380,7 @@ export function captureResult({
   tmpDir = tmpdir(),
   keepArtifacts = false,
   preUntracked = new Map(),
+  mainWorktreeSnapshot = null,
 }) {
   if (token === undefined)
     throw new Error(
@@ -347,6 +471,7 @@ export function captureResult({
   const built = {
     captured: true,
     touchedPaths,
+    mainWorktreeViolations: changedMainWorktreePaths(mainWorktreeSnapshot),
     lockedTestExitCode,
     exitCode: child.exitCode,
     stdout: child.stdout ?? "",

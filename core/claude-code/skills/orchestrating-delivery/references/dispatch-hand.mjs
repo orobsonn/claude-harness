@@ -291,17 +291,20 @@ export function excludeHarnessInternal(paths = []) {
  * attests `captured: true` on the harness-built result. A child marked `source: "model_prose"`,
  * or one that simply OMITS `captured`, is rejected as untrusted and never reaches DONE.
  * @param {{ dispatch: object, child: object }} args
- * @returns {{ status: string, scopeViolations: string[], frozenViolations: string[], allowedWriteViolations: string[], reasons: string[] }}
+ * @returns {{ status: string, scopeViolations: string[], frozenViolations: string[], allowedWriteViolations: string[], mainWorktreeViolations: string[], reasons: string[] }}
  */
 export function evaluateRun({ dispatch, child }) {
   const reasons = [];
 
   if (child.source === "model_prose" || child.captured !== true) {
     reasons.push("untrusted child: touchedPaths/lockedTestExitCode must come from an independent git diff + frozen-test run, not model prose");
-    return { status: OUTCOME.NOT_DONE, scopeViolations: [], frozenViolations: [], allowedWriteViolations: [], reasons };
+    return { status: OUTCOME.NOT_DONE, scopeViolations: [], frozenViolations: [], allowedWriteViolations: [], mainWorktreeViolations: [], reasons };
   }
 
   const touched = excludeHarnessInternal(child.touchedPaths ?? []);
+  const mainWorktreeViolations = Array.isArray(child.mainWorktreeViolations)
+    ? child.mainWorktreeViolations
+    : [];
 
   const scopeViolations = checkScope(touched, dispatch.scope_paths ?? []);
   const frozenViolations = checkFrozen(touched, dispatch.frozen_paths ?? []);
@@ -309,7 +312,10 @@ export function evaluateRun({ dispatch, child }) {
 
   let status = OUTCOME.DONE;
 
-  if (scopeViolations.length) {
+  if (mainWorktreeViolations.length) {
+    status = OUTCOME.FAILED;
+    reasons.push(`main worktree violation: ${mainWorktreeViolations.join(", ")}`);
+  } else if (scopeViolations.length) {
     status = OUTCOME.FAILED;
     reasons.push(`scope violation: ${scopeViolations.join(", ")}`);
   } else if (frozenViolations.length) {
@@ -329,7 +335,7 @@ export function evaluateRun({ dispatch, child }) {
     reasons.push(`locked tests exited ${child.lockedTestExitCode}`);
   }
 
-  return { status, scopeViolations, frozenViolations, allowedWriteViolations, reasons };
+  return { status, scopeViolations, frozenViolations, allowedWriteViolations, mainWorktreeViolations, reasons };
 }
 
 /**

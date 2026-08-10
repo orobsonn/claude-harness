@@ -29,7 +29,7 @@ import {
   buildRunRecord,
   OUTCOME,
 } from "./dispatch-hand.mjs";
-import { captureResult, realGit, realTestRunner } from "./capture-hand.mjs";
+import { captureResult, realGit, realTestRunner, snapshotMainWorktree } from "./capture-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
 import { isSafeFeatureId } from "../../../hooks/lib/gate-lib.mjs";
 import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
@@ -455,6 +455,11 @@ function defaultSnapshotUntracked() {
   return g.hashObject(g.lsFilesAllOthers());
 }
 
+/** @description Optional bounded attribution snapshot for the distinct primary worktree (#470). */
+function defaultSnapshotMainWorktree() {
+  return snapshotMainWorktree();
+}
+
 /**
  * @description Default run-record writer: persists the token-free record to a state path keyed
  * by feature_id/task_id (the producer of the on-disk evidence consumed by Part B). The directory
@@ -598,6 +603,7 @@ export async function runLiveDispatch(descriptor, {
   headSha = defaultHeadSha,
   capture = defaultCapture,
   snapshotUntracked = defaultSnapshotUntracked,
+  snapshotMainWorktreeFn = defaultSnapshotMainWorktree,
   env = process.env,
   writeRecord = defaultWriteRecord,
   readStreak,
@@ -738,6 +744,9 @@ export async function runLiveDispatch(descriptor, {
     // dispatchHand's own dirty guard is SCOPED to scope_paths; runLiveDispatch already asserted
     // the FULL tree is clean (step 5, strictly stronger), so we forward a clean scoped probe — the
     // authoritative reconciliation is the unscoped check above, not the redundant scoped one.
+    // #470 sidecar: snapshot only at the last possible point before the synchronous hand spawn.
+    // Earlier setup (brief read, ephemeral descriptor) must never be attributed to the hand.
+    const mainWorktreeSnapshot = snapshotMainWorktreeFn();
     const child = await dispatchHand(dispatch, { spawn, env, gitStatus: () => "" });
 
     // (9) INDEPENDENT capture: re-run the frozen locked_test by path + derive touchedPaths from a
@@ -749,6 +758,7 @@ export async function runLiveDispatch(descriptor, {
       testPath: descriptor.locked_test,
       token,
       preUntracked,
+      mainWorktreeSnapshot,
     });
 
     // A post-spawn HEAD divergence (rogue commit) is a CRITICAL EXCEPTION — never stamp a record.

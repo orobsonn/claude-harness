@@ -33,11 +33,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { OUTCOME } from "./dispatch-hand.mjs";
-import { captureResult, realGit, UNHASHABLE } from "./capture-hand.mjs";
+import { captureResult, MAIN_WORKTREE_SNAPSHOT_PATH_LIMIT, realGit, snapshotMainWorktree, UNHASHABLE } from "./capture-hand.mjs";
 
 /** @description Runs git in `cwd`, throwing on failure (test-only helper). */
 function git(cwd, args) {
@@ -106,6 +106,118 @@ function args159(dir, head, preUntracked, overrides = {}) {
     ...overrides,
   };
 }
+
+test("#470: a child worktree changing the primary tree is captured as an explicit violation", (t) => {
+  const { dir, head } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child", child]);
+
+  const mainSnapshot = snapshotMainWorktree(child);
+  assert.ok(mainSnapshot, "precondition: a distinct primary worktree is discovered canonically");
+
+  write(child, "migrations/0030_soundtracks.sql", "-- child change");
+  const mainPath = "main\nworktree-write.js";
+  write(dir, mainPath, "// forbidden main-tree write");
+  const result = captureResult(args159(child, head, new Map(), { mainWorktreeSnapshot: mainSnapshot }));
+
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, [mainPath], "NUL porcelain parsing preserves newline pathnames");
+});
+
+test("#470: unchanged primary-tree dirt is subtracted, while the child worktree still captures normally", (t) => {
+  const { dir, head } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-clean", child]);
+  write(dir, "operator-notes.txt", "pre-existing operator dirt");
+
+  const mainSnapshot = snapshotMainWorktree(child);
+  assert.ok(mainSnapshot, "precondition: a complete baseline exists");
+  write(child, "migrations/0030_soundtracks.sql", "-- child change");
+  const result = captureResult(args159(child, head, new Map(), { mainWorktreeSnapshot: mainSnapshot }));
+
+  assert.equal(result.outcome.status, OUTCOME.DONE);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, []);
+});
+
+test("#470: modifying pre-existing primary-tree dirt remains a violation", (t) => {
+  const { dir, head } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-dirty", child]);
+  write(dir, "operator-notes.txt", "before");
+
+  const mainSnapshot = snapshotMainWorktree(child);
+  write(dir, "operator-notes.txt", "changed during hand");
+  write(child, "migrations/0030_soundtracks.sql", "-- child change");
+  const result = captureResult(args159(child, head, new Map(), { mainWorktreeSnapshot: mainSnapshot }));
+
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, ["operator-notes.txt"]);
+});
+
+test("#470: an oversized primary-tree baseline disables only the optional probe", (t) => {
+  const { dir } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-overflow", child]);
+  for (let i = 0; i <= MAIN_WORKTREE_SNAPSHOT_PATH_LIMIT; i += 1) {
+    write(dir, `operator-dirt/${i}.txt`, "pre-existing");
+  }
+
+  assert.equal(snapshotMainWorktree(child), null, "incomplete baseline must not sample or accuse");
+});
+
+test("#470: post-spawn probe overflow degrades without inventing a main-tree violation", (t) => {
+  const { dir, head } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-post-overflow", child]);
+  const mainSnapshot = snapshotMainWorktree(child);
+  assert.ok(mainSnapshot, "precondition: the pre-spawn baseline is complete");
+
+  for (let i = 0; i <= MAIN_WORKTREE_SNAPSHOT_PATH_LIMIT; i += 1) {
+    write(dir, `during-run-dirt/${i}.txt`, "outside probe limit");
+  }
+  write(child, "migrations/0030_soundtracks.sql", "-- child change");
+  const result = captureResult(args159(child, head, new Map(), { mainWorktreeSnapshot: mainSnapshot }));
+
+  assert.equal(result.outcome.status, OUTCOME.DONE);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, []);
+});
+
+test("#470: an unreadable primary-tree entry disables the sidecar instead of becoming a stable fingerprint", (t) => {
+  const { dir } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-unhashable", child]);
+  symlinkSync("/nowhere/does/not/exist", join(dir, "unreadable-main.link"));
+
+  assert.equal(snapshotMainWorktree(child), null);
+});
+
+test("#470: chmod of pre-existing tracked dirt changes the fingerprint and fails the capture", (t) => {
+  const { dir, head } = makeRepo(t);
+  const child = `${dir}-child`;
+  t.after(() => rmSync(child, { recursive: true, force: true }));
+  git(dir, ["worktree", "add", "-qb", "capture-child-mode", child]);
+  write(dir, ".gitignore", ".wrangler/\n# operator edit\n");
+  const mainSnapshot = snapshotMainWorktree(child);
+  assert.ok(mainSnapshot);
+
+  chmodSync(join(dir, ".gitignore"), 0o755);
+  write(child, "migrations/0030_soundtracks.sql", "-- child change");
+  const result = captureResult(args159(child, head, new Map(), { mainWorktreeSnapshot: mainSnapshot }));
+
+  assert.equal(result.outcome.status, OUTCOME.FAILED);
+  assert.deepEqual(result.outcome.mainWorktreeViolations, [".gitignore"]);
+});
+
+test("#470: primary worktree equal to cwd disables the optional probe", (t) => {
+  const { dir } = makeRepo(t);
+  assert.equal(snapshotMainWorktree(dir), null);
+});
 
 // ---- 1. realGit().hashObject survives an unreadable path (the #362 root cause) ----
 
