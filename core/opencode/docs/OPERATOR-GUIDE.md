@@ -254,7 +254,7 @@ Só **interativo** e pedido **explícito** (não mistura com feature).
 # última release
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
 
-npx -y "github:orobsonn/claude-harness#<tag>" init --target opencode
+npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness init --target opencode
 ```
 
 - Detecta install vs update por `.opencode/.harness-version`.  

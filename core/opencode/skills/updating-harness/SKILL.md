@@ -1,6 +1,6 @@
 ---
 name: oc-updating-harness
-description: "Install or update the Claude Harness in the CURRENT project from within an OpenCode session. Runs the CLI from the pinned git release tag (npx github:orobsonn/claude-harness#<tag> init) so no engine needs to be vendored into .opencode/ and it never depends on the lagging npm release. Detects install-vs-update, resolves which runtime shell(s) to vendor, and re-vendors without clobbering project memory/kaizen/config. Run it in any repo to onboard or sync the OpenCode harness after a new release."
+description: "Install or update the Claude Harness in the CURRENT project from within an OpenCode session. Runs the named CLI from the pinned git release tag (npx --package=github:orobsonn/claude-harness#<tag> claude-harness init) so no engine needs to be vendored into .opencode/ and it never depends on the lagging npm release. Detects install-vs-update, resolves which runtime shell(s) to vendor, and re-vendors without clobbering project memory/kaizen/config. Run it in any repo to onboard or sync the OpenCode harness after a new release."
 license: MIT
 compatibility: opencode
 metadata:
@@ -83,7 +83,7 @@ single clean command** — no trailing comment, no `&&`, no redirect — so the 
 auditable and cannot compose an unrelated shell operation. **Run the CLI from the git tag, not from npm:**
 
 ```bash
-npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
 ```
 
 > **Why the git tag, not `@orobsonn/claude-harness@latest`:** the npm-published version lags the repo

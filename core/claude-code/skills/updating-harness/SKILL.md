@@ -79,7 +79,7 @@ may have only `.claude/`, only `.opencode/`, or both):
   token re-triggers the anti-forgery block when this same skill is loaded inside an OpenCode session
   (both shells expose a skill named `updating-harness`, and OpenCode may load this Claude one):
   ```bash
-  npx -y "github:orobsonn/claude-harness#<latest-tag>" init --target <resolved-runtime>
+  npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
   ```
   Substitute `<latest-tag>` with the concrete `vX.Y.Z` from Step 1 and `<resolved-runtime>` from 2b
   (`claude`, `opencode`, or `both`). Running from the `github:…#<tag>` spec always fetches the tagged

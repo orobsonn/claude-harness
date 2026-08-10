@@ -260,7 +260,7 @@ Diga o objetivo em linguagem de produto — a triagem carrega a skill certa se o
 # última release
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
 
-npx -y "github:orobsonn/claude-harness#<tag>" init --target claude
+npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness init --target claude
 ```
 
 - Detecta install vs update pela presença do instalador vendored / `.claude/.harness-version`.
