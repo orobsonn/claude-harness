@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.19](https://github.com/orobsonn/claude-harness/compare/v0.55.18...v0.55.19) (2026-08-10)
+
+
+### Bug Fixes
+
+* **opencode:** invoke pinned lifecycle CLI ([#687](https://github.com/orobsonn/claude-harness/issues/687)) ([01a4165](https://github.com/orobsonn/claude-harness/commit/01a41659ef04c824cf97ed3ff257628f7410045c))
+
 ## [0.55.18](https://github.com/orobsonn/claude-harness/compare/v0.55.17...v0.55.18) (2026-08-10)
 
 
