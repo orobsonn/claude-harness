@@ -373,7 +373,7 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 ## Phase 5 — Harvest + ship
 
 - Dispatch `harvester` once: consolidates `findings.md`, routes durable learnings by blast-radius (project pattern → native MEMORY.md + index · law of one folder → that folder's nested `AGENTS.md` + root router row · global convention → kaizen proposal), then **deletes the ephemeral run buffers** — `findings.md` (project root) + `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (git is the durable audit). It owns `oc-recording-findings` / `oc-distilling-learnings` / `oc-proposing-improvements`. It never auto-writes to memory.
-- Delivery (branch/commit/push/PR via `shipper`) uses the delivery authority already present in the task request. The autonomy directive prevents a duplicate confirmation; it does not expand scope beyond that request. `shipper` never edits code.
+- For LIGHT/FULL, dispatch `shipper` with `plan_path` equal to the `plan_path` returned by classify or the `canonical_plan_path` returned by recovery. Its brief contains exactly `Plan path (authoritative): <literal authoritative plan path>`. Pass that literal value verbatim: on resume it can name the source-plan session, so never reconstruct it from the current session id. QUICK must omit `plan_path`, because it has no plan. Delivery (branch/commit/push/PR via `shipper`) uses the delivery authority already present in the task request. The autonomy directive prevents a duplicate confirmation; it does not expand scope beyond that request. `shipper` never edits code.
 - **FULL ship preconditions (bash-decide):** planner entry facts + regate + capture + **final-review** + **demo when interactive**. Missing final/demo → deny with explicit `denied_class`.
 
 ---

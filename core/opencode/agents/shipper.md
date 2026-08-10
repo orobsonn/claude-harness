@@ -31,7 +31,8 @@ The orchestrator passes you:
 - **Type** — feat, fix, refactor, test, chore (default: feat)
 - **Issue** (optional) — issue number to reference with `Closes #N`
 - **Merge** (optional) — whether to auto-merge after PR creation
-- **Plan path** (optional) — the run's `execution-plan.json`; source of the engine-resolved decisions section (step 5). Absent on QUICK deliveries, which have no plan.
+- **Plan path (authoritative)** — the literal `plan_path` returned by classify or `canonical_plan_path` returned by recovery; required on LIGHT/FULL and absent on QUICK deliveries, which have no plan. It may name the source-plan session after resume.
+- **Feature id** — the classified run feature; use it only to validate a supplied plan, never to construct a path.
 
 ---
 
@@ -99,12 +100,13 @@ resolves ambiguities on its own and marks each one in the task-level array
 The operator reviewing this PR cannot otherwise tell an engine-made call apart from one they gave —
 and the engine may auto-merge. So surface it:
 
-1. Read **this run's** execution plan — `.opencode/plans/<sessionID>-<feature_id>/execution-plan.json`.
-   The conductor's brief names the path; use it verbatim when it does. Without it, `.opencode/plans/`
-   is **not** a safe place to guess: it accumulates one directory per run and nothing prunes it, so a
-   blind glob hands you another feature's decisions. Only accept a directory whose plan's `feature_id`
-   equals this run's feature; if zero or more than one match, take **no** plan and say so in your reply
-   — a wrong plan here puts a decision this PR never made in front of the operator.
+1. Read only the authoritative plan path supplied by the conductor. Parse its JSON and use it only when
+   its `feature_id` equals this run's feature. Do not construct a path from `sessionID` or glob
+   `.opencode/plans/`: a resumed run can own a plan from another session, and a wrong plan would put a
+   decision this PR never made in front of the operator. If the supplied path is unreadable, the existing
+   feature-id fallback is allowed only when it finds exactly one matching plan with the same `feature_id`;
+   otherwise take no plan and say so in your reply. On LIGHT/FULL with a missing path, take no plan and
+   do not guess. QUICK has no plan.
 2. Collect, across every task, each key listed in `resolved_judgments_model_resolved` together with
    its value from that task's `resolved_judgments`. Two tasks may resolve the same key differently, so
    carry the owning `task.id` with each pair.
