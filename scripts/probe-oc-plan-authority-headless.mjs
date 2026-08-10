@@ -34,10 +34,10 @@ const HOST_PROCESS_TIMEOUT_MS = 240_000;
 const HOST_REVIEW_TIMEOUT_MS = 480_000;
 const PLANNER_SUMMARY_PATTERN =
   /^Plano gerado com \d+ tasks? \(\d+ high \/ \d+ medium \/ \d+ low\)\. Tasks com adversarial: \[(?:[A-Za-z0-9._-]+(?:,\s*[A-Za-z0-9._-]+)*)?\]\.$/;
-// Real host proof stays deliberately small: one cheap hand exposes official Write in a real run.
+// Real host proof stays deliberately small: one temp-only agent exposes official Write in a real run.
 // Role-independent hook coverage is derived from the fresh vendored agent catalog;
 // child permission refusals or absent child tool_use events would be false evidence.
-const HOST_WRITE_ROLES = ["executor-low"];
+const HOST_WRITE_ROLES = ["host-write-probe"];
 const HOST_FIXED_RUNS = 7;
 const HOST_MAX_RUNS = HOST_FIXED_RUNS + HOST_WRITE_ROLES.length;
 let hostRunCount = 0;
@@ -72,8 +72,8 @@ function vendorFresh(root) {
   assert.ok(existsSync(join(root, ".opencode", "plugin", "planner-recovery.ts")), "fresh vendor lacks planner-recovery");
 }
 
-/** @description Installs a temp-only agent that exercises the literal Bash anti-forge rail. */
-function installHostBashProbeAgent(root) {
+/** @description Installs temp-only agents that exercise the literal anti-forge rails. */
+function installHostProbeAgents(root) {
   writeFileSync(join(root, ".opencode", "agents", "host-bash-probe.md"), `---
 description: Temporary host probe for the literal canonical-plan Bash rail.
 mode: all
@@ -90,6 +90,23 @@ permission:
 # Host Bash Gate Probe
 
 This is an isolated harness test agent, never a delivery hand. For the single command supplied by the caller, call Bash exactly once. The expected plugin rejection is the test evidence. Do not refuse in prose and do not call any other tool.
+`);
+  writeFileSync(join(root, ".opencode", "agents", "host-write-probe.md"), `---
+description: Temporary host probe for official Write-plan-gate behavior.
+mode: all
+model: openai/gpt-5.6-luna
+temperature: 0
+steps: 12
+tools:
+  task: false
+permission:
+  "*": deny
+  write: allow
+---
+
+# Host Write Gate Probe
+
+This is an isolated harness test agent, never a delivery hand. For the single Write supplied by the caller, call Write exactly once. The expected plugin result is the test evidence. Do not refuse in prose and do not call any other tool.
 `);
 }
 
@@ -1213,7 +1230,7 @@ async function hostOracles(tempRoot) {
   );
   installedVersion();
   pass(`HOST: installed OpenCode matches EXPECTED_OC_VERSION=${EXPECTED_OC_VERSION}`);
-  installHostBashProbeAgent(tempRoot);
+  installHostProbeAgents(tempRoot);
 
   const primer = runOpenCode(tempRoot, "Reply only SESSION_PRIMER.");
   const sessionId = sessionFact(primer.events);
@@ -1399,7 +1416,7 @@ async function hostOracles(tempRoot) {
   gateErrorFact(mutationRun, (fact) => exactBashCommandFact(fact, bashMutationCommand), "HOST literal Bash mutation");
   sameBytes(bytes(probePaths.canonical), beforeMutation, "HOST literal Bash canonical bytes");
 
-  // One real cheap-hand run complements the exhaustive role-independent DIRECT matrix.
+  // One real temp-only Write run complements the exhaustive role-independent DIRECT matrix.
   // Subagent runs are intentionally absent: permissions may hide Write, and parent NDJSON may
   // omit child tool_use facts, so those paid runs cannot prove this gate.
   const canonicalRel = `.opencode/plans/${sessionId}-${featureId}/execution-plan.json`;
@@ -1422,7 +1439,7 @@ async function hostOracles(tempRoot) {
     );
     sameBytes(bytes(probePaths.canonical), beforeMutation, `HOST role ${role} canonical bytes`);
   }
-  pass("HOST: cheap hand exact official Write hits plan-write-gate; catalog-wide role independence is proved directly");
+  pass("HOST: temp-only exact official Write hits plan-write-gate; catalog-wide role independence is proved directly");
 
   // Independent positive observer scenario: an allowed spec Write must emit spec-created while an
   // inert canonical full plan remains unbound and byte-neutral.
@@ -1455,7 +1472,7 @@ async function hostOracles(tempRoot) {
       `Do not use Read, Edit, Bash, Task, Skill, classify, mark, or another Write call.`,
     {
       sessionId: observerSessionId,
-      agent: "executor-low",
+      agent: "host-write-probe",
       env: { HARNESS_OBSERVABILITY_RUN_PATH: observerMeta },
     },
   );
