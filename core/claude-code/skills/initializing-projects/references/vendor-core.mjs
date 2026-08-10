@@ -1069,8 +1069,14 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   return { claudeDir };
 }
 
-/** @description Best-effort version string from git, else "unknown". */
+/** @description Release version from package.json, with git/unknown only as a legacy fallback. */
 function readVersion(repoDir) {
+  try {
+    const version = JSON.parse(readFileSync(join(repoDir, "package.json"), "utf8"))?.version;
+    if (typeof version === "string" && version.trim()) return `v${version.trim()}`;
+  } catch {
+    // A legacy/minimal source can lack package.json; retain the previous best-effort path.
+  }
   try {
     return execFileSync("git", ["-C", repoDir, "describe", "--tags", "--always"], {
       stdio: ["ignore", "pipe", "ignore"],
