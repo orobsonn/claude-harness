@@ -95,6 +95,20 @@ function assertOwnedOnly(paths, owned, label) {
 }
 
 /**
+ * The first OpenCode session after a vendor update still has the old plugin process in memory.
+ * It can therefore not observe a newly added no-CI exception. The bootstrap is deliberately
+ * narrower than the normal ship path: only an update commit that this helper has just verified,
+ * and only a repository with zero GitHub Actions workflows, may use the GitHub merge API.
+ * @param {{ operation: string, committedPaths: string[], owned: Set<string>, workflowCount: unknown }} input
+ */
+export function shouldBootstrapMergeWithoutCi({ operation, committedPaths, owned, workflowCount }) {
+  return operation === "updating-harness" &&
+    workflowCount === 0 &&
+    committedPaths.length > 0 &&
+    committedPaths.every((path) => owned.has(normalizedPath(path)));
+}
+
+/**
  * A completed lifecycle-only branch can be resumed. A product branch cannot, but its uncommitted
  * lifecycle update may still move safely to the default branch for an isolated commit.
  * @param {string[]} branchPaths
@@ -125,6 +139,69 @@ function defaultBranch() {
   const match = ref.match(/^origin\/(main|master)$/);
   if (!match) throw new Error(`origin/HEAD must name main or master, got ${ref || "none"}`);
   return match[1];
+}
+
+/** @param {string[]} args */
+function gh(args) {
+  return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * Finishes the one backward-compatible no-CI case without asking a stale OpenCode plugin to
+ * evaluate a merge command. GitHub remains the authority for rules, approvals and required
+ * status checks; any API denial stops the operation and leaves the PR visible.
+ * @param {{ operation: string, branch: string, lifecycleBranch: string, committedPaths: string[], owned: Set<string> }} input
+ */
+function bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths, owned }) {
+  let repo;
+  let workflowCount;
+  try {
+    repo = gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+    workflowCount = Number(gh(["api", `repos/${repo}/actions/workflows`, "--jq", ".total_count"]));
+  } catch {
+    return null;
+  }
+  if (!shouldBootstrapMergeWithoutCi({ operation, committedPaths, owned, workflowCount })) return null;
+
+  const headSha = git(["rev-parse", "HEAD"]).trim();
+  let remote = "";
+  try {
+    remote = git(["ls-remote", "--exit-code", "origin", `refs/heads/${lifecycleBranch}`]).trim();
+  } catch {
+    // A just-created lifecycle branch is expected not to exist on origin yet.
+  }
+  const remoteSha = remote.split(/\s+/)[0];
+  if (remoteSha && remoteSha !== headSha) {
+    throw new Error("lifecycle bootstrap refused: remote branch SHA differs from the verified commit");
+  }
+  if (!remoteSha) git(["push", "-u", "origin", "HEAD"]);
+
+  const url = gh([
+    "pr", "create",
+    "--base", branch,
+    "--head", lifecycleBranch,
+    "--title", COMMIT_MESSAGES[operation],
+    "--body", "Lifecycle do harness. Commit verificado pelo manifesto do vendor.",
+  ]);
+  const pr = JSON.parse(gh(["pr", "view", url, "--json", "number,url,baseRefName,headRefName,headRefOid"]));
+  if (
+    !Number.isInteger(pr?.number) ||
+    pr.baseRefName !== branch ||
+    pr.headRefName !== lifecycleBranch ||
+    pr.headRefOid !== headSha
+  ) {
+    throw new Error("lifecycle bootstrap refused: PR identity differs from the verified lifecycle commit");
+  }
+
+  const result = JSON.parse(gh([
+    "api", "--method", "PUT", `repos/${repo}/pulls/${pr.number}/merge`,
+    "-f", `sha=${headSha}`,
+    "-f", "merge_method=squash",
+  ]));
+  if (result?.merged !== true) throw new Error("lifecycle bootstrap merge was not accepted by GitHub");
+  git(["switch", branch]);
+  git(["pull", "--ff-only"]);
+  return { action: "merged", branch, paths: committedPaths, url: pr.url, reason: "old-entry-gate no-CI compatibility" };
 }
 
 /** @param {string} branch */
@@ -262,6 +339,8 @@ export function prepareLifecycleShip(operation) {
   const committed = nulPaths(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]));
   assertOwnedOnly(committed, owned, "lifecycle commit");
   renameSync(baseline.path, `${baseline.path}.consumed`);
+  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned });
+  if (merged) return merged;
   return { action: "committed", branch: lifecycleBranch, paths: committed };
 }
 
@@ -293,7 +372,10 @@ export function adoptExistingLifecycleShip(operation) {
   git(["commit", "--only", "-m", COMMIT_MESSAGES[operation], "--", ...paths]);
 
   const committed = nulPaths(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]));
-  assertOwnedOnly(committed, ownershipManifest(), "lifecycle commit");
+  const owned = ownershipManifest();
+  assertOwnedOnly(committed, owned, "lifecycle commit");
+  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned });
+  if (merged) return merged;
   return { action: "adopted", branch: lifecycleBranch, paths: committed };
 }
 
