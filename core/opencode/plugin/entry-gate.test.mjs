@@ -909,6 +909,61 @@ test("classify allowed for top-level build", async () => {
   )
 })
 
+test("configure-routing permits only an official root harness-config caller (#446)", async () => {
+  const allowedCaller = async () => ({ ok: true, agent: "harness-config", parentSessionId: null })
+  await withHooks(async (hooks) => {
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "configure-routing", sessionID: SID, callID: "routing-root" },
+      { args: { action: "apply", confirm_weak_judgment_eyes: true } },
+    ))
+  }, { resolveConfigureRoutingAuthorityFn: allowedCaller })
+
+  for (const caller of [
+    { ok: true, agent: "harness-config", parentSessionId: "ses_parent" },
+    { ok: true, agent: "general", parentSessionId: null },
+    { ok: true, agent: "explore", parentSessionId: null },
+    { ok: false, reason: "official runtime metadata unavailable" },
+  ]) {
+    await withHooks(async (hooks) => {
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "configure-routing", sessionID: SID, callID: "routing-denied" },
+          { args: { action: "apply", confirm_weak_judgment_eyes: true } },
+        ),
+        /\[entry-gate\].*(configure-routing|official runtime metadata|child session)/i,
+      )
+    }, { resolveConfigureRoutingAuthorityFn: async () => caller })
+  }
+})
+
+test("configure-routing ignores model-supplied agent fields and binds the exact official tool part (#446)", async () => {
+  const officialClient = ({ agent = "harness-config", parentID = null } = {}) => ({
+    session: {
+      get: async () => ({ data: { id: SID, ...(parentID ? { parentID } : {}) } }),
+      messages: async () => ({ data: [{
+        info: { id: "msg-routing", role: "assistant", sessionID: SID, agent },
+        parts: [{ type: "tool", tool: "configure-routing", callID: "routing-official", sessionID: SID, messageID: "msg-routing" }],
+      }] }),
+    },
+  })
+  await withHooks(async (hooks) => {
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "configure-routing", sessionID: SID, callID: "routing-official", agent: "general" },
+      { args: { action: "apply" } },
+    ))
+  }, { client: officialClient() })
+
+  await withHooks(async (hooks) => {
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "configure-routing", sessionID: SID, callID: "routing-official", agent: "harness-config" },
+        { args: { action: "apply" } },
+      ),
+      /\[entry-gate\].*general/i,
+    )
+  }, { client: officialClient({ agent: "general" }) })
+})
+
 test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged warning, and a transient hiccup self-heals on retry", async () => {
   await withHooks(async (hooks, root) => {
     const dir = path.join(root, ".opencode", "plans", ".state", SID)
