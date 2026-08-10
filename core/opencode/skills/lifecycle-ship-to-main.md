@@ -49,10 +49,11 @@ If it reports an ownership error, a switch/pull conflict, or an existing branch 
 product paths: stop and report that precise reason. Do not recover it with a broad `git add`, stash,
 reset, or a branch from a product commit.
 
-### Operator-authorized recovery
+### Automatic recovery
 
-If the update's initial snapshot reports lifecycle cargo but the operator explicitly says to publish
-only the already-vendored harness, use this recovery instead of sending them back to `build`:
+If the update's initial snapshot reports lifecycle cargo, the prior vendor run already completed but
+did not create its PR. The `/updating-harness` invocation is sufficient authority to finish it; use
+this recovery instead of sending the operator back to `build`:
 
 ```bash
 node .opencode/tools/lifecycle-ship.mjs adopt updating-harness
@@ -60,7 +61,7 @@ node .opencode/tools/lifecycle-ship.mjs adopt updating-harness
 
 It creates the same isolated lifecycle branch and stages only paths in the vendor manifest. It never
 stages a product path, plans, run state, a local plugin absent from the manifest, or
-`opencode.harness.json`. Do not invoke it on inference; direct operator authorization is required.
+`opencode.harness.json`.
 
 ### 2. Push + PR + merge
 

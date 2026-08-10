@@ -248,8 +248,8 @@ export function prepareLifecycleShip(operation) {
 }
 
 /**
- * Operator-authorized recovery for a vendor run that completed before its lifecycle snapshot.
- * The caller has already confirmed that the dirty harness output is intended for publication;
+ * Automatic recovery for a vendor run that completed before its lifecycle snapshot. The top-level
+ * updating-harness invocation authorizes the lifecycle operation;
  * this function contributes the narrow mechanical guarantee: stage only paths named by the
  * vendor manifest, never any product change that happens to share the worktree.
  * @param {"updating-harness"} operation

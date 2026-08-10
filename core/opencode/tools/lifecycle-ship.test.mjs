@@ -95,7 +95,7 @@ test("vendored CLI executes its argument guard when called through an absolute p
   assert.match(result.stderr, /unsupported lifecycle operation|usage:/i);
 });
 
-test("operator-authorized adoption commits only vendor paths and preserves staged product work", () => {
+test("automatic adoption commits only vendor paths and preserves staged product work", () => {
   const root = mkdtempSync(join(tmpdir(), "lifecycle-adopt-"));
   const remote = join(root, "remote.git");
   const seed = join(root, "seed");
