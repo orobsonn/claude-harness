@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.13](https://github.com/orobsonn/claude-harness/compare/v0.55.12...v0.55.13) (2026-08-10)
+
+
+### Changed
+
+* documenta o limite de confiança: run-record é evidência durável, não prova de proveniência contra Bash do mesmo usuário ([#79](https://github.com/orobsonn/claude-harness/issues/79))
+
 ## [0.55.12](https://github.com/orobsonn/claude-harness/compare/v0.55.11...v0.55.12) (2026-08-10)
 
 
