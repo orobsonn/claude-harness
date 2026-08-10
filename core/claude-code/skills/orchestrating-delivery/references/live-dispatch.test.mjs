@@ -76,6 +76,7 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
     const token = "fake-live-token-abc123";
     const sink = {};
     let captureArgs = null;
+    const mainWorktreeSnapshot = { before: new Map(), readCurrent: () => new Map() };
 
     const fakeCapture = (args) => {
       captureArgs = args;
@@ -101,6 +102,7 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
         gitStatus: () => "",
         headSha: () => FREEZE_SHA,
         capture: fakeCapture,
+        snapshotMainWorktreeFn: () => mainWorktreeSnapshot,
         env: { ANTHROPIC_AUTH_TOKEN: token },
         writeRecord: (path, content) => { writtenRecord = { path, content }; },
       });
@@ -125,6 +127,7 @@ describe("runLiveDispatch fires the live spawn + independent capture", () => {
       assert.equal(captureArgs.freezeCommitSha, FREEZE_SHA, "capture must anchor to the freeze commit");
       assert.equal(captureArgs.testPath, REAL_LOCKED_TEST, "capture must re-run the frozen locked_test by path");
       assert.equal(captureArgs.token, token, "capture must receive the resolved token for redaction");
+      assert.equal(captureArgs.mainWorktreeSnapshot, mainWorktreeSnapshot, "#470 snapshot must cross the spawn/capture boundary unchanged");
 
       // A run-record was written, nested under a per-feature directory.
       assert.ok(writtenRecord, "a run-record must be written to disk");
