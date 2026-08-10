@@ -66,6 +66,7 @@
 import {
   writeFileSync,
   readFileSync,
+  renameSync,
   rmSync,
   existsSync,
   chmodSync,
@@ -123,6 +124,37 @@ const CANONICAL_OC_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "..", 
  * the small exit-reason JSON) stay far under this ceiling.
  */
 const RAW_LOG_ULIMIT_BLOCKS = 204_800;
+
+/** Short, stable dispatch failure taxonomy. Never persist raw error text: it can expose paths or secrets. */
+const DISPATCH_FAILURE_REASONS = new Set([
+  "mem-guard",
+  "env-build",
+  "oc-data-home",
+  "env-file-write",
+  "worktree-add",
+  "fix-head-mismatch",
+  "oc-config-seed",
+  "body-file-write",
+  "tmux-spawn",
+]);
+
+function dispatchFailurePath(stateDir, issueNumber) {
+  return join(stateDir, `issue-${issueNumber}-dispatch-failure.json`);
+}
+
+/** Best-effort atomic evidence for an investigation after the session/Telegram topic has gone. */
+function recordDispatchFailure({ stateDir, issueNumber, reason }) {
+  if (!Number.isInteger(issueNumber) || !DISPATCH_FAILURE_REASONS.has(reason)) return;
+  const path = dispatchFailurePath(stateDir, issueNumber);
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(tmp, JSON.stringify({ reason, ts: new Date().toISOString() }), { encoding: "utf8", mode: 0o600 });
+    renameSync(tmp, path);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch {}
+  }
+}
 
 /**
  * @description Wall-clock ceiling for the fresh-base `git fetch origin main`. It is the ONLY
@@ -1212,7 +1244,8 @@ export function resolveRunPlansDir(worktreePath, projectRoot, runtimeDir = ".cla
  * @param {Function} [args.now=defaultNow] - Injectable epoch-SECONDS clock for the closedAt stamp.
  * @returns {Promise<void>}
  */
-async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
+async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, reason, obsContext, closeForumTopic, now = defaultNow }) {
+  recordDispatchFailure({ stateDir, issueNumber, reason });
   try {
     runLock.release({ stateDir, acquireTs });
   } catch {
@@ -1275,9 +1308,9 @@ async function recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumb
 }
 
 /** @description recoverSpawnFailure wrapped to return the { ok: false } result shape. */
-async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now = defaultNow }) {
-  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic, now });
-  return { ok: false };
+async function recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason, obsContext, closeForumTopic, now = defaultNow }) {
+  await recoverSpawnFailure({ runLock, stateDir, acquireTs, gh, issueNumber, reason, obsContext, closeForumTopic, now });
+  return { ok: false, reason };
 }
 
 /**
@@ -1528,7 +1561,7 @@ export async function dispatch(issue, opts) {
     freeBytes = null; // fail-open: a throwing reader must never stall dispatch
   }
   if (!hasEnoughFreeMemory({ freeBytes, thresholdBytes })) {
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext: null, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "mem-guard", obsContext: null, closeForumTopic });
   }
 
   // Pre-spawn observability setup (task-4): createRun + createForumTopic + append 'picked' all
@@ -1565,7 +1598,7 @@ export async function dispatch(issue, opts) {
   try {
     scopedEnv = buildScopedEnv(project, { stateDir, projectRoot });
   } catch {
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "env-build", obsContext, closeForumTopic });
   }
   const env = { ...scopedEnv };
   delete env.CLAUDE_CODE_REMOTE;
@@ -1645,7 +1678,7 @@ export async function dispatch(issue, opts) {
       env.XDG_DATA_HOME = ocDataHome;
       env.HARNESS_OC_DATA_HOME = ocDataHome; // exit cleans this; guarded basename oc-data-<n>
     } catch {
-      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "oc-data-home", obsContext, closeForumTopic });
     }
   }
 
@@ -1661,7 +1694,7 @@ export async function dispatch(issue, opts) {
         .join("\n");
     writeFileSync(envFile, envBody, { encoding: "utf8", mode: 0o600 });
   } catch {
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "env-file-write", obsContext, closeForumTopic });
   }
 
   // Deterministic per-issue output-log (issue-<n>-output.log, NOT per-uuid — reaper-findable).
@@ -1731,7 +1764,7 @@ export async function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup of the pre-created output-log
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "worktree-add", obsContext, closeForumTopic });
   }
 
   // The PR head was reviewed before checkout. Re-read the worktree commit afterward so a moved
@@ -1741,7 +1774,7 @@ export async function dispatch(issue, opts) {
     try { rmSync(envFile); } catch { /* best-effort */ }
     try { rmSync(logPath, { force: true }); } catch { /* best-effort */ }
     try { rmSync(fixFindingsPath, { force: true }); } catch { /* best-effort */ }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "fix-head-mismatch", obsContext, closeForumTopic });
   }
 
   // 1b) git worktree only checks out TRACKED files. When `.claude` is gitignored (e.g. the harness
@@ -1806,7 +1839,7 @@ export async function dispatch(issue, opts) {
       } catch {
         // best-effort cleanup of the pre-created output-log
       }
-      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+      return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "oc-config-seed", obsContext, closeForumTopic });
     }
   }
 
@@ -1833,7 +1866,7 @@ export async function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup of the pre-created output-log
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "body-file-write", obsContext, closeForumTopic });
   }
 
   // 3) Spawn the detached tmux session running claude -p + the chained graceful-exit handler. In
@@ -1872,11 +1905,12 @@ export async function dispatch(issue, opts) {
     } catch {
       // best-effort cleanup of the pre-created output-log
     }
-    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, obsContext, closeForumTopic });
+    return recoverSpawnFailureAndReturn({ runLock, stateDir, acquireTs, gh, issueNumber, reason: "tmux-spawn", obsContext, closeForumTopic });
   }
 
   // 4) Second lock phase + attempt charge — only AFTER a successful spawn. dispatch never
   //    re-acquires; it registers the owning session name onto the holder cron-a-select handed it.
+  try { rmSync(dispatchFailurePath(stateDir, issueNumber), { force: true }); } catch {}
   runLock.register(sessionName, { stateDir, acquireTs });
   counter.increment(issueNumber, { stateDir });
 

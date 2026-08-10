@@ -1132,7 +1132,7 @@ test("dispatch: a FRESH branch whose `git fetch origin main` spawn throws never 
     );
 
     assert.equal(counter.read(42, { stateDir }), 0, "a fetch failure must not consume a retry attempt");
-    assert.deepEqual(result, { ok: false }, "dispatch must resolve { ok: false } on a pre-registration fetch failure");
+    assert.deepEqual(result, { ok: false, reason: "worktree-add" }, "dispatch must surface its stable failure reason");
   } finally {
     cleanup();
   }
@@ -1220,7 +1220,45 @@ test("mem-guard: below-threshold returns the {ok:false} recovery shape", async (
       baseOpts({ projectRoot, worktreeRoot, stateDir, freeMem: () => 524288000 })
     );
 
-    assert.deepEqual(result, { ok: false }, "a below-threshold memory guard must resolve { ok: false }");
+    assert.deepEqual(result, { ok: false, reason: "mem-guard" }, "a below-threshold memory guard must surface its reason");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#468 dispatch records a short stable reason per failed attempt without changing recovery", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const first = await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, freeMem: () => 524288000 })
+    );
+    const failurePath = join(stateDir, "issue-42-dispatch-failure.json");
+    const mem = JSON.parse(readFileSync(failurePath, "utf8"));
+    assert.deepEqual(first, { ok: false, reason: "mem-guard" });
+    assert.equal(mem.reason, "mem-guard");
+    assert.match(mem.ts, /^\d{4}-\d{2}-\d{2}T/);
+
+    const second = await dispatch(
+      { number: 42, body: "hi" },
+      baseOpts({ projectRoot, worktreeRoot, stateDir, buildScopedEnv: () => { throw new Error("secret path"); } })
+    );
+    const env = JSON.parse(readFileSync(failurePath, "utf8"));
+    assert.deepEqual(second, { ok: false, reason: "env-build" });
+    assert.equal(env.reason, "env-build", "raw exception text must never reach durable evidence");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#468 a successful dispatch clears stale failure evidence only after tmux starts", async () => {
+  const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
+  try {
+    const failurePath = join(stateDir, "issue-42-dispatch-failure.json");
+    writeFileSync(failurePath, JSON.stringify({ reason: "mem-guard", ts: "old" }));
+    const result = await dispatch({ number: 42, body: "hi" }, baseOpts({ projectRoot, worktreeRoot, stateDir }));
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(failurePath), false, "a successful spawn must not leave stale failure evidence");
   } finally {
     cleanup();
   }

@@ -72,6 +72,22 @@ test("#ac-5.1 runCronA notifies 'dispatch-failed' when the wrapped dispatch retu
   assert.ok(!types.includes("picked"), "a failed dispatch must NOT also notify picked");
 });
 
+test("#468 runCronA forwards the stable dispatch failure reason to the operator notification", () => {
+  const events = [];
+  const fakeSelect = (opts) => {
+    opts.dispatch({ number: 7 }, { acquireTs: 1 });
+    return { ok: true, dispatched: true, issue: { number: 7 } };
+  };
+  runCronA(BASE_CONFIG, {
+    cronASelect: fakeSelect,
+    dispatch: () => ({ ok: false, reason: "mem-guard" }),
+    buildScopedEnvFromDisk: () => ({}), ghExec: () => ({ ok: true }),
+    runLock: { acquire: () => ({ acquired: true, acquireTs: 1 }), release: () => {}, register: () => {} },
+    spawn: () => {}, counter: { increment: () => {}, read: () => 0 }, notify: (event) => events.push(event),
+  });
+  assert.equal(events.find((event) => event.type === "dispatch-failed")?.reason, "mem-guard");
+});
+
 test("#ac-5.1 a THROWING notifier never breaks runCronA (fail-open at the root)", () => {
   assert.doesNotThrow(() => {
     runCronA(BASE_CONFIG, {
