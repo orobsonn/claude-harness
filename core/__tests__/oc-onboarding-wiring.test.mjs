@@ -58,7 +58,16 @@ test("OC harness updates use a direct lifecycle lane without delivery ceremony",
   assert.match(ocTriage, /Harness lifecycle operations do \*\*not\*\* run here[\s\S]*`harness-config`/i);
   assert.match(ocTriage, /\/updating-harness/, "triage must route to the command, not run the skill");
   assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
-  assert.match(updating, /lane owns only the OpenCode shell[\s\S]*`--target opencode`/i);
+  assert.match(
+    updating,
+    /Only `\.opencode\/\.harness-version` exists:[\s\S]*`opencode`[\s\S]*absent Claude shell is optional/i,
+    "an OpenCode-only project must update without depending on a Claude shell",
+  );
+  assert.match(
+    updating,
+    /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist:[\s\S]*`both`/i,
+    "a dual-runtime project must synchronize both installed shells",
+  );
   assert.match(ocBuild, /lifecycle operations are the exception[\s\S]*never classifies/i);
   assert.match(ocAgents, /Harness lifecycle lane[\s\S]*does not call `classify`/i);
 });
