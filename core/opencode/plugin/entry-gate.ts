@@ -23,6 +23,8 @@
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin"
 import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 
 const PREFIX = "[entry-gate]"
 
@@ -41,6 +43,8 @@ export type EntryGateDeps = {
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
   /** Read the exact PR's GitHub check rollup immediately before `gh pr merge`. */
   readMergeCheckRollupFn?: (target: string | null) => unknown
+  /** Whether the current branch is a mechanically verified lifecycle-only change. */
+  isLifecycleOnlyMergeFn?: () => boolean
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
@@ -187,6 +191,60 @@ function defaultMergeCheckRollup(target: string | null, cwd: string): unknown {
 }
 
 /**
+ * @description A lifecycle update is allowed to merge without CI only when its current branch
+ * is the helper's exact branch shape and every committed path is listed by its vendor manifest.
+ * This preserves the normal CI rail for product PRs and fails closed on any git/manifest doubt.
+ */
+function defaultIsLifecycleOnlyMerge(cwd: string): boolean {
+  try {
+    const git = (args: string[]) => execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    const branch = git(["branch", "--show-current"])
+    if (!/^chore\/harness-lifecycle-(updating-harness|configuring-model-routing)-\d+$/.test(branch)) {
+      return false
+    }
+
+    const owned = new Set<string>()
+    for (const relativePath of [
+      ".opencode/.harness-owned-files.json",
+      ".claude/.harness-owned-files.json",
+    ]) {
+      const manifestPath = join(cwd, relativePath)
+      if (!existsSync(manifestPath)) continue
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+      if (
+        manifest?.version !== 1 ||
+        !Array.isArray(manifest.files) ||
+        manifest.files.some((file: unknown) =>
+          typeof file !== "string" ||
+          file.length === 0 ||
+          file.startsWith("/") ||
+          file.split("/").includes(".."),
+        )
+      ) {
+        return false
+      }
+      for (const file of manifest.files) owned.add(file)
+    }
+    if (owned.size === 0) return false
+
+    const remoteHead = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+    if (!/^origin\/(main|master)$/.test(remoteHead)) return false
+    const changed = execFileSync(
+      "git",
+      ["diff", "--name-only", "-z", `${remoteHead}...HEAD`],
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).split("\0").filter(Boolean)
+    return changed.length > 0 && changed.every((file) => owned.has(file))
+  } catch {
+    return false
+  }
+}
+
+/**
  * @description Builds entry-gate hooks (async load of pure decide mjs).
  * Optional deps override git/list/ancestor seams for tests.
  */
@@ -229,6 +287,8 @@ async function createEntryGateHooks(
     ((featureId: string) => listHandRecordsForFeature(root, featureId))
   const readMergeCheckRollupFn =
     deps.readMergeCheckRollupFn ?? ((target: string | null) => defaultMergeCheckRollup(target, root))
+  const isLifecycleOnlyMergeFn =
+    deps.isLifecycleOnlyMergeFn ?? (() => defaultIsLifecycleOnlyMerge(root))
   const getSessionParentIdFn = deps.getSessionParentIdFn
   const resolveActingAgentFn =
     deps.resolveActingAgentFn ??
@@ -434,7 +494,13 @@ async function createEntryGateHooks(
           const checkDecision = target === undefined
             ? { ok: false, reason: "PR target is ambiguous; merge is denied." }
             : decideMergeChecks(readMergeCheckRollupFn(target))
-          if (!checkDecision.ok) {
+          const allowsLifecycleWithoutCi =
+            target === null &&
+            checkDecision.ok === false &&
+            "state" in checkDecision &&
+            checkDecision.state === "missing" &&
+            isLifecycleOnlyMergeFn()
+          if (!checkDecision.ok && !allowsLifecycleWithoutCi) {
             throw new Error(`${PREFIX} Blocked: ${checkDecision.reason}`)
           }
         }

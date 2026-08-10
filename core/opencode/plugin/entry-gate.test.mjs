@@ -185,6 +185,49 @@ test("gh pr merge reads the exact literal target and allows a green rollup", asy
   assert.equal(target, "42")
 })
 
+test("a current lifecycle-only PR may merge when its repository has no CI", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, fullDeliveryState())
+      await assert.doesNotReject(() =>
+        hooks["tool.execute.before"](
+          { tool: "bash", sessionID: SID },
+          { args: { command: "gh pr merge --squash --delete-branch" } },
+        ),
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "chore/harness-lifecycle-updating-harness-1", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+      readMergeCheckRollupFn: () => [],
+      isLifecycleOnlyMergeFn: () => true,
+    },
+  )
+})
+
+test("the lifecycle no-CI exception never authorizes an explicit PR target", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, fullDeliveryState())
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "bash", sessionID: SID },
+          { args: { command: "gh pr merge 42 --squash" } },
+        ),
+        /No CI checks are reported; merge is denied/,
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "chore/harness-lifecycle-updating-harness-1", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+      readMergeCheckRollupFn: () => [],
+      isLifecycleOnlyMergeFn: () => true,
+    },
+  )
+})
+
 test("gh pr merge rejects a chained second merge before reading any PR", async () => {
   let reads = 0
   await withHooks(
