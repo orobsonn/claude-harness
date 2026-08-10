@@ -15,7 +15,7 @@ Strong eyes, cheap hands. Safety is **not** trusting the hand model. Safety is:
 2. **Independent capture** after hand (git diff vs freeze + re-run tests)  
 3. **Scope/frozen path checks** (shared pure)  
 4. **Reset worktree** on FAILED  
-5. **On-disk run-record** as non-forgeable escalation evidence  
+5. **On-disk run-record** as durable escalation evidence (not OS-level provenance)  
 
 Probe proof: after plugin **denied** bash, model still emitted success text → **prose is not evidence**.
 

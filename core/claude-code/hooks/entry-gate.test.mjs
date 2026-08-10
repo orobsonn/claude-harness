@@ -133,7 +133,7 @@ test(
   () => {
     // trilho-3 (Part B): a MAIN-LOOP executor escape requires (1) a stamped escalation_fallback
     // ticket AND (2) that ticket mapping to an on-disk run-record whose outcome is FAILED (the
-    // non-forgeable genuine-failure evidence). Ticket + FAILED record → allow.
+    // durable genuine-failure evidence). Ticket + FAILED record → allow.
     const payload = makeAgentPayload("ses_exec_full", "executor");
     const readTriage = () => ({ session_id: "ses_exec_full", mode: "FULL", feature_id: "my-feature" });
     const readGateStateFn = () => ({ escalation_fallback: ["my-feature/task-1"] });
