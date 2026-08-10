@@ -57,6 +57,7 @@ const ALLOWED_BASH_HEADS = [
   "git pull --ff-only",
   "node .opencode/tools/lifecycle-ship.mjs prepare ",
   "node .opencode/tools/lifecycle-ship.mjs snapshot ",
+  "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness",
   "git push -u origin HEAD",
   "gh pr create --title ",
   "gh pr view ",
@@ -217,6 +218,16 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
   assert.match(skill, /claude-harness lifecycle-snapshot updating-harness/);
 });
 
+test("an operator may explicitly adopt an already-vendored harness without pulling product work into its PR", () => {
+  const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
+  const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
+
+  assert.match(update, /explicitly authorizes publishing only the harness/i);
+  assert.match(update, /do not send the operator back to build/i);
+  assert.match(ship, /operator-authorized recovery/i);
+  assert.match(ship, /never\s+stages? a product path/i);
+});
+
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
   const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
   const rules = permissionRules(fm, "bash");
@@ -232,6 +243,7 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
     "gh pr merge --rebase --delete-branch",
     "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness --extra",
     "node .opencode/tools/lifecycle-ship.mjs prepare product-delivery",
+    "node .opencode/tools/lifecycle-ship.mjs adopt configuring-model-routing",
     "git push -u origin main",
   ];
 
@@ -242,6 +254,7 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
 
   const mustAllow = [
     "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness",
+    "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness",
     "git push -u origin HEAD",
     "gh pr merge --squash --delete-branch",
     "git fetch origin",

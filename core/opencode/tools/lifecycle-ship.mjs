@@ -247,12 +247,48 @@ export function prepareLifecycleShip(operation) {
   return { action: "committed", branch: lifecycleBranch, paths: committed };
 }
 
+/**
+ * Operator-authorized recovery for a vendor run that completed before its lifecycle snapshot.
+ * The caller has already confirmed that the dirty harness output is intended for publication;
+ * this function contributes the narrow mechanical guarantee: stage only paths named by the
+ * vendor manifest, never any product change that happens to share the worktree.
+ * @param {"updating-harness"} operation
+ */
+export function adoptExistingLifecycleShip(operation) {
+  if (operation !== "updating-harness") throw new Error("adopt supports only updating-harness");
+  const branch = defaultBranch();
+  if (git(["rev-parse", branch]).trim() !== git(["rev-parse", `origin/${branch}`]).trim()) {
+    throw new Error(`local ${branch} is not equal to origin/${branch}; refusing to branch from local commits`);
+  }
+  const current = currentChangedPaths();
+  if (current.includes("opencode.harness.json")) {
+    throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
+  }
+  const paths = selectOwnedPaths(current, ownershipManifest());
+  if (paths.length === 0) return { action: "noop", branch, paths: [] };
+
+  git(["switch", branch]);
+  git(["pull", "--ff-only"]);
+  const lifecycleBranch = `chore/harness-lifecycle-${operation}-${Date.now()}`;
+  git(["switch", "-c", lifecycleBranch]);
+  git(["add", "--", ...paths]);
+  git(["commit", "--only", "-m", COMMIT_MESSAGES[operation], "--", ...paths]);
+
+  const committed = nulPaths(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]));
+  assertOwnedOnly(committed, ownershipManifest(), "lifecycle commit");
+  return { action: "adopted", branch: lifecycleBranch, paths: committed };
+}
+
 function main() {
   const [command, operation] = process.argv.slice(2);
-  if (!(operation in COMMIT_MESSAGES) || !["snapshot", "prepare"].includes(command)) {
-    throw new Error("usage: node .opencode/tools/lifecycle-ship.mjs <snapshot|prepare> <updating-harness|configuring-model-routing>");
+  if (!(operation in COMMIT_MESSAGES) || !["snapshot", "prepare", "adopt"].includes(command)) {
+    throw new Error("usage: node .opencode/tools/lifecycle-ship.mjs <snapshot|prepare|adopt> <updating-harness|configuring-model-routing>");
   }
-  const result = command === "snapshot" ? snapshotLifecycleShip(operation) : prepareLifecycleShip(operation);
+  const result = command === "snapshot"
+    ? snapshotLifecycleShip(operation)
+    : command === "adopt"
+      ? adoptExistingLifecycleShip(operation)
+      : prepareLifecycleShip(operation);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
