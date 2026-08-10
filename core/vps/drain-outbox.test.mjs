@@ -414,6 +414,28 @@ test("drainTelegramOutbox derives {type:'plan-created', tasks:9} once, idempoten
   );
 });
 
+test("drainTelegramOutbox derives an updated plan count in the same attempt", async () => {
+  const stateDir = makeStateDir();
+  const worktreePath = join(stateDir, "wt-plan-revision");
+  const planDir = join(worktreePath, ".opencode", "plans", "s-f");
+  mkdirSync(planDir, { recursive: true });
+  writeFileSync(join(planDir, "execution-plan.json"), JSON.stringify({ tasks: Array.from({ length: 4 }, (_, n) => ({ id: `t${n}` })) }));
+  writeMeta(stateDir, 289, {
+    issueNumber: 289, project: "demo", worktreePath, threadId: 712, cursor: 1, status: "active",
+  });
+  writeEvents(stateDir, 289, [{ type: "plan-created", tasks: 3 }]);
+  const calls = [];
+  await drainTelegramOutbox({ stateDir, homeDir: stateDir, chatId: 999 }, {
+    ...seams,
+    send: async (message) => { calls.push(message); return { sent: true }; },
+  });
+  assert.deepEqual(
+    readEvents(metaPath(stateDir, 289)).map(({ ts, ...event }) => event),
+    [{ type: "plan-created", tasks: 3 }, { type: "plan-created", tasks: 4 }],
+  );
+  assert.equal(calls.filter((call) => call.event?.type === "plan-created").length, 1);
+});
+
 test("drainTelegramOutbox stamps a derived plan-created checkpoint with execution-plan.json's mtime", async () => {
   const stateDir = makeStateDir();
   const worktreePath = mkdtempSync(join(tmpdir(), "drain-outbox-wt-"));
@@ -1004,9 +1026,10 @@ test("drainTelegramOutbox renders gates-ran as 'Portões: OK' / 'Portões: FALHO
  * @description #15 (curated feed) — Given one event of EVERY curated type, When the drain runs,
  * Then all of them are sent, in order, and the cursor advances past all of them.
  */
-test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created, spec-adversary, plan-created, plan-reviewed, task-executing, eye x3, hand-ran, sniper-ran, gates-ran, final-review-done, pr)", async () => {
+test("drainTelegramOutbox sends every curated type (attempt-started, pipeline-type, spec-created, spec-adversary, plan-created, plan-reviewed, task-executing, eye x3, hand-ran, sniper-ran, gates-ran, final-review-done, pr)", async () => {
   const stateDir = makeStateDir();
   const curatedEvents = [
+    { type: "attempt-started", attempt: 2 },
     { type: "pipeline-type", mode: "FULL" },
     { type: "spec-created" },
     { type: "spec-adversary" },
@@ -1045,6 +1068,7 @@ test("drainTelegramOutbox sends every curated type (pipeline-type, spec-created,
     curatedEvents.map((event) => event.type),
     "every curated type must be sent, in outbox order",
   );
+  assert.match(String(calls[0].text ?? ""), /🔁 Tentativa 2/, "attempt boundary is operator-visible");
   assert.strictEqual(readMetaRaw(stateDir, 152).cursor, curatedEvents.length);
 });
 

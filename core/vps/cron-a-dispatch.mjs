@@ -100,6 +100,7 @@ import {
 } from "../shared/lib/opencode-config-migration.mjs";
 import { DANGEROUS_BASH_DENYLIST } from "../shared/lib/dangerous-bash-denylist.mjs";
 import { sweepRetiredDispatchCleanup } from "../shared/lib/active-dispatch-cleanup-migration.mjs";
+import { currentAttemptEvents } from "../shared/lib/obs-attempt.mjs";
 
 /**
  * @description Absolute path to the graceful-exit handler. The session command invokes it with the
@@ -1445,7 +1446,7 @@ async function setupObservability({ obs, createForumTopic, issueNumber, title, p
   }
   // Opening border checkpoint (#ac-2.3) — append-if-absent so an idempotent requeue never duplicates.
   try {
-    const events = obs.readEvents(metaPath) || [];
+    const events = currentAttemptEvents(obs.readEvents(metaPath) || []);
     if (!events.some((e) => e && e.type === "picked")) {
       obs.appendEvent(metaPath, { type: "picked" });
     }

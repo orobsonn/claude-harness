@@ -292,7 +292,7 @@ test("assertion 1: dispatch for issue 141 with createForumTopic->thread 707 — 
   }
 });
 
-test("assertion 2: given obs-141.json already active with threadId 707 and a picked event already appended, a second dispatch does NOT call createForumTopic again, keeps threadId 707, and does not append a second picked event", async () => {
+test("assertion 2: a re-dispatch reuses the topic and opens tentativa 2 with its own picked checkpoint", async () => {
   const { projectRoot, worktreeRoot, stateDir, cleanup } = makeTempDirs();
   try {
     const worktreePath = join(worktreeRoot, "harness-demo-project-141");
@@ -320,8 +320,11 @@ test("assertion 2: given obs-141.json already active with threadId 707 and a pic
     assert.equal(meta.threadId, 707, "threadId must remain 707, unchanged by the idempotent requeue");
 
     const events = readObsEvents(stateDir, 141);
-    const pickedCount = events.filter((e) => e.type === "picked").length;
-    assert.equal(pickedCount, 1, "exactly one picked event must exist — no duplicate appended on requeue");
+    assert.deepEqual(
+      events.map(({ ts, ...event }) => event),
+      [{ type: "picked" }, { type: "attempt-started", attempt: 2 }, { type: "picked" }],
+      "the original anchor remains auditable and the retry owns a new picked checkpoint",
+    );
   } finally {
     cleanup();
   }

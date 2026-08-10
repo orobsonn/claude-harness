@@ -63,7 +63,7 @@ test("decide: null / malformed payload → none, never throws", () => {
   assert.deepEqual(decide({}), { action: "none" });
 });
 
-test("processInput: appends the event once, then dedupes a re-plan (REVISE rewrite)", () => {
+test("processInput: preserves distinct plan task counts within one attempt", () => {
   const events = [];
   const deps = {
     env: { HARNESS_OBSERVABILITY_RUN_PATH: "/meta.json" },
@@ -73,7 +73,27 @@ test("processInput: appends the event once, then dedupes a re-plan (REVISE rewri
   };
   processInput(JSON.stringify(planWrite(JSON.stringify({ tasks: [1] }))), deps);
   processInput(JSON.stringify(planWrite(JSON.stringify({ tasks: [1, 2] }))), deps); // re-plan
-  assert.equal(events.filter((e) => e.type === "plan-created").length, 1, "plan-created must not double-emit on a re-plan");
+  assert.deepEqual(events, [
+    { type: "plan-created", tasks: 1 },
+    { type: "plan-created", tasks: 2 },
+  ], "plan-created dedupes by (type,tasks), not type alone");
+});
+
+test("processInput: a new attempt emits its own plan-created but still dedupes that attempt", () => {
+  const events = [{ type: "plan-created", tasks: 1 }, { type: "attempt-started", attempt: 2 }];
+  const deps = {
+    env: { HARNESS_OBSERVABILITY_RUN_PATH: "/meta.json" },
+    existsSync: () => true,
+    readEvents: () => [...events],
+    appendEvent: (_p, e) => events.push(e),
+  };
+  processInput(JSON.stringify(planWrite(JSON.stringify({ tasks: [1] }))), deps);
+  processInput(JSON.stringify(planWrite(JSON.stringify({ tasks: [1] }))), deps);
+  assert.deepEqual(events, [
+    { type: "plan-created", tasks: 1 },
+    { type: "attempt-started", attempt: 2 },
+    { type: "plan-created", tasks: 1 },
+  ]);
 });
 
 test("processInput: no HARNESS_OBSERVABILITY_RUN_PATH → no append, exit 0", () => {

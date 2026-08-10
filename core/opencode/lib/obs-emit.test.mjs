@@ -187,3 +187,23 @@ test("dedupe plan-reviewed by verdict; hand-ran by task", () => {
     true,
   );
 });
+
+test("dedupe starts over after attempt-started but remains strict inside its epoch", () => {
+  const prior = [
+    { type: "spec-created" },
+    { type: "plan-created", tasks: 3 },
+    { type: "task-executing", n: 1 },
+    { type: "plan-reviewed", verdict: "APPROVE" },
+    { type: "hand-ran", task: "task-1" },
+    { type: "attempt-started", attempt: 2 },
+  ];
+  for (const event of [
+    { type: "spec-created" },
+    { type: "plan-created", tasks: 3 },
+    { type: "task-executing", n: 1 },
+    { type: "plan-reviewed", verdict: "APPROVE" },
+    { type: "hand-ran", task: "task-1" },
+  ]) assert.equal(dedupeByType(prior, event), false, `${event.type} restarts on attempt 2`);
+  assert.equal(dedupeByType([...prior, { type: "plan-created", tasks: 3 }], { type: "plan-created", tasks: 3 }), true);
+  assert.equal(dedupeByType([...prior, { type: "plan-created", tasks: 3 }], { type: "plan-created", tasks: 4 }), false);
+});

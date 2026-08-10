@@ -98,7 +98,7 @@ test("#4 advanceCursor: atomic rewrite leaves no leftover .tmp file and obs-141.
   }
 });
 
-test("#5 createRun: idempotent reuse — an existing non-closed outbox is never reset (threadId/events preserved)", () => {
+test("#5 createRun: active re-dispatch preserves the audit and appends tentativa 2", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = path.join(stateDir, "obs-141.json");
@@ -114,7 +114,11 @@ test("#5 createRun: idempotent reuse — an existing non-closed outbox is never 
 
     const meta = readMeta(metaPath);
     assert.equal(meta.threadId, 707, "threadId must not be reset by a re-run createRun");
-    assert.equal(readEvents(metaPath).length, 3, "existing events must not be reset/dropped");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ a: 1 }, { a: 2 }, { a: 3 }, { type: "attempt-started", attempt: 2 }],
+      "existing events must not be reset/dropped; the retry is an append-only boundary",
+    );
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -166,7 +170,7 @@ test("#7 readEvents: a truncated last line (in-flight append, no trailing newlin
   }
 });
 
-test("#8b createRun: re-dispatch on orphan reactivates → active, truncates events, preserves threadId, refreshes worktreePath (#291 telegram silence)", () => {
+test("#8b createRun: orphan re-dispatch reactivates append-only, preserving cursor and thread", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = createRun({ issueNumber: 291, project: "claude-harness", worktreePath: "/old/wt" }, stateDir);
@@ -183,15 +187,19 @@ test("#8b createRun: re-dispatch on orphan reactivates → active, truncates eve
     const meta = readMeta(metaPath);
     assert.equal(meta.status, "active", "orphan must reactivate to active");
     assert.equal(meta.threadId, 1653, "threadId preserved for existing forum topic");
-    assert.equal(meta.cursor, 0, "cursor reset so new picked is drainable");
+    assert.equal(meta.cursor, 2, "cursor stays monotonic; old events are never replayed");
     assert.equal(meta.worktreePath, "/new/wt-291", "worktreePath refreshed");
-    assert.deepEqual(readEvents(metaPath), [], "events truncated for clean re-dispatch feed");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ type: "picked" }, { type: "pipeline-type", mode: "LIGHT" }, { type: "attempt-started", attempt: 2 }],
+      "the original audit is kept and the retry is explicitly delimited",
+    );
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
 
-test("#8 createRun: re-dispatch on an 'awaiting-review' meta truncates events + resets cursor, but preserves threadId (reuse-with-truncate)", () => {
+test("#8 createRun: awaiting-review re-dispatch preserves events/cursor and appends a boundary", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
@@ -203,9 +211,13 @@ test("#8 createRun: re-dispatch on an 'awaiting-review' meta truncates events + 
     const returnedPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
     assert.equal(returnedPath, metaPath, "createRun must resolve to the same meta path");
 
-    assert.deepEqual(readEvents(metaPath), [], "events log must be truncated on an awaiting-review re-dispatch");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ type: "e", n: 0 }, { type: "e", n: 1 }, { type: "attempt-started", attempt: 2 }],
+      "events log remains append-only",
+    );
     const meta = readMeta(metaPath);
-    assert.equal(meta.cursor, 0, "cursor must be reset to 0 on an awaiting-review re-dispatch");
+    assert.equal(meta.cursor, 2, "cursor must not rewind on an awaiting-review re-dispatch");
     assert.equal(meta.threadId, 777, "threadId must be PRESERVED across an awaiting-review re-dispatch");
     assert.equal(meta.status, "active", "status must transition back to active on re-dispatch");
   } finally {
@@ -213,7 +225,7 @@ test("#8 createRun: re-dispatch on an 'awaiting-review' meta truncates events + 
   }
 });
 
-test("#9 createRun: re-dispatch on an 'active' meta is unchanged — events and cursor are NOT reset (no regression)", () => {
+test("#9 createRun: active re-dispatch appends one boundary without resetting events or cursor", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
@@ -225,7 +237,11 @@ test("#9 createRun: re-dispatch on an 'active' meta is unchanged — events and 
     const returnedPath = createRun({ issueNumber: 141, project: "p", worktreePath: "/w" }, stateDir);
     assert.equal(returnedPath, metaPath, "createRun must resolve to the same meta path");
 
-    assert.equal(readEvents(metaPath).length, 2, "events must NOT be truncated on an active re-dispatch");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ type: "e", n: 0 }, { type: "e", n: 1 }, { type: "attempt-started", attempt: 2 }],
+      "events must NOT be truncated on an active re-dispatch",
+    );
     assert.equal(readMeta(metaPath).cursor, 1, "cursor must be unchanged on an active re-dispatch");
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
@@ -320,7 +336,7 @@ test("#ac-1.7 createRun: awaiting-review reuse strips closedAt/topicDeletedAt fo
 
     const meta = readMeta(metaPath);
     assert.equal(meta.status, "active", "status must transition back to active on reuse");
-    assert.equal(meta.cursor, 0, "cursor must be reset to 0 on reuse");
+    assert.equal(meta.cursor, 3, "cursor must remain monotonic on reuse");
     assert.ok(!("closedAt" in meta), "closedAt fossil must be stripped on reuse");
     assert.ok(!("topicDeletedAt" in meta), "topicDeletedAt fossil must be stripped on reuse");
     assert.equal(meta.threadId, 5, "threadId must be preserved across reuse");
@@ -330,7 +346,7 @@ test("#ac-1.7 createRun: awaiting-review reuse strips closedAt/topicDeletedAt fo
   }
 });
 
-test("#ac-1.7 createRun: awaiting-review reuse still truncates the events log (reuse-with-truncate preserved)", () => {
+test("#ac-1.7 createRun: awaiting-review reuse preserves the event audit and appends attempt 2", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = path.join(stateDir, "obs-204.json");
@@ -355,10 +371,14 @@ test("#ac-1.7 createRun: awaiting-review reuse still truncates the events log (r
     const returnedPath = createRun({ issueNumber: 204, project: "p", worktreePath: "/w" }, stateDir);
     assert.equal(returnedPath, metaPath, "createRun must resolve to the same existing meta path");
 
-    assert.deepEqual(readEvents(metaPath), [], "events log must be truncated on an awaiting-review reuse");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ type: "e", n: 0 }, { type: "e", n: 1 }, { type: "attempt-started", attempt: 2 }],
+      "events log remains append-only on an awaiting-review reuse",
+    );
     const meta = readMeta(metaPath);
     assert.equal(meta.status, "active");
-    assert.equal(meta.cursor, 0);
+    assert.equal(meta.cursor, 3);
     assert.ok(!("closedAt" in meta), "closedAt fossil must be stripped on reuse");
     assert.ok(!("topicDeletedAt" in meta), "topicDeletedAt fossil must be stripped on reuse");
     assert.equal(meta.threadId, 5);
@@ -368,7 +388,7 @@ test("#ac-1.7 createRun: awaiting-review reuse still truncates the events log (r
   }
 });
 
-test("#ac-1.7 createRun: plain active reuse strips fossils, leaves the events log untouched", () => {
+test("#ac-1.7 createRun: plain active reuse strips fossils and appends attempt 2", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = path.join(stateDir, "obs-205.json");
@@ -398,12 +418,13 @@ test("#ac-1.7 createRun: plain active reuse strips fossils, leaves the events lo
     assert.equal(meta.cursor, 4, "cursor must be preserved on a plain active reuse");
 
     const events = readEvents(metaPath);
-    assert.equal(events.length, 2, "the events log must NOT be truncated on a plain active reuse");
+    assert.equal(events.length, 3, "the events log must remain append-only on a plain active reuse");
     assert.deepEqual(
       events.map(({ ts, ...rest }) => rest),
       [
         { type: "e", n: 0 },
         { type: "e", n: 1 },
+        { type: "attempt-started", attempt: 2 },
       ],
     );
   } finally {
@@ -411,7 +432,7 @@ test("#ac-1.7 createRun: plain active reuse strips fossils, leaves the events lo
   }
 });
 
-test("#ac-1.7 createRun: plain active reuse with no fossil writes nothing (byte-identical no-op)", () => {
+test("#ac-1.7 createRun: plain active reuse with no fossil only appends its attempt boundary", () => {
   const stateDir = makeStateDir();
   try {
     const metaPath = path.join(stateDir, "obs-206.json");
@@ -433,6 +454,11 @@ test("#ac-1.7 createRun: plain active reuse with no fossil writes nothing (byte-
 
     const after = readFileSync(metaPath, "utf8");
     assert.equal(after, before, "a fossil-free active reuse must not rewrite the meta file at all");
+    assert.deepEqual(
+      readEvents(metaPath).map(({ ts, ...event }) => event),
+      [{ type: "attempt-started", attempt: 2 }],
+      "the event log records the retry without widening the meta state",
+    );
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
