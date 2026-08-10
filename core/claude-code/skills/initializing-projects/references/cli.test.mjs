@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, symlinkSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, symlinkSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,6 +125,18 @@ test("writeLifecycleSnapshot preserves the pre-vendor tracked and untracked base
     const snapshot = JSON.parse(readFileSync(join(root, ".git", "harness-lifecycle-updating-harness.json"), "utf8"));
     assert.deepEqual(new Set(snapshot.paths), new Set(["tracked.txt", "untracked.txt"]));
     assert.throws(() => writeLifecycleSnapshot(root, "configuring-model-routing"), /only updating-harness/);
+
+    mkdirSync(join(root, ".opencode", "plugin", "lib"), { recursive: true });
+    writeFileSync(join(root, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/plugin/lib/retired.mjs"],
+    }));
+    writeFileSync(join(root, ".opencode", "plugin", "lib", "retired.mjs"), "edited\n");
+    git(["add", ".opencode/plugin/lib/retired.mjs"]);
+    assert.throws(
+      () => writeLifecycleSnapshot(root, "updating-harness"),
+      /pre-existing tracked change in lifecycle-owned cargo.*retired\.mjs/i,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

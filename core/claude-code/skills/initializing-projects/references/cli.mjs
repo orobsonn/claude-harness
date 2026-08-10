@@ -174,6 +174,28 @@ export function writeLifecycleSnapshot(cwd, operation) {
     ...git(["diff", "--name-only", "-z", "HEAD"]).split("\0"),
     ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
   ].filter(Boolean));
+  const manifestPath = join(cwd, ".opencode", ".harness-owned-files.json");
+  let owned;
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (parsed?.version !== 1 || !Array.isArray(parsed.files) || parsed.files.some((path) => typeof path !== "string")) {
+      throw new Error("invalid ownership manifest");
+    }
+    owned = new Set(parsed.files);
+  } catch {
+    const legacyPrefixes = [
+      ".opencode/agents/", ".opencode/command/", ".opencode/docs/", ".opencode/skills/",
+      ".opencode/plugin/", ".opencode/tools/", ".opencode/hands/", ".opencode/rules/",
+      ".opencode/lib/", ".opencode/shared/",
+    ];
+    const legacyFiles = new Set([".opencode/.gitignore", ".opencode/.harness-version", ".opencode/.harness-config-manifest.json", ".opencode/AGENTS.md", ".opencode/harness.routing.json", "opencode.json", "AGENTS.md", "harness.routing.json"]);
+    const tracked = git(["ls-files", "-z"]).split("\0").filter(Boolean);
+    owned = new Set(tracked.filter((path) => legacyFiles.has(path) || legacyPrefixes.some((prefix) => path.startsWith(prefix))));
+  }
+  const dirtyOwned = [...paths].filter((path) => owned.has(path));
+  if (dirtyOwned.length > 0) {
+    throw new Error(`pre-existing tracked change in lifecycle-owned cargo: ${dirtyOwned.join(", ")}`);
+  }
   const target = resolve(cwd, git(["rev-parse", "--git-path", `harness-lifecycle-${operation}.json`]).trim());
   const tmp = `${target}.tmp`;
   writeFileSync(tmp, `${JSON.stringify({ version: 1, paths: [...paths] })}\n`, { mode: 0o600 });
