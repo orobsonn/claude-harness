@@ -65,6 +65,14 @@ Resolve which runtime(s) to vendor (the public CLI's `--target`):
 
 First resolve the latest release tag (the CLI runs from that pinned tag):
 
+Immediately before the first write, capture the lifecycle baseline. It permits unrelated product
+work but rejects a pre-existing edit to a harness-owned file, because that edit cannot safely be
+separated from the update later:
+
+```bash
+node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness
+```
+
 ```bash
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0
 ```
@@ -114,15 +122,9 @@ paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/
 `skills/lifecycle-ship-to-main.md` end-to-end in this same session: branch → selective stage → commit →
 push → PR → squash merge → pull main.
 
-Skip ship only if the tree is already clean for harness paths, or the operator explicitly said not to
-ship. Prefer commit message:
-
-```bash
-git commit -m "chore: sincroniza harness vendored"
-```
-
-(Use the other commands exactly as listed in `lifecycle-ship-to-main.md` — they are allowlisted on
-this lane.)
+The shared procedure also resumes an already-created, lifecycle-only commit after a restart; a clean
+worktree alone is never a reason to skip it. The lifecycle helper owns the exact commit message and
+path allowlist. Use only the commands listed in `lifecycle-ship-to-main.md`.
 
 ---
 
