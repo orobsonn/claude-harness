@@ -129,7 +129,7 @@ test("writeLifecycleSnapshot preserves the pre-vendor tracked and untracked base
     mkdirSync(join(root, ".opencode", "plugin", "lib"), { recursive: true });
     writeFileSync(join(root, ".opencode", ".harness-owned-files.json"), JSON.stringify({
       version: 1,
-      files: [".opencode/plugin/lib/retired.mjs"],
+      files: [],
     }));
     writeFileSync(join(root, ".opencode", "plugin", "lib", "retired.mjs"), "edited\n");
     git(["add", ".opencode/plugin/lib/retired.mjs"]);

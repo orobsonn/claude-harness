@@ -177,6 +177,11 @@ export function writeLifecycleSnapshot(cwd, operation) {
   const manifestPath = join(cwd, ".opencode", ".harness-owned-files.json");
   let owned;
   try {
+    // A local/untracked manifest is data from the project, not authority. Only the last committed,
+    // clean vendor manifest may narrow the conservative legacy fallback.
+    git(["ls-files", "--error-unmatch", ".opencode/.harness-owned-files.json"]);
+    git(["diff", "--quiet", "--", ".opencode/.harness-owned-files.json"]);
+    git(["diff", "--cached", "--quiet", "--", ".opencode/.harness-owned-files.json"]);
     const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
     if (parsed?.version !== 1 || !Array.isArray(parsed.files) || parsed.files.some((path) => typeof path !== "string")) {
       throw new Error("invalid ownership manifest");
