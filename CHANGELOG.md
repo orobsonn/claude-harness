@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.30](https://github.com/orobsonn/claude-harness/compare/v0.55.29...v0.55.30) (2026-08-10)
+
+
+### Fixed
+
+* Sincroniza o badge de versão do README com o manifesto publicado.
+
 ## [0.55.29](https://github.com/orobsonn/claude-harness/compare/v0.55.28...v0.55.29) (2026-08-10)
 
 
