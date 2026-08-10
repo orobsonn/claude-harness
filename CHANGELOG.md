@@ -8,6 +8,13 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [0.55.17](https://github.com/orobsonn/claude-harness/compare/v0.55.16...v0.55.17) (2026-08-10)
 
 
+### Bug Fixes
+
+* **opencode:** ship lifecycle changes safely ([#683](https://github.com/orobsonn/claude-harness/issues/683)) ([7077bdc](https://github.com/orobsonn/claude-harness/commit/7077bdc39c9f529e234a924e7f9f392aa63a17ab))
+
+## [0.55.17](https://github.com/orobsonn/claude-harness/compare/v0.55.16...v0.55.17) (2026-08-10)
+
+
 ### Tests
 
 * adiciona canária real de retomada de plano aprovado no OpenCode ([#681](https://github.com/orobsonn/claude-harness/pull/681))
