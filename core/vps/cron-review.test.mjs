@@ -492,6 +492,32 @@ test("cronReview: a BEHIND-branch auto-merge (mergeAndFinalize returns {updateAt
   assert.equal(recordReviewed.calls.length, 0, "an update-branch retry must NOT record the (pr, sha) as reviewed — the sha changes and must re-review");
 });
 
+test("cronReview: pending checks retry the same sha without recording it, then merge after checks turn green", async () => {
+  const { gh, calls, setPr, setDiff } = makeFakeGh();
+  const pr = { number: 82, headRefName: "harness/122", author: { login: "bot-user" }, labels: [], headSha: "sha-pending", url: "u82" };
+  setPr(82, pr);
+  setDiff(82, ["src/z.js"]);
+  const reviewed = makeStatefulReviewedStore();
+  const notify = makeSpy();
+  let attempts = 0;
+  const mergeAndFinalize = makeSpy(() => {
+    attempts += 1;
+    return attempts === 1
+      ? { merged: false, checksRetryable: true, terminal: false }
+      : { merged: true };
+  });
+  const opts = baseOpts({ gh, notify, alreadyReviewed: reviewed.alreadyReviewed, recordReviewed: reviewed.recordReviewed, autoMergeEnabled: true, crossFamilyEligible: () => true, mergeAndFinalize });
+
+  await cronReview(opts);
+  assert.equal(reviewed.recordReviewed.calls.length, 0, "pending CI must not seal this sha as reviewed");
+  assert.equal(calls.some((a) => a[0] === "issue" && a[1] === "edit" && a.includes("harness:awaiting-merge")), false);
+  assert.ok(notify.calls.some((a) => a[0]?.type === "pr-merge-checks-retry"));
+
+  await cronReview(opts);
+  assert.equal(attempts, 2, "the unchanged sha is retried once CI is green");
+  assert.ok(notify.calls.some((a) => a[0]?.type === "pr-merged"));
+});
+
 test("cronReview: verdict === null below the ceiling → counts infra-failure, retries next cycle (NO routeReject, NO relabel, NO recordReviewed)", async () => {
   const { gh, calls, setPr, setDiff } = makeFakeGh();
   setPr(90, { number: 90, headRefName: "harness/130", author: { login: "bot-user" }, labels: [], headSha: "sha-crash", url: "u90" });

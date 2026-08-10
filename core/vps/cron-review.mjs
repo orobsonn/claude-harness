@@ -298,6 +298,11 @@ export async function cronReview(opts) {
           // the pr-merge-failed "needs a human" signal.
           const rootIssue = resolveRoot(pr);
           notify({ type: "pr-branch-updated-retry", pr: pr.number, url: pr.url, root: rootIssue });
+        } else if (mergeOutcome.checksRetryable && !mergeOutcome.terminal) {
+          // CI may simply still be running (or GitHub may have been temporarily unavailable).
+          // Keep the same sha eligible for the next cycle; do not relabel or record it reviewed.
+          const rootIssue = resolveRoot(pr);
+          notify({ type: "pr-merge-checks-retry", pr: pr.number, url: pr.url, root: rootIssue });
         } else {
           // Permanent merge failure (real conflict / head moved / update-branch ceiling) — route to
           // manual merge as a genuinely TERMINAL state (routeToAwaitingMerge records the review) so it

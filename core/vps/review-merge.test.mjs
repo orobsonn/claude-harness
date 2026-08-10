@@ -94,7 +94,14 @@ function makeFakeMergeGh(mergeResult, { viewResult = { ok: true }, updateResult 
   function gh(args) {
     calls.push(args);
     if (args[0] === "pr" && args[1] === "merge") return mergeResult;
-    if (args[0] === "pr" && args[1] === "view") return viewResult;
+    if (args[0] === "pr" && args[1] === "view") {
+      if (args.includes("statusCheckRollup")) {
+        return Object.hasOwn(viewResult, "statusCheckRollup")
+          ? viewResult
+          : { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }] };
+      }
+      return viewResult;
+    }
     if (args[0] === "pr" && args[1] === "update-branch") return updateResult;
     return { ok: true };
   }
@@ -286,6 +293,46 @@ test("mergeAndFinalize: CLEAN verdict + unchanged head -> merge --match-head-com
   );
 });
 
+test("mergeAndFinalize: CI that is not provably green is terminal and never invokes gh pr merge", () => {
+  const { gh, calls } = makeFakeMergeGh({ ok: true }, {
+    viewResult: {
+      statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+    },
+  });
+  const counter = makeFakeCounter();
+
+  const result = mergeAndFinalize({ number: 7, headRefName: "harness/42" }, "sha-a", {
+    gh,
+    counter,
+    recordReviewed: () => {},
+    stateDir: STATE_DIR,
+    sleep: () => {},
+  });
+
+  assert.deepEqual(result, { merged: false, terminal: true, mergeBlockedByChecks: true });
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "merge"), false);
+  assert.equal(calls[0][0], "pr");
+  assert.equal(calls[0][1], "view");
+  assert.equal(calls[0].includes("statusCheckRollup"), true);
+});
+
+test("mergeAndFinalize: pending CI is retryable and never invokes gh pr merge", () => {
+  const { gh, calls } = makeFakeMergeGh({ ok: true }, {
+    viewResult: {
+      statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null }],
+    },
+  });
+  const result = mergeAndFinalize({ number: 7, headRefName: "harness/42" }, "sha-a", {
+    gh,
+    counter: makeFakeCounter(),
+    recordReviewed: () => {},
+    stateDir: STATE_DIR,
+    sleep: () => {},
+  });
+  assert.deepEqual(result, { merged: false, checksRetryable: true, terminal: false });
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "merge"), false);
+});
+
 test("mergeAndFinalize: head moved (merge rejects, not BEHIND) -> terminal:true, NO update-branch, recordReviewed NOT called, issue NOT relabeled", () => {
   const sha = "stale-sha-0000";
   const pr = { number: 9, headRefName: "harness/99" };
@@ -448,6 +495,9 @@ test("mergeAndFinalize: transient merge failure (GitHub mergeability lag) is ret
   const pr = { number: 12, headRefName: "harness/120" };
   let mergeAttempts = 0;
   const gh = (args) => {
+    if (args[0] === "pr" && args[1] === "view" && args.includes("statusCheckRollup")) {
+      return { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }] };
+    }
     if (args[0] === "pr" && args[1] === "merge") {
       mergeAttempts += 1;
       return { ok: mergeAttempts >= 2 }; // first attempt fails (mergeability still computing), then succeeds

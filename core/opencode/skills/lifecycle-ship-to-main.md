@@ -183,7 +183,9 @@ Confirm `baseRefName` is the repo default (`main` or `master`). If base is a fea
 gh pr checks --watch
 ```
 
-If checks are absent or the repo has none, continue. If a required check fails, stop and give the operator the PR URL — do not merge red CI.
+Only continue when the PR reports at least one completed `SUCCESS` or `NEUTRAL` check. If checks are absent,
+pending, failing, unknown, or GitHub cannot be read, stop and give the operator the PR URL — do
+not merge. The entry gate independently enforces this again at the merge command.
 
 ```bash
 gh pr merge --squash --delete-branch

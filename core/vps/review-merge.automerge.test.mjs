@@ -64,6 +64,9 @@ test("AC-3.3 reconcile strips the full state set + awaiting-merge, adds done, pr
 test("AC-3.3 mergeAndFinalize strips the full state set on the auto-merge happy path (no residual leak)", () => {
   const editCalls = [];
   function gh(args) {
+    if (args[0] === "pr" && args[1] === "view" && args.includes("statusCheckRollup")) {
+      return { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }] };
+    }
     if (args[0] === "pr" && args[1] === "merge") return { ok: true };
     if (args[0] === "issue" && args[1] === "edit") {
       editCalls.push(args);

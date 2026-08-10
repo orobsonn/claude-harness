@@ -690,6 +690,40 @@ test("processInput: empty string → exitCode 0, output null (fail-open)", () =>
   assert.equal(result.output, null);
 });
 
+test("decide: gh pr merge is denied when CI evidence is pending", () => {
+  const payload = {
+    session_id: "ses_merge_pending",
+    tool_name: "Bash",
+    tool_input: { command: "gh pr merge 42 --squash" },
+  };
+  const verdict = decide(payload, {
+    gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+    readGateStateFn: () => ({}),
+    readMergeCheckRollupFn: () => [{ __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null }],
+  });
+  assert.equal(verdict.allow, false);
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /CI is still running/);
+});
+
+test("decide: gh pr merge passes the literal PR target to one green-rollup reader", () => {
+  let target;
+  const payload = {
+    session_id: "ses_merge_green",
+    tool_name: "Bash",
+    tool_input: { command: "gh pr merge 42 --squash" },
+  };
+  const verdict = decide(payload, {
+    gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+    readGateStateFn: () => ({}),
+    readMergeCheckRollupFn: (value) => {
+      target = value;
+      return [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }];
+    },
+  });
+  assert.equal(verdict.allow, true);
+  assert.equal(target, "42");
+});
+
 // ---------------------------------------------------------------------------
 // Fix 1: session_id with unsafe chars → fail-open (never brick)
 // ---------------------------------------------------------------------------
