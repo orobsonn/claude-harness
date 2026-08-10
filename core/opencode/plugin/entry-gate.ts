@@ -43,6 +43,12 @@ export type EntryGateDeps = {
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
   resolveActingAgentFn?: (input: unknown, output: unknown) => string | null
+  /** Resolve exact official caller facts for the sensitive routing tool (injectable). */
+  resolveConfigureRoutingAuthorityFn?: (input: {
+    sessionId: string
+    callId: string
+    toolName: string
+  }) => Promise<{ ok: boolean; reason?: string; agent?: unknown; parentSessionId?: unknown }>
   /** Official SDK client used only to bind factual child Task metadata. */
   client?: any
 }
@@ -68,6 +74,13 @@ function isClassifyTool(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false
   const n = toolName.toLowerCase()
   return n === "classify" || n.endsWith("_classify") || n.endsWith(".classify")
+}
+
+/** @description Native routing tool — lifecycle lane only. */
+function isConfigureRoutingTool(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false
+  const n = toolName.toLowerCase()
+  return n === "configure-routing" || n.endsWith("_configure-routing") || n.endsWith(".configure-routing")
 }
 
 /**
@@ -209,6 +222,42 @@ async function createEntryGateHooks(
         null
       return typeof a === "string" && a.trim() ? a.trim() : null
     })
+  const resolveConfigureRoutingAuthorityFn =
+    deps.resolveConfigureRoutingAuthorityFn ??
+    (async ({ sessionId, callId, toolName }: { sessionId: string; callId: string; toolName: string }) => {
+      if (!sessionId || !callId || typeof client?.session?.get !== "function" || typeof client?.session?.messages !== "function") {
+        return { ok: false, reason: "official runtime metadata unavailable" }
+      }
+      try {
+        const unwrap = (value: any) => value && typeof value === "object" && "data" in value ? value.data : value
+        const session = unwrap(await client.session.get({ path: { id: sessionId }, query: { directory: root } }))
+        if (!session || session.id !== sessionId) return { ok: false, reason: "official session identity conflicts" }
+        const messages = unwrap(await client.session.messages({ path: { id: sessionId }, query: { directory: root } }))
+        const matches: Array<{ info: any; part: any }> = []
+        for (const bundle of Array.isArray(messages) ? messages : []) {
+          for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
+            if (part?.type === "tool" && part.callID === callId) matches.push({ info: bundle?.info, part })
+          }
+        }
+        if (matches.length !== 1) return { ok: false, reason: "official tool call identity must match exactly one part" }
+        const { info, part } = matches[0]
+        const agent = typeof info?.agent === "string" ? info.agent : info?.mode
+        if (
+          info?.role !== "assistant" ||
+          info?.sessionID !== sessionId ||
+          part?.sessionID !== sessionId ||
+          part?.messageID !== info?.id ||
+          String(part?.tool).toLowerCase() !== toolName.toLowerCase() ||
+          typeof agent !== "string" || !agent.trim()
+        ) {
+          return { ok: false, reason: "official tool/session metadata conflicts" }
+        }
+        const parent = typeof session.parentID === "string" ? session.parentID.trim() : ""
+        return { ok: true, agent, parentSessionId: parent || null }
+      } catch {
+        return { ok: false, reason: "official runtime metadata unavailable" }
+      }
+    })
 
   const writingHand = (role: unknown) => isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role)
   const client = deps.client
@@ -253,6 +302,23 @@ async function createEntryGateHooks(
         if (!auth.ok) {
           throw new Error(`${PREFIX} ${auth.reason}`)
         }
+        return
+      }
+
+      // configure-routing changes who judges every later delivery. Its confirmation is the
+      // host-owned `permission: ask` rule; this belt refuses any caller other than the exact
+      // official, root lifecycle lane, independently of model-supplied tool arguments.
+      if (isConfigureRoutingTool(toolName)) {
+        const authority = await resolveConfigureRoutingAuthorityFn({
+          sessionId: typeof sessionId === "string" ? sessionId : "",
+          callId: typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : "",
+          toolName: typeof toolName === "string" ? toolName : "",
+        })
+        if (!authority?.ok) throw new Error(`${PREFIX} configure-routing denied: ${authority?.reason ?? "official runtime metadata unavailable"}`)
+        const parent = typeof authority.parentSessionId === "string" ? authority.parentSessionId.trim() : ""
+        if (parent) throw new Error(`${PREFIX} configure-routing denied on child session — only the root harness-config lane may change routing`)
+        const agent = typeof authority.agent === "string" ? authority.agent.trim().toLowerCase().replace(/\.md$/, "") : ""
+        if (agent !== "harness-config") throw new Error(`${PREFIX} configure-routing denied for agent '${typeof authority.agent === "string" ? authority.agent : "unknown"}' — only harness-config may change routing`)
         return
       }
 

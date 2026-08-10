@@ -14,9 +14,10 @@
         "glob": "allow",
         "grep": "allow",
         "list": "allow",
-        "webfetch": "allow",
-        "websearch": "allow",
-        "edit": "deny"
+      "webfetch": "allow",
+      "websearch": "allow",
+      "configure-routing": "deny",
+      "edit": "deny"
       }
     },
     "general": {
@@ -26,9 +27,10 @@
         "glob": "allow",
         "grep": "allow",
         "list": "allow",
-        "webfetch": "allow",
-        "websearch": "allow",
-        "edit": "allow"
+      "webfetch": "allow",
+      "websearch": "allow",
+      "configure-routing": "deny",
+      "edit": "allow"
       }
     }
   },
@@ -68,6 +70,7 @@
     "lsp": "allow",
     "external_directory": "allow",
     "question": "allow",
+    "configure-routing": "ask",
     "bash": {
       "*": "allow",
       "npx tsc --noEmit": "allow",

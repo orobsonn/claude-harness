@@ -5,8 +5,8 @@
  * touchpoints with sed/perl is what the anti-forgery gate (correctly) blocks, so this
  * tool is the ONLY sanctioned way to mutate routing.
  *
- * targetRoot is always context.directory (cwd); confirm flags default false and are only
- * set after the operator confirms — the config lane is operator-turn only.
+ * targetRoot is always context.directory (cwd). Every apply also invokes the host-owned
+ * confirmation channel; model-supplied confirmation flags never substitute for it.
  */
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -39,7 +39,7 @@ export default tool({
     "action 'inspect' returns presets + touchpoints + current routing (read-only). " +
     "action 'apply' writes all touchpoints atomically with rollback. " +
     "Pass preset (id, primary form) OR slots (JSON object, escape hatch). " +
-    "targetRoot is always the cwd. Weak-eye confirm flags default false — set only after the operator confirms.",
+    "targetRoot is always the cwd. Every apply requires explicit host confirmation; weak-eye flags never replace it.",
   args: {
     action: tool.schema.string().optional().describe("'inspect' (read-only map) or 'apply' (default)"),
     preset: tool.schema.string().optional().describe("preset id from listPresets() — primary form for apply"),
@@ -53,6 +53,15 @@ export default tool({
     force_core_grok: tool.schema.boolean().optional().describe("allow xAI/Grok on harness source (CI-banned by default)"),
   },
   async execute(args, context) {
+    const action = typeof args.action === "string" && args.action.trim() ? args.action.trim() : "apply"
+    if (action === "apply") {
+      await context.ask({
+        permission: "configure-routing",
+        patterns: ["apply"],
+        always: [],
+        metadata: { action: "apply", impact: "changes harness model routing" },
+      })
+    }
     const { runConfigureRouting } = await import("./configure-routing-core.mjs")
     const engine = await import("../skills/configuring-model-routing/references/apply-routing.mjs")
     return runConfigureRouting(args, context as ConfigureRoutingContext, engine, {

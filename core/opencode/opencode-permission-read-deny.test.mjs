@@ -35,6 +35,19 @@ const editMaps = [
 ];
 const maps = [...readMaps, ...editMaps];
 
+test("configure-routing requires host ask globally and is denied for general/explore (#446)", () => {
+  for (const [label, config] of [["root", rootConfig], ["example", exampleConfig]]) {
+    assert.equal(config.permission["configure-routing"], "ask", `${label} must ask the host before routing changes`);
+    for (const agent of ["general", "explore"]) {
+      assert.equal(
+        config.agent?.[agent]?.permission?.["configure-routing"],
+        "deny",
+        `${label} ${agent} must not call configure-routing`,
+      );
+    }
+  }
+});
+
 test("opencode.json permission.read/edit are per-pattern maps, not scalars (#ac-1.5)", () => {
   assert.equal(
     typeof rootConfig.permission.read,
