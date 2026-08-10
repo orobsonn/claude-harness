@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.16](https://github.com/orobsonn/claude-harness/compare/v0.55.15...v0.55.16) (2026-08-10)
+
+
+### Bug Fixes
+
+* exercise write gate in host probe ([25992d1](https://github.com/orobsonn/claude-harness/commit/25992d1dae4fc9022af111f6722e832a496a100b))
+
 ## [0.55.15](https://github.com/orobsonn/claude-harness/compare/v0.55.14...v0.55.15) (2026-08-10)
 
 
