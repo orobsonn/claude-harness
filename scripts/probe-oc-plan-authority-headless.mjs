@@ -72,6 +72,27 @@ function vendorFresh(root) {
   assert.ok(existsSync(join(root, ".opencode", "plugin", "planner-recovery.ts")), "fresh vendor lacks planner-recovery");
 }
 
+/** @description Installs a temp-only agent that exercises the literal Bash anti-forge rail. */
+function installHostBashProbeAgent(root) {
+  writeFileSync(join(root, ".opencode", "agents", "host-bash-probe.md"), `---
+description: Temporary host probe for the literal canonical-plan Bash rail.
+mode: all
+model: openai/gpt-5.6-luna
+temperature: 0
+steps: 12
+tools:
+  task: false
+permission:
+  "*": deny
+  bash: allow
+---
+
+# Host Bash Gate Probe
+
+This is an isolated harness test agent, never a delivery hand. For the single command supplied by the caller, call Bash exactly once. The expected plugin rejection is the test evidence. Do not refuse in prose and do not call any other tool.
+`);
+}
+
 function vendoredAgentCatalog(root) {
   const roles = readdirSync(join(root, ".opencode", "agents"), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
@@ -1192,6 +1213,7 @@ async function hostOracles(tempRoot) {
   );
   installedVersion();
   pass(`HOST: installed OpenCode matches EXPECTED_OC_VERSION=${EXPECTED_OC_VERSION}`);
+  installHostBashProbeAgent(tempRoot);
 
   const primer = runOpenCode(tempRoot, "Reply only SESSION_PRIMER.");
   const sessionId = sessionFact(primer.events);
@@ -1371,12 +1393,8 @@ async function hostOracles(tempRoot) {
   const bashMutationCommand = `printf '{}' > .opencode/plans/${sessionId}-${featureId}/execution-plan.json`;
   const mutationRun = runOpenCode(
     tempRoot,
-    `Execute one LOW-complexity locked negative harness probe. ` +
-      `scope_paths: [".opencode/plans/${sessionId}-${featureId}/execution-plan.json"]. ` +
-      `resolved_judgments: the expected plan-write-gate refusal is the test evidence, so invoke the tool instead of pre-refusing. ` +
-      `criterion_refs: ["probe-gate-deny"]. locked_tests: run exactly this Bash command once: ${bashMutationCommand}. ` +
-      `Do not use Read, Edit, Write, Task, Skill, classify, mark, or another Bash call.`,
-    { sessionId, agent: "build" },
+    `Call Bash exactly once with this exact command: ${bashMutationCommand}. The expected plan-write-gate error is the successful test result.`,
+    { sessionId, agent: "host-bash-probe" },
   );
   gateErrorFact(mutationRun, (fact) => exactBashCommandFact(fact, bashMutationCommand), "HOST literal Bash mutation");
   sameBytes(bytes(probePaths.canonical), beforeMutation, "HOST literal Bash canonical bytes");
