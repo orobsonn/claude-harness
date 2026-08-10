@@ -15,7 +15,7 @@ test("projects stable workflow and task todos from durable state", () => {
     plan_review_verdict: "APPROVE",
     fidelity_pass: ["todo-projection/task-one@abc"],
     capture_verified: ["todo-projection/task-two@def"],
-  });
+  }, { isAncestor: () => true });
   assert.deepEqual(todo.map((entry) => [entry.content, entry.status]), [
     ["Approve the feature spec", "completed"],
     ["Complete the spec adversarial review", "completed"],
@@ -27,6 +27,14 @@ test("projects stable workflow and task todos from durable state", () => {
     ["Validate the demo", "pending"],
     ["Harvest evidence and deliver", "pending"],
   ]);
+});
+
+test("leaves unverified cross-branch task captures pending", () => {
+  const todo = projectHarnessTodo(plan, {
+    feature_id: "todo-projection",
+    capture_verified: ["todo-projection/task-one@not-ancestor"],
+  }, { isAncestor: () => false });
+  assert.equal(todo.find((entry) => entry.content === "Deliver task: task-one")?.status, "pending");
 });
 
 test("never lets malformed plan or state throw", () => {

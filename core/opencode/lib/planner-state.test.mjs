@@ -63,6 +63,42 @@ test("a canonical plan binds only to its matching planner identity", () => {
   assert.equal(bound.state.planner_status, "usable");
 });
 
+test("a revised bound plan clears task-scoped delivery facts from the previous plan", () => {
+  const previous = {
+    ...base,
+    planner_status: "usable",
+    planner_plan_binding: { semantic_hash: "old-hash" },
+    fidelity_pass: ["feature/task-one@freeze"],
+    hand_finished: ["feature/task-one"],
+    capture_verified: ["feature/task-one@freeze"],
+    regate_pending: ["feature/task-one"],
+    regate_passed: ["feature/task-one@freeze"],
+    final_review_done: true,
+    demo_done: true,
+    delivery_status: "delivered",
+    plan_review_verdict: "APPROVE",
+  };
+  const claimed = claim(previous);
+  const returned = completePlannerAttempt(claimed.state, {
+    callId: "call-1", token: "token-1", resultKind: "usable_plan", planHash: "new-hash",
+  });
+  const bound = bindPlannerArtifact(returned.state, {
+    sessionId: "session-1", featureId: "feature",
+    artifact: { valid: true, semanticHash: "new-hash", fileHash: "file", fingerprint: "new", plan: { feature_id: "feature" } },
+    expectedModelStrategy,
+  });
+  assert.equal(bound.ok, true);
+  assert.deepEqual(bound.state.capture_verified, []);
+  assert.deepEqual(bound.state.fidelity_pass, []);
+  assert.deepEqual(bound.state.hand_finished, []);
+  assert.deepEqual(bound.state.regate_pending, []);
+  assert.deepEqual(bound.state.regate_passed, []);
+  assert.equal(bound.state.final_review_done, false);
+  assert.equal(bound.state.demo_done, false);
+  assert.equal(bound.state.delivery_status, null);
+  assert.equal(bound.state.plan_review_verdict, null);
+});
+
 test("classify reset contains identity fields, not runtime budgets", () => {
   const reset = plannerCycleResetPatch();
   assert.deepEqual(Object.keys(reset).sort(), [

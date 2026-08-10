@@ -1,6 +1,21 @@
 /** @description Native best-effort todo projection for the current persisted harness state. */
 
 import { tool } from "@opencode-ai/plugin/tool"
+import { execFileSync } from "node:child_process"
+
+function isAncestorAtHead(directory: string, sha: string) {
+  if (!/^[0-9a-f]{7,64}$/i.test(sha)) return false
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd: directory,
+      stdio: "ignore",
+      timeout: 2_000,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
 import fs from "node:fs"
 
 export default tool({
@@ -22,7 +37,7 @@ export default tool({
       const featureId = typeof state?.feature_id === "string" ? state.feature_id : ""
       const planPath = resolvePlannerArtifactPath(root, sessionID, featureId, state?.resumed_from_session_id)
       const plan = planPath ? JSON.parse(fs.readFileSync(planPath, "utf8")) : null
-      const todos = projectHarnessTodo(plan, state)
+      const todos = projectHarnessTodo(plan, state, { isAncestor: (sha: string) => isAncestorAtHead(root, sha) })
       return {
         title: "harness todo projected",
         output: JSON.stringify({ todos }, null, 2),
