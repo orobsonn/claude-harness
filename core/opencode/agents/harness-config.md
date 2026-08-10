@@ -50,6 +50,7 @@ permission:
     "git pull --ff-only": allow
     "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness": allow
     "node .opencode/tools/lifecycle-ship.mjs prepare configuring-model-routing": allow
+    "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness": allow
     "node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness": allow
     "node .opencode/tools/lifecycle-ship.mjs snapshot configuring-model-routing": allow
     "git commit*--no-verify*": deny
