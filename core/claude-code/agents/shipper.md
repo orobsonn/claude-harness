@@ -92,6 +92,8 @@ EOF
 gh pr merge --squash --delete-branch
 ```
 - Only if the input explicitly authorizes merge.
+- Only after GitHub reports at least one completed `SUCCESS` or `NEUTRAL` check. No checks, pending/red/unknown CI,
+  or an unreadable GitHub response means stop with the PR URL; never use `--admin` to bypass it.
 - **Never in headless mode** — a draft PR is the terminal state; the human merges after review.
 - If not authorized, report the PR URL and stop.
 

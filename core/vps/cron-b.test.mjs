@@ -52,6 +52,9 @@ function makeFakeGh() {
       return [...prs.entries()].map(([number, pr]) => ({ number, ...pr }));
     }
     if (args[0] === "pr" && args[1] === "view") {
+      if (args.includes("statusCheckRollup")) {
+        return { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }] };
+      }
       const number = Number(args[2]);
       const pr = prs.get(number);
       const body = pr ? bodies.get(`${number}:${pr.headSha}`) : undefined;
@@ -154,6 +157,34 @@ test("cronB: CLEAN verdict + no open-risk marker -> gh pr ready, then gh pr merg
     recordedCalls.some((c) => c.pr === 10 && c.sha === "sha-clean"),
     "PR 10 must be recorded as reviewed at its head SHA after a successful merge"
   );
+});
+
+test("cronB: non-green CI comments and never marks ready or merges", () => {
+  const { gh: baseGh, calls, setPr, setBody } = makeFakeGh();
+  setPr(10, { headRefName: "harness/42", headSha: "sha-ci-red" });
+  setBody(10, "sha-ci-red", bodyClean());
+  const gh = (args) => args[0] === "pr" && args[1] === "view" && args.includes("statusCheckRollup")
+    ? { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }] }
+    : baseGh(args);
+
+  cronB(baseOpts({ gh, openRiskMarker: () => false }));
+
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "ready"), false);
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "merge"), false);
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "comment"), true);
+});
+
+test("cronB: pending CI does not comment-spam while it waits", () => {
+  const { gh: baseGh, calls, setPr, setBody } = makeFakeGh();
+  setPr(10, { headRefName: "harness/42", headSha: "sha-ci-pending" });
+  setBody(10, "sha-ci-pending", bodyClean());
+  const gh = (args) => args[0] === "pr" && args[1] === "view" && args.includes("statusCheckRollup")
+    ? { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null }] }
+    : baseGh(args);
+
+  cronB(baseOpts({ gh, openRiskMarker: () => false }));
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "comment"), false);
+  assert.equal(calls.some((args) => args[0] === "pr" && args[1] === "merge"), false);
 });
 
 test("cronB: BLOCKED verdict, an absent verdict block, or an open-risk marker -> comments naming the blocking finding, NEVER merges", () => {

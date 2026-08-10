@@ -18,6 +18,7 @@
  */
 
 import { STATE_LABELS } from "./review-labels.mjs";
+import { decideMergeChecks } from "../shared/lib/merge-check-gate.mjs";
 
 /** @description Non-terminal harness labels scanned by reconcile() when opts.labels is not given. */
 const DEFAULT_NON_TERMINAL_LABELS = ["harness:in-progress", "harness:in-review", "harness:awaiting-merge"];
@@ -93,6 +94,19 @@ function mergeStateStatusOf(gh, prNumber) {
 }
 
 /**
+ * @description Reads one exact PR's GitHub check rollup through the injected `gh` boundary.
+ * An unavailable/malformed response stays null and the shared policy denies it.
+ * @param {(args: string[]) => any} gh
+ * @param {number} prNumber
+ * @returns {unknown}
+ */
+function mergeChecksOf(gh, prNumber) {
+  const view = gh(["pr", "view", String(prNumber), "--json", "statusCheckRollup"]);
+  if (!view || Array.isArray(view) || typeof view !== "object") return null;
+  return view.statusCheckRollup;
+}
+
+/**
  * @description Merges a harness PR with the `--match-head-commit` TOCTOU guard, then finalizes the
  * issue (relabel -> reset counters -> record reviewed) only when the merge actually succeeded.
  *
@@ -112,7 +126,7 @@ function mergeStateStatusOf(gh, prNumber) {
  * @param {(pr: number, sha: string, o: {stateDir: string}) => void} opts.recordReviewed
  * @param {string} opts.stateDir
  * @param {number} [opts.maxUpdateAttempts] update-branch retry ceiling (default 3)
- * @returns {{merged: boolean, updateAttempted?: boolean, terminal?: boolean}}
+ * @returns {{merged: boolean, updateAttempted?: boolean, checksRetryable?: boolean, terminal?: boolean}}
  */
 /**
  * @description Classifies a merge that failed after the mergeability retries and, for the only
@@ -147,6 +161,16 @@ export function mergeAndFinalize(pr, sha, opts) {
   const { gh, counter, recordReviewed, stateDir, sleep = defaultSleep, maxMergeAttempts = 3, maxUpdateAttempts = 3 } = opts;
 
   const issueNumber = issueNumberFromHeadRefName(pr.headRefName);
+
+  // The official cron path must prove CI green immediately before it asks GitHub to merge. This
+  // is intentionally one read and one pure decision: no cache, poller, or duplicate policy.
+  const checkDecision = decideMergeChecks(mergeChecksOf(gh, pr.number));
+  if (!checkDecision.ok) {
+    if (checkDecision.state === "pending" || checkDecision.state === "unavailable") {
+      return { merged: false, checksRetryable: true, terminal: false };
+    }
+    return { merged: false, terminal: true, mergeBlockedByChecks: true };
+  }
 
   // GitHub computes mergeability ASYNCHRONOUSLY; right after the review pass it can still be
   // "unknown" (computing), which makes the first `gh pr merge` fail transiently even for a

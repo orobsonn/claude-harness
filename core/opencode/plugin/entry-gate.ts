@@ -39,6 +39,8 @@ export type EntryGateDeps = {
   /** Session environment carrying host-frozen fix-mode authority (injectable in tests). */
   dispatchEnvironment?: Record<string, string | undefined>
   listHandRecordsForFeatureFn?: (featureId: string) => unknown[]
+  /** Read the exact PR's GitHub check rollup immediately before `gh pr merge`. */
+  readMergeCheckRollupFn?: (target: string | null) => unknown
   /** Resolve parent session id for classify top-level rail (injectable in tests). */
   getSessionParentIdFn?: (sessionId: string) => Promise<string | null>
   /** Acting agent name when known (injectable). */
@@ -170,6 +172,20 @@ function defaultIsAncestor(sha: string, cwd = process.cwd()): boolean | null {
   }
 }
 
+/** @description One direct GitHub read; unavailable evidence is denied by the shared policy. */
+function defaultMergeCheckRollup(target: string | null, cwd: string): unknown {
+  try {
+    const output = execFileSync(
+      "gh",
+      ["pr", "view", ...(target === null ? [] : [target]), "--json", "statusCheckRollup"],
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 },
+    )
+    return JSON.parse(output)?.statusCheckRollup
+  } catch {
+    return null
+  }
+}
+
 /**
  * @description Builds entry-gate hooks (async load of pure decide mjs).
  * Optional deps override git/list/ancestor seams for tests.
@@ -201,6 +217,7 @@ async function createEntryGateHooks(
   const { claimDispatchForRuntime, bindChildSession, removeDispatchRecord } = await import("../lib/dispatch-scope.mjs")
   const { recordTaskCompletion } = await import("./lib/host-hand-capture.mjs")
   const { computeGitState } = await import("../../shared/lib/git-state.mjs")
+  const { decideMergeChecks, isGhPrMergeCommand, mergeTargetFromCommand } = await import("../../shared/lib/merge-check-gate.mjs")
   const { listHandRecordsForFeature } = await import("../lib/hand-records.mjs")
 
   const gitStateFn =
@@ -210,6 +227,8 @@ async function createEntryGateHooks(
   const listHandRecordsForFeatureFn =
     deps.listHandRecordsForFeatureFn ??
     ((featureId: string) => listHandRecordsForFeature(root, featureId))
+  const readMergeCheckRollupFn =
+    deps.readMergeCheckRollupFn ?? ((target: string | null) => defaultMergeCheckRollup(target, root))
   const getSessionParentIdFn = deps.getSessionParentIdFn
   const resolveActingAgentFn =
     deps.resolveActingAgentFn ??
@@ -404,6 +423,19 @@ async function createEntryGateHooks(
             deliveryExtras.gitState = gitStateFn()
           } catch {
             deliveryExtras.gitState = null
+          }
+        }
+
+        // `gh pr merge` is the one delivery verb that needs external evidence. Resolve the
+        // literal target without evaluating shell syntax, read it once, and fail closed on any
+        // missing/pending/red/unknown rollup. Other delivery gates remain pure and local.
+        if (isGhPrMergeCommand(command)) {
+          const target = mergeTargetFromCommand(command)
+          const checkDecision = target === undefined
+            ? { ok: false, reason: "PR target is ambiguous; merge is denied." }
+            : decideMergeChecks(readMergeCheckRollupFn(target))
+          if (!checkDecision.ok) {
+            throw new Error(`${PREFIX} Blocked: ${checkDecision.reason}`)
           }
         }
 

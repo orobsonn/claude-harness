@@ -143,6 +143,74 @@ test("#ac-1.1: bash gh pr create + empty gate-state on a feature branch with com
   )
 })
 
+test("gh pr merge is denied when the injected GitHub rollup is not provably green", async () => {
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, fullDeliveryState())
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () => before({ tool: "bash", sessionID: SID }, { args: { command: "gh pr merge 42 --squash" } }),
+        /CI is still running; merge is denied/,
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+      readMergeCheckRollupFn: () => [{ __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null }],
+    },
+  )
+})
+
+test("gh pr merge reads the exact literal target and allows a green rollup", async () => {
+  let target = undefined
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, fullDeliveryState())
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before({ tool: "bash", sessionID: SID }, { args: { command: "gh pr merge 42 --squash" } }),
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+      readMergeCheckRollupFn: (value) => {
+        target = value
+        return [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }]
+      },
+    },
+  )
+  assert.equal(target, "42")
+})
+
+test("gh pr merge rejects a chained second merge before reading any PR", async () => {
+  let reads = 0
+  await withHooks(
+    async (hooks, root) => {
+      writeGateState(root, SID, fullDeliveryState())
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "bash", sessionID: SID },
+          { args: { command: "gh pr merge 42 --squash && gh pr merge 43 --squash" } },
+        ),
+        /PR target is ambiguous/,
+      )
+    },
+    {
+      gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
+      listHandRecordsForFeatureFn: () => [],
+      isAncestorFn: () => true,
+      readMergeCheckRollupFn: () => {
+        reads += 1
+        return [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }]
+      },
+    },
+  )
+  assert.equal(reads, 0)
+})
+
 test("task executor without required delivery facts → throws [entry-gate]", async () => {
   await withHooks(async (hooks, root) => {
     writeGateState(root, SID, {})

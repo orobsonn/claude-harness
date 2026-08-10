@@ -343,6 +343,9 @@ test("#ac-7.1 cronB returns the additive per-PR outcome array (merged/blocked)",
       ];
     }
     if (args[0] === "pr" && args[1] === "view") {
+      if (args.includes("statusCheckRollup")) {
+        return { statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }] };
+      }
       const n = Number(args[2]);
       return { body: n === 10 ? "CLEAN" : "BLOCKED" };
     }

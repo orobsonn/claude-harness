@@ -14,6 +14,7 @@
  * trailing `{stateDir}` opts arg; the call site passes it unconditionally.
  */
 import { OPEN_TAG } from "./verdict-block.mjs";
+import { decideMergeChecks } from "../shared/lib/merge-check-gate.mjs";
 
 /** @description Head-branch prefix marking a harness-originated PR (never a human PR). */
 const HARNESS_BRANCH_PREFIX = "harness/";
@@ -169,6 +170,24 @@ export function cronB(opts) {
         gh(["pr", "comment", String(number), `Cannot auto-merge: ${finding}`]);
         recordReviewed(number, sha, { stateDir });
         outcomes.push({ number, headRefName: pr.headRefName, outcome: "blocked", finding, url: pr.url });
+        continue;
+      }
+
+      // Legacy cron-b is no longer installed for new fleets, but keep its official merge path
+      // aligned with cron-review: one exact, fail-closed check read before any merge-side effect.
+      const checkView = gh(["pr", "view", String(number), "--json", "statusCheckRollup"]);
+      const checkDecision = decideMergeChecks(
+        checkView && !Array.isArray(checkView) && typeof checkView === "object"
+          ? checkView.statusCheckRollup
+          : null,
+      );
+      if (!checkDecision.ok) {
+        // Pending/transient evidence retries on a later legacy tick; commenting every tick would
+        // spam the PR. Red/missing evidence remains a visible, manual intervention signal.
+        if (checkDecision.state !== "pending" && checkDecision.state !== "unavailable") {
+          gh(["pr", "comment", String(number), `Cannot auto-merge: ${checkDecision.reason}`]);
+        }
+        outcomes.push({ number, headRefName: pr.headRefName, outcome: "blocked", finding: checkDecision.reason, url: pr.url });
         continue;
       }
 
