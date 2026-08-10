@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.10](https://github.com/orobsonn/claude-harness/compare/v0.55.9...v0.55.10) (2026-08-10)
+
+
+### Bug Fixes
+
+* isolate hand records by role ([#665](https://github.com/orobsonn/claude-harness/issues/665)) ([46bfcfa](https://github.com/orobsonn/claude-harness/commit/46bfcfa70e1eed91fe6048800422052db8412166))
+
 ## [0.55.9](https://github.com/orobsonn/claude-harness/compare/v0.55.8...v0.55.9) (2026-08-10)
 
 
