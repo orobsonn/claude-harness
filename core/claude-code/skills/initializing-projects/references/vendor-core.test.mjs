@@ -93,6 +93,25 @@ test("vendor-core CLI stamps the release package version, not an older git-descr
   }
 });
 
+test("vendor-core writes an exact Claude ownership manifest for lifecycle shipping", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-claude-owned-files-"));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const manifest = JSON.parse(readFileSync(join(target, ".claude", ".harness-owned-files.json"), "utf8"));
+    assert.equal(manifest.version, 1);
+    assert.ok(manifest.files.includes(".claude/agents/executor.md"));
+    assert.ok(manifest.files.includes(".claude/.harness-owned-files.json"));
+    assert.ok(!manifest.files.includes(".claude/plans/local.json"));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 function createIssueAuthoringSourceFixture() {
   const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-source-fixture-"));
   const copies = [

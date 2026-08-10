@@ -847,6 +847,49 @@ function writeOcOwnershipManifest(ocDir, entries) {
 }
 
 /**
+ * @description Writes the exact Claude files produced by this vendor run. The lifecycle shipper
+ * consumes this list instead of a directory prefix, so a project's local `.claude/` cargo never
+ * enters the harness PR.
+ * @param {{ coreDir: string, claudeCodeDir: string, claudeDir: string, hookVpsDeps: string[], modules: string[] }} options
+ */
+function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookVpsDeps, modules }) {
+  const entries = [];
+  for (const dir of FRAMEWORK_OWNED) {
+    const src = join(claudeCodeDir, dir);
+    if (existsSync(src)) collectDestinationTree(src, join(".claude", dir), entries);
+  }
+  for (const file of FRAMEWORK_FILES) {
+    const src = join(claudeCodeDir, file);
+    if (existsSync(src)) entries.push({ destination: join(".claude", file), kind: "file" });
+  }
+  const sharedDir = join(coreDir, "shared");
+  if (existsSync(sharedDir)) collectDestinationTree(sharedDir, join(".claude", "shared"), entries);
+  for (const name of hookVpsDeps) entries.push({ destination: join(".claude", "vps", name), kind: "file" });
+  const modulesRoot = join(coreDir, "..", "modules");
+  for (const name of modules) {
+    const src = join(modulesRoot, name);
+    if (existsSync(src)) collectDestinationTree(src, join(".claude", "modules", name), entries);
+  }
+
+  const files = new Set(
+    entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => entry.destination.split(sep).join("/")),
+  );
+  for (const path of [
+    ".claude/.gitignore",
+    ".claude/.harness-version",
+    ".claude/.harness-config-manifest.json",
+    ".claude/.harness-owned-files.json",
+    ".claude/CLAUDE.md",
+    ".claude/settings.json",
+    ".github/ISSUE_TEMPLATE/harness-task.yml",
+    ".dev.vars.example",
+  ]) files.add(path);
+  writeFileSync(join(claudeDir, ".harness-owned-files.json"), `${JSON.stringify({ version: 1, files: [...files].sort() }, null, 2)}\n`);
+}
+
+/**
  * Harness files retired from `core/opencode/` that must be actively deleted from an
  * already-vendored `.opencode/` on update. `copyOcTree` only copies what the source still
  * has — it never diffs against the destination — so a file dropped from source stays behind
@@ -1051,10 +1094,10 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   ok(`shared import rewrites: ${sharedRewrites}`);
 
   const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir);
-  ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps}`);
+  ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps.length ? hookVpsDeps.join(", ") : "none (hooks import no vps modules)"}`);
 
   const modules = copyModules(join(coreDir, "..", "modules"), claudeDir, Boolean(withCodex));
-  ok(`modules: ${modules}`);
+  ok(`modules: ${modules.length ? modules.join(", ") : "none (default off; pass --with-codex to enable)"}`);
 
   seedAccumulated(claudeCodeDir, claudeDir);
   ok("memory/MEMORY.md, kaizen.md seeded (if absent)");
@@ -1089,6 +1132,7 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
 
   const claudeGitignore = mergeClaudeGitignore(claudeDir);
   writeFileSync(join(claudeDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
+  writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookVpsDeps, modules });
   ok(`.claude/.gitignore (${claudeGitignore}), .harness-version written`);
   return { claudeDir };
 }
@@ -1222,7 +1266,7 @@ function rewriteClaudeSharedImports(claudeDir) {
  */
 function copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir = coreDir) {
   const hooksDir = join(claudeCodeDir, "hooks");
-  if (!existsSync(hooksDir)) return "none (no hooks/)";
+  if (!existsSync(hooksDir)) return [];
   const VPS_IMPORT = /from\s+['"]\.\.\/vps\/([\w.-]+\.mjs)['"]/g;
   const SIBLING_IMPORT = /from\s+['"]\.\/([\w.-]+\.mjs)['"]/g;
 
@@ -1252,7 +1296,7 @@ function copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir = coreDir) {
     const text = readFileSync(src, "utf8");
     for (const m of text.matchAll(SIBLING_IMPORT)) queue.push(m[1]);
   }
-  return copied.length ? copied.sort().join(", ") : "none (hooks import no vps modules)";
+  return copied.sort();
 }
 
 /**
@@ -1313,7 +1357,7 @@ function copyModules(modulesRoot, claudeDir, withCodex) {
     cpSync(src, join(claudeDir, "modules", name), { recursive: true, filter });
     copied.push(name);
   }
-  return copied.length ? copied.join(", ") : "none (default off; pass --with-codex to enable)";
+  return copied;
 }
 
 /** @description Copies accumulated stores only when absent (never clobbers). */

@@ -38,6 +38,7 @@ const LIFECYCLE_SKILL_NAMES = LIFECYCLE_OPERATIONS.map((op) => `oc-${op}`);
  */
 const ALLOWED_BASH_HEADS = [
   "test -f .opencode/.harness-version",
+  "test -f .claude/.harness-version",
   "echo ",
   "gh release view --repo orobsonn/claude-harness",
   "npx --yes --package=github:orobsonn/claude-harness#v",
@@ -197,7 +198,8 @@ test("every command the lifecycle skills run is covered by the lane's allowlist"
       // Placeholders like <latest-tag> → concrete-shaped stand-in for match.
       const concrete = command
         .replace(/<latest-tag>/g, "v0.54.0")
-        .replace(/<tag>/g, "v0.54.0");
+        .replace(/<tag>/g, "v0.54.0")
+        .replace(/<resolved-runtime>/g, "opencode");
       const action = resolveBash(rules, concrete);
       assert.equal(
         action,
@@ -210,12 +212,17 @@ test("every command the lifecycle skills run is covered by the lane's allowlist"
 
 test("updating-harness invokes the named CLI from its pinned GitHub package", () => {
   const skill = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
+  const rules = permissionRules(frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8")), "bash");
   assert.match(
     skill,
-    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target opencode/,
+    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>/,
   );
   assert.doesNotMatch(skill, /npx -y "github:orobsonn\/claude-harness#<latest-tag>" init/);
   assert.match(skill, /claude-harness lifecycle-snapshot updating-harness/);
+  assert.match(skill, /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist.*`both`/s);
+  assert.equal(resolveBash(rules, "test -f .claude/.harness-version"), "allow");
+  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness init --target claude"), "allow");
+  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness init --target both"), "allow");
 });
 
 test("a harness update automatically adopts an already-vendored harness without pulling product work into its PR", () => {
