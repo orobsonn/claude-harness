@@ -31,15 +31,7 @@ restart. In headless or relayed input, stop without modifying the harness.
 
 ---
 
-## Two distinct verbs — do not conflate them
-
-- **Sync (default):** refresh the shell(s) the project **already has** to the latest version.
-- **Add a runtime:** vendor a shell the project does **not** yet have (e.g. add the Claude shell to an
-  OpenCode-only project). This is **never** inferred — it requires **explicit operator intent** (`both`).
-
----
-
-## Step 1 — Detect install-vs-update and resolve the runtime
+## Step 1 — Detect install-vs-update
 
 Detect by the OpenCode shell's version stamp:
 
@@ -47,17 +39,9 @@ Detect by the OpenCode shell's version stamp:
 test -f .opencode/.harness-version && echo update || echo install
 ```
 
-Resolve which runtime(s) to vendor (the public CLI's `--target`):
-- **Both `.claude/.harness-version` and `.opencode/.harness-version` exist:** `both`.
-- **Only `.opencode/.harness-version` exists:** `opencode`.
-- **Only `.claude/.harness-version` exists:** `claude`.
-- **A marker exists without its runtime shell:** stop; do not repair a partial install by inference.
-- **No marker exists:** install only the runtime explicitly requested by the operator.
-- **Add a runtime (explicit intent only):** `both` — keep/add the Claude shell alongside OpenCode.
-
-> **Public CLI `--target` = runtime shell.** In the CLI, `--target opencode|claude|both` names the
-> runtime — this is the CLI convention and differs from the low-level engine, whose `--target` is a
-> directory. From OpenCode you always drive the CLI, so use `--target opencode` (or `both`).
+This OpenCode lane owns only the OpenCode shell. It always runs `--target opencode`; refreshing or
+adding the Claude shell is a separate Claude-side lifecycle. That keeps its local `.claude/` files
+outside this lane's ownership boundary.
 
 ---
 
@@ -65,12 +49,11 @@ Resolve which runtime(s) to vendor (the public CLI's `--target`):
 
 First resolve the latest release tag (the CLI runs from that pinned tag):
 
-Immediately before the first write, capture the lifecycle baseline. It permits unrelated product
-work but rejects a pre-existing edit to a harness-owned file, because that edit cannot safely be
-separated from the update later:
+Immediately before the first write, use the pinned CLI to capture the lifecycle baseline. This works
+even when the project still has an older harness with no local lifecycle helper:
 
 ```bash
-node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness lifecycle-snapshot updating-harness
 ```
 
 ```bash
@@ -78,12 +61,12 @@ gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # �
 ```
 
 Both first-install and update use the same command — `init` is idempotent. Substitute `<latest-tag>`
-with the concrete `vX.Y.Z` from Step 1 and `<resolved-runtime>` with `opencode` or `both`. **Emit a
+with the concrete `vX.Y.Z` from Step 1. **Emit a
 single clean command** — no trailing comment, no `&&`, no redirect — so the lifecycle action remains
 auditable and cannot compose an unrelated shell operation. **Run the CLI from the git tag, not from npm:**
 
 ```bash
-npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target opencode
 ```
 
 > **Why the git tag, not `@orobsonn/claude-harness@latest`:** the npm-published version lags the repo
@@ -94,8 +77,7 @@ npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness i
 
 This vendors the OpenCode shell into `.opencode/` — the framework-owned trees `agents/`, `command/`,
 `docs/`, `skills/`, `plugin/`, `tools/`, `hands/`, `rules/` plus `harness.routing.json`, `AGENTS.md`,
-`shared/` and `opencode.json` — stamps `.opencode/.harness-version`, and — with `both` — also
-refreshes the Claude shell in `.claude/`.
+`shared/` and `opencode.json` — and stamps `.opencode/.harness-version`.
 
 **Non-clobber guarantees (per shell):** `MEMORY.md`/`kaizen.md` are seeded only if absent; `AGENTS.md`
 is merged between harness markers (project content preserved); an existing `opencode.json` is updated

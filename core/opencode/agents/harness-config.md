@@ -31,9 +31,8 @@ permission:
     "test -f .opencode/.harness-version": allow
     "echo *": allow
     "gh release view --repo orobsonn/claude-harness *": allow
+    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness": allow
     "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target opencode": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target claude": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target both": allow
     "opencode models": allow
     "opencode models *": allow
     "git status*": allow

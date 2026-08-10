@@ -71,6 +71,7 @@ test("resolveDangerousBashCommand: #499 hardening denies bash -c/node -e/npx/tar
 test("resolveDangerousBashCommand: the harness's own prescribed npx invocations stay allowed", () => {
   for (const command of [
     "npx tsc --noEmit",
+    "npx --yes --package=github:orobsonn/claude-harness#v1.2.3 claude-harness lifecycle-snapshot updating-harness",
     "npx --yes --package=github:orobsonn/claude-harness#v1.2.3 claude-harness init --target opencode",
     "npx github:orobsonn/claude-harness#v1.2.3 init",
     "npx -y github:orobsonn/claude-harness#v1.2.3 init",

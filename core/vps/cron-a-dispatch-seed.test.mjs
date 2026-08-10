@@ -820,6 +820,7 @@ test("DANGEROUS_BASH_DENYLIST: the FULL allow-key list is pinned — a future ed
     "git push --force-with-lease*",
     "git push * --force-with-lease*",
     "npx tsc --noEmit*",
+    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness",
     "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init*",
     "npx github:orobsonn/claude-harness#v* init*",
     "npx -y github:orobsonn/claude-harness#v* init*",
