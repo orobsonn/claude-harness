@@ -11,6 +11,7 @@ import {
   metaExists as defaultMetaExists,
   readEvents as defaultReadEvents,
 } from "../../shared/lib/obs-append.mjs";
+import { currentAttemptEvents } from "../../shared/lib/obs-attempt.mjs";
 import {
   REVIEW_AGENT_ALIASES,
   REVIEW_AGENT_CATALOG,
@@ -60,24 +61,29 @@ export function obsAppend(event, deps = {}) {
 }
 
 /**
- * @description Dedupe plan-created/spec-created once; task-executing by (type,n).
+ * @description Dedupe only within the current attempt: plan-created by (type,tasks),
+ * spec/final-review by type, task-executing by (type,n).
  * @param {object[]} existing
  * @param {object} event
  * @returns {boolean} true = skip
  */
 export function dedupeByType(existing, event) {
   if (!event || typeof event.type !== "string") return false;
-  if (event.type === "plan-created" || event.type === "spec-created" || event.type === "final-review-done") {
-    return (existing || []).some((e) => e && e.type === event.type);
+  const attempt = currentAttemptEvents(existing);
+  if (event.type === "plan-created") {
+    return attempt.some((e) => e && e.type === "plan-created" && (e.tasks ?? null) === (event.tasks ?? null));
+  }
+  if (event.type === "spec-created" || event.type === "final-review-done") {
+    return attempt.some((e) => e && e.type === event.type);
   }
   if (event.type === "task-executing" && event.n != null) {
-    return (existing || []).some(
+    return attempt.some(
       (e) => e && e.type === "task-executing" && e.n === event.n,
     );
   }
   // plan-reviewed: dedupe identical verdicts emitted structurally by review eyes.
   if (event.type === "plan-reviewed") {
-    return (existing || []).some(
+    return attempt.some(
       (e) =>
         e &&
         e.type === "plan-reviewed" &&
@@ -86,7 +92,7 @@ export function dedupeByType(existing, event) {
   }
   // hand-ran: same task id
   if (event.type === "hand-ran" && event.task) {
-    return (existing || []).some(
+    return attempt.some(
       (e) => e && e.type === "hand-ran" && e.task === event.task,
     );
   }

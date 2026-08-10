@@ -12,8 +12,9 @@
  * append-if-absent dedupe means this hook and it never double-emit).
  *
  * Contract (mirrors obs-eye-append / stamp-triage): append-only, NO hookSpecificOutput, fail-open —
- * exits 0 on ANY error, never blocks a Write. Dedupe by type (one spec-created / one plan-created
- * per run) so a re-plan (planner rewrites execution-plan.json under REVISE) does not double-emit.
+ * exits 0 on ANY error, never blocks a Write. Dedupe inside the current attempt so a re-plan
+ * (planner rewrites execution-plan.json under REVISE) does not double-emit, while a retry reports
+ * its own border checkpoints.
  */
 
 import fs from "node:fs";
@@ -23,6 +24,7 @@ import {
   appendEvent as defaultAppendEvent,
   readEvents as defaultReadEvents,
 } from "../vps/obs-outbox.mjs";
+import { currentAttemptEvents } from "../../shared/lib/obs-attempt.mjs";
 
 /**
  * @description Splits a file_path into lowercased, '..'-normalized path components anchored under
@@ -111,10 +113,12 @@ export function processInput(rawStr, deps) {
     const readEvents = (deps && deps.readEvents) ? deps.readEvents : defaultReadEvents;
     const appendEvent = (deps && deps.appendEvent) ? deps.appendEvent : defaultAppendEvent;
 
-    // Dedupe by type: one spec-created / one plan-created per run (a REVISE re-plan rewrites the
-    // execution-plan.json, which must not emit a second plan-created).
-    const existing = readEvents(metaPath) || [];
-    if (existing.some((e) => e && e.type === d.event.type)) return { exitCode: 0 };
+    const existing = currentAttemptEvents(readEvents(metaPath) || []);
+    const duplicate = existing.some((e) =>
+      e && e.type === d.event.type &&
+      (d.event.type !== "plan-created" || (e.tasks ?? null) === (d.event.tasks ?? null))
+    );
+    if (duplicate) return { exitCode: 0 };
 
     appendEvent(metaPath, d.event);
     return { exitCode: 0 };

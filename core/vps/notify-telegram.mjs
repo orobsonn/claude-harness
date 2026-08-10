@@ -26,6 +26,7 @@ import {
   updateMeta as defaultUpdateMeta,
   appendEvent as defaultAppendEvent,
 } from "./obs-outbox.mjs";
+import { currentAttemptEvents } from "../shared/lib/obs-attempt.mjs";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -81,6 +82,7 @@ const EMOJI = {
   "engine-update-failed": "❗",
   "chain-released": "🔗",
   "chain-stranded": "⛓️‍💥",
+  "attempt-started": "🔁",
   "pipeline-type": "🚀",
   "spec-created": "📝",
   "spec-adversary": "🛡️",
@@ -756,6 +758,7 @@ function consumeBudget() {
  * suppressed (its own dedicated `plan-reviewed` checkpoint already covers that fact).
  */
 const CURATED_FEED_TYPES = new Set([
+  "attempt-started",
   "picked",
   "pipeline-type",
   "spec-created",
@@ -833,6 +836,9 @@ const EYE_ROLE_LABELS = {
  * @returns {string}
  */
 function resolveCheckpointLabel(type, event) {
+  if (type === "attempt-started") {
+    return `Tentativa ${event?.attempt ?? "?"}`;
+  }
   if (type === "eye") {
     return EYE_ROLE_LABELS[String(event?.role ?? "").toLowerCase()] ?? type.toUpperCase();
   }
@@ -1012,7 +1018,7 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
   const read = seams.readEvents ?? defaultReadEvents;
   const append = seams.appendEvent ?? defaultAppendEvent;
   const stat = seams.statSync ?? statSync;
-  const events = read(metaPath);
+  const events = currentAttemptEvents(read(metaPath));
   const worktreePath = meta?.worktreePath;
   if (typeof worktreePath !== "string" || !worktreePath) return;
 
@@ -1093,7 +1099,7 @@ function deriveBorderCheckpoints(metaPath, meta, seams) {
     const ts = timestampFor(specPathForTimestamp, specTimestamp);
     append(metaPath, ts ? { type: "spec-created", ts } : { type: "spec-created" });
   }
-  if (taskCount != null && !events.some((event) => event.type === "plan-created")) {
+  if (taskCount != null && !events.some((event) => event.type === "plan-created" && (event.tasks ?? null) === taskCount)) {
     const ts = timestampFor(planPathForTimestamp, planTimestamp);
     append(metaPath, ts ? { type: "plan-created", tasks: taskCount, ts } : { type: "plan-created", tasks: taskCount });
   }

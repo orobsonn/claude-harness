@@ -7,6 +7,7 @@
  */
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { nextAttemptNumber } from "../shared/lib/obs-attempt.mjs";
 
 const INITIAL_CURSOR = 0;
 const INITIAL_STATUS = "active";
@@ -68,8 +69,9 @@ function stripFossilTimestamps(meta) {
 
 /**
  * @description Creates (or idempotently reuses) the outbox meta for an issue. When a non-closed
- * meta already exists it is reused AS-IS — events and cursor are NEVER reset. When the prior run
- * is closed (or absent) a fresh meta is written atomically. Returns the meta path.
+ * meta already exists it starts a new attempt in the SAME append-only event log — events and
+ * cursor are NEVER reset. When the prior run is closed (or absent) a fresh meta is written
+ * atomically. Returns the meta path.
  * @param {{ issueNumber: number, project: string, worktreePath: string }} input
  * @param {string} stateDir — cron-side state directory
  * @returns {string} the obs-<issue>.json path
@@ -81,37 +83,25 @@ export function createRun({ issueNumber, project, worktreePath }, stateDir) {
   const metaPath = join(stateDir, `obs-${issueNumber}.json`);
   const existing = readMetaRecord(metaPath);
   if (existing && existing.status !== CLOSED_STATUS) {
-    // Reactivate terminal-ish statuses (awaiting-review / orphan / fallback): reuse-with-truncate.
-    // orphan/fallback used to be "idempotent reuse AS-IS" — that left status stuck, cursor advanced,
-    // and no new `picked` event → Telegram silence on re-dispatch after a died run (#291).
-    // Preserve threadId/chatId, reset cursor to 0, truncate events log, set status to active,
-    // refresh worktreePath, strip fossils. Truncate FIRST so an interleaved drain never re-sends
-    // the old log against a reset cursor.
-    if (REACTIVATE_STATUSES.has(existing.status)) {
-      let truncated = false;
-      try {
-        writeFileSync(eventsPathFor(metaPath), "", "utf8");
-        truncated = true;
-      } catch {
-        // best-effort: a failed truncate must never propagate to the caller
-      }
+    // A redispatch is a new attempt, never a new log. Keeping the cursor and all preceding facts
+    // makes the audit append-only and prevents an interleaved drain from replaying old messages.
+    // Producers dedupe against the suffix after this marker (see shared/obs-attempt.mjs).
+    const events = readEvents(metaPath);
+    appendEvent(metaPath, { type: "attempt-started", attempt: nextAttemptNumber(events) });
 
-      if (truncated) {
-        atomicWriteMeta(metaPath, stripFossilTimestamps({
-          ...existing,
-          worktreePath,
-          project,
-          cursor: INITIAL_CURSOR,
-          status: INITIAL_STATUS,
-          criticalSent: [],
-        }));
-      }
+    // Reactivate terminal-ish nonclosed states without rewriting the outbox history.
+    if (REACTIVATE_STATUSES.has(existing.status)) {
+      atomicWriteMeta(metaPath, stripFossilTimestamps({
+        ...existing,
+        worktreePath,
+        project,
+        status: INITIAL_STATUS,
+      }));
 
       return metaPath;
     }
 
-    // Idempotent reuse for still-active runs: never reset events/cursor/threadId.
-    // Only refresh worktreePath + strip fossils when present.
+    // Active re-dispatch: preserve events/cursor/threadId; only refresh mutable metadata.
     const freshExisting = readMetaRecord(metaPath);
     if (!freshExisting) return metaPath;
     let dirty = false;
