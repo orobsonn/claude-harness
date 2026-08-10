@@ -55,13 +55,8 @@ const ALLOWED_BASH_HEADS = [
   "git checkout main",
   "git checkout master",
   "git pull --ff-only",
-  "git add .opencode",
-  "git add .claude",
-  "git add opencode.json",
-  "git add AGENTS.md",
-  "git add harness.routing.json",
-  "git add core/opencode",
-  "git commit -m ",
+  "node .opencode/tools/lifecycle-ship.mjs prepare ",
+  "node .opencode/tools/lifecycle-ship.mjs snapshot ",
   "git push -u origin HEAD",
   "gh pr create --title ",
   "gh pr view ",
@@ -226,10 +221,8 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
     "gh pr merge --squash --delete-branch --admin",
     "gh pr merge --merge",
     "gh pr merge --rebase --delete-branch",
-    "git add .opencode package.json",
-    "git add .opencode/../.env",
-    "git add -A",
-    "git add .",
+    "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness --extra",
+    "node .opencode/tools/lifecycle-ship.mjs prepare product-delivery",
     "git push -u origin main",
   ];
 
@@ -239,11 +232,9 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
   }
 
   const mustAllow = [
-    'git commit -m "chore: sincroniza harness vendored"',
+    "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness",
     "git push -u origin HEAD",
     "gh pr merge --squash --delete-branch",
-    "git add .opencode",
-    "git add AGENTS.md",
     "git fetch origin",
     "git switch -c chore/harness-lifecycle",
     'gh pr create --title "chore: lifecycle harness" --body "x"',
@@ -255,20 +246,23 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
   }
 });
 
-test("lifecycle-ship procedure refuses product feature branches and stages root AGENTS.md", () => {
+test("lifecycle-ship resumes an isolated lifecycle branch without absorbing unrelated work", () => {
   const body = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
-  assert.match(body, /Never create it from a product feature branch tip/i);
-  assert.match(body, /Never\*\* run `git switch -c chore/i);
-  assert.match(body, /\.opencode\/plans/);
-  assert.match(body, /git add AGENTS\.md/);
+  assert.match(body, /fixed vendor ownership set/i);
+  assert.match(body, /already-created lifecycle commit/i);
+  assert.match(body, /Product work may be dirty or already staged/i);
+  assert.match(body, /\.opencode.*\.claude.*outside the/i);
   assert.match(body, /baseRefName/);
-  assert.match(body, /git fetch origin/);
+  assert.match(body, /git commit --only/);
+  assert.doesNotMatch(body, /shows \*\*any path outside\*\* the lifecycle allowlist/i);
   // Prose may name the forbidden forms; fenced bash must never invoke them.
   const fenced = [...body.matchAll(/^```bash\r?\n([\s\S]*?)^```/gm)].map((m) => m[1]).join("\n");
   assert.doesNotMatch(fenced, /^git add -A\s*$/m);
   assert.doesNotMatch(fenced, /^git add \.\s*$/m);
+  assert.doesNotMatch(fenced, /^git add \.opencode\s*$/m);
+  assert.doesNotMatch(fenced, /^git add \.claude\s*$/m);
   assert.doesNotMatch(fenced, /--force|--no-verify|--admin/);
-  assert.match(fenced, /^git add AGENTS\.md\s*$/m);
+  assert.match(fenced, /^node \.opencode\/tools\/lifecycle-ship\.mjs prepare /m);
 });
 
 test("each lifecycle command routes to harness-config in the same session", () => {

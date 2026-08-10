@@ -49,13 +49,10 @@ permission:
     "git checkout main": allow
     "git checkout master": allow
     "git pull --ff-only": allow
-    "git add .opencode": allow
-    "git add .claude": allow
-    "git add opencode.json": allow
-    "git add AGENTS.md": allow
-    "git add harness.routing.json": allow
-    "git add core/opencode": allow
-    "git commit -m *": allow
+    "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness": allow
+    "node .opencode/tools/lifecycle-ship.mjs prepare configuring-model-routing": allow
+    "node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness": allow
+    "node .opencode/tools/lifecycle-ship.mjs snapshot configuring-model-routing": allow
     "git commit*--no-verify*": deny
     "git commit*--no-gpg-sign*": deny
     "git push -u origin HEAD": allow
@@ -95,12 +92,12 @@ Your two operations, each bound to one skill:
   from the pinned git release tag.
 
 Both skills end with the shared **lifecycle ship-to-main** procedure (`skills/lifecycle-ship-to-main.md`):
-default-branch tip → chore branch → selective stage (lifecycle paths only) → commit → push HEAD → PR →
-squash merge → pull default → demand session restart. That ship is part of the lifecycle op — not product
+verified lifecycle commit (new or already-created) → push HEAD → PR → squash merge → pull default → demand
+session restart. That ship is part of the lifecycle op — not product
 delivery — so the operator does not need a second session just to land the change.
 
-**Ship hard rules (also in the procedure file):** never branch off a product feature branch; refuse if
-`git status` shows non-lifecycle paths; never force-push / `--no-verify` / `gh pr merge --admin`.
+**Ship hard rules (also in the procedure file):** never include product work, plans or run state in a
+lifecycle commit; never force-push / `--no-verify` / `gh pr merge --admin`.
 
 All operator-facing messages are concise pt-br, product-language. Identifiers, commands, and file
 content stay in English.

@@ -95,8 +95,8 @@ Highlight: avaliador único por padrão; `secondEyeModel` é opt-in fail-open (o
 ### 2. Elicit (one question at a time)
 
 **Q1 — Onde aplicar?**
-- Projeto vendored (`.opencode/`) — recomendado pra teste
-- Source do harness (`core/opencode/`) — só se for mudar o default shippado (CI banne `xai/`/`grok` em slots obrigatórios; `secondEyeModel` opcional é exempt)
+- Projeto vendored (`.opencode/`). Esta lane entrega somente a configuração do projeto atual; mudar
+  os defaults do source do harness segue o fluxo normal de desenvolvimento do core.
 
 **Q2 — Preset ou custom?**
 
@@ -136,6 +136,13 @@ olhos de plan-review / adversary / security em modelo barato enfraquecem o safet
 
 ### 3. Apply (via the tool)
 
+Immediately before applying, capture the lifecycle baseline. It allows dirty product work but
+rejects a pre-existing edit to a vendor-owned harness file, which cannot safely be separated later:
+
+```bash
+node .opencode/tools/lifecycle-ship.mjs snapshot configuring-model-routing
+```
+
 Preset (primary form):
 
 ```
@@ -155,26 +162,18 @@ On `ok:true` → list `changed` + `warnings`.
 - Same-provider dual → reject  
 - Weak **support** eye (compliance/security/harvester/shipper não openai/xai) → reject unless the operator confirms → pass `confirm_weak_eyes: true`  
 - Weak **judgment** eye (plan-reviewer/adversary não openai/xai) → reject unless the operator confirms → pass `confirm_weak_judgment_eyes: true` (degrades the harness safety net; surface the warning first)  
-- xAI/Grok num slot **obrigatório** do **source** `core/opencode` (avaliador, hands, support, build/planner) → reject unless `force_core_grok: true`. `secondEyeModel` opcional é exempt.  
 - `targetRoot` = cwd sempre; `opencode.json` só sob cwd/ocRoot (nunca `../`)  
 - AGENTS.md presente mas §8 ilegível → reject (não deixa routing/agents divergirem do doc)
 
 ### 4. Ship to main (default, same session)
 
 **Do not stop at "commit when you want".** After `ok:true` with dirty harness paths, follow
-`skills/lifecycle-ship-to-main.md` end-to-end: branch → selective stage → commit → push → PR →
-squash merge → pull main.
+`skills/lifecycle-ship-to-main.md` end-to-end. Its helper resumes an already-created lifecycle-only
+commit after a restart or makes one from the fixed ownership set, then the same session pushes, opens
+the PR, and squash-merges it. A clean worktree alone is never a reason to skip the procedure. Use
+only the commands listed in `lifecycle-ship-to-main.md`.
 
-Skip ship only if the tree is clean, or the operator explicitly said not to ship. Prefer:
-
-```bash
-git commit -m "chore: reconfigura model routing do harness"
-```
-
-(Other ship commands: exact list in `lifecycle-ship-to-main.md` — allowlisted on this lane.)
-
-Never stage secrets. If apply targeted harness **source** (`core/opencode`), remember CI
-`model-routing.test.mjs` bans xAI/Grok on required committed slots.
+Never stage secrets.
 
 ### 5. Close
 
