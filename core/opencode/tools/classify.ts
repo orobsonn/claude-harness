@@ -133,7 +133,10 @@ export async function executeClassify(
         plan_path: adopted.planPath,
         mode: resume.state.mode,
         feature_id: finalFeatureId,
-        action: "resume",
+        action: resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
+          (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
+          ? "resume-approved-plan"
+          : "resume",
         source_session_id: resume.sessionId,
       }
       return {
