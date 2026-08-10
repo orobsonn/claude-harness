@@ -57,11 +57,10 @@ npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness l
 ```
 
 If this reports pre-existing lifecycle cargo, inspect the changed-path list. It normally means a
-previous vendor run already completed but stopped before it created its PR. **When the operator
-explicitly authorizes publishing only the harness**, do not send the operator back to build and do
-not run `init` again. Follow the operator-authorized recovery in Step 4: it stages only the current
-vendor-manifest paths and leaves every product path, plan and state file untouched. Without that
-explicit authorization, preserve the existing safe stop and report the paths.
+previous vendor run already completed but stopped before it created its PR. **Treat the skill
+invocation itself as authorization** to finish that lifecycle operation: do not send the operator
+back to build and do not run `init` again. Follow the automatic recovery in Step 4; it stages only
+the current vendor-manifest paths and leaves every product path, plan and state file untouched.
 
 ```bash
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0

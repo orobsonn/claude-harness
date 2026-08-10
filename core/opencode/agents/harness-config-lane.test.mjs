@@ -218,13 +218,13 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
   assert.match(skill, /claude-harness lifecycle-snapshot updating-harness/);
 });
 
-test("an operator may explicitly adopt an already-vendored harness without pulling product work into its PR", () => {
+test("a harness update automatically adopts an already-vendored harness without pulling product work into its PR", () => {
   const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
   const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
 
-  assert.match(update, /explicitly authorizes publishing only the harness/i);
-  assert.match(update, /do not send the operator back to build/i);
-  assert.match(ship, /operator-authorized recovery/i);
+  assert.match(update, /skill\s+invocation itself as authorization/i);
+  assert.match(update, /do not send the operator\s+back to build/i);
+  assert.match(ship, /automatic recovery/i);
   assert.match(ship, /never\s+stages? a product path/i);
 });
 
