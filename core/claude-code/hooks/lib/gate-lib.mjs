@@ -117,7 +117,7 @@ export function stateDirFor(sessionId) {
  * Builds the canonical path to a cheap-hand run-record. The PRODUCER is `runLiveDispatch`
  * (spawn-hand.mjs), which writes a token-free record keyed by feature, role, and task id
  * under this dir; the CONSUMER is the entry-gate hand-routing branch, which reads the record as
- * the NON-FORGEABLE evidence (real exitCode + lockedTestExitCode from the independent capture)
+ * durable evidence (real exitCode + lockedTestExitCode from the independent capture)
  * that authorizes a Claude hand escape. The qualifiedId is the gate-state shape `feature_id/task_id`;
  * the path adds the trusted dispatch role as its own directory segment.
  * @param {string} qualifiedId - `${feature_id}/${task_id}`

@@ -1056,13 +1056,15 @@ export function decide(payload, deps = {}) {
   // is only the legit K=1 escalation/transcription fallback. Per-task binding from the Agent
   // prompt prose is infeasible (untrustworthy string-match), so the binding is session-level —
   // BUT the unlock belt is NOT the ticket alone. The escalation_fallback ticket NAMES the in-flight
-  // task(s); the real, NON-FORGEABLE belt is the on-disk run-record (written by runLiveDispatch's
+  // task(s); the durable belt is the on-disk run-record (written by runLiveDispatch's
   // INDEPENDENT capture): the Claude hand escape is authorized ONLY when a ticketed task's record
   // shows outcome === FAILED — a genuine spawn that ran and failed its locked test/exit. A
   // PRE-SPAWN CONFIG ERROR (no token, dirty baseline, gate not armed) writes NO such record, so the
   // escape is DENIED → the orchestrator must route to the critical-exception path, never a silent
   // Claude fallback. This removes the old "any non-empty escalation_fallback array unlocks"
-  // looseness (an echo-forgeable ticket could fake it). Runs AFTER Gate 1 so a hand WITHOUT triage
+  // looseness (an echo-forgeable ticket could fake it). This proves a real producer path only
+  // against accidental omission; same-user Bash can still forge files, so it is not OS provenance.
+  // Runs AFTER Gate 1 so a hand WITHOUT triage
   // still hits the triage deny first.
   if (HAND_ROLES.has(role)) {
     // test-author is dispatched as a main-loop Claude Agent in BOTH local and headless. It is the

@@ -83,8 +83,8 @@ draft is **rejected**. Findings:
 
 **Verdict:** keep the manual marker as the human checkpoint (it is not the failure mode that
 needs fixing), but stop trusting it blindly, and stop relying on it being the *only* signal
-the delivery gate has. Read the same non-forgeable file the K=1 escalation gate already
-trusts. Fixes below reflect this.
+the delivery gate has. Read the same durable run-record the K=1 escalation gate already
+checks. Fixes below reflect this.
 
 ## Design
 
@@ -241,8 +241,8 @@ It now **also** reads the real hand-record file for that qualified id
 ## Known limitation (found by post-implementation adversarial review — NOT closed by this spec)
 
 A second adversarial pass, run against the actual implementation (not just the design), found
-and **proved with a working PoC** that the "real on-disk run-record" this spec relies on as the
-non-forgeable source of truth is **itself forgeable** — by the same actor (the orchestrator) that
+and **proved with a working PoC** that the "real on-disk run-record" this spec relies on as a
+durable source of truth is **itself forgeable** — by the same actor (the orchestrator) that
 could already forge the old marker-echo, using the same missing control: **nothing gates the Bash
 tool from writing directly into `.claude/plans/.state/hand-records/**`.** `plan-write-gate.mjs`
 denies the `Write`/`Edit` tools from touching that path, but has no Bash-tool equivalent, and the
