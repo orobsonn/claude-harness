@@ -976,10 +976,10 @@ test("handle: capture-verified for a finished hand with a real on-disk record �
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"], active_dispatch: { feature_id: "feat-a", task_id: "task-1", role: "executor" } }),
       "utf8",
     );
-    const recordPath = handRecordPathFor("feat-a/task-1");
+    const recordPath = handRecordPathFor("feat-a/task-1", "executor");
     fs.mkdirSync(path.dirname(recordPath), { recursive: true });
     fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 
@@ -1045,10 +1045,10 @@ test("handle: capture-verified stamps capturedVerifiedAt onto the real hand-reco
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ hand_finished: ["feat-b/task-1"] }),
+      JSON.stringify({ hand_finished: ["feat-b/task-1"], active_dispatch: { feature_id: "feat-b", task_id: "task-1", role: "executor" } }),
       "utf8",
     );
-    const recordPath = handRecordPathFor("feat-b/task-1");
+    const recordPath = handRecordPathFor("feat-b/task-1", "executor");
     fs.mkdirSync(path.dirname(recordPath), { recursive: true });
     fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 
@@ -1301,10 +1301,10 @@ test(
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(
         path.join(stateDir, "gate-state.json"),
-        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"], active_dispatch: { feature_id: "feat-x", task_id: "task-1", role: "executor" } }),
         "utf8",
       );
-      const recordPath = handRecordPathFor("feat-x/task-1");
+      const recordPath = handRecordPathFor("feat-x/task-1", "executor");
       fs.mkdirSync(path.dirname(recordPath), { recursive: true });
       fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 
@@ -1331,10 +1331,10 @@ test(
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(
         path.join(stateDir, "gate-state.json"),
-        JSON.stringify({ hand_finished: ["feat-x/task-1"] }),
+        JSON.stringify({ hand_finished: ["feat-x/task-1"], active_dispatch: { feature_id: "feat-x", task_id: "task-1", role: "executor" } }),
         "utf8",
       );
-      const recordPath = handRecordPathFor("feat-x/task-1");
+      const recordPath = handRecordPathFor("feat-x/task-1", "executor");
       fs.mkdirSync(path.dirname(recordPath), { recursive: true });
       fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 
@@ -1346,7 +1346,7 @@ test(
       // Second (idempotent gate-state) call: the durable writer must STILL be invoked — this
       // is the self-heal path — and its success must be reflected in readBackOk.
       let called = false;
-      const spy = (id, ts) => {
+      const spy = (id, role, ts) => {
         called = true;
         return true;
       };
@@ -1377,7 +1377,7 @@ test("lt-no-hand-record-shape", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"], active_dispatch: { feature_id: "feat-a", task_id: "task-1", role: "executor" } }),
       "utf8",
     );
     // no hand-record on disk
@@ -1395,7 +1395,7 @@ test("lt-no-hand-finished-shape", () => {
     // no feat-a/task-2 in hand_finished
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"], active_dispatch: { feature_id: "feat-a", task_id: "task-1", role: "executor" } }),
       "utf8",
     );
     const res = handle(makeRegatePayload(sessionId, "capture-verified", "feat-a", "task-2"));
@@ -1431,10 +1431,10 @@ test("lt-happy-path-sha-qualified", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
-      JSON.stringify({ hand_finished: ["feat-a/task-1"] }),
+      JSON.stringify({ hand_finished: ["feat-a/task-1"], active_dispatch: { feature_id: "feat-a", task_id: "task-1", role: "executor" } }),
       "utf8",
     );
-    const recordPath = handRecordPathFor("feat-a/task-1");
+    const recordPath = handRecordPathFor("feat-a/task-1", "executor");
     fs.mkdirSync(path.dirname(recordPath), { recursive: true });
     fs.writeFileSync(recordPath, JSON.stringify({ outcome: { status: "DONE" } }), "utf8");
 

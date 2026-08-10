@@ -145,6 +145,22 @@ test(
   },
 );
 
+test("role-scoped records prevent a sniper failure from authorizing the executor for the same task", () => {
+  const payload = makeAgentPayload("ses_role_isolation", "executor");
+  const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
+  const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
+  const readHandRecordFn = (qualifiedId, role) =>
+    qualifiedId === "feat/task-1" && role === "sniper"
+      ? { outcome: { status: "FAILED" } }
+      : null;
+
+  assert.equal(
+    decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow,
+    false,
+    "an executor may only consume executor evidence for its K=1 fallback",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // LOCKED TEST 5
 // Given a main-loop Agent dispatch with subagent_type 'adversary' and triage.json
@@ -1549,6 +1565,21 @@ test("real-file capture rail: denies push when a real DONE hand-record has no ca
   });
   assert.equal(result.allow, false);
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /task-1/);
+});
+
+test("real-file capture rail: denies delivery when an upgrade finds a legacy flat hand-record", () => {
+  const payload = makeBashPayload("ses_legacy_record", "git push");
+  const result = decide(payload, {
+    readGateStateFn: () => ({ feature_id: "feat-legacy" }),
+    gitStateFn: () => null,
+    isAncestorFn: () => true,
+    listHandRecordsForFeatureFn: () => [{
+      taskId: "task-1",
+      identityError: "legacy flat hand-record; re-dispatch the hand to create role-scoped evidence",
+    }],
+  });
+  assert.equal(result.allow, false);
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /legacy flat hand-record/);
 });
 
 test("real-file capture rail: allows push when the real hand-record already carries capturedVerifiedAt", () => {

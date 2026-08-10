@@ -115,19 +115,21 @@ export function stateDirFor(sessionId) {
 
 /**
  * Builds the canonical path to a cheap-hand run-record. The PRODUCER is `runLiveDispatch`
- * (spawn-hand.mjs), which writes a token-free record keyed by `${feature_id}__${task_id}.json`
+ * (spawn-hand.mjs), which writes a token-free record keyed by feature, role, and task id
  * under this dir; the CONSUMER is the entry-gate hand-routing branch, which reads the record as
  * the NON-FORGEABLE evidence (real exitCode + lockedTestExitCode from the independent capture)
  * that authorizes a Claude hand escape. The qualifiedId is the gate-state shape `feature_id/task_id`;
- * the file uses `__` as the separator (both segments are kebab-case, so `__` never collides).
+ * the path adds the trusted dispatch role as its own directory segment.
  * @param {string} qualifiedId - `${feature_id}/${task_id}`
- * @returns {string} path to the run-record JSON, relative to process.cwd()
+ * @param {"executor"|"sniper"} role - The hand role that owns this record.
+ * @returns {string|null} path to the run-record JSON, relative to process.cwd(), or null for an invalid role
  */
-export function handRecordPathFor(qualifiedId) {
+export function handRecordPathFor(qualifiedId, role) {
+  if (role !== "executor" && role !== "sniper") return null;
   const separatorIndex = String(qualifiedId).indexOf("/");
   const featureId = separatorIndex === -1 ? String(qualifiedId) : qualifiedId.slice(0, separatorIndex);
   const taskId = separatorIndex === -1 ? "" : qualifiedId.slice(separatorIndex + 1);
-  return path.join(".claude/plans/.state/hand-records", featureId, `${taskId}.json`);
+  return path.join(".claude/plans/.state/hand-records", featureId, role, `${taskId}.json`);
 }
 
 /**
@@ -135,11 +137,14 @@ export function handRecordPathFor(qualifiedId) {
  * Returns null on missing file, unparseable content, or any fs error — never throws
  * (fail-closed consumers treat a missing/garbage record as "no genuine failure evidence").
  * @param {string} qualifiedId - `${feature_id}/${task_id}`
+ * @param {"executor"|"sniper"} role - The hand role that owns this record.
  * @returns {object|null} Parsed run-record, or null on any error
  */
-export function readHandRecord(qualifiedId) {
+export function readHandRecord(qualifiedId, role) {
   try {
-    const raw = fs.readFileSync(handRecordPathFor(qualifiedId), "utf8");
+    const recordPath = handRecordPathFor(qualifiedId, role);
+    if (!recordPath) return null;
+    const raw = fs.readFileSync(recordPath, "utf8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return null;
@@ -156,7 +161,7 @@ export function readHandRecord(qualifiedId) {
  * cross-check stays cheap regardless of how many features have ever run.
  * Returns [] on a missing directory or any fs error — never throws.
  * @param {string} featureId - The feature_id (unqualified — no task segment)
- * @returns {Array<{taskId: string, record: object}>}
+ * @returns {Array<{taskId: string, role?: "executor"|"sniper", record?: object, identityError?: string}>}
  */
 export function listHandRecordsForFeature(featureId) {
   // Defense in depth: every current caller already validates featureId upstream (gate-state's
@@ -174,12 +179,32 @@ export function listHandRecordsForFeature(featureId) {
     return [];
   }
   const results = [];
+  // A flat record belongs to the pre-role layout. Do not reuse it as evidence: it
+  // may be an unstamped DONE or a violation that the new layout would otherwise
+  // hide. Surface it as an identity error so the delivery rail fails closed until
+  // the hand is re-dispatched into a role-scoped record.
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
-    const taskId = entry.slice(0, -".json".length);
-    const record = readHandRecord(`${featureId}/${taskId}`);
-    if (record !== null) {
-      results.push({ taskId, record });
+    results.push({
+      taskId: entry.slice(0, -".json".length) || "unknown",
+      identityError: "legacy flat hand-record; re-dispatch the hand to create role-scoped evidence",
+    });
+  }
+  for (const role of ["executor", "sniper"]) {
+    const roleDir = path.join(dir, role);
+    let roleEntries;
+    try {
+      roleEntries = fs.readdirSync(roleDir);
+    } catch {
+      continue;
+    }
+    for (const entry of roleEntries) {
+      if (!entry.endsWith(".json")) continue;
+      const taskId = entry.slice(0, -".json".length);
+      const record = readHandRecord(`${featureId}/${taskId}`, role);
+      if (record !== null) {
+        results.push({ taskId, role, record });
+      }
     }
   }
   return results;
@@ -191,10 +216,11 @@ export function listHandRecordsForFeature(featureId) {
  * anti-forgery guard: a marker for a dispatch that never happened has no file to stamp.
  * Never throws. Atomic write (temp -> rename), mirrors mergeGateState's strategy.
  * @param {string} qualifiedId - `${feature_id}/${task_id}`
+ * @param {"executor"|"sniper"} role - The hand role that owns this record.
  * @param {string} timestampIso - ISO-8601 timestamp string
  * @returns {boolean} true on success, false when the record is missing or the write fails
  */
-export function markHandRecordCaptured(qualifiedId, timestampIso) {
+export function markHandRecordCaptured(qualifiedId, role, timestampIso) {
   // Defense in depth: reject a qualifiedId whose feature/task segments are not both safe
   // kebab-case ids BEFORE doing anything — same rationale as listHandRecordsForFeature.
   const separatorIndex = String(qualifiedId).indexOf("/");
@@ -203,13 +229,14 @@ export function markHandRecordCaptured(qualifiedId, timestampIso) {
   if (!isSafeFeatureId(featureIdPart) || !isSafeFeatureId(taskIdPart)) {
     return false;
   }
-  const record = readHandRecord(qualifiedId);
+  const record = readHandRecord(qualifiedId, role);
   if (record === null) {
     return false;
   }
   try {
     const merged = { ...record, capturedVerifiedAt: timestampIso };
-    const targetPath = handRecordPathFor(qualifiedId);
+    const targetPath = handRecordPathFor(qualifiedId, role);
+    if (!targetPath) return false;
     const tmpPath = `${targetPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2), "utf8");
     fs.renameSync(tmpPath, targetPath);

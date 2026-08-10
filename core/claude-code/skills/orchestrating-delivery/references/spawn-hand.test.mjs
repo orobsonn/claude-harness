@@ -1153,6 +1153,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
@@ -1204,6 +1205,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
@@ -1256,6 +1258,7 @@ describe("runLiveDispatch wall-clock timeout — salvage-hang capture-then-class
     const descriptor = {
       feature_id: featureId,
       task_id: taskId,
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
@@ -1317,6 +1320,7 @@ describe("runLiveDispatch inline capture-verified stamp (#89)", () => {
     return {
       feature_id: featureId,
       task_id: taskId,
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
@@ -1556,6 +1560,7 @@ describe("runLiveDispatch wall-clock timeout — token never leaks + exact reaso
     const descriptor = {
       feature_id: "hand-wallclock-timeout",
       task_id: "task-1",
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
@@ -1641,6 +1646,7 @@ describe("runLiveDispatch wall-clock timeout — normal-exit regression guard (#
     const descriptor = {
       feature_id: "hand-wallclock-timeout",
       task_id: "task-1",
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
@@ -1727,6 +1733,7 @@ describe("runLiveDispatch consecutive-429 streak tracking (#ac-2.1)", () => {
     return {
       feature_id: "hand-rate-limit-streak",
       task_id: "task-1",
+      role: "executor",
       model: "glm-5.2",
       brief_file: briefFile,
       locked_test: lockedTest,
@@ -2156,5 +2163,55 @@ describe("runLiveDispatch consecutive-429 streak tracking (#ac-2.1)", () => {
     assert.ok(writeStreakCalls.length > 0, "writeStreak must have been called");
     assert.equal(writeStreakCalls[writeStreakCalls.length - 1].count, 0, "a timed-out non-429 dispatch resets the streak to 0");
     assert.equal(capturedRecord.rateLimitExhausted, false, "a timed-out non-429 dispatch must not be exhausted");
+  });
+});
+
+describe("runLiveDispatch role-isolated durable state (#370)", () => {
+  it("keeps executor capture evidence and 429 streak separate from a sniper on the same task", async () => {
+    const briefDir = mkdtempSync(join(tmpdir(), "hand-role-brief-"));
+    const briefFile = join(briefDir, "brief.txt");
+    writeFileSync(briefFile, "Implement the task", "utf8");
+    const stateDir = mkdtempSync(join(tmpdir(), "hand-role-state-"));
+    const freezeCommitSha = "role000000000000000000000000000000000001";
+    const base = {
+      feature_id: "role-isolation",
+      task_id: "task-1",
+      model: "glm-5.2",
+      brief_file: briefFile,
+      locked_test: "core/claude-code/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
+      freeze_commit_sha: freezeCommitSha,
+      scope_paths: ["core/"],
+      allowed_writes: ["core/"],
+    };
+    const spawn429 = (_cmd, args) =>
+      args?.includes("--test")
+        ? { status: 0, stdout: "# tests 1\n", stderr: "", output: [] }
+        : { status: 1, stdout: "", stderr: "429 Too Many Requests", output: [] };
+    const doneCapture = () => ({
+      child: { captured: true, touchedPaths: ["core/x.js"], exitCode: 0, lockedTestExitCode: 0, stdout: "", stderr: "" },
+      captured: true,
+      criticalException: false,
+    });
+    const notDoneCapture = () => ({
+      child: { captured: true, touchedPaths: [], exitCode: 0, lockedTestExitCode: 0, stdout: "", stderr: "" },
+      captured: true,
+      criticalException: false,
+    });
+
+    const executor = await runLiveDispatch({ ...base, role: "executor" }, {
+      spawn: spawn429, env: { ANTHROPIC_AUTH_TOKEN: "test-token" }, gitStatus: () => "",
+      headSha: () => freezeCommitSha, snapshotUntracked: () => new Map(), capture: doneCapture, stateDir,
+    });
+    const sniper = await runLiveDispatch({ ...base, role: "sniper" }, {
+      spawn: spawn429, env: { ANTHROPIC_AUTH_TOKEN: "test-token" }, gitStatus: () => "",
+      headSha: () => freezeCommitSha, snapshotUntracked: () => new Map(), capture: notDoneCapture, stateDir,
+    });
+
+    assert.equal(executor.record.outcome.status, "DONE");
+    assert.ok(executor.record.capturedVerifiedAt, "executor green capture remains stamped");
+    assert.equal(sniper.record.rateLimitExhausted, false, "sniper starts at its own 429 count, not executor's");
+    const executorRecord = JSON.parse(readFileSync(join(stateDir, "role-isolation", "executor", "task-1.json"), "utf8"));
+    assert.equal(executorRecord.outcome.status, "DONE");
+    assert.ok(executorRecord.capturedVerifiedAt);
   });
 });

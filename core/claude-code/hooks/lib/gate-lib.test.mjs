@@ -45,10 +45,10 @@ function withTempDir(fn) {
   }
 }
 
-test("handRecordPathFor nests the record under a per-feature directory: <feature>/<task>.json", () => {
+test("handRecordPathFor isolates the record by feature, role, and task", () => {
   assert.strictEqual(
-    handRecordPathFor("my-feature/task-1"),
-    path.join(".claude/plans/.state/hand-records", "my-feature", "task-1.json")
+    handRecordPathFor("my-feature/task-1", "executor"),
+    path.join(".claude/plans/.state/hand-records", "my-feature", "executor", "task-1.json")
   );
 });
 
@@ -60,25 +60,40 @@ test("listHandRecordsForFeature returns [] when the feature directory does not e
 
 test("listHandRecordsForFeature lists every task record under a feature directory", () => {
   withTempDir(() => {
-    const p1 = handRecordPathFor("feat-x/task-1");
-    const p2 = handRecordPathFor("feat-x/task-2");
+    const p1 = handRecordPathFor("feat-x/task-1", "executor");
+    const p2 = handRecordPathFor("feat-x/task-2", "sniper");
     fs.mkdirSync(path.dirname(p1), { recursive: true });
+    fs.mkdirSync(path.dirname(p2), { recursive: true });
     fs.writeFileSync(p1, JSON.stringify({ outcome: { status: "DONE" } }));
     fs.writeFileSync(p2, JSON.stringify({ outcome: { status: "FAILED" } }));
     const records = listHandRecordsForFeature("feat-x");
     assert.strictEqual(records.length, 2);
-    const byTaskId = Object.fromEntries(records.map((r) => [r.taskId, r.record]));
-    assert.strictEqual(byTaskId["task-1"].outcome.status, "DONE");
-    assert.strictEqual(byTaskId["task-2"].outcome.status, "FAILED");
+    const byTaskId = Object.fromEntries(records.map((r) => [r.taskId, r]));
+    assert.strictEqual(byTaskId["task-1"].record.outcome.status, "DONE");
+    assert.strictEqual(byTaskId["task-1"].role, "executor");
+    assert.strictEqual(byTaskId["task-2"].record.outcome.status, "FAILED");
+    assert.strictEqual(byTaskId["task-2"].role, "sniper");
   });
 });
 
 test("listHandRecordsForFeature skips a garbage JSON file instead of throwing", () => {
   withTempDir(() => {
-    const p1 = handRecordPathFor("feat-y/task-1");
+    const p1 = handRecordPathFor("feat-y/task-1", "executor");
     fs.mkdirSync(path.dirname(p1), { recursive: true });
     fs.writeFileSync(p1, "{not json");
     assert.deepStrictEqual(listHandRecordsForFeature("feat-y"), []);
+  });
+});
+
+test("listHandRecordsForFeature surfaces a legacy flat record as an identity error, never usable evidence", () => {
+  withTempDir(() => {
+    const legacy = path.join(".claude/plans/.state/hand-records", "feat-legacy", "task-1.json");
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, JSON.stringify({ outcome: { status: "DONE" } }));
+    assert.deepStrictEqual(listHandRecordsForFeature("feat-legacy"), [{
+      taskId: "task-1",
+      identityError: "legacy flat hand-record; re-dispatch the hand to create role-scoped evidence",
+    }]);
   });
 });
 
@@ -90,24 +105,24 @@ test("listHandRecordsForFeature rejects a path-traversal featureId instead of es
 
 test("markHandRecordCaptured rejects a path-traversal qualifiedId instead of writing outside hand-records", () => {
   withTempDir(() => {
-    assert.strictEqual(markHandRecordCaptured("../../evil/task-1", "2026-07-01T00:00:00.000Z"), false);
-    assert.strictEqual(markHandRecordCaptured("feat/../../evil", "2026-07-01T00:00:00.000Z"), false);
+    assert.strictEqual(markHandRecordCaptured("../../evil/task-1", "executor", "2026-07-01T00:00:00.000Z"), false);
+    assert.strictEqual(markHandRecordCaptured("feat/../../evil", "executor", "2026-07-01T00:00:00.000Z"), false);
   });
 });
 
 test("markHandRecordCaptured returns false and writes nothing when no record exists", () => {
   withTempDir(() => {
-    assert.strictEqual(markHandRecordCaptured("ghost/task-1", "2026-07-01T00:00:00.000Z"), false);
-    assert.strictEqual(fs.existsSync(handRecordPathFor("ghost/task-1")), false);
+    assert.strictEqual(markHandRecordCaptured("ghost/task-1", "executor", "2026-07-01T00:00:00.000Z"), false);
+    assert.strictEqual(fs.existsSync(handRecordPathFor("ghost/task-1", "executor")), false);
   });
 });
 
 test("markHandRecordCaptured stamps capturedVerifiedAt onto an existing record without losing other fields", () => {
   withTempDir(() => {
-    const p = handRecordPathFor("feat-z/task-1");
+    const p = handRecordPathFor("feat-z/task-1", "executor");
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify({ outcome: { status: "DONE" } }));
-    assert.strictEqual(markHandRecordCaptured("feat-z/task-1", "2026-07-01T00:00:00.000Z"), true);
+    assert.strictEqual(markHandRecordCaptured("feat-z/task-1", "executor", "2026-07-01T00:00:00.000Z"), true);
     const updated = JSON.parse(fs.readFileSync(p, "utf8"));
     assert.strictEqual(updated.capturedVerifiedAt, "2026-07-01T00:00:00.000Z");
     assert.strictEqual(updated.outcome.status, "DONE");
@@ -116,26 +131,40 @@ test("markHandRecordCaptured stamps capturedVerifiedAt onto an existing record w
 
 test("readHandRecord returns null when no record on disk", () => {
   withTempDir(() => {
-    assert.strictEqual(readHandRecord("feat/missing"), null);
+    assert.strictEqual(readHandRecord("feat/missing", "executor"), null);
   });
 });
 
 test("readHandRecord parses a written run-record by qualified id", () => {
   withTempDir(() => {
-    const p = handRecordPathFor("feat/task-1");
+    const p = handRecordPathFor("feat/task-1", "executor");
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify({ outcome: { status: "FAILED" }, exitCode: 1 }), "utf8");
-    const rec = readHandRecord("feat/task-1");
+    const rec = readHandRecord("feat/task-1", "executor");
     assert.strictEqual(rec?.outcome?.status, "FAILED");
   });
 });
 
 test("readHandRecord returns null on garbage JSON (fail-closed)", () => {
   withTempDir(() => {
-    const p = handRecordPathFor("feat/task-1");
+    const p = handRecordPathFor("feat/task-1", "executor");
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, "{ not json", "utf8");
-    assert.strictEqual(readHandRecord("feat/task-1"), null);
+    assert.strictEqual(readHandRecord("feat/task-1", "executor"), null);
+  });
+});
+
+test("executor and sniper records for the same task never overwrite or cross-read", () => {
+  withTempDir(() => {
+    const executorPath = handRecordPathFor("feat-x/task-1", "executor");
+    const sniperPath = handRecordPathFor("feat-x/task-1", "sniper");
+    fs.mkdirSync(path.dirname(executorPath), { recursive: true });
+    fs.mkdirSync(path.dirname(sniperPath), { recursive: true });
+    fs.writeFileSync(executorPath, JSON.stringify({ outcome: { status: "DONE" }, capturedVerifiedAt: "verified" }));
+    fs.writeFileSync(sniperPath, JSON.stringify({ outcome: { status: "FAILED" }, rateLimited: true }));
+    assert.strictEqual(readHandRecord("feat-x/task-1", "executor")?.outcome?.status, "DONE");
+    assert.strictEqual(readHandRecord("feat-x/task-1", "sniper")?.outcome?.status, "FAILED");
+    assert.strictEqual(readHandRecord("feat-x/task-1", "executor")?.capturedVerifiedAt, "verified");
   });
 });
 
