@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.11](https://github.com/orobsonn/claude-harness/compare/v0.55.10...v0.55.11) (2026-08-10)
+
+
+### Bug Fixes
+
+* stamp vendored release version ([#668](https://github.com/orobsonn/claude-harness/issues/668)) ([1c9291c](https://github.com/orobsonn/claude-harness/commit/1c9291c92626f0f09de6db8329b608822aefc5a8))
+
 ## [0.55.10](https://github.com/orobsonn/claude-harness/compare/v0.55.9...v0.55.10) (2026-08-10)
 
 
