@@ -172,6 +172,8 @@ classify({ mode, feature_id })
 
 This writes the plan stub + gate-state stamps that entry-gate / plan-gate consume. **Do not skip on a delivery path.**
 
+**Approved plan resumed:** when `metadata.action` is `resume-approved-plan`, load `oc-orchestrating-delivery` and start at the first unfinished delivery task. **Do not load `oc-brainstorming`, dispatch `planner`, or dispatch `plan-reviewer` again.** A plain `resume` restores an unfinished ceremony; follow the normal route from its pending phase.
+
 **Once per delivery session+feature.** Host `classify` is escalate-only after the first successful **delivery** stamp: same mode is a no-op; downgrade (e.g. LIGHT→QUICK) and feature-switch under QUICK/LIGHT/FULL are denied. A prior **no-ceremony** stamp (if any legacy path left one) does **not** pin `feature_id` — the next delivery classify may be `fresh` with a new feature. **Never** re-call `classify` mid-delivery to “unstick” a review cap or provider error — that is QUICK laundering and delivery rails will deny the ship.
 
 **HEADLESS note:** call `classify` for **QUICK, LIGHT, and FULL** only (delivery modes) so gate-state has `mode` + `feature_id`.
@@ -183,6 +185,8 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 | **QUICK** | Inline fix or craft (Step 2.1). Cheap rails + commit via `oc-committing-changes`. **No** full `oc-orchestrating-delivery`. Prefer writing the fix via a single `executor-*` only after a **full** plan exists if plan-gate is armed — for true 1-file QUICK, implement without executor hand if build may write; otherwise one executor after a minimal full plan. |
 | **LIGHT** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` LIGHT. |
 | **FULL** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` FULL. |
+
+The resumed-feature rule overrides this table.
 
 ---
 

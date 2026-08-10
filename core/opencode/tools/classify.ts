@@ -124,7 +124,7 @@ export async function executeClassify(
   if (transition.action === "fresh") {
     const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
     const resume = findFeatureResume(context.directory, finalFeatureId)
-    if (resume && resume.sessionId !== sessionID) {
+    if (resume && resume.sessionId !== sessionID && finalMode === resume.state.mode) {
       const adopted = adoptFeatureResume(context.directory, sessionID, resume, finalMode)
       if (!adopted.ok) {
         return errorResult("feature resume failed", adopted.reason, finalFeatureId)
@@ -133,7 +133,11 @@ export async function executeClassify(
         plan_path: adopted.planPath,
         mode: resume.state.mode,
         feature_id: finalFeatureId,
-        action: "resume",
+        action: finalMode === resume.state.mode && resume.state.session_status !== "completed" &&
+          resume.state.final_review_done !== true && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
+          (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
+          ? "resume-approved-plan"
+          : "resume",
         source_session_id: resume.sessionId,
       }
       return {
