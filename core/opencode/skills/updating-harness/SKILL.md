@@ -31,7 +31,15 @@ restart. In headless or relayed input, stop without modifying the harness.
 
 ---
 
-## Step 1 — Detect install-vs-update
+## Two distinct verbs — do not conflate them
+
+- **Sync (default):** refresh the shell(s) the project **already has** to the latest version.
+- **Add a runtime:** vendor a shell the project does **not** yet have. This is never inferred — it
+  requires explicit operator intent (`both`).
+
+---
+
+## Step 1 — Detect install-vs-update and resolve the runtime
 
 Detect by the OpenCode shell's version stamp:
 
@@ -39,9 +47,15 @@ Detect by the OpenCode shell's version stamp:
 test -f .opencode/.harness-version && echo update || echo install
 ```
 
-This OpenCode lane owns only the OpenCode shell. It always runs `--target opencode`; refreshing or
-adding the Claude shell is a separate Claude-side lifecycle. That keeps its local `.claude/` files
-outside this lane's ownership boundary.
+Resolve which runtime(s) to vendor (the public CLI's `--target`):
+
+- **Both `.claude/.harness-version` and `.opencode/.harness-version` exist:** `both`.
+- **Only `.opencode/.harness-version` exists:** `opencode` — the absent Claude shell is optional;
+  continue normally.
+- **Only `.claude/.harness-version` exists:** `claude`.
+- **A marker exists without its runtime shell:** stop; do not repair a partial install by inference.
+- **No marker exists:** install only the runtime explicitly requested by the operator.
+- **Add a runtime (explicit intent only):** `both`.
 
 ---
 
@@ -72,7 +86,7 @@ single clean command** — no trailing comment, no `&&`, no redirect — so the 
 auditable and cannot compose an unrelated shell operation. **Run the CLI from the git tag, not from npm:**
 
 ```bash
-npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target opencode
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
 ```
 
 > **Why the git tag, not `@orobsonn/claude-harness@latest`:** the npm-published version lags the repo
@@ -81,9 +95,11 @@ npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness i
 > has the OpenCode shell. Only use the npm form once a release **≥ the tag with OpenCode support** is
 > published (`npx -y "@orobsonn/claude-harness@>=0.40.0" …` fails loud if it is not).
 
-This vendors the OpenCode shell into `.opencode/` — the framework-owned trees `agents/`, `command/`,
+This vendors the selected shell(s). OpenCode goes into `.opencode/` — the framework-owned trees `agents/`, `command/`,
 `docs/`, `skills/`, `plugin/`, `tools/`, `hands/`, `rules/` plus `harness.routing.json`, `AGENTS.md`,
-`shared/` and `opencode.json` — and stamps `.opencode/.harness-version`.
+`shared/` and `opencode.json` — and stamps `.opencode/.harness-version`; `both` also refreshes
+the Claude shell in `.claude/`. The lifecycle shipper uses exact manifests for each selected shell,
+so a local plan, state file, plugin, or product file is never included in the PR.
 
 **Non-clobber guarantees (per shell):** `MEMORY.md`/`kaizen.md` are seeded only if absent; `AGENTS.md`
 is merged between harness markers (project content preserved); an existing `opencode.json` is updated

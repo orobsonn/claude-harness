@@ -140,14 +140,23 @@ function currentChangedPaths() {
   return [...new Set([...tracked, ...untracked])];
 }
 
-function ownershipManifest() {
-  const path = ".opencode/.harness-owned-files.json";
-  if (!existsSync(path)) throw new Error("missing .opencode/.harness-owned-files.json; re-run the harness update before lifecycle ship");
+const OWNERSHIP_MANIFESTS = [
+  ".opencode/.harness-owned-files.json",
+  ".claude/.harness-owned-files.json",
+];
+
+function readOwnershipManifest(path) {
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   if (parsed?.version !== 1 || !Array.isArray(parsed.files) || parsed.files.some((file) => typeof file !== "string")) {
-    throw new Error("invalid .opencode/.harness-owned-files.json");
+    throw new Error(`invalid ${path}`);
   }
-  return new Set(parsed.files.map(normalizedPath));
+  return parsed.files.map(normalizedPath);
+}
+
+function ownershipManifest() {
+  const present = OWNERSHIP_MANIFESTS.filter(existsSync);
+  if (present.length === 0) throw new Error("missing harness ownership manifest; re-run the harness update before lifecycle ship");
+  return new Set(present.flatMap(readOwnershipManifest));
 }
 
 function assertTrackedCleanOwnershipManifest(operation) {
@@ -168,9 +177,18 @@ export function legacyTrackedOwnership(trackedPaths) {
 }
 
 function snapshotOwnershipManifest() {
-  const path = ".opencode/.harness-owned-files.json";
-  if (existsSync(path)) return ownershipManifest();
-  return legacyTrackedOwnership(nulPaths(git(["ls-files", "-z"])));
+  const tracked = nulPaths(git(["ls-files", "-z"]));
+  const present = OWNERSHIP_MANIFESTS.filter(existsSync);
+  if (present.length === 0) return legacyTrackedOwnership(tracked);
+  const owned = ownershipManifest();
+  // A project updated from a release before the second runtime had an exact manifest still needs
+  // protection for that shell during this one transition. The fallback sees tracked legacy paths
+  // only; untracked local cargo is never promoted to lifecycle ownership.
+  for (const path of tracked) {
+    const shell = path.startsWith(".claude/") ? ".claude" : path.startsWith(".opencode/") ? ".opencode" : null;
+    if (shell && !existsSync(`${shell}/.harness-owned-files.json`) && isLifecyclePath(path)) owned.add(path);
+  }
+  return owned;
 }
 
 /** @param {string} operation */

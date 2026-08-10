@@ -151,3 +151,66 @@ test("automatic adoption commits only vendor paths and preserves staged product 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("automatic adoption unions exact OpenCode and Claude manifests without staging local cargo", () => {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-adopt-both-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const project = join(root, "project");
+  const git = (cwd, args) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  const mustGit = (cwd, args) => {
+    const result = git(cwd, args);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+
+  try {
+    assert.equal(spawnSync("git", ["init", "--bare", "--initial-branch=main", remote]).status, 0);
+    assert.equal(spawnSync("git", ["init", "--initial-branch=main", seed]).status, 0);
+    mustGit(seed, ["config", "user.email", "test@example.com"]);
+    mustGit(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, ".opencode"), { recursive: true });
+    mkdirSync(join(seed, ".claude"), { recursive: true });
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/harness.md"],
+    }));
+    writeFileSync(join(seed, ".claude", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".claude/agents/harness-config.md"],
+    }));
+    mkdirSync(join(seed, ".claude", "agents"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", "harness.md"), "before\n");
+    writeFileSync(join(seed, ".claude", "agents", "harness-config.md"), "before\n");
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    mustGit(seed, ["add", "."]);
+    mustGit(seed, ["commit", "-m", "base"]);
+    mustGit(seed, ["remote", "add", "origin", remote]);
+    mustGit(seed, ["push", "-u", "origin", "main"]);
+    assert.equal(spawnSync("git", ["clone", remote, project]).status, 0);
+    mustGit(project, ["config", "user.email", "test@example.com"]);
+    mustGit(project, ["config", "user.name", "Test"]);
+
+    writeFileSync(join(project, ".opencode", "harness.md"), "vendored OC\n");
+    writeFileSync(join(project, ".claude", "agents", "harness-config.md"), "vendored CC\n");
+    writeFileSync(join(project, "src", "product.js"), "operator work\n");
+    mkdirSync(join(project, ".claude", "plans"), { recursive: true });
+    writeFileSync(join(project, ".claude", "plans", "local.json"), "{}\n");
+    mustGit(project, ["add", "src/product.js"]);
+
+    const adopted = spawnSync(process.execPath, [toolPath, "adopt", "updating-harness"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    assert.equal(adopted.status, 0, adopted.stderr);
+    assert.deepEqual(
+      mustGit(project, ["show", "--format=", "--name-only", "HEAD"]).trim().split("\n"),
+      [".claude/agents/harness-config.md", ".opencode/harness.md"],
+    );
+    assert.equal(mustGit(project, ["diff", "--cached", "--name-only"]).trim(), "src/product.js");
+    assert.equal(existsSync(join(project, ".claude", "plans", "local.json")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
