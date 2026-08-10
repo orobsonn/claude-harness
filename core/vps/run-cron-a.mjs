@@ -238,13 +238,13 @@ export function runCronA(config, deps = {}) {
         .then((r) => {
           if (r && r.ok === false) {
             dispatchFailed = true;
-            safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number });
+            safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number, reason: r.reason });
           }
         })
         .catch(() => {});
     } else if (result && result.ok === false) {
       dispatchFailed = true;
-      safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number });
+      safeNotify({ type: "dispatch-failed", project: config.project, issue: issue.number, reason: result.reason });
     }
     return result;
   };

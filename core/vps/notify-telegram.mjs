@@ -209,7 +209,7 @@ export function formatEvent(event = {}) {
       return `${prefix} pegou issue ${issueRef}${title} — sessão iniciada${summaryLine}`;
     }
     case "dispatch-failed":
-      return `${prefix} falha ao despachar issue ${issueRef} — re-enfileirada`;
+      return `${prefix} falha ao despachar issue ${issueRef}${reason || ": causa indisponível"} — re-enfileirada`;
     case "session-done":
       return `${prefix} issue ${issueRef} concluída → PR ${prRef ?? "aberto"}`;
     case "session-requeued":
