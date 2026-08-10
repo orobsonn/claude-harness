@@ -235,6 +235,13 @@ test("a harness update automatically adopts an already-vendored harness without 
   assert.match(ship, /never\s+stages? a product path/i);
 });
 
+test("lifecycle shipping merges when the repository has no CI configured", () => {
+  const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
+
+  assert.match(ship, /no checks (?:are )?reported[\s\S]*continue to merge/i);
+  assert.match(ship, /GitHub branch rules remain the authority/i);
+});
+
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
   const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
   const rules = permissionRules(fm, "bash");

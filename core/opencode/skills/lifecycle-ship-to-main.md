@@ -86,8 +86,9 @@ Confirm `baseRefName` is the default (`main` or `master`). Otherwise stop; do no
 gh pr checks --watch
 ```
 
-Continue only with at least one completed `SUCCESS` or `NEUTRAL` check. If checks are absent,
-pending, failing, unknown, or GitHub cannot be read, stop with the PR URL.
+If `gh pr checks --watch` reports **no checks reported**, the repository has no CI configured:
+continue to merge. GitHub branch rules remain the authority for whether that merge is permitted.
+If any check is pending, failing, unknown, or GitHub cannot be read, stop with the PR URL.
 
 ```bash
 gh pr merge --squash --delete-branch
