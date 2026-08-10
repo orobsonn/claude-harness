@@ -504,6 +504,35 @@ Tailscale. Depois de parear uma vez, o celular reconecta sozinho nas próximas v
 rede funciona (só não é conexão direta, é via relay — normal em rede celular, não é problema). Se
 não voltar nada, o problema é mesmo de rede/Tailscale no celular, não do Orca.
 
+### 5.6 — Dando acesso de escrita a um segundo agente/usuário no mesmo projeto (opcional)
+
+Se em algum momento você quiser dar acesso a **outro agente de IA** (ex: Codex) ou outra pessoa a
+um projeto que o `orca` já usa — sem entregar a chave raiz da VPS — o padrão é: usuário Linux
+dedicado + ACL escopada só na(s) pasta(s) do(s) projeto(s) em questão (nunca a VPS inteira).
+
+🤖 A IA cria o usuário e concede acesso só ao projeto certo:
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> '
+useradd --create-home --shell /bin/bash <nome-do-usuario>
+setfacl -R -m u:<nome-do-usuario>:rwX /home/orca/orca/projects/<projeto>
+setfacl -R -d -m u:<nome-do-usuario>:rwX /home/orca/orca/projects/<projeto>
+'
+```
+
+**Gotcha crítico — a ACL tem que ser simétrica nos dois sentidos.** Se o projeto já é usado pelo
+`orca` (Orca/OpenCode escrevendo nele), a ACL acima só dá permissão de volta pro usuário novo.
+Qualquer arquivo/pasta que **ele** criar (ex: `.git/objects/xx/` de um commit dele) nasce sem
+entrada de ACL pro `orca` — o `orca` cai no bucket "other" (só leitura) nessa pasta nova. Na
+prática isso aparece assim: o agente original tenta commitar/dar push depois do novo e recebe algo
+como "Git não tem permissão para gravar em .git/objects". O fix é dar a mesma ACL pros **dois**
+usuários, nos dois modos (atual + default, pra valer em arquivos futuros também):
+```bash
+setfacl -R -m u:orca:rwX,u:<nome-do-usuario>:rwX /home/orca/orca/projects/<projeto>
+setfacl -R -d -m u:orca:rwX,u:<nome-do-usuario>:rwX /home/orca/orca/projects/<projeto>
+```
+Roda isso **toda vez que um projeto passa a ser compartilhado por dois usuários** — não é
+automático, e o erro só aparece depois que os dois já escreveram alguma coisa cada um.
+
 ---
 
 ## Cuidado com capacidade (memória/CPU)
