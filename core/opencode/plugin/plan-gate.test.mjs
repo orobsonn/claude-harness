@@ -325,6 +325,46 @@ test("bound-plan prompt injection is idempotent across duplicate hook instances 
   })
 })
 
+test("bound-plan gate replaces one terminal prior binding during plan re-review", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath } = seedUsableBoundProject(root)
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const currentSha = state.planner_plan_binding.snapshot_hash
+    const priorSha = "a".repeat(64)
+    const hooks = await createPlanGateHooks(root)
+    const output = { args: {
+      description: "re-review revised plan",
+      subagent_type: "plan-reviewer",
+      prompt: `Review the revised plan.\n\n[HARNESS_BOUND_PLAN sha256=${priorSha}]\n{"stale":"must be discarded"}\n[/HARNESS_BOUND_PLAN]`,
+    } }
+
+    await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output))
+    assert.match(output.args.prompt, new RegExp(`\\[HARNESS_BOUND_PLAN sha256=${currentSha}\\]`))
+    assert.doesNotMatch(output.args.prompt, new RegExp(priorSha))
+    assert.doesNotMatch(output.args.prompt, /must be discarded/)
+  })
+})
+
+test("bound-plan gate keeps ambiguous or non-terminal stale blocks fail-closed", async () => {
+  await withTempRoot(async (root) => {
+    seedUsableBoundProject(root)
+    const hooks = await createPlanGateHooks(root)
+    const priorSha = "b".repeat(64)
+    const block = `[HARNESS_BOUND_PLAN sha256=${priorSha}]\n{}\n[/HARNESS_BOUND_PLAN]`
+    for (const prompt of [
+      `Review.\n\n${block}\n\n${block}`,
+      `Review.\n\n${block}\nUntrusted suffix.`,
+      "Review.\n\n[HARNESS_BOUND_PLAN sha256=deadbeef]\n{}\n[/HARNESS_BOUND_PLAN]",
+    ]) {
+      const output = { args: { description: "review", subagent_type: "plan-reviewer", prompt } }
+      await assert.rejects(
+        () => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output),
+        /conflicting bound-plan prompt marker/,
+      )
+    }
+  })
+})
+
 test("bound-plan gate replaces one terminal same-SHA partial block with canonical bytes", async () => {
   await withTempRoot(async (root) => {
     const { statePath } = seedUsableBoundProject(root)
