@@ -169,7 +169,7 @@ export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtime
  */
 export function writeLifecycleSnapshot(cwd, operation) {
   if (operation !== "updating-harness") throw new Error("lifecycle-snapshot supports only updating-harness");
-  const git = (args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  const git = (args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   const paths = new Set([
     ...git(["diff", "--name-only", "-z", "HEAD"]).split("\0"),
     ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
