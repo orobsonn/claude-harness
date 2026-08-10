@@ -59,8 +59,8 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 
 ### Deploy (Cloudflare Workers — padrao do stack)
 - **2 modos** — skill `/deploy` pergunta sempre, nao decide sozinha:
-  - **Direto** (`wrangler deploy`): ~5s, sobe 100% direto. Recomendado pra MVP/staging/projetos sem usuario real ainda. Sem preview, sem smoke entre etapas
-  - **Versionado** (`wrangler versions upload` → smoke preview → `versions deploy @100%` → smoke prod): ~30s a mais. Recomendado pra prod com usuario real. `versions upload` gera URL `<version-id>-<worker>.<subdomain>.workers.dev` sem roteamento publico — bate `/health` antes de promover
+  - **Direto** (`wrangler deploy`): ~5s, sobe 100% direto. Recomendado pra MVP/staging/projetos sem usuario real ainda. Sem preview, sem smoke entre etapas <!-- release-guard:allow-mention -->
+  - **Versionado** (`wrangler versions upload` → smoke preview → `versions deploy @100%` → smoke prod): ~30s a mais. Recomendado pra prod com usuario real. `versions upload` gera URL `<version-id>-<worker>.<subdomain>.workers.dev` sem roteamento publico — bate `/health` antes de promover <!-- release-guard:allow-mention -->
 - **Default sugerido pela skill** baseado em sinais do `<projeto>/.claude/CLAUDE.md` (tem dominio custom em prod? menciona usuarios reais?). Sempre confirma com usuario
 - Rollback rapido (vale pros 2 modos — Cloudflare versiona internamente todo deploy): `wrangler rollback [version-id-anterior]` — segundos, sem rebuild
 - Outras plataformas (Vercel, Pages): seguir convencao equivalente do `<projeto>/.claude/CLAUDE.md`
@@ -129,7 +129,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 - **Fluxo de deploy seguro (Cloudflare Worker)**:
   ```bash
   # 1. Upload da versao sem rotear trafego
-  UPLOAD_OUT=$(wrangler versions upload --message "vX.Y.Z" 2>&1)
+  UPLOAD_OUT=$(wrangler versions upload --message "vX.Y.Z" 2>&1)  # release-guard:allow-mention
   VERSION_ID=$(echo "$UPLOAD_OUT" | grep -oE '[a-f0-9-]{36}' | head -1)
   PREVIEW_URL=$(echo "$UPLOAD_OUT" | grep -oE 'https://[a-z0-9-]+\.workers\.dev')
 
@@ -137,7 +137,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
   curl -fsS "$PREVIEW_URL/health" || { echo "Smoke preview falhou — abortando"; exit 1; }
 
   # 3. Promover a 100%
-  wrangler versions deploy "$VERSION_ID@100%" --yes
+  wrangler versions deploy "$VERSION_ID@100%" --yes  # release-guard:allow-mention
 
   # 4. Smoke contra prod
   curl -fsS "https://<dominio-prod>/health" || { echo "Smoke prod falhou — rollback urgente"; exit 1; }
@@ -181,7 +181,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 
 - **Numeracao de migration colidindo com branch concorrente**: ao criar `NNNN_nome.sql`, checar `ls migrations/ | grep -E '^NNNN'` contra `origin/main` (nao so o working tree local) — PRs paralelos podem reservar o mesmo numero. Dois arquivos com o mesmo prefixo nao quebram (wrangler rastreia por nome, nao por numero), mas e smell e confunde ordem
 - **`d1 migrations apply --remote` fora do fluxo de deploy**: aplicar migration em prod durante demo/validacao (antes do merge) cria drift e abre janela pra colisao de numero com outro PR que mergeia no meio. Migration em prod **so** no deploy formal; pra validar antes, usar `--local` ou aceitar a feature atras do deploy
-- **`wrangler versions deploy` sem `--yes`**: o prompt interativo trava em pipe (`yes |` NAO satisfaz) — em background vira task pendurada. Sempre `wrangler versions deploy "<id>@100%" --yes`
+- **`wrangler versions deploy` sem `--yes`**: o prompt interativo trava em pipe (`yes |` NAO satisfaz) — em background vira task pendurada. Sempre `wrangler versions deploy "<id>@100%" --yes` <!-- release-guard:allow-mention -->
 - **Commit de release direto em `main`**: viola auditoria. Sempre via branch `chore/release-X.Y.Z` + PR (ate em time de 1, pra ter history limpa e revertable)
 - **`awk` com range `/a/,/b/`**: linha do header bate com os dois padroes. Usar flag-based: `/^## \[X.Y.Z\]/{flag=1; next} /^## \[/{flag=0} flag`
 - **`--latest` ausente em `gh release create`**: release aparece no historico mas nao e promovida na sidebar do repo
@@ -189,7 +189,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 - **Esquecer de mover `[Unreleased]`**: se commitar bump sem mover, awk extrai vazio. Validar com `head -30 CHANGELOG.md` antes
 - **CI nao roda em push direto pra main nem em tags**: validar localmente antes (`npx tsc --noEmit && npm test`). PR de release faz CI bater de novo, pega ultimo regressao
 - **`npm version` sem `--no-git-tag-version`**: cria tag automatica que nao agrupa com o commit do CHANGELOG e suja a branch. Usar a flag
-- **`wrangler deploy` em vez de `versions upload` + `versions deploy`**: vai pros 100% direto sem smoke. Bug em prod pra todo mundo na hora. Default seguro e versions
+- **`wrangler deploy` em vez de `versions upload` + `versions deploy`**: vai pros 100% direto sem smoke. Bug em prod pra todo mundo na hora. Default seguro e versions <!-- release-guard:allow-mention -->
 - **Smoke pulado "porque foi mudanca pequena"**: 100% dos disasters em prod sao "mudanca pequena". Smoke obrigatorio, sem excecao
 - **Rollback via `git revert + redeploy`**: gasta minutos rebuilding. `wrangler rollback <version-id>` reverte em segundos sem rebuild
 - **Squash merge ausente nas settings do repo**: merge commit em PR de release vira ruido no CHANGELOG futuro. Configurar `Allow squash merging` apenas
