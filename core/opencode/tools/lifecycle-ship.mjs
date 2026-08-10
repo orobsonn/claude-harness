@@ -150,6 +150,18 @@ function ownershipManifest() {
   return new Set(parsed.files.map(normalizedPath));
 }
 
+function assertTrackedCleanOwnershipManifest(operation) {
+  const path = ".opencode/.harness-owned-files.json";
+  if (operation === "updating-harness") return;
+  try {
+    git(["ls-files", "--error-unmatch", path]);
+    git(["diff", "--quiet", "--", path]);
+    git(["diff", "--cached", "--quiet", "--", path]);
+  } catch {
+    throw new Error("routing requires a tracked, clean .opencode/.harness-owned-files.json");
+  }
+}
+
 /** @param {string[]} trackedPaths */
 export function legacyTrackedOwnership(trackedPaths) {
   return new Set(trackedPaths.map(normalizedPath).filter(isLifecyclePath));
@@ -213,6 +225,11 @@ export function prepareLifecycleShip(operation) {
     return { action: "resume", branch: git(["branch", "--show-current"]).trim(), paths: resumedPaths };
   }
   const baseline = readBaseline(operation);
+  const preexistingOwned = selectOwnedPaths([...baseline.paths], owned);
+  if (preexistingOwned.length > 0) {
+    throw new Error(`pre-existing tracked change in lifecycle-owned cargo: ${preexistingOwned.join(", ")}`);
+  }
+  assertTrackedCleanOwnershipManifest(operation);
   const afterSnapshot = current.filter((path) => !baseline.paths.has(path));
   const { paths } = { paths: selectOwnedPaths(afterSnapshot, owned) };
   if (paths.length === 0) return { action: "noop", branch, paths: [] };

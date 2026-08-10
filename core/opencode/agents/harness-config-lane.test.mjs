@@ -214,6 +214,7 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
     /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target opencode/,
   );
   assert.doesNotMatch(skill, /npx -y "github:orobsonn\/claude-harness#<latest-tag>" init/);
+  assert.match(skill, /claude-harness lifecycle-snapshot updating-harness/);
 });
 
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {

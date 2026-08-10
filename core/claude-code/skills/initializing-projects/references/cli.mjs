@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -158,6 +158,27 @@ export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtime
   }
   runVendor({ source: SOURCE_URL, ref: tag, target: cwd, withCodex, runtimeTarget });
   return tag;
+}
+
+/**
+ * Records the pre-vendor worktree state in .git so the newly vendored lifecycle helper can stage
+ * only files that appeared during this update. This is deliberately available from the release
+ * CLI: an older project cannot call a helper it has not vendored yet.
+ * @param {string} cwd
+ * @param {string} operation
+ */
+export function writeLifecycleSnapshot(cwd, operation) {
+  if (operation !== "updating-harness") throw new Error("lifecycle-snapshot supports only updating-harness");
+  const git = (args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  const paths = new Set([
+    ...git(["diff", "--name-only", "-z", "HEAD"]).split("\0"),
+    ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+  ].filter(Boolean));
+  const target = resolve(cwd, git(["rev-parse", "--git-path", `harness-lifecycle-${operation}.json`]).trim());
+  const tmp = `${target}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ version: 1, paths: [...paths] })}\n`, { mode: 0o600 });
+  renameSync(tmp, target);
+  return paths.size;
 }
 
 /**
@@ -335,12 +356,24 @@ async function main() {
     return;
   }
 
+  if (command === "lifecycle-snapshot") {
+    try {
+      const count = writeLifecycleSnapshot(process.cwd(), process.argv[3]);
+      process.stdout.write(`[claude-harness] lifecycle snapshot captured (${count} existing path(s))\n`);
+    } catch (err) {
+      process.stderr.write(`[claude-harness] ${err.message}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (command !== "setup-local") {
     process.stderr.write(
       "Usage:\n" +
         "  npx claude-harness init --target opencode|claude|both [--with-codex]\n" +
-        "  npx claude-harness setup-local [--target opencode|claude|both] [--with-codex]\n" +
-        "  npx claude-harness setup-vps\n"
+      "  npx claude-harness setup-local [--target opencode|claude|both] [--with-codex]\n" +
+      "  npx claude-harness lifecycle-snapshot updating-harness\n" +
+      "  npx claude-harness setup-vps\n"
     );
     process.exit(1);
   }

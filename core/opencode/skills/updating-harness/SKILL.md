@@ -49,12 +49,11 @@ outside this lane's ownership boundary.
 
 First resolve the latest release tag (the CLI runs from that pinned tag):
 
-Immediately before the first write, capture the lifecycle baseline. It permits unrelated product
-work but rejects a pre-existing edit to a harness-owned file, because that edit cannot safely be
-separated from the update later:
+Immediately before the first write, use the pinned CLI to capture the lifecycle baseline. This works
+even when the project still has an older harness with no local lifecycle helper:
 
 ```bash
-node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness lifecycle-snapshot updating-harness
 ```
 
 ```bash

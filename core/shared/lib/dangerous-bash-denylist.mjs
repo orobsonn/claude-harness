@@ -151,6 +151,7 @@ export const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "source *": "deny",
   ". *": "deny",
   "npx tsc --noEmit*": "allow",
+  "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness": "allow",
   "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init*": "allow",
   "npx github:orobsonn/claude-harness#v* init*": "allow",
   "npx -y github:orobsonn/claude-harness#v* init*": "allow",
