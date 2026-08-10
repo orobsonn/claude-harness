@@ -28,6 +28,7 @@ const { default: MarkerAuthority } = await import("./marker-authority.ts");
 const { writeHandRecord } = await import("../lib/hand-records.mjs");
 const { formatFeatureTaskEntry } = await import("../../shared/lib/absolution.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
+const { projectRuntimeTodo } = await import("../lib/runtime-todo-projection.mjs");
 
 function statePath(root, sessionID = "ses-authority") {
   return path.join(root, ".opencode", "plans", ".state", sessionID, "gate-state.json");
@@ -109,6 +110,13 @@ function seed(root) {
   return { file, bytes };
 }
 
+function seedPlan(root, tasks = [TASK]) {
+  const file = path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`, "execution-plan.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ feature_id: FEATURE, tasks: tasks.map((id) => ({ id })) }));
+  return file;
+}
+
 async function harness(root) {
   const hooks = await MarkerAuthority({ directory: root, worktree: root });
   return {
@@ -142,6 +150,7 @@ test("real before-hook object identity writes only the plain boolean workflow fa
     await before({ tool: "mark", sessionID: "ses-authority", callID: "call-authority" }, { args });
     const result = await execute(args, context());
     assert.equal(result.metadata.ok, true, result.output);
+    assert.deepEqual(result.metadata.todo_projection, { available: false }, "a missing plan must never offer an empty list that clears native todos");
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(state.brainstormed, true);
     assert.equal(state.brainstormed_binding, undefined);
@@ -406,6 +415,28 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
     assert.equal(replay.metadata.ok, true, replay.output);
     assert.deepEqual(fs.readFileSync(file), stableState);
     assert.deepEqual(fs.readFileSync(recordPath), stableRecord);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("successful task marks return the canonical todo projection for immediate native todowrite", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-todo-projection-"));
+  try {
+    seed(root);
+    seedPlan(root);
+    const { sha } = seedDoneHandRecord(root, "DONE");
+    const { before, execute } = await harness(root);
+    const started = await markOnce(before, execute, "fidelity", { task_id: TASK, sha }, "call-todo-fidelity");
+    assert.equal(started.metadata.ok, true, started.output);
+    assert.equal(started.metadata.todo_projection.todos.find((todo) => todo.content === `Deliver task: ${TASK}`)?.status, "in_progress");
+
+    assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-todo-finished")).metadata.ok, true);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-todo-captured");
+    assert.equal(captured.metadata.ok, true, captured.output);
+    assert.equal(captured.metadata.todo_projection.todos.find((todo) => todo.content === `Deliver task: ${TASK}`)?.status, "completed");
+    assert.deepEqual(captured.metadata.todo_projection, projectRuntimeTodo(root, SESSION));
+    assert.match(captured.output, /todowrite/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
