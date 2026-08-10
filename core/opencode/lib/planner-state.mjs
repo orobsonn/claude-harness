@@ -127,10 +127,23 @@ export function bindPlannerArtifact(previous, input = {}) {
   if (active.baseline_plan?.fingerprint && active.baseline_plan.fingerprint === artifact.fingerprint) {
     return { ok: false, reason: "planner returned the canonical plan unchanged", state };
   }
+  const previousPlanHash = state.planner_plan_binding?.semantic_hash;
+  const planChanged = typeof previousPlanHash === "string" && previousPlanHash !== artifact.semanticHash;
   return {
     ok: true,
     state: {
       ...state,
+      ...(planChanged ? {
+        fidelity_pass: [],
+        hand_finished: [],
+        capture_verified: [],
+        regate_pending: [],
+        regate_passed: [],
+        final_review_done: false,
+        demo_done: false,
+        delivery_status: null,
+        plan_review_verdict: null,
+      } : {}),
       planner_status: "usable",
       planner_active_attempt: null,
       planner_last_attempt: { ...active, result: "bound" },

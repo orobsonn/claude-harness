@@ -12,8 +12,9 @@ function complete(value) {
 }
 
 /** @description Return a stable todo list from a validated plan plus persisted workflow facts. Never throws. */
-export function projectHarnessTodo(plan, state = {}) {
+export function projectHarnessTodo(plan, state = {}, options = {}) {
   const safeState = state && typeof state === "object" && !Array.isArray(state) ? state : {};
+  const isAncestor = typeof options.isAncestor === "function" ? options.isAncestor : () => false;
   const featureId = typeof safeState.feature_id === "string" ? safeState.feature_id : "feature";
   const tasks = Array.isArray(plan?.tasks) ? plan.tasks.filter((task) => task && isSafeTaskId(task.id)) : [];
   const planned = tasks.length > 0;
@@ -26,14 +27,14 @@ export function projectHarnessTodo(plan, state = {}) {
 
   for (const task of tasks) {
     const key = `${featureId}/${task.id}`;
-    const captured = matchesAbsolution(key, safeState.capture_verified, () => true);
-    const fidelity = matchesAbsolution(key, safeState.fidelity_pass, () => true);
+    const captured = matchesAbsolution(key, safeState.capture_verified, isAncestor);
+    const fidelity = matchesAbsolution(key, safeState.fidelity_pass, isAncestor);
     const status = captured ? "completed" : fidelity ? "in_progress" : "pending";
     out.push(item(`Deliver task: ${task.id}`, status));
   }
 
   const allCaptured = planned && tasks.every((task) =>
-    matchesAbsolution(`${featureId}/${task.id}`, safeState.capture_verified, () => true),
+    matchesAbsolution(`${featureId}/${task.id}`, safeState.capture_verified, isAncestor),
   );
   out.push(item("Complete final review", complete(allCaptured && safeState.final_review_done === true)));
   out.push(item("Validate the demo", complete(safeState.demo_done === true), "medium"));

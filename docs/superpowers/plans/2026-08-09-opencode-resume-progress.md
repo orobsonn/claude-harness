@@ -23,14 +23,16 @@
 **Files:**
 
 - Modify: `core/opencode/lib/feature-resume.mjs`
-- Test: `core/opencode/lib/feature-resume.test.mjs`
+- Modify: `core/opencode/lib/planner-state.mjs`, `core/opencode/lib/todo-projection.mjs`, `core/opencode/tools/classify.ts`, `core/opencode/tools/sync-harness-todo.ts`
+- Create: `core/opencode/lib/classify-resume.mjs`
+- Test: `core/opencode/lib/feature-resume.test.mjs`, `core/opencode/lib/planner-state.test.mjs`, `core/opencode/lib/todo-projection.test.mjs`, `core/opencode/lib/classify-resume.test.mjs`
 
 **Interfaces:**
 
 - Consumes: gate-state JSON, canonical `execution-plan.json`, and planner snapshot binding.
 - Produces: `findFeatureResume(projectRoot, featureId)` candidate with `sessionId`, canonical plan identity, valid `planPath`, state, and plan.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```js
 assert.equal(resume.sessionId, resumedSession);
@@ -40,13 +42,13 @@ assert.equal(adoptedState.resumed_from_session_id, sourceSession);
 assert.equal(adoptedState.resume_state_source_session_id, resumedSession);
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `node --test core/opencode/lib/feature-resume.test.mjs`
 
 Expected: FAIL because discovery only considers the first session that owns a plan directory.
 
-- [ ] **Step 3: Implement minimal validated discovery**
+- [x] **Step 3: Implement minimal validated discovery**
 
 ```js
 const candidates = listFeatureGateStates(projectRoot, featureId)
@@ -56,15 +58,15 @@ const candidates = listFeatureGateStates(projectRoot, featureId)
   .sort(compareResumeProgress);
 ```
 
-Resolve and group candidates by immutable bound-plan identity. Select progress only from the authoritative identity, then keep that identity's canonical session in `resumed_from_session_id` during adoption.
+Resolve and group candidates by immutable bound-plan identity. Select progress only when every resumable approved candidate has the same identity; ambiguous concurrent revisions fail closed. Keep that identity's canonical session in `resumed_from_session_id` during adoption.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `node --test core/opencode/lib/feature-resume.test.mjs`
 
 Expected: PASS with later-session progress retained and no cross-plan progress reuse.
 
-- [ ] **Step 5: Run relevant regressions**
+- [x] **Step 5: Run relevant regressions**
 
 Run: `node --test core/opencode/lib/feature-resume.test.mjs core/opencode/lib/planner-artifact.test.mjs core/opencode/plugin/reinject-state.test.mjs core/opencode/lib/todo-projection.test.mjs`
 
