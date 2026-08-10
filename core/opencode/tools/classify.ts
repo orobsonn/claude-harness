@@ -124,7 +124,7 @@ export async function executeClassify(
   if (transition.action === "fresh") {
     const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
     const resume = findFeatureResume(context.directory, finalFeatureId)
-    if (resume && resume.sessionId !== sessionID) {
+    if (resume && resume.sessionId !== sessionID && finalMode === resume.state.mode) {
       const adopted = adoptFeatureResume(context.directory, sessionID, resume, finalMode)
       if (!adopted.ok) {
         return errorResult("feature resume failed", adopted.reason, finalFeatureId)
