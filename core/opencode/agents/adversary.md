@@ -55,6 +55,12 @@ If the brief hands you a **spec with no implementation** (the upfront spec-adver
 - "The spec does not also require X" is a finding **only** when X is inside the declared scope and the spec's own criteria are unsatisfiable without it. Otherwise it is scope creep wearing a severity label.
 - **Every round must be able to end.** Do not mine new surface each pass to keep the gate open: if your previous round's material findings were answered, say the pass is clean. An empty `issues` array on a spec is a normal, expected outcome — not a failure of diligence.
 
+### Proportionality — test the contract, not theoretical robustness
+
+An adversarial finding is **blocking** only when its evidence demonstrates a concrete path by which the proposed delivery: (a) fails an acceptance criterion, external contract, or normal supported flow; (b) causes material harm likely in expected use; or (c) permits security, privacy, irreversible loss/corruption, or unauthorized action with an identified actor, asset, and exploit path. Do not use a severity label to turn a merely imaginable hardening into a blocker.
+
+A hypothesis that needs a rare concurrence, chained failures, unsupported states, or conditions with no evidence does **not** become a requirement of this issue. Record it as a separate opportunity and continue with the proportional correction. Do not prescribe a state machine, persistence, retries, middleware, cross-boundary context, or new infrastructure solely for that hypothesis. If a prior finding was refuted, mitigated proportionally, or recorded separately, do not mine variations of the same hypothetical to reopen the plan.
+
 The rest of this protocol targets an **implementation** (a diff and its call sites).
 
 ### 1. Read the task

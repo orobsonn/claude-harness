@@ -59,6 +59,16 @@ defect, evidence, chosen repair, and gates. Never disable a rail. Never relax a 
 marker, or use an executor to repair a frozen test — only `test-author` may do that, followed by
 fidelity and freeze again.
 
+**Proportionality before escalation:** a finding is material only when evidence shows the proposed delivery
+fails an acceptance criterion, external contract, or normal supported flow; causes material likely harm in
+expected use; or creates a concrete security, privacy, irreversible-loss/corruption, or unauthorized-action
+path with identified actor, asset, and exploit. Unsupported rare chains, chained failures, and states outside
+the contract are separate opportunities, not reasons to widen this issue. Do not introduce a state machine,
+persistence, retries, middleware, cross-boundary context, or new infrastructure solely for such hardening.
+That expansion is allowed only when the AC/contract already requires it, concrete evidence requires it, or a
+qualifying safety risk cannot be mitigated locally. Record the opportunity succinctly; preserve the proportional
+correction and continue.
+
 ---
 
 ## Macro-flow
@@ -178,7 +188,7 @@ After every durable phase transition, refresh the visual todo immediately. For `
    - The canonical runtime copy is `.opencode/plans/<sessionID>-<feature_id>/spec.md`. This is the spec passed to the planner; the plain persisted `brainstormed` workflow fact records completion separately.
 4. **Upfront spec-adversary (mandatory LIGHT/FULL):** identify the existing paths implicated by the spec and pass them as `scope_paths` (empty is valid only when no existing file is implicated). Dispatch `adversary` (+ optional `adversary-family-2` only when `roles.adversary.secondEyeModel` is set). The Task prompt MUST require both passes and `evidence: "file:anchor"`; use a function/exported symbol for code or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Only a greenfield surface with no existing file is narrative N/A. It MUST follow the exact JSON schema and MUST NOT request `SHIP`/`BLOCK`, `verdict`, `mechanism`, `sweep`, `blockers`, or any extra field. Primary returns only `{ "issues": [...] }`.
 
-   **Acceptance is defined, and "clean" is not the only way out.** No unresolved medium/high finding → the pass is accepted: stamp the marker and go to the plan. A material finding → revise `spec.md` so it is answered (a criterion that pins the behaviour, or an explicit locked decision that accepts it), then re-attack. Under the autonomy directive, repair same-contract engineering and re-attack without asking; ask only if resolving it requires a changed product behavior. Headless records unresolved risks in `spec.md` under "Open risks", proceeds only by explicit orchestrator judgment, and includes them in the PR body for the human gate.
+   **Acceptance is defined, and "clean" is not the only way out.** Apply **Proportionality before escalation**. No unresolved material finding → the pass is accepted: stamp the marker and go to the plan. A material finding → revise `spec.md` so it is answered (a criterion that pins the behaviour, or an explicit locked decision that accepts it), then re-attack. A separate opportunity is recorded as a concise open risk; it does not widen the spec or reopen the pass. Under the autonomy directive, repair same-contract engineering and re-attack without asking; ask only if resolving it requires a changed product behavior. Headless records unresolved risks in `spec.md` under "Open risks", proceeds only by explicit orchestrator judgment, and includes them in the PR body for the human gate.
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does AND surface **each locked decision in plain product terms**. **Do not show code or schema.**  
 **AUTONOMOUS / HEADLESS:** no wait — adversary clean is the gate; record the spec summary in the run evidence / PR body.
