@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.34](https://github.com/orobsonn/claude-harness/compare/v0.55.33...v0.55.34) (2026-08-11)
+
+
+### Bug Fixes
+
+* **opencode:** bound spec adversary reattacks ([#720](https://github.com/orobsonn/claude-harness/issues/720)) ([63f0f95](https://github.com/orobsonn/claude-harness/commit/63f0f952e66c2fd5326fadde527ec7d60834587c))
+
 ## [0.55.33](https://github.com/orobsonn/claude-harness/compare/v0.55.32...v0.55.33) (2026-08-11)
 
 
