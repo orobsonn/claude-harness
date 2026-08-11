@@ -28,3 +28,12 @@ test("updating-harness — an OpenCode-only project does not treat an absent Cla
   assert.match(skill, /never use `read` to probe an absent optional shell/i);
   assert.match(skill, /absent Claude marker means `opencode`/i);
 });
+
+test("updating-harness — recovery lands the tag requested by this invocation", () => {
+  assert.match(skill, /resolve the latest release tag\s+\*\*once\*\*/i);
+  assert.match(skill, /after `adopt` has been merged/i);
+  assert.match(skill, /first line of `.opencode\/\.harness-version`/i);
+  assert.match(skill, /exactly one normal update pass/i);
+  assert.match(skill, /never resolve the latest tag again\s+or make a third pass/i);
+  assert.match(skill, /installed version differs from the resolved tag/i);
+});
