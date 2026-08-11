@@ -183,7 +183,7 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 
 | Mode | Action |
 |---|---|
-| **QUICK** | `build` never writes product code itself — dispatch a **single** `executor-low`/`executor-medium` (Step 2.1: artisan skill for craft) — **no plan required**. With no planner lifecycle started for this session, `plan-gate`'s full-plan check is the fail-open operator/fix-mode branch (no binding, no throw); it only turns strict once a planner attempt exists. Cheap rails + commit via `oc-committing-changes`. **No** `oc-orchestrating-delivery`, no brainstorming, no full loop. |
+| **QUICK** | `build` edits the fix directly itself (or routes to the artisan skill for craft, Step 2.1) — **no plan, no `executor-*` dispatch**. `entry-gate` hard-blocks any executor/sniper dispatch while mode is QUICK ("mode 'QUICK' forbids executor-low — classify LIGHT or FULL BEFORE dispatching any delivery agent"), so a direct `build` edit (it holds `edit: allow`) is QUICK's only legal path — see `build.md`'s QUICK exception. Cheap rails + commit via `oc-committing-changes`. **No** `oc-orchestrating-delivery`, no brainstorming, no full loop. |
 | **LIGHT** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` LIGHT. |
 | **FULL** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` FULL. |
 
