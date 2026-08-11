@@ -217,7 +217,9 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
     /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>/,
   );
   assert.doesNotMatch(skill, /claude-harness lifecycle-snapshot updating-harness/);
-  assert.match(skill, /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist.*`both`/s);
+  assert.match(skill, /test -f \.claude\/\.harness-version && echo claude \|\| echo no-claude/);
+  assert.doesNotMatch(skill, /test -d \.opencode/);
+  assert.match(skill, /OpenCode result `update` plus Claude result `claude`: `both`/);
   assert.equal(resolveBash(rules, "test -f .claude/.harness-version"), "allow");
   assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness lifecycle-update --target claude --ref v0.55.22"), "allow");
   assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness lifecycle-update --target both --ref v0.55.22"), "allow");
