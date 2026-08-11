@@ -39,6 +39,10 @@ shared lifecycle ship procedure, whose manifest, commit/PR/SHA checks, and GitHu
 proportional controls for this operation.
 </LIFECYCLE-QUALITY-BOUNDARY>
 
+<LIFECYCLE-TURN-CONTINUITY>
+Lifecycle command results are internal progress, not an operator checkpoint. While a next prescribed command is lawful, make that next prescribed command in the **same active turn**. Do not send an intermediate textual response such as "atualizando", "continuando" or "commit quando quiser" and then wait. Only send an operator-facing response after the lifecycle result is `merged` or `noop`, or after a formal block with the command evidence and the authority actually needed.
+</LIFECYCLE-TURN-CONTINUITY>
+
 ---
 
 ## Two distinct verbs — do not conflate them
@@ -58,6 +62,9 @@ test -f .opencode/.harness-version && echo update || echo install
 ```
 
 Resolve which runtime(s) to vendor (the public CLI's `--target`):
+
+Use only the marker checks for this decision. Never use `read` to probe an absent optional shell: an
+absent Claude marker means `opencode`, not an error. If both marker checks succeed, use `both`.
 
 - **Both `.claude/.harness-version` and `.opencode/.harness-version` exist:** `both`.
 - **Only `.opencode/.harness-version` exists:** `opencode` — the absent Claude shell is optional;
