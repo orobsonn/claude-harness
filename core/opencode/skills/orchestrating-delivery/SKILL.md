@@ -52,10 +52,12 @@ defect, evidence, chosen repair, and gates. Never disable a rail. Never relax a 
 marker, or use an executor to repair a frozen test — only `test-author` may do that, followed by
 fidelity and freeze again.
 
-**Turn discipline in live autonomy:** a **progress update is not terminal**. When the approved plan has a
-next lawful action, make that **next lawful tool call** before ending the turn; do not say **"vou"** or
-**"na sequencia"** and stop. A turn may end only after delivery is complete, a real rail blocks with its
-evidence, or an unresolved product decision remains.
+**Turn discipline in live autonomy:** tool and subagent results are already visible progress. **Do not send
+an intermediate textual build response** between lawful actions. After every result, evaluate it internally
+and make the **next lawful tool call in the same turn**; do not say **"vou"**, **"na sequencia"**, or
+**"continuando automaticamente"** and stop. A textual response may end a turn only for final delivery, a
+genuine unresolved product decision, a formal rail block with its evidence and required authority, or an
+operator request for status.
 
 **Proportionality before escalation:** a finding is material only when evidence shows the proposed delivery
 fails an acceptance criterion, external contract, or normal supported flow; causes material likely harm in
@@ -98,8 +100,9 @@ Detect **first** (same signals as `oc-triaging-requests`):
 | HARD-GATE 3 (demo) | operator tests | auto-validate ACs; attach to PR |
 | Delivery | merge on operator OK | **draft PR only — never merge** |
 
-In **AUTONOMOUS**, use the HEADLESS column's evidence gates and the task's existing delivery authority,
-while retaining normal progress messages. Do not stop for an engineering choice.
+In **AUTONOMOUS**, use the HEADLESS column's evidence gates and the task's existing delivery authority.
+Tool and subagent outputs carry progress; do not emit intermediate build status messages. Do not stop for
+an engineering choice.
 
 **Headless golden rules:** never block on questions; never invent product decisions when the trigger is silent (stop + comment); never skip a configured optional eye; never dispatch `executor-*` until a **full** plan (not classify stub) exists and plan-gate allows.
 
