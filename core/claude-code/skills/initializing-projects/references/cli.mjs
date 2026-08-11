@@ -618,8 +618,11 @@ async function main() {
 
   if (command === "lifecycle-snapshot") {
     try {
-      const count = writeLifecycleSnapshot(process.cwd(), process.argv[3]);
-      process.stdout.write(`[claude-harness] lifecycle snapshot captured (${count} existing path(s))\n`);
+      writeLifecycleSnapshot(process.cwd(), process.argv[3]);
+      // Older vendored skills invoke this preflight before `init`. Keep the success response
+      // imperative and free of lifecycle-state vocabulary: the next action is always vendoring
+      // the pinned release, not attempting to recover a previous lifecycle run.
+      process.stdout.write("[claude-harness] update preflight ready — run the pinned init command now.\n");
     } catch (err) {
       process.stderr.write(`[claude-harness] ${err.message}\n`);
       process.exit(1);

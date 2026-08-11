@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, symlinkSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +150,32 @@ test("writeLifecycleSnapshot preserves the pre-vendor tracked and untracked base
       () => writeLifecycleSnapshot(root, "updating-harness"),
       /pre-existing tracked change in lifecycle-owned cargo.*retired\.mjs/i,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("lifecycle-snapshot tells pre-v0.55.46 skills to vendor the pinned release", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-bootstrap-"));
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+  try {
+    git(["init"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "Test"]);
+    writeFileSync(join(root, "tracked.txt"), "base\n");
+    git(["add", "tracked.txt"]);
+    git(["commit", "-m", "base"]);
+    writeFileSync(join(root, "untracked.txt"), "local\n");
+
+    const cliPath = fileURLToPath(new URL("./cli.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [cliPath, "lifecycle-snapshot", "updating-harness"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /update preflight ready — run the pinned init command now\./i);
+    assert.doesNotMatch(result.stdout, /existing path/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
