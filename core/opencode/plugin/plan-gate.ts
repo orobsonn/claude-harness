@@ -43,8 +43,8 @@ function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, 
   const planBlock = `[HARNESS_BOUND_PLAN sha256=${snapshotHash}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
   const hasReservedToken = existingPrompt.includes("[HARNESS_BOUND_PLAN") || existingPrompt.includes("[/HARNESS_BOUND_PLAN]")
   if (!hasReservedToken) return { ok: true, prompt: `${existingPrompt}\n\n${planBlock}`.trim() }
-  const opens = [...existingPrompt.matchAll(/(?:^|\n)\[HARNESS_BOUND_PLAN sha256=([0-9a-f]{64})\](?=\n)/g)]
-  const closes = [...existingPrompt.matchAll(/(?:^|\n)\[\/HARNESS_BOUND_PLAN\](?=$|\n)/g)]
+  const opens = [...existingPrompt.matchAll(/(?:^|\n)\[HARNESS_BOUND_PLAN sha256=([0-9a-f]{64})\](?=\r?\n)/g)]
+  const closes = [...existingPrompt.matchAll(/(?:^|\n)\[\/HARNESS_BOUND_PLAN\](?=$|\r?\n)/g)]
   if (opens.length !== 1 || closes.length !== 1) return { ok: false }
   const open = opens[0]
   const start = (open.index ?? -1) + (open[0].startsWith("\n") ? 1 : 0)
@@ -53,7 +53,8 @@ function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, 
   // A re-review can reuse the prior Task prompt after the planner has bound a revised snapshot.
   // The binding/artifact above is authoritative; replace this one complete stale transport block
   // rather than rejecting a valid review solely because its old hash no longer matches.
-  if (start < 0 || closeStart < start || closeStart + "[/HARNESS_BOUND_PLAN]".length !== existingPrompt.length) return { ok: false }
+  const suffix = existingPrompt.slice(closeStart + "[/HARNESS_BOUND_PLAN]".length)
+  if (start < 0 || closeStart < start || !/^[ \t\r\n]*$/.test(suffix)) return { ok: false }
   return { ok: true, prompt: `${existingPrompt.slice(0, start)}${planBlock}` }
 }
 

@@ -345,6 +345,25 @@ test("bound-plan gate replaces one terminal prior binding during plan re-review"
   })
 })
 
+test("bound-plan gate replaces a stale terminal binding followed only by CRLF", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath } = seedUsableBoundProject(root)
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const currentSha = state.planner_plan_binding.snapshot_hash
+    const hooks = await createPlanGateHooks(root)
+    const output = { args: {
+      description: "re-review revised plan",
+      subagent_type: "plan-reviewer",
+      prompt: `Review the revised plan.\r\n\r\n[HARNESS_BOUND_PLAN sha256=${"a".repeat(64)}]\r\n{"stale":true}\r\n[/HARNESS_BOUND_PLAN]\r\n`,
+    } }
+
+    await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output))
+    assert.match(output.args.prompt, new RegExp(`\\[HARNESS_BOUND_PLAN sha256=${currentSha}\\]`))
+    assert.doesNotMatch(output.args.prompt, /"stale":true/)
+    assert.equal(output.args.prompt.endsWith("\r\n"), false)
+  })
+})
+
 test("bound-plan gate keeps ambiguous or non-terminal stale blocks fail-closed", async () => {
   await withTempRoot(async (root) => {
     seedUsableBoundProject(root)
@@ -354,6 +373,7 @@ test("bound-plan gate keeps ambiguous or non-terminal stale blocks fail-closed",
     for (const prompt of [
       `Review.\n\n${block}\n\n${block}`,
       `Review.\n\n${block}\nUntrusted suffix.`,
+      `Review.\n\n${block}\n\u00a0`,
       "Review.\n\n[HARNESS_BOUND_PLAN sha256=deadbeef]\n{}\n[/HARNESS_BOUND_PLAN]",
     ]) {
       const output = { args: { description: "review", subagent_type: "plan-reviewer", prompt } }
