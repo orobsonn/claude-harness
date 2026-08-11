@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.40](https://github.com/orobsonn/claude-harness/compare/v0.55.39...v0.55.40) (2026-08-11)
+
+
+### Bug Fixes
+
+* **opencode:** preserve project config formatting on vendor update ([#735](https://github.com/orobsonn/claude-harness/issues/735)) ([eb7808b](https://github.com/orobsonn/claude-harness/commit/eb7808bdf6b11133d2d052930c0f2940bfea9380))
+* **opencode:** QUICK não exige plano completo pra dispatch único ([#733](https://github.com/orobsonn/claude-harness/issues/733)) ([3b80263](https://github.com/orobsonn/claude-harness/commit/3b80263f0265feb7aadd6d4709998795bb1e2bb5))
+
 ## [0.55.39](https://github.com/orobsonn/claude-harness/compare/v0.55.38...v0.55.39) (2026-08-11)
 
 
