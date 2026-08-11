@@ -183,7 +183,7 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 
 | Mode | Action |
 |---|---|
-| **QUICK** | Inline fix or craft (Step 2.1). Cheap rails + commit via `oc-committing-changes`. **No** full `oc-orchestrating-delivery`. Prefer writing the fix via a single `executor-*` only after a **full** plan exists if plan-gate is armed — for true 1-file QUICK, implement without executor hand if build may write; otherwise one executor after a minimal full plan. |
+| **QUICK** | The `build` agent implements the fix inline itself (or routes to the artisan skill for craft, Step 2.1) — **no plan, no `executor-*` dispatch**. `plan-gate` only gates a `Task` dispatch of the plan-reviewer/test-author/executor/sniper roles; a direct edit by `build` (which holds `edit: allow`) never reaches it, so there is nothing to be "armed" against. Cheap rails + commit via `oc-committing-changes`. **No** `oc-orchestrating-delivery`. |
 | **LIGHT** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` LIGHT. |
 | **FULL** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` FULL. |
 
