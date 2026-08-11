@@ -60,12 +60,12 @@ test("OC harness updates use a direct lifecycle lane without delivery ceremony",
   assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
   assert.match(
     updating,
-    /Only `\.opencode\/\.harness-version` exists:[\s\S]*`opencode`[\s\S]*absent Claude shell is optional/i,
+    /OpenCode result `update` plus Claude result `no-claude`:[\s\S]*`opencode`[\s\S]*absent Claude shell is optional/i,
     "an OpenCode-only project must update without depending on a Claude shell",
   );
   assert.match(
     updating,
-    /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist:[\s\S]*`both`/i,
+    /OpenCode result `update` plus Claude result `claude`:[\s\S]*`both`/i,
     "a dual-runtime project must synchronize both installed shells",
   );
   assert.match(ocBuild, /lifecycle operations are the exception[\s\S]*never classifies/i);
