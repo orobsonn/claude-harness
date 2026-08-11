@@ -481,6 +481,141 @@ export function pluginsAreRelative(plugins) {
   });
 }
 
+/** @description Advance past one strict JSON string starting at its opening quote. */
+function jsonStringEnd(source, start) {
+  if (source[start] !== '"') return -1;
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === '"') return index + 1;
+  }
+  return -1;
+}
+
+/** @description Advance past one strict JSON value without interpreting nested object keys. */
+function jsonValueEnd(source, start) {
+  const first = source[start];
+  if (first === '"') return jsonStringEnd(source, start);
+
+  if (first === "{" || first === "[") {
+    const stack = [first === "{" ? "}" : "]"];
+    for (let index = start + 1; index < source.length; index += 1) {
+      const char = source[index];
+      if (char === '"') {
+        const end = jsonStringEnd(source, index);
+        if (end < 0) return -1;
+        index = end - 1;
+        continue;
+      }
+      if (char === "{") stack.push("}");
+      else if (char === "[") stack.push("]");
+      else if (char === "}" || char === "]") {
+        if (stack.pop() !== char) return -1;
+        if (stack.length === 0) return index + 1;
+      }
+    }
+    return -1;
+  }
+
+  let end = start;
+  while (end < source.length && !/[\s,}\]]/.test(source[end])) end += 1;
+  return end === start ? -1 : end;
+}
+
+/** @description Return strict JSON root-object value spans, or null when the raw layout is unsupported. */
+function topLevelJsonValueSpans(source) {
+  const whitespace = /\s/;
+  const skipWhitespace = (index) => {
+    let next = index;
+    while (next < source.length && whitespace.test(source[next])) next += 1;
+    return next;
+  };
+
+  let index = skipWhitespace(0);
+  if (source[index] !== "{") return null;
+  index = skipWhitespace(index + 1);
+  const spans = new Map();
+
+  while (source[index] !== "}") {
+    const keyEnd = jsonStringEnd(source, index);
+    if (keyEnd < 0) return null;
+    let key;
+    try {
+      key = JSON.parse(source.slice(index, keyEnd));
+    } catch {
+      return null;
+    }
+    if (typeof key !== "string" || spans.has(key)) return null;
+
+    index = skipWhitespace(keyEnd);
+    if (source[index] !== ":") return null;
+    const valueStart = skipWhitespace(index + 1);
+    const valueEnd = jsonValueEnd(source, valueStart);
+    if (valueEnd < 0) return null;
+    spans.set(key, { start: valueStart, end: valueEnd });
+
+    index = skipWhitespace(valueEnd);
+    if (source[index] === ",") {
+      index = skipWhitespace(index + 1);
+      continue;
+    }
+    if (source[index] !== "}") return null;
+  }
+
+  return skipWhitespace(index + 1) === source.length ? spans : null;
+}
+
+/** @description Leading indentation of the line containing `index`, retained for a replaced JSON value. */
+function lineIndentationAt(source, index) {
+  const lineStart = source.lastIndexOf("\n", index - 1) + 1;
+  const prefix = source.slice(lineStart, index);
+  const match = prefix.match(/^[\t ]*/);
+  return match ? match[0] : "";
+}
+
+/** @description Stable JSON comparison for a JSON value, including its property order. */
+function sameJsonValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * @description Preserve raw project formatting while replacing only harness-owned top-level
+ * `plugin` / `permission` values. Null means a conservative canonical rewrite is required.
+ */
+function preserveProjectConfigFormatting(existingRaw, originalConfig, migratedConfig) {
+  const originalKeys = Object.keys(originalConfig);
+  const migratedKeys = Object.keys(migratedConfig);
+  const keys = new Set([...originalKeys, ...migratedKeys]);
+  const changedKeys = [...keys].filter((key) => !sameJsonValue(originalConfig[key], migratedConfig[key]));
+  if (changedKeys.length === 0 || changedKeys.some((key) => key !== "plugin" && key !== "permission")) return null;
+
+  const spans = topLevelJsonValueSpans(existingRaw);
+  if (!spans || changedKeys.some((key) => !spans.has(key))) return null;
+
+  const newline = existingRaw.includes("\r\n") ? "\r\n" : "\n";
+  const replacements = changedKeys
+    .map((key) => {
+      const span = spans.get(key);
+      const indentation = lineIndentationAt(existingRaw, span.start);
+      const value = JSON.stringify(migratedConfig[key], null, 2).replace(/\n/g, `${newline}${indentation}`);
+      return { ...span, value };
+    })
+    .sort((left, right) => right.start - left.start);
+
+  let candidate = existingRaw;
+  for (const replacement of replacements) {
+    candidate = `${candidate.slice(0, replacement.start)}${replacement.value}${candidate.slice(replacement.end)}`;
+  }
+
+  try {
+    return sameJsonValue(JSON.parse(candidate), migratedConfig) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @description Create or idempotently merge canonical plugins into a valid project-owned opencode.json.
  * Also migrates the `permission` block across harness generations (issue #479): a manifest sidecar
@@ -496,7 +631,9 @@ export function pluginsAreRelative(plugins) {
  * Issue #441: when an existing file needs no semantic mutation (plugin[] already clean of harness
  * autoload paths AND permission migration is a no-op including key order), skip the write entirely
  * and return `"unchanged"` so project formatters (Biome/Prettier) are not destroyed by a cosmetic
- * `JSON.stringify(..., null, 2)` rewrite. Real mutations still rewrite with the canonical indent.
+ * `JSON.stringify(..., null, 2)` rewrite. For a real plugin/permission migration, preserve the raw
+ * project fields and replace only those two harness-owned root values; unsupported layouts safely
+ * fall back to canonical JSON.
  * @param {string} openCodeDir - source core/opencode
  * @param {string} targetDir - project root
  * @param {string} [version] - harness version currently being vendored (stamped into the manifest)
@@ -589,7 +726,11 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   const removedEntries = migrated.report.filter((r) => r.action === "removed-retired");
   const keptEntries = migrated.report.filter((r) => r.action === "kept-custom");
 
-  const nextConfigText = `${JSON.stringify(migrated.config, null, 2)}\n`;
+  const canonicalConfigText = `${JSON.stringify(migrated.config, null, 2)}\n`;
+  const nextConfigText =
+    wasPresent && originalSnapshot !== null && existingRaw !== null
+      ? preserveProjectConfigFormatting(existingRaw, originalSnapshot, migrated.config) ?? canonicalConfigText
+      : canonicalConfigText;
   const nextManifestText = `${JSON.stringify(migrated.manifest, null, 2)}\n`;
 
   // #441: skip rewriting opencode.json when nothing semantic changed — including permission key
@@ -599,7 +740,7 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
     wasPresent &&
     originalSnapshot !== null &&
     existingRaw !== null &&
-    (existingRaw === nextConfigText ||
+    (existingRaw === canonicalConfigText ||
       JSON.stringify(originalSnapshot) === JSON.stringify(migrated.config));
   const manifestUnchanged = existingManifestRaw !== null && existingManifestRaw === nextManifestText;
 

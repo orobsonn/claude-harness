@@ -1689,6 +1689,33 @@ test("writeOpencodeConfig (issue #441 ac-1.4): still strips harness autoload plu
   }
 });
 
+test("writeOpencodeConfig preserves Biome-formatted project fields when a real harness plugin migration changes the config", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-preserve-project-format-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v0.50.0"), "created");
+
+    const dest = join(tempDir, "opencode.json");
+    const config = JSON.parse(readFileSync(dest, "utf8"));
+    config.instructions = ["AGENTS.md"];
+    config.plugin = ["./.opencode/plugin/entry-gate.ts"];
+    writeFileSync(dest, `${biomeInlineShortArrays(JSON.stringify(config, null, 2))}\n`);
+
+    const status = writeOpencodeConfig(oc, tempDir, "v0.50.0");
+    const after = readFileSync(dest, "utf8");
+
+    assert.match(status, /updated existing/);
+    assert.match(
+      after,
+      /"instructions": \["AGENTS.md"\]/,
+      "an unrelated project field must retain the formatter's inline-array layout",
+    );
+    assert.deepEqual(JSON.parse(after).plugin, []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("writeOpencodeConfig preserves malformed project config and emits repair sidecar", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-invalid-config-"));
   try {
@@ -1742,7 +1769,12 @@ test("writeOpencodeConfig (issue #479, ac-1.2/ac-1.7-style): tier 2 drops the re
     // custom" and this test fails for a reason that has nothing to do with the code under test.
     for (const wildcard of RETIRED_NPX_WILDCARDS) legacyConfig.permission.bash[wildcard] = "allow";
     legacyConfig.permission.bash["git pull*"] = "ask"; // operator customization diverging from the historical "allow"
-    writeFileSync(join(tempDir, "opencode.json"), `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    legacyConfig.instructions = ["AGENTS.md"];
+    legacyConfig.project_note = 'the words "permission" and "plugin" here are project data';
+    writeFileSync(
+      join(tempDir, "opencode.json"),
+      `${biomeInlineShortArrays(JSON.stringify(legacyConfig, null, 2))}\n`,
+    );
 
     const status = writeOpencodeConfig(join(harnessRoot, "core/opencode"), tempDir, "v0.50.0");
     assert.match(status, /permission migration/);
@@ -1755,6 +1787,13 @@ test("writeOpencodeConfig (issue #479, ac-1.2/ac-1.7-style): tier 2 drops the re
       assert.ok(!Object.hasOwn(migrated.permission.bash, wildcard), `retired wildcard must be pruned: ${wildcard}`);
     }
     assert.equal(migrated.permission.bash["git pull*"], "ask", "a value diverging from the ledger's historical default must survive");
+    const migratedRaw = readFileSync(join(tempDir, "opencode.json"), "utf8");
+    assert.match(migratedRaw, /"instructions": \["AGENTS.md"\]/, "a permission migration must not reformat an unrelated project array");
+    assert.match(
+      migratedRaw,
+      /"project_note": "the words \\"permission\\" and \\"plugin\\" here are project data"/,
+      "quoted harness field names inside project data must not confuse the top-level replacement",
+    );
 
     const manifest = JSON.parse(readFileSync(join(tempDir, ".opencode", ".harness-config-manifest.json"), "utf8"));
     assert.equal(manifest.harnessVersion, "v0.50.0");
