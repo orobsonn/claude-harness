@@ -429,7 +429,6 @@ export function harnessOcPluginFiles() {
     "./.opencode/plugin/obs-eye.ts",
     "./.opencode/plugin/obs-hand.ts",
     "./.opencode/plugin/agent-idle-nudge.ts",
-    "./.opencode/plugin/autonomy-controller.ts",
   ];
 }
 
@@ -969,6 +968,8 @@ export const OC_RETIRED_FILES = [
   "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
   "plugin/harvest-guard.ts",
   "plugin/lib/harvest-findings.mjs",
+  "plugin/autonomy-controller.ts",
+  "plugin/lib/autonomy-controller.mjs",
   "plugin/lib/agent-catalog-health.mjs",
   "plugin/lib/ceremony-binding.mjs",
   "plugin/lib/ceremony-transition.mjs",

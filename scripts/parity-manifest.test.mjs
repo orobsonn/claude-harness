@@ -92,13 +92,11 @@ const OC_AUTOLOAD_PLUGIN_PATHS = new Set(
 );
 const OC_FROZEN_MODULES = {
   "plugin/agent-idle-nudge.ts": { current_path: "plugin/agent-idle-nudge.ts", verdict: "KEEP" },
-  "plugin/autonomy-controller.ts": { current_path: "plugin/autonomy-controller.ts", verdict: "REWRITE" },
   "plugin/entry-gate.ts": { current_path: "plugin/entry-gate.ts", verdict: "REWRITE" },
   "plugin/harvest-guard.ts": { current_path: "plugin/harvest-guard.ts", verdict: "DELETE" },
   "plugin/lavish-command-gate.ts": { current_path: "plugin/lavish-command-gate.ts", verdict: "KEEP" },
   "plugin/lib/agent-catalog-health.mjs": { current_path: "plugin/lib/agent-catalog-health.mjs", verdict: "DELETE" },
   "plugin/lib/agent-idle-nudge.mjs": { current_path: "plugin/lib/agent-idle-nudge.mjs", verdict: "KEEP" },
-  "plugin/lib/autonomy-controller.mjs": { current_path: "plugin/lib/autonomy-controller.mjs", verdict: "REWRITE" },
   "plugin/lib/bash-decide.mjs": { current_path: "plugin/lib/bash-decide.mjs", verdict: "REWRITE" },
   "plugin/lib/ceremony-binding.mjs": { current_path: "plugin/lib/ceremony-binding.mjs", verdict: "DELETE" },
   "plugin/lib/ceremony-transition.mjs": { current_path: "plugin/lib/ceremony-transition.mjs", verdict: "DELETE" },
@@ -146,13 +144,11 @@ const OC_FROZEN_MODULES = {
 
 const OC_MODULE_NORMATIVE_METADATA = {
   "plugin/agent-idle-nudge.ts": { failure_policy: "always fail-open/advisory", tests: ["core/opencode/plugin/agent-idle-nudge.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/agent-idle-nudge.mjs"] },
-  "plugin/autonomy-controller.ts": { failure_policy: "operator capture and continuation faults open; delivery rails remain unchanged", tests: ["core/opencode/plugin/autonomy-controller.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/agent-idle-nudge.mjs"] },
   "plugin/entry-gate.ts": { failure_policy: "factual deny; infrastructure failures open and log", tests: ["core/opencode/plugin/entry-gate.test.mjs"] },
   "plugin/harvest-guard.ts": { failure_policy: "no remaining caller after atomic deletion", tests: ["scripts/parity-manifest.test.mjs"] },
   "plugin/lavish-command-gate.ts": { failure_policy: "matched fact denies; parser and adapter errors open", tests: ["core/opencode/plugin/lavish-command-gate.test.mjs"] },
   "plugin/lib/agent-catalog-health.mjs": { failure_policy: "no remaining caller after dynamic branch removal", tests: ["scripts/parity-manifest.test.mjs"] },
   "plugin/lib/agent-idle-nudge.mjs": { failure_policy: "always fail-open/advisory", tests: ["core/opencode/plugin/lib/agent-idle-nudge.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/agent-idle-nudge.mjs"] },
-  "plugin/lib/autonomy-controller.mjs": { failure_policy: "pure projection never throws; malformed or disabled state produces no continuation", tests: ["core/opencode/plugin/lib/autonomy-controller.test.mjs"], cc_op: ["CC_OP:core/claude-code/hooks/agent-idle-nudge.mjs"] },
   "plugin/lib/bash-decide.mjs": { failure_policy: "factual deny; every other error opens and logs", tests: ["core/opencode/plugin/lib/bash-decide.test.mjs"] },
   "plugin/lib/ceremony-binding.mjs": { failure_policy: "no remaining caller after R10 simplification", tests: ["core/opencode/plugin/entry-gate.test.mjs", "core/opencode/plugin/plan-gate.test.mjs"] },
   "plugin/lib/ceremony-transition.mjs": { failure_policy: "no remaining caller after direct factual marks", tests: ["core/opencode/plugin/entry-gate.test.mjs", "core/opencode/plugin/marker-authority.test.mjs"] },
@@ -200,13 +196,11 @@ const OC_MODULE_NORMATIVE_METADATA = {
 
 const OC_MODULE_NORMATIVE_REASONS = {
   "plugin/agent-idle-nudge.ts": "Thin OpenCode adapter preserves the Claude operational nudge.",
-  "plugin/autonomy-controller.ts": "Native controller turns an explicit operator autonomy directive into bounded same-session continuation.",
   "plugin/entry-gate.ts": "Retain only factual entry rails and host adaptation.",
   "plugin/harvest-guard.ts": "OpenCode-only harvest ceremony has no factual rule.",
   "plugin/lavish-command-gate.ts": "Preserves the exact share/setup-hooks command boundary.",
   "plugin/lib/agent-catalog-health.mjs": "OpenCode-only advisory is outside factual parity.",
   "plugin/lib/agent-idle-nudge.mjs": "Pure operational decision mirrors Claude behavior.",
-  "plugin/lib/autonomy-controller.mjs": "Pure directive and phase projection keeps continuation policy outside the host adapter.",
   "plugin/lib/bash-decide.mjs": "Reduce Bash judgment to the factual delivery boundary.",
   "plugin/lib/ceremony-binding.mjs": "R10 is represented by plain booleans and feature match.",
   "plugin/lib/ceremony-transition.mjs": "Host marker writes ordered R10 facts directly with no sidecar.",
@@ -255,7 +249,7 @@ const OC_MODULE_NORMATIVE_REASONS = {
 const OC_INVENTORY_PROVENANCE = {
   base_commit: "faded65759fbab932a4362d63745c5cb4d1ea365",
   base_module_count: 55,
-  frozen_module_count: 46,
+  frozen_module_count: 44,
   pr3_death_list: [
     "plugin/lib/second-eye-authority.mjs",
     "plugin/second-eye-coordinator.ts",
