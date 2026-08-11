@@ -963,8 +963,8 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
   return { targetReal, openCodeDir, entries };
 }
 
-/** @description Writes the exact OpenCode files owned by this vendor run, never a directory prefix. */
-function writeOcOwnershipManifest(ocDir, entries) {
+/** @description Writes exact current ownership plus the finite vendor retirement ledger. */
+function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
   const files = new Set(
     entries
       .filter((entry) => entry.kind === "file" && entry.destination.startsWith(join(".opencode", sep)))
@@ -983,7 +983,13 @@ function writeOcOwnershipManifest(ocDir, entries) {
     ".github/ISSUE_TEMPLATE/harness-task.yml",
     ".dev.vars.example",
   ]) files.add(path);
-  writeFileSync(join(ocDir, ".harness-owned-files.json"), `${JSON.stringify({ version: 1, files: [...files].sort() }, null, 2)}\n`);
+  const retired = OC_RETIRED_FILES
+    .filter((rel) => !existsWithExactCase(dirname(join(sourceOcDir, rel)), rel.split("/").pop()))
+    .map((rel) => `.opencode/${rel}`);
+  writeFileSync(
+    join(ocDir, ".harness-owned-files.json"),
+    `${JSON.stringify({ version: 1, files: [...files].sort(), retired }, null, 2)}\n`,
+  );
 }
 
 /**
@@ -1203,7 +1209,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
 
   const gi = mergeOcGitignore(ocDir);
   writeFileSync(join(ocDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
-  writeOcOwnershipManifest(ocDir, preflight.entries);
+  writeOcOwnershipManifest(ocDir, preflight.entries, openCodeDir);
   ok(`.opencode/.gitignore (${gi}), .harness-version written`);
 
   const repoFiles = installRepoFiles(coreDir, targetDir);

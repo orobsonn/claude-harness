@@ -615,6 +615,13 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
     for (const rel of required) {
       assert.ok(existsSync(join(tempDir, rel)), `missing ${rel}`);
     }
+    const ownership = JSON.parse(readFileSync(join(tempDir, ".opencode/.harness-owned-files.json"), "utf8"));
+    assert.deepEqual(
+      ownership.retired.filter((path) => path.includes("autonomy-controller")),
+      [".opencode/plugin/autonomy-controller.ts", ".opencode/plugin/lib/autonomy-controller.mjs"],
+      "the vendor must declare each actually-retired controller path for a pre-manifest update",
+    );
+    assert.ok(!ownership.retired.includes("src/product.js"), "the retirement ledger must never become a product allowlist");
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/harvest-findings.mjs")), false);
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/lib/agent-catalog-health.mjs")), false);
