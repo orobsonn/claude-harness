@@ -38,7 +38,8 @@ Detect the mode **first**; it changes whether you may ask questions or wait for 
   engineering to the current model only: OpenCode does not inject a continuation or re-open an idle
   session. Do not ask about engineering. The **only** permitted
   question is an unresolved choice that changes the observable product behavior or contract. This is not
-  HEADLESS: communicate progress normally, but do not wait for a reply.
+  HEADLESS: acknowledge the start once if useful, but do not emit intermediate status between lawful
+  actions or wait for a reply.
 - **HEADLESS:** no operator is reachable. Active when **any** of:
   - the trigger prompt says to run **autonomously** / VPS cron / "without asking questions" (the cron dispatcher always prepends this fixed prefix)
   - env `$HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS mid-run outbox)

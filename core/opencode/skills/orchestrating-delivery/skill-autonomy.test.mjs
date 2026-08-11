@@ -26,6 +26,8 @@ test("#autonomy — explicit operator directive delegates autonomous delivery in
   assert.match(skill, /aut[oô]nom|sem (?:parar|perguntar)/i);
   assert.match(skill, /prompt-level delegation/i);
   assert.match(triage, /Autonomy directive/i);
+  assert.doesNotMatch(triage, /communicate progress normally/i);
+  assert.match(triage, /do not emit intermediate status/i);
   assert.match(brainstorming, /Autonomy directive/i);
 });
 
@@ -38,10 +40,12 @@ test("#autonomy — same-contract engineering is resolved and verified without a
   assert.match(skill, /virgin/i);
 });
 
-test("#autonomy — a progress update cannot end a live delegated delivery with a lawful next action", () => {
-  assert.match(skill, /progress update.*not.*terminal|not.*terminal.*progress update/i);
+test("#autonomy — autonomous delivery emits no textual progress turn between lawful actions", () => {
+  assert.doesNotMatch(skill, /while retaining normal progress messages/i);
+  assert.match(skill, /do not send\s+(?:an )?intermediate textual (?:build )?response/i);
   assert.match(skill, /next lawful tool call/i);
-  assert.match(skill, /do not say.*vou|do not say.*na sequ/i);
+  assert.match(skill, /final delivery[\s\S]*product decision[\s\S]*formal rail block/i);
+  assert.match(skill, /do not say.*vou|do not say.*na sequ|continuando automaticamente/i);
 });
 
 test("#autonomy — only a choice that changes the delivered product remains human-owned", () => {
