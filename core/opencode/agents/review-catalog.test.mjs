@@ -121,5 +121,12 @@ test("adversary prompts preserve the executable report schema without verdict fi
   const body = agentContract(readFileSync(join(AGENTS_DIR, "adversary.md"), "utf8"));
   assert.match(body, /JSON contract is exact/);
   assert.match(body, /Never add `verdict`/);
+  assert.doesNotMatch(body, /"suggested_sniper_tier"\s*:/);
   assert.doesNotMatch(body, /emit `BLOCKED`/);
+});
+
+test("spec re-attacks verify prior findings and direct consequences instead of widening the architecture", () => {
+  const body = agentContract(readFileSync(join(AGENTS_DIR, "adversary.md"), "utf8"));
+  assert.match(body, /spec re-attack[\s\S]{0,300}prior material findings[\s\S]{0,300}direct consequences/i);
+  assert.match(body, /rare hypothesis[\s\S]{0,180}open risk/i);
 });
