@@ -54,6 +54,9 @@ import {
   readHarnessVersionStamp,
 } from "../../../../shared/lib/opencode-config-migration.mjs";
 import { sweepRetiredDispatchCleanup } from "../../../../shared/lib/active-dispatch-cleanup-migration.mjs";
+import { OC_RETIRED_FILES } from "../../../../opencode/lib/retired-files.mjs";
+
+export { OC_RETIRED_FILES };
 
 const HARNESS_START = "<!-- harness:start — managed by initializing-projects, do not edit inside -->";
 const HARNESS_END = "<!-- harness:end -->";
@@ -963,8 +966,8 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
   return { targetReal, openCodeDir, entries };
 }
 
-/** @description Writes the exact OpenCode files owned by this vendor run, never a directory prefix. */
-function writeOcOwnershipManifest(ocDir, entries) {
+/** @description Writes exact current ownership plus the finite vendor retirement ledger. */
+function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
   const files = new Set(
     entries
       .filter((entry) => entry.kind === "file" && entry.destination.startsWith(join(".opencode", sep)))
@@ -983,7 +986,13 @@ function writeOcOwnershipManifest(ocDir, entries) {
     ".github/ISSUE_TEMPLATE/harness-task.yml",
     ".dev.vars.example",
   ]) files.add(path);
-  writeFileSync(join(ocDir, ".harness-owned-files.json"), `${JSON.stringify({ version: 1, files: [...files].sort() }, null, 2)}\n`);
+  const retired = OC_RETIRED_FILES
+    .filter((rel) => !existsWithExactCase(dirname(join(sourceOcDir, rel)), rel.split("/").pop()))
+    .map((rel) => `.opencode/${rel}`);
+  writeFileSync(
+    join(ocDir, ".harness-owned-files.json"),
+    `${JSON.stringify({ version: 1, files: [...files].sort(), retired }, null, 2)}\n`,
+  );
 }
 
 /**
@@ -1037,85 +1046,6 @@ function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookV
  * Exact relative paths ONLY (never a directory or a glob) — this must never risk deleting a
  * user's own local plugin placed alongside the harness ones in the same auto-load directory.
  */
-export const OC_RETIRED_FILES = [
-  "plugin/command-resolver.ts",
-  "plugin/lib/command-resolver.mjs",
-  "agents/executor-high-spawn.md",
-  "agents/executor-low-spawn.md",
-  "agents/executor-medium-spawn.md",
-  "agents/sniper-high-spawn.md",
-  "agents/sniper-low-spawn.md",
-  "agents/sniper-medium-spawn.md",
-  "agents/test-author-spawn.md",
-  "plugin/loop-guard.ts",
-  "plugin/lib/dual-enforcement.mjs",
-  "plugin/lib/dual-enforcement.test.mjs",
-  "plugin/lib/dual-merge.mjs",
-  "plugin/lib/dual-merge.test.mjs",
-  "plugin/lib/dual-nudge.mjs",
-  "plugin/lib/marker-seal.mjs",
-  "plugin/lib/marker-security.test.mjs",
-  "plugin/lib/mark-gate.mjs",
-  "skills/orchestrating-delivery/dual-runtime.mjs",
-  "skills/orchestrating-delivery/dual-runtime.test.mjs",
-  "plugin/lib/gate-state.mjs",
-  "plugin/lib/entry-decide.mjs",
-  "plugin/lib/dispatch-scope.mjs",
-  "plugin/lib/hand-records.mjs",
-  "plugin/lib/planner-state.mjs",
-  "plugin/lib/obs-emit.mjs",
-  "plugin/lib/plan-hash.mjs",
-  "plugin/lib/planner-artifact.mjs",
-  "plugin/lib/planner-fallback-config.mjs",
-  "lib/planner-fallback-config.mjs",
-  "plugin/lib/regate-arm.mjs",
-  "plugin/lib/regate-arm.test.mjs",
-  "agents/planner-fallback.md",
-  "plugin/lib/roles.mjs",
-  "plugin/lib/task-dispatch-identity.mjs",
-  "plugin/lib/second-eye-authority.mjs",
-  "plugin/lib/second-eye-authority.test.mjs",
-  "plugin/second-eye-coordinator.ts",
-  "plugin/second-eye-coordinator.test.mjs",
-  "skills/orchestrating-delivery/second-eye-runtime.mjs",
-  "skills/orchestrating-delivery/second-eye-runtime.test.mjs",
-  "plugin/lib/loop-decide.mjs",
-  "plugin/lib/plan-and-loop-decide.test.mjs",
-  "plugin/review-guard.ts",
-  "plugin/lib/review-accounting.test.mjs",
-  "plugin/lib/adversary-nudge.mjs",
-  "plugin/lib/adversary-nudge.test.mjs",
-  "plugin/lib/revise-nudge.mjs",
-  "plugin/lib/revise-nudge.test.mjs",
-  "plugin/lib/review-restart.mjs",
-  "skills/orchestrating-delivery/skill-plan-review-budget.test.mjs",
-  "skills/orchestrating-delivery/skill-primary-failure-cap.test.mjs",
-  "shared/lib/agent-retry.mjs",
-  "shared/lib/agent-retry.test.mjs",
-  "shared/lib/agent-retry-call.mjs",
-  "shared/lib/agent-retry-call.test.mjs",
-  "plugin/ceremony-coordinator.ts",
-  "plugin/ceremony-coordinator.test.mjs",
-  "skills/orchestrating-delivery/ceremony-runtime.mjs",
-  "skills/orchestrating-delivery/ceremony-runtime.test.mjs",
-  "plugin/lib/scope-runtime-composition.mjs",
-  "plugin/lib/bound-plan.mjs",
-  "plugin/lib/bound-plan.test.mjs",
-  "plugin/lib/obs-test-isolation.mjs",
-  "plugin/lib/obs-test-isolation.test.mjs",
-  "plugin/eyes-permission-lockdown.test.mjs",
-  "skills/orchestrating-delivery/skill-regate-stop-predicate.test.mjs",
-  "skills/orchestrating-delivery/skill-regate-stagnation-ceiling.test.mjs",
-  "skills/orchestrating-delivery/skill-regate-deadlock-escape.test.mjs",
-  "plugin/harvest-guard.ts",
-  "plugin/lib/harvest-findings.mjs",
-  "plugin/autonomy-controller.ts",
-  "plugin/lib/autonomy-controller.mjs",
-  "plugin/lib/agent-catalog-health.mjs",
-  "plugin/lib/ceremony-binding.mjs",
-  "plugin/lib/ceremony-transition.mjs",
-];
-
 /**
  * @description True when `dir/name` exists with that EXACT case (case-sensitive directory
  * listing, not a case-insensitive path lookup). Guards `pruneOcRetiredFiles` against deleting
@@ -1203,7 +1133,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
 
   const gi = mergeOcGitignore(ocDir);
   writeFileSync(join(ocDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
-  writeOcOwnershipManifest(ocDir, preflight.entries);
+  writeOcOwnershipManifest(ocDir, preflight.entries, openCodeDir);
   ok(`.opencode/.gitignore (${gi}), .harness-version written`);
 
   const repoFiles = installRepoFiles(coreDir, targetDir);

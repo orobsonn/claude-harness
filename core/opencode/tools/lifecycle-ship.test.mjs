@@ -14,9 +14,11 @@ import {
   shouldBootstrapMergeWithoutCi,
   selectOwnedPaths,
   selectLifecyclePaths,
+  selectVendorRetiredDeletions,
 } from "./lifecycle-ship.mjs";
 
 const toolPath = fileURLToPath(new URL("./lifecycle-ship.mjs", import.meta.url));
+const retiredFilesPath = fileURLToPath(new URL("../lib/retired-files.mjs", import.meta.url));
 
 test("selectLifecyclePaths keeps framework cargo and leaves product work plus run ephemera out", () => {
   const selected = selectLifecyclePaths([
@@ -52,6 +54,25 @@ test("selectOwnedPaths excludes a local plugin that is absent from the vendor ma
   assert.deepEqual(
     selectOwnedPaths([".opencode/plugin/entry-gate.ts", ".opencode/plugin/local-plugin.ts"], new Set([".opencode/plugin/entry-gate.ts"])),
     [".opencode/plugin/entry-gate.ts"],
+  );
+});
+
+test("vendor retirement bridge accepts only a known deleted ledger path during harness update", () => {
+  const declared = new Set([
+    ".opencode/plugin/autonomy-controller.ts",
+    "src/product.js",
+  ]);
+  assert.deepEqual(
+    selectVendorRetiredDeletions(
+      [".opencode/plugin/autonomy-controller.ts", "src/product.js"],
+      declared,
+      "updating-harness",
+    ),
+    [".opencode/plugin/autonomy-controller.ts"],
+  );
+  assert.deepEqual(
+    selectVendorRetiredDeletions([".opencode/plugin/autonomy-controller.ts"], declared, "configuring-model-routing"),
+    [],
   );
 });
 
@@ -129,7 +150,9 @@ test("vendored CLI executes its argument guard when called through an absolute p
   const root = mkdtempSync(join(tmpdir(), "lifecycle-ship-vendored-"));
   const vendored = join(root, ".opencode", "tools", "lifecycle-ship.mjs");
   mkdirSync(join(root, ".opencode", "tools"), { recursive: true });
+  mkdirSync(join(root, ".opencode", "lib"), { recursive: true });
   cpSync(toolPath, vendored);
+  cpSync(retiredFilesPath, join(root, ".opencode", "lib", "retired-files.mjs"));
 
   const result = spawnSync(process.execPath, [vendored, "prepare", "product-delivery"], { encoding: "utf8" });
   assert.notEqual(result.status, 0);
@@ -256,7 +279,7 @@ test("automatic adoption unions exact OpenCode and Claude manifests without stag
   }
 });
 
-test("lifecycle prepare commits a deletion only when the exact path was owned by the prior manifest", () => {
+test("lifecycle prepare bootstraps only vendor-declared exact retired deletions from a pre-manifest project", () => {
   const root = mkdtempSync(join(tmpdir(), "lifecycle-adopt-retired-"));
   const remote = join(root, "remote.git");
   const seed = join(root, "seed");
@@ -275,15 +298,8 @@ test("lifecycle prepare commits a deletion only when the exact path was owned by
     mustGit(seed, ["config", "user.name", "Test"]);
     mkdirSync(join(seed, ".opencode", "plugin", "lib"), { recursive: true });
     mkdirSync(join(seed, "src"), { recursive: true });
-    writeFileSync(join(seed, ".opencode", ".harness-owned-files.json"), JSON.stringify({
-      version: 1,
-      files: [
-        ".opencode/.harness-owned-files.json",
-        ".opencode/plugin/entry-gate.ts",
-        ".opencode/plugin/lib/autonomy-controller.mjs",
-      ],
-    }));
     writeFileSync(join(seed, ".opencode", "plugin", "entry-gate.ts"), "old gate\n");
+    writeFileSync(join(seed, ".opencode", "plugin", "autonomy-controller.ts"), "old controller plugin\n");
     writeFileSync(join(seed, ".opencode", "plugin", "lib", "autonomy-controller.mjs"), "old controller\n");
     writeFileSync(join(seed, ".opencode", "plugin", "local-plugin.ts"), "project-owned plugin\n");
     writeFileSync(join(seed, "src", "product.js"), "base\n");
@@ -304,8 +320,14 @@ test("lifecycle prepare commits a deletion only when the exact path was owned by
     writeFileSync(join(project, ".opencode", ".harness-owned-files.json"), JSON.stringify({
       version: 1,
       files: [".opencode/.harness-owned-files.json", ".opencode/plugin/entry-gate.ts"],
+      retired: [
+        ".opencode/plugin/autonomy-controller.ts",
+        ".opencode/plugin/lib/autonomy-controller.mjs",
+        "src/product.js",
+      ],
     }));
     writeFileSync(join(project, ".opencode", "plugin", "entry-gate.ts"), "new gate\n");
+    rmSync(join(project, ".opencode", "plugin", "autonomy-controller.ts"));
     rmSync(join(project, ".opencode", "plugin", "lib", "autonomy-controller.mjs"));
     rmSync(join(project, ".opencode", "plugin", "local-plugin.ts"));
     writeFileSync(join(project, "src", "product.js"), "operator work\n");
@@ -316,10 +338,16 @@ test("lifecycle prepare commits a deletion only when the exact path was owned by
       encoding: "utf8",
     });
     assert.equal(prepared.status, 0, prepared.stderr);
+    assert.doesNotMatch(
+      prepared.stderr,
+      /fatal: path .* not in 'HEAD'/,
+      "a missing legacy manifest is expected compatibility, not a visible git error",
+    );
     assert.deepEqual(
       mustGit(project, ["show", "--format=", "--name-only", "HEAD"]).trim().split("\n"),
       [
         ".opencode/.harness-owned-files.json",
+        ".opencode/plugin/autonomy-controller.ts",
         ".opencode/plugin/entry-gate.ts",
         ".opencode/plugin/lib/autonomy-controller.mjs",
       ],

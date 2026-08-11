@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OC_RETIRED_FILES } from "../lib/retired-files.mjs";
 
 // Only used to protect an old install before it has the exact vendor manifest. New lifecycle
 // commits MUST use the manifest below; a directory prefix could capture a local plugin.
@@ -228,11 +229,17 @@ function parseOwnershipManifest(raw, path) {
   if (parsed?.version !== 1 || !Array.isArray(parsed.files) || parsed.files.some((file) => typeof file !== "string")) {
     throw new Error(`invalid ${path}`);
   }
-  return parsed.files.map(normalizedPath);
+  if (parsed.retired !== undefined && (!Array.isArray(parsed.retired) || parsed.retired.some((file) => typeof file !== "string"))) {
+    throw new Error(`invalid ${path}`);
+  }
+  return {
+    files: parsed.files.map(normalizedPath),
+    retired: (parsed.retired ?? []).map(normalizedPath),
+  };
 }
 
 function readOwnershipManifest(path) {
-  return parseOwnershipManifest(readFileSync(path, "utf8"), path);
+  return parseOwnershipManifest(readFileSync(path, "utf8"), path).files;
 }
 
 function ownershipManifest() {
@@ -241,15 +248,32 @@ function ownershipManifest() {
   return new Set(present.flatMap(readOwnershipManifest));
 }
 
+/** @description Exact current retirement paths that the vendor declared for this release. */
+function vendorDeclaredRetirements() {
+  const known = new Set(OC_RETIRED_FILES.map((path) => `.opencode/${path}`));
+  const retired = new Set();
+  for (const manifest of OWNERSHIP_MANIFESTS.filter(existsSync)) {
+    const parsed = parseOwnershipManifest(readFileSync(manifest, "utf8"), manifest);
+    for (const path of parsed.retired) {
+      if (known.has(path)) retired.add(path);
+    }
+  }
+  return retired;
+}
+
 /**
- * @description Exact owned paths committed at `ref`. This is used only to carry an intentional
- * deletion through an update; a local or post-vendor manifest can never widen that deletion set.
+ * @description Exact owned paths committed at `ref`. This is one proof for an intentional deletion;
+ * the separate pre-manifest bridge is intersected with this release's fixed retirement ledger.
  */
 function committedOwnershipManifest(ref) {
   const paths = new Set();
   for (const manifest of OWNERSHIP_MANIFESTS) {
     try {
-      for (const path of parseOwnershipManifest(git(["show", `${ref}:${manifest}`]), manifest)) paths.add(path);
+      const raw = execFileSync("git", ["show", `${ref}:${manifest}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      for (const path of parseOwnershipManifest(raw, manifest).files) paths.add(path);
     } catch {
       // Older installs may not have an exact manifest. Do not infer deletion ownership by prefix.
     }
@@ -271,6 +295,21 @@ function deletedTrackedPaths(ref) {
 /** @description Deletions allowed only when the identical path was owned before this update. */
 function priorOwnedDeletions(paths, ref) {
   return selectOwnedPaths(paths, committedOwnershipManifest(ref));
+}
+
+/**
+ * @description First-update bridge for pre-manifest installs. A path must be both deleted and
+ * declared by this release's finite vendor ledger; `retired` cannot authorize arbitrary cargo.
+ */
+export function selectVendorRetiredDeletions(paths, declaredPaths, operation) {
+  if (operation !== "updating-harness") return [];
+  const known = new Set(OC_RETIRED_FILES.map((path) => `.opencode/${path}`));
+  const declared = new Set([...declaredPaths].map(normalizedPath));
+  return paths.map(normalizedPath).filter((path) => known.has(path) && declared.has(path));
+}
+
+function vendorDeclaredRetiredDeletions(paths, operation) {
+  return selectVendorRetiredDeletions(paths, vendorDeclaredRetirements(), operation);
 }
 
 function assertTrackedCleanOwnershipManifest(operation) {
@@ -353,7 +392,11 @@ export function prepareLifecycleShip(operation) {
   // committed lifecycle branch, but only if neither the branch nor the working tree has an
   // uncommitted manifest-owned change that could be confused with the prior lifecycle result.
   if (resumedPaths.length > 0 && selectOwnedPaths(current, owned).length === 0) {
-    const resumedDeletes = priorOwnedDeletions(deletedTrackedPaths(`origin/${branch}`), `origin/${branch}`);
+    const deleted = deletedTrackedPaths(`origin/${branch}`);
+    const resumedDeletes = [
+      ...priorOwnedDeletions(deleted, `origin/${branch}`),
+      ...vendorDeclaredRetiredDeletions(deleted, operation),
+    ];
     assertOwnedOnly(resumedPaths, new Set([...owned, ...resumedDeletes]), "existing lifecycle branch");
     return { action: "resume", branch: git(["branch", "--show-current"]).trim(), paths: resumedPaths };
   }
@@ -365,10 +408,11 @@ export function prepareLifecycleShip(operation) {
   assertTrackedCleanOwnershipManifest(operation);
   const afterSnapshot = current.filter((path) => !baseline.paths.has(path));
   const deletedAfterSnapshot = new Set(deletedTrackedPaths("HEAD"));
-  const retired = priorOwnedDeletions(
-    afterSnapshot.filter((path) => deletedAfterSnapshot.has(path)),
-    "HEAD",
-  );
+  const deleted = afterSnapshot.filter((path) => deletedAfterSnapshot.has(path));
+  const retired = [
+    ...priorOwnedDeletions(deleted, "HEAD"),
+    ...vendorDeclaredRetiredDeletions(deleted, operation),
+  ];
   const allowed = new Set([...owned, ...retired]);
   const { paths } = { paths: [...new Set([...selectOwnedPaths(afterSnapshot, owned), ...retired])] };
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
@@ -407,7 +451,11 @@ export function adoptExistingLifecycleShip(operation) {
     throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
   }
   const owned = ownershipManifest();
-  const retired = priorOwnedDeletions(deletedTrackedPaths("HEAD"), "HEAD");
+  const deleted = deletedTrackedPaths("HEAD");
+  const retired = [
+    ...priorOwnedDeletions(deleted, "HEAD"),
+    ...vendorDeclaredRetiredDeletions(deleted, operation),
+  ];
   const allowed = new Set([...owned, ...retired]);
   const paths = [...new Set([...selectOwnedPaths(current, owned), ...retired])];
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
