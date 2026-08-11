@@ -265,3 +265,23 @@ test("reconciliation rejects every non-exact snapshot_path spelling", () => {
     assert.match(reconciled.state.planner_binding_error, /snapshot path/);
   }
 });
+
+test("reconciliation keeps an approved binding usable when only filesystem metadata changes", () => {
+  const dir = root();
+  const seeded = seedUsableBinding(dir);
+  const canonical = planPath(dir);
+  const before = readPlannerArtifact(dir, SESSION, FEATURE);
+  assert.equal(before.exists, true, "seeded canonical plan is readable");
+
+  fs.chmodSync(canonical, 0o600);
+
+  const after = readPlannerArtifact(dir, SESSION, FEATURE);
+  assert.equal(after.fileHash, before.fileHash, "the canonical bytes did not change");
+  assert.notEqual(after.fingerprint, before.fingerprint, "the filesystem metadata changed");
+
+  const reconciled = reconcilePlannerStateFromDisk(dir, SESSION);
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.state.planner_status, "usable");
+  assert.equal(reconciled.state.planner_binding_error, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(seeded.statePath, "utf8")).planner_status, "usable");
+});
