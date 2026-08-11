@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.44](https://github.com/orobsonn/claude-harness/compare/v0.55.43...v0.55.44) (2026-08-11)
+
+
+### Bug Fixes
+
+* **opencode:** isolate harness lifecycle updates ([#743](https://github.com/orobsonn/claude-harness/issues/743)) ([1affecc](https://github.com/orobsonn/claude-harness/commit/1affeccefe73c9cc50fcf8408c96b6d49f1163e0))
+
 ## [0.55.43](https://github.com/orobsonn/claude-harness/compare/v0.55.42...v0.55.43) (2026-08-11)
 
 
