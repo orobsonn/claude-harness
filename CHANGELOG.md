@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.32](https://github.com/orobsonn/claude-harness/compare/v0.55.31...v0.55.32) (2026-08-11)
+
+
+### Bug Fixes
+
+* **opencode:** limita escalada adversarial ([#716](https://github.com/orobsonn/claude-harness/issues/716)) ([9ae84f8](https://github.com/orobsonn/claude-harness/commit/9ae84f8ac405907ea75d7fe33b7c9e0f8408c4fc))
+
 ## [0.55.31](https://github.com/orobsonn/claude-harness/compare/v0.55.30...v0.55.31) (2026-08-11)
 
 
