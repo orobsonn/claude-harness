@@ -18,7 +18,6 @@ import {
 } from "./lifecycle-ship.mjs";
 
 const toolPath = fileURLToPath(new URL("./lifecycle-ship.mjs", import.meta.url));
-const retiredFilesPath = fileURLToPath(new URL("../lib/retired-files.mjs", import.meta.url));
 
 test("selectLifecyclePaths keeps framework cargo and leaves product work plus run ephemera out", () => {
   const selected = selectLifecyclePaths([
@@ -150,9 +149,7 @@ test("vendored CLI executes its argument guard when called through an absolute p
   const root = mkdtempSync(join(tmpdir(), "lifecycle-ship-vendored-"));
   const vendored = join(root, ".opencode", "tools", "lifecycle-ship.mjs");
   mkdirSync(join(root, ".opencode", "tools"), { recursive: true });
-  mkdirSync(join(root, ".opencode", "lib"), { recursive: true });
   cpSync(toolPath, vendored);
-  cpSync(retiredFilesPath, join(root, ".opencode", "lib", "retired-files.mjs"));
 
   const result = spawnSync(process.execPath, [vendored, "prepare", "product-delivery"], { encoding: "utf8" });
   assert.notEqual(result.status, 0);

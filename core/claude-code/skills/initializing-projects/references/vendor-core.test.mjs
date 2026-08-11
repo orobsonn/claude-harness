@@ -601,7 +601,6 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
       ".opencode/skills",
       ".opencode/plugin",
       ".opencode/tools",
-      ".opencode/lib/retired-files.mjs",
       ".opencode/harness.routing.json",
       ".opencode/plugin/entry-gate.ts",
       ".opencode/shared/lib/capture-oracle.mjs",

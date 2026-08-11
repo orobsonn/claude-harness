@@ -8,7 +8,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OC_RETIRED_FILES } from "../lib/retired-files.mjs";
+
+// Old v0.54 installs predate exact ownership manifests. The only deletion they need for this
+// migration is the retired controller pair; every newer deletion is proven by its prior manifest.
+const PRE_MANIFEST_RETIRED_FILES = new Set([
+  ".opencode/plugin/autonomy-controller.ts",
+  ".opencode/plugin/lib/autonomy-controller.mjs",
+]);
 
 // Only used to protect an old install before it has the exact vendor manifest. New lifecycle
 // commits MUST use the manifest below; a directory prefix could capture a local plugin.
@@ -250,12 +256,11 @@ function ownershipManifest() {
 
 /** @description Exact current retirement paths that the vendor declared for this release. */
 function vendorDeclaredRetirements() {
-  const known = new Set(OC_RETIRED_FILES.map((path) => `.opencode/${path}`));
   const retired = new Set();
   for (const manifest of OWNERSHIP_MANIFESTS.filter(existsSync)) {
     const parsed = parseOwnershipManifest(readFileSync(manifest, "utf8"), manifest);
     for (const path of parsed.retired) {
-      if (known.has(path)) retired.add(path);
+      if (PRE_MANIFEST_RETIRED_FILES.has(path)) retired.add(path);
     }
   }
   return retired;
@@ -303,9 +308,8 @@ function priorOwnedDeletions(paths, ref) {
  */
 export function selectVendorRetiredDeletions(paths, declaredPaths, operation) {
   if (operation !== "updating-harness") return [];
-  const known = new Set(OC_RETIRED_FILES.map((path) => `.opencode/${path}`));
   const declared = new Set([...declaredPaths].map(normalizedPath));
-  return paths.map(normalizedPath).filter((path) => known.has(path) && declared.has(path));
+  return paths.map(normalizedPath).filter((path) => PRE_MANIFEST_RETIRED_FILES.has(path) && declared.has(path));
 }
 
 function vendorDeclaredRetiredDeletions(paths, operation) {
