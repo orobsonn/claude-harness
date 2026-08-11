@@ -38,6 +38,12 @@ test("#autonomy — same-contract engineering is resolved and verified without a
   assert.match(skill, /virgin/i);
 });
 
+test("#autonomy — a progress update cannot end a live delegated delivery with a lawful next action", () => {
+  assert.match(skill, /progress update.*not.*terminal|not.*terminal.*progress update/i);
+  assert.match(skill, /next lawful tool call/i);
+  assert.match(skill, /do not say.*vou|do not say.*na sequ/i);
+});
+
 test("#autonomy — only a choice that changes the delivered product remains human-owned", () => {
   assert.match(skill, /product (?:behavior|contract)|user receives/i);
   assert.match(skill, /only permitted question/i);

@@ -52,6 +52,11 @@ defect, evidence, chosen repair, and gates. Never disable a rail. Never relax a 
 marker, or use an executor to repair a frozen test — only `test-author` may do that, followed by
 fidelity and freeze again.
 
+**Turn discipline in live autonomy:** a **progress update is not terminal**. When the approved plan has a
+next lawful action, make that **next lawful tool call** before ending the turn; do not say **"vou"** or
+**"na sequencia"** and stop. A turn may end only after delivery is complete, a real rail blocks with its
+evidence, or an unresolved product decision remains.
+
 **Proportionality before escalation:** a finding is material only when evidence shows the proposed delivery
 fails an acceptance criterion, external contract, or normal supported flow; causes material likely harm in
 expected use; or creates a concrete security, privacy, irreversible-loss/corruption, or unauthorized-action
