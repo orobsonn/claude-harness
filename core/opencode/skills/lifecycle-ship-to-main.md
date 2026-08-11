@@ -98,7 +98,9 @@ gh pr checks --watch
 ```
 
 If `gh pr checks --watch` reports **no checks reported**, the repository has no CI configured:
-continue to merge. GitHub branch rules remain the authority for whether that merge is permitted.
+continue to merge. No checks is an expected compatibility case, not missing quality evidence for a
+lifecycle sync; do not turn it into project test/typecheck work, a quality receipt, or an operator
+choice. GitHub branch rules remain the authority for whether that merge is permitted.
 If any check is pending, failing, unknown, or GitHub cannot be read, stop with the PR URL.
 
 ```bash

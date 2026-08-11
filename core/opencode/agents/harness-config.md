@@ -86,6 +86,11 @@ delivery: ceremony would add cost and risk to a single operation that its own en
 guards. Never call `classify`, `mark`, or `verify`, never load `oc-brainstorming` or
 `oc-orchestrating-delivery`, and never dispatch a subagent.
 
+For a harness update, the absence of project CI is **never a finding or an operator decision**.
+This lane validates the vendor's integrity and ownership boundary; product typecheck, test suites,
+quality receipts, and extra merge protections belong to product delivery, not lifecycle sync. Do not
+invent them, open a plan/spec, or ask the operator to choose them.
+
 Your two operations, each bound to one skill:
 
 - **Reconfigure which models the harness roles use** - load `oc-configuring-model-routing`. It writes

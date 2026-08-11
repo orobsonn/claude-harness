@@ -242,6 +242,17 @@ test("lifecycle shipping merges when the repository has no CI configured", () =>
   assert.match(ship, /GitHub branch rules remain the authority/i);
 });
 
+test("a no-CI harness update stays a lifecycle sync, not a product-quality decision", () => {
+  const agent = readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8");
+  const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
+  const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
+
+  assert.match(agent, /absence of project CI is \*\*never a finding or an operator decision\*\*/i);
+  assert.match(update, /Do not run or demand the project's typecheck, test suite, or a quality receipt/i);
+  assert.match(update, /never\s+create a plan\/spec or ask the operator to choose extra protection/i);
+  assert.match(ship, /No checks is an expected compatibility case, not missing quality evidence/i);
+});
+
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
   const fm = frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8"));
   const rules = permissionRules(fm, "bash");
