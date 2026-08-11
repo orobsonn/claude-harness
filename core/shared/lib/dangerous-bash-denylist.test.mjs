@@ -72,6 +72,7 @@ test("resolveDangerousBashCommand: the harness's own prescribed npx invocations 
   for (const command of [
     "npx tsc --noEmit",
     "npx --yes --package=github:orobsonn/claude-harness#v1.2.3 claude-harness lifecycle-snapshot updating-harness",
+    "npx --yes --package=github:orobsonn/claude-harness#v1.2.3 claude-harness lifecycle-update --target opencode --ref v1.2.3",
     "npx --yes --package=github:orobsonn/claude-harness#v1.2.3 claude-harness init --target opencode",
     "npx github:orobsonn/claude-harness#v1.2.3 init",
     "npx -y github:orobsonn/claude-harness#v1.2.3 init",

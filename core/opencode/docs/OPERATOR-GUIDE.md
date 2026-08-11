@@ -254,13 +254,13 @@ Só **interativo** e pedido **explícito** (não mistura com feature).
 # última release
 gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
 
-npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness init --target opencode
+npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness lifecycle-update --target opencode --ref <tag>
 ```
 
 - Detecta install vs update por `.opencode/.harness-version`.  
 - **Não** use `@latest` do npm (pode vendorar shell errado/stale).  
-- **Ship automático:** PR + squash-merge na `main` na mesma sessão (cron/cloud só enxerga o repo commitado).  
-- **Reinicia a sessão.**  
+- **Ship automático:** a operação usa clone temporário da `main`, cria PR e faz squash-merge sem tocar no checkout ativo.
+- Abra uma nova sessão a partir da `main` atualizada.
 - Headless: a skill **recusa** (não mexe no harness sozinha).
 
 ---

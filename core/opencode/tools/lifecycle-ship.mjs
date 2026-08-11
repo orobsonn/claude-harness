@@ -5,7 +5,7 @@
  * before a branch, stage, or commit is attempted.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -147,6 +147,72 @@ function defaultBranch() {
   const match = ref.match(/^origin\/(main|master)$/);
   if (!match) throw new Error(`origin/HEAD must name main or master, got ${ref || "none"}`);
   return match[1];
+}
+
+/** @param {string[]} args */
+function gitBuffer(args) {
+  return execFileSync("git", args, { stdio: ["ignore", "pipe", "ignore"] });
+}
+
+/** @param {string} ref @param {string} path */
+function refFile(ref, path) {
+  try {
+    return gitBuffer(["show", `${ref}:${path}`]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A lifecycle PR can be merged from another worktree while this checkout still holds the exact
+ * vendor output. That is not divergent work: after staging only byte-identical owned files, a
+ * fast-forward consumes it without touching any product path.
+ * @param {string} ref
+ * @param {string} path
+ */
+function matchesRefFile(ref, path) {
+  const remote = refFile(ref, path);
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || remote === null) return false;
+    return Buffer.compare(readFileSync(path), remote) === 0;
+  } catch (error) {
+    if (error?.code === "ENOENT") return remote === null;
+    throw error;
+  }
+}
+
+/** @param {string} branch */
+function localBranchIsStrictlyBehind(branch) {
+  try {
+    git(["merge-base", "--is-ancestor", branch, `origin/${branch}`]);
+  } catch {
+    return false;
+  }
+  try {
+    git(["merge-base", "--is-ancestor", `origin/${branch}`, branch]);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * @param {string} branch
+ * @param {string[]} paths
+ */
+function fastForwardAlreadyMergedCargo(branch, paths) {
+  if (git(["branch", "--show-current"]).trim() !== branch) return null;
+  if (!localBranchIsStrictlyBehind(branch)) return null;
+  const remote = `origin/${branch}`;
+  if (paths.length === 0 || !paths.every((path) => matchesRefFile(remote, path))) return null;
+
+  const present = paths.filter((path) => existsSync(path));
+  const removed = paths.filter((path) => !existsSync(path));
+  if (present.length > 0) git(["add", "--", ...present]);
+  if (removed.length > 0) git(["add", "-u", "--", ...removed]);
+  git(["pull", "--ff-only"]);
+  return { action: "already-merged", branch, paths };
 }
 
 /** @param {string[]} args */
@@ -447,13 +513,7 @@ export function prepareLifecycleShip(operation) {
 export function adoptExistingLifecycleShip(operation) {
   if (operation !== "updating-harness") throw new Error("adopt supports only updating-harness");
   const branch = defaultBranch();
-  if (git(["rev-parse", branch]).trim() !== git(["rev-parse", `origin/${branch}`]).trim()) {
-    throw new Error(`local ${branch} is not equal to origin/${branch}; refusing to branch from local commits`);
-  }
   const current = currentChangedPaths();
-  if (current.includes("opencode.harness.json")) {
-    throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
-  }
   const owned = ownershipManifest();
   const deleted = deletedTrackedPaths("HEAD");
   const retired = [
@@ -462,6 +522,14 @@ export function adoptExistingLifecycleShip(operation) {
   ];
   const allowed = new Set([...owned, ...retired]);
   const paths = [...new Set([...selectOwnedPaths(current, owned), ...retired])];
+  const alreadyMerged = fastForwardAlreadyMergedCargo(branch, paths);
+  if (alreadyMerged) return alreadyMerged;
+  if (git(["rev-parse", branch]).trim() !== git(["rev-parse", `origin/${branch}`]).trim()) {
+    throw new Error(`local ${branch} is not equal to origin/${branch}; refusing to branch from local commits`);
+  }
+  if (current.includes("opencode.harness.json")) {
+    throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
+  }
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
 
   git(["switch", branch]);

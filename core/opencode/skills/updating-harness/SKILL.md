@@ -1,6 +1,6 @@
 ---
 name: oc-updating-harness
-description: "Install or update the Claude Harness in the CURRENT project from within an OpenCode session. Runs the named CLI from the pinned git release tag (npx --package=github:orobsonn/claude-harness#<tag> claude-harness init) so no engine needs to be vendored into .opencode/ and it never depends on the lagging npm release. Detects install-vs-update, resolves which runtime shell(s) to vendor, and re-vendors without clobbering project memory/kaizen/config. Run it in any repo to onboard or sync the OpenCode harness after a new release."
+description: "Install or update the Claude Harness from an OpenCode session. The pinned release CLI performs the whole lifecycle in an isolated clone: vendor, exact-boundary commit, PR, and merge. It never alters the checkout carrying the active conversation."
 license: MIT
 compatibility: opencode
 metadata:
@@ -8,172 +8,98 @@ metadata:
   invocation: operator-only
 ---
 
-# Updating-Harness (OpenCode) — install or update the harness from within OpenCode
+# Updating-Harness (OpenCode)
 
-This is the **loader-visible lifecycle entry for an OpenCode-native session**. A Claude Code session
-has its own `oc-updating-harness` skill that runs the vendored engine directly; an OpenCode session cannot
-see that engine, so here we drive the CLI **from the pinned git release tag**, which fetches the engine
-from that release. This keeps an OpenCode project self-maintaining — it never depends on a Claude Code
-session to administer it, nor on the npm release being current.
+This is the loader-visible lifecycle entry for an OpenCode-native session. It uses the published CLI
+from one pinned git release; it does not depend on a local helper from an older vendor.
 
 **Announce at start (operator language):** "Atualizando o Claude Harness (OpenCode) a partir do CLI publicado."
 
-All identifiers/commands stay in English; every message to the operator is in **the operator's language**, product-language.
+All identifiers and commands stay in English; every operator message is concise, in the operator's
+language.
 
 <HARD-GATE>
-This is a top-level, interactive lifecycle operation, not a delivery. Run only from a direct operator
-request and only when no delivery is active. Do not call `classify`, create or modify a plan/spec,
-load `oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. This runs in the
-`harness-config` lane, which the operator reaches by typing `/updating-harness` — never from `build`.
-Run the exact release CLI command, ship the result to main via PR (see Step 4), and require a session
-restart. In headless or relayed input, stop without modifying the harness.
+This is one top-level, interactive lifecycle operation, not product delivery. Run only from a direct
+operator request while no delivery is active. Do not call `classify`, create a plan/spec, load
+`oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. The operator reaches this
+lane through `/updating-harness`, never through `build`. In headless or relayed input, stop without
+modifying the harness.
 </HARD-GATE>
 
 <LIFECYCLE-QUALITY-BOUNDARY>
-This operation validates the released vendor's exact ownership boundary, not the project's product
-behavior. Do not run or demand the project's typecheck, test suite, or a quality receipt; their
-commands and dependencies are project-specific and they are not evidence for this vendor sync.
-No GitHub Actions checks is an expected compatibility case, not missing quality evidence. Never
-create a plan/spec or ask the operator to choose extra protection because CI is absent: follow the
-shared lifecycle ship procedure, whose manifest, commit/PR/SHA checks, and GitHub rules are the
-proportional controls for this operation.
+This operation validates the released vendor's ownership boundary, not the project's product behavior.
+Do not run or demand the project's typecheck, test suite, or a quality receipt. No GitHub Actions
+checks is an expected compatibility case, not missing evidence. Never create a plan/spec or ask the
+operator to choose extra protection because CI is absent.
 </LIFECYCLE-QUALITY-BOUNDARY>
 
 <LIFECYCLE-TURN-CONTINUITY>
-Lifecycle command results are internal progress, not an operator checkpoint. While a next prescribed command is lawful, make that next prescribed command in the **same active turn**. Do not send an intermediate textual response such as "atualizando", "continuando" or "commit quando quiser" and then wait. Only send an operator-facing response after the lifecycle result is `merged` or `noop`, or after a formal block with the command evidence and the authority actually needed.
+Lifecycle command results are internal progress, not an operator checkpoint. While a next prescribed
+command is lawful, make that next prescribed command in the **same active turn**. Do not send an
+intermediate textual response such as "atualizando", "continuando" or "commit quando quiser" and then
+wait. Only send an operator-facing response after the lifecycle result is `merged` or `noop`, or after
+a formal block with command evidence and the authority actually needed.
 </LIFECYCLE-TURN-CONTINUITY>
 
----
+## Step 1 — resolve the runtime
 
-## Two distinct verbs — do not conflate them
-
-- **Sync (default):** refresh the shell(s) the project **already has** to the latest version.
-- **Add a runtime:** vendor a shell the project does **not** yet have. This is never inferred — it
-  requires explicit operator intent (`both`).
-
----
-
-## Step 1 — Detect install-vs-update and resolve the runtime
-
-Detect by the OpenCode shell's version stamp:
+Detect the OpenCode shell:
 
 ```bash
 test -f .opencode/.harness-version && echo update || echo install
 ```
 
-Resolve which runtime(s) to vendor (the public CLI's `--target`):
+Use only marker checks to resolve the CLI target. Never use `read` to probe an absent optional shell:
+an absent Claude marker means `opencode`, not an error.
 
-Use only the marker checks for this decision. Never use `read` to probe an absent optional shell: an
-absent Claude marker means `opencode`, not an error. If both marker checks succeed, use `both`.
+- Both `.claude/.harness-version` and `.opencode/.harness-version` exist: `both`.
+- Only `.opencode/.harness-version` exists: `opencode` — the absent Claude shell is optional.
+- Only `.claude/.harness-version` exists: `claude`.
+- A marker exists without its runtime shell: stop; do not repair a partial install by inference.
+- No marker exists: install only the runtime explicitly requested by the operator.
+- Add a runtime only with explicit intent: `both`.
 
-- **Both `.claude/.harness-version` and `.opencode/.harness-version` exist:** `both`.
-- **Only `.opencode/.harness-version` exists:** `opencode` — the absent Claude shell is optional;
-  continue normally.
-- **Only `.claude/.harness-version` exists:** `claude`.
-- **A marker exists without its runtime shell:** stop; do not repair a partial install by inference.
-- **No marker exists:** install only the runtime explicitly requested by the operator.
-- **Add a runtime (explicit intent only):** `both`.
+## Step 2 — one isolated operation
 
----
-
-## Step 2 — Install or update (same idempotent command)
-
-Resolve the latest release tag **once** (the CLI runs from that pinned tag) and retain that exact
-value for the entire invocation, including a recovery. Do not resolve it again after a merge:
+Resolve the latest release tag **once** and retain that value for this invocation:
 
 ```bash
-gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0
+gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
 ```
 
-Immediately before the first write, use the pinned CLI to capture the lifecycle baseline. This works
-even when the project still has an older harness with no local lifecycle helper:
+Run exactly this single clean command — substitute its placeholders with the resolved values; no
+comment, redirect, `&&`, or second lifecycle command:
 
 ```bash
-npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness lifecycle-snapshot updating-harness
+npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>
 ```
 
-If this reports pre-existing lifecycle cargo, inspect the changed-path list. It normally means a
-previous vendor run already completed but stopped before it created its PR. **Treat the skill
-invocation itself as authorization** to finish that lifecycle operation: do not send the operator
-back to build. First follow the automatic recovery in Step 4 through its PR merge and `pull`; it
-stages only the current vendor-manifest paths and leaves every product path, plan and state file
-untouched. That adopts the **previous** vendor run — it is not automatically the requested sync.
+The published CLI starts from a **clean clone of `origin/main`** (or `origin/master`), vendors the
+pinned release, accepts only the exact generated harness manifest, creates the lifecycle-only commit,
+opens its PR, and merges it. It cleans the temporary clone in every outcome. It **does not modify the
+invoking checkout**: its current branch, staged product work, plans, state, and local files remain
+untouched. This prevents an old or dirty session checkout from blocking a legitimate harness sync.
 
-After `adopt` has been merged, read the first line of `.opencode/.harness-version`. If it equals the
-resolved `<latest-tag>`, close normally. If the installed version differs from the resolved tag,
-perform **exactly one normal update pass** from the snapshot command above through `init`, `prepare`,
-PR merge and `pull`, using that same already-resolved tag. Then read the version again: equality is
-required for success; a mismatch is a formal failure with evidence. Never resolve the latest tag again
-or make a third pass. If adoption itself does not merge, stop there — never vendor over its branch.
+The PR contains only the release's exact harness files. Product work, plans, run state, local plugins,
+secrets, and unrelated staged files cannot enter it. GitHub rules remain authoritative. When the
+repository has workflows, the CLI waits for their checks; when it has none, the manifest/SHA/PR identity
+checks are the proportional lifecycle gate.
 
-Both first-install and update use the same command — `init` is idempotent. Substitute `<latest-tag>`
-with the concrete `vX.Y.Z` from Step 1. **Emit a
-single clean command** — no trailing comment, no `&&`, no redirect — so the lifecycle action remains
-auditable and cannot compose an unrelated shell operation. **Run the CLI from the git tag, not from npm:**
+## Step 3 — close
 
-```bash
-npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
-```
+- `merged`: report version/PR and that it landed on the default branch.
+- `noop`: report that the requested version was already present on the default branch.
+- Any other result: report its command evidence and stop. Do not retry through a different branch,
+  broad staging, reset, stash, direct commit, or another release tag.
 
-> **Why the git tag, not `@orobsonn/claude-harness@latest`:** the npm-published version lags the repo
-> and may predate OpenCode support entirely — `@latest` can silently vendor a stale **Claude-only**
-> harness with `--target` ignored. The `github:…#<tag>` spec always runs the tagged release's CLI, which
-> has the OpenCode shell. Only use the npm form once a release **≥ the tag with OpenCode support** is
-> published (`npx -y "@orobsonn/claude-harness@>=0.40.0" …` fails loud if it is not).
-
-This vendors the selected shell(s). OpenCode goes into `.opencode/` — the framework-owned trees `agents/`, `command/`,
-`docs/`, `skills/`, `plugin/`, `tools/`, `hands/`, `rules/` plus `harness.routing.json`, `AGENTS.md`,
-`shared/` and `opencode.json` — and stamps `.opencode/.harness-version`; `both` also refreshes
-the Claude shell in `.claude/`. The lifecycle shipper uses exact manifests for each selected shell,
-so a local plan, state file, plugin, or product file is never included in the PR.
-
-**Non-clobber guarantees (per shell):** `MEMORY.md`/`kaizen.md` are seeded only if absent; `AGENTS.md`
-is merged between harness markers (project content preserved); an existing `opencode.json` is updated
-in place, preserving the project's own settings and non-harness plugins (only stale harness autoload
-paths are stripped from `plugin[]`, since OpenCode auto-loads `.opencode/plugin/*.ts`).
-
----
-
-## Step 3 — Reconcile
-
-- If the CLI wrote `opencode.harness.json`, the project's existing `opencode.json` could **not** be
-  parsed (invalid JSON, or not a JSON object) — the CLI refused to touch it and dropped the harness
-  config beside it for manual repair. Present the diff in product-language and hand the merge to the
-  operator — the lane cannot write files, and repairing a broken config unattended is exactly the
-  move that loses their settings. A valid `opencode.json` never produces this file: it is updated in
-  place.
-- Note **version before → after** (for the final report).
-
----
-
-## Step 4 — Ship to main (default, same session)
-
-**Do not stop at "commit when you want".** After a successful update that dirtied harness paths, follow
-`skills/lifecycle-ship-to-main.md` end-to-end in this same session: branch → selective stage → commit →
-push → PR → squash merge → pull main.
-
-The shared procedure also resumes an already-created, lifecycle-only commit after a restart; a clean
-worktree alone is never a reason to skip it. The lifecycle helper owns the exact commit message and
-path allowlist. Use only the commands listed in `lifecycle-ship-to-main.md`.
-
----
-
-## Step 5 — Close
-
-- Report in pt-br: version before → after, PR URL, what landed on main.
-- **Mandatory:** operator must **restart the OpenCode session** — plugins already loaded still run the
-  previous version; a hybrid runtime is forbidden.
-- Point to `.opencode/docs/OPERATOR-GUIDE.md` when useful.
-
----
+The active checkout intentionally remains as it was. Require a **new OpenCode session opened from the
+updated default branch** to load the new plugins and skills; do not claim this existing session changed
+its runtime.
 
 ## Anti-patterns
 
-- **Vendoring the engine into `.opencode/` to run it locally** — the sanctioned OpenCode entry is the
-  CLI run from the pinned git release tag (spec 08); do not clone-and-run a local engine from within OpenCode.
-- **Using `@orobsonn/claude-harness@latest` from npm** — the npm release lags and may predate OpenCode; `@latest` can silently vendor a stale Claude-only harness. Use the `github:…#<tag>` spec, or pin `@>=0.40.0` so npm fails loud instead of mis-vendoring.
-- **Passing a runtime word to the low-level engine's `--target`** — from OpenCode you drive the CLI, whose
-  `--target` IS the runtime. Never hand-invoke the engine's directory-`--target` with `opencode`/`both`.
-- **Inferring "add a runtime" from detection** — detection is blind to a shell that isn't there yet; adding one needs explicit operator intent (`both`).
-- **Stopping after vendor without shipping** — leaves the operator opening a second session just to land the PR. Ship is the default close-out.
-- **Shipping unrelated project files** — only harness lifecycle paths (see ship procedure).
+- Running a multi-step vendor/commit/PR sequence in the checkout that carries the conversation.
+- Using `@orobsonn/claude-harness@latest` from npm; the npm release can lag the git tag.
+- Inferring an additional runtime from detection; only explicit `both` adds one.
+- Turning absent project CI into a product-test demand or an operator choice.
+- Broad staging, force-push, `--no-verify`, or an admin merge.
