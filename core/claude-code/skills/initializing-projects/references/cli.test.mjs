@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLifecycleClone, parseCliArgs, runInit, runIsolatedLifecycleUpdate, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle, writeLifecycleSnapshot } from "./cli.mjs";
+import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
 
 test("parseCliArgs", () => {
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init"]), {
@@ -93,6 +93,20 @@ test("SOURCE_URL is the baked slug", () => {
   assert.equal(SOURCE_URL, "https://github.com/orobsonn/claude-harness.git");
 });
 
+test("an existing OpenCode installation uses the isolated update path", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-existing-harness-"));
+  try {
+    mkdirSync(join(root, ".opencode"), { recursive: true });
+    writeFileSync(join(root, ".opencode", ".harness-version"), "v0.55.39\n");
+
+    assert.equal(hasInstalledHarness(root, "opencode"), true);
+    assert.equal(hasInstalledHarness(root, "both"), true);
+    assert.equal(hasInstalledHarness(root, "claude"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runInit delegates to vendor with resolved tag", () => {
   let calls = 0; let arg = null;
   const ret = runInit({
@@ -121,41 +135,7 @@ test("runInit throws when tag cannot be resolved and never vendors", () => {
   assert.equal(calls, 0);
 });
 
-test("writeLifecycleSnapshot preserves the pre-vendor tracked and untracked baseline for an old project", () => {
-  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-snapshot-"));
-  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
-  try {
-    git(["init"]);
-    git(["config", "user.email", "test@example.com"]);
-    git(["config", "user.name", "Test"]);
-    writeFileSync(join(root, "tracked.txt"), "base\n");
-    git(["add", "tracked.txt"]);
-    git(["commit", "-m", "base"]);
-    writeFileSync(join(root, "tracked.txt"), "changed\n");
-    writeFileSync(join(root, "untracked.txt"), "local\n");
-
-    assert.equal(writeLifecycleSnapshot(root, "updating-harness"), 2);
-    const snapshot = JSON.parse(readFileSync(join(root, ".git", "harness-lifecycle-updating-harness.json"), "utf8"));
-    assert.deepEqual(new Set(snapshot.paths), new Set(["tracked.txt", "untracked.txt"]));
-    assert.throws(() => writeLifecycleSnapshot(root, "configuring-model-routing"), /only updating-harness/);
-
-    mkdirSync(join(root, ".opencode", "plugin", "lib"), { recursive: true });
-    writeFileSync(join(root, ".opencode", ".harness-owned-files.json"), JSON.stringify({
-      version: 1,
-      files: [],
-    }));
-    writeFileSync(join(root, ".opencode", "plugin", "lib", "retired.mjs"), "edited\n");
-    git(["add", ".opencode/plugin/lib/retired.mjs"]);
-    assert.throws(
-      () => writeLifecycleSnapshot(root, "updating-harness"),
-      /pre-existing tracked change in lifecycle-owned cargo.*retired\.mjs/i,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("lifecycle-snapshot tells pre-v0.55.46 skills to vendor the pinned release", () => {
+test("lifecycle-snapshot is a compatibility no-op for old OpenCode skills", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-bootstrap-"));
   const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
   try {
@@ -174,8 +154,8 @@ test("lifecycle-snapshot tells pre-v0.55.46 skills to vendor the pinned release"
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /update preflight ready — run the pinned init command now\./i);
-    assert.doesNotMatch(result.stdout, /existing path/i);
+    assert.match(result.stdout, /compatibility preflight complete — run the pinned init command now\./i);
+    assert.equal(existsSync(join(root, ".git", "harness-lifecycle-updating-harness.json")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
