@@ -287,8 +287,7 @@ export function reconcilePlannerStateFromDisk(projectRoot, sessionId, _now = Dat
           snapshot.semanticHash !== binding.semantic_hash ||
           canonical.semanticHash !== binding.semantic_hash ||
           canonical.fileHash !== binding.file_hash ||
-          canonical.fileHash !== binding.snapshot_file_hash ||
-          canonical.fingerprint !== binding.fingerprint
+          canonical.fileHash !== binding.snapshot_file_hash
         ) {
           state = { ...state, planner_status: "plan_invalid", planner_binding_error: "bound snapshot integrity failed" };
         } else if (snapshot.validationError === "validator_internal" || canonical.validationError === "validator_internal") {
