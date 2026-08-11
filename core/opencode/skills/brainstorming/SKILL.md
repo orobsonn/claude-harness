@@ -30,8 +30,8 @@ This skill runs inside the `build` (primary) agent. Its output is the approved (
 
 - **INTERACTIVE:** ask the operator **one question at a time**; present design; wait for approval.
 - **Autonomy directive — AUTONOMOUS (local):** when the operator explicitly says "sem parar", "sem me perguntar", or
-  equivalent, record `autonomy_directive: enabled` in the spec/decision ledger and use the HEADLESS
-  evidence-and-adversary workflow without waiting. This directive persists for the feature/session.
+  equivalent, use the HEADLESS evidence-and-adversary workflow without waiting. This is prompt-level
+  delegation only: OpenCode does not inject a continuation or re-open an idle session.
   Ask only when two viable choices change the observable product behavior or contract; select and record
   the least-invasive engineering option when the contract is the same.
 - **HEADLESS** (autonomous / VPS cron / `$HARNESS_OBSERVABILITY_RUN_PATH` / `$HARNESS_OC_DATA_HOME` / trigger says "without asking"): **do not wait for a human**. Simulate exploration with **read-only** investigation + optional fan-out `task` exploration lenses (user-journeys, edge-cases, constraints), synthesize a spec from the trigger + codebase, then run one primary **spec-adversary**. Dispatch an optional second eye only when routing explicitly configures one via `secondEyeModel` or legacy `families.family-2`; catalog presence alone is not authorization. If blocking product decisions cannot be resolved from the trigger, stop and comment on the issue/PR — do not invent product judgments silently.

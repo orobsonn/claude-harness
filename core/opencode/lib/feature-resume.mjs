@@ -53,9 +53,8 @@ function verifiedEntries(state, featureId, plan) {
 }
 
 function isTerminalState(state) {
-  // final_review_done is the final host-stamped engineering phase. The autonomy
-  // controller intentionally stops prompting after it, so reopening it would
-  // repeatedly revive an already delivered feature when no delivery_status
+  // final_review_done is the final host-stamped engineering phase. Reopening it
+  // would repeatedly revive an already delivered feature when no delivery_status
   // writer exists.
   return state?.delivery_status === "delivered" || state?.final_review_done === true;
 }

@@ -34,9 +34,9 @@ Detect the mode **first**; it changes whether you may ask questions or wait for 
 
 - **INTERACTIVE (local):** an operator is present. Clarifying questions and the human veto (Step 4) are available.
 - **Autonomy directive — AUTONOMOUS (local):** the operator is present but explicitly says to proceed autonomously — for example
-  "sem parar", "sem me perguntar", "siga autonomamente", or "siga a implementacao". The native
-  autonomy controller persists `autonomy_directive: enabled` in session gate-state from the operator
-  message itself; retain it in the runtime spec/decision ledger too. Do not ask about engineering. The **only** permitted
+  "sem parar", "sem me perguntar", "siga autonomamente", or "siga a implementacao". This delegates
+  engineering to the current model only: OpenCode does not inject a continuation or re-open an idle
+  session. Do not ask about engineering. The **only** permitted
   question is an unresolved choice that changes the observable product behavior or contract. This is not
   HEADLESS: communicate progress normally, but do not wait for a reply.
 - **HEADLESS:** no operator is reachable. Active when **any** of:

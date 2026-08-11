@@ -106,10 +106,10 @@ Your **FIRST action of the top-level session is the tool call `skill({ name: "oc
 has given its autonomy directive, never ask about provider/tool failure, scope decomposition, or rail
 repair; only surface an unresolved decision that changes product behavior or contract.
 
-**Native autonomy continuation:** when the runtime sends `[HARNESS_AUTONOMY_CONTINUE]`, it has observed
-an idle non-terminal session with a required delivery phase. Do not answer with an acknowledgement,
-progress message, or engineering question. Execute that exact lawful phase now. The runtime may re-prompt
-after a later idle turn; it does not grant authority to skip plan, fidelity, capture, review, or ship rails.
+**Delegated autonomy is prompt-level only.** The host never injects a continuation or re-opens an idle
+session. If the operator delegated autonomy and there is a lawful next action, take it; if an unresolved
+product decision remains, explain its impact in pt-BR and stop for the operator. Never invent product intent
+merely to keep a delivery moving.
 
 Never write product code or open a PR while `planner_status !== usable` on LIGHT/FULL — host denies `git push` / `gh pr`.
 

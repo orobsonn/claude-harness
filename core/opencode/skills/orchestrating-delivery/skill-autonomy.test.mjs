@@ -14,10 +14,17 @@ const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const triage = readFileSync(join(here, "..", "triaging-requests", "SKILL.md"), "utf8");
 const brainstorming = readFileSync(join(here, "..", "brainstorming", "SKILL.md"), "utf8");
 
-test("#autonomy — explicit operator directive enables autonomous delivery in a live session", () => {
-  assert.match(skill, /Autonomy directive/i);
+test("#autonomy — delegation is prose, never an idle host continuation", () => {
+  for (const document of [skill, triage, brainstorming]) {
+    assert.doesNotMatch(document, /native autonomy controller|idle motor|re-prompt/i);
+    assert.match(document, /does not\s+inject|does not\s+re-open|no host continuation/i);
+  }
+});
+
+test("#autonomy — explicit operator directive delegates autonomous delivery in a live session", () => {
+  assert.match(skill, /Delegated autonomy/i);
   assert.match(skill, /aut[oô]nom|sem (?:parar|perguntar)/i);
-  assert.match(skill, /persists? for the (?:feature|session)/i);
+  assert.match(skill, /prompt-level delegation/i);
   assert.match(triage, /Autonomy directive/i);
   assert.match(brainstorming, /Autonomy directive/i);
 });

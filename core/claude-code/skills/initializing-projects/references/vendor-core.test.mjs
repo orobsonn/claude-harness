@@ -638,12 +638,16 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     const staleResolver = join(tempDir, ".opencode/plugin/command-resolver.ts");
     const staleLib = join(tempDir, ".opencode/plugin/lib/command-resolver.mjs");
     const staleMarkGate = join(tempDir, ".opencode/plugin/lib/mark-gate.mjs");
+    const staleAutonomyController = join(tempDir, ".opencode/plugin/autonomy-controller.ts");
+    const staleAutonomyControllerLib = join(tempDir, ".opencode/plugin/lib/autonomy-controller.mjs");
     const projectSibling = join(tempDir, ".opencode/plugin/lib/project-owned-marker.mjs");
     mkdirSync(dirname(staleResolver), { recursive: true });
     mkdirSync(dirname(staleLib), { recursive: true });
     writeFileSync(staleResolver, "// stale plugin from a prior vendor\n", "utf8");
     writeFileSync(staleLib, "// stale lib from a prior vendor\n", "utf8");
     writeFileSync(staleMarkGate, "// stale shell marker from a prior vendor\n", "utf8");
+    writeFileSync(staleAutonomyController, "// stale automatic continuation plugin\n", "utf8");
+    writeFileSync(staleAutonomyControllerLib, "// stale automatic continuation helper\n", "utf8");
     writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
 
     const result = spawnSync(
@@ -656,6 +660,8 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     assert.ok(!existsSync(staleResolver), "retired plugin file must be deleted on re-vendor");
     assert.ok(!existsSync(staleLib), "retired plugin lib must be deleted on re-vendor");
     assert.ok(!existsSync(staleMarkGate), "retired mark-gate helper must be deleted on re-vendor");
+    assert.ok(!existsSync(staleAutonomyController), "retired automatic continuation plugin must be deleted on re-vendor");
+    assert.ok(!existsSync(staleAutonomyControllerLib), "retired automatic continuation helper must be deleted on re-vendor");
     assert.ok(existsSync(projectSibling), "exact retirement must preserve project-owned siblings");
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
@@ -1536,11 +1542,11 @@ test("defaultOcPluginPaths() / example / root opencode.json plugin[] are empty (
   assert.deepStrictEqual(fromRoot, []);
 });
 
-test("harnessOcPluginFiles lists autonomy controller and observability carriers on disk", () => {
+test("harnessOcPluginFiles lists observability carriers but not the retired autonomy controller", () => {
   const files = harnessOcPluginFiles();
   assert.ok(files.includes("./.opencode/plugin/obs-eye.ts"));
   assert.ok(files.includes("./.opencode/plugin/agent-idle-nudge.ts"));
-  assert.ok(files.includes("./.opencode/plugin/autonomy-controller.ts"));
+  assert.equal(files.includes("./.opencode/plugin/autonomy-controller.ts"), false);
   assert.ok(files.every((p) => isHarnessAutoloadPluginPath(p)));
 });
 
