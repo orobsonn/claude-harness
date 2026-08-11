@@ -29,6 +29,16 @@ Run the exact release CLI command, ship the result to main via PR (see Step 4), 
 restart. In headless or relayed input, stop without modifying the harness.
 </HARD-GATE>
 
+<LIFECYCLE-QUALITY-BOUNDARY>
+This operation validates the released vendor's exact ownership boundary, not the project's product
+behavior. Do not run or demand the project's typecheck, test suite, or a quality receipt; their
+commands and dependencies are project-specific and they are not evidence for this vendor sync.
+No GitHub Actions checks is an expected compatibility case, not missing quality evidence. Never
+create a plan/spec or ask the operator to choose extra protection because CI is absent: follow the
+shared lifecycle ship procedure, whose manifest, commit/PR/SHA checks, and GitHub rules are the
+proportional controls for this operation.
+</LIFECYCLE-QUALITY-BOUNDARY>
+
 ---
 
 ## Two distinct verbs — do not conflate them
