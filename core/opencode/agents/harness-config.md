@@ -32,10 +32,9 @@ permission:
     "test -f .claude/.harness-version": allow
     "echo *": allow
     "gh release view --repo orobsonn/claude-harness *": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target opencode": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target claude": allow
-    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target both": allow
+    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-update --target opencode --ref v*": allow
+    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-update --target claude --ref v*": allow
+    "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-update --target both --ref v*": allow
     "opencode models": allow
     "opencode models *": allow
     "git status*": allow
@@ -53,8 +52,6 @@ permission:
     "git pull --ff-only": allow
     "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness": allow
     "node .opencode/tools/lifecycle-ship.mjs prepare configuring-model-routing": allow
-    "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness": allow
-    "node .opencode/tools/lifecycle-ship.mjs snapshot updating-harness": allow
     "node .opencode/tools/lifecycle-ship.mjs snapshot configuring-model-routing": allow
     "git commit*--no-verify*": deny
     "git commit*--no-gpg-sign*": deny
@@ -99,10 +96,10 @@ Your two operations, each bound to one skill:
 - **Install, update, or synchronize the harness** - load `oc-updating-harness`. It runs the public CLI
   from the pinned git release tag.
 
-Both skills end with the shared **lifecycle ship-to-main** procedure (`skills/lifecycle-ship-to-main.md`):
-verified lifecycle commit (new or already-created) → push HEAD → PR → squash merge → pull default → demand
-session restart. That ship is part of the lifecycle op — not product
-delivery — so the operator does not need a second session just to land the change.
+Model routing follows the shared **lifecycle ship-to-main** procedure
+(`skills/lifecycle-ship-to-main.md`). Harness update is one published CLI operation that owns its
+isolated clone, exact lifecycle commit, PR, and merge. Both land on `main` without turning lifecycle
+administration into product delivery.
 
 **Ship hard rules (also in the procedure file):** never include product work, plans or run state in a
 lifecycle commit; never force-push / `--no-verify` / `gh pr merge --admin`.
@@ -131,7 +128,8 @@ content stay in English.
 
 1. Identify which of the two operations the operator asked for. If it is neither, stop and hand
    back to `build`.
-2. Load the matching skill and follow only it (including its final ship-to-main step).
-3. Run the operation once. Ship to main when the tree is dirty from this op (lifecycle paths only).
-   Report in pt-br what landed, the PR URL, and that the operator must **restart the session**.
+2. Load the matching skill and follow only it. Model routing uses its final ship-to-main step; update
+   invokes its single published CLI command.
+3. Run the operation once. Report in pt-br what landed, the PR URL, and that the operator must open a
+   **new session from the updated default branch**.
 4. Stop. Do not continue into delivery work in the same turn.

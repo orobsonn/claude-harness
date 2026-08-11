@@ -11,8 +11,9 @@
 import { execFileSync } from "node:child_process";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync } from "node:fs";
+import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { tmpdir } from "node:os";
 
 import { runSetupVps } from "./setup-vps.mjs";
 
@@ -20,6 +21,230 @@ export const SOURCE_URL = "https://github.com/orobsonn/claude-harness.git";
 
 /** @description Env key that turns the cross-family (Codex/GPT) eyes on. */
 export const CROSS_FAMILY_ENV = "HARNESS_CODEX_ADVERSARY";
+
+/**
+ * Creates an independent clone at the current remote default tip for a lifecycle operation.
+ * The caller may be on an old branch or have product work staged; neither becomes lifecycle input.
+ * @param {string} cwd
+ * @returns {{ directory: string, defaultBranch: "main"|"master", cleanup: () => void }}
+ */
+export function createLifecycleClone(cwd) {
+  const git = (args, options = {}) => execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+  });
+  git(["fetch", "origin"]);
+  const originHead = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim();
+  const match = originHead.match(/^origin\/(main|master)$/);
+  if (!match) throw new Error(`origin/HEAD must name main or master, got ${originHead || "none"}`);
+  const defaultBranch = /** @type {"main"|"master"} */ (match[1]);
+  const remote = git(["remote", "get-url", "origin"]).trim();
+  if (!remote) throw new Error("origin has no URL for lifecycle clone");
+
+  const directory = mkdtempSync(join(tmpdir(), "claude-harness-lifecycle-"));
+  try {
+    execFileSync("git", ["clone", "--no-checkout", remote, directory], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["-C", directory, "checkout", "-B", defaultBranch, `origin/${defaultBranch}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+
+  return {
+    directory,
+    defaultBranch,
+    cleanup: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+/** @param {string} cwd @param {string[]} args */
+function gitAt(cwd, args) {
+  return execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/** @param {string} cwd @param {string[]} args */
+function ghAt(cwd, args) {
+  return execFileSync("gh", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/** @param {string} source @param {string} target */
+function copyGitIdentity(source, target) {
+  for (const key of ["user.name", "user.email"]) {
+    try {
+      const value = gitAt(source, ["config", "--get", key]).trim();
+      if (value) gitAt(target, ["config", key, value]);
+    } catch {
+      // A global identity is already inherited by the clone; a missing project override is fine.
+    }
+  }
+}
+
+/** @param {unknown} value */
+function normalizedLifecyclePath(value) {
+  if (typeof value !== "string") throw new Error("invalid lifecycle ownership manifest path");
+  const path = value.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (
+    !path || path.startsWith("/") || path === "." || path === ".." || path.startsWith("../") ||
+    path.endsWith("/.") || path.endsWith("/..") || path.includes("/../")
+  ) {
+    throw new Error(`unsafe lifecycle ownership manifest path: ${String(value)}`);
+  }
+  return path;
+}
+
+/** @param {string} directory @param {"claude"|"opencode"|"both"} runtimeTarget */
+function vendoredOwnershipPaths(directory, runtimeTarget) {
+  const manifests = runtimeTarget === "both"
+    ? [".opencode/.harness-owned-files.json", ".claude/.harness-owned-files.json"]
+    : [runtimeTarget === "opencode" ? ".opencode/.harness-owned-files.json" : ".claude/.harness-owned-files.json"];
+  const paths = new Set();
+  for (const manifest of manifests) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(join(directory, manifest), "utf8"));
+    } catch {
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest}`);
+    }
+    if (parsed?.version !== 1 || !Array.isArray(parsed.files)) {
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest}`);
+    }
+    for (const path of parsed.files) paths.add(normalizedLifecyclePath(path));
+  }
+  if (paths.size === 0) throw new Error("lifecycle ownership manifest declares no files");
+  return paths;
+}
+
+/** @param {string} directory */
+function lifecycleChangedPaths(directory) {
+  const tracked = gitAt(directory, ["diff", "--name-only", "-z", "HEAD"]).split("\0").filter(Boolean);
+  const untracked = gitAt(directory, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+  return new Set([...tracked, ...untracked].map(normalizedLifecyclePath));
+}
+
+/**
+ * The clone is known-clean before vendoring, so the current vendor manifests are the only authority
+ * needed to make the lifecycle commit. This stays independent of either runtime's local helper.
+ * @param {string} directory
+ * @param {"claude"|"opencode"|"both"} runtimeTarget
+ */
+function prepareVendoredLifecycle(directory, runtimeTarget) {
+  const owned = vendoredOwnershipPaths(directory, runtimeTarget);
+  const changed = lifecycleChangedPaths(directory);
+  if (changed.has("opencode.harness.json")) {
+    throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
+  }
+  const paths = [...owned].filter((path) => changed.has(path)).sort();
+  const defaultBranch = gitAt(directory, ["branch", "--show-current"]).trim();
+  if (paths.length === 0) return { action: "noop", branch: defaultBranch, paths };
+
+  const lifecycleBranch = `chore/harness-lifecycle-updating-harness-${Date.now()}`;
+  gitAt(directory, ["switch", "-c", lifecycleBranch]);
+  const present = paths.filter((path) => existsSync(join(directory, path)));
+  const removed = paths.filter((path) => !existsSync(join(directory, path)));
+  if (present.length > 0) gitAt(directory, ["add", "--", ...present]);
+  if (removed.length > 0) gitAt(directory, ["add", "-u", "--", ...removed]);
+  gitAt(directory, ["commit", "--only", "-m", "chore: sincroniza harness vendored", "--", ...paths]);
+
+  const committed = gitAt(directory, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"])
+    .split("\0").filter(Boolean).map(normalizedLifecyclePath);
+  const foreign = committed.filter((path) => !owned.has(path));
+  if (foreign.length > 0) throw new Error(`lifecycle commit contains paths outside the vendor ownership manifest: ${foreign.join(", ")}`);
+  return { action: "committed", branch: lifecycleBranch, paths: committed };
+}
+
+/**
+ * Ships a lifecycle-only commit that was prepared in the isolated clone. A repository with no
+ * Actions workflow is explicit compatibility data, not an inference from a momentarily empty check list.
+ * @param {{ directory: string, defaultBranch: string, prepared: { action: string, branch?: string, paths?: string[], url?: string } }} input
+ */
+function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
+  if (prepared.action === "noop" || prepared.action === "merged") return prepared;
+  if (prepared.action !== "committed" && prepared.action !== "resume") {
+    throw new Error(`unsupported lifecycle preparation result: ${prepared.action}`);
+  }
+  const branch = gitAt(directory, ["branch", "--show-current"]).trim();
+  if (!branch || branch !== prepared.branch || !branch.startsWith("chore/harness-lifecycle-updating-harness-")) {
+    throw new Error("lifecycle branch identity differs from the verified prepared commit");
+  }
+  gitAt(directory, ["push", "-u", "origin", "HEAD"]);
+  const url = ghAt(directory, [
+    "pr", "create",
+    "--base", defaultBranch,
+    "--head", branch,
+    "--title", "chore: sincroniza harness vendored",
+    "--body", "Lifecycle do harness. Commit verificado pelo manifesto do vendor.",
+  ]);
+  const pr = JSON.parse(ghAt(directory, ["pr", "view", url, "--json", "number,url,baseRefName,headRefName,headRefOid"]));
+  const head = gitAt(directory, ["rev-parse", "HEAD"]).trim();
+  if (!Number.isInteger(pr.number) || pr.baseRefName !== defaultBranch || pr.headRefName !== branch || pr.headRefOid !== head) {
+    throw new Error("lifecycle PR identity differs from the verified prepared commit");
+  }
+  const repo = ghAt(directory, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const workflowCount = Number(ghAt(directory, ["api", `repos/${repo}/actions/workflows`, "--jq", ".total_count"]));
+  if (!Number.isInteger(workflowCount) || workflowCount < 0) throw new Error("could not determine the repository workflow count");
+  if (workflowCount === 0) {
+    const result = JSON.parse(ghAt(directory, [
+      "api", "--method", "PUT", `repos/${repo}/pulls/${pr.number}/merge`,
+      "-f", `sha=${head}`,
+      "-f", "merge_method=squash",
+    ]));
+    if (result?.merged !== true) throw new Error("lifecycle merge was not accepted by GitHub");
+  } else {
+    ghAt(directory, ["pr", "checks", url, "--watch"]);
+    ghAt(directory, ["pr", "merge", url, "--squash", "--delete-branch"]);
+  }
+  gitAt(directory, ["switch", defaultBranch]);
+  gitAt(directory, ["pull", "--ff-only"]);
+  return { action: "merged", url: pr.url, paths: prepared.paths ?? [] };
+}
+
+/**
+ * Runs the full harness update outside the caller checkout. This makes a lifecycle sync atomic
+ * from the operator's point of view: a feature branch, staged product work, or a stale local main
+ * cannot contaminate the PR that refreshes the harness on origin's default branch.
+ * @param {{
+ *   cwd: string,
+ *   ref: string,
+ *   runtimeTarget: "claude"|"opencode"|"both",
+ *   runVendor?: typeof runVendorDefault,
+ *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"both") => { action: string, branch?: string, paths?: string[], url?: string },
+ *   ship?: typeof shipPreparedLifecycle,
+ * }} input
+ */
+export function runIsolatedLifecycleUpdate({
+  cwd,
+  ref,
+  runtimeTarget,
+  runVendor = runVendorDefault,
+  prepare = prepareVendoredLifecycle,
+  ship = shipPreparedLifecycle,
+}) {
+  const lifecycle = createLifecycleClone(cwd);
+  try {
+    copyGitIdentity(cwd, lifecycle.directory);
+    runVendor({
+      source: SOURCE_URL,
+      ref,
+      target: lifecycle.directory,
+      withCodex: false,
+      runtimeTarget,
+    });
+    const prepared = prepare(lifecycle.directory, runtimeTarget);
+    return ship({ directory: lifecycle.directory, defaultBranch: lifecycle.defaultBranch, prepared });
+  } finally {
+    lifecycle.cleanup();
+  }
+}
 
 /**
  * @description Checks if the script is being run directly, resolving symlinks.
@@ -41,10 +266,11 @@ export function isDirectCli(scriptPath) {
  * alias is resolved by the dispatcher in main()).
  * Public `--target opencode|claude|both` selects the runtime shell (default claude).
  * @param {string[]} argv - The process.argv-shaped array.
- * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"both" }}
+ * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"both", releaseRef: string | undefined }}
  */
 export function parseCliArgs(argv) {
   let runtimeTarget = "claude";
+  let releaseRef;
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--target" && argv[i + 1]) {
       const v = String(argv[++i]).toLowerCase();
@@ -53,11 +279,17 @@ export function parseCliArgs(argv) {
       else if (v === "both" || v === "all") runtimeTarget = "both";
       else throw new Error(`invalid --target "${v}" — expected: opencode | claude | both`);
     }
+    if (argv[i] === "--ref") {
+      const value = String(argv[++i] ?? "").trim();
+      if (!value) throw new Error("--ref requires a release tag");
+      releaseRef = value;
+    }
   }
   return {
     command: argv[2],
     withCodex: argv.includes("--with-codex"),
     runtimeTarget,
+    releaseRef,
   };
 }
 
@@ -369,6 +601,7 @@ async function main() {
     command: rawCommand,
     withCodex: withCodexFlag,
     runtimeTarget,
+    releaseRef,
   } = parsed;
   // `init` is a backward-compatible alias for `setup-local` (vendors the harness locally).
   const command = rawCommand === "init" ? "setup-local" : rawCommand;
@@ -394,12 +627,33 @@ async function main() {
     return;
   }
 
+  if (command === "lifecycle-update") {
+    if (!releaseRef) {
+      process.stderr.write("[claude-harness] lifecycle-update requires --ref <release-tag>\n");
+      process.exit(1);
+    }
+    try {
+      const result = runIsolatedLifecycleUpdate({
+        cwd: process.cwd(),
+        ref: releaseRef,
+        runtimeTarget,
+      });
+      const url = typeof result?.url === "string" ? ` ${result.url}` : "";
+      process.stdout.write(`[claude-harness] lifecycle update ${releaseRef}: ${result.action}.${url}\n`);
+    } catch (err) {
+      process.stderr.write(`[claude-harness] ${err.message}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (command !== "setup-local") {
     process.stderr.write(
       "Usage:\n" +
         "  npx claude-harness init --target opencode|claude|both [--with-codex]\n" +
-      "  npx claude-harness setup-local [--target opencode|claude|both] [--with-codex]\n" +
+        "  npx claude-harness setup-local [--target opencode|claude|both] [--with-codex]\n" +
       "  npx claude-harness lifecycle-snapshot updating-harness\n" +
+      "  npx claude-harness lifecycle-update --target opencode|claude|both --ref <release-tag>\n" +
       "  npx claude-harness setup-vps\n"
     );
     process.exit(1);

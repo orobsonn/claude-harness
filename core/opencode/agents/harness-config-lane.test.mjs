@@ -58,7 +58,6 @@ const ALLOWED_BASH_HEADS = [
   "git pull --ff-only",
   "node .opencode/tools/lifecycle-ship.mjs prepare ",
   "node .opencode/tools/lifecycle-ship.mjs snapshot ",
-  "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness",
   "git push -u origin HEAD",
   "gh pr create --title ",
   "gh pr view ",
@@ -215,42 +214,39 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
   const rules = permissionRules(frontmatter(readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8")), "bash");
   assert.match(
     skill,
-    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>/,
+    /npx --yes --package=github:orobsonn\/claude-harness#<latest-tag> claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>/,
   );
-  assert.doesNotMatch(skill, /npx -y "github:orobsonn\/claude-harness#<latest-tag>" init/);
-  assert.match(skill, /claude-harness lifecycle-snapshot updating-harness/);
+  assert.doesNotMatch(skill, /claude-harness lifecycle-snapshot updating-harness/);
   assert.match(skill, /Both `\.claude\/\.harness-version` and `\.opencode\/\.harness-version` exist.*`both`/s);
   assert.equal(resolveBash(rules, "test -f .claude/.harness-version"), "allow");
-  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness init --target claude"), "allow");
-  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness init --target both"), "allow");
+  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness lifecycle-update --target claude --ref v0.55.22"), "allow");
+  assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness lifecycle-update --target both --ref v0.55.22"), "allow");
 });
 
-test("a harness update automatically adopts an already-vendored harness without pulling product work into its PR", () => {
+test("a harness update is one isolated operation and leaves the invoking checkout untouched", () => {
   const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
-  const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
 
-  assert.match(update, /skill\s+invocation itself as authorization/i);
-  assert.match(update, /do not send the operator\s+back to build/i);
-  assert.match(ship, /automatic recovery/i);
-  assert.match(ship, /never\s+stages? a product path/i);
+  assert.match(update, /single clean command/i);
+  assert.match(update, /clean clone of `origin\/main`/i);
+  assert.match(update, /does not modify the\s+invoking checkout/i);
+  assert.match(update, /staged product work, plans, state, and local files remain\s+untouched/i);
 });
 
 test("lifecycle shipping merges when the repository has no CI configured", () => {
   const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
 
-  assert.match(ship, /no checks (?:are )?reported[\s\S]*continue to merge/i);
-  assert.match(ship, /GitHub branch rules remain the authority/i);
+  assert.match(ship, /no checks\s+(?:are\s+)?reported[\s\S]*continue/i);
+  assert.match(ship, /GitHub branch rules remain\s+authoritative/i);
 });
 
 test("a no-CI harness update stays a lifecycle sync, not a product-quality decision", () => {
   const agent = readFileSync(join(AGENTS_DIR, "harness-config.md"), "utf8");
   const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
-  const ship = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
 
   assert.match(agent, /absence of project CI is \*\*never a finding or an operator decision\*\*/i);
   assert.match(update, /Do not run or demand the project's typecheck, test suite, or a quality receipt/i);
-  assert.match(update, /never\s+create a plan\/spec or ask the operator to choose extra protection/i);
-  assert.match(ship, /No checks is an expected compatibility case, not missing quality evidence/i);
+  assert.match(update, /never\s+create a plan\/spec or ask the\s+operator to choose extra protection/i);
+  assert.match(update, /workflows, the CLI waits for their checks; when it has none/i);
 });
 
 test("ship allowlist denies force-push, no-verify, admin merge, and multi-path git add", () => {
@@ -278,8 +274,7 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
   }
 
   const mustAllow = [
-    "node .opencode/tools/lifecycle-ship.mjs prepare updating-harness",
-    "node .opencode/tools/lifecycle-ship.mjs adopt updating-harness",
+    "npx --yes --package=github:orobsonn/claude-harness#v0.55.44 claude-harness lifecycle-update --target opencode --ref v0.55.44",
     "git push -u origin HEAD",
     "gh pr merge --squash --delete-branch",
     "git fetch origin",
@@ -293,13 +288,13 @@ test("ship allowlist denies force-push, no-verify, admin merge, and multi-path g
   }
 });
 
-test("lifecycle-ship resumes an isolated lifecycle branch without absorbing unrelated work", () => {
+test("routing lifecycle ship resumes an isolated lifecycle branch without absorbing unrelated work", () => {
   const body = readFileSync(join(SKILLS_DIR, "lifecycle-ship-to-main.md"), "utf8");
-  assert.match(body, /fixed vendor ownership set/i);
-  assert.match(body, /already-created lifecycle commit/i);
-  assert.match(body, /Product work may be dirty or already staged/i);
-  assert.match(body, /\.opencode.*\.claude.*outside the/i);
-  assert.match(body, /baseRefName/);
+  assert.match(body, /fixed routing ownership set/i);
+  assert.match(body, /already-created.*lifecycle-only commit/i);
+  assert.match(body, /Product work may be dirty or\s+staged/i);
+  assert.match(body, /outside that set/i);
+  assert.match(body, /base must be `main` or `master`/i);
   assert.match(body, /git commit --only/);
   assert.doesNotMatch(body, /shows \*\*any path outside\*\* the lifecycle allowlist/i);
   // Prose may name the forbidden forms; fenced bash must never invoke them.

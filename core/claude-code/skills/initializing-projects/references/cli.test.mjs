@@ -1,47 +1,60 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, symlinkSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCliArgs, runInit, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle, writeLifecycleSnapshot } from "./cli.mjs";
+import { createLifecycleClone, parseCliArgs, runInit, runIsolatedLifecycleUpdate, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle, writeLifecycleSnapshot } from "./cli.mjs";
 
 test("parseCliArgs", () => {
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init"]), {
     command: "init",
     withCodex: false,
     runtimeTarget: "claude",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "bogus"]), {
     command: "bogus",
     withCodex: false,
     runtimeTarget: "claude",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs"]), {
     command: undefined,
     withCodex: false,
     runtimeTarget: "claude",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--with-codex"]), {
     command: "init",
     withCodex: true,
     runtimeTarget: "claude",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "opencode"]), {
     command: "init",
     withCodex: false,
     runtimeTarget: "opencode",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "both"]), {
     command: "init",
     withCodex: false,
     runtimeTarget: "both",
+    releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "claude"]), {
     command: "init",
     withCodex: false,
     runtimeTarget: "claude",
+    releaseRef: undefined,
+  });
+  assert.deepEqual(parseCliArgs(["node", "cli.mjs", "lifecycle-update", "--target", "both", "--ref", "v0.55.44"]), {
+    command: "lifecycle-update",
+    withCodex: false,
+    runtimeTarget: "both",
+    releaseRef: "v0.55.44",
   });
   // A garbage --target must fail loud, not silently fall back to claude-only.
   assert.throws(() => parseCliArgs(["node", "cli.mjs", "init", "--target", "codex"]), /invalid --target/);
@@ -157,4 +170,203 @@ test("isDirectCli resolves symlinks (npm bin is a symlink, not the real module p
   }
   // an unrelated / nonexistent path -> false
   assert.equal(isDirectCli("/definitely/not/the/cli.mjs"), false);
+});
+
+test("createLifecycleClone starts from origin main without changing a dirty caller checkout", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-clone-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+
+    writeFileSync(join(seed, "src", "remote.js"), "remote tip\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "remote advance"]);
+    git(seed, ["push"]);
+
+    writeFileSync(join(caller, "src", "product.js"), "operator work\n");
+    git(caller, ["add", "src/product.js"]);
+    const before = gitOut(caller, ["status", "--porcelain=v1"]);
+
+    const lifecycle = createLifecycleClone(caller);
+
+    assert.equal(lifecycle.defaultBranch, "main");
+    assert.equal(
+      gitOut(lifecycle.directory, ["rev-parse", "HEAD"]).trim(),
+      gitOut(caller, ["rev-parse", "origin/main"]).trim(),
+      "the isolated checkout starts from the fetched remote default tip",
+    );
+    assert.equal(gitOut(caller, ["status", "--porcelain=v1"]), before, "caller worktree and index are byte-for-byte untouched");
+    assert.notEqual(
+      resolve(lifecycle.directory, gitOut(lifecycle.directory, ["rev-parse", "--git-common-dir"]).trim()),
+      resolve(caller, gitOut(caller, ["rev-parse", "--git-common-dir"]).trim()),
+      "a clone has an independent Git database, unlike a linked worktree",
+    );
+    lifecycle.cleanup();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate vendors and ships from the clone, never from the caller checkout", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-run-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+
+    writeFileSync(join(caller, "src", "product.js"), "operator work\n");
+    git(caller, ["add", "src/product.js"]);
+    const before = gitOut(caller, ["status", "--porcelain=v1"]);
+    let vendorTarget = "";
+    let shipTarget = "";
+    const result = runIsolatedLifecycleUpdate({
+      cwd: caller,
+      ref: "v0.55.44",
+      runtimeTarget: "opencode",
+      snapshot: () => {},
+      runVendor: ({ target, ref, runtimeTarget }) => {
+        vendorTarget = target;
+        assert.equal(ref, "v0.55.44");
+        assert.equal(runtimeTarget, "opencode");
+      },
+      prepare: () => ({ action: "committed", branch: "chore/harness-lifecycle-test", paths: [".opencode/.harness-version"] }),
+      ship: ({ directory, prepared }) => {
+        shipTarget = directory;
+        assert.equal(prepared.action, "committed");
+        return { action: "merged", url: "https://example.test/pr/1" };
+      },
+    });
+
+    assert.deepEqual(result, { action: "merged", url: "https://example.test/pr/1" });
+    assert.equal(vendorTarget, shipTarget);
+    assert.equal(existsSync(vendorTarget), false, "the temporary clone is always cleaned after the lifecycle run");
+    assert.equal(gitOut(caller, ["status", "--porcelain=v1"]), before, "caller product work remains untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate prepares a Claude-only lifecycle commit from that runtime's exact manifest", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-claude-only-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+    writeFileSync(join(caller, "src", "product.js"), "operator work\n");
+    git(caller, ["add", "src/product.js"]);
+    const before = gitOut(caller, ["status", "--porcelain=v1"]);
+
+    const result = runIsolatedLifecycleUpdate({
+      cwd: caller,
+      ref: "v0.55.44",
+      runtimeTarget: "claude",
+      runVendor: ({ target }) => {
+        mkdirSync(join(target, ".claude", "agents"), { recursive: true });
+        writeFileSync(join(target, ".claude", "agents", "harness.md"), "vendor\n");
+        writeFileSync(join(target, ".claude", ".harness-owned-files.json"), JSON.stringify({
+          version: 1,
+          files: [".claude/.harness-owned-files.json", ".claude/agents/harness.md"],
+        }));
+        writeFileSync(join(target, "MEMORY.md"), "operator memory is not lifecycle cargo\n");
+      },
+      ship: ({ directory, prepared }) => {
+        assert.equal(prepared.action, "committed");
+        assert.deepEqual(prepared.paths, [".claude/.harness-owned-files.json", ".claude/agents/harness.md"]);
+        assert.deepEqual(
+          gitOut(directory, ["show", "--format=", "--name-only", "HEAD"]).trim().split("\n").sort(),
+          prepared.paths,
+          "the exact Claude manifest, not an OpenCode helper or product path, determines the commit",
+        );
+        assert.equal(existsSync(join(directory, ".opencode")), false);
+        assert.match(gitOut(directory, ["status", "--porcelain=v1"]), /\?\? MEMORY\.md/);
+        return { action: "merged", url: "https://example.test/pr/claude" };
+      },
+    });
+
+    assert.equal(result.action, "merged");
+    assert.equal(gitOut(caller, ["status", "--porcelain=v1"]), before, "the caller's staged product work remains untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate rejects an ownership manifest path that escapes the clone", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-manifest-escape-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    writeFileSync(join(seed, "product.txt"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+
+    assert.throws(
+      () => runIsolatedLifecycleUpdate({
+        cwd: caller,
+        ref: "v0.55.44",
+        runtimeTarget: "opencode",
+        runVendor: ({ target }) => {
+          mkdirSync(join(target, ".opencode"), { recursive: true });
+          writeFileSync(join(target, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+            version: 1,
+            files: ["../product.txt"],
+          }));
+        },
+        ship: () => assert.fail("a malformed ownership manifest must never reach PR shipping"),
+      }),
+      /unsafe lifecycle ownership manifest path/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
