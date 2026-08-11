@@ -49,14 +49,20 @@ Detect the OpenCode shell:
 test -f .opencode/.harness-version && echo update || echo install
 ```
 
-Use only marker checks to resolve the CLI target. Never use `read` to probe an absent optional shell:
-an absent Claude marker means `opencode`, not an error.
+Then run this exact second marker check. Do not probe a directory and do not compose a different shell
+test:
 
-- Both `.claude/.harness-version` and `.opencode/.harness-version` exist: `both`.
-- Only `.opencode/.harness-version` exists: `opencode` — the absent Claude shell is optional.
-- Only `.claude/.harness-version` exists: `claude`.
-- A marker exists without its runtime shell: stop; do not repair a partial install by inference.
-- No marker exists: install only the runtime explicitly requested by the operator.
+```bash
+test -f .claude/.harness-version && echo claude || echo no-claude
+```
+
+Use only those marker results to resolve the CLI target. Never use `read` to probe an absent optional
+shell, and never use `test -d`: an absent Claude marker means `opencode`, not an error.
+
+- OpenCode result `update` plus Claude result `claude`: `both`.
+- OpenCode result `update` plus Claude result `no-claude`: `opencode` — the absent Claude shell is optional.
+- OpenCode result `install` plus Claude result `claude`: `claude`.
+- Both results absent: install only the runtime explicitly requested by the operator.
 - Add a runtime only with explicit intent: `both`.
 
 ## Step 2 — one isolated operation

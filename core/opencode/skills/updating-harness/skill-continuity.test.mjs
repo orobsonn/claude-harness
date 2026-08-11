@@ -25,8 +25,10 @@ test("updating-harness — only a final lifecycle result or formal block may ans
 });
 
 test("updating-harness — an OpenCode-only project does not treat an absent Claude shell as an error", () => {
-  assert.match(skill, /never use `read` to probe an absent optional shell/i);
+  assert.match(skill, /never use `read` to probe an absent optional\s+shell/i);
   assert.match(skill, /absent Claude marker means `opencode`/i);
+  assert.match(skill, /test -f \.claude\/\.harness-version && echo claude \|\| echo no-claude/i);
+  assert.doesNotMatch(skill, /test -d \.opencode/i);
 });
 
 test("updating-harness — one isolated command lands the tag requested by this invocation", () => {
