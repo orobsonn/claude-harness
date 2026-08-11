@@ -78,7 +78,12 @@ absent Claude marker means `opencode`, not an error. If both marker checks succe
 
 ## Step 2 — Install or update (same idempotent command)
 
-First resolve the latest release tag (the CLI runs from that pinned tag):
+Resolve the latest release tag **once** (the CLI runs from that pinned tag) and retain that exact
+value for the entire invocation, including a recovery. Do not resolve it again after a merge:
+
+```bash
+gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0
+```
 
 Immediately before the first write, use the pinned CLI to capture the lifecycle baseline. This works
 even when the project still has an older harness with no local lifecycle helper:
@@ -90,12 +95,16 @@ npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness l
 If this reports pre-existing lifecycle cargo, inspect the changed-path list. It normally means a
 previous vendor run already completed but stopped before it created its PR. **Treat the skill
 invocation itself as authorization** to finish that lifecycle operation: do not send the operator
-back to build and do not run `init` again. Follow the automatic recovery in Step 4; it stages only
-the current vendor-manifest paths and leaves every product path, plan and state file untouched.
+back to build. First follow the automatic recovery in Step 4 through its PR merge and `pull`; it
+stages only the current vendor-manifest paths and leaves every product path, plan and state file
+untouched. That adopts the **previous** vendor run — it is not automatically the requested sync.
 
-```bash
-gh release view --repo orobsonn/claude-harness --json tagName -q .tagName   # → <latest-tag>, e.g. v0.40.0
-```
+After `adopt` has been merged, read the first line of `.opencode/.harness-version`. If it equals the
+resolved `<latest-tag>`, close normally. If the installed version differs from the resolved tag,
+perform **exactly one normal update pass** from the snapshot command above through `init`, `prepare`,
+PR merge and `pull`, using that same already-resolved tag. Then read the version again: equality is
+required for success; a mismatch is a formal failure with evidence. Never resolve the latest tag again
+or make a third pass. If adoption itself does not merge, stop there — never vendor over its branch.
 
 Both first-install and update use the same command — `init` is idempotent. Substitute `<latest-tag>`
 with the concrete `vX.Y.Z` from Step 1. **Emit a
