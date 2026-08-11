@@ -426,6 +426,19 @@ GitHub primeiro (ou local com `git init`), depois clona do mesmo jeito. Ou usa o
 → "Create a new project" (a IA já resolveu a identidade git na Fase 5.0, então esse fluxo funciona
 direto pela interface também).
 
+**Gotcha crítico — todo clone feito pelo app Orca (botão "Clone from URL") nasce sem
+`origin/HEAD` configurado.** Um `git clone` de terminal normal configura essa referência sozinho
+(é ela que diz qual é a branch padrão do remoto — `main` ou `master`); o clone feito pela
+interface do Orca pula esse passo, sempre, em todo projeto novo. Sem ela, qualquer skill que
+precise identificar a branch padrão pra abrir PR com segurança (o `/updating-harness`, por
+exemplo) recusa seguir — e o erro só aparece muito depois, na hora de tentar mergear. **Rode isso
+uma vez logo após clonar** (seja qual for o mecanismo usado):
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@<IP_DA_VPS> "sudo -u orca git -C /home/orca/dev/<SEU_REPO> remote set-head origin -a"
+```
+Se em algum momento surgir um erro mencionando `origin/HEAD` num projeto que você não lembra de
+ter configurado assim, é sempre esse mesmo gap — roda o comando acima nele.
+
 ### 5.3 — Registrar no Orca
 ```bash
 orca repo add --path /home/orca/dev/<SEU_REPO> --environment <NOME_DA_VPS>
