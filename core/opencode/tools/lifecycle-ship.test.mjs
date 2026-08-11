@@ -255,3 +255,82 @@ test("automatic adoption unions exact OpenCode and Claude manifests without stag
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("lifecycle prepare commits a deletion only when the exact path was owned by the prior manifest", () => {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-adopt-retired-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const project = join(root, "project");
+  const git = (cwd, args) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  const mustGit = (cwd, args) => {
+    const result = git(cwd, args);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+
+  try {
+    assert.equal(spawnSync("git", ["init", "--bare", "--initial-branch=main", remote]).status, 0);
+    assert.equal(spawnSync("git", ["init", "--initial-branch=main", seed]).status, 0);
+    mustGit(seed, ["config", "user.email", "test@example.com"]);
+    mustGit(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, ".opencode", "plugin", "lib"), { recursive: true });
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [
+        ".opencode/.harness-owned-files.json",
+        ".opencode/plugin/entry-gate.ts",
+        ".opencode/plugin/lib/autonomy-controller.mjs",
+      ],
+    }));
+    writeFileSync(join(seed, ".opencode", "plugin", "entry-gate.ts"), "old gate\n");
+    writeFileSync(join(seed, ".opencode", "plugin", "lib", "autonomy-controller.mjs"), "old controller\n");
+    writeFileSync(join(seed, ".opencode", "plugin", "local-plugin.ts"), "project-owned plugin\n");
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    mustGit(seed, ["add", "."]);
+    mustGit(seed, ["commit", "-m", "base"]);
+    mustGit(seed, ["remote", "add", "origin", remote]);
+    mustGit(seed, ["push", "-u", "origin", "main"]);
+    assert.equal(spawnSync("git", ["clone", remote, project]).status, 0);
+    mustGit(project, ["config", "user.email", "test@example.com"]);
+    mustGit(project, ["config", "user.name", "Test"]);
+
+    const snapshot = spawnSync(process.execPath, [toolPath, "snapshot", "updating-harness"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    assert.equal(snapshot.status, 0, snapshot.stderr);
+
+    writeFileSync(join(project, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/.harness-owned-files.json", ".opencode/plugin/entry-gate.ts"],
+    }));
+    writeFileSync(join(project, ".opencode", "plugin", "entry-gate.ts"), "new gate\n");
+    rmSync(join(project, ".opencode", "plugin", "lib", "autonomy-controller.mjs"));
+    rmSync(join(project, ".opencode", "plugin", "local-plugin.ts"));
+    writeFileSync(join(project, "src", "product.js"), "operator work\n");
+    mustGit(project, ["add", "src/product.js"]);
+
+    const prepared = spawnSync(process.execPath, [toolPath, "prepare", "updating-harness"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.deepEqual(
+      mustGit(project, ["show", "--format=", "--name-only", "HEAD"]).trim().split("\n"),
+      [
+        ".opencode/.harness-owned-files.json",
+        ".opencode/plugin/entry-gate.ts",
+        ".opencode/plugin/lib/autonomy-controller.mjs",
+      ],
+    );
+    assert.equal(mustGit(project, ["diff", "--cached", "--name-only"]).trim(), "src/product.js");
+    assert.match(
+      mustGit(project, ["diff", "--name-only"]),
+      /\.opencode\/plugin\/local-plugin\.ts/,
+      "a project plugin deletion absent from the prior manifest must remain outside the lifecycle commit",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

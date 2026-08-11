@@ -1,7 +1,8 @@
 /**
  * @description Prepares the lifecycle-only commit used by the harness-config lane.
  * It deliberately has no product-path input: changed paths come from git and are filtered against
- * the fixed vendor ownership set before a branch, stage, or commit is attempted.
+ * the exact current vendor ownership set, plus deletions that were exactly owned before the update,
+ * before a branch, stage, or commit is attempted.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
@@ -222,18 +223,54 @@ const OWNERSHIP_MANIFESTS = [
   ".claude/.harness-owned-files.json",
 ];
 
-function readOwnershipManifest(path) {
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
+function parseOwnershipManifest(raw, path) {
+  const parsed = JSON.parse(raw);
   if (parsed?.version !== 1 || !Array.isArray(parsed.files) || parsed.files.some((file) => typeof file !== "string")) {
     throw new Error(`invalid ${path}`);
   }
   return parsed.files.map(normalizedPath);
 }
 
+function readOwnershipManifest(path) {
+  return parseOwnershipManifest(readFileSync(path, "utf8"), path);
+}
+
 function ownershipManifest() {
   const present = OWNERSHIP_MANIFESTS.filter(existsSync);
   if (present.length === 0) throw new Error("missing harness ownership manifest; re-run the harness update before lifecycle ship");
   return new Set(present.flatMap(readOwnershipManifest));
+}
+
+/**
+ * @description Exact owned paths committed at `ref`. This is used only to carry an intentional
+ * deletion through an update; a local or post-vendor manifest can never widen that deletion set.
+ */
+function committedOwnershipManifest(ref) {
+  const paths = new Set();
+  for (const manifest of OWNERSHIP_MANIFESTS) {
+    try {
+      for (const path of parseOwnershipManifest(git(["show", `${ref}:${manifest}`]), manifest)) paths.add(path);
+    } catch {
+      // Older installs may not have an exact manifest. Do not infer deletion ownership by prefix.
+    }
+  }
+  return paths;
+}
+
+/** @description Exact tracked deletions between `ref` and the current worktree/branch. */
+function deletedTrackedPaths(ref) {
+  const entries = git(["diff", "--name-status", "-z", "--diff-filter=D", ref]).split("\0").filter(Boolean);
+  const paths = [];
+  for (let index = 0; index < entries.length; index += 2) {
+    if (entries[index] !== "D" || !entries[index + 1]) return [];
+    paths.push(normalizedPath(entries[index + 1]));
+  }
+  return paths;
+}
+
+/** @description Deletions allowed only when the identical path was owned before this update. */
+function priorOwnedDeletions(paths, ref) {
+  return selectOwnedPaths(paths, committedOwnershipManifest(ref));
 }
 
 function assertTrackedCleanOwnershipManifest(operation) {
@@ -316,7 +353,8 @@ export function prepareLifecycleShip(operation) {
   // committed lifecycle branch, but only if neither the branch nor the working tree has an
   // uncommitted manifest-owned change that could be confused with the prior lifecycle result.
   if (resumedPaths.length > 0 && selectOwnedPaths(current, owned).length === 0) {
-    assertOwnedOnly(resumedPaths, owned, "existing lifecycle branch");
+    const resumedDeletes = priorOwnedDeletions(deletedTrackedPaths(`origin/${branch}`), `origin/${branch}`);
+    assertOwnedOnly(resumedPaths, new Set([...owned, ...resumedDeletes]), "existing lifecycle branch");
     return { action: "resume", branch: git(["branch", "--show-current"]).trim(), paths: resumedPaths };
   }
   const baseline = readBaseline(operation);
@@ -326,7 +364,13 @@ export function prepareLifecycleShip(operation) {
   }
   assertTrackedCleanOwnershipManifest(operation);
   const afterSnapshot = current.filter((path) => !baseline.paths.has(path));
-  const { paths } = { paths: selectOwnedPaths(afterSnapshot, owned) };
+  const deletedAfterSnapshot = new Set(deletedTrackedPaths("HEAD"));
+  const retired = priorOwnedDeletions(
+    afterSnapshot.filter((path) => deletedAfterSnapshot.has(path)),
+    "HEAD",
+  );
+  const allowed = new Set([...owned, ...retired]);
+  const { paths } = { paths: [...new Set([...selectOwnedPaths(afterSnapshot, owned), ...retired])] };
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
 
   git(["switch", branch]);
@@ -337,9 +381,9 @@ export function prepareLifecycleShip(operation) {
   git(["commit", "--only", "-m", message, "--", ...paths]);
 
   const committed = nulPaths(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]));
-  assertOwnedOnly(committed, owned, "lifecycle commit");
+  assertOwnedOnly(committed, allowed, "lifecycle commit");
   renameSync(baseline.path, `${baseline.path}.consumed`);
-  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned });
+  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned: allowed });
   if (merged) return merged;
   return { action: "committed", branch: lifecycleBranch, paths: committed };
 }
@@ -348,7 +392,8 @@ export function prepareLifecycleShip(operation) {
  * Automatic recovery for a vendor run that completed before its lifecycle snapshot. The top-level
  * updating-harness invocation authorizes the lifecycle operation;
  * this function contributes the narrow mechanical guarantee: stage only paths named by the
- * vendor manifest, never any product change that happens to share the worktree.
+ * current vendor manifest and exact deletions owned by the committed prior manifest, never any
+ * product change that happens to share the worktree.
  * @param {"updating-harness"} operation
  */
 export function adoptExistingLifecycleShip(operation) {
@@ -361,7 +406,10 @@ export function adoptExistingLifecycleShip(operation) {
   if (current.includes("opencode.harness.json")) {
     throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
   }
-  const paths = selectOwnedPaths(current, ownershipManifest());
+  const owned = ownershipManifest();
+  const retired = priorOwnedDeletions(deletedTrackedPaths("HEAD"), "HEAD");
+  const allowed = new Set([...owned, ...retired]);
+  const paths = [...new Set([...selectOwnedPaths(current, owned), ...retired])];
   if (paths.length === 0) return { action: "noop", branch, paths: [] };
 
   git(["switch", branch]);
@@ -372,9 +420,8 @@ export function adoptExistingLifecycleShip(operation) {
   git(["commit", "--only", "-m", COMMIT_MESSAGES[operation], "--", ...paths]);
 
   const committed = nulPaths(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]));
-  const owned = ownershipManifest();
-  assertOwnedOnly(committed, owned, "lifecycle commit");
-  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned });
+  assertOwnedOnly(committed, allowed, "lifecycle commit");
+  const merged = bootstrapMergeWithoutCi({ operation, branch, lifecycleBranch, committedPaths: committed, owned: allowed });
   if (merged) return merged;
   return { action: "adopted", branch: lifecycleBranch, paths: committed };
 }
