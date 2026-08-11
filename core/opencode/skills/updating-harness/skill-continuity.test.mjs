@@ -39,3 +39,8 @@ test("updating-harness — one isolated command lands the tag requested by this 
   assert.doesNotMatch(skill, /lifecycle-snapshot updating-harness/i);
   assert.doesNotMatch(skill, /`adopt`/i);
 });
+
+test("updating-harness — merge does not wait for a transient GitHub checks listing", () => {
+  assert.match(skill, /requests the merge immediately/i);
+  assert.doesNotMatch(skill, /waits for their checks/i);
+});

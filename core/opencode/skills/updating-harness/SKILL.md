@@ -87,9 +87,9 @@ invoking checkout**: its current branch, staged product work, plans, state, and 
 untouched. This prevents an old or dirty session checkout from blocking a legitimate harness sync.
 
 The PR contains only the release's exact harness files. Product work, plans, run state, local plugins,
-secrets, and unrelated staged files cannot enter it. GitHub rules remain authoritative. When the
-repository has workflows, the CLI waits for their checks; when it has none, the manifest/SHA/PR identity
-checks are the proportional lifecycle gate.
+secrets, and unrelated staged files cannot enter it. The CLI requests the merge immediately; GitHub
+rules remain authoritative and reject it when the repository itself requires approval or checks. It
+never polls a just-created PR for checks, because that transient list can be empty before Actions starts.
 
 ## Step 3 — close
 

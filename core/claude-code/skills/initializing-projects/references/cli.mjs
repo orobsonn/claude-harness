@@ -163,8 +163,9 @@ function prepareVendoredLifecycle(directory, runtimeTarget) {
 }
 
 /**
- * Ships a lifecycle-only commit that was prepared in the isolated clone. A repository with no
- * Actions workflow is explicit compatibility data, not an inference from a momentarily empty check list.
+ * Ships a lifecycle-only commit that was prepared in the isolated clone. GitHub's branch rules are
+ * the authority for any required checks; this operation must not race Actions creation by polling
+ * a transient check list in the client.
  * @param {{ directory: string, defaultBranch: string, prepared: { action: string, branch?: string, paths?: string[], url?: string } }} input
  */
 function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
@@ -190,19 +191,12 @@ function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
     throw new Error("lifecycle PR identity differs from the verified prepared commit");
   }
   const repo = ghAt(directory, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
-  const workflowCount = Number(ghAt(directory, ["api", `repos/${repo}/actions/workflows`, "--jq", ".total_count"]));
-  if (!Number.isInteger(workflowCount) || workflowCount < 0) throw new Error("could not determine the repository workflow count");
-  if (workflowCount === 0) {
-    const result = JSON.parse(ghAt(directory, [
-      "api", "--method", "PUT", `repos/${repo}/pulls/${pr.number}/merge`,
-      "-f", `sha=${head}`,
-      "-f", "merge_method=squash",
-    ]));
-    if (result?.merged !== true) throw new Error("lifecycle merge was not accepted by GitHub");
-  } else {
-    ghAt(directory, ["pr", "checks", url, "--watch"]);
-    ghAt(directory, ["pr", "merge", url, "--squash", "--delete-branch"]);
-  }
+  const result = JSON.parse(ghAt(directory, [
+    "api", "--method", "PUT", `repos/${repo}/pulls/${pr.number}/merge`,
+    "-f", `sha=${head}`,
+    "-f", "merge_method=squash",
+  ]));
+  if (result?.merged !== true) throw new Error("lifecycle merge was not accepted by GitHub");
   gitAt(directory, ["switch", defaultBranch]);
   gitAt(directory, ["pull", "--ff-only"]);
   return { action: "merged", url: pr.url, paths: prepared.paths ?? [] };

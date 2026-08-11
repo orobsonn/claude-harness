@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
 
+const cliSource = readFileSync(fileURLToPath(new URL("./cli.mjs", import.meta.url)), "utf8");
+
 test("parseCliArgs", () => {
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init"]), {
     command: "init",
@@ -105,6 +107,17 @@ test("an existing OpenCode installation uses the isolated update path", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("lifecycle update does not wait for GitHub Actions to materialize before requesting its merge", () => {
+  const ship = cliSource.slice(
+    cliSource.indexOf("function shipPreparedLifecycle"),
+    cliSource.indexOf("export function runIsolatedLifecycleUpdate"),
+  );
+
+  assert.match(ship, /pulls\/\$\{pr\.number\}\/merge/);
+  assert.doesNotMatch(ship, /actions\/workflows/);
+  assert.doesNotMatch(ship, /\["pr", "checks"/);
 });
 
 test("runInit delegates to vendor with resolved tag", () => {
