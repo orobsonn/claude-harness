@@ -71,6 +71,29 @@ test("a derived tier that disagrees with severity is NORMALIZED, never a reason 
   }).ok, false);
 });
 
+test("canonical adversary reports contain only judgment fields; legacy derived tiers are tolerated at the boundary", () => {
+  const canonical = {
+    issues: [{
+      description: "The opt-out client does not bound its request.",
+      category: "boundary",
+      severity: "medium",
+      scope: "src/backend/opt-out.ts",
+      evidence: "src/backend/opt-out.ts:stopFollowUps",
+      fix_hint: "Add the existing backend timeout helper to stopFollowUps.",
+    }],
+  };
+  const result = validateReviewReport("adversary", canonical);
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(result.report, canonical, "the canonical report does not echo a derived routing tier");
+  assert.equal(result.findings[0].suggested_sniper_tier, "sniper-medium", "routing derives the tier after validation");
+
+  const legacy = structuredClone(canonical);
+  legacy.issues[0].suggested_sniper_tier = "sniper-high";
+  const legacyResult = validateReviewReport("adversary", legacy);
+  assert.equal(legacyResult.ok, true, legacyResult.reason);
+  assert.deepEqual(legacyResult.report, canonical, "legacy tier input is normalized away instead of reopening a review");
+});
+
 test("legacy family marker on a report is ignored, never required", () => {
   const plan = validateReviewReport("plan-reviewer", {
     verdict: "APPROVE",

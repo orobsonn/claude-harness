@@ -31,7 +31,6 @@ const ADVERSARY_FINDING_KEYS = Object.freeze([
   "severity",
   "scope",
   "evidence",
-  "suggested_sniper_tier",
   "fix_hint",
 ]);
 
@@ -97,21 +96,30 @@ export function validatePlanReviewFinding(value) {
 
 /**
  * @description The sniper tier is DERIVED from severity, never trusted from the report.
- * It carries no information the report does not already state, so requiring the model to restate it
- * correctly only creates a way to lose good work: a live adversary report — canonical JSON, valid
- * keys, valid enums, two real findings — was thrown away whole because one finding said
- * `severity: high` with `suggested_sniper_tier: sniper-medium`. The eye is asked to judge; echoing a
- * derived value is not judgment. The field stays in the shape (the agent contract still emits it) and
- * its value is normalized here so every downstream consumer reads the tier that matches severity.
+ * It carries no information the report does not already state. The eye judges severity; routing
+ * derives the tier. Legacy reports that still echo a tier are accepted and canonicalized below.
  */
 export function normalizedSniperTier(severity) {
   return REVIEW_SEVERITIES.has(severity) ? `sniper-${severity}` : null;
 }
 
-export function validateAdversaryFinding(value) {
+/** @description Remove the former derived tier before validating the canonical report shape. */
+function withoutLegacySuggestedSniperTier(finding) {
+  if (!Object.hasOwn(finding, "suggested_sniper_tier")) return finding;
+  const { suggested_sniper_tier: _legacy, ...rest } = finding;
+  return rest;
+}
+
+function normalizeAdversaryFinding(value) {
   const finding = plain(value);
-  if (!finding || !exactKeys(finding, ADVERSARY_FINDING_KEYS) || !nonEmptyStrings(finding, ADVERSARY_FINDING_KEYS)) return false;
-  return ADVERSARY_CATEGORIES.has(finding.category) && REVIEW_SEVERITIES.has(finding.severity);
+  const canonical = finding && withoutLegacySuggestedSniperTier(finding);
+  if (!canonical || !exactKeys(canonical, ADVERSARY_FINDING_KEYS) || !nonEmptyStrings(canonical, ADVERSARY_FINDING_KEYS)) return null;
+  if (!ADVERSARY_CATEGORIES.has(canonical.category) || !REVIEW_SEVERITIES.has(canonical.severity)) return null;
+  return canonical;
+}
+
+export function validateAdversaryFinding(value) {
+  return Boolean(normalizeAdversaryFinding(value));
 }
 
 /** @description Strip legacy dual-family marker before canonical key checks (ignored, never required). */
@@ -137,13 +145,15 @@ export function validateReviewReport(logicalRole, value) {
   }
   if (logicalRole === "adversary") {
     if (!exactKeys(body, ["issues"])) return { ok: false, reason: "adversary report keys are not canonical" };
-    if (!Array.isArray(body.issues) || !body.issues.every(validateAdversaryFinding)) {
+    const issues = Array.isArray(body.issues) ? body.issues.map(normalizeAdversaryFinding) : null;
+    if (!issues || issues.some((issue) => !issue)) {
       return { ok: false, reason: "adversary finding is not canonical" };
     }
-    // Normalize the derived field so the dispatch tier always matches severity, whatever the eye wrote.
-    const issues = body.issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) }));
-    const normalized = { ...body, issues };
-    return { ok: true, report: normalized, findings: issues };
+    return {
+      ok: true,
+      report: { ...body, issues },
+      findings: issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) })),
+    };
   }
   return { ok: false, reason: "unknown review role" };
 }
