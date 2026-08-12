@@ -639,6 +639,35 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
   }
 });
 
+test("OpenCode vendor ignores AppleDouble metadata and removes stale AppleDouble artifacts", () => {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-oc-appledouble-source-"));
+  const target = mkdtempSync(join(tmpdir(), "vendor-oc-appledouble-target-"));
+  try {
+    cpSync(join(harnessRoot, "core"), join(sourceRoot, "core"), { recursive: true });
+    cpSync(join(harnessRoot, "package.json"), join(sourceRoot, "package.json"));
+    writeFileSync(join(sourceRoot, "core/opencode/plugin/._entry-gate.ts"), Buffer.from([0, 1, 2, 3]));
+
+    const stale = join(target, ".opencode/plugin/._stale-plugin.ts");
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, Buffer.from([0, 1, 2, 3]));
+
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", sourceRoot, "--target", target, "--runtime", "opencode"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
+    assert.equal(existsSync(join(target, ".opencode/plugin/._entry-gate.ts")), false);
+    assert.equal(existsSync(stale), false);
+    const manifest = JSON.parse(readFileSync(join(target, ".opencode/.harness-owned-files.json"), "utf8"));
+    assert.equal(manifest.files.some((file) => file.split("/").some((part) => part.startsWith("._"))), false);
+    assert.ok(existsSync(join(target, ".opencode/plugin/entry-gate.ts")), "the real plugin remains vendored");
+  } finally {
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test("re-vendoring onto an already-vendored project deletes retired plugin files (no zombie auto-load)", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-"));
   try {

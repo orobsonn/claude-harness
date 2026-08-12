@@ -390,6 +390,7 @@ function copyOcTree(srcDir, destDir, relPrefix = "") {
   if (!existsSync(srcDir)) return;
   mkdirSync(destDir, { recursive: true });
   for (const name of readdirSync(srcDir)) {
+    if (name.startsWith("._")) continue;
     const src = join(srcDir, name);
     const dest = join(destDir, name);
     const rel = relPrefix ? `${relPrefix}/${name}` : name;
@@ -856,6 +857,7 @@ function collectDestinationTree(src, destination, entries) {
   entries.push({ destination, kind: info.isDirectory() ? "directory" : "file" });
   if (!info.isDirectory()) return;
   for (const name of readdirSync(src)) {
+    if (name.startsWith("._")) continue;
     const child = join(src, name);
     if (statSync(child).isFile() && name.endsWith(".test.mjs")) continue;
     collectDestinationTree(child, join(destination, name), entries);
@@ -1151,6 +1153,27 @@ export function pruneOcRetiredFiles(ocDir, sourceOcDir) {
   }
 }
 
+/** @description Remove macOS AppleDouble metadata only from framework-owned OpenCode trees. */
+function pruneOcAppleDoubleArtifacts(ocDir) {
+  const pruneTree = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      const entry = join(dir, name);
+      const info = lstatSync(entry);
+      if (name.startsWith("._")) {
+        rmSync(entry, { recursive: info.isDirectory(), force: true });
+        continue;
+      }
+      if (info.isDirectory() && !info.isSymbolicLink()) pruneTree(entry);
+    }
+  };
+  for (const dir of OC_FRAMEWORK_OWNED) pruneTree(join(ocDir, dir));
+  pruneTree(join(ocDir, "shared"));
+  for (const name of readdirSync(ocDir)) {
+    if (name.startsWith("._")) rmSync(join(ocDir, name), { recursive: true, force: true });
+  }
+}
+
 /**
  * @description Vendor OpenCode harness into project `.opencode/` + root config/memory.
  * @param {{ coreDir: string, targetDir: string, version: string, stampDate: string }} opts
@@ -1163,6 +1186,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   const sharedDir = join(coreDir, "shared");
   const ocDir = join(targetDir, ".opencode");
   mkdirSync(ocDir, { recursive: true });
+  pruneOcAppleDoubleArtifacts(ocDir);
 
   for (const dir of OC_FRAMEWORK_OWNED) {
     const src = join(openCodeDir, dir);
