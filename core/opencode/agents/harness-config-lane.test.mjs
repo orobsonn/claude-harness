@@ -225,13 +225,14 @@ test("updating-harness invokes the named CLI from its pinned GitHub package", ()
   assert.equal(resolveBash(rules, "npx --yes --package=github:orobsonn/claude-harness#v0.55.22 claude-harness lifecycle-update --target both --ref v0.55.22"), "allow");
 });
 
-test("a harness update is one isolated operation and leaves the invoking checkout untouched", () => {
+test("a harness update is isolated and synchronizes an invoking default branch", () => {
   const update = readFileSync(join(SKILLS_DIR, "updating-harness", "SKILL.md"), "utf8");
 
   assert.match(update, /single clean command/i);
   assert.match(update, /clean clone of `origin\/main`/i);
-  assert.match(update, /does not modify the\s+invoking checkout/i);
-  assert.match(update, /staged product work, plans, state, and local files remain\s+untouched/i);
+  assert.match(update, /fast-forwards the invoking default-branch checkout/i);
+  assert.match(update, /never switches a feature branch/i);
+  assert.match(update, /never uses stash, reset, or a non-fast-forward merge/i);
 });
 
 test("lifecycle shipping merges when the repository has no CI configured", () => {

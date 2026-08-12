@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
+import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, syncCallerCheckout, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
 
 const cliSource = readFileSync(fileURLToPath(new URL("./cli.mjs", import.meta.url)), "utf8");
 
@@ -240,7 +240,75 @@ test("createLifecycleClone starts from origin main without changing a dirty call
   }
 });
 
-test("runIsolatedLifecycleUpdate vendors and ships from the clone, never from the caller checkout", () => {
+test("syncCallerCheckout fast-forwards active main and preserves staged product work", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-sync-main-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, ".opencode"), { recursive: true });
+    mkdirSync(join(seed, "src"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", ".harness-version"), "v1\n");
+    writeFileSync(join(seed, "src", "product.js"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+
+    writeFileSync(join(caller, "src", "product.js"), "operator work\n");
+    git(caller, ["add", "src/product.js"]);
+    const stagedBefore = gitOut(caller, ["diff", "--cached", "--", "src/product.js"]);
+    writeFileSync(join(seed, ".opencode", ".harness-version"), "v2\n");
+    git(seed, ["add", ".opencode/.harness-version"]);
+    git(seed, ["commit", "-m", "harness update"]);
+    git(seed, ["push"]);
+
+    assert.deepEqual(syncCallerCheckout({ cwd: caller, defaultBranch: "main" }), { action: "synced" });
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v2\n");
+    assert.equal(gitOut(caller, ["diff", "--cached", "--", "src/product.js"]), stagedBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncCallerCheckout never switches a feature branch to main", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-sync-branch-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    writeFileSync(join(seed, "product.txt"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+    git(caller, ["switch", "-c", "feature/operator-work"]);
+
+    assert.deepEqual(
+      syncCallerCheckout({ cwd: caller, defaultBranch: "main" }),
+      { action: "skipped", reason: "active branch is not the default branch" },
+    );
+    assert.equal(gitOut(caller, ["branch", "--show-current"]).trim(), "feature/operator-work");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate vendors in a clone then synchronizes active main", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-run-"));
   const remote = join(root, "remote.git");
   const seed = join(root, "seed");
@@ -253,7 +321,9 @@ test("runIsolatedLifecycleUpdate vendors and ships from the clone, never from th
     git(seed, ["config", "user.email", "test@example.com"]);
     git(seed, ["config", "user.name", "Test"]);
     mkdirSync(join(seed, "src"), { recursive: true });
+    mkdirSync(join(seed, ".opencode"), { recursive: true });
     writeFileSync(join(seed, "src", "product.js"), "base\n");
+    writeFileSync(join(seed, ".opencode", ".harness-version"), "v1\n");
     git(seed, ["add", "."]);
     git(seed, ["commit", "-m", "base"]);
     git(seed, ["remote", "add", "origin", remote]);
@@ -263,6 +333,10 @@ test("runIsolatedLifecycleUpdate vendors and ships from the clone, never from th
     writeFileSync(join(caller, "src", "product.js"), "operator work\n");
     git(caller, ["add", "src/product.js"]);
     const before = gitOut(caller, ["status", "--porcelain=v1"]);
+    writeFileSync(join(seed, ".opencode", ".harness-version"), "v2\n");
+    git(seed, ["add", ".opencode/.harness-version"]);
+    git(seed, ["commit", "-m", "remote harness update"]);
+    git(seed, ["push"]);
     let vendorTarget = "";
     let shipTarget = "";
     const result = runIsolatedLifecycleUpdate({
@@ -283,9 +357,14 @@ test("runIsolatedLifecycleUpdate vendors and ships from the clone, never from th
       },
     });
 
-    assert.deepEqual(result, { action: "merged", url: "https://example.test/pr/1" });
+    assert.deepEqual(result, {
+      action: "merged",
+      url: "https://example.test/pr/1",
+      callerSync: { action: "synced" },
+    });
     assert.equal(vendorTarget, shipTarget);
     assert.equal(existsSync(vendorTarget), false, "the temporary clone is always cleaned after the lifecycle run");
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v2\n");
     assert.equal(gitOut(caller, ["status", "--porcelain=v1"]), before, "caller product work remains untouched");
   } finally {
     rmSync(root, { recursive: true, force: true });
