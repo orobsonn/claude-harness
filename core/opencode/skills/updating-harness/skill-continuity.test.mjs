@@ -31,11 +31,12 @@ test("updating-harness — an OpenCode-only project does not treat an absent Cla
   assert.doesNotMatch(skill, /test -d \.opencode/i);
 });
 
-test("updating-harness — one isolated command lands the tag requested by this invocation", () => {
+test("updating-harness — one isolated command lands the tag and fast-forwards active main", () => {
   assert.match(skill, /resolve the latest release tag\s+\*\*once\*\*/i);
   assert.match(skill, /claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>/i);
   assert.match(skill, /clean clone.*origin\/main/i);
-  assert.match(skill, /does not modify the\s+invoking checkout/i);
+  assert.match(skill, /fast-forwards the invoking default-branch checkout/i);
+  assert.match(skill, /never switches a feature branch/i);
   assert.doesNotMatch(skill, /lifecycle-snapshot updating-harness/i);
   assert.doesNotMatch(skill, /`adopt`/i);
 });

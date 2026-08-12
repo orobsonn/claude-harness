@@ -68,6 +68,34 @@ function gitAt(cwd, args) {
   });
 }
 
+/**
+ * Fast-forwards the checkout that invoked a completed lifecycle update when it is already on the
+ * repository default branch. A feature checkout is never switched, and Git is left to refuse any
+ * fast-forward that would overwrite local work.
+ * @param {{ cwd: string, defaultBranch: string }} input
+ * @returns {{ action: "synced" } | { action: "skipped", reason: string }}
+ */
+export function syncCallerCheckout({ cwd, defaultBranch }) {
+  const activeBranch = gitAt(cwd, ["branch", "--show-current"]).trim();
+  if (activeBranch !== defaultBranch) {
+    return { action: "skipped", reason: "active branch is not the default branch" };
+  }
+  try {
+    gitAt(cwd, ["fetch", "origin"]);
+    gitAt(cwd, ["merge", "--ff-only", `origin/${defaultBranch}`]);
+    return { action: "synced" };
+  } catch {
+    return { action: "skipped", reason: "could not fast-forward the active default branch" };
+  }
+}
+
+/** @param {{ callerSync?: { action: string, reason?: string } } | undefined} result */
+function callerSyncSummary(result) {
+  if (!result?.callerSync) return "";
+  if (result.callerSync.action === "synced") return " Local default branch synchronized.";
+  return ` Local checkout unchanged: ${result.callerSync.reason}.`;
+}
+
 /** @param {string} cwd @param {string[]} args */
 function ghAt(cwd, args) {
   return execFileSync("gh", args, {
@@ -205,7 +233,8 @@ function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
 /**
  * Runs the full harness update outside the caller checkout. This makes a lifecycle sync atomic
  * from the operator's point of view: a feature branch, staged product work, or a stale local main
- * cannot contaminate the PR that refreshes the harness on origin's default branch.
+ * cannot contaminate the PR that refreshes the harness on origin's default branch. Once the PR is
+ * merged, an active default-branch caller is fast-forwarded to that same remote tip.
  * @param {{
  *   cwd: string,
  *   ref: string,
@@ -213,6 +242,7 @@ function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
  *   runVendor?: typeof runVendorDefault,
  *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"both") => { action: string, branch?: string, paths?: string[], url?: string },
  *   ship?: typeof shipPreparedLifecycle,
+ *   syncCaller?: typeof syncCallerCheckout,
  * }} input
  */
 export function runIsolatedLifecycleUpdate({
@@ -222,6 +252,7 @@ export function runIsolatedLifecycleUpdate({
   runVendor = runVendorDefault,
   prepare = prepareVendoredLifecycle,
   ship = shipPreparedLifecycle,
+  syncCaller = syncCallerCheckout,
 }) {
   const lifecycle = createLifecycleClone(cwd);
   try {
@@ -234,7 +265,9 @@ export function runIsolatedLifecycleUpdate({
       runtimeTarget,
     });
     const prepared = prepare(lifecycle.directory, runtimeTarget);
-    return ship({ directory: lifecycle.directory, defaultBranch: lifecycle.defaultBranch, prepared });
+    const result = ship({ directory: lifecycle.directory, defaultBranch: lifecycle.defaultBranch, prepared });
+    if (result.action !== "merged" && result.action !== "noop") return result;
+    return { ...result, callerSync: syncCaller({ cwd, defaultBranch: lifecycle.defaultBranch }) };
   } finally {
     lifecycle.cleanup();
   }
@@ -595,7 +628,8 @@ async function main() {
         runtimeTarget,
       });
       const url = typeof result?.url === "string" ? ` ${result.url}` : "";
-      process.stdout.write(`[claude-harness] lifecycle update ${releaseRef}: ${result.action}.${url}\n`);
+      const local = callerSyncSummary(result);
+      process.stdout.write(`[claude-harness] lifecycle update ${releaseRef}: ${result.action}.${url}${local}\n`);
     } catch (err) {
       process.stderr.write(`[claude-harness] ${err.message}\n`);
       process.exit(1);
@@ -635,7 +669,8 @@ async function main() {
       process.stdout.write(`${isTTY ? "\x1b[32m✓\x1b[0m" : "✓"} latest release: ${tag}\n`);
       const result = runIsolatedLifecycleUpdate({ cwd, ref: tag, runtimeTarget });
       const url = typeof result?.url === "string" ? ` ${result.url}` : "";
-      process.stdout.write(`[claude-harness] lifecycle update ${tag}: ${result.action}.${url} Update finished; do not run lifecycle recovery or shipping commands.\n`);
+      const local = callerSyncSummary(result);
+      process.stdout.write(`[claude-harness] lifecycle update ${tag}: ${result.action}.${url}${local} Update finished; do not run lifecycle recovery or shipping commands.\n`);
       return;
     }
     const tag = runInit({
