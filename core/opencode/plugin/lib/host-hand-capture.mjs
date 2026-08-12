@@ -10,8 +10,8 @@ import { isCapacityExhaustedOutput, parseHandStatusFromOutput, writeHandRecord }
 import { listGitTouchedPaths, pathsChangedSinceBaseline } from "../../lib/worktree-baseline.mjs";
 import { checkFrozen } from "../../../shared/lib/capture-oracle.mjs";
 
-function isDone(outcome) {
-  return outcome === "DONE";
+function isCaptureEligibleOutcome(outcome) {
+  return outcome === "DONE" || outcome === "DONE_WITH_CONCERNS";
 }
 
 function readHandRecord(projectRoot, sessionId, featureId, taskId) {
@@ -33,7 +33,7 @@ function scopeViolations(touchedPaths, record) {
 }
 
 /**
- * @description Persist a terminal host record and, only for DONE, its bare completion stamp.
+ * @description Persist a terminal host record and stamp a capture-eligible completion fact.
  * @param {{ projectRoot: string, sessionId: string, featureId: string, taskId: string, role: string, producerCallId: string, outcome: string, touchedPaths: string[], freezeCommitSha: string | null }} input
  * @returns {{ ok: boolean, recorded: boolean, reason?: string }}
  */
@@ -57,7 +57,7 @@ export function recordHandFinished(input) {
       const bare = formatFeatureTaskEntry(featureId, taskId);
       if (existing?.producerCallId === producerCallId) {
         const handFinished = removeTaskEntry(gateState.hand_finished, bare);
-        if (isDone(existing.outcome)) handFinished.push(bare);
+        if (isCaptureEligibleOutcome(existing.outcome)) handFinished.push(bare);
         outcomeResult = { ok: true, recorded: false, reason: "completion producer already recorded" };
         return { ...gateState, hand_finished: handFinished };
       }
@@ -91,7 +91,7 @@ export function recordHandFinished(input) {
         supersededProducerCallId = existing.producerCallId;
       }
       const handFinished = removeTaskEntry(gateState.hand_finished, bare);
-      if (isDone(effectiveOutcome)) handFinished.push(bare);
+      if (isCaptureEligibleOutcome(effectiveOutcome)) handFinished.push(bare);
       outcomeResult = { ok: true, recorded: true };
       return { ...gateState, hand_finished: handFinished };
     });
@@ -164,7 +164,7 @@ export function recordTaskCompletion(input) {
   const persisted = readHandRecord(input?.projectRoot, input?.sessionId, input?.featureId, input?.taskId);
   const capturePending =
     recorded.ok === true &&
-    persisted?.outcome === "DONE" &&
+    isCaptureEligibleOutcome(persisted?.outcome) &&
     persisted?.producerCallId === input?.producerCallId;
   return { ...recorded, terminal: true, capturePending };
 }

@@ -112,7 +112,7 @@ test("recordTaskCompletion ignores unchanged files that predate this exact dispa
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.capturePending, true);
+    assert.equal(result.capturePending, true, JSON.stringify(result));
     const recordPath = path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     assert.deepEqual(record.touchedPaths, ["src/a.ts"]);
@@ -256,7 +256,7 @@ test("capturePending belongs only to the producer that owns the persisted DONE r
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("DONE_WITH_CONCERNS records completion but never stamps hand_finished", () => {
+test("DONE_WITH_CONCERNS records a capture-eligible completion stamp", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-concerns-"));
   try {
     const sessionId = "ses_concerns";
@@ -268,6 +268,46 @@ test("DONE_WITH_CONCERNS records completion but never stamps hand_finished", () 
     seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "concerns" });
     const result = hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "concerns", outcome: "DONE_WITH_CONCERNS", touchedPaths: [], freezeCommitSha: null });
     assert.equal(result.recorded, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, [`${featureId}/${taskId}`]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DONE_WITH_CONCERNS keeps its exact producer pending for parent capture", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-concerns-pending-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  try {
+    git("init");
+    git("config", "user.email", "harness@example.invalid");
+    git("config", "user.name", "Harness Test");
+    fs.writeFileSync(path.join(root, "anchor.txt"), "anchor\n");
+    fs.writeFileSync(path.join(root, ".gitignore"), ".opencode/plans/.state/\n");
+    git("add", "anchor.txt", ".gitignore");
+    git("commit", "-m", "anchor");
+    const sessionId = "ses_concerns_pending";
+    const featureId = "feat-concerns-pending";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "concerns-pending" });
+    const result = hostHandCapture.recordTaskCompletion({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "concerns-pending", outputText: "## Status: DONE_WITH_CONCERNS" });
+    assert.equal(result.capturePending, true, JSON.stringify(result));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DONE_WITH_CONCERNS with a frozen mutation is still downgraded and never stamps completion", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-hand-concerns-frozen-"));
+  try {
+    const sessionId = "ses_concerns_frozen";
+    const featureId = "feat-concerns-frozen";
+    const taskId = "task-1";
+    const statePath = path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ session_id: sessionId, feature_id: featureId }));
+    seedDispatch(root, { sessionId, featureId, taskId, role: "executor-low", callId: "concerns-frozen", frozenPaths: ["tests/oracle.test.mjs"] });
+    hostHandCapture.recordHandFinished({ projectRoot: root, sessionId, featureId, taskId, role: "executor-low", producerCallId: "concerns-frozen", outcome: "DONE_WITH_CONCERNS", touchedPaths: ["tests/oracle.test.mjs"], freezeCommitSha: "done" });
+    const record = JSON.parse(fs.readFileSync(path.join(root, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`), "utf8"));
+    assert.equal(record.outcome, "BLOCKED");
     assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).hand_finished, []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

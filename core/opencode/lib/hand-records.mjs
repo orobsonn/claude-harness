@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { handRecordPath } from "../../shared/lib/path-helpers.mjs";
+import { isCaptureEligibleHandRecord } from "../../shared/lib/real-file-capture-rail.mjs";
 
 /** @description Match last Status: line from Task output. Order: DONE_WITH before DONE. */
 const HAND_STATUS_RE =
@@ -37,17 +38,17 @@ export function isCapacityExhaustedOutput(text) {
 const OC_HAND_RECORD_WRITERS = new Set(["host-hand-finished", "run-hand-adapter"]);
 
 /**
- * @description Validate the factual identity of one OC DONE record against its exact path owner.
+ * @description Validate the factual identity of one OC capture-eligible record against its exact path owner.
  * @param {unknown} record
  * @param {{ featureId: string, taskId: string, sessionId: string, producerCallId?: string, sha?: string }} expected
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
-export function validateOcDoneHandRecord(record, expected) {
+export function validateOcCaptureEligibleHandRecord(record, expected) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return { ok: false, reason: "hand-record must be an object" };
   }
   const value = /** @type {Record<string, unknown>} */ (record);
-  if (value.outcome !== "DONE") return { ok: false, reason: "hand-record is not DONE" };
+  if (!isCaptureEligibleHandRecord(value)) return { ok: false, reason: "hand-record is not capture-eligible" };
   if (!OC_HAND_RECORD_WRITERS.has(value.writtenBy)) {
     return { ok: false, reason: "hand-record writtenBy is not a host adapter" };
   }
@@ -193,8 +194,8 @@ export function listHandRecordsForFeature(projectRoot, featureId) {
         if (!taskId) continue;
         const record = readRecordFile(path.join(sessionDir, taskEntry.name));
         if (record !== null) {
-          const identity = record.outcome === "DONE"
-            ? validateOcDoneHandRecord(record, { featureId, taskId, sessionId })
+          const identity = isCaptureEligibleHandRecord(record)
+            ? validateOcCaptureEligibleHandRecord(record, { featureId, taskId, sessionId })
             : { ok: true };
           results.push({
             taskId,

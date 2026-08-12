@@ -1,5 +1,5 @@
 /**
- * @description Pure real-file capture rail — dual-shape DONE (OC string + CC nested).
+ * @description Pure real-file capture rail — terminal capture eligibility (OC string + CC nested).
  * Inject listFn / isAncestorFn. No fs.
  */
 
@@ -15,12 +15,13 @@ function coerceArray(v) {
  * @param {unknown} record
  * @returns {boolean}
  */
-export function isDoneHandRecord(record) {
+export function isCaptureEligibleHandRecord(record) {
   if (!record || typeof record !== "object") return false;
   const o = /** @type {Record<string, unknown>} */ (record).outcome;
-  if (o === "DONE") return true;
+  if (o === "DONE" || o === "DONE_WITH_CONCERNS") return true;
   if (o && typeof o === "object" && !Array.isArray(o)) {
-    return /** @type {Record<string, unknown>} */ (o).status === "DONE";
+    const status = /** @type {Record<string, unknown>} */ (o).status;
+    return status === "DONE" || status === "DONE_WITH_CONCERNS";
   }
   return false;
 }
@@ -127,7 +128,7 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
     const r = /** @type {Record<string, unknown>} */ (record);
     const sha = r.freezeCommitSha;
 
-    if (isDoneHandRecord(record)) {
+    if (isCaptureEligibleHandRecord(record)) {
       if (typeof sha !== "string" || sha.length === 0) {
         return {
           ok: false,
@@ -151,12 +152,12 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
     if (ancestor === false) continue;
 
     const { scope, frozen } = recordViolations(record);
-    const isDone = isDoneHandRecord(record);
+    const isCaptureEligible = isCaptureEligibleHandRecord(record);
     const hasViolations = scope.length > 0 || frozen.length > 0;
 
-    // null (or non-boolean) = undetermined → deny fail-closed for DONE or scope/frozen
+    // null (or non-boolean) = undetermined → deny fail-closed for capture-eligible records or scope/frozen
     if (ancestor !== true) {
-      if (isDone || hasViolations) {
+      if (isCaptureEligible || hasViolations) {
         return {
           ok: false,
           decision: "deny",
@@ -180,7 +181,7 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
       };
     }
 
-    if (isDone && !isValidCapturedVerifiedAt(r.capturedVerifiedAt)) {
+    if (isCaptureEligible && !isValidCapturedVerifiedAt(r.capturedVerifiedAt)) {
       return {
         ok: false,
         decision: "deny",
@@ -192,10 +193,10 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
       };
     }
 
-    // Positive evidence: DONE + valid stamp + ancestor + no violations
+    // Positive evidence: capture-eligible terminal record + valid stamp + ancestor + no violations
     // When requiredSessionId set, only the current delivery session counts
     if (
-      isDone &&
+      isCaptureEligible &&
       isValidCapturedVerifiedAt(r.capturedVerifiedAt) &&
       (!requiredSessionId || itemSessionId === requiredSessionId)
     ) {
@@ -212,7 +213,7 @@ export function checkRealFileCaptureRail(featureId, deps = {}) {
         (requiredSessionId
           ? ` in the current session (${requiredSessionId})`
           : "") +
-        " with DONE + capturedVerifiedAt (empty list or other-session-only is a vacuous ship).",
+        " with a capture-eligible terminal outcome + capturedVerifiedAt (empty list or other-session-only is a vacuous ship).",
     };
   }
 
