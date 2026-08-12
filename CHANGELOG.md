@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.52](https://github.com/orobsonn/claude-harness/compare/v0.55.51...v0.55.52) (2026-08-12)
+
+
+### Bug Fixes
+
+* **vendor:** ignore macOS metadata files ([#760](https://github.com/orobsonn/claude-harness/issues/760)) ([9548f5e](https://github.com/orobsonn/claude-harness/commit/9548f5ef3bd1614df5446deacbf78aa999cb64df))
+
 ## [0.55.51](https://github.com/orobsonn/claude-harness/compare/v0.55.50...v0.55.51) (2026-08-12)
 
 
