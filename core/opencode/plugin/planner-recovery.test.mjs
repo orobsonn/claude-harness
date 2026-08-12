@@ -67,6 +67,26 @@ test("planner output creates a canonical identity-bound plan", async () => {
   });
 });
 
+test("an APPROVE plan blocks a later planner dispatch in the same session", async () => {
+  await withRun(async (root, state) => {
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
+    const initialArgs = { subagent_type: "planner", prompt: "Produce a plan." };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "approved-plan" }, { args: initialArgs });
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "approved-plan", args: initialArgs }, { output: JSON.stringify(plan), metadata: {} });
+    const approved = { ...state(), plan_review_verdict: "APPROVE" };
+    fs.writeFileSync(path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"), JSON.stringify(approved));
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: sessionId, callID: "late-planner" },
+        { args: { subagent_type: "planner", prompt: "Replan an already approved feature." } },
+      ),
+      /resumed approved plan must continue delivery/,
+    );
+    assert.equal(state().planner_status, "usable");
+    assert.equal(state().plan_review_verdict, "APPROVE");
+  });
+});
+
 test("duplicate planner before reuses its frozen snapshot after routing changes", async () => {
   await withRun(async (root, state) => {
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });

@@ -45,6 +45,7 @@ async function createPlannerRecoveryHooks(
   const { classifyPlannerBoundaryError, classifyPlannerResult } = await import("./lib/planner-result.mjs")
   const {
     readPlannerArtifact,
+    reconcilePlannerStateFromDisk,
     prepareCanonicalPlan,
     preparedPlanMatchesArtifacts,
     semanticPlanHash,
@@ -63,6 +64,18 @@ async function createPlannerRecoveryHooks(
     if (typeof sessionId !== "string" || !sessionId) return null
     const result = gateStatePath({ projectRoot: root, runtime: "opencode", sessionId })
     return result.ok ? result.path : null
+  }
+
+  function approvedBindingStamp(state: Record<string, unknown>): string | null {
+    const binding = state.planner_plan_binding as Record<string, unknown> | undefined
+    if (
+      state.planner_status !== "usable" || state.plan_review_verdict !== "APPROVE" ||
+      !binding || binding.session_id !== state.session_id || binding.feature_id !== state.feature_id ||
+      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_file_hash !== "string" ||
+      typeof binding.snapshot_hash !== "string" || typeof binding.file_hash !== "string" ||
+      typeof binding.semantic_hash !== "string"
+    ) return null
+    return [state.session_id, state.feature_id, binding.snapshot_path, binding.snapshot_file_hash, binding.snapshot_hash, binding.file_hash, binding.semantic_hash].join(":")
   }
 
   function providerConfig() {
@@ -113,17 +126,13 @@ async function createPlannerRecoveryHooks(
       if (!sp || typeof callId !== "string" || !callId) {
         throw new Error("[planner-recovery] planner dispatch requires sessionID and callID")
       }
+      const reconciled = reconcilePlannerStateFromDisk(root, sessionId)
+      const approvedBeforeDispatch = reconciled.ok && !reconciled.validatorFailed
+        ? approvedBindingStamp(reconciled.state as Record<string, unknown>)
+        : null
       const attemptToken = token()
       let claimError = ""
       const claimed = withGateStateLock(sp, (previous: Record<string, unknown>) => {
-        if (
-          typeof previous.resumed_from_session_id === "string" &&
-          previous.planner_status === "usable" &&
-          previous.plan_review_verdict === "APPROVE"
-        ) {
-          claimError = "resumed approved plan must continue delivery; do not dispatch planner"
-          return previous
-        }
         const active = previous.planner_active_attempt as Record<string, unknown> | undefined
         // OC may invoke before twice for one Task. The first claim freezes the strategy;
         // duplicate delivery must never reread or revalidate routing from disk.
@@ -141,6 +150,10 @@ async function createPlannerRecoveryHooks(
             model: active.model,
             expectedModelStrategy: active.expected_model_strategy,
           }).state
+        }
+        if (approvedBeforeDispatch && approvedBindingStamp(previous) === approvedBeforeDispatch) {
+          claimError = "resumed approved plan must continue delivery; do not dispatch planner"
+          return previous
         }
         const config = providerConfig()
         if (!config || typeof config.model !== "string" || !config.model.includes("/")) {
