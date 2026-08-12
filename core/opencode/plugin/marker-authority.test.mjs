@@ -506,6 +506,45 @@ test("capture-verified is parent-only even with a valid record and hand_finished
   }
 });
 
+test("DONE_WITH_CONCERNS remains visible to normal review but can receive the same parent capture proof", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-concerns-capture-"));
+  try {
+    const { file } = seed(root);
+    const { path: recordPath, sha } = seedDoneHandRecord(root, "DONE_WITH_CONCERNS");
+    const { before, execute } = await harness(root);
+    const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-concerns-finished");
+    assert.equal(finished.metadata.ok, true, finished.metadata.reason);
+    const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-concerns-capture");
+    assert.equal(captured.metadata.ok, true, captured.metadata.reason);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(state.hand_finished, [`${FEATURE}/${TASK}`]);
+    assert.deepEqual(state.capture_verified, [`${FEATURE}/${TASK}@${sha}`]);
+    assert.match(String(JSON.parse(fs.readFileSync(recordPath, "utf8")).capturedVerifiedAt), /^\d{4}-/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("NEEDS_CONTEXT and CAPACITY_EXHAUSTED stay ineligible for hand and capture markers", async () => {
+  for (const outcome of ["NEEDS_CONTEXT", "CAPACITY_EXHAUSTED"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-nonterminal-"));
+    try {
+      const { file } = seed(root);
+      seedDoneHandRecord(root, outcome);
+      const { before, execute } = await harness(root);
+      const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, `call-${outcome}-finished`);
+      assert.equal(finished.metadata.ok, false);
+      const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, `call-${outcome}-capture`);
+      assert.equal(captured.metadata.ok, false);
+      const state = JSON.parse(fs.readFileSync(file, "utf8"));
+      assert.deepEqual(state.hand_finished ?? [], []);
+      assert.deepEqual(state.capture_verified ?? [], []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("capture-verified ignores args.sha and stamps the record's own freeze SHA", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-sha-"));
   try {
@@ -599,7 +638,7 @@ test("hand-finished without hand-record → ok:false (blocks capture path)", asy
   }
 });
 
-test("hand-finished with BLOCKED hand-record → ok:false not DONE", async () => {
+test("hand-finished with BLOCKED hand-record → ok:false not capture-eligible", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-capture-blocked-"));
   try {
     const { file } = seed(root);
@@ -607,7 +646,7 @@ test("hand-finished with BLOCKED hand-record → ok:false not DONE", async () =>
     const { before, execute } = await harness(root);
     const finished = await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-hand-finished");
     assert.equal(finished.metadata.ok, false);
-    assert.match(String(finished.metadata.reason ?? ""), /hand-record is not DONE/i);
+    assert.match(String(finished.metadata.reason ?? ""), /hand-record is not capture-eligible/i);
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(Array.isArray(state.hand_finished) ? state.hand_finished.length : 0, 0);
   } finally {

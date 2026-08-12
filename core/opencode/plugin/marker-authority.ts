@@ -14,10 +14,10 @@ import crypto from "node:crypto"
 import { withGateStateLock } from "../lib/gate-state.mjs"
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs"
 import { gateStatePath, handRecordPath } from "../../shared/lib/path-helpers.mjs"
-import { isDoneHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs"
+import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs"
 import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs"
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs"
-import { validateOcDoneHandRecord } from "../lib/hand-records.mjs"
+import { validateOcCaptureEligibleHandRecord } from "../lib/hand-records.mjs"
 import { readDispatchRecord, removeDispatchRecord } from "../lib/dispatch-scope.mjs"
 import { isAncestorSha, resolveHeadSha } from "./lib/host-hand-capture.mjs"
 
@@ -72,7 +72,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   const authorizedArgs = new WeakMap<object, Authorization>()
 
   function validateExactProducer(record: Record<string, unknown>, authorization: Authorization, taskId: string, sha?: string) {
-    const identity = validateOcDoneHandRecord(record, {
+    const identity = validateOcCaptureEligibleHandRecord(record, {
       featureId: authorization.featureID,
       taskId,
       sessionId: authorization.sessionID,
@@ -90,7 +90,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       producer.record.task_id !== taskId ||
       producer.record.role !== record.agent
     ) return { ok: false as const, reason: "producer dispatch identity mismatch" }
-    return validateOcDoneHandRecord(record, {
+    return validateOcCaptureEligibleHandRecord(record, {
       featureId: authorization.featureID,
       taskId,
       sessionId: authorization.sessionID,
@@ -134,7 +134,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
         } else if (action === "regate-pending") {
           patch = { regate_pending: [bare] }
         } else if (action === "hand-finished") {
-          // Require host-written DONE hand-record — prose mark alone must not unlock ship rails.
+          // Require a host-written capture-eligible record — prose mark alone must not unlock ship rails.
           const hfPath = handRecordPath(
             { projectRoot, runtime: "opencode", sessionId: authorization.sessionID, featureId: authorization.featureID },
             taskId,
@@ -146,7 +146,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           } catch {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
-          if (!isDoneHandRecord(hfRecord)) return { ok: false, reason: "hand-record is not DONE" }
+          if (!isCaptureEligibleHandRecord(hfRecord)) return { ok: false, reason: "hand-record is not capture-eligible" }
           const hfIdentity = validateExactProducer(hfRecord, authorization, taskId)
           if (!hfIdentity.ok) return hfIdentity
           patch = { hand_finished: [bare] }
@@ -172,7 +172,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
           try { record = JSON.parse(fs.readFileSync(recordPath.path, "utf8")) } catch {
             return { ok: false, reason: "hand-record missing or unreadable" }
           }
-          if (!isDoneHandRecord(record)) return { ok: false, reason: "hand-record is not DONE" }
+          if (!isCaptureEligibleHandRecord(record)) return { ok: false, reason: "hand-record is not capture-eligible" }
           const violations = recordViolations(record)
           if (violations.scope.length > 0 || violations.frozen.length > 0) {
             return { ok: false, reason: "hand-record contains scope or frozen violations" }
@@ -198,7 +198,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
             Array.isArray(previous.capture_verified) &&
             previous.capture_verified.includes(payload)
           ) {
-            const replayIdentity = validateOcDoneHandRecord(record, {
+            const replayIdentity = validateOcCaptureEligibleHandRecord(record, {
               featureId: authorization.featureID,
               taskId,
               sessionId: authorization.sessionID,

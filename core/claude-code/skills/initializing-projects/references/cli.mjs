@@ -9,11 +9,12 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync, mkdtempSync, rmSync, lstatSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
 
 import { runSetupVps } from "./setup-vps.mjs";
 
@@ -68,6 +69,111 @@ function gitAt(cwd, args) {
   });
 }
 
+/** @param {string} file */
+function regularFileHash(file) {
+  const stat = lstatSync(file);
+  if (!stat.isFile()) throw new Error(`lifecycle runtime path is not a regular file: ${file}`);
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+/** @param {string} cwd */
+function runtimeOverlayPath(cwd) {
+  const raw = gitAt(cwd, ["rev-parse", "--git-path", "harness-runtime-overlay.json"]).trim();
+  return isAbsolute(raw) ? raw : join(cwd, raw);
+}
+
+/** @param {string} cwd @param {string[]} paths */
+function changedLifecyclePaths(cwd, paths) {
+  if (paths.length === 0) return new Set();
+  const query = ["--", ...paths];
+  const read = (args) => gitAt(cwd, args).split("\0").filter(Boolean).map(normalizedLifecyclePath);
+  return new Set([
+    ...read(["diff", "--name-only", "-z", ...query]),
+    ...read(["diff", "--cached", "--name-only", "-z", ...query]),
+    ...read(["ls-files", "--others", "--exclude-standard", "-z", ...query]),
+  ]);
+}
+
+/** @param {string} cwd @param {string[]} paths */
+function readRuntimeOverlay(cwd, paths) {
+  try {
+    const parsed = JSON.parse(readFileSync(runtimeOverlayPath(cwd), "utf8"));
+    if (parsed?.version !== 1 || !parsed?.files || typeof parsed.files !== "object" || Array.isArray(parsed.files)) return null;
+    const expected = [...paths].sort();
+    const actual = Object.keys(parsed.files).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return null;
+    for (const path of actual) {
+      if (typeof parsed.files[path] !== "string" && parsed.files[path] !== null) return null;
+    }
+    return parsed.files;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} cwd @param {string} path */
+function callerPathHash(cwd, path) {
+  const file = join(cwd, path);
+  if (!existsSync(file)) return null;
+  return regularFileHash(file);
+}
+
+/** @param {string} destination @param {Buffer} body @param {number} mode */
+function writeRuntimeFileAtomically(destination, body, mode) {
+  mkdirSync(dirname(destination), { recursive: true });
+  if (existsSync(destination)) regularFileHash(destination);
+  const temporary = `${destination}.harness-runtime-${process.pid}-${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(temporary, body, { mode });
+    chmodSync(temporary, mode);
+    renameSync(temporary, destination);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+/**
+ * Refreshes the exact harness files in an active feature checkout after an isolated lifecycle PR
+ * has merged. This intentionally leaves a visible local diff: it is the only way for the next
+ * process in that worktree to load the new vendored runtime without merging or rebasing product work.
+ * @param {{ cwd: string, sourceDirectory: string, runtimeTarget: "claude"|"opencode"|"both" }} input
+ */
+export function syncCallerRuntimeOverlay({ cwd, sourceDirectory, runtimeTarget }) {
+  const ownership = vendoredOwnership(sourceDirectory, runtimeTarget);
+  const paths = [...new Set([...ownership.paths, ...ownership.retired])].sort();
+  const sourceFiles = new Map();
+  for (const path of ownership.paths) {
+    const source = join(sourceDirectory, path);
+    regularFileHash(source);
+    sourceFiles.set(path, { body: readFileSync(source), mode: lstatSync(source).mode });
+  }
+  for (const path of ownership.retired) {
+    if (existsSync(join(sourceDirectory, path))) {
+      throw new Error(`retired lifecycle path is still present in source: ${path}`);
+    }
+  }
+
+  const overlay = readRuntimeOverlay(cwd, paths);
+  const changed = changedLifecyclePaths(cwd, paths);
+  const conflicts = [...changed].filter((path) => !overlay || overlay[path] !== callerPathHash(cwd, path)).sort();
+  if (conflicts.length > 0) return { action: "skipped", reason: "local lifecycle files differ", paths: conflicts };
+
+  for (const [path, source] of sourceFiles) {
+    writeRuntimeFileAtomically(join(cwd, path), source.body, source.mode);
+  }
+  for (const path of ownership.retired) {
+    const destination = join(cwd, path);
+    if (existsSync(destination)) {
+      regularFileHash(destination);
+      rmSync(destination, { force: true });
+    }
+  }
+  const files = Object.fromEntries(paths.map((path) => [path, callerPathHash(cwd, path)]));
+  writeRuntimeFileAtomically(runtimeOverlayPath(cwd), Buffer.from(`${JSON.stringify({ version: 1, files }, null, 2)}\n`), 0o600);
+  return { action: "synced", paths: [...ownership.paths].sort() };
+}
+
 /**
  * Fast-forwards the checkout that invoked a completed lifecycle update when it is already on the
  * repository default branch. A feature checkout is never switched, and Git is left to refuse any
@@ -93,6 +199,12 @@ export function syncCallerCheckout({ cwd, defaultBranch }) {
 function callerSyncSummary(result) {
   if (!result?.callerSync) return "";
   if (result.callerSync.action === "synced") return " Local default branch synchronized.";
+  if (result?.callerRuntimeSync?.action === "synced") {
+    return " Harness runtime synchronized in the active checkout; restart OpenCode to load it.";
+  }
+  if (result?.callerRuntimeSync?.action === "skipped") {
+    return ` Local runtime unchanged: ${result.callerRuntimeSync.reason} (${result.callerRuntimeSync.paths.join(", ")}).`;
+  }
   return ` Local checkout unchanged: ${result.callerSync.reason}.`;
 }
 
@@ -131,11 +243,12 @@ function normalizedLifecyclePath(value) {
 }
 
 /** @param {string} directory @param {"claude"|"opencode"|"both"} runtimeTarget */
-function vendoredOwnershipPaths(directory, runtimeTarget) {
+function vendoredOwnership(directory, runtimeTarget) {
   const manifests = runtimeTarget === "both"
     ? [".opencode/.harness-owned-files.json", ".claude/.harness-owned-files.json"]
     : [runtimeTarget === "opencode" ? ".opencode/.harness-owned-files.json" : ".claude/.harness-owned-files.json"];
   const paths = new Set();
+  const retired = new Set();
   for (const manifest of manifests) {
     let parsed;
     try {
@@ -147,9 +260,18 @@ function vendoredOwnershipPaths(directory, runtimeTarget) {
       throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest}`);
     }
     for (const path of parsed.files) paths.add(normalizedLifecyclePath(path));
+    if (parsed.retired !== undefined && !Array.isArray(parsed.retired)) {
+      throw new Error(`invalid lifecycle retired-path manifest: ${manifest}`);
+    }
+    for (const path of parsed.retired ?? []) retired.add(normalizedLifecyclePath(path));
   }
   if (paths.size === 0) throw new Error("lifecycle ownership manifest declares no files");
-  return paths;
+  return { paths, retired };
+}
+
+/** @param {string} directory @param {"claude"|"opencode"|"both"} runtimeTarget */
+function vendoredOwnershipPaths(directory, runtimeTarget) {
+  return vendoredOwnership(directory, runtimeTarget).paths;
 }
 
 /** @param {string} directory */
@@ -243,6 +365,7 @@ function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
  *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"both") => { action: string, branch?: string, paths?: string[], url?: string },
  *   ship?: typeof shipPreparedLifecycle,
  *   syncCaller?: typeof syncCallerCheckout,
+ *   syncRuntime?: typeof syncCallerRuntimeOverlay,
  * }} input
  */
 export function runIsolatedLifecycleUpdate({
@@ -253,6 +376,7 @@ export function runIsolatedLifecycleUpdate({
   prepare = prepareVendoredLifecycle,
   ship = shipPreparedLifecycle,
   syncCaller = syncCallerCheckout,
+  syncRuntime = syncCallerRuntimeOverlay,
 }) {
   const lifecycle = createLifecycleClone(cwd);
   try {
@@ -267,7 +391,11 @@ export function runIsolatedLifecycleUpdate({
     const prepared = prepare(lifecycle.directory, runtimeTarget);
     const result = ship({ directory: lifecycle.directory, defaultBranch: lifecycle.defaultBranch, prepared });
     if (result.action !== "merged" && result.action !== "noop") return result;
-    return { ...result, callerSync: syncCaller({ cwd, defaultBranch: lifecycle.defaultBranch }) };
+    const callerSync = syncCaller({ cwd, defaultBranch: lifecycle.defaultBranch });
+    const callerRuntimeSync = callerSync.action === "synced"
+      ? { action: "not-needed", paths: [] }
+      : syncRuntime({ cwd, sourceDirectory: lifecycle.directory, runtimeTarget });
+    return { ...result, callerSync, callerRuntimeSync };
   } finally {
     lifecycle.cleanup();
   }

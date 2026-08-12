@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, syncCallerCheckout, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
+import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, syncCallerCheckout, syncCallerRuntimeOverlay, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
 
 const cliSource = readFileSync(fileURLToPath(new URL("./cli.mjs", import.meta.url)), "utf8");
 
@@ -308,6 +308,133 @@ test("syncCallerCheckout never switches a feature branch to main", () => {
   }
 });
 
+test("syncCallerRuntimeOverlay refreshes only exact harness cargo in a feature checkout", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-overlay-"));
+  const caller = join(root, "caller");
+  const source = join(root, "source");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--initial-branch=main", caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+    mkdirSync(join(caller, ".opencode", "plugin"), { recursive: true });
+    mkdirSync(join(caller, "src"), { recursive: true });
+    writeFileSync(join(caller, ".opencode", ".harness-version"), "v1\n");
+    writeFileSync(join(caller, ".opencode", "plugin", "official.ts"), "export const generation = 1\n");
+    writeFileSync(join(caller, ".opencode", "plugin", "local.ts"), "export const local = true\n");
+    writeFileSync(join(caller, "src", "product.js"), "operator work\n");
+    git(caller, ["add", "."]);
+    git(caller, ["commit", "-m", "base"]);
+    git(caller, ["switch", "-c", "feature/operator-work"]);
+    writeFileSync(join(caller, "src", "product.js"), "staged operator work\n");
+    git(caller, ["add", "src/product.js"]);
+    const stagedProduct = gitOut(caller, ["diff", "--cached", "--", "src/product.js"]);
+    const headBefore = gitOut(caller, ["rev-parse", "HEAD"]).trim();
+
+    mkdirSync(join(source, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(source, ".opencode", ".harness-version"), "v2\n");
+    writeFileSync(join(source, ".opencode", "plugin", "official.ts"), "export const generation = 2\n");
+    writeFileSync(join(source, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [
+        ".opencode/.harness-version",
+        ".opencode/.harness-owned-files.json",
+        ".opencode/plugin/official.ts",
+      ],
+      retired: [],
+    }));
+
+    assert.deepEqual(
+      syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
+      { action: "synced", paths: [".opencode/.harness-owned-files.json", ".opencode/.harness-version", ".opencode/plugin/official.ts"] },
+    );
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v2\n");
+    assert.equal(readFileSync(join(caller, ".opencode", "plugin", "official.ts"), "utf8"), "export const generation = 2\n");
+    assert.equal(readFileSync(join(caller, ".opencode", "plugin", "local.ts"), "utf8"), "export const local = true\n");
+    assert.equal(gitOut(caller, ["rev-parse", "HEAD"]).trim(), headBefore, "runtime refresh never moves the feature branch");
+    assert.equal(gitOut(caller, ["diff", "--cached", "--", "src/product.js"]), stagedProduct, "product staging remains exact");
+    assert.equal(gitOut(caller, ["status", "--porcelain=v1", "--", ".opencode/plugin/local.ts"]).trim(), "", "a local plugin is outside the runtime overlay");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncCallerRuntimeOverlay never overwrites a locally modified harness file", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-conflict-"));
+  const caller = join(root, "caller");
+  const source = join(root, "source");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  try {
+    execFileSync("git", ["init", "--initial-branch=main", caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+    mkdirSync(join(caller, ".opencode"), { recursive: true });
+    writeFileSync(join(caller, ".opencode", ".harness-version"), "v1-local-edit\n");
+    git(caller, ["add", "."]);
+    git(caller, ["commit", "-m", "base"]);
+    writeFileSync(join(caller, ".opencode", ".harness-version"), "operator edit\n");
+
+    mkdirSync(join(source, ".opencode"), { recursive: true });
+    writeFileSync(join(source, ".opencode", ".harness-version"), "v2\n");
+    writeFileSync(join(source, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/.harness-version", ".opencode/.harness-owned-files.json"],
+      retired: [],
+    }));
+
+    assert.deepEqual(
+      syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
+      { action: "skipped", reason: "local lifecycle files differ", paths: [".opencode/.harness-version"] },
+    );
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "operator edit\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncCallerRuntimeOverlay recognizes its prior overlay but stops for a later local edit", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-provenance-"));
+  const caller = join(root, "caller");
+  const source = join(root, "source");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const writeSource = (version) => {
+    mkdirSync(join(source, ".opencode"), { recursive: true });
+    writeFileSync(join(source, ".opencode", ".harness-version"), `${version}\n`);
+    writeFileSync(join(source, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/.harness-version", ".opencode/.harness-owned-files.json"],
+      retired: [],
+    }));
+  };
+  try {
+    execFileSync("git", ["init", "--initial-branch=main", caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+    mkdirSync(join(caller, ".opencode"), { recursive: true });
+    writeFileSync(join(caller, ".opencode", ".harness-version"), "v1\n");
+    git(caller, ["add", "."]);
+    git(caller, ["commit", "-m", "base"]);
+    git(caller, ["switch", "-c", "feature/operator-work"]);
+
+    writeSource("v2");
+    assert.equal(syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }).action, "synced");
+    writeSource("v3");
+    assert.equal(syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }).action, "synced");
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v3\n");
+
+    writeFileSync(join(caller, ".opencode", ".harness-version"), "operator edit\n");
+    writeSource("v4");
+    assert.deepEqual(
+      syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
+      { action: "skipped", reason: "local lifecycle files differ", paths: [".opencode/.harness-version"] },
+    );
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "operator edit\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runIsolatedLifecycleUpdate vendors in a clone then synchronizes active main", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-run-"));
   const remote = join(root, "remote.git");
@@ -361,11 +488,54 @@ test("runIsolatedLifecycleUpdate vendors in a clone then synchronizes active mai
       action: "merged",
       url: "https://example.test/pr/1",
       callerSync: { action: "synced" },
+      callerRuntimeSync: { action: "not-needed", paths: [] },
     });
     assert.equal(vendorTarget, shipTarget);
     assert.equal(existsSync(vendorTarget), false, "the temporary clone is always cleaned after the lifecycle run");
     assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v2\n");
     assert.equal(gitOut(caller, ["status", "--porcelain=v1"]), before, "caller product work remains untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate refreshes the runtime overlay when the caller is a feature branch", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-run-overlay-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    writeFileSync(join(seed, "product.txt"), "base\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+    let overlayInput = null;
+
+    const result = runIsolatedLifecycleUpdate({
+      cwd: caller,
+      ref: "v0.55.53",
+      runtimeTarget: "opencode",
+      runVendor: () => {},
+      prepare: () => ({ action: "committed", branch: "chore/harness-lifecycle-test", paths: [".opencode/.harness-version"] }),
+      ship: () => ({ action: "merged", url: "https://example.test/pr/overlay" }),
+      syncCaller: () => ({ action: "skipped", reason: "active branch is not the default branch" }),
+      syncRuntime: (input) => {
+        overlayInput = input;
+        return { action: "synced", paths: [".opencode/.harness-version"] };
+      },
+    });
+
+    assert.equal(overlayInput.cwd, caller);
+    assert.equal(overlayInput.runtimeTarget, "opencode");
+    assert.notEqual(overlayInput.sourceDirectory, caller, "the overlay copies from the verified lifecycle clone, never the caller");
+    assert.deepEqual(result.callerRuntimeSync, { action: "synced", paths: [".opencode/.harness-version"] });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

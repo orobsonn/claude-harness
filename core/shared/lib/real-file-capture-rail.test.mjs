@@ -41,6 +41,34 @@ test("OC DONE + valid stamp + empty violations → null allow", () => {
   assert.equal(d, null);
 });
 
+test("DONE_WITH_CONCERNS requires the same independent capture proof and can then count", () => {
+  const unverified = checkRealFileCaptureRail("feat", {
+    listHandRecordsForFeatureFn: listOf({
+      taskId: "t1",
+      record: { outcome: "DONE_WITH_CONCERNS", freezeCommitSha: "abc" },
+    }),
+    isAncestorFn: ancTrue,
+  });
+  assert.equal(unverified?.decision, "deny");
+  assert.match(unverified.reason, /capturedVerifiedAt/);
+
+  const verified = checkRealFileCaptureRail("feat", {
+    listHandRecordsForFeatureFn: listOf({
+      taskId: "t1",
+      record: {
+        outcome: "DONE_WITH_CONCERNS",
+        freezeCommitSha: "abc",
+        capturedVerifiedAt: "2026-07-01T00:00:00.000Z",
+        scopeViolations: [],
+        frozenViolations: [],
+      },
+    }),
+    isAncestorFn: ancTrue,
+    requireCaptureEvidence: true,
+  });
+  assert.equal(verified, null);
+});
+
 test("OC path record with mismatched internal identity remains a delivery deny", () => {
   const d = checkRealFileCaptureRail("feat", {
     listHandRecordsForFeatureFn: listOf({
