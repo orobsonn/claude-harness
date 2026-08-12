@@ -363,8 +363,9 @@ export function buildRoutingFromSlots(slots) {
       hands[t] = parsed.route;
     }
 
-    // test-author rides the eyes tier by default (oracle that makes cheap hands safe).
-    const testAuthorParsed = parseRouteValue(slots?.testAuthor ?? primaryRoute, "testAuthor");
+    // Test transcription is a write hand: default it to the strongest hand, while
+    // compliance remains the independent primary-eye evaluator.
+    const testAuthorParsed = parseRouteValue(slots?.testAuthor ?? hands.high, "testAuthor");
     if (!testAuthorParsed.ok) return testAuthorParsed;
 
     /** @type {Record<string, unknown>} */
@@ -437,7 +438,7 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
     planner: { model: "openai/gpt-5.6-sol" },
     "plan-reviewer": { model: "openai/gpt-5.6-sol" },
     adversary: { model: "openai/gpt-5.6-sol" },
-    compliance: { model: "openai/gpt-5.6-terra" },
+    compliance: { model: "openai/gpt-5.6-sol" },
     security: { model: "openai/gpt-5.6-sol" },
     executor: {
       tiers: {
@@ -453,7 +454,7 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
         high: { model: "openai/gpt-5.6-terra" },
       },
     },
-    "test-author": { model: "openai/gpt-5.6-sol" },
+    "test-author": { model: "openai/gpt-5.6-terra" },
     harvester: { model: "openai/gpt-5.6-luna" },
     shipper: { model: "openai/gpt-5.6-luna" },
   },

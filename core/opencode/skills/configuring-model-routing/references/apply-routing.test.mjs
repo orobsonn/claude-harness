@@ -40,6 +40,8 @@ test("CANONICAL_DEFAULT_ROUTING is valid once capabilities are derived", () => {
   assert.equal(validateRouting(built.routing).ok, true);
   // sanity: the three-layer architecture is intact
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.build.model, "openai/gpt-5.6-terra");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.compliance.model, "openai/gpt-5.6-sol");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles["test-author"].model, "openai/gpt-5.6-terra");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.security.model, "openai/gpt-5.6-sol");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.harvester.model, "openai/gpt-5.6-luna");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.executor.tiers.low.model, "openai/gpt-5.6-luna");
@@ -247,7 +249,7 @@ test("buildRoutingFromSlots accepts single evaluator without secondaryEye", () =
   assert.equal(ok.ok, true, ok.reason);
   assert.equal(ok.routing.roles.adversary.model, "openai/gpt-5.6-sol");
   assert.equal(ok.routing.roles.adversary.secondEyeModel, undefined);
-  assert.equal(ok.routing.roles["test-author"].model, "openai/gpt-5.6-sol");
+  assert.equal(ok.routing.roles["test-author"].model, "openai/gpt-5.6-terra");
 });
 
 test("replaceFrontmatterModel updates model line only", () => {
