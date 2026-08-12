@@ -233,6 +233,19 @@ After every durable phase transition, refresh the visual todo immediately. For `
 
 ---
 
+## Approved-plan continuity
+
+After the `plan-reviewer` returns **APPROVE**, the bound plan is the delivery contract for this feature. A same-contract engineering finding from an executor, compliance, adversary, security, or gate does **not** buy another planner or plan-reviewer cycle. Do not dispatch `planner` or `plan-reviewer` automatically after APPROVE; preserve the task DAG, locked tests, and approved product decisions.
+
+- If the evidence fits the **current task's `scope_paths`**, record its file:anchor and repair it through that task's normal executor/sniper/gate rail.
+- If the evidence fits a **pending task's `scope_paths`**, record it in `shared_context.md` with its file:anchor and carry it to that legal task when it becomes ready. `shared_context.md` is context only: it does not grant write authority or widen a task.
+- If the evidence is **outside every approved `scope_paths`** and does not make an approved AC, locked test, or normal supported flow impossible, record a concise open risk / follow-up issue and continue the approved delivery.
+- If it makes an approved AC or locked test impossible inside the authorized paths, it is a **plan-contract conflict**. Do not write outside scope and do not automatically re-plan; stop with the concrete evidence. A material security, privacy, auth, corruption, or irreversible-harm finding is also delivery-blocking — it cannot be downgraded to an open risk.
+
+Only an explicit operator decision that changes delivered product behavior can authorize a new plan. Engineering uncertainty by itself cannot expand an approved plan from nine tasks to eleven.
+
+---
+
 ## Context curation — the ICM layers (applies to every dispatch)
 
 Curate **layered** context per agent (budget ~2k–8k tokens/step), never the whole conversation.
@@ -280,8 +293,8 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | # | Step | Who / How |
 |---|---|---|
 | a | Pick executor tier | `executor-<task.complexity ?? task.severity>` (low/medium/high; `max`→high). If `complexity` absent, fall back to `severity`. Re-score a path via `complexity-scorer` tool if needed (one call/path). |
-| a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **fidelity mode** (pre-freeze: full-observable fidelity only, no green required). On fidelity **FAIL** (`partial` counts as FAIL), re-dispatch the same `test-author` with the feedback — **at most 2 `test-author` dispatches per `test_path`** in this pre-freeze gate (initial + exactly one re-dispatch; this is a fidelity-only rule, never a general retry authority). A provider/transient Task failure follows the bounded recovery ladder without asking the operator. On fidelity **PASS** — stamp disk marker **before** any executor spawn (see Fidelity-rail stamp below). Freeze the locked test, then proceed to implement. A further fidelity failure escalates the transcription to a stronger hand (see "Test-author fidelity escalation" right after this table). |
-| b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → resolve missing engineering context, repair the rail, or re-plan; ask only if the missing judgment changes product behavior. |
+| a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **`FIDELITY_TRANSCRIPTION` mode**: it checks only the literal pinned assertions and whether the test imports/runs; a direct assertion failure because production is not implemented yet is **expected red**, not a fidelity failure. On fidelity **FAIL**, re-dispatch the same `test-author` **once** with the named pinned assertion and literal transcription/import/setup/fixture defect. A provider/transient Task failure follows the bounded recovery ladder without asking the operator. On fidelity **PASS** — stamp disk marker **before** any executor spawn (see Fidelity-rail stamp below). Freeze the locked test, then proceed to implement. If the one correction still fails, use the bounded `fidelity_transcription_failed` outlet below — never a sniper. |
+| b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → resolve missing engineering context or repair the rail inside the approved task boundary; apply **Approved-plan continuity** above rather than re-planning automatically. Ask only if the missing judgment changes product behavior. |
 | c | Compliance | Dispatch `compliance` (read-only, bash allow) with **diff + ACs + locked_tests only** — NOT shared_context, NOT adversary findings. Reads back `pass \| partial \| fail`. |
 | d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary` **VIRGIN**, then attempt `adversary-family-2` only when `roles.adversary.secondEyeModel` is set — no prior verdicts, no compliance output, no shared_context — with task spec + `adversarial.focus` + diff. Every brief MUST require both passes and repo-relative `evidence: "file:anchor"`, using a function/exported symbol for code or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Primary issues use exactly `description`, `category`, `severity`, `scope`, `evidence`, and `fix_hint`; routing derives sniper tier from severity. Never ask for verdict/sweep/mechanism/tier fields. Zero findings is a **VALID result — never re-dispatch to hit a count**. A missing, malformed, or unanchored primary report is **NOT a pass — halt and escalate**. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
@@ -290,15 +303,14 @@ Initialize `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via ba
 | h | Record | Rewrite `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` **via bash** with the budget-capped knowledge ledger so far; adversary never reads it. The rewrite is read-modify-write: retain durable product decisions and open risks, then append this task's raw finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root **via bash** — it is the producer the harvester/`oc-recording-findings` consumes; if never written, the run's learnings are lost. |
 | i | Escalate | See escalation ladder below. |
 
-### Test-author fidelity escalation (compliance fidelity gate)
+### Test-author fidelity transcription
 
-When the **compliance fidelity gate** (step a′) does not reach PASS within the **2** permitted `test-author` dispatches for a `test_path`, escalate transcription to a stronger hand. This limit is scoped solely to locked-test fidelity, not a general OpenCode retry policy.
+`FIDELITY_TRANSCRIPTION` is not normal compliance and does not judge implementation. Its initial authoring pass plus **one correction** are the entire content-repair budget for one `test_path`; provider/transient Task failures use the existing recovery rail and do not consume that correction.
 
-- **Escalate to `sniper-high`, don't retry to death.** After the 2nd `test-author` fidelity FAIL, dispatch **`sniper-high`** against the already-written test file (with `[HARNESS_TASK_CONTEXT]`), handing it the compliance fidelity feedback as `fix_hint` plus the full pinned-assertion list. Map compliance prose ("Problemas encontrados" + `NÃO` rows) into per-assertion instructions. Frame the brief so restoring named assertions inside the existing file **is** the defect (sniper refuses ambiguous scope). Tier is fixed at high by design. After DONE, re-dispatch `compliance` in fidelity mode — only `pass` is PASS; `partial`/`fail` are FAIL. No file on disk → no escalation; go straight to CRITICAL EXCEPTION.
-- **CLOSE THE RE-GATE RAIL.** After a qualifying `sniper-high`/`sniper-medium` fix, the conductor explicitly calls native `mark` with `action: regate-pending`. The moment `compliance` returns fidelity **PASS**, call native `mark` with `action: regate-passed` + `task_id` + `sha` = HEAD. The independent compliance fidelity PASS is the re-gate of record for this rail.
-- **On PASS, resume the normal rail.** Stamp `fidelity_pass` via native `mark`, freeze the locked test, dispatch the executor.
-- **One extra attempt.** If the repaired transcription also fails fidelity — or `sniper-high` returns `BLOCKED`/`NEEDS_CONTEXT` — repair the stated engineering cause through the bounded recovery ladder, then repeat fidelity. Do not weaken the fidelity contract or make an unbounded re-dispatch loop; ask only if the repair would change product behavior.
-- **The fidelity limit applies only to fidelity verdicts** inside the pre-freeze gate. Provider/transient Task failure follows the bounded recovery ladder. Post-freeze maintenance edits are a different dispatch shape.
+- A fidelity FAIL must name one or more pinned assertions and one literal defect only: missing/altered assertion, parse/import/setup/fixture failure, or a test that never reaches the pinned assertion. It must not add criterion checks, critical-class coverage, production requirements, or a new test idea.
+- On the one correction's PASS, stamp `fidelity_pass`, freeze the test, and dispatch the executor.
+- If the correction still fails, stop that task as **`fidelity_transcription_failed`** with the test path, named pinned assertion, and literal evidence. Do not dispatch a sniper, executor, planner, or plan-reviewer; do not weaken the assertion. This is a concrete authoring defect, not authority to alter the approved plan.
+- Post-freeze maintenance edits are a separate dispatch shape: only `test-author` may alter a frozen test, followed by this same fidelity check.
 
 **Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), structural producers emit the curated events the drain already renders: plugins `obs-plan-write` / `obs-eye` / `obs-hand` plus classify `pipeline-type`. `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Plan-review observation comes from the structural eye producer; the conductor runs no observability CLI checkpoint.
 
@@ -329,7 +341,7 @@ Advance to the next task only when its gates are green.
 
 Two distinct concerns, never mixed: **transient failure** (the dispatch itself broke — automatic bounded recovery) and **implementation failure** (the executor ran and its work does not hold — **one tier up, once**). The `test-author` fidelity gate is neither — it has its own rule.
 
-**`test-author` fidelity gate (step a′) only:** a `test-author` FAIL at the compliance fidelity gate follows its own **2 dispatches per `test_path`** limit, then escalates transcription to `sniper-high` (§ Test-author fidelity escalation). Provider/transient failures use bounded recovery.
+**`test-author` fidelity gate (step a′) only:** an initial `test-author` fidelity FAIL receives one named correction; a second fidelity FAIL is `fidelity_transcription_failed` (§ Test-author fidelity transcription). It never escalates to a sniper, executor, planner, or plan-reviewer. Provider/transient failures use bounded recovery.
 
 **Task failures:** provider/transient failures are engineering. Preserve evidence and in-scope work, re-dispatch the same role once when it never started, then use the defined tier/replan path. Record each attempt; no generic or unbounded retry tally is allowed, and do not ask the operator.
 
@@ -346,7 +358,7 @@ Two distinct concerns, never mixed: **transient failure** (the dispatch itself b
 
 **Hand CONFIG_ERROR → repair rail (NOT a tier escalation):** when a hand dispatch fails precondition / never ran (e.g. missing fidelity_pass stamp, CONFIG_ERROR), repair its recorded precondition through the owning legal rail, then re-dispatch only after that rail is green. Do not bypass, weaken, or spoof a gate; do not surface this engineering fault to the operator.
 
-A fix bigger than surgical scope (re-architecture) is **not** a sniper job → re-dispatch `executor-<tier>` or split the task. Available **at most once per task**, and only when the failure is a plan defect. **Any split/re-plan that re-runs `planner` → `planner-recovery` persists the revised plan** (§ Phase 1). Never hand-write `execution-plan.json`. Re-run `validate-plan` before resuming executors.
+A fix bigger than surgical scope (re-architecture) is **not** a sniper job. Keep any in-scope repair with the approved task's executor rail. An out-of-scope repair follows **Approved-plan continuity**: it is a pending-task handoff, open risk, or plan-contract conflict — never an automatic split/re-plan after APPROVE. Never hand-write `execution-plan.json`.
 
 For a transient dispatch failure, make the bounded continuation decision inside the pipeline; never let a numeric OpenCode retry rule declare a pass or terminal outcome.
 

@@ -929,7 +929,8 @@ describe("parity-manifest", () => {
     assert.equal(res.ok, true, res.reason || "single-evaluator routing required");
     assert.equal(canonicalRouting.roles.adversary.model, "openai/gpt-5.6-sol");
     assert.equal(canonicalRouting.roles["plan-reviewer"].model, "openai/gpt-5.6-sol");
-    assert.equal(canonicalRouting.roles["test-author"].model, "openai/gpt-5.6-sol");
+    assert.equal(canonicalRouting.roles.compliance.model, "openai/gpt-5.6-sol");
+    assert.equal(canonicalRouting.roles["test-author"].model, "openai/gpt-5.6-terra");
   });
 
   it("t11-routing-validator: fails on manipulated model capabilities", () => {

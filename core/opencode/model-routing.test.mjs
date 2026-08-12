@@ -121,19 +121,22 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
       const routing = JSON.parse(readFileSync(routingPath, "utf8"));
       assert.equal(routing.version, 2);
       assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
-      assert.equal(routing.roles["test-author"].model, "openai/gpt-5.6-sol");
+      assert.equal(routing.roles["test-author"].model, "openai/gpt-5.6-terra");
+      assert.equal(routing.roles.compliance.model, "openai/gpt-5.6-sol");
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("approved defaults and the shared test-author agent rides the eyes tier", () => {
+test("approved defaults route test transcription to Terra and its fidelity eye to Sol", () => {
   for (const relative of ["opencode.json", "core/opencode/opencode.json.example"]) {
     const config = JSON.parse(readFileSync(join(repoRoot, relative), "utf8"));
     assert.equal(config.model, "openai/gpt-5.6-terra");
     assert.equal(config.small_model, "openai/gpt-5.6-terra");
   }
   const body = readFileSync(join(ocRoot, "agents", "test-author.md"), "utf8");
-  assert.match(body, /^model: openai\/gpt-5\.6-sol$/m);
+  const compliance = readFileSync(join(ocRoot, "agents", "compliance.md"), "utf8");
+  assert.match(body, /^model: openai\/gpt-5\.6-terra$/m);
+  assert.match(compliance, /^model: openai\/gpt-5\.6-sol$/m);
 });

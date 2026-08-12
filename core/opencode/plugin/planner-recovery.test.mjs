@@ -23,7 +23,7 @@ const modelStrategy = {
   hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" },
   planner: "openai/gpt-5.6-sol",
   "plan-reviewer": "openai/gpt-5.6-sol",
-  compliance: "openai/gpt-5.6-terra",
+  compliance: "openai/gpt-5.6-sol",
   adversary: "openai/gpt-5.6-sol",
   security: "openai/gpt-5.6-sol",
   shipper: "openai/gpt-5.6-luna",
