@@ -40,6 +40,7 @@ async function createObsEyeHooks(
   const { gateStatePath } = await import("../../shared/lib/path-helpers.mjs");
   const { reconcilePlannerStateFromDisk } = await import("../lib/planner-artifact.mjs");
   const { withGateStateLock } = await import("../lib/gate-state.mjs");
+  const { validateReviewReport } = await import("../../shared/lib/review-report-schema.mjs");
   const cwd = typeof dir === "string" && dir ? dir : process.cwd();
   const reviewCalls = new Map<string, { sessionId: string; featureId: string; binding: string }>();
 
@@ -67,8 +68,26 @@ async function createObsEyeHooks(
     ].join(":");
   }
 
+  /**
+   * OpenCode returns a completed Task as a transport envelope. Accept only the
+   * whole, unambiguous envelope; an embedded XML-looking string must never be
+   * allowed to influence a plan verdict.
+   */
+  function unwrapWholeTaskResult(response: string): string | null {
+    const match = response.match(
+      /^[ \t\r\n]*<task(?:[ \t\r\n]+[^<>]*)?>[ \t\r\n]*<task_result>([\s\S]*)<\/task_result>[ \t\r\n]*<\/task>[ \t\r\n]*$/,
+    );
+    if (!match) return null;
+    const body = match[1];
+    if (/<\/?task(?:[ \t\r\n>])|<\/?task_result(?:[ \t\r\n>])/.test(body)) return null;
+    return body;
+  }
+
   function strictPlanReviewVerdict(response: string): "APPROVE" | "REVISE" | null {
-    const source = response.trimStart();
+    const taskLike = /^[ \t\r\n]*<task(?:[ \t\r\n>])/.test(response);
+    const unwrapped = taskLike ? unwrapWholeTaskResult(response) : response;
+    if (unwrapped === null) return null;
+    const source = unwrapped.trimStart();
     if (!source.startsWith("{")) return null;
     let depth = 0;
     let quoted = false;
@@ -85,8 +104,8 @@ async function createObsEyeHooks(
       else if (char === "{") depth += 1;
       else if (char === "}" && --depth === 0) {
         try {
-          const verdict = JSON.parse(source.slice(0, index + 1))?.verdict;
-          return verdict === "APPROVE" || verdict === "REVISE" ? verdict : null;
+          const validated = validateReviewReport("plan-reviewer", JSON.parse(source.slice(0, index + 1)));
+          return validated.ok ? validated.report.verdict : null;
         } catch {
           return null;
         }

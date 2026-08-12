@@ -102,6 +102,74 @@ test("plan-reviewer APPROVE records the verdict only for the bound plan it revie
   });
 });
 
+test("plan-reviewer Task wrapper records an APPROVE verdict from a live-shaped response", async () => {
+  await withOutbox(async ({ root }) => {
+    const { statePath } = seedBoundPlan(root);
+    const hooks = await createObsEyeHooks(root);
+    const call = taskCall(
+      "plan-reviewer",
+      '<task id="ses-child" state="completed">\n<task_result>\n{"verdict":"APPROVE","findings":[]}\n\nPlano consistente.\n</task_result>\n</task>',
+    );
+    call.input.callID = "call-live-shaped-review";
+    await hooks["tool.execute.before"](call.input, call.output);
+    await hooks["tool.execute.after"](call.input, call.output);
+
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "APPROVE");
+  });
+});
+
+test("plan-reviewer Task wrapper records a schema-valid REVISE verdict", async () => {
+  await withOutbox(async ({ root }) => {
+    const { statePath } = seedBoundPlan(root);
+    const hooks = await createObsEyeHooks(root);
+    const call = taskCall(
+      "plan-reviewer",
+      '<task id="ses-child" state="completed">\r\n<task_result>\r\n{"verdict":"REVISE","findings":[{"area":"scope","severity":"high","task_id":"task-1","problem":"Evidence: src/index.ts:run — task scope omits the writer.","planner_instruction":"Add the writer to task-1 scope_paths."}]}\r\nResumo.\r\n</task_result>\r\n</task>\r\n',
+    );
+    call.input.callID = "call-live-shaped-revise";
+    await hooks["tool.execute.before"](call.input, call.output);
+    await hooks["tool.execute.after"](call.input, call.output);
+
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "REVISE");
+  });
+});
+
+test("plan-reviewer verdict wrapper with trailing text remains unstamped", async () => {
+  await withOutbox(async ({ root }) => {
+    const { statePath } = seedBoundPlan(root);
+    const hooks = await createObsEyeHooks(root);
+    const call = taskCall(
+      "plan-reviewer",
+      '<task id="ses-child" state="completed"><task_result>{"verdict":"APPROVE"}</task_result></task> unrelated',
+    );
+    call.input.callID = "call-malformed-live-review";
+    await hooks["tool.execute.before"](call.input, call.output);
+    await hooks["tool.execute.after"](call.input, call.output);
+
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
+  });
+});
+
+test("plan-reviewer stamps neither malformed Task transport nor non-canonical review reports", async () => {
+  const malformed = [
+    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task> suffix',
+    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task><task id="two"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
+    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
+    '<task id="one"><task_result>{"verdict":"APPROVE","findings":"not-an-array"}</task_result></task>',
+  ];
+  for (const [index, response] of malformed.entries()) {
+    await withOutbox(async ({ root }) => {
+      const { statePath } = seedBoundPlan(root);
+      const hooks = await createObsEyeHooks(root);
+      const call = taskCall("plan-reviewer", response);
+      call.input.callID = `call-malformed-${index}`;
+      await hooks["tool.execute.before"](call.input, call.output);
+      await hooks["tool.execute.after"](call.input, call.output);
+      assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
+    });
+  }
+});
+
 test("a late plan-reviewer result cannot stamp a replacement plan", async () => {
   await withOutbox(async ({ root }) => {
     const { statePath } = seedBoundPlan(root);
