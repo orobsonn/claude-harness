@@ -122,15 +122,23 @@ async function createObsEyeHooks(
         const ids = extractTaskIds(args);
         if (!isEyeRole(ids.role) || isHandRole(ids.role)) return;
         const planned = eventForEyeRole(ids.role, "", { planExists: true });
-        if (planned?.type !== "plan-reviewed" || typeof ids.featureId !== "string") return;
+        if (planned?.type !== "plan-reviewed") return;
         const sessionId = typeof input?.sessionID === "string" ? input.sessionID : "";
         const callId = typeof input?.callID === "string" ? input.callID : "";
         if (!sessionId || !callId) return;
         const reconciled = reconcilePlannerStateFromDisk(cwd, sessionId);
+        // Real OpenCode Task calls carry role + prompt, but no feature_id argument.
+        // The reconciled bound state is the canonical source in that shape.
+        const featureId = typeof ids.featureId === "string" && ids.featureId.trim()
+          ? ids.featureId
+          : typeof reconciled.state?.feature_id === "string"
+            ? reconciled.state.feature_id
+            : "";
+        if (!featureId) return;
         const binding = reconciled.ok && !reconciled.validatorFailed
-          ? bindingStamp(reconciled.state, ids.featureId)
+          ? bindingStamp(reconciled.state, featureId)
           : null;
-        if (binding) reviewCalls.set(`${sessionId}:${callId}`, { sessionId, featureId: ids.featureId, binding });
+        if (binding) reviewCalls.set(`${sessionId}:${callId}`, { sessionId, featureId, binding });
       } catch {
         /* an unavailable receipt must never block a review */
       }

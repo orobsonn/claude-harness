@@ -118,6 +118,23 @@ test("plan-reviewer Task wrapper records an APPROVE verdict from a live-shaped r
   });
 });
 
+test("plan-reviewer records the live Task shape when feature_id is only in canonical state", async () => {
+  await withOutbox(async ({ root }) => {
+    const { statePath } = seedBoundPlan(root);
+    const hooks = await createObsEyeHooks(root);
+    const call = taskCall(
+      "plan-reviewer",
+      '<task id="ses-child" state="completed"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
+    );
+    delete call.output.args.feature_id;
+    call.input.callID = "call-live-no-feature-id";
+    await hooks["tool.execute.before"](call.input, call.output);
+    await hooks["tool.execute.after"](call.input, call.output);
+
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "APPROVE");
+  });
+});
+
 test("plan-reviewer Task wrapper records a schema-valid REVISE verdict", async () => {
   await withOutbox(async ({ root }) => {
     const { statePath } = seedBoundPlan(root);
