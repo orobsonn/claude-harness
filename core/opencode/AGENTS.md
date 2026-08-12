@@ -133,12 +133,12 @@ Any match in plan `scope_paths` forces FULL mode.
 | planner | `openai/gpt-5.6-sol` |
 | plan-reviewer | `openai/gpt-5.6-sol` |
 | adversary | `openai/gpt-5.6-sol` |
-| compliance | `openai/gpt-5.6-terra` |
+| compliance | `openai/gpt-5.6-sol` |
 | security | `openai/gpt-5.6-sol` |
 | executor/sniper low | `openai/gpt-5.6-luna` |
 | executor/sniper medium | `openai/gpt-5.6-luna` |
 | executor/sniper high | `openai/gpt-5.6-terra` |
-| test-author | `openai/gpt-5.6-sol` |
+| test-author | `openai/gpt-5.6-terra` |
 | harvester / shipper | `openai/gpt-5.6-luna` |
 
 **Single evaluator** on plan-reviewer and adversary. Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.
