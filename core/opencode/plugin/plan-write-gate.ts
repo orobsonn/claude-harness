@@ -203,6 +203,9 @@ async function createPlanWriteGateHooks(
         const resolvePlannerIdentity = deps.resolvePlannerIdentity ?? resolveOfficialPlannerIdentity;
         const planner = await resolvePlannerIdentity(root, input, { client: deps.client, args });
         if (planner?.ok && planner.role === "planner") {
+          if (rawPaths.length === 0) {
+            throw new Error("[plan-write-gate] Blocked: planner authoring exposed no parseable target paths.");
+          }
           if (canonicalTargets.length !== rawPaths.length) {
             throw new Error("[plan-write-gate] Blocked: planner may author only canonical execution plans.");
           }
