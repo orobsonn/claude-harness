@@ -43,8 +43,29 @@ function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, 
   const planBlock = `[HARNESS_BOUND_PLAN sha256=${snapshotHash}]\n${serializedPlan}\n[/HARNESS_BOUND_PLAN]`
   const hasReservedToken = existingPrompt.includes("[HARNESS_BOUND_PLAN") || existingPrompt.includes("[/HARNESS_BOUND_PLAN]")
   if (!hasReservedToken) return { ok: true, prompt: `${existingPrompt}\n\n${planBlock}`.trim() }
-  const opens = [...existingPrompt.matchAll(/(?:^|\n)\[HARNESS_BOUND_PLAN sha256=([0-9a-f]{64})\](?=\r?\n)/g)]
+  // A retained Task prompt can be cut after the opener (with or without a newline) before
+  // OpenCode invokes this hook again. That opener is recoverable only when it names this
+  // already-validated binding and is the sole reserved marker in the terminal transport tail.
+  const opens = [...existingPrompt.matchAll(/(?:^|\n)\[HARNESS_BOUND_PLAN sha256=([0-9a-f]{64})\](?=$|\r?\n)/g)]
   const closes = [...existingPrompt.matchAll(/(?:^|\n)\[\/HARNESS_BOUND_PLAN\](?=$|\r?\n)/g)]
+  if (opens.length === 1 && closes.length === 0) {
+    const open = opens[0]
+    const start = (open.index ?? -1) + (open[0].startsWith("\n") ? 1 : 0)
+    const opener = `[HARNESS_BOUND_PLAN sha256=${open[1]}]`
+    const prefix = start >= 0 ? existingPrompt.slice(0, start) : ""
+    const tail = start >= 0 ? existingPrompt.slice(start + opener.length) : ""
+    if (
+      start >= 0 &&
+      open[1] === snapshotHash &&
+      !prefix.includes("[HARNESS_BOUND_PLAN") &&
+      !prefix.includes("[/HARNESS_BOUND_PLAN]") &&
+      !tail.includes("[HARNESS_BOUND_PLAN") &&
+      !tail.includes("[/HARNESS_BOUND_PLAN]")
+    ) {
+      return { ok: true, prompt: `${existingPrompt.slice(0, start)}${planBlock}` }
+    }
+    return { ok: false }
+  }
   if (opens.length !== 1 || closes.length !== 1) return { ok: false }
   const open = opens[0]
   const start = (open.index ?? -1) + (open[0].startsWith("\n") ? 1 : 0)
@@ -54,7 +75,15 @@ function normalizeBoundPlanPrompt(existingPrompt: string, snapshotHash: string, 
   // The binding/artifact above is authoritative; replace this one complete stale transport block
   // rather than rejecting a valid review solely because its old hash no longer matches.
   const suffix = existingPrompt.slice(closeStart + "[/HARNESS_BOUND_PLAN]".length)
-  if (start < 0 || closeStart < start || !/^[ \t\r\n]*$/.test(suffix)) return { ok: false }
+  const opener = `[HARNESS_BOUND_PLAN sha256=${open[1]}]`
+  const prefix = start >= 0 ? existingPrompt.slice(0, start) : ""
+  const body = start >= 0 ? existingPrompt.slice(start + opener.length, closeStart) : ""
+  if (
+    start < 0 || closeStart < start ||
+    prefix.includes("[HARNESS_BOUND_PLAN") || prefix.includes("[/HARNESS_BOUND_PLAN]") ||
+    body.includes("[HARNESS_BOUND_PLAN") || body.includes("[/HARNESS_BOUND_PLAN]") ||
+    !/^[ \t\r\n]*$/.test(suffix)
+  ) return { ok: false }
   return { ok: true, prompt: `${existingPrompt.slice(0, start)}${planBlock}` }
 }
 

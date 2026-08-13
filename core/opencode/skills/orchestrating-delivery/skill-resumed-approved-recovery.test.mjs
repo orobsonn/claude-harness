@@ -1,8 +1,6 @@
 /**
- * @description A resumed feature can briefly surface a stale planner failure while
- * its canonical APPROVE binding is restored.  The host then rejects a planner
- * dispatch on purpose; the conductor must keep the same session moving on the
- * approved plan rather than buying another planning/review cycle.
+ * @description An approved plan is the normal delivery contract, but a concrete
+ * in-flow contradiction may require a minimal revision in the same session.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,12 +12,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const build = readFileSync(join(here, "..", "..", "agents", "build.md"), "utf8");
 
-test("resumed approved-plan refusal continues the same delivery without a new planning cycle", () => {
+test("an approved plan defaults to delivery and reserves planner revision for a concrete contradiction", () => {
   for (const document of [skill, build]) {
-    assert.match(document, /resumed approved plan must continue delivery/i);
     assert.match(document, /same session/i);
-    assert.match(document, /do not dispatch .*planner.*plan-reviewer|do not dispatch .*plan-reviewer.*planner/i);
-    assert.match(document, /next legal unfinished task/i);
+    assert.match(document, /concrete.*(?:locked test|gate|executor|compliance|security)/i);
+    assert.match(document, /minimum.*revision/i);
+    assert.match(document, /product behavior.*contract/i);
   }
 });
 

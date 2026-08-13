@@ -66,18 +66,6 @@ async function createPlannerRecoveryHooks(
     return result.ok ? result.path : null
   }
 
-  function approvedBindingStamp(state: Record<string, unknown>): string | null {
-    const binding = state.planner_plan_binding as Record<string, unknown> | undefined
-    if (
-      state.planner_status !== "usable" || state.plan_review_verdict !== "APPROVE" ||
-      !binding || binding.session_id !== state.session_id || binding.feature_id !== state.feature_id ||
-      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_file_hash !== "string" ||
-      typeof binding.snapshot_hash !== "string" || typeof binding.file_hash !== "string" ||
-      typeof binding.semantic_hash !== "string"
-    ) return null
-    return [state.session_id, state.feature_id, binding.snapshot_path, binding.snapshot_file_hash, binding.snapshot_hash, binding.file_hash, binding.semantic_hash].join(":")
-  }
-
   /**
    * @description A legacy resumed run can have an intact bound plan but no persisted review
    * verdict.  Its next legal phase is review, not a planner rewrite to match new routing.
@@ -147,9 +135,6 @@ async function createPlannerRecoveryHooks(
         throw new Error("[planner-recovery] planner dispatch requires sessionID and callID")
       }
       const reconciled = reconcilePlannerStateFromDisk(root, sessionId)
-      const approvedBeforeDispatch = reconciled.ok && !reconciled.validatorFailed
-        ? approvedBindingStamp(reconciled.state as Record<string, unknown>)
-        : null
       const awaitingReviewBeforeDispatch = reconciled.ok && !reconciled.validatorFailed
         ? resumedBindingAwaitingReviewStamp(reconciled.state as Record<string, unknown>)
         : null
@@ -173,10 +158,6 @@ async function createPlannerRecoveryHooks(
             model: active.model,
             expectedModelStrategy: active.expected_model_strategy,
           }).state
-        }
-        if (approvedBeforeDispatch && approvedBindingStamp(previous) === approvedBeforeDispatch) {
-          claimError = "resumed approved plan must continue delivery; do not dispatch planner"
-          return previous
         }
         if (awaitingReviewBeforeDispatch && resumedBindingAwaitingReviewStamp(previous) === awaitingReviewBeforeDispatch) {
           claimError = "resumed bound plan awaits plan review; do not dispatch planner"
