@@ -130,3 +130,18 @@ test("spec re-attacks verify prior findings and direct consequences instead of w
   assert.match(body, /spec re-attack[\s\S]{0,300}prior material findings[\s\S]{0,300}direct consequences/i);
   assert.match(body, /rare hypothesis[\s\S]{0,180}open risk/i);
 });
+
+test("plan re-reviews verify the repair instead of serializing new edge-case hunts", () => {
+  const reviewer = agentContract(readFileSync(join(AGENTS_DIR, "plan-reviewer.md"), "utf8"));
+  const delivery = readFileSync(join(OC_ROOT, "skills", "orchestrating-delivery", "SKILL.md"), "utf8");
+
+  assert.match(delivery, /Review kind: REVISION[\s\S]{0,450}prior findings/i);
+  assert.match(reviewer, /revision review[\s\S]{0,450}prior finding[\s\S]{0,450}direct consequences/i);
+  assert.match(delivery, /Review kind: REVISION[\s\S]{0,550}(changed|added|removed)[\s\S]{0,550}(tasks|scope_paths|locked_tests)/i);
+  assert.match(reviewer, /altered[\s\S]{0,180}(added|removed|changed)[\s\S]{0,220}direct consequences/i);
+  assert.match(reviewer, /Do \*\*not\*\*[\s\S]{0,120}new[\s\S]{0,120}(hypothetical|edge-case|boundary)/i);
+  assert.match(reviewer, /APPROVE[\s\S]{0,250}prior finding/i);
+  assert.match(reviewer, /INITIAL only[\s\S]{0,200}two mandatory, separate passes/i);
+  assert.match(reviewer, /REVISION[\s\S]{0,250}do not run these categories as a fresh audit/i);
+  assert.doesNotMatch(reviewer, /Runtime counters never decide whether the plan is reviewed again/i);
+});
