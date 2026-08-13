@@ -26,20 +26,25 @@ async function createObsPlanWriteHooks(
   const { eventForPlanPath, obsAppend, dedupeByType, resolveHookArgs } = await import(
     "../lib/obs-emit.mjs"
   );
-  const { sessionFeatureFromPlanPath } = await import("./lib/plan-path-session.mjs");
+  const { featureFromPlanPath } = await import("./lib/plan-path-feature.mjs");
   return {
     "tool.execute.after": async (input: any, output: any) => {
       try {
         const args = resolveHookArgs(input, output);
-        let filePath = extractPath(args);
+        const filePath = extractPath(args);
         if (!isWriteTool(input?.tool)) return;
         if (!filePath && isWriteTool(input?.tool)) return;
         const ev = filePath ? eventForPlanPath(filePath) : null;
-        // Canonical execution-plan writes are owner-only (`planner-recovery`); this observer
-        // must never consume the global plan-created dedupe key for a forbidden model write.
-        if (!ev || ev.type === "plan-created") return;
-        const sessionFeature = sessionFeatureFromPlanPath(filePath);
-        if (sessionFeature) Object.assign(ev, { session_id: sessionFeature.sessionId, feature_id: sessionFeature.featureId });
+        if (!ev) return;
+        const feature = featureFromPlanPath(filePath);
+        const sessionId = typeof input?.sessionID === "string" ? input.sessionID : "";
+        if (feature) Object.assign(ev, { ...(sessionId ? { session_id: sessionId } : {}), feature_id: feature.featureId });
+        if (ev.type === "plan-created") {
+          try {
+            const parsed = JSON.parse(typeof args?.content === "string" ? args.content : "null");
+            if (Array.isArray(parsed?.tasks)) Object.assign(ev, { tasks: parsed.tasks.length });
+          } catch { /* event remains factual at path level */ }
+        }
         obsAppend(ev, { dedupe: dedupeByType });
       } catch {
         /* fail-open */

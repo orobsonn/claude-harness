@@ -1,6 +1,6 @@
 /**
  * @description OC plan-write-gate — anti-forge + call-keyed dispatch scope rail for official write tools.
- * tool.execute.before: deny throws [plan-write-gate]. Canonical plans are host-written only.
+ * tool.execute.before: deny throws [plan-write-gate]. Canonical plans are planner-written only.
  * Factory accepts projectRoot / { directory, worktree } so live gate-state load works
  * when an exact dispatch record is stamped; missing session/role/state → scope rail off, anti-forge still runs.
  */
@@ -16,6 +16,12 @@ function isWriteTool(name: unknown): boolean {
   const bare = n.split(/[.:/]/).pop() ?? n;
   return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file", "delete", "delete_file"].includes(bare) ||
     n.endsWith(".write") || n.endsWith(".edit") || n.endsWith(".delete") || n.endsWith("_write") || n.endsWith("_edit") || n.endsWith("_delete");
+}
+
+function isPlanAuthoringTool(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const bare = name.toLowerCase().split(/[.:/]/).pop() ?? "";
+  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file"].includes(bare);
 }
 
 function isPatchTool(name: unknown): boolean {
@@ -79,15 +85,83 @@ function extractOfficialWritePaths(args: Record<string, unknown> | null, extract
   return paths;
 }
 
+function unwrapSdkData(value: any): any {
+  return value && typeof value === "object" && "data" in value ? value.data : value;
+}
+
+/** @description Authenticate one planner Write/Edit against official child and parent Task metadata. */
+async function resolveOfficialPlannerIdentity(
+  projectRoot: string,
+  input: any,
+  options: { client?: any; reader?: any } = {},
+): Promise<{ ok: true; role: "planner"; parentSessionId: string } | { ok: false; reason: string }> {
+  const childSessionId = typeof input?.sessionID === "string" ? input.sessionID : "";
+  const callId = typeof input?.callID === "string" ? input.callID : "";
+  if (!childSessionId || !callId) return { ok: false, reason: "runtime sessionID/callID unavailable" };
+  const reader = options.reader ?? {
+    getSession: async (sessionId: string) => unwrapSdkData(await options.client?.session?.get?.({ path: { id: sessionId }, query: { directory: projectRoot } })),
+    getMessages: async (sessionId: string) => unwrapSdkData(await options.client?.session?.messages?.({ path: { id: sessionId }, query: { directory: projectRoot } })),
+  };
+  let session: any;
+  let childMessages: any;
+  try {
+    session = await reader.getSession(childSessionId);
+    childMessages = await reader.getMessages(childSessionId);
+  } catch {
+    return { ok: false, reason: "official planner metadata unavailable" };
+  }
+  const parentSessionId = session?.id === childSessionId && typeof session?.parentID === "string" ? session.parentID : "";
+  if (!parentSessionId) return { ok: false, reason: "planner child session has no official parent" };
+  const writeMatches: any[] = [];
+  for (const bundle of Array.isArray(childMessages) ? childMessages : []) {
+    for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
+      if (
+        bundle?.info?.role === "assistant" && bundle?.info?.agent === "planner" &&
+        bundle?.info?.sessionID === childSessionId && typeof bundle?.info?.parentID === "string" &&
+        part?.type === "tool" && part?.callID === callId && part?.sessionID === childSessionId &&
+        part?.messageID === bundle.info.id && String(part?.tool).toLowerCase() === String(input?.tool).toLowerCase()
+      ) writeMatches.push({ bundle, part });
+    }
+  }
+  if (writeMatches.length !== 1) return { ok: false, reason: "official planner write call is missing or ambiguous" };
+  const childParent = (Array.isArray(childMessages) ? childMessages : []).filter((bundle: any) =>
+    bundle?.info?.id === writeMatches[0].bundle.info.parentID && bundle?.info?.role === "user" &&
+    bundle?.info?.sessionID === childSessionId && bundle?.info?.agent === "planner",
+  );
+  if (childParent.length !== 1) return { ok: false, reason: "official planner message relationship conflicts" };
+  let parentMessages: any;
+  try {
+    parentMessages = await reader.getMessages(parentSessionId);
+  } catch {
+    return { ok: false, reason: "official parent Task metadata unavailable" };
+  }
+  const dispatches: any[] = [];
+  for (const bundle of Array.isArray(parentMessages) ? parentMessages : []) {
+    for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
+      const toolName = String(part?.tool ?? "").toLowerCase();
+      if (
+        bundle?.info?.role === "assistant" && bundle?.info?.sessionID === parentSessionId &&
+        part?.type === "tool" && ["task", "task_tool", "tasktool"].includes(toolName) &&
+        part?.sessionID === parentSessionId && part?.messageID === bundle.info.id &&
+        part?.state?.status === "running" && part?.state?.input?.subagent_type === "planner" &&
+        part?.state?.metadata?.sessionId === childSessionId
+      ) dispatches.push(part);
+    }
+  }
+  return dispatches.length === 1
+    ? { ok: true, role: "planner", parentSessionId }
+    : { ok: false, reason: "official parent planner Task is missing or ambiguous" };
+}
+
 /**
  * @description Builds plan-write-gate hooks (async load of pure decide + resolveHookArgs).
  * When projectRoot is set, loads gate-state by sessionId for the scope rail.
  */
 async function createPlanWriteGateHooks(
   projectRoot?: string,
-  deps: { client?: any; identityReader?: any; resolveRuntimeIdentity?: any; requireHeartbeat?: boolean } = {},
+  deps: { client?: any; identityReader?: any; resolveRuntimeIdentity?: any; resolvePlannerIdentity?: any; requireHeartbeat?: boolean } = {},
 ): Promise<Pick<Hooks, "tool.execute.before">> {
-  const { decide, throwIfDenied, extractWritePath } = await import(
+  const { decide, throwIfDenied, extractWritePath, isCanonicalPlanPath } = await import(
     "./lib/plan-write-decide.mjs"
   );
   const { resolveHookArgs } = await import("../lib/obs-emit.mjs");
@@ -108,17 +182,30 @@ async function createPlanWriteGateHooks(
         : patchTool
           ? extractPatchPaths(args)
           : extractOfficialWritePaths(args, extractWritePath);
-      // R14 is an owner fact: deny canonical model writes before resolving identity,
-      // scope, heartbeat, or gate-state. Bash matching is deliberately literal best-effort.
+      const canonicalTargets = rawPaths.filter((rawPath) => isCanonicalPlanPath(rawPath));
+      let plannerAuthenticated = false;
+      // Bash and patch never author the canonical plan. Write/Edit require an official
+      // planner child identity; model-supplied agent aliases are not authority.
       if (bashTool) {
         throwIfDenied(decide({ args }));
         // Bash has only literal anti-forge friction. Resolving a writing-hand
         // identity here can reject read-only verification commands in eye sessions.
         return;
-      } else {
+      } else if (patchTool || canonicalTargets.length === 0 || !isPlanAuthoringTool(input?.tool)) {
         for (const rawPath of rawPaths) {
           throwIfDenied(decide({ args: { filePath: rawPath } }));
         }
+      } else {
+        const resolvePlannerIdentity = deps.resolvePlannerIdentity ?? resolveOfficialPlannerIdentity;
+        const planner = await resolvePlannerIdentity(root, input, { client: deps.client, args });
+        if (!planner?.ok || planner.role !== "planner") {
+          throw new Error(`[plan-write-gate] Blocked: official planner identity required (${String(planner?.reason ?? "missing")}).`);
+        }
+        plannerAuthenticated = true;
+        for (const rawPath of rawPaths) {
+          throwIfDenied(decide({ args: { filePath: rawPath } }, { actingRole: "planner" }));
+        }
+        if (canonicalTargets.length === rawPaths.length) return;
       }
       const { resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
       const { normalizeProjectPath } = await import("../lib/dispatch-scope.mjs");
@@ -173,7 +260,7 @@ async function createPlanWriteGateHooks(
         const decision = normalized.ok
           ? decide(
               { args: { filePath: checkedPath }, tool_input: { file_path: checkedPath } },
-              { actingRole: actingRole || undefined, isSubagent, dispatchRecord: record },
+              { actingRole: plannerAuthenticated && canonicalTargets.includes(rawPath) ? "planner" : actingRole || undefined, isSubagent, dispatchRecord: record },
             )
           : { allow: false, reason: `[plan-write-gate] Blocked: '${rawPath}' is not a safe project path (${normalized.reason}).` };
         const scopeViolation = !normalized.ok || /OUTSIDE|armed hand dispatch|acting role identity/i.test(decision.reason ?? "");
@@ -191,7 +278,7 @@ export const PlanWriteGate: Plugin = async ({ directory, worktree, client }: any
   const root = resolveProjectRoot(directory, worktree);
   return createPlanWriteGateHooks(root, { client });
 };
-Object.defineProperty(PlanWriteGate, "testApi", { value: Object.freeze({ createPlanWriteGateHooks }) });
+Object.defineProperty(PlanWriteGate, "testApi", { value: Object.freeze({ createPlanWriteGateHooks, resolveOfficialPlannerIdentity }) });
 
 /** @description OC load contract — default export required. */
 export default PlanWriteGate;

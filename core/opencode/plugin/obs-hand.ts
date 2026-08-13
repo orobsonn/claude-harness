@@ -22,7 +22,7 @@ async function createObsHandHooks(dir?: string): Promise<Pick<Hooks, "tool.execu
 
   function emitExecuting(sessionId: string, fid: string, taskId: string) {
     try {
-      const planPath = join(planDirForRun(cwd, sessionId, fid) || "", "execution-plan.json");
+      const planPath = join(planDirForRun(cwd, fid) || "", "execution-plan.json");
       if (!planPath || !existsSync(planPath)) return;
       const indexed = taskIndexFromPlan(planPath, taskId);
       const event = indexed ? eventForTaskExecuting(indexed) : null;

@@ -25,39 +25,42 @@ import {
   defaultHasFidelityPass,
 } from "./run-hand.mjs";
 import { mergeGateState } from "../lib/gate-state.mjs";
-import { semanticPlanHash } from "../lib/planner-artifact.mjs";
 
-const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
+const MODEL_STRATEGY = { hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
 
 function seedBoundTask(root, sessionId, featureId, taskId, scopePaths = ["src/"]) {
   const plan = {
     feature_id: featureId,
-    kind: "full",
     mode: "full",
     model_strategy: MODEL_STRATEGY,
+    final_review: { compliance: true, adversary: true },
+    demo: { type: "smoke", scenarios_from_refs: ["#uj-1"] },
     tasks: [{
       id: taskId,
+      title: "Implement hand",
+      description: "Implement the scoped hand task.",
+      depends_on: [],
       severity: "medium",
       complexity: "medium",
       scope_paths: scopePaths,
+      resolved_judgments: { scope: "fixed" },
       criterion_refs: ["#ac-1"],
       locked_tests: [{ id: "lt-1", path: "tests/foo.test.mjs", assertion: "Given foo, When run, Then ok" }],
+      adversarial: { enabled: false, focus: [] },
     }],
   };
-  const hash = semanticPlanHash(plan);
-  const snapshotBytes = Buffer.from(JSON.stringify(plan));
-  const snapshotFileHash = crypto.createHash("sha256").update(snapshotBytes).digest("hex");
   const stateDir = join(root, ".opencode", "plans", ".state", sessionId);
-  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${snapshotFileHash}.json`;
-  mkdirSync(join(stateDir, "bound-plans"), { recursive: true });
+  const planDir = join(root, ".opencode", "plans", featureId);
+  mkdirSync(planDir, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
   mkdirSync(join(root, "src"), { recursive: true });
-  writeFileSync(join(root, snapshotRel), snapshotBytes);
+  writeFileSync(join(planDir, "execution-plan.json"), JSON.stringify(plan));
   writeFileSync(join(stateDir, "gate-state.json"), JSON.stringify({
     session_id: sessionId,
     feature_id: featureId,
-    planner_status: "usable",
+    mode: "FULL",
+    classified: true,
     delivery_status: "ready",
-    planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: snapshotRel, snapshot_hash: hash, snapshot_file_hash: snapshotFileHash },
   }));
 }
 

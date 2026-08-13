@@ -160,7 +160,7 @@ Default hands use the OpenAI Luna → Terra ladder. Reconfigure by typing the `/
 
 | Concept | Path |
 |---|---|
-| Plans | `.opencode/plans/<sessionID>-<feature_id>/` |
+| Plans | `.opencode/plans/<feature_id>/execution-plan.json` |
 | Gate state | `.opencode/plans/.state/<session_id>/` |
 | Hand records | `.opencode/plans/.state/hand-records/<feature>/<sessionId>/<task>.json` |
 | Findings buffer | project root `findings.md` (ephemeral) |
@@ -182,7 +182,7 @@ marker/state sidecar.
 
 ## 11. Folder law — .opencode/ (OpenCode vendored harness)
 
-- Plans, gate-state, hand-records under `.opencode/plans/` and `.opencode/plans/.state/` are run-ephemeral (deleted at harvest); only execution-plan.json and shared_context.md (pre-delete) live in the feature subdir.
+- The stable execution plan lives under `.opencode/plans/<feature_id>/`; gate-state and hand-records under `.opencode/plans/.state/` are session-ephemeral.
 - Edit source under `core/opencode/` (agents, skills, AGENTS.md); `.opencode/` at project root is the vendored runtime copy (do not edit directly in a vendored project).
 
 See also: core/opencode/skills/orchestrating-delivery/SKILL.md (runtime paths)
@@ -202,11 +202,11 @@ dispatch, the first plugin to `throw` wins, so **discovery order decides which g
 operator actually sees deny**. The chain that gates a real Task dispatch runs, in order:
 
 ```
-planner-recovery → plan-gate → obs-hand → entry-gate
+plan-gate → obs-hand → entry-gate
 ```
 
 Note `entry-gate.ts` — the plugin usually thought of as "the gate" — runs **last**. A rename
-that changes any of these 5 files' relative alphabetical position silently reorders the
+that changes any of these files' relative alphabetical position silently reorders the
 chain. `plugin-dispatch-order.test.mjs` locks this sequence as a regression tripwire; update
 this section and that test together, only after confirming a reorder is intentional.
 

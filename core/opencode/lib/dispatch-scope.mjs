@@ -3,11 +3,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { gateStatePath } from "../../shared/lib/path-helpers.mjs";
+import { executionPlanPath, gateStatePath } from "../../shared/lib/path-helpers.mjs";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { acquireLock, releaseLock } from "./gate-state.mjs";
-import { readBoundPlanSnapshot } from "./planner-artifact.mjs";
-import { isCompleteExpectedModelStrategy } from "../../shared/lib/model-strategy-projection.mjs";
+import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { snapshotWorktreeBaseline } from "./worktree-baseline.mjs";
 import { isExecutorRole, isSniperRole, isTestAuthorRole } from "./roles.mjs";
 
@@ -124,10 +123,10 @@ function canonicalStringList(projectRoot, value, requireNonempty) {
 
 function validDispatchRecord(projectRoot, record) {
   if (!record || typeof record !== "object" || Array.isArray(record)) return false;
-  const required = [record.parent_session_id, record.dispatch_call_id, record.feature_id, record.task_id, record.role, record.snapshot_hash, record.claimed_at];
+  const required = [record.parent_session_id, record.dispatch_call_id, record.feature_id, record.task_id, record.role, record.plan_hash, record.claimed_at];
   if (!required.every((value) => typeof value === "string" && value.length > 0)) return false;
   if (!safeSegment(record.parent_session_id) || !isSafeFeatureId(record.feature_id) || !isSafeTaskId(record.task_id) || !writingHand(record.role)) return false;
-  if (!/^[0-9a-f]{64}$/.test(record.snapshot_hash)) return false;
+  if (!/^[0-9a-f]{64}$/.test(record.plan_hash)) return false;
   if (record.child_session_id !== null && !safeSegment(record.child_session_id)) return false;
   const claimedAt = Date.parse(record.claimed_at);
   if (!Number.isFinite(claimedAt) || new Date(claimedAt).toISOString() !== record.claimed_at) return false;
@@ -165,34 +164,37 @@ export function readDispatchRecord(projectRoot, { parentSessionId, callId }) {
   return { ok: true, record, path: resolved.path };
 }
 
-/** @description Read one exact task from the content-addressed immutable planner snapshot. */
-export function readCanonicalTaskFromSnapshot(projectRoot, state, taskId) {
-  if (state?.planner_status !== "usable") return { ok: false, reason: "planner_status usable required" };
-  const binding = state?.planner_plan_binding;
-  if (!binding || typeof binding !== "object") return { ok: false, reason: "bound planner snapshot required" };
-  if (typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" || typeof binding.snapshot_file_hash !== "string") return { ok: false, reason: "bound planner snapshot identity missing" };
-  if (binding.session_id !== state.session_id || binding.feature_id !== state.feature_id) return { ok: false, reason: "bound planner snapshot identity mismatch" };
-  const expectedDir = path.resolve(projectRoot, ".opencode", "plans", ".state", String(state.session_id), "bound-plans");
-  const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
-  const expectedPath = path.join(expectedDir, `${binding.snapshot_file_hash}.json`);
-  const expectedRelative = path.relative(projectRoot, expectedPath).split(path.sep).join("/");
-  if (snapshotPath !== expectedPath || binding.snapshot_path !== expectedRelative) return { ok: false, reason: "bound planner snapshot path is not canonical content-addressed identity" };
-  const expectedModelStrategy = isCompleteExpectedModelStrategy(binding.expected_model_strategy)
-    ? binding.expected_model_strategy
-    : isCompleteExpectedModelStrategy(state?.planner_last_attempt?.expected_model_strategy)
-      ? state.planner_last_attempt.expected_model_strategy
-      : undefined;
-  const snapshot = readBoundPlanSnapshot(snapshotPath, expectedModelStrategy === undefined ? {} : { expectedModelStrategy });
-  if (!snapshot.valid || snapshot.semanticHash !== binding.snapshot_hash || snapshot.fileHash !== binding.snapshot_file_hash || snapshot.plan?.feature_id !== state.feature_id) return { ok: false, reason: "bound planner snapshot integrity failed" };
-  const matches = (Array.isArray(snapshot.plan.tasks) ? snapshot.plan.tasks : []).filter((task) => task && task.id === taskId);
-  if (matches.length !== 1) return { ok: false, reason: "canonical task id missing or ambiguous in bound plan" };
-  return { ok: true, featureId: state.feature_id, taskId, task: matches[0], snapshotHash: snapshot.semanticHash };
+/** @description Read and structurally validate one exact task from the feature-stable plan. */
+export function readCanonicalTask(projectRoot, featureId, taskId) {
+  if (!isSafeFeatureId(featureId) || !isSafeTaskId(taskId)) return { ok: false, reason: "canonical feature or task identity invalid" };
+  const resolved = executionPlanPath({ projectRoot, runtime: "opencode", featureId });
+  if (!resolved.ok) return resolved;
+  let bytes;
+  let plan;
+  try {
+    bytes = fs.readFileSync(resolved.path);
+    plan = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    return { ok: false, reason: error && typeof error === "object" && error.code === "ENOENT" ? "stable plan missing" : "stable plan unreadable" };
+  }
+  if (!plan || typeof plan !== "object" || Array.isArray(plan) || plan.feature_id !== featureId) return { ok: false, reason: "stable plan feature mismatch" };
+  let validation;
+  try {
+    validation = validatePlan(plan, { expect: "full", expectedModelStrategy: plan.model_strategy });
+  } catch {
+    return { ok: false, reason: "stable plan validation failed internally" };
+  }
+  if (!validation?.ok) return { ok: false, reason: `stable plan invalid: ${(validation?.errors ?? []).join("; ")}` };
+  const matches = (Array.isArray(plan.tasks) ? plan.tasks : []).filter((task) => task && task.id === taskId);
+  if (matches.length !== 1) return { ok: false, reason: "canonical task id missing or ambiguous in stable plan" };
+  const planHash = crypto.createHash("sha256").update(bytes).digest("hex");
+  return { ok: true, featureId, taskId, task: matches[0], planHash, planPath: resolved.path };
 }
 
-/** @description Verify the immutable planner binding and derive the canonical task scope. */
-export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) {
+/** @description Derive one writing hand's scope from the validated stable plan. */
+export function canonicalDispatchFromPlan(projectRoot, featureId, taskId, role) {
   if (!writingHand(role)) return { ok: false, reason: "role is not a writing hand" };
-  const bound = readCanonicalTaskFromSnapshot(projectRoot, state, taskId);
+  const bound = readCanonicalTask(projectRoot, featureId, taskId);
   if (!bound.ok) return bound;
   const scopePaths = [];
   for (const item of Array.isArray(bound.task.scope_paths) ? bound.task.scope_paths : []) {
@@ -218,9 +220,9 @@ export function canonicalDispatchFromSnapshot(projectRoot, state, taskId, role) 
   }
   if (isTestAuthorRole(role)) {
     if (frozenPaths.length === 0) return { ok: false, reason: "test-author requires canonical locked test paths" };
-    return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths: frozenPaths, allowedWrites: [], frozenPaths: [], snapshotHash: bound.snapshotHash };
+    return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths: frozenPaths, allowedWrites: [], frozenPaths: [], planHash: bound.planHash };
   }
-  return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, frozenPaths, snapshotHash: bound.snapshotHash };
+  return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, frozenPaths, planHash: bound.planHash };
 }
 
 function loadCanonicalState(projectRoot, sessionId) {
@@ -235,7 +237,7 @@ function sameDispatch(left, right) {
   return left.parent_session_id === right.parent_session_id &&
     left.dispatch_call_id === right.dispatch_call_id &&
     left.feature_id === right.feature_id && left.task_id === right.task_id && left.role === right.role &&
-    left.snapshot_hash === right.snapshot_hash && JSON.stringify(left.scope_paths) === JSON.stringify(right.scope_paths) &&
+    left.plan_hash === right.plan_hash && JSON.stringify(left.scope_paths) === JSON.stringify(right.scope_paths) &&
     JSON.stringify(left.allowed_writes) === JSON.stringify(right.allowed_writes) &&
     JSON.stringify(left.frozen_paths ?? []) === JSON.stringify(right.frozen_paths ?? []);
 }
@@ -262,7 +264,7 @@ function claimResolvedDispatch(projectRoot, { sessionId, callId, role, taskId, n
       feature_id: canonical.featureId, task_id: canonical.taskId, role,
       scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
       frozen_paths: canonical.frozenPaths ?? [],
-      snapshot_hash: canonical.snapshotHash, claimed_at: new Date(now).toISOString(),
+      plan_hash: canonical.planHash, claimed_at: new Date(now).toISOString(),
       ...(worktreeBaseline?.entries?.length ? { worktree_baseline: worktreeBaseline } : {}),
     };
     const resolved = dispatchRecordPath(realRoot, sessionId, callId);
@@ -288,7 +290,9 @@ export function claimActiveDispatch(projectRoot, { sessionId, callId, role, task
     const loaded = loadCanonicalState(realRoot, sessionId);
     if (!loaded.ok) return loaded;
     if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
-    return canonicalDispatchFromSnapshot(realRoot, loaded.state, taskId, role);
+    if (loaded.state.classified !== true || !["LIGHT", "FULL"].includes(loaded.state.mode)) return { ok: false, reason: "classified LIGHT or FULL required" };
+    if (!isSafeFeatureId(loaded.state.feature_id)) return { ok: false, reason: "gate-state feature identity invalid" };
+    return canonicalDispatchFromPlan(realRoot, loaded.state.feature_id, taskId, role);
   });
 }
 
@@ -345,11 +349,11 @@ export function claimDispatchForRuntime(projectRoot, args = {}, { env = process.
       }
       scopePaths.push(item);
     }
-    const snapshotHash = crypto.createHash("sha256").update(JSON.stringify({
+    const planHash = crypto.createHash("sha256").update(JSON.stringify({
       authority: "fix-mode-v1", session_id: sessionId, feature_id: featureId,
       task_id: taskId, role, reviewed_sha: authority.reviewedSha, scope_paths: scopePaths,
     })).digest("hex");
-    return { ok: true, featureId, taskId, scopePaths, allowedWrites: [], snapshotHash, reviewedSha: authority.reviewedSha };
+    return { ok: true, featureId, taskId, scopePaths, allowedWrites: [], planHash, reviewedSha: authority.reviewedSha };
   });
 }
 
@@ -453,4 +457,4 @@ export function removeDispatchRecord(projectRoot, { sessionId, callId }) {
   return removed.ok ? { ok: true, removed: Boolean(removed.removed) } : removed;
 }
 
-export default { bindChildSession, canonicalDispatchFromSnapshot, claimActiveDispatch, claimDispatchForRuntime, dispatchRecordPath, normalizeProjectPath, readBoundDispatchForChild, readCanonicalTaskFromSnapshot, readDispatchRecord, removeDispatchRecord, resolveFixModeScopeAuthority };
+export default { bindChildSession, canonicalDispatchFromPlan, claimActiveDispatch, claimDispatchForRuntime, dispatchRecordPath, normalizeProjectPath, readBoundDispatchForChild, readCanonicalTask, readDispatchRecord, removeDispatchRecord, resolveFixModeScopeAuthority };

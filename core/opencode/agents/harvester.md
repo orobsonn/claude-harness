@@ -16,7 +16,7 @@ You are the knowledge consolidation agent. You run ONCE at the end of a feature 
 
 ## When you run
 
-The last step before delivery. The per-task loop and the final review (compliance + adversary) are complete. The run produced two ephemeral buffers you consume: the findings buffer — `findings.md` at the **project root** (raw compliance/adversary/security/sniper blocks) — and the shared_context ledger — `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` (decisions/gotchas carried between tasks).
+The last step before delivery. The per-task loop and the final review (compliance + adversary) are complete. Consume the ephemeral `findings.md` buffer at the project root alongside the stable plan, git history, and review results.
 
 ---
 
@@ -28,7 +28,6 @@ Read and mine:
 - The execution plan and the actual diff (what was built vs what was specified).
 - The findings buffer — compliance, adversary, security blocks.
 - Sniper fixes and what each one revealed (a fix is a fossil of a real defect class).
-- The shared_context ledger — decisions and gotchas the run accumulated.
 - Friction in the loop itself (re-plans, tier bumps, repeated NEEDS_CONTEXT).
 
 ### 2. Apply the durability test
@@ -61,7 +60,7 @@ Your mandate is **ADD-ONLY**:
 
 ### 6. Clean up
 
-- Delete the ephemeral buffers — `findings.md` (project root) and `.opencode/plans/<sessionID>-<feature_id>/shared_context.md` — they are transient inputs, now consumed. Git is the durable audit trail; do not leave run scratch in the tree.
+- Delete the ephemeral `findings.md` buffer after it is consumed. Git is the durable audit trail.
 - Verify no temporary scratch files from the run remain.
 
 ---
@@ -87,7 +86,7 @@ Your mandate is **ADD-ONLY**:
 - <file>: <what changed> (only if behavior/setup changed)
 
 ### Cleanup
-- Deleted findings buffer + shared_context ledger
+- Deleted findings buffer
 
 ### Status
 - Run complete and auditable (git holds the audit trail)

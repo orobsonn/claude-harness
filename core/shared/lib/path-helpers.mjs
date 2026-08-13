@@ -1,4 +1,4 @@
-/** @description Path builders returning PathResult only. Never throws. OC planDir = sessionId-featureId; Claude = featureId only. Rejects unsafe ids with ok:false. */
+/** @description Path builders returning PathResult only. Never throws. Feature plans are stable across sessions. */
 
 import {
   isSafeFeatureId,
@@ -47,14 +47,19 @@ export function planDir(roots) {
   }
   const root = plansRoot(roots)
   if (!root.ok) return root
-  if (roots.runtime === 'opencode') {
-    if (!roots.sessionId || !isSafeSessionId(roots.sessionId)) {
-      return { ok: false, reason: 'invalid sessionId' }
-    }
-    return { ok: true, path: `${root.path}/${roots.sessionId}-${roots.featureId}` }
-  }
-  // claude
   return { ok: true, path: `${root.path}/${roots.featureId}` }
+}
+
+/** @description Stable feature plan path shared by Claude Code and OpenCode. */
+export function executionPlanPath(roots) {
+  const bad = invalidRoots(roots)
+  if (bad) return bad
+  if (!roots.featureId || !isSafeFeatureId(roots.featureId)) {
+    return { ok: false, reason: 'invalid featureId' }
+  }
+  const root = plansRoot(roots)
+  if (!root.ok) return root
+  return { ok: true, path: `${root.path}/${roots.featureId}/execution-plan.json` }
 }
 
 export function gateStateDir(roots) {

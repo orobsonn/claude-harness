@@ -1,7 +1,6 @@
 /** @description Single-evaluator gate-state shape and persisted legacy compatibility tests. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import {
   DUAL_STATUS,
   DUAL_STATUS_VALUES,
@@ -9,27 +8,8 @@ import {
   isDualStatusEnum,
   mergeGateStatePatch,
   normalizeDualStatus,
-  readDualStatus,
   validateGateStateDualFields,
 } from "./gate-state-shape.mjs";
-
-function redactedVendoredGateState(fixture) {
-  return JSON.parse(fs.readFileSync(new URL(`./fixtures/oc-gate-state/${fixture}/gate-state.json`, import.meta.url), "utf8"));
-}
-
-test("#584 reads redacted real-shape vendored gate-state maps without treating them as stale or corrupt", () => {
-  const adversaryOnly = redactedVendoredGateState("adversary-both");
-  assert.equal(adversaryOnly.session_id, "ses_fixture_adversary_both");
-  assert.deepEqual(adversaryOnly.dual_status, { adversary: "both" });
-  assert.equal(validateGateStateDualFields(adversaryOnly).ok, true);
-  assert.equal(readDualStatus(adversaryOnly), DUAL_STATUS.DONE);
-
-  const bothPhases = redactedVendoredGateState("both-phases-both");
-  assert.equal(bothPhases.session_id, "ses_fixture_both_phases");
-  assert.deepEqual(bothPhases.dual_status, { plan_review: "both", adversary: "both" });
-  assert.equal(validateGateStateDualFields(bothPhases).ok, true);
-  assert.equal(readDualStatus(bothPhases), DUAL_STATUS.DONE);
-});
 
 test("current dual_status writes are limited to done and pending", () => {
   assert.deepEqual([...DUAL_STATUS_VALUES].sort(), ["done", "pending"]);

@@ -32,7 +32,7 @@ export function decidePlanGate(input = {}, { validatePlanFn = validatePlan } = {
           ok: false,
           decision: "deny",
           reason:
-            "[plan-gate] Blocked: plan is stub kind — planner returns JSON and planner-recovery overwrites the stub with the full plan before executors.",
+            "[plan-gate] Blocked: plan is stub kind — planner must write a full stable plan before downstream dispatch.",
           details: { kind: "stub" },
         };
       }

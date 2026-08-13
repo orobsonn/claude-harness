@@ -85,7 +85,7 @@ type Roots = {
 |---|---|
 | `runtimeDirName(runtime)` | `".claude"` \| `".opencode"` |
 | `plansRoot(roots)` | `<project>/<runtimeDir>/plans` |
-| `planDir(roots)` | Claude: `.../plans/<featureId>` · OC: `.../plans/<sessionId>-<featureId>` (require both ids for OC) |
+| `planDir(roots)` | Claude and OC: `.../plans/<featureId>` (stable across sessions) |
 | `gateStateDir(roots)` | `.../plans/.state/<sessionId>` |
 | `gateStatePath(roots)` | `.../gate-state.json` |
 | `handRecordPath(roots, taskId)` | PathResult → `{runtimeDir}/plans/.state/hand-records/<featureId>/<sessionId>/<taskId>.json` when `sessionId` present (OC default); Claude may use `<featureId>/<taskId>.json` if single-session-per-feature legacy — **OC must include sessionId** to avoid cross-session collision. Requires safe featureId + safe sessionId + safe taskId. |

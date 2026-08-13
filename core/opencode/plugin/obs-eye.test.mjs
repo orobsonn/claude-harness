@@ -1,7 +1,6 @@
 /** @description OC obs-eye mirrors the CC lane's curated, fail-open eye observability. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +10,6 @@ import { obsEye } from "./obs-eye.ts";
 
 const { createObsEyeHooks } = obsEye.testApi;
 import { eventsPathFor, readEvents } from "../../shared/lib/obs-append.mjs";
-import { semanticPlanHash } from "../lib/plan-hash.mjs";
 
 const SESSION = "ses-obs-eye";
 const FEATURE = "obs-eye";
@@ -42,36 +40,6 @@ async function withOutbox(run) {
   }
 }
 
-function seedBoundPlan(root) {
-  const plan = {
-    feature_id: FEATURE,
-    kind: "full",
-    mode: "full",
-    model_strategy: {
-      hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
-      planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance",
-      adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester",
-    },
-    tasks: [{ id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/index.ts"], criterion_refs: ["#ac-1"], locked_tests: [], no_tests: true }],
-  };
-  const raw = Buffer.from(JSON.stringify(plan));
-  const fileHash = crypto.createHash("sha256").update(raw).digest("hex");
-  const planPath = path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`, "execution-plan.json");
-  const snapshotPath = path.join(root, ".opencode", "plans", ".state", SESSION, "bound-plans", `${fileHash}.json`);
-  const statePath = path.join(root, ".opencode", "plans", ".state", SESSION, "gate-state.json");
-  fs.mkdirSync(path.dirname(planPath), { recursive: true });
-  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
-  fs.writeFileSync(planPath, raw);
-  fs.writeFileSync(snapshotPath, raw);
-  const binding = {
-    session_id: SESSION, feature_id: FEATURE,
-    snapshot_path: path.relative(root, snapshotPath), snapshot_hash: semanticPlanHash(plan), snapshot_file_hash: fileHash,
-    semantic_hash: semanticPlanHash(plan), file_hash: fileHash, expected_model_strategy: plan.model_strategy,
-  };
-  fs.writeFileSync(statePath, JSON.stringify({ session_id: SESSION, feature_id: FEATURE, mode: "FULL", planner_status: "usable", planner_plan_binding: binding }));
-  return { statePath, binding };
-}
-
 test("plan-reviewer appends the curated verdict without mutating task metadata", async () => {
   await withOutbox(async ({ root, metaPath }) => {
     const hooks = await createObsEyeHooks(root);
@@ -86,143 +54,13 @@ test("plan-reviewer appends the curated verdict without mutating task metadata",
   });
 });
 
-test("plan-reviewer APPROVE records the verdict only for the bound plan it reviewed", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath, binding } = seedBoundPlan(root);
-
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall("plan-reviewer", '{"verdict":"APPROVE","findings":[]}');
-    call.input.callID = "call-approved-review";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    assert.equal(state.plan_review_verdict, "APPROVE");
-    assert.equal(state.planner_plan_binding.snapshot_file_hash, binding.snapshot_file_hash);
-  });
-});
-
-test("plan-reviewer Task wrapper records an APPROVE verdict from a live-shaped response", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall(
-      "plan-reviewer",
-      '<task id="ses-child" state="completed">\n<task_result>\n{"verdict":"APPROVE","findings":[]}\n\nPlano consistente.\n</task_result>\n</task>',
-    );
-    call.input.callID = "call-live-shaped-review";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "APPROVE");
-  });
-});
-
-test("plan-reviewer records the live Task shape when feature_id is only in canonical state", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall(
-      "plan-reviewer",
-      '<task id="ses-child" state="completed"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
-    );
-    delete call.output.args.feature_id;
-    call.input.callID = "call-live-no-feature-id";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "APPROVE");
-  });
-});
-
-test("plan-reviewer Task wrapper records a schema-valid REVISE verdict", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall(
-      "plan-reviewer",
-      '<task id="ses-child" state="completed">\r\n<task_result>\r\n{"verdict":"REVISE","findings":[{"area":"scope","severity":"high","task_id":"task-1","problem":"Evidence: src/index.ts:run — task scope omits the writer.","planner_instruction":"Add the writer to task-1 scope_paths."}]}\r\nResumo.\r\n</task_result>\r\n</task>\r\n',
-    );
-    call.input.callID = "call-live-shaped-revise";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, "REVISE");
-  });
-});
-
-test("plan-reviewer verdict wrapper with trailing text remains unstamped", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall(
-      "plan-reviewer",
-      '<task id="ses-child" state="completed"><task_result>{"verdict":"APPROVE"}</task_result></task> unrelated',
-    );
-    call.input.callID = "call-malformed-live-review";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
-  });
-});
-
-test("plan-reviewer stamps neither malformed Task transport nor non-canonical review reports", async () => {
-  const malformed = [
-    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task> suffix',
-    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task><task id="two"><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
-    '<task id="one"><task_result>{"verdict":"APPROVE","findings":[]}</task_result><task_result>{"verdict":"APPROVE","findings":[]}</task_result></task>',
-    '<task id="one"><task_result>{"verdict":"APPROVE","findings":"not-an-array"}</task_result></task>',
-  ];
-  for (const [index, response] of malformed.entries()) {
-    await withOutbox(async ({ root }) => {
-      const { statePath } = seedBoundPlan(root);
-      const hooks = await createObsEyeHooks(root);
-      const call = taskCall("plan-reviewer", response);
-      call.input.callID = `call-malformed-${index}`;
-      await hooks["tool.execute.before"](call.input, call.output);
-      await hooks["tool.execute.after"](call.input, call.output);
-      assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
-    });
-  }
-});
-
-test("a late plan-reviewer result cannot stamp a replacement plan", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall("plan-reviewer", "Verdict: APPROVE");
-    call.input.callID = "call-stale-review";
-    await hooks["tool.execute.before"](call.input, call.output);
-    const replaced = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    replaced.planner_plan_binding.snapshot_file_hash = "a".repeat(64);
-    fs.writeFileSync(statePath, JSON.stringify(replaced));
-    await hooks["tool.execute.after"](call.input, call.output);
-
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
-  });
-});
-
-test("narrative verdict text never stamps plan approval", async () => {
-  await withOutbox(async ({ root }) => {
-    const { statePath } = seedBoundPlan(root);
-    const hooks = await createObsEyeHooks(root);
-    const call = taskCall("plan-reviewer", "I cannot APPROVE this plan yet.");
-    call.input.callID = "call-narrative";
-    await hooks["tool.execute.before"](call.input, call.output);
-    await hooks["tool.execute.after"](call.input, call.output);
-    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).plan_review_verdict, undefined);
-  });
-});
-
 test("adversary is spec-scoped before a plan and a raw eye after a full plan", async () => {
   await withOutbox(async ({ root, metaPath }) => {
     const hooks = await createObsEyeHooks(root);
     const first = taskCall("adversary", '{"issues":[]}');
     await hooks["tool.execute.after"](first.input, first.output);
 
-    const planDir = path.join(root, ".opencode", "plans", `${SESSION}-${FEATURE}`);
+    const planDir = path.join(root, ".opencode", "plans", FEATURE);
     fs.mkdirSync(planDir, { recursive: true });
     fs.writeFileSync(
       path.join(planDir, "execution-plan.json"),

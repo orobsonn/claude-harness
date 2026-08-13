@@ -96,6 +96,13 @@ Does the request require writing, changing, or deleting code or configuration?
 
 ### Step 2 — Classify QUICK / LIGHT / FULL
 
+**Explicit stable-plan resume:** when the operator names an existing plan, resolve
+`.opencode/plans/<feature_id>/execution-plan.json`, run `validate-plan`, and use that plan's own
+`feature_id` plus uppercase `mode` for `classify`. This is continuation, not a fresh estimate: do not
+reinterpret its mode from the new one-line resume request and do not run brainstorming, planner, or
+plan-reviewer again. If the named file is missing or structurally invalid, report that concrete problem;
+do not silently create a replacement plan.
+
 **INTERACTIVE:** classify only once you have enough clarity. **Ask clarifying questions until ambiguity is gone — do not guess.**
 
 **AUTONOMOUS:** classify deterministically from the trigger plus investigation. Choose the smallest
@@ -171,11 +178,14 @@ classify({ mode, feature_id })
 - `mode`: `QUICK` | `LIGHT` | `FULL` — **never** `no-ceremony` (Step 1 already stopped without classify)
 - `feature_id`: kebab-case slug from the request (e.g. `fix-capture-verified-marker`)
 
-This writes the plan stub + gate-state stamps that entry-gate / plan-gate consume. **Do not skip on a delivery path.**
+This writes only session triage state and returns the stable plan path
+`.opencode/plans/<feature_id>/execution-plan.json`. It never creates, discovers, adopts, or reviews a
+plan. **Do not skip on a delivery path.**
 
-**Approved plan resumed:** when `metadata.action` is `resume-approved-plan`, load `oc-orchestrating-delivery` and start at the first unfinished delivery task. **Do not load `oc-brainstorming`, dispatch `planner`, or dispatch `plan-reviewer` again.** A plain `resume` restores an unfinished ceremony; follow the normal route from its pending phase.
-
-**Bound plan awaiting legacy review:** when `metadata.action` is `resume-bound-plan-review`, load `oc-orchestrating-delivery` and dispatch **one `plan-reviewer`** against the literal `metadata.plan_path`. The binding already proves the exact plan bytes; do **not** load `oc-brainstorming`, call `validate-plan` against current routing, or dispatch `planner`. `APPROVE` continues delivery; `REVISE` is the only result that returns to the planner rail.
+When the operator explicitly asks to resume a named existing plan, read that stable file and the current
+git/files evidence, then continue its unfinished work. Do not dispatch brainstorming, planner, or
+plan-reviewer again unless the operator requests a new review or `validate-plan` reports that the file is
+structurally invalid.
 
 **Once per delivery session+feature.** Host `classify` is escalate-only after the first successful **delivery** stamp: same mode is a no-op; downgrade (e.g. LIGHT→QUICK) and feature-switch under QUICK/LIGHT/FULL are denied. A prior **no-ceremony** stamp (if any legacy path left one) does **not** pin `feature_id` — the next delivery classify may be `fresh` with a new feature. **Never** re-call `classify` mid-delivery to “unstick” a review cap or provider error — that is QUICK laundering and delivery rails will deny the ship.
 
@@ -183,13 +193,16 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 
 ### Step 6 — Route
 
+**Explicit resume overrides the fresh-delivery rows below.** If the operator named an existing stable
+plan and Step 5 found that valid file, load `oc-orchestrating-delivery` at the first unfinished task.
+Do not load brainstorming and do not dispatch planner or plan-reviewer again. The stable plan plus the
+current checkout is the context, exactly as in Claude Code.
+
 | Mode | Action |
 |---|---|
 | **QUICK** | `build` edits the fix directly itself (or routes to the artisan skill for craft, Step 2.1) — **no plan, no `executor-*` dispatch**. `entry-gate` hard-blocks any executor/sniper dispatch while mode is QUICK ("mode 'QUICK' forbids executor-low — classify LIGHT or FULL BEFORE dispatching any delivery agent"), so a direct `build` edit (it holds `edit: allow`) is QUICK's only legal path — see `build.md`'s QUICK exception. Cheap rails + commit via `oc-committing-changes`. **No** `oc-orchestrating-delivery`, no brainstorming, no full loop. |
 | **LIGHT** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` LIGHT. |
 | **FULL** | Load `oc-brainstorming` (HEADLESS branch if headless), then `oc-orchestrating-delivery` FULL. |
-
-The resumed-feature rule overrides this table.
 
 ---
 

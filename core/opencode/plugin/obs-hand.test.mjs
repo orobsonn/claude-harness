@@ -12,8 +12,7 @@ import { execFileSync } from "node:child_process"
 import { obsHand } from "./obs-hand.ts"
 
 const { createObsHandHooks } = obsHand.testApi
-import { readPlannerArtifact, writeBoundPlanSnapshot } from "../lib/planner-artifact.mjs"
-const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }
+const MODEL_STRATEGY = { hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" }
 const savedObservabilityRunPath = process.env.HARNESS_OBSERVABILITY_RUN_PATH
 const hadObservabilityRunPath = Object.prototype.hasOwnProperty.call(process.env, "HARNESS_OBSERVABILITY_RUN_PATH")
 before(() => { delete process.env.HARNESS_OBSERVABILITY_RUN_PATH })
@@ -85,39 +84,36 @@ test("lt-oh-markerless-observes: markerless dispatch is observed without creatin
     fs.mkdirSync(stateDir, { recursive: true })
     const plan = {
       feature_id: featureId,
-      kind: "full",
       mode: "full",
       model_strategy: MODEL_STRATEGY,
+      final_review: { compliance: true, adversary: true },
+      demo: { type: "smoke", scenarios_from_refs: ["#uj-1"] },
       tasks: [
         {
           id: taskId,
+          title: "Observe hand",
+          description: "Observe one hand without claiming scope.",
+          depends_on: [],
           severity: "medium",
           complexity: "high",
           scope_paths: ["core/opencode/plugin/"],
+          resolved_judgments: { observation: "fail-open" },
           criterion_refs: ["#ac-1.5"],
           locked_tests: [{ id: "lt-1", path: "core/opencode/plugin/obs-hand.test.mjs", assertion: "Given plan, When gated, Then ok" }],
+          adversarial: { enabled: false, focus: [] },
         },
       ],
     }
-    const planDir = path.join(root, ".opencode", "plans", `${sessionId}-${featureId}`)
+    const planDir = path.join(root, ".opencode", "plans", featureId)
     fs.mkdirSync(planDir, { recursive: true })
     fs.writeFileSync(path.join(planDir, "execution-plan.json"), JSON.stringify(plan), "utf8")
-    const artifact = readPlannerArtifact(root, sessionId, featureId)
-    const snapshot = writeBoundPlanSnapshot(root, sessionId, artifact)
     fs.writeFileSync(
       path.join(stateDir, "gate-state.json"),
       JSON.stringify({
         session_id: sessionId,
         feature_id: featureId,
-        planner_status: "usable",
-        planner_plan_binding: {
-          session_id: sessionId,
-          feature_id: featureId,
-          snapshot_path: snapshot.relativePath,
-          snapshot_hash: artifact.semanticHash,
-          snapshot_file_hash: snapshot.snapshot.fileHash,
-          semantic_hash: artifact.semanticHash,
-        },
+        mode: "FULL",
+        classified: true,
       }),
       "utf8",
     )

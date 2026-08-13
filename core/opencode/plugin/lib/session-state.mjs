@@ -1,73 +1,18 @@
-/** @description Strict session-owned recovery reads and retention cleanup for OpenCode gate state. */
+/** @description Same-session compaction context for OpenCode's stable feature plan. */
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../../shared/lib/feature-id.mjs";
-import { matchesAbsolution } from "../../../shared/lib/absolution.mjs";
-import { gateStatePath } from "../../../shared/lib/path-helpers.mjs";
-import { isCompleteExpectedModelStrategy } from "../../../shared/lib/model-strategy-projection.mjs";
+import { isSafeFeatureId, isSafeSessionId } from "../../../shared/lib/feature-id.mjs";
+import { executionPlanPath, gateStatePath } from "../../../shared/lib/path-helpers.mjs";
 import { validatePlan } from "../../../shared/lib/validate-plan.mjs";
-import { resolvePlannerArtifactPath, semanticPlanHash } from "../../lib/planner-artifact.mjs";
-import { acquireLock, releaseLock, writeGateStateAtomic } from "../../lib/gate-state.mjs";
 
-/**
- * @description Resolve frozen R15 strategy from binding, then last attempt (dispatch-scope/plan-gate parity).
- * @param {Record<string, unknown> | null | undefined} state
- */
-function resolveExpectedModelStrategy(state) {
-  const binding = state?.planner_plan_binding;
-  if (isCompleteExpectedModelStrategy(binding?.expected_model_strategy)) {
-    return binding.expected_model_strategy;
-  }
-  if (isCompleteExpectedModelStrategy(state?.planner_last_attempt?.expected_model_strategy)) {
-    return state.planner_last_attempt.expected_model_strategy;
-  }
-  return undefined;
-}
-
-/**
- * @description Full-plan validate options: pin to freeze when complete; omit key to keep ladder fallback.
- * @param {Record<string, unknown> | null | undefined} state
- */
-function fullPlanValidationOptions(state) {
-  const expectedModelStrategy = resolveExpectedModelStrategy(state);
-  return expectedModelStrategy === undefined
-    ? { expect: "full" }
-    : { expect: "full", expectedModelStrategy };
-}
-
-export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_REINJECT_BYTES = 8 * 1024;
-const MAX_LIST_ITEMS = 50;
 const RECOVERY_OPEN = "<HARNESS_RECOVERY_JSON>\n";
 const RECOVERY_CLOSE = "\n</HARNESS_RECOVERY_JSON>";
 
 function inside(parent, candidate) {
   const relative = path.relative(parent, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
-}
-
-function lifecycleBasePath(projectRoot, sessionId) {
-  return path.join(projectRoot, ".opencode", "plans", ".state", ".session-lifecycle", sessionId);
-}
-
-function lifecycleRecordPath(projectRoot, sessionId) {
-  return `${lifecycleBasePath(projectRoot, sessionId)}.json`;
-}
-
-function writeLifecycleRecord(projectRoot, sessionId, value) {
-  const target = lifecycleRecordPath(projectRoot, sessionId);
-  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(temporary, JSON.stringify(value), { encoding: "utf8", flag: "wx", mode: 0o600 });
-    fs.renameSync(temporary, target);
-    return true;
-  } catch {
-    try { fs.rmSync(temporary, { force: true }); } catch { /* ignore */ }
-    return false;
-  }
 }
 
 /** @description Resolve one project root and reject directory/worktree disagreement. */
@@ -86,41 +31,21 @@ function readSafeJson(projectRoot, file, maxBytes = 1024 * 1024) {
   try {
     const root = fs.realpathSync(projectRoot);
     const resolved = path.resolve(file);
-    if (!inside(root, resolved)) return { ok: false, reason: "path escaped project root" };
+    if (!inside(root, resolved)) return null;
     const relative = path.relative(root, resolved);
     let cursor = root;
     for (const segment of relative.split(path.sep)) {
       cursor = path.join(cursor, segment);
       const stat = fs.lstatSync(cursor);
-      if (stat.isSymbolicLink()) return { ok: false, reason: "symbolic link rejected" };
+      if (stat.isSymbolicLink()) return null;
     }
     const stat = fs.statSync(resolved);
-    if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) return { ok: false, reason: "invalid file shape" };
-    if (fs.realpathSync(resolved) !== resolved) return { ok: false, reason: "non-canonical file path" };
-    const raw = fs.readFileSync(resolved, "utf8");
-    const value = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "JSON object required" };
-    return { ok: true, value, raw, path: resolved };
+    if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes || fs.realpathSync(resolved) !== resolved) return null;
+    const value = JSON.parse(fs.readFileSync(resolved, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   } catch {
-    return { ok: false, reason: "missing or unreadable file" };
+    return null;
   }
-}
-
-function parsePending(value, featureId, taskIds) {
-  if (value === undefined) return { ok: true, value: [] };
-  if (!Array.isArray(value)) return { ok: false, reason: "regate_pending must be an array" };
-  const result = [];
-  for (const item of value) {
-    if (typeof item !== "string") return { ok: false, reason: "invalid pending re-gate" };
-    const slash = item.indexOf("/");
-    const feature = slash > 0 ? item.slice(0, slash) : "";
-    const task = slash > 0 ? item.slice(slash + 1) : "";
-    if (feature !== featureId || !isSafeTaskId(task) || !taskIds.has(task)) {
-      return { ok: false, reason: "pending re-gate identity mismatch" };
-    }
-    if (!result.includes(item)) result.push(item);
-  }
-  return { ok: true, value: result };
 }
 
 function utf8Prefix(value, maxBytes) {
@@ -155,300 +80,37 @@ export function encodeRecoveryPayload(payload, maxBytes = MAX_REINJECT_BYTES) {
   return Buffer.byteLength(encoded, "utf8") <= maxBytes ? encoded : null;
 }
 
-function currentPlan(projectRoot, sessionId, featureId, state) {
-  const canonicalPath = resolvePlannerArtifactPath(projectRoot, sessionId, featureId, state.resumed_from_session_id);
-  if (!canonicalPath) return { ok: false, reason: "canonical plan path unresolved" };
-  const canonical = readSafeJson(projectRoot, canonicalPath);
-  const sourceSessionId = isSafeSessionId(state.resumed_from_session_id) ? state.resumed_from_session_id : "";
-  if (!canonical.ok || (canonical.value.session_id && canonical.value.session_id !== sessionId && canonical.value.session_id !== sourceSessionId) || canonical.value.feature_id !== featureId) {
-    return { ok: false, reason: "canonical plan identity mismatch" };
-  }
-
-  const binding = state.planner_plan_binding;
-  const canonicalRelativePath = path.relative(projectRoot, canonicalPath);
-  if (binding == null) {
-    const tasks = canonical.value.tasks;
-    if (Array.isArray(tasks) && tasks.length > 0) {
-      const full = validatePlan(canonical.value, fullPlanValidationOptions(state));
-      if (!full.ok) return { ok: false, reason: "canonical full plan failed validation" };
-      return { ok: false, reason: "full plan recovery requires planner snapshot binding" };
-    }
-    const stub = validatePlan(canonical.value, { expect: "stub" });
-    if (!stub.ok || canonical.value.kind !== "stub" || (canonical.value.session_id !== sessionId && canonical.value.session_id !== sourceSessionId) ||
-        !Array.isArray(tasks) || tasks.length !== 0) {
-      return { ok: false, reason: "canonical classify stub failed validation" };
-    }
-    return { ok: true, plan: canonical.value, canonicalPath, canonicalRelativePath };
-  }
-  if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
-      state.planner_status !== "usable" ||
-      binding.session_id !== sessionId || binding.feature_id !== featureId ||
-      typeof binding.snapshot_path !== "string" || typeof binding.snapshot_hash !== "string" ||
-      typeof binding.snapshot_file_hash !== "string" || typeof binding.semantic_hash !== "string" ||
-      typeof binding.file_hash !== "string") {
-    return { ok: false, reason: "planner snapshot identity mismatch" };
-  }
-  const expectedSnapshotPath = `.opencode/plans/.state/${sessionId}/bound-plans/${binding.snapshot_file_hash}.json`;
-  if (!/^[0-9a-f]{64}$/.test(binding.snapshot_hash) || !/^[0-9a-f]{64}$/.test(binding.snapshot_file_hash) ||
-      !/^[0-9a-f]{64}$/.test(binding.semantic_hash) || !/^[0-9a-f]{64}$/.test(binding.file_hash) ||
-      binding.snapshot_path !== expectedSnapshotPath ||
-      binding.snapshot_path.includes("\\") || path.isAbsolute(binding.snapshot_path)) {
-    return { ok: false, reason: "planner snapshot path is not canonical repo-relative form" };
-  }
-  const snapshotRoot = path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "bound-plans");
-  const snapshotPath = path.resolve(projectRoot, binding.snapshot_path);
-  if (!inside(snapshotRoot, snapshotPath)) return { ok: false, reason: "planner snapshot escaped session" };
-  const snapshot = readSafeJson(projectRoot, snapshotPath);
-  if (!snapshot.ok) return { ok: false, reason: "planner snapshot integrity mismatch" };
-  const snapshotFileHash = crypto.createHash("sha256").update(snapshot.raw, "utf8").digest("hex");
-  const canonicalFileHash = crypto.createHash("sha256").update(canonical.raw, "utf8").digest("hex");
-  if (snapshot.value.feature_id !== featureId || snapshot.raw !== canonical.raw ||
-      snapshotFileHash !== binding.snapshot_file_hash || canonicalFileHash !== binding.file_hash ||
-      canonicalFileHash !== binding.snapshot_file_hash || semanticPlanHash(snapshot.value) !== binding.snapshot_hash ||
-      semanticPlanHash(canonical.value) !== binding.snapshot_hash || binding.semantic_hash !== binding.snapshot_hash) {
-    return { ok: false, reason: "planner snapshot integrity mismatch" };
-  }
-  const full = validatePlan(snapshot.value, fullPlanValidationOptions(state));
-  if (!full.ok) return { ok: false, reason: "planner snapshot full plan failed validation" };
-  return { ok: true, plan: snapshot.value, canonicalPath, canonicalRelativePath };
-}
-
-/** @description Derive bounded recovery context only from the envelope session's validated state and plan. */
-export function buildSessionRecovery(projectRoot, sessionId, options = {}) {
+/** @description Reinject facts from this session only; never infer a phase or adopt another run. */
+export function buildSessionRecovery(projectRoot, sessionId) {
   if (!projectRoot || !isSafeSessionId(sessionId)) return { ok: false, reason: "invalid session identity" };
   const stateResult = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
   if (!stateResult.ok) return stateResult;
-  const loaded = readSafeJson(projectRoot, stateResult.path);
-  if (!loaded.ok || loaded.value.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
-  const state = loaded.value;
+  const state = readSafeJson(projectRoot, stateResult.path);
+  if (!state || state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };
+
   const featureId = state.feature_id;
   const mode = state.mode;
   if (!isSafeFeatureId(featureId) || !["no-ceremony", "QUICK", "LIGHT", "FULL"].includes(mode)) {
     return { ok: false, reason: "invalid recovery identity" };
   }
-  const resolvedPlan = currentPlan(projectRoot, sessionId, featureId, state);
-  if (!resolvedPlan.ok) return resolvedPlan;
-  const tasks = Array.isArray(resolvedPlan.plan.tasks) ? resolvedPlan.plan.tasks : null;
-  if (!tasks || tasks.some((task) => !task || typeof task !== "object" || !isSafeTaskId(task.id))) {
-    return { ok: false, reason: "invalid plan tasks" };
-  }
-  const taskIds = new Set(tasks.map((task) => task.id));
-  const pending = parsePending(state.regate_pending, featureId, taskIds);
-  if (!pending.ok || state.regate_passed !== undefined && !Array.isArray(state.regate_passed) ||
-      state.capture_verified !== undefined && !Array.isArray(state.capture_verified)) {
-    return { ok: false, reason: pending.reason ?? "invalid absolution markers" };
-  }
-  const isAncestor = typeof options.isAncestor === "function" ? options.isAncestor : () => false;
-  const unmatched = pending.value.filter((item) => !matchesAbsolution(item, state.regate_passed, isAncestor));
-  const completed = tasks.filter((task) => matchesAbsolution(`${featureId}/${task.id}`, state.capture_verified, isAncestor)).length;
-  const sharedContextPath = path.join(path.dirname(resolvedPlan.canonicalPath), "shared_context.md");
+
+  const planResult = executionPlanPath({ projectRoot, runtime: "opencode", featureId });
+  if (!planResult.ok) return planResult;
+  const plan = readSafeJson(projectRoot, planResult.path);
+  const validated = plan ? validatePlan(plan, { expect: "full" }) : { ok: false };
+  const matchingPlan = validated.ok && plan.feature_id === featureId && String(plan.mode).toUpperCase() === mode;
+  const totalTasks = matchingPlan && Array.isArray(plan.tasks) ? plan.tasks.length : 0;
+  const canonicalRelativePath = path.relative(projectRoot, planResult.path);
   const context = encodeRecoveryPayload({
     schema: "harness.compaction-recovery.v1",
     mode,
     feature_id: featureId,
-    canonical_plan_path: resolvedPlan.canonicalRelativePath,
-    progress: { capture_verified: completed, total_tasks: tasks.length },
-    shared_context_path: path.relative(projectRoot, sharedContextPath),
-    unmatched_regates: unmatched.slice(0, MAX_LIST_ITEMS),
+    canonical_plan_path: canonicalRelativePath,
+    plan_available: matchingPlan,
+    total_tasks: totalTasks,
   });
   if (!context) return { ok: false, reason: "recovery payload byte budget too small" };
-  return { ok: true, context, statePath: loaded.path };
+  return { ok: true, context, statePath: stateResult.path };
 }
 
-function hasExactDispatchRecords(projectRoot, sessionId) {
-  const records = path.join(projectRoot, ".opencode", "plans", ".state", sessionId, "dispatch-records");
-  let stat;
-  try {
-    stat = fs.lstatSync(records);
-  } catch (error) {
-    if (error && typeof error === "object" && error.code === "ENOENT") return false;
-    return true;
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
-  try {
-    return fs.readdirSync(records).length > 0;
-  } catch {
-    return true;
-  }
-}
-
-function terminalDeliveryProof(projectRoot, sessionId, state, _eventType, isAncestor) {
-  if (state.session_id !== sessionId || hasExactDispatchRecords(projectRoot, sessionId)) return false;
-  if (state.planner_status !== "usable" || state.planner_binding_error != null ||
-      state.classified === false) return false;
-  const featureId = state.feature_id;
-  if (!isSafeFeatureId(featureId)) return false;
-  const resolved = currentPlan(projectRoot, sessionId, featureId, state);
-  if (!resolved.ok || !validatePlan(resolved.plan, fullPlanValidationOptions(state)).ok || !Array.isArray(resolved.plan.tasks)) return false;
-  if (!Array.isArray(state.hand_finished) || !Array.isArray(state.capture_verified)) return false;
-  const taskIds = new Set();
-  for (const task of resolved.plan.tasks) {
-    if (!task || typeof task !== "object" || !isSafeTaskId(task.id)) return false;
-    taskIds.add(task.id);
-    if (!state.hand_finished.includes(`${featureId}/${task.id}`)) return false;
-    if (!matchesAbsolution(`${featureId}/${task.id}`, state.capture_verified, isAncestor)) return false;
-  }
-  const pending = parsePending(state.regate_pending, featureId, taskIds);
-  return pending.ok && pending.value.every((item) => matchesAbsolution(item, state.regate_passed, isAncestor));
-}
-
-/** @description Stamp a retention clock only from an official terminal event plus delivery proof. */
-export function recordSessionCompletion(projectRoot, sessionId, options = {}) {
-  const eventType = options.eventType;
-  const now = options.now ?? Date.now();
-  const isAncestor = typeof options.isAncestor === "function" ? options.isAncestor : () => false;
-  if (!isSafeSessionId(sessionId) || !["session.idle", "session.updated", "session.deleted"].includes(eventType) || !Number.isFinite(now)) {
-    return { ok: false, recorded: false, reason: "official session event identity required" };
-  }
-  const lifecyclePath = lifecycleBasePath(projectRoot, sessionId);
-  const lifecycle = acquireLock(lifecyclePath, options.lockOptions);
-  if (!lifecycle.ok) return { ok: false, recorded: false, reason: lifecycle.reason };
-  try {
-    const stateResult = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
-    if (!stateResult.ok) return { ok: false, recorded: false, reason: stateResult.reason };
-    const initial = readSafeJson(projectRoot, stateResult.path);
-    const lifecycleRecord = readSafeJson(projectRoot, lifecycleRecordPath(projectRoot, sessionId), 64 * 1024);
-    const mayReopenMissing = eventType === "session.updated" && lifecycleRecord.ok &&
-      lifecycleRecord.value.session_id === sessionId && lifecycleRecord.value.status === "cleaned";
-    if (!initial.ok && !mayReopenMissing) return { ok: true, recorded: false };
-
-    const acquired = acquireLock(stateResult.path, options.lockOptions);
-    if (!acquired.ok) return { ok: false, recorded: false, reason: acquired.reason };
-    try {
-      const loaded = readSafeJson(projectRoot, stateResult.path);
-      if (!loaded.ok) {
-        if (!mayReopenMissing) return { ok: true, recorded: false };
-        const reopened = { session_id: sessionId, session_status: "active", session_reopened_at: new Date(now).toISOString() };
-        if (!writeGateStateAtomic(stateResult.path, reopened)) return { ok: false, recorded: false, reason: "reopened session persistence failed" };
-        try { fs.rmSync(lifecycleRecordPath(projectRoot, sessionId), { force: true }); } catch { /* consumed record may be retried */ }
-        return { ok: true, recorded: false, reopened: true };
-      }
-      if (eventType === "session.updated") {
-        const next = { ...loaded.value };
-        delete next.session_status;
-        delete next.session_completed_at;
-        next.session_status = "active";
-        next.session_reopened_at = new Date(now).toISOString();
-        const temporary = `${stateResult.path}.${crypto.randomUUID()}.reopen`;
-        fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
-        fs.renameSync(temporary, stateResult.path);
-        return { ok: true, recorded: false, reopened: true };
-      }
-      const terminal = terminalDeliveryProof(projectRoot, sessionId, loaded.value, eventType, isAncestor);
-      if (!terminal) return { ok: true, recorded: false };
-      if (loaded.value.session_status === "completed" && Number.isFinite(Date.parse(loaded.value.session_completed_at))) {
-        return { ok: true, recorded: false };
-      }
-      const next = { ...loaded.value, session_status: "completed", session_completed_at: new Date(now).toISOString() };
-      const temporary = `${stateResult.path}.${crypto.randomUUID()}.completion`;
-      fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
-      fs.renameSync(temporary, stateResult.path);
-      return { ok: true, recorded: true };
-    } finally {
-      releaseLock(stateResult.path, acquired.token);
-    }
-  } catch {
-    return { ok: false, recorded: false, reason: "completion timestamp persistence failed" };
-  } finally {
-    releaseLock(lifecyclePath, lifecycle.token);
-  }
-}
-
-function restoreClaims(claims) {
-  for (const claim of claims) {
-    try {
-      if (!fs.existsSync(claim.target)) fs.renameSync(claim.tombstone, claim.target);
-    } catch { /* a failed restore remains an inert tombstone */ }
-  }
-}
-
-/** @description Remove only an expired completed session marker under its ownership lock. */
-export function cleanupRetainedCompletedSession(projectRoot, sessionId, options = {}) {
-  const retentionMs = options.retentionMs;
-  const now = options.now ?? Date.now();
-  if (!Number.isFinite(retentionMs) || retentionMs < 0 || !Number.isFinite(now) || !isSafeSessionId(sessionId)) {
-    return { ok: false, cleaned: false, reason: "explicit retention policy required" };
-  }
-  const stateResult = gateStatePath({ projectRoot, runtime: "opencode", sessionId });
-  if (!stateResult.ok) return { ok: false, cleaned: false, reason: stateResult.reason };
-  const eligible = (loaded) => {
-    if (!loaded.ok || loaded.value.session_id !== sessionId) return false;
-    const completedAt = Date.parse(loaded.value.session_completed_at);
-    return loaded.value.session_status === "completed" && Number.isFinite(completedAt) && now - completedAt >= retentionMs;
-  };
-  const lifecyclePath = lifecycleBasePath(projectRoot, sessionId);
-  const lifecycle = acquireLock(lifecyclePath, options.lockOptions);
-  if (!lifecycle.ok) return { ok: false, cleaned: false, reason: lifecycle.reason };
-  if (!eligible(readSafeJson(projectRoot, stateResult.path))) {
-    releaseLock(lifecyclePath, lifecycle.token);
-    return { ok: true, cleaned: false };
-  }
-  const acquired = acquireLock(stateResult.path, options.lockOptions);
-  if (!acquired.ok) {
-    releaseLock(lifecyclePath, lifecycle.token);
-    return { ok: false, cleaned: false, reason: acquired.reason };
-  }
-  let tombstone = null;
-  let tombstoneStatePath = null;
-  let handRecordClaim = null;
-  const sessionDir = path.dirname(stateResult.path);
-  try {
-    const loaded = readSafeJson(projectRoot, stateResult.path);
-    if (!eligible(loaded) || hasExactDispatchRecords(projectRoot, sessionId)) {
-      return { ok: true, cleaned: false };
-    }
-    if (isSafeFeatureId(loaded.value.feature_id)) {
-      const records = path.join(projectRoot, ".opencode", "plans", ".state", "hand-records", loaded.value.feature_id, sessionId);
-      if (fs.existsSync(records)) {
-        const recordsTombstone = `${records}.${crypto.randomUUID()}.retained`;
-        fs.renameSync(records, recordsTombstone);
-        handRecordClaim = { target: records, tombstone: recordsTombstone };
-      }
-    }
-    if (typeof options.beforeSessionRename === "function") options.beforeSessionRename();
-    tombstone = `${sessionDir}.${crypto.randomUUID()}.retained`;
-    fs.renameSync(sessionDir, tombstone);
-    tombstoneStatePath = path.join(tombstone, "gate-state.json");
-    if (!writeLifecycleRecord(projectRoot, sessionId, {
-      session_id: sessionId,
-      status: "cleaned",
-      cleaned_at: new Date(now).toISOString(),
-    })) throw new Error("lifecycle cleanup record failed");
-  } catch {
-    if (tombstone && !fs.existsSync(sessionDir)) {
-      try {
-        fs.renameSync(tombstone, sessionDir);
-        tombstone = null;
-        tombstoneStatePath = null;
-      } catch { /* fail closed with claimed session tombstone retained */ }
-    }
-    if (handRecordClaim) restoreClaims([handRecordClaim]);
-    return { ok: false, cleaned: false, reason: "completed session cleanup failed" };
-  } finally {
-    releaseLock(tombstoneStatePath ?? stateResult.path, acquired.token);
-    releaseLock(lifecyclePath, lifecycle.token);
-  }
-  if (handRecordClaim) {
-    try { fs.rmSync(handRecordClaim.tombstone, { recursive: true, force: true }); } catch { /* tombstone is inert */ }
-  }
-  try { fs.rmSync(tombstone, { recursive: true, force: true }); } catch { /* tombstone is inert */ }
-  return { ok: true, cleaned: true };
-}
-
-/** @description Opportunistically clean every safe retained session directory under this project root. */
-export function sweepRetainedSessions(projectRoot, options = {}) {
-  const stateRoot = path.join(projectRoot, ".opencode", "plans", ".state");
-  let cleaned = 0;
-  try {
-    for (const entry of fs.readdirSync(stateRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !isSafeSessionId(entry.name)) continue;
-      const result = cleanupRetainedCompletedSession(projectRoot, entry.name, options);
-      if (result.cleaned) cleaned += 1;
-    }
-    return { ok: true, cleaned };
-  } catch {
-    return { ok: true, cleaned };
-  }
-}
-
-export default { buildSessionRecovery, cleanupRetainedCompletedSession, encodeRecoveryPayload, recordSessionCompletion, resolveSessionProjectRoot, sweepRetainedSessions };
+export default { buildSessionRecovery, encodeRecoveryPayload, resolveSessionProjectRoot };

@@ -17,24 +17,26 @@ import {
   resolveFixModeScopeAuthority,
 } from "./dispatch-scope.mjs";
 import { acquireLock, releaseLock } from "./gate-state.mjs";
-import { semanticPlanHash } from "./planner-artifact.mjs";
 
-const MODEL_STRATEGY = { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
+const MODEL_STRATEGY = { hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
 
 function fixture(tasks = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-scope-"));
   const sessionId = "ses-scope";
   const featureId = "feat-scope";
-  const plan = { feature_id: featureId, kind: "full", mode: "full", model_strategy: MODEL_STRATEGY, tasks: tasks ?? [
-    { id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "a" }] },
-  ] };
+  const rawTasks = tasks ?? [{ id: "task-1", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "Given task, When complete, Then observable a" }] }];
+  const normalizedTasks = rawTasks.map((task) => ({
+    title: `Implement ${task.id}`, description: `Implement ${task.id}.`, depends_on: [], severity: "medium", complexity: "medium",
+    resolved_judgments: { scope: "fixed" }, adversarial: { enabled: false, focus: [] }, ...task,
+  }));
+  const plan = { feature_id: featureId, mode: "full", model_strategy: MODEL_STRATEGY,
+    final_review: { compliance: true, adversary: true }, demo: { type: "smoke", scenarios_from_refs: ["#uj-1"] }, tasks: normalizedTasks };
   const bytes = Buffer.from(JSON.stringify(plan));
-  const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
   const stateDir = path.join(root, ".opencode", "plans", ".state", sessionId);
-  const relative = `.opencode/plans/.state/${sessionId}/bound-plans/${fileHash}.json`;
-  fs.mkdirSync(path.join(stateDir, "bound-plans"), { recursive: true });
-  fs.writeFileSync(path.join(root, relative), bytes);
-  fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId, planner_status: "usable", planner_plan_binding: { session_id: sessionId, feature_id: featureId, snapshot_path: relative, snapshot_hash: semanticPlanHash(plan), snapshot_file_hash: fileHash } }));
+  fs.mkdirSync(path.join(root, ".opencode", "plans", featureId), { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(root, ".opencode", "plans", featureId, "execution-plan.json"), bytes);
+  fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true, mode: "FULL" }));
   return { root, sessionId, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -59,8 +61,6 @@ function fixModeFixture() {
     feature_id: featureId,
     classified: true,
     mode: "LIGHT",
-    planner_status: "not_started",
-    planner_plan_binding: null,
   }));
   return { root, sessionId, featureId, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
@@ -109,10 +109,10 @@ test("fix-mode authority creates the same exact call record without inventing a 
       scope_paths: ["src/a.ts", "src/b.ts"],
       allowed_writes: [],
       frozen_paths: [],
-      snapshot_hash: claim.claim.snapshot_hash,
+      plan_hash: claim.claim.plan_hash,
       claimed_at: "1970-01-01T00:00:01.000Z",
     });
-    assert.match(claim.claim.snapshot_hash, /^[0-9a-f]{64}$/);
+    assert.match(claim.claim.plan_hash, /^[0-9a-f]{64}$/);
 
     const replay = claimDispatchForRuntime(f.root, {
       sessionId: f.sessionId,
@@ -273,7 +273,7 @@ test("claim stores the exact required record outside shared gate-state", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(recordPath(f, "exact-call"), "utf8")), {
       parent_session_id: f.sessionId, dispatch_call_id: "exact-call", child_session_id: null,
       feature_id: "feat-scope", task_id: "task-1", role: "executor-high",
-      scope_paths: ["src/a.ts"], allowed_writes: [], frozen_paths: ["tests/a.test.mjs"], snapshot_hash: claim.claim.snapshot_hash,
+      scope_paths: ["src/a.ts"], allowed_writes: [], frozen_paths: ["tests/a.test.mjs"], plan_hash: claim.claim.plan_hash,
       claimed_at: "1970-01-01T00:00:01.000Z",
     });
     const state = JSON.parse(fs.readFileSync(path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "gate-state.json"), "utf8"));
@@ -298,8 +298,11 @@ test("claim records a stable baseline for dirty files that predate the exact han
     assert.equal(claim.ok, true, claim.reason);
     const record = readDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: "baseline-call" });
     assert.equal(record.ok, true, record.reason);
-    assert.deepEqual(record.record.worktree_baseline?.entries.map((entry) => entry.path), ["MEMORY.md"]);
-    assert.equal(record.record.worktree_baseline?.entries[0]?.fingerprint.kind, "file");
+    assert.deepEqual(record.record.worktree_baseline?.entries.map((entry) => entry.path), [
+      ".opencode/plans/feat-scope/execution-plan.json",
+      "MEMORY.md",
+    ]);
+    assert.equal(record.record.worktree_baseline?.entries.find((entry) => entry.path === "MEMORY.md")?.fingerprint.kind, "file");
 
     const before = fs.readFileSync(recordPath(f, "baseline-call"));
     fs.writeFileSync(path.join(f.root, "MEMORY.md"), "changed after dispatch\n");
@@ -351,7 +354,7 @@ test("present exact records fail as conflicts unless their complete schema is ca
       { ...valid, feature_id: "Not-Kebab" },
       { ...valid, task_id: "../task" },
       { ...valid, role: "planner" },
-      { ...valid, snapshot_hash: "not-a-sha256" },
+      { ...valid, plan_hash: "not-a-sha256" },
       { ...valid, child_session_id: "../other" },
       { ...valid, claimed_at: "not-an-iso-timestamp" },
       { ...valid, scope_paths: ["src/a.ts", 7] },
@@ -391,15 +394,16 @@ test("identical same-call replay is idempotent and byte-stable", () => {
   } finally { f.close(); }
 });
 
-test("claim rejects unusable or invalid canonical planner state", () => {
+test("claim rejects unclassified state or invalid stable plan", () => {
   const f = fixture();
   try {
     const statePath = path.join(f.root, ".opencode", "plans", ".state", f.sessionId, "gate-state.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    fs.writeFileSync(statePath, JSON.stringify({ ...state, planner_status: "pending" }));
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, classified: false }));
     assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "bad-state", role: "executor-low", taskId: "task-1" }).ok, false);
-    fs.writeFileSync(statePath, JSON.stringify({ ...state, planner_plan_binding: { ...state.planner_plan_binding, snapshot_hash: "bad" } }));
-    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "bad-snapshot", role: "executor-low", taskId: "task-1" }).ok, false);
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    fs.writeFileSync(path.join(f.root, ".opencode", "plans", "feat-scope", "execution-plan.json"), "{}");
+    assert.equal(claimActiveDispatch(f.root, { sessionId: f.sessionId, callId: "bad-plan", role: "executor-low", taskId: "task-1" }).ok, false);
   } finally { f.close(); }
 });
 
@@ -485,7 +489,7 @@ test("child binding fails closed on a sibling json file with a noncanonical call
     fs.writeFileSync(path.join(records, "bad-name.json"), JSON.stringify({
       parent_session_id: "other-session", dispatch_call_id: "other-call", child_session_id: null,
       feature_id: "feat-scope", task_id: "task-1", role: "executor-low", scope_paths: ["src/a.ts"],
-      allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z",
+      allowed_writes: [], plan_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z",
     }));
     const result = bindChildSession(f.root, { parentSessionId: f.sessionId, childSessionId: "child-bad-name", role: "executor-low", callId: "wanted-bad-name" });
     assert.equal(result.ok, false);
@@ -503,7 +507,7 @@ test("child binding fails closed when sibling file identity disagrees with its s
     fs.writeFileSync(path.join(records, `${crypto.createHash("sha256").update(otherCall).digest("hex")}.json`), JSON.stringify({
       parent_session_id: "wrong-session", dispatch_call_id: otherCall, child_session_id: null,
       feature_id: "feat-scope", task_id: "task-1", role: "executor-low", scope_paths: ["src/a.ts"],
-      allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z",
+      allowed_writes: [], plan_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z",
     }));
     const result = bindChildSession(f.root, { parentSessionId: f.sessionId, childSessionId: "child-bad-parent", role: "executor-low", callId: "wanted-bad-parent" });
     assert.equal(result.ok, false);
@@ -570,7 +574,7 @@ test("dispatch records reject a symlinked state root and canonicalize a root ali
   }
 });
 
-test("canonical hand records derive frozen paths from the bound plan and narrow test-author writes", () => {
+test("hand records derive frozen paths from the stable plan and narrow test-author writes", () => {
   const f = fixture([{
     id: "task-1", severity: "medium", complexity: "medium", scope_paths: ["src/", "tests/"], criterion_refs: ["#ac-1"],
     locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", fixture_paths: ["tests/fixtures/a.json"], assertion: "a" }],

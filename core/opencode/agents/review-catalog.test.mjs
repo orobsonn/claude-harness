@@ -34,7 +34,7 @@ test("canonical review catalog is single-evaluator", () => {
   for (const name of Object.keys(REVIEW_AGENT_CATALOG)) {
     assert.equal(existsSync(join(AGENTS_DIR, `${name}.md`)), true, `${name}.md`);
   }
-  // Compatibility alias files stay loadable for bound plans / two-release window.
+  // Compatibility alias files stay loadable for older vendored configurations.
   for (const alias of Object.keys(REVIEW_AGENT_ALIASES)) {
     assert.equal(existsSync(join(AGENTS_DIR, `${alias}.md`)), true, `${alias}.md alias stub`);
   }
@@ -135,13 +135,13 @@ test("plan re-reviews verify the repair instead of serializing new edge-case hun
   const reviewer = agentContract(readFileSync(join(AGENTS_DIR, "plan-reviewer.md"), "utf8"));
   const delivery = readFileSync(join(OC_ROOT, "skills", "orchestrating-delivery", "SKILL.md"), "utf8");
 
-  assert.match(delivery, /Review kind: REVISION[\s\S]{0,450}prior findings/i);
+  assert.match(delivery, /On REVISE,[\s\S]{0,220}exact findings[\s\S]{0,220}review it again/i);
+  assert.match(delivery, /revision review[\s\S]{0,220}prior findings[\s\S]{0,220}direct consequences/i);
   assert.match(reviewer, /revision review[\s\S]{0,450}prior finding[\s\S]{0,450}direct consequences/i);
-  assert.match(delivery, /Review kind: REVISION[\s\S]{0,550}(changed|added|removed)[\s\S]{0,550}(tasks|scope_paths|locked_tests)/i);
   assert.match(reviewer, /altered[\s\S]{0,180}(added|removed|changed)[\s\S]{0,220}direct consequences/i);
   assert.match(reviewer, /Do \*\*not\*\*[\s\S]{0,120}new[\s\S]{0,120}(hypothetical|edge-case|boundary)/i);
   assert.match(reviewer, /APPROVE[\s\S]{0,250}prior finding/i);
   assert.match(reviewer, /INITIAL only[\s\S]{0,200}two mandatory, separate passes/i);
   assert.match(reviewer, /REVISION[\s\S]{0,250}do not run these categories as a fresh audit/i);
-  assert.doesNotMatch(reviewer, /Runtime counters never decide whether the plan is reviewed again/i);
+  assert.doesNotMatch(delivery, /approval receipt|plan_review_verdict|bound plan/i);
 });

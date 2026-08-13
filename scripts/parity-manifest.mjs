@@ -10,7 +10,7 @@ import { harnessOcPluginFiles } from "../core/claude-code/skills/initializing-pr
 /**
  * OC-canonical agent files.
  * Single-evaluator eyes (`plan-reviewer`, `adversary`) are required; the six family/openai
- * names stay required as **2-release alias + optional second-eye stubs** (bound plans and
+ * names stay required as **2-release alias + optional second-eye stubs** (stable plans and
  * Task dispatch still resolve those filenames). Not "instead of" the six names — both.
  */
 export const OC_REQUIRED_AGENTS = [

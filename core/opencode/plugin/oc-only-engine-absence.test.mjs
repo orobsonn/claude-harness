@@ -44,28 +44,14 @@ test("obsolete OpenCode implementation playbook stays absent and the live operat
   assert.equal(operatorGuide.includes(playbook), false, "live operator guide still references the obsolete playbook");
 });
 
-test("identity-based planner lifecycle carries no runtime review or retry counters", () => {
+test("the retired planner lifecycle stays absent", () => {
   for (const relativePath of [
     "core/opencode/lib/planner-state.mjs",
     "core/opencode/lib/planner-artifact.mjs",
     "core/opencode/plugin/lib/planner-brief.mjs",
     "core/opencode/plugin/planner-recovery.ts",
   ]) {
-    const source = readFileSync(join(repositoryRoot, relativePath), "utf8");
-    for (const rail of [
-      "plan_review_count",
-      "adversary_loop_count",
-      "primary_failure_streak",
-      "planner_primary_attempts",
-      "planner_attempts_round",
-      "planner_retry_outcome",
-      "delivery-blocked",
-      "agent_dispatch_failures",
-      "agent_dispatch_outcomes",
-      "gate_blocked_dispatches",
-    ]) {
-      assert.equal(source.includes(rail), false, `${relativePath} still contains runtime rail ${rail}`);
-    }
+    assert.equal(existsSync(join(repositoryRoot, relativePath)), false, `retired planner lifecycle returned: ${relativePath}`);
   }
 });
 

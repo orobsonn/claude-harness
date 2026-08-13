@@ -344,7 +344,6 @@ function plantMonorepoOcPlugins(root) {
     "entry-gate.ts",
     "marker-authority.ts",
     "plan-gate.ts",
-    "planner-recovery.ts",
     "plan-write-gate.ts",
     "reinject-state.ts",
     "version-check.ts",
@@ -371,10 +370,7 @@ function plantMonorepoOcPlugins(root) {
     "entry-decide.mjs",
     "dispatch-scope.mjs",
     "hand-records.mjs",
-    "planner-state.mjs",
     "obs-emit.mjs",
-    "plan-hash.mjs",
-    "planner-artifact.mjs",
     "roles.mjs",
     "task-dispatch-identity.mjs",
   ]) {
