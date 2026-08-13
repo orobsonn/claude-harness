@@ -175,6 +175,8 @@ This writes the plan stub + gate-state stamps that entry-gate / plan-gate consum
 
 **Approved plan resumed:** when `metadata.action` is `resume-approved-plan`, load `oc-orchestrating-delivery` and start at the first unfinished delivery task. **Do not load `oc-brainstorming`, dispatch `planner`, or dispatch `plan-reviewer` again.** A plain `resume` restores an unfinished ceremony; follow the normal route from its pending phase.
 
+**Bound plan awaiting legacy review:** when `metadata.action` is `resume-bound-plan-review`, load `oc-orchestrating-delivery` and dispatch **one `plan-reviewer`** against the literal `metadata.plan_path`. The binding already proves the exact plan bytes; do **not** load `oc-brainstorming`, call `validate-plan` against current routing, or dispatch `planner`. `APPROVE` continues delivery; `REVISE` is the only result that returns to the planner rail.
+
 **Once per delivery session+feature.** Host `classify` is escalate-only after the first successful **delivery** stamp: same mode is a no-op; downgrade (e.g. LIGHT→QUICK) and feature-switch under QUICK/LIGHT/FULL are denied. A prior **no-ceremony** stamp (if any legacy path left one) does **not** pin `feature_id` — the next delivery classify may be `fresh` with a new feature. **Never** re-call `classify` mid-delivery to “unstick” a review cap or provider error — that is QUICK laundering and delivery rails will deny the ship.
 
 **HEADLESS note:** call `classify` for **QUICK, LIGHT, and FULL** only (delivery modes) so gate-state has `mode` + `feature_id`.

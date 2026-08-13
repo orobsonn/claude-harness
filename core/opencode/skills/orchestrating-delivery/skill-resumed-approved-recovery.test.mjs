@@ -26,3 +26,12 @@ test("resumed approved-plan refusal continues the same delivery without a new pl
 test("ordinary plan refusals still use the planner repair rail", () => {
   assert.match(skill, /If the Task metadata says the plan was refused, fix it \*\*with the planner\*\*/i);
 });
+
+test("a resumed legacy binding gets one reviewer before any planner repair", () => {
+  for (const document of [skill, build]) {
+    assert.match(document, /resumed bound plan awaits plan review/i);
+  }
+  assert.match(skill, /resume-bound-plan-review/i);
+  assert.match(skill, /do \*\*not\*\* .*validate-plan.*current routing/i);
+  assert.match(skill, /APPROVE.*next legal unfinished task.*REVISE.*planner/i);
+});

@@ -87,6 +87,51 @@ test("an APPROVE plan blocks a later planner dispatch in the same session", asyn
   });
 });
 
+test("a bound plan awaiting its first review blocks re-planning after routing changes", async () => {
+  await withRun(async (root, state) => {
+    const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
+    const initialArgs = { subagent_type: "planner", prompt: "Produce a plan." };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: sessionId, callID: "unreviewed-plan" }, { args: initialArgs });
+    await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "unreviewed-plan", args: initialArgs }, { output: JSON.stringify(plan), metadata: {} });
+    assert.equal(state().planner_status, "usable");
+    fs.writeFileSync(
+      path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"),
+      JSON.stringify({
+        ...state(),
+        plan_review_verdict: null,
+        resumed_from_session_id: "ses_priorApproved",
+        resume_state_source_session_id: "ses_priorApproved",
+      }),
+    );
+
+    const routingPath = path.join(root, ".opencode", "harness.routing.json");
+    const routing = JSON.parse(fs.readFileSync(routingPath, "utf8"));
+    routing.roles.compliance.model = "openai/gpt-5.6-terra";
+    fs.writeFileSync(routingPath, JSON.stringify(routing));
+
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "task", sessionID: sessionId, callID: "wrong-replan" },
+        { args: { subagent_type: "planner", prompt: "Rewrite the plan for new routing." } },
+      ),
+      /bound plan awaits plan review/,
+    );
+    assert.equal(state().planner_status, "usable");
+    assert.equal(state().planner_active_attempt, null);
+    assert.equal(state().plan_review_verdict, null);
+
+    fs.writeFileSync(
+      path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"),
+      JSON.stringify({ ...state(), plan_review_verdict: "REVISE" }),
+    );
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: sessionId, callID: "review-repair" },
+      { args: { subagent_type: "planner", prompt: "Repair the reviewed plan." } },
+    ));
+    assert.equal(state().planner_status, "running");
+  });
+});
+
 test("duplicate planner before reuses its frozen snapshot after routing changes", async () => {
   await withRun(async (root, state) => {
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });

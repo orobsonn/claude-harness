@@ -7,7 +7,7 @@
 import { tool } from "@opencode-ai/plugin/tool"
 import fs from "node:fs"
 import path from "node:path"
-import { resumedApprovedPlanMetadata } from "../lib/classify-resume.mjs"
+import { resumedApprovedPlanMetadata, resumedBoundPlanReviewMetadata } from "../lib/classify-resume.mjs"
 
 function errorResult(error: string, hint: string, received: string) {
   const payload = { error, hint, received }
@@ -137,6 +137,9 @@ export async function executeClassify(
         action: finalMode === resume.state.mode && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
           (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
           ? "resume-approved-plan"
+          : finalMode === resume.state.mode && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === null &&
+              (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
+            ? "resume-bound-plan-review"
           : "resume",
         source_session_id: resume.sessionId,
       }
@@ -149,7 +152,8 @@ export async function executeClassify(
   }
 
   const resumedMetadata = transition.action === "noop"
-    ? resumedApprovedPlanMetadata(context.directory, finalFeatureId, prior)
+    ? resumedApprovedPlanMetadata(context.directory, finalFeatureId, prior) ??
+      resumedBoundPlanReviewMetadata(context.directory, finalFeatureId, prior)
     : null
   if (resumedMetadata) {
     return {
