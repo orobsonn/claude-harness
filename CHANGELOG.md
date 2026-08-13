@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.66](https://github.com/orobsonn/claude-harness/compare/v0.55.65...v0.55.66) (2026-08-13)
+
+
+### Bug Fixes
+
+* **opencode:** restore Claude Code plan flow ([#789](https://github.com/orobsonn/claude-harness/issues/789)) ([728f265](https://github.com/orobsonn/claude-harness/commit/728f2653f5809de0d7cbadfa064f78611d4579d7))
+
 ## [0.55.65](https://github.com/orobsonn/claude-harness/compare/v0.55.64...v0.55.65) (2026-08-13)
 
 
