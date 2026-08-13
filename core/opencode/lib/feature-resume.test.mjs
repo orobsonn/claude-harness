@@ -254,6 +254,8 @@ test("migrates captured legacy progress to an approved resumed plan without anot
     assert.equal(adopted.ok, true);
     const state = JSON.parse(fs.readFileSync(adopted.statePath, "utf8"));
     assert.equal(state.plan_review_verdict, "APPROVE");
+    assert.equal(state.classified, true);
+    assert.equal(state.triaged, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

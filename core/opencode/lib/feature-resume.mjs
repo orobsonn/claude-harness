@@ -202,6 +202,10 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
       planner_active_attempt: null,
       mode,
       peak_mode: mode,
+      // classify returns early after adoption, so stamp the resumed session here.
+      // Without these facts, a later classify replay incorrectly starts a fresh stub.
+      classified: true,
+      triaged: true,
       session_status: "active",
       session_completed_at: null,
       session_reopened_at: new Date().toISOString(),
