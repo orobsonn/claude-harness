@@ -163,6 +163,10 @@ test("authenticated planner may create only the stable plan through apply_patch"
     { tool: "apply_patch", sessionID: "ses_planner", callID: "patch-mixed" },
     { args: { patchText: "*** Begin Patch\n*** Add File: .opencode/plans/foo/execution-plan.json\n+{}\n*** Add File: src/unauthorized.mjs\n+export {};\n*** End Patch" } },
   ), /canonical plan|planner|scope/i);
+  await assert.rejects(() => hooks["tool.execute.before"](
+    { tool: "apply_patch", sessionID: "ses_planner", callID: "patch-product" },
+    { args: { patchText: "*** Begin Patch\n*** Add File: src/unauthorized.mjs\n+export {};\n*** End Patch" } },
+  ), /planner.*only.*canonical/i);
 });
 
 test("literal Bash mutations against a canonical plan are frictioned while reads pass", () => {
