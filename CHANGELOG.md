@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.63](https://github.com/orobsonn/claude-harness/compare/v0.55.62...v0.55.63) (2026-08-13)
+
+
+### Bug Fixes
+
+* **opencode:** retain opaque worktree baselines ([#782](https://github.com/orobsonn/claude-harness/issues/782)) ([952940c](https://github.com/orobsonn/claude-harness/commit/952940c425a017d2ee1737bb21df73da6c4added))
+
 ## [0.55.62](https://github.com/orobsonn/claude-harness/compare/v0.55.61...v0.55.62) (2026-08-13)
 
 
