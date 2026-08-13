@@ -40,7 +40,7 @@ function runtimeFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) return runtimeFiles(path);
-    return /\.(?:mjs|ts)$/.test(entry.name) && !entry.name.includes(".test.") ? [path] : [];
+    return /\.(?:json|mjs|ts)$/.test(entry.name) && !entry.name.includes(".test.") ? [path] : [];
   });
 }
 

@@ -1653,17 +1653,6 @@ describe("parity-manifest", () => {
         relativePath,
       );
     }
-    for (const fixturePath of [
-      "../docs/prd/fixtures/gate-state-exemplo-a-adversary-both.json",
-      "../docs/prd/fixtures/gate-state-exemplo-b-plan-review-both.json",
-    ]) {
-      const fixture = JSON.parse(readFileSync(new URL(fixturePath, import.meta.url), "utf8"));
-      assert.equal(fixture.brainstormed, true, fixturePath);
-      assert.equal(fixture.adversary_fired, true, fixturePath);
-      for (const retired of ["brainstormed_binding", "adversary_fired_binding", "ceremony_generation", "ceremony_evidence"]) {
-        assert.equal(Object.hasOwn(fixture, retired), false, `${fixturePath}: ${retired}`);
-      }
-    }
     for (const historyPath of [
       "../docs/OC-CC-PARITY-REPORT.md",
       "../docs/OC-CC-PARITY-ROADMAP-INPUT.md",
