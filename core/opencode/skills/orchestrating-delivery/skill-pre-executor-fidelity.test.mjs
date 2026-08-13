@@ -28,6 +28,21 @@ test("pre-executor fidelity accepts a direct expected-red assertion and limits r
   assert.match(fidelity, /not.*require.*green|never.*require.*green/i);
 });
 
+test("a missing planned production module is expected red, not a broken test import", () => {
+  const complianceFidelity = section(compliance, "## Fidelity-transcription mode (before executor)");
+  const orchestrationFidelity = section(skill, "### Test-author fidelity transcription");
+
+  assert.match(complianceFidelity, /missing production module.*expected red/i);
+  assert.match(complianceFidelity, /production entry in task `scope_paths`/i);
+  assert.match(complianceFidelity, /missing planned.*scope_paths.*not a FAIL/is);
+  assert.match(complianceFidelity, /wrong.*import.*path|dependency.*missing|fixture.*missing/i);
+  assert.match(orchestrationFidelity, /missing production module/i);
+  assert.match(orchestrationFidelity, /scope_paths/i);
+  assert.match(orchestrationFidelity, /expected red/i);
+  assert.match(complianceFidelity, /directly imported.*locked test/is);
+  assert.match(complianceFidelity, /transitive|post-implementation|already exists/i);
+});
+
 test("a transcription failure gets one named test-author correction, never a sniper repair", () => {
   const perTask = section(skill, "### Per-task steps (topological order via `depends_on`)");
   const fidelity = section(skill, "### Test-author fidelity transcription");

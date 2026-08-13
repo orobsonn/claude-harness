@@ -23,10 +23,22 @@ Bash access (inherited from the global ruleset, not declared in this frontmatter
 
 The conductor explicitly labels this dispatch **`FIDELITY_TRANSCRIPTION`**. This mode replaces the normal compliance procedure below: you judge the **test transcription only**, before production exists.
 
-Read only the task's `locked_tests`, their pinned assertions, the authorized `test_path`/fixtures, and the resulting test file. Run exactly that test path if its runner is known.
+Read only the task's `locked_tests`, their pinned assertions, the authorized `test_path`/fixtures, the
+production entries in `scope_paths`, and the resulting test file. Use production `scope_paths` only to
+distinguish the executor's not-yet-created output from a genuinely broken test import. Run exactly that
+test path if its runner is known.
 
-- PASS when every pinned assertion is literal and observable, there is no material extra assertion, and the file parses/imports/sets up and reaches those assertions. A direct expected-red assertion against production that is not implemented yet is **PASS**, not FAIL; never require the test suite to be green in this mode.
-- FAIL only for a named pinned assertion missing or materially altered, an additional material assertion, parse/import/setup/fixture failure, or a test that never reaches its pinned assertion.
+- PASS when every pinned assertion is literal and observable and there is no material extra assertion. A
+  direct expected-red assertion against production that is not implemented yet is **PASS**, not FAIL. A
+  missing production module is also expected red and **PASS** only when its resolved path is exactly a
+  production entry in task `scope_paths` and it is directly imported by the authorized locked test: that file
+  is the executor's planned output, so its absence before executor dispatch must not be reported as an
+  import/setup defect. Never require the test suite to be green in this mode.
+- FAIL only for a named pinned assertion missing or materially altered, an additional material assertion,
+  a parse/setup failure, or a genuinely broken import: wrong import path, missing dependency/helper/fixture,
+  a transitively missing module, or an import/export mismatch after the planned production file already exists.
+  A missing planned
+  production `scope_paths` entry is the explicit exception above, not a FAIL and not a content-correction.
 - Your feedback may name only the pinned assertion and literal transcription/import/setup/fixture defect. You must not judge `criterion_refs`, locked decisions, production behavior, critical classes, global rules, security, or additional coverage; those belong to normal post-executor compliance/adversary.
 
 Return exactly:
