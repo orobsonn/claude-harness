@@ -7,6 +7,14 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ## [0.55.64](https://github.com/orobsonn/claude-harness/compare/v0.55.63...v0.55.64) (2026-08-13)
 
+
+### Bug Fixes
+
+* **opencode:** continue through concrete plan contradictions ([#786](https://github.com/orobsonn/claude-harness/issues/786)) ([2e9e96e](https://github.com/orobsonn/claude-harness/commit/2e9e96ecff36ddde3e09584034814c6c776f673c))
+* **opencode:** converge plan re-reviews ([#784](https://github.com/orobsonn/claude-harness/issues/784)) ([6d3f156](https://github.com/orobsonn/claude-harness/commit/6d3f1561db1d00bf43626998a55f35c11e136523))
+
+## [0.55.64](https://github.com/orobsonn/claude-harness/compare/v0.55.63...v0.55.64) (2026-08-13)
+
 ### Bug Fixes
 
 * **opencode:** limita re-revisão do plano à correção e seus efeitos diretos
