@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { join, dirname, isAbsolute } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync, mkdtempSync, rmSync, lstatSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -76,46 +76,35 @@ function regularFileHash(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-/** @param {string} cwd */
-function runtimeOverlayPath(cwd) {
-  const raw = gitAt(cwd, ["rev-parse", "--git-path", "harness-runtime-overlay.json"]).trim();
-  return isAbsolute(raw) ? raw : join(cwd, raw);
-}
-
-/** @param {string} cwd @param {string[]} paths */
-function changedLifecyclePaths(cwd, paths) {
-  if (paths.length === 0) return new Set();
-  const query = ["--", ...paths];
-  const read = (args) => gitAt(cwd, args).split("\0").filter(Boolean).map(normalizedLifecyclePath);
-  return new Set([
-    ...read(["diff", "--name-only", "-z", ...query]),
-    ...read(["diff", "--cached", "--name-only", "-z", ...query]),
-    ...read(["ls-files", "--others", "--exclude-standard", "-z", ...query]),
-  ]);
-}
-
-/** @param {string} cwd @param {string[]} paths */
-function readRuntimeOverlay(cwd, paths) {
-  try {
-    const parsed = JSON.parse(readFileSync(runtimeOverlayPath(cwd), "utf8"));
-    if (parsed?.version !== 1 || !parsed?.files || typeof parsed.files !== "object" || Array.isArray(parsed.files)) return null;
-    const expected = [...paths].sort();
-    const actual = Object.keys(parsed.files).sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) return null;
-    for (const path of actual) {
-      if (typeof parsed.files[path] !== "string" && parsed.files[path] !== null) return null;
+/**
+ * The lifecycle clone is the authority for its exact manifest. Before replacing a path in the
+ * invoking checkout, reject links or malformed filesystem shapes so a local `.opencode` symlink
+ * cannot redirect an update into product files or outside the worktree.
+ * @param {string} cwd
+ * @param {string} path
+ */
+function assertSafeRuntimeDestination(cwd, path) {
+  const parts = normalizedLifecyclePath(path).split("/");
+  let current = cwd;
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index]);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
     }
-    return parsed.files;
-  } catch {
-    return null;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`lifecycle runtime path crosses a symbolic link: ${path}`);
+    }
+    if (index < parts.length - 1 && !stat.isDirectory()) {
+      throw new Error(`lifecycle runtime parent is not a directory: ${path}`);
+    }
+    if (index === parts.length - 1 && !stat.isFile()) {
+      throw new Error(`lifecycle runtime destination is not a regular file: ${path}`);
+    }
   }
-}
-
-/** @param {string} cwd @param {string} path */
-function callerPathHash(cwd, path) {
-  const file = join(cwd, path);
-  if (!existsSync(file)) return null;
-  return regularFileHash(file);
 }
 
 /** @param {string} destination @param {Buffer} body @param {number} mode */
@@ -154,23 +143,31 @@ export function syncCallerRuntimeOverlay({ cwd, sourceDirectory, runtimeTarget }
     }
   }
 
-  const overlay = readRuntimeOverlay(cwd, paths);
-  const changed = changedLifecyclePaths(cwd, paths);
-  const conflicts = [...changed].filter((path) => !overlay || overlay[path] !== callerPathHash(cwd, path)).sort();
-  if (conflicts.length > 0) return { action: "skipped", reason: "local lifecycle files differ", paths: conflicts };
+  // The operator asked for an update: divergences in harness-owned regular files are therefore
+  // expected and are replaced. Validate every destination before the first write so malformed
+  // paths never produce a partial runtime update.
+  for (const path of paths) assertSafeRuntimeDestination(cwd, path);
 
-  for (const [path, source] of sourceFiles) {
+  const markerPaths = new Set([".opencode/.harness-version", ".claude/.harness-version"]);
+  const write = (path) => {
+    const source = sourceFiles.get(path);
+    if (!source) return;
     writeRuntimeFileAtomically(join(cwd, path), source.body, source.mode);
+  };
+  for (const path of [...sourceFiles.keys()].filter((path) => !markerPaths.has(path)).sort()) {
+    write(path);
   }
   for (const path of ownership.retired) {
     const destination = join(cwd, path);
     if (existsSync(destination)) {
-      regularFileHash(destination);
       rmSync(destination, { force: true });
     }
   }
-  const files = Object.fromEntries(paths.map((path) => [path, callerPathHash(cwd, path)]));
-  writeRuntimeFileAtomically(runtimeOverlayPath(cwd), Buffer.from(`${JSON.stringify({ version: 1, files }, null, 2)}\n`), 0o600);
+  // A partially interrupted update keeps the old marker, so the next session never claims to run
+  // a release whose plugin/skills were not all copied. Re-running this command is idempotent.
+  for (const path of [...sourceFiles.keys()].filter((path) => markerPaths.has(path)).sort()) {
+    write(path);
+  }
   return { action: "synced", paths: [...ownership.paths].sort() };
 }
 

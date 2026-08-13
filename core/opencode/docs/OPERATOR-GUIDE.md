@@ -259,8 +259,8 @@ npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness lifecycl
 
 - Detecta install vs update por `.opencode/.harness-version`.  
 - **Não** use `@latest` do npm (pode vendorar shell errado/stale).  
-- **Ship automático:** a operação usa clone temporário da `main`, cria PR e faz squash-merge sem tocar no checkout ativo.
-- Abra uma nova sessão a partir da `main` atualizada.
+- **Ship automático:** a operação usa clone temporário da `main`, cria PR e faz squash-merge. Em branch de feature, sincroniza também os arquivos oficiais do harness no checkout atual, sem tocar no trabalho do produto.
+- Abra uma nova sessão após a atualização.
 - Headless: a skill **recusa** (não mexe no harness sozinha).
 
 ---

@@ -232,8 +232,8 @@ test("a harness update is isolated and synchronizes an invoking default branch",
   assert.match(update, /clean clone of `origin\/main`/i);
   assert.match(update, /fast-forwards the invoking default-branch checkout/i);
   assert.match(update, /never switches a feature branch/i);
-  assert.match(update, /feature checkout receives an exact\s+local runtime overlay/i);
-  assert.match(update, /without staging, committing, merging, rebasing, stashing, or resetting/i);
+  assert.match(update, /feature checkout[\s\S]*exact release-owned harness files/i);
+  assert.match(update, /without staging, committing,\s+merging, rebasing, stashing, or resetting/i);
   assert.match(update, /never uses stash, reset, or a non-fast-forward merge/i);
 });
 
