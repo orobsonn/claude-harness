@@ -139,13 +139,34 @@ export async function executeClassify(
         plan_path: adopted.planPath,
         mode: resume.state.mode,
         feature_id: finalFeatureId,
-        action: resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
+        action: adopted.planReviewVerdict === "APPROVE" &&
           (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
           ? "resume-approved-plan"
-          : resume.state.planner_status === "usable" && resume.state.plan_review_verdict === null &&
+          : adopted.planReviewVerdict === null &&
               (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
             ? "resume-bound-plan-review"
           : "resume",
+        source_session_id: resume.sessionId,
+      }
+      return {
+        title: `classify: resumed ${finalFeatureId}`,
+        output: JSON.stringify(metadata, null, 2),
+        metadata,
+      }
+    }
+  }
+
+  if (transition.action === "noop" && prior.plan_review_verdict === null) {
+    const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
+    const resume = findFeatureResume(context.directory, finalFeatureId)
+    if (resume?.sessionId === sessionID && resume.legacyApproved === true) {
+      const promoted = adoptFeatureResume(context.directory, sessionID, resume, resume.state.mode)
+      if (!promoted.ok) return errorResult("legacy plan approval migration failed", promoted.reason, finalFeatureId)
+      const metadata = {
+        plan_path: promoted.planPath,
+        mode: resume.state.mode,
+        feature_id: finalFeatureId,
+        action: "resume-approved-plan",
         source_session_id: resume.sessionId,
       }
       return {

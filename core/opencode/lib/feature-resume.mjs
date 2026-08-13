@@ -93,8 +93,12 @@ function readResumeCandidate(projectRoot, plansPath, featureId, sessionId) {
       semanticPlanHash(plan) !== binding.snapshot_hash || semanticPlanHash(plan) !== binding.semantic_hash ||
       !validatePlan(plan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
   const taskIds = new Set(plan.tasks.map((task) => task?.id).filter(isSafeTaskId));
-  const approved = state.plan_review_verdict === "APPROVE" && state.planner_active_attempt == null;
   const captureTaskIds = verifiedTaskIds(state, featureId, taskIds, "capture_verified");
+  // Older harness versions did not persist the reviewer receipt. A validated capture
+  // is already the durable proof that this exact bound plan crossed into delivery.
+  // Promote only that legacy shape; a plan with no captured task still goes to review.
+  const legacyApproved = state.plan_review_verdict === null && captureTaskIds.size > 0;
+  const approved = (state.plan_review_verdict === "APPROVE" || legacyApproved) && state.planner_active_attempt == null;
   return {
     sessionId,
     planSessionId,
@@ -106,6 +110,7 @@ function readResumeCandidate(projectRoot, plansPath, featureId, sessionId) {
     planMtimeMs: planStat.mtimeMs,
     planIdentity: `${binding.snapshot_file_hash}:${binding.snapshot_hash}`,
     approved,
+    legacyApproved,
     captured: captureTaskIds.size,
     fidelity: countVerifiedTasks(state, featureId, taskIds, "fidelity_pass"),
     captureTaskIds,
@@ -175,6 +180,7 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
     const source = resume.state;
     const binding = source.planner_plan_binding;
     const sourceMode = typeof source.mode === "string" ? source.mode : "";
+    const resumingSameSession = targetSessionId === resume.sessionId;
     // The bound plan owns its ceremony. A new request can be classified at a higher
     // mode, but changing it here would make a valid resumed plan look incompatible
     // and force a needless planner pass.
@@ -182,8 +188,12 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
     const adopted = {
       ...source,
       session_id: targetSessionId,
-      resumed_from_session_id: isSafeSessionId(resume.planSessionId) ? resume.planSessionId : resume.sessionId,
-      resume_state_source_session_id: resume.sessionId,
+      resumed_from_session_id: resumingSameSession
+        ? source.resumed_from_session_id
+        : isSafeSessionId(resume.planSessionId) ? resume.planSessionId : resume.sessionId,
+      resume_state_source_session_id: resumingSameSession
+        ? source.resume_state_source_session_id
+        : resume.sessionId,
       capture_verified: verifiedEntries(source, source.feature_id, resume.plan),
       fidelity_pass: [],
       hand_finished: [],
@@ -195,6 +205,10 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
       session_status: "active",
       session_completed_at: null,
       session_reopened_at: new Date().toISOString(),
+      // Persist the one-time legacy migration in the new session. The source's
+      // capture is valid only because readResumeCandidate already checked it
+      // against this feature's immutable bound plan.
+      plan_review_verdict: resume.legacyApproved ? "APPROVE" : source.plan_review_verdict,
     };
     if (binding && typeof binding === "object" && typeof binding.snapshot_file_hash === "string" && typeof binding.snapshot_path === "string") {
       const sourceSnapshot = path.resolve(projectRoot, binding.snapshot_path);
@@ -233,14 +247,25 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
             (currentBinding && adoptedBinding &&
               currentBinding.snapshot_file_hash === adoptedBinding.snapshot_file_hash &&
               currentBinding.snapshot_path === adoptedBinding.snapshot_path))
-        ) return current;
+        ) {
+          return resume.legacyApproved && current.plan_review_verdict === null
+            ? { ...current, plan_review_verdict: "APPROVE" }
+            : current;
+        }
         return { ok: false, reason: "target session already has harness state" };
       }
       // The host creates these session-local facts before classify. They are not delivery state.
       return { ...adopted, ...current, session_id: targetSessionId, session_status: "active" };
     });
     if (!persisted.ok) return { ok: false, reason: persisted.reason };
-    return { ok: true, statePath: target.path, planPath: resume.planPath, sourceSessionId: resume.sessionId, planSessionId: resume.planSessionId ?? resume.sessionId };
+    return {
+      ok: true,
+      statePath: target.path,
+      planPath: resume.planPath,
+      sourceSessionId: resume.sessionId,
+      planSessionId: resume.planSessionId ?? resume.sessionId,
+      planReviewVerdict: adopted.plan_review_verdict,
+    };
   } catch {
     return { ok: false, reason: "feature resume adoption failed" };
   }
