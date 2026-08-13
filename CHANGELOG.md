@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.67](https://github.com/orobsonn/claude-harness/compare/v0.55.66...v0.55.67) (2026-08-13)
+
+
+### Bug Fixes
+
+* **opencode:** autentica planner via apply patch ([#791](https://github.com/orobsonn/claude-harness/issues/791)) ([d0186fe](https://github.com/orobsonn/claude-harness/commit/d0186fee023e320c613c3a08dc87d72f3afe75fd))
+
 ## [0.55.66](https://github.com/orobsonn/claude-harness/compare/v0.55.65...v0.55.66) (2026-08-13)
 
 
