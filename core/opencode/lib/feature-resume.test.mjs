@@ -104,21 +104,43 @@ function writeApprovedRun(root, { sessionId, planSessionId = sessionId, featureI
   }));
 }
 
-test("discovers and adopts a prior feature without copying its plan", () => {
+test("adoption materializes a session-local plan instead of sharing a stub", () => {
   const f = fixture();
   try {
     const resume = findFeatureResume(f.root, featureId);
     assert.equal(resume?.sessionId, sourceSession);
-    assert.equal(resolvePlannerArtifactPath(f.root, targetSession, featureId), f.planPath);
 
     const adopted = adoptFeatureResume(f.root, targetSession, resume);
     assert.equal(adopted.ok, true);
-    assert.equal(fs.existsSync(path.join(f.root, ".opencode", "plans", `${targetSession}-${featureId}`, "execution-plan.json")), false);
+    const targetPlanPath = path.join(f.root, ".opencode", "plans", `${targetSession}-${featureId}`, "execution-plan.json");
+    assert.equal(fs.existsSync(targetPlanPath), true);
+    assert.equal(adopted.planPath, targetPlanPath);
+    assert.equal(resolvePlannerArtifactPath(f.root, targetSession, featureId), targetPlanPath);
     const state = JSON.parse(fs.readFileSync(adopted.statePath, "utf8"));
     assert.equal(state.session_id, targetSession);
     assert.equal(state.plan_review_verdict, "REVISE");
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("resumes from the immutable bound snapshot when a prior resumed planner rewrote its canonical plan", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-snapshot-recovery-"));
+  try {
+    const approvedPlan = fullPlan(featureId, "approved");
+    writeApprovedRun(root, { sessionId: sourceSession, featureId, plan: approvedPlan });
+    const sourcePlanPath = path.join(root, ".opencode", "plans", `${sourceSession}-${featureId}`, "execution-plan.json");
+    fs.writeFileSync(sourcePlanPath, JSON.stringify(fullPlan(featureId, "rewritten")));
+
+    const resume = findFeatureResume(root, featureId);
+    assert.equal(resume?.sessionId, sourceSession);
+    assert.deepEqual(resume?.plan, approvedPlan);
+
+    const adopted = adoptFeatureResume(root, targetSession, resume);
+    assert.equal(adopted.ok, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(adopted.planPath, "utf8")), approvedPlan);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

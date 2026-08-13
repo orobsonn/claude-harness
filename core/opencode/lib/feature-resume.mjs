@@ -68,14 +68,17 @@ function readResumeCandidate(projectRoot, plansPath, featureId, sessionId) {
   if (state.planner_active_attempt != null) return null;
   const planSessionId = canonicalPlanSessionId(plansPath, featureId, state, sessionId);
   const planPath = path.join(plansPath, `${planSessionId}-${featureId}`, "execution-plan.json");
-  const plan = readJson(planPath);
-  if (!plan || plan.feature_id !== featureId || !Array.isArray(plan.tasks)) return null;
   const stateStat = fs.statSync(statePath.path);
-  const planStat = fs.statSync(planPath);
   if (state.planner_status !== "usable") {
+    const plan = readJson(planPath);
+    if (!plan || plan.feature_id !== featureId || !Array.isArray(plan.tasks)) return null;
+    const planStat = fs.statSync(planPath);
     if (state.planner_status === "running") return null;
     if (planSessionId !== sessionId || plan.kind !== "stub" || plan.tasks.length !== 0) return null;
-    return { sessionId, planSessionId, planPath, statePath: statePath.path, plan, state, mtimeMs: stateStat.mtimeMs, planMtimeMs: planStat.mtimeMs, approved: false, captured: 0, fidelity: 0 };
+    return {
+      sessionId, planSessionId, planPath, statePath: statePath.path, plan, planRaw: fs.readFileSync(planPath),
+      state, mtimeMs: stateStat.mtimeMs, planMtimeMs: planStat.mtimeMs, approved: false, captured: 0, fidelity: 0,
+    };
   }
   const binding = state.planner_plan_binding;
   if (!binding || typeof binding !== "object" || Array.isArray(binding) || binding.session_id !== sessionId || binding.feature_id !== featureId ||
@@ -86,13 +89,13 @@ function readResumeCandidate(projectRoot, plansPath, featureId, sessionId) {
   const snapshot = path.resolve(projectRoot, binding.snapshot_path);
   if (!snapshot.startsWith(path.resolve(projectRoot) + path.sep)) return null;
   const snapshotRaw = fs.readFileSync(snapshot);
-  const canonicalRaw = fs.readFileSync(planPath);
   const snapshotPlan = readJson(snapshot);
-  const fileHash = crypto.createHash("sha256").update(canonicalRaw).digest("hex");
-  if (!snapshotPlan || !snapshotRaw.equals(canonicalRaw) || fileHash !== binding.snapshot_file_hash || fileHash !== binding.file_hash ||
-      semanticPlanHash(plan) !== binding.snapshot_hash || semanticPlanHash(plan) !== binding.semantic_hash ||
-      !validatePlan(plan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
-  const taskIds = new Set(plan.tasks.map((task) => task?.id).filter(isSafeTaskId));
+  const fileHash = crypto.createHash("sha256").update(snapshotRaw).digest("hex");
+  if (!snapshotPlan || snapshotPlan.feature_id !== featureId || !Array.isArray(snapshotPlan.tasks) ||
+      fileHash !== binding.snapshot_file_hash || fileHash !== binding.file_hash ||
+      semanticPlanHash(snapshotPlan) !== binding.snapshot_hash || semanticPlanHash(snapshotPlan) !== binding.semantic_hash ||
+      !validatePlan(snapshotPlan, { expect: "full", expectedModelStrategy: binding.expected_model_strategy }).ok) return null;
+  const taskIds = new Set(snapshotPlan.tasks.map((task) => task?.id).filter(isSafeTaskId));
   const captureTaskIds = verifiedTaskIds(state, featureId, taskIds, "capture_verified");
   // Older harness versions did not persist the reviewer receipt. A validated capture
   // is already the durable proof that this exact bound plan crossed into delivery.
@@ -103,11 +106,12 @@ function readResumeCandidate(projectRoot, plansPath, featureId, sessionId) {
     sessionId,
     planSessionId,
     planPath,
+    planRaw: snapshotRaw,
     statePath: statePath.path,
-    plan,
+    plan: snapshotPlan,
     state,
     mtimeMs: stateStat.mtimeMs,
-    planMtimeMs: planStat.mtimeMs,
+    planMtimeMs: fs.statSync(snapshot).mtimeMs,
     planIdentity: `${binding.snapshot_file_hash}:${binding.snapshot_hash}`,
     approved,
     legacyApproved,
@@ -179,6 +183,24 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
   try {
     const source = resume.state;
     const binding = source.planner_plan_binding;
+    const targetPlanPath = path.join(projectRoot, ".opencode", "plans", `${targetSessionId}-${source.feature_id}`, "execution-plan.json");
+    const planRaw = Buffer.isBuffer(resume.planRaw) ? resume.planRaw : null;
+    if (!planRaw) return { ok: false, reason: "source canonical plan missing" };
+    fs.mkdirSync(path.dirname(targetPlanPath), { recursive: true });
+    if (fs.existsSync(targetPlanPath)) {
+      if (!fs.readFileSync(targetPlanPath).equals(planRaw)) {
+        return { ok: false, reason: "target canonical plan conflicts" };
+      }
+    } else {
+      const temp = `${targetPlanPath}.${process.pid}.tmp`;
+      try {
+        fs.writeFileSync(temp, planRaw);
+        fs.renameSync(temp, targetPlanPath);
+      } catch {
+        try { fs.rmSync(temp, { force: true }); } catch { /* best effort */ }
+        return { ok: false, reason: "target canonical plan write failed" };
+      }
+    }
     const sourceMode = typeof source.mode === "string" ? source.mode : "";
     const resumingSameSession = targetSessionId === resume.sessionId;
     // The bound plan owns its ceremony. A new request can be classified at a higher
@@ -265,7 +287,7 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
     return {
       ok: true,
       statePath: target.path,
-      planPath: resume.planPath,
+      planPath: targetPlanPath,
       sourceSessionId: resume.sessionId,
       planSessionId: resume.planSessionId ?? resume.sessionId,
       planReviewVerdict: adopted.plan_review_verdict,
