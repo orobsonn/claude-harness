@@ -29,7 +29,6 @@ const CANONICAL_STUBS = [
   "entry-gate.ts",
   "marker-authority.ts",
   "plan-gate.ts",
-  "planner-recovery.ts",
   "plan-write-gate.ts",
   "reinject-state.ts",
   "version-check.ts",
@@ -44,10 +43,7 @@ const CLOSURE_LIBS = [
   "entry-decide.mjs",
   "dispatch-scope.mjs",
   "hand-records.mjs",
-  "planner-state.mjs",
   "obs-emit.mjs",
-  "plan-hash.mjs",
-  "planner-artifact.mjs",
   "roles.mjs",
   "task-dispatch-identity.mjs",
 ];
@@ -1338,7 +1334,7 @@ test("materializeOpencodeRuntime + seed: monorepo fixture → critical paths + c
   }
 });
 
-test("materializeOpencodeRuntime: every closure-10 lib is required and copied into the headless runtime", () => {
+test("materializeOpencodeRuntime: every factual runtime lib is required and copied into the headless runtime", () => {
   const { root, projectRoot, worktree } = makeSeedDirs("oc-seed-closure-10-");
   try {
     const mat = materializeOpencodeRuntime(worktree, projectRoot);
@@ -1475,7 +1471,7 @@ test("materializeOpencodeRuntime: partial stale monorepo cannot preserve a zombi
   }
 });
 
-test("materializeOpencodeRuntime: each missing closure-10 lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
+test("materializeOpencodeRuntime: each missing factual runtime lib rejects incomplete source instead of materializing a factory-breaking runtime", () => {
   for (const name of CLOSURE_LIBS) {
     const { root, projectRoot, worktree } = makeSeedDirs(`oc-seed-missing-${name}-`, { bare: true });
     try {
@@ -1551,7 +1547,7 @@ test("seedOpencodeRootConfig: consumer vendored source re-syncs framework-owned;
     // Harness autoload paths stripped; external package plugins preserved
     assert.deepEqual(cfg.plugin, ["my-external-package"]);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/entry-gate.ts")), true);
-    assert.equal(existsSync(join(worktree, ".opencode/plugin/planner-recovery.ts")), true);
+    assert.equal(existsSync(join(worktree, ".opencode/plugin/plan-write-gate.ts")), true);
     assert.equal(existsSync(join(worktree, ".opencode/plugin/review-guard.ts")), false, "retired review plugin must stay absent");
     assert.equal(existsSync(join(worktree, ".opencode/plugin/loop-guard.ts")), false);
     assertCriticalRuntime(worktree);

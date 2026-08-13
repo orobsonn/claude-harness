@@ -189,7 +189,7 @@ function plantMonorepoOcPlugins(root) {
   const dir = join(oc, "plugin");
   mkdirSync(dir, { recursive: true });
   for (const name of [
-    "entry-gate.ts", "marker-authority.ts", "plan-gate.ts", "planner-recovery.ts",
+    "entry-gate.ts", "marker-authority.ts", "plan-gate.ts",
     "plan-write-gate.ts", "reinject-state.ts", "version-check.ts", "obs-plan-write.ts",
     "obs-eye.ts", "obs-hand.ts", "agent-idle-nudge.ts",
   ]) {
@@ -208,7 +208,7 @@ function plantMonorepoOcPlugins(root) {
   mkdirSync(libDir, { recursive: true });
   for (const name of [
     "gate-state.mjs", "entry-decide.mjs", "dispatch-scope.mjs", "hand-records.mjs",
-    "planner-state.mjs", "obs-emit.mjs", "plan-hash.mjs", "planner-artifact.mjs",
+    "obs-emit.mjs",
     "roles.mjs", "task-dispatch-identity.mjs",
   ]) {
     writeFileSync(join(libDir, name), `// stub ${name}\n`, "utf8");

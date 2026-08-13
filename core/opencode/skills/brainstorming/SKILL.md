@@ -61,7 +61,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 4. **Propose 2–3 approaches** — with trade-offs; lead with your recommendation and why.
 5. **Present design** — in sections scaled to complexity; get approval after each section. Cover architecture, components, data flow, error handling, testing.
 6. **Capture locked decisions** — record each decision the operator settled as an explicit, **non-negotiable constraint** in the spec (its own clearly-marked section). These are the operator's domain judgments; downstream roles (adversary, compliance) must DEFEND them, not optimize them. Persist each locked decision to `.opencode/decision-ledger.md` using entries with id | decision | operator_resolution — this ledger is the authoritative record for downstream roles (adversary, compliance) to check that the implementation does not violate the operator's locked choices.
-7. **Write design doc** — save the canonical runtime spec to `.opencode/plans/<sessionID>-<feature_id>/spec.md`; optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit the docs copy (via `oc-committing-changes`).
+7. **Write design doc** — save the canonical runtime spec to `.opencode/plans/<feature_id>/spec.md`; optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit the docs copy (via `oc-committing-changes`).
 8. **Spec self-review** — inline check for placeholders, contradictions, ambiguity, scope.
 9. **Operator reviews written spec** — ask the operator to review the spec file before proceeding.
 10. **Transition** — hand the approved spec back to `build` Phase 1 (dispatch `planner`). Do NOT invoke any other skill.
@@ -88,7 +88,7 @@ Every task goes through this. "Simple" tasks are where unexamined assumptions ca
 ## After the Design
 
 **Documentation:**
-- Write the validated design to the canonical runtime path `.opencode/plans/<sessionID>-<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build`, write it directly with the edit tool** (`agents/build.md`: `edit: allow`) — older revisions of this skill said `edit` was denied there and instructed a bash workaround; that predates the current `build.md` and no longer applies.
+- Write the validated design to the canonical runtime path `.opencode/plans/<feature_id>/spec.md`. Optionally mirror it to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` when a durable project document is wanted. **When run inside `build`, write it directly with the edit tool** (`agents/build.md`: `edit: allow`).
 - Commit only the durable docs copy (via `oc-committing-changes`); the runtime spec remains session state.
 
 **Spec self-review** — look with fresh eyes:

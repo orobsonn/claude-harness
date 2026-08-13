@@ -2,7 +2,7 @@
  * @description Pure decide for OC plan-write-gate: anti-forge + optional scope rail.
  * Denies Write/Edit to gate-state.json, triage.json, and any JSON under
  * .opencode/plans/.state/ — absolute or relative — and every feature canonical
- * execution-plan.json. Canonical persistence belongs exclusively to planner-recovery.
+ * execution-plan.json except when the hook has authenticated the acting planner.
  * Accepts CC shape (tool_input.file_path) and OC shape (args.filePath|path|file|target).
  * Anti-forge is fail-closed (outside soft catch). Scope rail fail-opens when context
  * is incomplete or on rail errors; an exact dispatch record denies executor/sniper
@@ -448,9 +448,10 @@ export function decide(payload, opts = {}) {
     };
   }
   if (isCanonicalPlanPath(filePath)) {
+    if (opts.actingRole === "planner") return { allow: true };
     return {
       allow: false,
-      reason: `${PREFIX} Blocked: canonical plan is written only by planner-recovery, never by a model tool.`,
+      reason: `${PREFIX} Blocked: canonical plan authorship is planner-only.`,
     };
   }
   if (!carved && isStateFilePath(filePath)) {

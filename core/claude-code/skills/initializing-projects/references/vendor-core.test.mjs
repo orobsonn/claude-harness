@@ -796,17 +796,14 @@ test("re-vendoring removes ceremony sidecar helpers and preserves lib siblings",
   }
 });
 
-test("re-vendoring moves the closure-10 into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
+test("re-vendoring moves the factual runtime closure into framework-owned lib, sweeps only old paths, and preserves a project sibling", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-closure-10-"));
   const closure = [
     "gate-state.mjs",
     "entry-decide.mjs",
     "dispatch-scope.mjs",
     "hand-records.mjs",
-    "planner-state.mjs",
     "obs-emit.mjs",
-    "plan-hash.mjs",
-    "planner-artifact.mjs",
     "roles.mjs",
     "task-dispatch-identity.mjs",
   ];
@@ -1108,6 +1105,7 @@ test("OC_RETIRED_FILES covers every exact path scheduled for OpenCode parity pru
     "plugin/lib/obs-emit.mjs",
     "plugin/lib/plan-hash.mjs",
     "plugin/lib/planner-artifact.mjs",
+    "lib/plan-hash.mjs",
     "plugin/lib/planner-fallback-config.mjs",
     "lib/planner-fallback-config.mjs",
     "agents/planner-fallback.md",
@@ -1505,9 +1503,9 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
     assert.match(entry, /import\("\.\/lib\/hook-identity\.mjs"\)/);
     assert.match(entry, /import\("\.\.\/lib\/gate-state\.mjs"\)/);
     assert.ok(!entry.includes("/Users/"), "vendored plugin must not embed absolute home paths");
-    const plannerRecovery = readFileSync(join(tempDir, ".opencode/plugin/planner-recovery.ts"), "utf8");
-    assert.match(plannerRecovery, /import\("\.\.\/lib\/planner-artifact\.mjs"\)/);
-    assert.ok(!plannerRecovery.includes("/Users/"), "vendored planner import must be relative, not home path");
+    const planGate = readFileSync(join(tempDir, ".opencode/plugin/plan-gate.ts"), "utf8");
+    assert.match(planGate, /import\("\.\.\/lib\/task-dispatch-identity\.mjs"\)/);
+    assert.ok(!planGate.includes("/Users/"), "vendored plan gate imports must be relative, not home paths");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

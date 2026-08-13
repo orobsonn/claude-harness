@@ -67,7 +67,6 @@ function atomicJsonWrite(file: string, value: Record<string, unknown>) {
 
 const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   const { tool } = await import("@opencode-ai/plugin/tool")
-  const { projectRuntimeTodo } = await import("../lib/runtime-todo-projection.mjs")
   const projectRoot = typeof directory === "string" && directory ? directory : worktree
   const authorizedArgs = new WeakMap<object, Authorization>()
 
@@ -237,7 +236,7 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
   }
 
   const mark = tool({
-    description: "Persist a runtime-bound privileged harness marker. A successful result includes todo_projection when available; the parent build agent must immediately call native todowrite with its exact todos. No dedicated shell CLI exists; same-user import and instantiation are outside this authority boundary.",
+    description: "Persist a runtime-bound privileged harness marker. No dedicated shell CLI exists; same-user import and instantiation are outside this authority boundary.",
     args: {
       action: tool.schema.string().describe("brainstormed | adversary_fired | fidelity | regate-pending | regate-passed | hand-finished | capture-verified | final-review | demo-done"),
       task_id: tool.schema.string().optional().describe("Task id for task-scoped markers"),
@@ -260,15 +259,10 @@ const MarkerAuthority: Plugin = async ({ directory, worktree }) => {
       }
       const result = mutate(args, authorization)
       if (!result.ok) return response(false, String(result.reason ?? "marker failed"))
-      const todoProjection = projectRuntimeTodo(projectRoot, authorization.sessionID, result.state)
       return response(true, "", {
         action: authorization.action,
         session_id: authorization.sessionID,
         feature_id: authorization.featureID,
-        todo_projection: todoProjection,
-        todo_instruction: todoProjection.available
-          ? "Immediately call native todowrite with todo_projection.todos exactly as returned."
-          : "Todo projection is unavailable; do not clear native todos and continue the delivery flow.",
       })
     },
   })

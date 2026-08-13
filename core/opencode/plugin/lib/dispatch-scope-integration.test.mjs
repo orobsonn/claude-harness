@@ -14,7 +14,7 @@ function seed(root, callId, { scopePaths = ["src/a.ts"], taskId = "task" } = {})
   const sessionId = "parent";
   const dir = path.join(root, ".opencode", "plans", ".state", sessionId, "dispatch-records");
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${crypto.createHash("sha256").update(callId).digest("hex")}.json`), JSON.stringify({ parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null, feature_id: "feat", task_id: taskId, role: "executor-low", scope_paths: scopePaths, allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z" }));
+  fs.writeFileSync(path.join(dir, `${crypto.createHash("sha256").update(callId).digest("hex")}.json`), JSON.stringify({ parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null, feature_id: "feat", task_id: taskId, role: "executor-low", scope_paths: scopePaths, allowed_writes: [], plan_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z" }));
 }
 
 function messages(sessionId, callId) {

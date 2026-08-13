@@ -391,8 +391,7 @@ test("lt-compliance-no-bash-override", () => {
 
 /**
  * @description Edit/bash matrix per oc-agents-permission-parity (issue #472), updated by #516: planner
- * is the only eye with edit: allow (parity write access; the plan JSON is still persisted by the
- * planner-recovery plugin, never by the planner itself). compliance, security, and planner run bash
+ * is the only eye with edit: allow because it authors the stable plan directly. compliance, security, and planner run bash
  * commands (audit/exploration parity) but declare NO permission.bash override in frontmatter — that
  * access comes from the global ruleset only, since an explicit override is resolved last by OpenCode
  * and would shadow every future global bash deny (issue #516). Every other eye keeps edit: deny and

@@ -59,7 +59,7 @@ function seedDispatch(root, { sessionId, featureId, taskId, role, callId, claime
   fs.writeFileSync(path.join(directory, filename), JSON.stringify({
     parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
     feature_id: featureId, task_id: taskId, role, scope_paths: ["src/a.ts"],
-    allowed_writes: [], frozen_paths: frozenPaths, snapshot_hash: "a".repeat(64), claimed_at: claimedAt,
+    allowed_writes: [], frozen_paths: frozenPaths, plan_hash: "a".repeat(64), claimed_at: claimedAt,
     ...(worktreeBaseline ? { worktree_baseline: worktreeBaseline } : {}),
   }));
 }

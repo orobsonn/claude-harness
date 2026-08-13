@@ -42,13 +42,13 @@ test("eventForPlanPath anchored; rejects .state", () => {
   assert.equal(eventForPlanPath(".opencode/plans/.state/s/execution-plan.json"), null);
 });
 
-test("fullPlanExistsForRun: scoped to session-feature; ignores other full plans", () => {
+test("fullPlanExistsForRun: scoped to the stable classified feature", () => {
   const dir = mkdtempSync(join(tmpdir(), "plan-scope-"));
   try {
     const sid = "ses_abc";
     const fid = "feat-a";
     const other = join(dir, ".opencode/plans/old-other");
-    const mine = join(dir, ".opencode/plans", `${sid}-${fid}`);
+    const mine = join(dir, ".opencode/plans", fid);
     mkdirSync(other, { recursive: true });
     mkdirSync(mine, { recursive: true });
     writeFileSync(join(other, "execution-plan.json"), JSON.stringify({ tasks: [{ id: "x" }] }));
@@ -56,11 +56,11 @@ test("fullPlanExistsForRun: scoped to session-feature; ignores other full plans"
     assert.equal(
       fullPlanExistsForRun({ cwd: dir, sessionId: sid, featureId: fid }),
       false,
-      "stub for this run",
+      "missing full plan for this feature",
     );
     writeFileSync(join(mine, "execution-plan.json"), JSON.stringify({ tasks: [{ id: "t1" }] }));
     assert.equal(fullPlanExistsForRun({ cwd: dir, sessionId: sid, featureId: fid }), true);
-    // without session: fail closed
+    // without a feature: fail closed
     assert.equal(fullPlanExistsForRun({ cwd: dir, sessionId: null, featureId: null }), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });

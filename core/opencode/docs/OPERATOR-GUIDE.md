@@ -269,9 +269,8 @@ npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness lifecycl
 
 | Conceito | Path |
 |---|---|
-| Plano da feature | `.opencode/plans/<sessionID>-<feature_id>/` |
-| Plano JSON | `.../execution-plan.json` |
-| Spec | `.../spec.md` |
+| Plano estável da feature | `.opencode/plans/<feature_id>/execution-plan.json` |
+| Spec | `.opencode/plans/<feature_id>/spec.md` |
 | Estado dos portões | `.opencode/plans/.state/<session>/gate-state.json` |
 | Prova da mão (hand-record) | `.opencode/plans/.state/hand-records/<feature>/<session>/<task>.json` |
 | Achados da run | `findings.md` na raiz (some no harvest) |
@@ -283,8 +282,8 @@ npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness lifecycl
 | Versão vendored | `.opencode/.harness-version` |
 | Routing | `.opencode/harness.routing.json` |
 
-Plans / hand-records / findings são **efêmeros** (apagados no harvest).  
-`CONTEXT.md` **não** é efêmero: é committado e sobe no PR da entrega.  
+Gate-state / hand-records / findings são **efêmeros**. O plano estável permanece no checkout para uma retomada explícita.
+`CONTEXT.md` **não** é efêmero: é committado e sobe no PR da entrega.
 Auditoria que fica = **git**.
 
 ---
@@ -296,7 +295,7 @@ Você não configura plugin a plugin no dia a dia. Eles **barram** atalhos:
 | Sintoma | Causa comum | O que fazer |
 |---|---|---|
 | “Planner negado” / cerimônia | Spec ainda não passou brainstorm + ataque | Completar brainstorm; não pular pro plano |
-| Executor bloqueado após review do plano | **REVISE** no review do plano (`plan_verdict`) | Corrigir o plano; o segundo olho opcional não substitui o **APPROVE** principal |
+| Executor bloqueado após review do plano | O plano está ausente, inválido ou não contém a task | Corrigir o arquivo estável com o planner e validar novamente |
 | Push / PR bloqueado: captura | Falta hand-record DONE + `capture-verified` numa task terminada | A mão precisa terminar de verdade; prosa “pronto” não conta |
 | Push bloqueado: task do plano sem evidência | **Uma writing task do plano nunca foi despachada** (nem hand-record, nem captura) — feature ia subir pela metade | Despachar a mão de cada task que falta antes de entregar. Não bloqueia `DONE_WITH_CONCERNS` (shippable) nem se o plano não puder ser lido (fail-open) |
 | Push bloqueado: regate | Correção grave (sniper-high) sem re-auditoria | Rodar adversary de regate + `regate-passed` |

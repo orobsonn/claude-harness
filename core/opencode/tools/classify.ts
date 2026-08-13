@@ -1,13 +1,11 @@
 /** @description
  * The `classify` native tool for the OpenCode harness.
- * Builds a pre-plan stub via shared buildClassifyStub and writes it under
- * .opencode/plans/<sessionID>-<feature_id>/execution-plan.json. Stamps gate-state markers.
+ * Validates the model's triage choice, stamps session gate state, and returns
+ * the stable `.opencode/plans/<feature_id>/execution-plan.json` path.
  */
 
 import { tool } from "@opencode-ai/plugin/tool"
 import fs from "node:fs"
-import path from "node:path"
-import { resumedApprovedPlanMetadata, resumedBoundPlanReviewMetadata } from "../lib/classify-resume.mjs"
 
 function errorResult(error: string, hint: string, received: string) {
   const payload = { error, hint, received }
@@ -28,7 +26,7 @@ export interface ClassifyContext {
 }
 
 /**
- * @description Core execute logic — validates via buildClassifyStub, writes stub, stamps gate-state.
+ * @description Core execute logic — validates triage, stamps gate-state, and never writes a plan.
  */
 export async function executeClassify(
   args: { mode?: unknown; feature_id?: unknown },
@@ -38,15 +36,14 @@ export async function executeClassify(
   output: string
   metadata: Record<string, unknown>
 }> {
-  const { buildClassifyStub, decideClassifyTransition } = await import(
+  const { decideClassifyTransition } = await import(
     "../../shared/lib/classify-stub.mjs"
   )
   const { isSafeSessionId } = await import("../../shared/lib/feature-id.mjs")
-  const { planDir, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
-  const { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyArtifacts } = await import(
+  const { executionPlanPath, gateStatePath } = await import("../../shared/lib/path-helpers.mjs")
+  const { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyState } = await import(
     "./lib/classify-persist.mjs"
   )
-  const { plannerCycleResetPatch } = await import("../lib/planner-state.mjs")
 
   const featureId = typeof args.feature_id === "string" ? args.feature_id.trim() : ""
   const mode = typeof args.mode === "string" ? args.mode.trim() : ""
@@ -120,130 +117,16 @@ export async function executeClassify(
   const finalFeatureId = transition.featureId
   const peakMode = transition.peakMode
 
-  // A feature outlives a chat session. On a fresh session, adopt its most recent durable
-  // workflow state before creating a stub so planner/review/task progress is not discarded.
-  if (transition.action === "fresh") {
-    const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
-    const resume = findFeatureResume(context.directory, finalFeatureId)
-    // A content-bound plan owns the ceremony chosen when it was approved.  A later
-    // request may be classified more conservatively (for example FULL after a prior
-    // LIGHT plan), but that is not authority to reinterpret or recreate the plan.
-    // Resume its frozen mode and model strategy; a genuinely new feature gets the
-    // current classification below.
-    if (resume && resume.sessionId !== sessionID && (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")) {
-      const adopted = adoptFeatureResume(context.directory, sessionID, resume, resume.state.mode)
-      if (!adopted.ok) {
-        return errorResult("feature resume failed", adopted.reason, finalFeatureId)
-      }
-      const metadata = {
-        plan_path: adopted.planPath,
-        mode: resume.state.mode,
-        feature_id: finalFeatureId,
-        action: adopted.planReviewVerdict === "APPROVE" &&
-          (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
-          ? "resume-approved-plan"
-          : adopted.planReviewVerdict === null &&
-              (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
-            ? "resume-bound-plan-review"
-          : "resume",
-        source_session_id: resume.sessionId,
-      }
-      return {
-        title: `classify: resumed ${finalFeatureId}`,
-        output: JSON.stringify(metadata, null, 2),
-        metadata,
-      }
-    }
-  }
-
-  if (transition.action === "noop" && prior.plan_review_verdict === null) {
-    const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
-    const resume = findFeatureResume(context.directory, finalFeatureId)
-    if (resume?.sessionId === sessionID && resume.legacyApproved === true) {
-      const promoted = adoptFeatureResume(context.directory, sessionID, resume, resume.state.mode)
-      if (!promoted.ok) return errorResult("legacy plan approval migration failed", promoted.reason, finalFeatureId)
-      const metadata = {
-        plan_path: promoted.planPath,
-        mode: resume.state.mode,
-        feature_id: finalFeatureId,
-        action: "resume-approved-plan",
-        source_session_id: resume.sessionId,
-      }
-      return {
-        title: `classify: resumed ${finalFeatureId}`,
-        output: JSON.stringify(metadata, null, 2),
-        metadata,
-      }
-    }
-  }
-
-  const resumedMetadata = transition.action === "noop"
-    ? resumedApprovedPlanMetadata(context.directory, finalFeatureId, prior) ??
-      resumedBoundPlanReviewMetadata(context.directory, finalFeatureId, prior)
-    : null
-  if (resumedMetadata) {
-    return {
-      title: `classify: resumed ${finalFeatureId}`,
-      output: JSON.stringify(resumedMetadata, null, 2),
-      metadata: resumedMetadata,
-    }
-  }
-
-  const built = buildClassifyStub({
-    mode: finalMode,
-    featureId: finalFeatureId,
-    sessionId: sessionID,
-  })
-  if (!built.ok || !built.stub) {
-    return errorResult(
-      built.reason === "invalid featureId" ? "invalid feature_id" : built.reason ?? "invalid",
-      "mode ∈ { no-ceremony, QUICK, LIGHT, FULL }; feature_id kebab-case",
-      JSON.stringify({ mode: finalMode, feature_id: finalFeatureId }),
-    )
-  }
-
-  const pd = planDir({
+  const pp = executionPlanPath({
     projectRoot: context.directory,
     runtime: "opencode",
-    sessionId: sessionID,
     featureId: finalFeatureId,
   })
-  if (!pd.ok) {
-    return errorResult("invalid plan path", pd.reason, finalFeatureId)
+  if (!pp.ok) {
+    return errorResult("invalid plan path", pp.reason, finalFeatureId)
   }
+  const planPath = pp.path
 
-  const planPath = path.join(pd.path, "execution-plan.json")
-
-  if (fs.existsSync(planPath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(planPath, "utf8")) as Record<string, unknown>
-      if (Array.isArray(existing.tasks) && existing.tasks.length > 0) {
-        if (transition.action === "noop") {
-          const metadata = {
-            plan_path: planPath,
-            mode: finalMode,
-            feature_id: finalFeatureId,
-            action: "noop",
-            peak_mode: peakMode,
-          }
-          return {
-            title: `classify: ${finalFeatureId} → ${finalMode} (noop)`,
-            output: JSON.stringify(metadata, null, 2),
-            metadata,
-          }
-        }
-        return errorResult(
-          "plan already exists",
-          "classify will not overwrite an existing full plan",
-          planPath,
-        )
-      }
-    } catch {
-      /* allow overwrite of corrupt stub */
-    }
-  }
-
-  // Replay: do not wipe planner facts, planner, or review state; do not re-emit obs.
   if (transition.action === "noop") {
     const metadata = {
       plan_path: planPath,
@@ -269,22 +152,7 @@ export async function executeClassify(
     triaged: true,
   }
 
-  if (transition.action === "fresh") {
-    Object.assign(statePatch, {
-      brainstormed: false,
-      adversary_fired: false,
-      marker_seals: null,
-      ...plannerCycleResetPatch(),
-    })
-  } else {
-    // escalate: keep planner facts/review/planner; only raise mode + peak
-    statePatch.mode = finalMode
-    statePatch.peak_mode = peakMode
-  }
-
-  const persisted = persistClassifyArtifacts({
-    planPath,
-    stub: built.stub,
+  const persisted = persistClassifyState({
     statePath: gsPath.path,
     statePatch,
     ...(transition.action === "fresh"
@@ -320,11 +188,10 @@ export async function executeClassify(
 
 export default tool({
   description:
-    "Classify the current request into a triage mode and write a pre-plan stub. " +
+    "Classify the current request into a triage mode and persist session triage state. " +
     "The model passes { mode, feature_id } where mode ∈ { no-ceremony, QUICK, LIGHT, FULL }. " +
-    "The stub is written to <directory>/.opencode/plans/<sessionID>-<feature_id>/execution-plan.json. " +
-    "Returns the canonical plan path and echoed { mode, feature_id } in metadata. " +
-    "The stub is a PRE-PLAN artifact (empty tasks) — the planner returns JSON only; planner-recovery (the host adapter) overwrites the stub with the validated full plan.",
+    "Returns the stable <directory>/.opencode/plans/<feature_id>/execution-plan.json path and " +
+    "echoed { mode, feature_id, action } metadata. Classification never creates or changes the plan.",
   args: {
     mode: tool.schema
       .string()

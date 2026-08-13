@@ -28,7 +28,6 @@ const { default: MarkerAuthority } = await import("./marker-authority.ts");
 const { writeHandRecord } = await import("../lib/hand-records.mjs");
 const { formatFeatureTaskEntry } = await import("../../shared/lib/absolution.mjs");
 const { handRecordPath } = await import("../../shared/lib/path-helpers.mjs");
-const { projectRuntimeTodo } = await import("../lib/runtime-todo-projection.mjs");
 
 function statePath(root, sessionID = "ses-authority") {
   return path.join(root, ".opencode", "plans", ".state", sessionID, "gate-state.json");
@@ -73,7 +72,7 @@ function seedProducerDispatch(root, callId = "task-call-one") {
     role: "executor-medium",
     scope_paths: ["src"],
     allowed_writes: [],
-    snapshot_hash: "a".repeat(64),
+    plan_hash: "a".repeat(64),
     claimed_at: "2026-08-01T00:00:00.000Z",
   }));
   return file;
@@ -150,7 +149,7 @@ test("real before-hook object identity writes only the plain boolean workflow fa
     await before({ tool: "mark", sessionID: "ses-authority", callID: "call-authority" }, { args });
     const result = await execute(args, context());
     assert.equal(result.metadata.ok, true, result.output);
-    assert.deepEqual(result.metadata.todo_projection, { available: false }, "a missing plan must never offer an empty list that clears native todos");
+    assert.equal(result.metadata.todo_projection, undefined, "mark must not project a second workflow into native todos");
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(state.brainstormed, true);
     assert.equal(state.brainstormed_binding, undefined);
@@ -420,8 +419,8 @@ test("capture-verified happy path: DONE hand-record + hand-finished stamps captu
   }
 });
 
-test("successful task marks return the canonical todo projection for immediate native todowrite", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-todo-projection-"));
+test("successful task marks do not project a second workflow into native todos", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marker-authority-no-native-todo-"));
   try {
     seed(root);
     seedPlan(root);
@@ -429,14 +428,13 @@ test("successful task marks return the canonical todo projection for immediate n
     const { before, execute } = await harness(root);
     const started = await markOnce(before, execute, "fidelity", { task_id: TASK, sha }, "call-todo-fidelity");
     assert.equal(started.metadata.ok, true, started.output);
-    assert.equal(started.metadata.todo_projection.todos.find((todo) => todo.content === `Deliver task: ${TASK}`)?.status, "in_progress");
+    assert.equal(started.metadata.todo_projection, undefined);
 
     assert.equal((await markOnce(before, execute, "hand-finished", { task_id: TASK }, "call-todo-finished")).metadata.ok, true);
     const captured = await markOnce(before, execute, "capture-verified", { task_id: TASK }, "call-todo-captured");
     assert.equal(captured.metadata.ok, true, captured.output);
-    assert.equal(captured.metadata.todo_projection.todos.find((todo) => todo.content === `Deliver task: ${TASK}`)?.status, "completed");
-    assert.deepEqual(captured.metadata.todo_projection, projectRuntimeTodo(root, SESSION));
-    assert.match(captured.output, /todowrite/i);
+    assert.equal(captured.metadata.todo_projection, undefined);
+    assert.doesNotMatch(captured.output, /todowrite/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

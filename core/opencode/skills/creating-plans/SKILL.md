@@ -11,7 +11,7 @@ This skill runs ONLY inside the `planner` agent (always the planner model from r
 
 # Creating-Plans — Generating execution-plan.json from an approved spec
 
-**This skill runs inside the planner agent (always the planner model from routing).** It does not write code, invoke orchestrating-delivery, or write a model-owned plan file. Its only output is exactly one validated JSON `execution-plan.json` returned in the reply; `planner-recovery` persists it.
+**This skill runs inside the planner agent (always the planner model from routing).** It does not write implementation code or invoke orchestrating-delivery. Its artifact is exactly one validated JSON file at `.opencode/plans/<feature_id>/execution-plan.json`; the planner writes and revises that file directly.
 
 **Announce at the start (in pt-br):** "Usando creating-plans para gerar o execution-plan.json a partir da spec aprovada."
 
@@ -227,7 +227,7 @@ If a decision is genuinely open (the product has not resolved it):
 
 ## Step 7 — Assemble model_strategy
 
-Copy the exact routing snapshot appended by `planner-recovery`; do not reread routing or guess models. This snapshot is deterministic and the host adapter validates it before persisting the return.
+Read the active vendored `.opencode/harness.routing.json` (falling back to root `harness.routing.json`) and project its exact executor tiers plus seven role models. Do not guess models. The native `validate-plan` tool independently validates this strategy against active routing.
 
 **OC shape — exact `hand_tiers` plus fixed eye models:**
 
@@ -245,7 +245,7 @@ Copy the exact routing snapshot appended by `planner-recovery`; do not reread ro
 }
 ```
 
-`hand_tiers` must be exactly the three executor-tier values in the supplied snapshot; the values above are the default routing example. The seven hyphenated eye keys must exactly match that snapshot. `fallback` is optional opaque JSON. Legacy `tiers`, `plan_reviewer`, `executor`, `sniper`, top-level hand keys, and unknown keys are rejected.
+`hand_tiers` must be exactly the three executor-tier values supplied in the planner brief; the values above are the default routing example. The seven hyphenated eye keys must match that brief. `fallback` is optional opaque JSON. Legacy `tiers`, `plan_reviewer`, `executor`, `sniper`, top-level hand keys, and unknown keys are rejected.
 
 **Hand roles (executor and sniper):**
 - `executor` and `sniper` select their dispatch tier elsewhere; `max` maps to high.
@@ -276,13 +276,14 @@ Before returning the JSON, verify:
 4. **depends_on graph:** no dangling references (every dep ID exists in the tasks array), no cycles.
 5. **resolved_judgments completeness:** no open decisions left as prose or empty values. Every key you resolved yourself (HEADLESS) is listed in the same task's optional `resolved_judgments_model_resolved`, and every entry there is a key that task actually resolves.
 6. **scope_paths non-overlap:** tasks at the same DAG level (no dependency between them) do not share writable paths.
-7. **model_strategy complete:** exact `hand_tiers` and all 7 fixed hyphenated eye roles match the supplied routing snapshot.
+7. **model_strategy complete:** exact `hand_tiers` and all 7 fixed hyphenated eye roles match the supplied planner brief.
 
 ---
 
 ## Step 10 — Validate before finalizing
 
-Run the validator against the generated inline JSON or its read-only canonical path. **Do not finalize the plan if validation fails.**
+Write the plan to `.opencode/plans/<feature_id>/execution-plan.json`, run the validator against that
+file, and fix it in place until validation succeeds. **Do not finalize the plan if validation fails.**
 
 **Prefer the OC native tool** `validate-plan` (args: `path` and/or inline `plan`, optional `expect`). CLI fallback:
 
@@ -299,12 +300,12 @@ The shared validator (`core/shared/lib/validate-plan.mjs`) is dependency-free an
 
 When the orchestrator re-dispatches you with an **existing plan + plan-reviewer findings** (each finding carries a `task_id` and a `planner_instruction`), do **not** regenerate from scratch:
 
-1. Read the existing canonical plan JSON; do not write a replacement file yourself.
+1. Read the existing stable plan JSON and revise that same file.
 2. Apply **each** `planner_instruction` to its target `task_id` (or plan-wide for `(plan-wide)` findings) — a **targeted edit**, nothing else.
 3. Keep every untouched task **byte-stable** — do not re-derive tasks the reviewer did not flag.
-4. Re-run Step 9 self-review and Step 10 validation, then return the revised plan.
+4. Re-run Step 9 self-review and Step 10 validation, then report the revised file ready for review.
 
-On REVISE, revise the plan against the reviewer's stated findings and return it for another review. If a finding requires a product decision, record it explicitly in the plan and ask the operator rather than inventing a runtime budget.
+On REVISE, revise the same stable plan against the reviewer's stated findings. If a finding requires a product decision, record it explicitly in the plan and ask the operator rather than inventing a runtime budget.
 
 ---
 
@@ -314,7 +315,7 @@ On REVISE, revise the plan against the reviewer's stated findings and return it 
 - **Task scope too broad** — "implement the auth module" covers 4 concerns. Split by domain boundary.
 - **locked_tests that assert nothing observable** — "error handling works" or "returns 201" (status only) are theatre. Assert the body / returned value / persisted state, not just a status code or that a value exists.
 - **adversarial on trivial tasks** — config, types, schema wiring do not need adversarial review. Reserve it for high-risk tasks.
-- **Incomplete model_strategy** — `hand_tiers` must be exactly low/medium/high approved slugs and all 7 fixed roles must be present. Legacy `tiers` is rejected. Partial snapshots break dispatch.
+- **Incomplete model_strategy** — `hand_tiers` must be exactly low/medium/high approved slugs and all 7 fixed roles must be present. Legacy `tiers` is rejected.
 - **ACs without criterion_refs** — every AC must be owned by exactly one task. Unowned ACs mean unimplemented features.
 - **resolved_judgments left open** — if you write `"algorithm": "TBD"`, resolve it before continuing: **INTERACTIVE** stop and ask the user; **HEADLESS** pick the most defensible default yourself and add the key to `resolved_judgments_model_resolved`. `TBD` is never a valid value in either mode.
 
@@ -323,7 +324,7 @@ On REVISE, revise the plan against the reviewer's stated findings and return it 
 ## HARD-GATE — exit condition
 
 The planner finalizes **only** when:
-1. OC tool `validate-plan` (or CLI `node core/shared/lib/validate-plan.mjs`) returns ok (schema valid)
+1. OC tool `validate-plan` against `.opencode/plans/<feature_id>/execution-plan.json` returns ok (schema valid)
 2. Every AC has at least one `criterion_ref` in a task
 3. Every task has at least one locked_test (`{id, path, assertion}`)
 4. No open `resolved_judgments` values
@@ -332,4 +333,4 @@ After the plan is valid, show a short summary to the user (in pt-br):
 
 > "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs]."
 
-**DO NOT write code. DO NOT invoke orchestrating-delivery directly. The only terminal action is handing the validated plan to the orchestrating-delivery skill.**
+**DO NOT write implementation code. DO NOT invoke orchestrating-delivery directly. The only write is the stable plan; the terminal reply reports its validated task summary.**

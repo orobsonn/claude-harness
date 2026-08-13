@@ -152,21 +152,19 @@ export function isFullExecutionPlan(planFilePath, io = {}) {
 }
 
 /**
- * @description Canonical plan dir: .opencode/plans/<sessionId>-<featureId>
+ * @description Canonical plan dir: .opencode/plans/<featureId>
  * @param {string} cwd
- * @param {string} sessionId
  * @param {string} featureId
  * @returns {string|null}
  */
-export function planDirForRun(cwd, sessionId, featureId) {
+export function planDirForRun(cwd, featureId) {
   if (typeof cwd !== "string" || !cwd) return null;
-  if (typeof sessionId !== "string" || !sessionId) return null;
   if (typeof featureId !== "string" || !featureId) return null;
-  return join(cwd, ".opencode", "plans", `${sessionId}-${featureId}`);
+  return join(cwd, ".opencode", "plans", featureId);
 }
 
 /**
- * @description Full plan exists for THIS run only (session+feature). Stub = false.
+ * @description Full plan exists for the classified feature. Missing feature = false.
  * Falls back to gate-state feature_id when featureId empty.
  * @param {{
  *   cwd: string,
@@ -202,18 +200,18 @@ export function fullPlanExistsForRun(opts) {
         /* ignore */
       }
     }
-    if (sid && fid) {
+    if (fid) {
       const planPath = join(
         cwd,
         ".opencode",
         "plans",
-        `${sid}-${fid}`,
+        fid,
         "execution-plan.json",
       );
       if (exists(planPath) && isFull(planPath, { readFileSync: read })) return true;
       return false;
     }
-    // No session/feature: fail closed to "no full plan" (prefer spec-adversary over wrong eye)
+    // No feature: fail closed to "no full plan" (prefer spec-adversary over wrong eye)
     return false;
   } catch {
     return false;

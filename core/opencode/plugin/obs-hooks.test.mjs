@@ -34,7 +34,7 @@ function seedDispatch(dir, { sessionId, callId, featureId, taskId, role, claimed
     role,
     scope_paths: ["src"],
     allowed_writes: [],
-    snapshot_hash: "a".repeat(64),
+    plan_hash: "a".repeat(64),
     claimed_at: claimedAt,
   }));
   const state = join(dir, ".opencode", "plans", ".state", sessionId, "gate-state.json");
@@ -46,7 +46,7 @@ function handRecordPath(dir, sessionId, featureId, taskId) {
   return join(dir, ".opencode", "plans", ".state", "hand-records", featureId, sessionId, `${taskId}.json`);
 }
 
-test("obs-plan-write: canonical model-tool writes are inert and cannot emit plan-created", async () => {
+test("obs-plan-write emits plan-created for a stable planner write", async () => {
   const dir = mkdtempSync(join(tmpdir(), "obs-pw-"));
   try {
     const meta = join(dir, "obs.json");
@@ -56,9 +56,13 @@ test("obs-plan-write: canonical model-tool writes are inert and cannot emit plan
     const planAbs = join(dir, planRel);
     mkdirSync(dirname(planAbs), { recursive: true });
     writeFileSync(planAbs, JSON.stringify({ tasks: [{ id: "t1" }, { id: "t2" }] }));
-    const hooks = await createObsPlanWriteHooks();
-    await hooks["tool.execute.after"]({ tool: "write" }, { args: { filePath: planRel, content: "model output" } });
-    assert.equal(existsSync(join(dir, "obs.events.jsonl")), false);
+    const hooks = await createObsPlanWriteHooks(dir);
+    await hooks["tool.execute.after"]({ tool: "write", sessionID: "ses_plan" }, { args: { filePath: planRel, content: JSON.stringify({ tasks: [{ id: "t1" }, { id: "t2" }] }) } });
+    const event = JSON.parse(readFileSync(join(dir, "obs.events.jsonl"), "utf8").trim());
+    assert.equal(event.type, "plan-created");
+    assert.equal(event.session_id, "ses_plan");
+    assert.equal(event.feature_id, "feat");
+    assert.equal(event.tasks, 2);
   } finally {
     delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
     rmSync(dir, { recursive: true, force: true });
@@ -71,15 +75,15 @@ test("obs-plan-write leaves canonical and gate-state bytes unchanged", async () 
     const sid = "ses_observer_inert";
     const fid = "inert-plan";
     const statePath = join(dir, ".opencode", "plans", ".state", sid, "gate-state.json");
-    const planPath = join(dir, ".opencode", "plans", `${sid}-${fid}`, "execution-plan.json");
+    const planPath = join(dir, ".opencode", "plans", fid, "execution-plan.json");
     mkdirSync(dirname(statePath), { recursive: true });
     mkdirSync(dirname(planPath), { recursive: true });
-    writeFileSync(statePath, JSON.stringify({ session_id: sid, feature_id: fid, planner_status: "plan_pending_write" }));
+    writeFileSync(statePath, JSON.stringify({ session_id: sid, feature_id: fid, mode: "LIGHT", classified: true }));
     writeFileSync(planPath, JSON.stringify({ feature_id: fid, tasks: [{ id: "task-1" }] }));
     const beforeState = readFileSync(statePath);
     const beforePlan = readFileSync(planPath);
     const hooks = await createObsPlanWriteHooks(dir);
-    await hooks["tool.execute.after"]({ tool: "write", sessionID: sid }, { args: { filePath: `.opencode/plans/${sid}-${fid}/execution-plan.json`, content: "model output" } });
+    await hooks["tool.execute.after"]({ tool: "write", sessionID: sid }, { args: { filePath: `.opencode/plans/${fid}/execution-plan.json`, content: "model output" } });
     assert.deepEqual(readFileSync(statePath), beforeState);
     assert.deepEqual(readFileSync(planPath), beforePlan);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -114,8 +118,8 @@ test("obs-hand emits task-executing and hand-ran without dispatch mutation", asy
     process.env.HARNESS_OBSERVABILITY_RUN_PATH = meta;
     const sid = "ses_obs";
     const fid = "feat-obs";
-    mkdirSync(join(dir, `.opencode/plans/${sid}-${fid}`), { recursive: true });
-    writeFileSync(join(dir, `.opencode/plans/${sid}-${fid}/execution-plan.json`), JSON.stringify({ tasks: [{ id: "t-obs", scope_paths: ["src/a.ts"] }] }));
+    mkdirSync(join(dir, `.opencode/plans/${fid}`), { recursive: true });
+    writeFileSync(join(dir, `.opencode/plans/${fid}/execution-plan.json`), JSON.stringify({ tasks: [{ id: "t-obs", scope_paths: ["src/a.ts"] }] }));
     const args = taskArgs("t-obs", "executor-medium", fid);
     const hooks = await createObsHandHooks(dir);
     assert.equal(hooks.event, undefined, "obs-hand must not own Task lifecycle events");

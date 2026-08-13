@@ -9,33 +9,9 @@
  *   - anti-stale (NEW-2): fix-mode engages only when the reviewed sha matches the PR head; a mismatch
  *     / gh error / empty scope falls back to normal mode, and any stale findings file is pruned.
  *
- * #ac-2.1 (issue #488) / #ac-3 (issue #513): the OTHER half of fix-mode — whether the sniper TASK
- * DISPATCH composed above actually survives the real OpenCode gate chain
- * (planner-recovery → plan-gate → obs-hand → entry-gate,
- * docs/OC-CC-PARITY-REPORT.md §2). The tests above never exercised this: they only assert what
- * cron-a-dispatch.mjs COMPOSES for tmux, never what the OpenCode plugin chain does with it once
- * dispatched. Three tests below cover the shapes that matter:
- *   - a REALISTIC fresh fix-mode gate-state (classify/mode stamped; recorded prior dual/
- *     plan_verdict; no planner ceremony/binding/regate/fidelity) survives all 5 plugins
- *     (#ac-3.1, below).
- *   - a genuinely COLD/EMPTY gate-state (no `.opencode/plans/.state/<sid>/gate-state.json` at all)
- *     is DENIED at entry-gate's Gate 1 (CC parity, #485/#509: every delivery role — sniper included
- *     — requires a classified mode of LIGHT/FULL). This is intentional, correct-by-design behavior
- *     (Gate 1 itself is out of #513's scope) — the `chain:` test asserts the DENY so it regresses
- *     loudly if Gate 1 is ever silently loosened.
- *   - issue #513's fix: `FIX_MODE_TRIGGER` (cron-a-dispatch.mjs:247) now explicitly instructs the
- *     session to call the `classify` tool DIRECTLY (mode LIGHT, fixed — not routed through the full
- *     `triaging-requests` protocol, whose own rubric could land a small fix on QUICK, which Gate 1
- *     also denies) BEFORE dispatching the sniper — unlike before, where only `TRIGGER_PROMPT`/
- *     `OPENCODE_TRIGGER_PROMPT` pointed the session at the entry policy. The `#ac-3` test below
- *     proves the CONDITIONAL consequence: IF a session follows that instruction and classify
- *     genuinely runs (simulated by calling the real classify pipeline against a cold root, not a
- *     fixture edited to inject the field), the sniper dispatch survives the same real chain the
- *     `chain:` test denies. What it does NOT prove — and cannot, by test alone — is that a real
- *     session actually FOLLOWS the trigger's instruction: that stamp is still model-invoked, never a
- *     code guarantee. The trigger text is the strongest lever available at this issue's scope
- *     (FIX_MODE_TRIGGER prose only, no plugin/gate code); closing the "model ignores the
- *     instruction" residual risk would require a code-level guarantee outside #513's scope.
+ * The integration checks below drive the current factual OpenCode chain: a classified LIGHT
+ * session plus its existing stable feature plan may resume the sniper task; a cold session without
+ * those facts is denied. No planner lifecycle, review receipt, or session binding is reconstructed.
  *
  * Run with: HARNESS_MEM_GUARD_BYTES=0 node --test core/vps/cron-a-dispatch-fixmode.test.mjs
  * (the memory guard in cron-a-dispatch.mjs's `dispatch()` fails 4 of the tests above under low free
@@ -48,34 +24,24 @@ import os from "node:os";
 import path from "node:path";
 
 import { dispatch } from "./cron-a-dispatch.mjs";
-import { PlannerRecovery } from "../opencode/plugin/planner-recovery.ts";
 import { PlanGate } from "../opencode/plugin/plan-gate.ts";
 import { obsHand } from "../opencode/plugin/obs-hand.ts";
 import { EntryGate } from "../opencode/plugin/entry-gate.ts";
 import { decideClassifyAuthority } from "../shared/lib/classify-authority.mjs";
-import { buildClassifyStub, decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
-import { gateStatePath, planDir } from "../shared/lib/path-helpers.mjs";
+import { decideClassifyTransition } from "../shared/lib/classify-stub.mjs";
+import { executionPlanPath, gateStatePath } from "../shared/lib/path-helpers.mjs";
 import {
   FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE,
-  persistClassifyArtifacts,
+  persistClassifyState,
 } from "../opencode/tools/lib/classify-persist.mjs";
-import { plannerCycleResetPatch } from "../opencode/lib/planner-state.mjs";
 
-const { createPlannerRecoveryHooks } = PlannerRecovery.testApi;
 const { createPlanGateHooks } = PlanGate.testApi;
 const { createObsHandHooks } = obsHand.testApi;
 const { createEntryGateHooks } = EntryGate.testApi;
 
 /**
- * Reconstructs, from its real pure sub-functions, exactly what `core/opencode/tools/classify.ts`'s
- * `executeClassify` does for a fresh (never-classified) session at mode LIGHT. The `classify`
- * native tool itself cannot be imported in this test process — it statically imports
- * `@opencode-ai/plugin/tool` (the OpenCode host SDK), which is not installed outside a real
- * OpenCode runtime — so this repo's own convention (classify-persist.test.mjs,
- * classify-stub.test.mjs, classify-authority.test.mjs) is to exercise the underlying pure
- * functions directly rather than the tool wrapper. This is the SAME sequence classify.ts runs
- * (authority check → transition decision → stub build → persist), calling the real production
- * functions unmodified — not a hand-crafted gate-state fixture.
+ * Reconstructs the native classify tool's pure path: authority, transition, then triage-state
+ * persistence. Classification deliberately does not create or rewrite the stable feature plan.
  */
 function runRealClassify({ root, sessionId, featureId, mode, priorState }) {
   const auth = decideClassifyAuthority({ agent: "", parentSessionId: null, sessionId });
@@ -104,13 +70,6 @@ function runRealClassify({ root, sessionId, featureId, mode, priorState }) {
     throw new Error(`runRealClassify only models the "fresh" transition; got "${transition.action}"`);
   }
 
-  const built = buildClassifyStub({ mode: transition.mode, featureId: transition.featureId, sessionId });
-  if (!built.ok) throw new Error(`classify stub build failed: ${built.reason}`);
-
-  const pd = planDir({ projectRoot: root, runtime: "opencode", sessionId, featureId: transition.featureId });
-  if (!pd.ok) throw new Error(`invalid plan path: ${pd.reason}`);
-  const planPath = path.join(pd.path, "execution-plan.json");
-
   const statePatch = {
     session_id: sessionId,
     feature_id: transition.featureId,
@@ -118,21 +77,51 @@ function runRealClassify({ root, sessionId, featureId, mode, priorState }) {
     peak_mode: transition.peakMode,
     classified: true,
     triaged: true,
-    brainstormed: false,
-    adversary_fired: false,
-    marker_seals: null,
-    ...plannerCycleResetPatch(),
   };
 
-  const persisted = persistClassifyArtifacts({
-    planPath,
-    stub: built.stub,
+  const persisted = persistClassifyState({
     statePath: gsPath.path,
     statePatch,
     removeStateKeys: FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE,
   });
   if (!persisted.ok) throw new Error(`classify persistence failed: ${persisted.reason}`);
   return persisted.state;
+}
+
+function writeStableFixPlan(root, featureId) {
+  const resolved = executionPlanPath({ projectRoot: root, runtime: "opencode", featureId });
+  if (!resolved.ok) throw new Error(resolved.reason);
+  const plan = {
+    feature_id: featureId,
+    mode: "light",
+    model_strategy: {
+      hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" },
+      planner: "openai/gpt-5.6-sol",
+      "plan-reviewer": "openai/gpt-5.6-sol",
+      compliance: "openai/gpt-5.6-sol",
+      adversary: "openai/gpt-5.6-sol",
+      security: "openai/gpt-5.6-sol",
+      harvester: "openai/gpt-5.6-luna",
+      shipper: "openai/gpt-5.6-luna",
+    },
+    final_review: { compliance: true, adversary: true },
+    demo: { type: "smoke", scenarios_from_refs: ["#uj-1"] },
+    tasks: [{
+      id: "t0-fix",
+      title: "Apply reviewed fix",
+      description: "Apply the bounded review finding.",
+      depends_on: [],
+      severity: "medium",
+      complexity: "medium",
+      scope_paths: ["core/x.mjs"],
+      resolved_judgments: { source: "approved stable plan" },
+      criterion_refs: ["#ac-1"],
+      locked_tests: [{ id: "lt-fix", path: "test/fix.test.mjs", assertion: "Given a reviewed fix, When applied, Then the regression stays closed" }],
+      adversarial: { enabled: false, focus: [] },
+    }],
+  };
+  fs.mkdirSync(path.dirname(resolved.path), { recursive: true });
+  fs.writeFileSync(resolved.path, `${JSON.stringify(plan)}\n`, "utf8");
 }
 
 function makeTempDirs() {
@@ -360,28 +349,11 @@ test("post-checkout SHA mismatch aborts before tmux instead of running fix-mode 
 });
 
 // ---------------------------------------------------------------------------
-// #ac-3.1 (issue #485): the sniper Task dispatch that fix-mode actually issues must survive the
-// REAL dispatch chain (planner-recovery → plan-gate → obs-hand → entry-gate, the
-// documented order from plugin-dispatch-order.test.mjs) against a REALISTIC fresh fix-mode
-// session's gate-state: classified/mode present (triaging-requests always runs at session start
-// per core/CLAUDE.md — the FIX_MODE_TRIGGER only skips planner/plan-reviewer, not classify) and
-// dual_status/plan_verdict recorded+sealed (the plan WAS already dual-reviewed and APPROVEd by
-// the original pre-rejection pipeline this branch resumes — the former review-classification gate's
-// requireDualOn-by-default check, out of THIS issue's scope, would otherwise deny any executor/
-// sniper dispatch missing it, unrelated to what #485 fixes). NO planner_plan_binding, NO
-// brainstormed/adversary_fired, NO regate, NO fidelity_pass — a resumed branch's session never
-// re-ran planner/plan-reviewer ceremony (#476 already made plan-gate.ts's binding block
-// conditional/skip on that absence). Before #485 this died on entry-decide.mjs's fidelity rail:
-// the sniper was gated by the SAME fidelity-pass check as the executor (now EXEMPT, ac-2.1) with
-// an empty fidelity_pass. This is a superset/stronger check than the unit tests in
-// entry-decide.test.mjs: it drives the REAL hook wiring (entry-gate.ts, untouched by #485)
-// end-to-end instead of just the pure decideEntryTask function.
-// DISPATCH_CHAIN is declared once, below, alongside issue #488's `chain:` test group — this test
-// runs inside a node:test callback (executed after the whole module has finished evaluating), so
-// referencing the later `const` here is safe (no temporal-dead-zone at actual test-run time).
+// A resumed fix reuses the existing stable plan. Only classified session facts and that plan are
+// required by the current chain; there is no reviewer receipt or planner lifecycle to recreate.
 // ---------------------------------------------------------------------------
 
-test("#ac-3.1 sniper Task dispatch with a realistic fresh fix-mode gate-state (recorded prior dual/plan_verdict; no planner ceremony/binding/regate/fidelity for THIS session) survives all 5 real dispatch-chain plugins", async () => {
+test("#ac-3.1 sniper Task dispatch with classified LIGHT state and an existing stable plan survives the real dispatch chain", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
   try {
     const sessionId = "ses_fixmode_chain";
@@ -393,10 +365,9 @@ test("#ac-3.1 sniper Task dispatch with a realistic fresh fix-mode gate-state (r
       feature_id: featureId,
       mode: "LIGHT",
       classified: true,
-      dual_status: "done",
-      plan_verdict: "APPROVE",
     };
     fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify(gateState), "utf8");
+    writeStableFixPlan(root, featureId);
 
     const input = { tool: "task", sessionID: sessionId, callID: "call-fixmode-1" };
     const output = {
@@ -441,11 +412,11 @@ test("stale hygiene: a NON-resume (fresh-branch) dispatch prunes any leftover fi
   }
 });
 
-// #ac-2.1 (issue #488) — real 5-plugin gate chain, not just the tmux trigger composition.
+// Current before-hook chain, not just the tmux trigger composition.
 //
 // Order matches DISPATCH_CHAIN_ORDER, the documented contract asserted by
 // core/opencode/plugin/plugin-dispatch-order.test.mjs (docs/OC-CC-PARITY-REPORT.md §2): the first
-// throw wins, so this drives the SAME `input`/`output` object through all 5 factories in that
+// throw wins, so this drives the same `input`/`output` object through every factory in that
 // documented order, letting an earlier plugin's prompt/args mutation (as in production) propagate
 // downstream. Caveat inherited from plugin-dispatch-order.test.mjs's own docstring: the REAL
 // OpenCode plugin loader discovers these via an unsorted filesystem glob, which is not portable
@@ -453,14 +424,13 @@ test("stale hygiene: a NON-resume (fresh-branch) dispatch prunes any leftover fi
 // descending on the parity report's environment) — DISPATCH_CHAIN_ORDER is the documented/asserted
 // contract, not a live re-measurement of the raw glob order on whatever host runs this test.
 const DISPATCH_CHAIN = [
-  ["planner-recovery", createPlannerRecoveryHooks],
   ["plan-gate", createPlanGateHooks],
   ["obs-hand", createObsHandHooks],
   ["entry-gate", createEntryGateHooks],
 ];
 
 /**
- * Drives a single Task dispatch through the real 5-plugin chain against a project root, in
+ * Drives a single Task dispatch through the real before-hook chain against a project root, in
  * documented order. Returns `{ survived: true }` if every plugin's `tool.execute.before` allowed
  * it, or `{ survived: false, deniedAt, message }` at the first thrown deny.
  */
@@ -478,32 +448,7 @@ async function runDispatchChain(root, input, output, entryDeps = null) {
   return { survived: true };
 }
 
-test("chain: sniper Task dispatch with a TRULY COLD/EMPTY gate-state (no gate-state.json at all, no harness.routing.json) is DENIED at entry-gate's Gate 1 (ceremony/classify missing) — the honest current behavior, not the hoped-for one", async () => {
-  // #483/#484/#485/#486 are all closed and merged into this branch — re-verified empirically that
-  // FOUR of the five plugins now fail open against a cold/empty gate-state:
-  //   - planner-recovery: allows (non-planner role).
-  //   - plan-gate: the planner_plan_binding block is now conditional on the binding's EXISTENCE
-  //     (#476/#500) — absent → skip entirely. dual/plan_verdict classification is record-only
-  //     (#483/#511) — it never denies, regardless of harness.routing.json being present on disk.
-  //   - obs-hand: shadow-records only (#488's own T17 half, PR #508/#509) — never denies dispatch.
-  // But entry-gate's Gate 1 (entry-decide.mjs:88-109, CC parity #485/#509) requires EVERY delivery
-  // role — sniper included, no per-role exemption, exactly like Claude Code's entry-gate.mjs — to
-  // be dispatched under a classified mode of LIGHT or FULL. A literally empty gate-state has
-  // neither, so it is denied with "ceremony missing".
-  //
-  // An earlier version of this test injected {classified:true, mode:"LIGHT"} into the gate-state
-  // to make it pass, on the premise that "core/CLAUDE.md always runs triaging-requests at session
-  // start, so a real fix-mode dispatch never actually reaches Gate 1 without that stamp". That
-  // premise does NOT hold under scrutiny: unlike TRIGGER_PROMPT and OPENCODE_TRIGGER_PROMPT
-  // (cron-a-dispatch.mjs:135-151), which explicitly say "Follow the vendored .claude/.opencode/
-  // entry policy", FIX_MODE_TRIGGER (cron-a-dispatch.mjs:247-258) never does — and the classify
-  // stamp is model-invoked (via the triaging-requests skill calling classify.mjs), never a
-  // deterministic code guarantee. Asserting `survived: true` against a fixture edited to inject
-  // exactly the field whose absence causes the denial characterizes the fixture, not the system —
-  // see the tracking issue this PR opens for closing the real gap (FIX_MODE_TRIGGER should
-  // explicitly instruct the session to classify before dispatching the sniper). This test instead
-  // asserts today's REAL, deterministic behavior so it regresses loudly if Gate 1 is ever silently
-  // loosened, independent of whether/when the trigger prompt gets fixed.
+test("chain: sniper Task dispatch with no classified state or stable plan is denied by the factual plan gate", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-chain-"));
   try {
     // Deliberately nothing on disk: no `.opencode/plans/.state/<sid>/gate-state.json`, no
@@ -526,26 +471,14 @@ test("chain: sniper Task dispatch with a TRULY COLD/EMPTY gate-state (no gate-st
     const result = await runDispatchChain(root, input, output);
     assert.equal(result.survived, false,
       "expected a truly cold/empty gate-state to be DENIED (ceremony/classify missing), not to survive");
-    assert.equal(result.deniedAt, "entry-gate");
-    assert.match(result.message, /ceremony missing/);
+    assert.equal(result.deniedAt, "plan-gate");
+    assert.match(result.message, /gate-state missing|stable plan missing/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-// #ac-3 (issue #513) — the literal form of #488's original #ac-2.1: a sniper Task dispatch from a
-// TRULY COLD gate-state survives the real 5-plugin chain WHEN classify has genuinely run first
-// (mode LIGHT) — not because this test injects `{classified, mode}` into a hand-written fixture (the
-// exact shortcut the `chain:` test above documents as illegitimate). This is a CONDITIONAL proof:
-// FIX_MODE_TRIGGER (edited above, cron-a-dispatch.mjs:247) now instructs the session to call
-// classify directly before dispatching the sniper, but whether a real session follows that
-// instruction remains model-judgment, not code-guaranteed (see the file header docstring). What
-// this test proves is the consequence, not the compliance: IF classify runs — via the REAL classify
-// pipeline (runRealClassify, defined above — the exact pure sub-functions
-// `core/opencode/tools/classify.ts` itself calls; see that helper's docstring for why the tool
-// wrapper can't be imported directly in this test process) against a genuinely empty root — THEN the
-// sniper dispatch survives the same unmodified real chain the `chain:` test denies.
-test("#ac-3 (issue #513): once classify has genuinely run first (mode LIGHT), a sniper Task dispatch survives the real 5-plugin chain from a truly cold start — not a field injected into a fixture", async () => {
+test("#ac-3 (issue #513): classify plus the pre-existing stable plan lets a fix-mode sniper resume", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixmode-classify-"));
   try {
     const sessionId = "ses_fixmode_classify_513";
@@ -557,6 +490,7 @@ test("#ac-3 (issue #513): once classify has genuinely run first (mode LIGHT), a 
     const persistedState = runRealClassify({ root, sessionId, featureId, mode: "LIGHT" });
     assert.equal(persistedState.classified, true, "classify must persist classified:true");
     assert.equal(persistedState.mode, "LIGHT", "classify must persist mode LIGHT");
+    writeStableFixPlan(root, featureId);
 
     const input = { tool: "task", sessionID: sessionId, callID: "call-fixmode-classify-1" };
     const output = {
@@ -600,7 +534,6 @@ test("drift guard: fresh classify removes legacy ceremony sidecars from persiste
       assert.equal(Object.hasOwn(persistedState, retiredKey), false, `${retiredKey} survived fresh classify`);
     }
     assert.equal(persistedState.classified, true);
-    assert.equal(persistedState.classify_status, "ready");
     assert.equal(persistedState.unrelated_fact, "preserve-me");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -55,9 +55,8 @@ test("#autonomy — only a choice that changes the delivered product remains hum
   assert.match(skill, /infrastructure|deploy|publish/i);
 });
 
-test("#autonomy — automatic recovery may not weaken rails or mutate frozen tests through an executor", () => {
-  assert.match(skill, /never disable|must not disable/i);
-  assert.match(skill, /never relax|must not relax/i);
+test("#autonomy — engineering repairs may not weaken rails or mutate frozen tests through an executor", () => {
+  assert.match(skill, /never disable a rail, relax a locked assertion/i);
   assert.match(skill, /test-author/i);
   assert.match(skill, /fidelity/i);
 });

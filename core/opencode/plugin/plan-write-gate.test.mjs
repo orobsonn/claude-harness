@@ -16,7 +16,7 @@ import { PlanWriteGate } from "./plan-write-gate.ts";
 import { PlanGate } from "./plan-gate.ts";
 import { obsHand } from "./obs-hand.ts";
 
-const { createPlanWriteGateHooks } = PlanWriteGate.testApi;
+const { createPlanWriteGateHooks, resolveOfficialPlannerIdentity } = PlanWriteGate.testApi;
 const { createPlanGateHooks } = PlanGate.testApi;
 const { createObsHandHooks } = obsHand.testApi;
 
@@ -34,7 +34,7 @@ function createScopedHooks(root, { scopePaths = ["src/a.ts"] } = {}) {
       runtimeSessionId: `child-${input.sessionID}`,
       callId: "task-call",
       role: "executor-high",
-      record: { parent_session_id: input.sessionID, dispatch_call_id: "task-call", child_session_id: `child-${input.sessionID}`, feature_id: "feat-scope", task_id: "t1", role: "executor", scope_paths: scopePaths, allowed_writes: [], snapshot_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z" },
+      record: { parent_session_id: input.sessionID, dispatch_call_id: "task-call", child_session_id: `child-${input.sessionID}`, feature_id: "feat-scope", task_id: "t1", role: "executor", scope_paths: scopePaths, allowed_writes: [], plan_hash: "a".repeat(64), claimed_at: "2026-08-01T00:00:00.000Z" },
     }),
   });
 }
@@ -55,6 +55,68 @@ test("deny model-tool writes to a feature canonical execution-plan.json", () => 
   };
   assert.equal(decide(p).allow, false);
   assert.match(decide(p).reason ?? "", /canonical plan/i);
+});
+
+test("canonical plan authorship allows only an authenticated planner decision", () => {
+  const payload = {
+    tool_input: { file_path: ".opencode/plans/foo/execution-plan.json" },
+  };
+  assert.equal(decide(payload, { actingRole: "planner" }).allow, true);
+  for (const actingRole of ["", "build", "plan-reviewer", "executor-low"]) {
+    const result = decide(payload, { actingRole });
+    assert.equal(result.allow, false, actingRole || "missing role");
+  }
+});
+
+test("canonical plan hook requires official planner authentication", async () => {
+  const target = ".opencode/plans/foo/execution-plan.json";
+  const allowed = await createPlanWriteGateHooks("/work/project", {
+    resolvePlannerIdentity: async () => ({ ok: true, role: "planner" }),
+  });
+  await assert.doesNotReject(() => allowed["tool.execute.before"](
+    { tool: "write", sessionID: "ses_planner", callID: "write-plan" },
+    { args: { filePath: target, content: "{}" } },
+  ));
+
+  const denied = await createPlanWriteGateHooks("/work/project", {
+    resolvePlannerIdentity: async () => ({ ok: false, reason: "official planner identity missing" }),
+  });
+  await assert.rejects(() => denied["tool.execute.before"](
+    { tool: "write", sessionID: "ses_build", callID: "write-plan", agent: "planner" },
+    { args: { filePath: target, content: "{}" } },
+  ), /planner identity|planner-only|canonical plan/i);
+});
+
+test("official planner identity binds the write call to its parent Task dispatch", async () => {
+  const child = "ses_planner_child";
+  const parent = "ses_build_parent";
+  const result = await resolveOfficialPlannerIdentity("/work/project", {
+    tool: "write",
+    sessionID: child,
+    callID: "write-plan",
+  }, {
+    reader: {
+      getSession: async () => ({ id: child, parentID: parent }),
+      getMessages: async (sessionId) => sessionId === child
+        ? [
+            { info: { id: "user-child", role: "user", sessionID: child, agent: "planner" }, parts: [] },
+            { info: { id: "assistant-child", parentID: "user-child", role: "assistant", sessionID: child, agent: "planner" }, parts: [
+              { type: "tool", tool: "write", callID: "write-plan", sessionID: child, messageID: "assistant-child" },
+            ] },
+          ]
+        : [
+            { info: { id: "assistant-parent", role: "assistant", sessionID: parent, agent: "build" }, parts: [
+              { type: "tool", tool: "task", callID: "dispatch-planner", sessionID: parent, messageID: "assistant-parent", state: {
+                status: "running",
+                input: { subagent_type: "planner" },
+                metadata: { sessionId: child },
+              } },
+            ] },
+          ],
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, role: "planner", parentSessionId: parent });
 });
 
 test("literal Bash mutations against a canonical plan are frictioned while reads pass", () => {
@@ -130,7 +192,7 @@ test("canonical plan is denied through apply_patch for every role and any target
   for (const agent of ["planner", "compliance", "executor-low", "sniper-high"]) {
     await assert.rejects(
       () => before({ tool: "apply_patch", agent }, { args: { patchText: patch } }),
-      /canonical plan/,
+      /planner identity|planner-only|canonical plan/,
       agent,
     );
   }
@@ -142,15 +204,28 @@ test("canonical plan scan reaches a real plan after a nested .state decoy", () =
   assert.match(decide({ tool_input: { file_path: p } }).reason ?? "", /canonical plan/);
 });
 
-test("official delete variants deny canonical plan before identity resolution", async () => {
+test("official delete variants deny canonical plan without planner authentication", async () => {
   const before = (await createPlanWriteGateHooks()) ["tool.execute.before"];
   for (const tool of ["delete", "file.delete", "delete_file", "fs_delete"]) {
     await assert.rejects(
       () => before({ tool }, { args: { filePath: ".opencode/plans/ses-feat/execution-plan.json" } }),
-      /canonical plan/,
+      /planner identity|planner-only|canonical plan/,
       tool,
     );
   }
+});
+
+test("authenticated planner still cannot delete the canonical plan", async () => {
+  const before = (await createPlanWriteGateHooks("/work/project", {
+    resolvePlannerIdentity: async () => ({ ok: true, role: "planner" }),
+  }))["tool.execute.before"];
+  await assert.rejects(
+    () => before(
+      { tool: "delete", sessionID: "ses_planner", callID: "delete-plan" },
+      { args: { filePath: ".opencode/plans/feat/execution-plan.json" } },
+    ),
+    /planner-only|canonical plan/i,
+  );
 });
 
 test("canonical path ignores an unrelated .state ancestor but excludes plans/.state itself", () => {
@@ -315,7 +390,7 @@ test("hermetic plugin: OC write to gate-state and canonical plan throw; normal f
         },
       },
     ),
-    /canonical plan/,
+    /planner identity|planner-only|canonical plan/,
   );
 
   await assert.doesNotReject(() =>
@@ -336,19 +411,19 @@ test("hermetic plugin: OC write to gate-state and canonical plan throw; normal f
   );
 });
 
-test("canonical execution plan is denied through Write/Edit regardless of binding", async () => {
+test("canonical execution plan is denied through Write/Edit without planner authentication", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-write-bound-"));
   try {
     const stateDir = path.join(root, ".opencode", "plans", ".state", "ses_bound");
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ planner_status: "usable" }));
+    fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ classified: true }));
     const before = (await createScopedHooks(root))["tool.execute.before"];
     await assert.rejects(
       () => before(
         { tool: "write", sessionID: "ses_bound" },
         { args: { filePath: ".opencode/plans/ses_bound-feat/execution-plan.json", content: "{}" } },
       ),
-      /canonical plan/,
+      /planner identity|planner-only|canonical plan/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

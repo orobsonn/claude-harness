@@ -1,8 +1,5 @@
-/** @description Persist a fail-closed classify reset before replacing its stub; never rolls plan bytes back. */
+/** @description Persist only classify triage facts in the session gate state. */
 
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import {
   mergeGateState as defaultMergeGateState,
   withGateStateLock as defaultWithGateStateLock,
@@ -16,18 +13,6 @@ export const FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE = Object.freeze([
   "ceremony_evidence",
 ]);
 
-function atomicWrite(file, content) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-  try {
-    fs.writeFileSync(temp, content);
-    fs.renameSync(temp, file);
-  } catch (error) {
-    try { fs.rmSync(temp, { force: true }); } catch { /* ignore */ }
-    throw error;
-  }
-}
-
 function mergeGateStateAndRemove(statePath, patch, removeStateKeys, deps = {}) {
   const withGateStateLock = deps.withGateStateLock ?? defaultWithGateStateLock;
   return withGateStateLock(statePath, (previous) => {
@@ -39,8 +24,8 @@ function mergeGateStateAndRemove(statePath, patch, removeStateKeys, deps = {}) {
   });
 }
 
-/** @description Persist reset, replace stub, then mark classify ready; no failure path rewrites the plan. */
-export function persistClassifyArtifacts(input, deps = {}) {
+/** @description Merge one classify transition without creating or changing a plan artifact. */
+export function persistClassifyState(input, deps = {}) {
   const removeStateKeys = Array.isArray(input.removeStateKeys)
     ? input.removeStateKeys.filter((key) => typeof key === "string")
     : [];
@@ -50,29 +35,11 @@ export function persistClassifyArtifacts(input, deps = {}) {
         const mergeAndRemove = deps.mergeGateStateAndRemove ?? mergeGateStateAndRemove;
         return mergeAndRemove(statePath, patch, removeStateKeys, deps);
       };
-  const writePlan = deps.writePlan ?? atomicWrite;
-  const pending = mergeGateState(input.statePath, {
-    ...input.statePatch,
-    classified: false,
-    classify_status: "stub_pending",
-  });
-  if (!pending?.ok) {
-    return { ok: false, reason: `gate-state persistence failed: ${String(pending?.reason ?? "unknown")}` };
+  const persisted = mergeGateState(input.statePath, input.statePatch);
+  if (!persisted?.ok) {
+    return { ok: false, reason: `gate-state persistence failed: ${String(persisted?.reason ?? "unknown")}` };
   }
-  try {
-    writePlan(input.planPath, `${JSON.stringify(input.stub, null, 2)}\n`);
-  } catch (error) {
-    return { ok: false, reason: `plan write failed: ${error instanceof Error ? error.message : String(error)}` };
-  }
-  const finalized = mergeGateState(input.statePath, {
-    ...input.statePatch,
-    classified: true,
-    classify_status: "ready",
-  });
-  if (!finalized?.ok) {
-    return { ok: false, reason: `gate-state finalize failed: ${String(finalized?.reason ?? "unknown")}` };
-  }
-  return { ok: true, state: finalized.state };
+  return { ok: true, state: persisted.state };
 }
 
-export default { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyArtifacts };
+export default { FRESH_CLASSIFY_STATE_KEYS_TO_REMOVE, persistClassifyState };

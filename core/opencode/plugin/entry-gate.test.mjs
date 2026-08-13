@@ -13,7 +13,6 @@ import { obsHand } from "./obs-hand.ts"
 
 const { createEntryGateHooks } = EntryGate.testApi
 const { createObsHandHooks } = obsHand.testApi
-import { semanticPlanHash } from "../lib/planner-artifact.mjs"
 
 const SID = "ses_test1"
 
@@ -71,8 +70,6 @@ function fullDeliveryState(extra = {}, sessionId = SID) {
     brainstormed: true,
     adversary_fired: true,
     feature_id: "feat",
-    // Exact writing-hand scope is bound only to a usable planner artifact.
-    planner_status: "usable",
     regate_pending: [],
     regate_passed: [],
     hand_finished: [],
@@ -81,36 +78,28 @@ function fullDeliveryState(extra = {}, sessionId = SID) {
   }
 }
 
-/** @description Install the immutable snapshot required for an exact writing-hand claim. */
+/** @description Install the stable plan required for an exact writing-hand claim. */
 function writeScopeReadyState(root, sessionId = SID, taskId = "task-scope") {
   const featureId = "feat"
   const plan = {
     feature_id: featureId,
-    kind: "full",
     mode: "full",
     model_strategy: {
-      hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" },
+      hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" },
       planner: "openai/gpt-5.6-sol", "plan-reviewer": "openai/gpt-5.6-sol", compliance: "openai/gpt-5.6-terra",
       adversary: "openai/gpt-5.6-sol", security: "openai/gpt-5.6-sol", shipper: "openai/gpt-5.6-luna", harvester: "openai/gpt-5.6-luna",
     },
-    tasks: [{ id: taskId, severity: "low", complexity: "low", scope_paths: ["src"], allowed_writes: [], criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "a" }] }],
+    final_review: { compliance: true, adversary: true },
+    demo: { type: "smoke", scenarios_from_refs: ["#uj-1"] },
+    tasks: [{ id: taskId, title: "Implement scope", description: "Implement the scoped task.", depends_on: [], severity: "low", complexity: "low", scope_paths: ["src"], allowed_writes: [], resolved_judgments: { scope: "fixed" }, criterion_refs: ["#ac-1"], locked_tests: [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "Given scope, When dispatched, Then writes stay bounded" }], adversarial: { enabled: false, focus: [] } }],
   }
   const content = JSON.stringify(plan)
-  const fileHash = crypto.createHash("sha256").update(content).digest("hex")
-  const snapshotPath = path.join(root, ".opencode", "plans", ".state", sessionId, "bound-plans", `${fileHash}.json`)
-  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true })
+  const planPath = path.join(root, ".opencode", "plans", featureId, "execution-plan.json")
+  fs.mkdirSync(path.dirname(planPath), { recursive: true })
   fs.mkdirSync(path.join(root, "src"), { recursive: true })
-  fs.writeFileSync(snapshotPath, content)
-  const snapshotRel = `.opencode/plans/.state/${sessionId}/bound-plans/${fileHash}.json`
+  fs.writeFileSync(planPath, content)
   writeGateState(root, sessionId, fullDeliveryState({
     fidelity_pass: [`${featureId}/${taskId}`],
-    planner_plan_binding: {
-      session_id: sessionId,
-      feature_id: featureId,
-      snapshot_path: snapshotRel,
-      snapshot_hash: semanticPlanHash(plan),
-      snapshot_file_hash: fileHash,
-    },
   }, sessionId))
 }
 
@@ -1262,7 +1251,7 @@ test("entry-gate claims one exact dispatch record after allowing a writing Task"
       scope_paths: ["src"],
       allowed_writes: [],
       frozen_paths: ["tests/a.test.mjs"],
-      snapshot_hash: record.snapshot_hash,
+      plan_hash: record.plan_hash,
       claimed_at: record.claimed_at,
     })
     assert.match(record.claimed_at, /^\d{4}-\d{2}-\d{2}T/)

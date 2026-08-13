@@ -116,7 +116,7 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
 
     const merged = JSON.parse(readFileSync(join(vendored, "opencode.json"), "utf8"));
     assert.deepEqual(merged.plugin, []);
-    assert.equal(existsSync(join(vendored, ".opencode", "plugin", "planner-recovery.ts")), true);
+    assert.equal(existsSync(join(vendored, ".opencode", "plugin", "planner-recovery.ts")), false);
     for (const routingPath of [jsonPaths[1], jsonPaths[3]]) {
       const routing = JSON.parse(readFileSync(routingPath, "utf8"));
       assert.equal(routing.version, 2);

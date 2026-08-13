@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { planDir } from "./path-helpers.mjs";
 
-test("t2-plan-dir: OC planDir includes sessionId-featureId; Claude planDir has no session prefix", () => {
+test("t2-plan-dir: OC and Claude planDir are feature-stable without a session prefix", () => {
   const oc = planDir({
     runtime: "opencode",
     projectRoot: "/tmp/project",
@@ -11,8 +11,8 @@ test("t2-plan-dir: OC planDir includes sessionId-featureId; Claude planDir has n
     featureId: "oc-port-phase-1",
   });
   assert.equal(oc.ok, true);
-  assert.ok(oc.path.includes("ses_abc123-oc-port-phase-1"));
-  assert.ok(oc.path.endsWith("ses_abc123-oc-port-phase-1"));
+  assert.ok(oc.path.endsWith("/oc-port-phase-1"));
+  assert.ok(!oc.path.includes("ses_abc123"));
 
   const claude = planDir({
     runtime: "claude",
@@ -26,14 +26,13 @@ test("t2-plan-dir: OC planDir includes sessionId-featureId; Claude planDir has n
 });
 
 test("t2-path-result: unsafe ids yield PathResult ok false without throw", () => {
-  const badSession = planDir({
+  const ignoredSession = planDir({
     runtime: "opencode",
     projectRoot: "/tmp/p",
     sessionId: "ses..dotdot",
     featureId: "ok-id",
   });
-  assert.equal(badSession.ok, false);
-  assert.ok(typeof badSession.reason === "string");
+  assert.deepEqual(ignoredSession, { ok: true, path: "/tmp/p/.opencode/plans/ok-id" });
 
   const badFeature = planDir({
     runtime: "claude",
