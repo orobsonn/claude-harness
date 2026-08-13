@@ -27,10 +27,20 @@ function fingerprint(projectRoot, relativePath) {
   }
   try {
     if (first.isFile()) {
-      const bytes = fs.readFileSync(target);
-      const second = fs.lstatSync(target);
-      if (!sameStat(first, second) || !second.isFile()) return null;
-      return { kind: "file", mode: first.mode & 0o777, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+      try {
+        const bytes = fs.readFileSync(target);
+        const second = fs.lstatSync(target);
+        if (!sameStat(first, second) || !second.isFile()) return null;
+        return { kind: "file", mode: first.mode & 0o777, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+      } catch (error) {
+        // A pre-existing dirty file may belong to another local user. The hand cannot
+        // read or alter it, so retain an opaque, stat-stable baseline rather than
+        // falsely attributing it to the hand at completion.
+        if (!error || typeof error !== "object" || !["EACCES", "EPERM"].includes(error.code)) return null;
+        const second = fs.lstatSync(target);
+        if (!sameStat(first, second) || !second.isFile()) return null;
+        return { kind: "opaque", mode: first.mode & 0o777, size: first.size, mtimeMs: first.mtimeMs, ctimeMs: first.ctimeMs };
+      }
     }
     if (first.isSymbolicLink()) {
       const targetText = fs.readlinkSync(target);
@@ -63,6 +73,9 @@ export function listGitTouchedPaths(projectRoot) {
 function validFingerprint(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (value.kind === "absent") return Object.keys(value).length === 1;
+  if (value.kind === "opaque") return Number.isInteger(value.mode) && value.mode >= 0 && value.mode <= 0o777 &&
+    Number.isInteger(value.size) && value.size >= 0 && Number.isFinite(value.mtimeMs) && Number.isFinite(value.ctimeMs) &&
+    Object.keys(value).length === 5;
   return ["file", "symlink"].includes(value.kind) && Number.isInteger(value.mode) && value.mode >= 0 && value.mode <= 0o777 && Number.isInteger(value.size) && value.size >= 0 && typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256) && Object.keys(value).length === 4;
 }
 

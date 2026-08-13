@@ -54,6 +54,32 @@ test("baseline attributes deletion and permission changes to a pre-existing dirt
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("baseline suppresses an unchanged pre-existing unreadable path but attributes a later change", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-worktree-baseline-opaque-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  const opaque = path.join(root, "operator-owned.txt");
+  try {
+    git("init");
+    git("config", "user.email", "harness@example.invalid");
+    git("config", "user.name", "Harness Test");
+    fs.writeFileSync(path.join(root, "tracked.txt"), "baseline\n");
+    git("add", "tracked.txt");
+    git("commit", "-m", "baseline");
+
+    fs.writeFileSync(opaque, "pre-existing operator data\n", { mode: 0o600 });
+    fs.chmodSync(opaque, 0o000);
+    const baseline = snapshotWorktreeBaseline(root);
+    assert.deepEqual(baseline?.entries.map((entry) => entry.path), ["operator-owned.txt"]);
+    assert.equal(baseline?.entries[0]?.fingerprint.kind, "opaque");
+    assert.deepEqual(pathsChangedSinceBaseline(root, baseline), []);
+
+    fs.chmodSync(opaque, 0o600);
+    fs.writeFileSync(opaque, "changed after dispatch\n");
+    fs.chmodSync(opaque, 0o000);
+    assert.deepEqual(pathsChangedSinceBaseline(root, baseline), ["operator-owned.txt"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("a malformed optional baseline never suppresses current dirty paths", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-worktree-baseline-invalid-"));
   const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
