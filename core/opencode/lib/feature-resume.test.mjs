@@ -235,6 +235,83 @@ test("prefers an intact unreviewed bound plan over a newer classify stub", () =>
   }
 });
 
+test("migrates captured legacy progress to an approved resumed plan without another review", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-legacy-approved-"));
+  try {
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId),
+      captured: [`${featureId}/task-one@freeze`],
+      statePatch: { plan_review_verdict: null },
+    });
+
+    const resume = findFeatureResume(root, featureId);
+    assert.equal(resume?.approved, true, "captured legacy progress proves this plan had already entered delivery");
+    assert.equal(resume?.legacyApproved, true);
+
+    const adopted = adoptFeatureResume(root, targetSession, resume);
+    assert.equal(adopted.ok, true);
+    const state = JSON.parse(fs.readFileSync(adopted.statePath, "utf8"));
+    assert.equal(state.plan_review_verdict, "APPROVE");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps an unreviewed legacy plan without captured progress awaiting review", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-legacy-unreviewed-"));
+  try {
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId),
+      statePatch: { plan_review_verdict: null },
+    });
+
+    const resume = findFeatureResume(root, featureId);
+    assert.equal(resume?.approved, false);
+    assert.equal(resume?.legacyApproved, false);
+
+    const adopted = adoptFeatureResume(root, targetSession, resume);
+    assert.equal(adopted.ok, true);
+    const state = JSON.parse(fs.readFileSync(adopted.statePath, "utf8"));
+    assert.equal(state.plan_review_verdict, null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("repairs captured legacy approval when classify replays in the same resumed session", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-legacy-replay-"));
+  const resumedSession = "ses-resume-legacy-replay";
+  try {
+    writeApprovedRun(root, {
+      sessionId: resumedSession,
+      planSessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId),
+      captured: [`${featureId}/task-one@freeze`],
+      statePatch: {
+        plan_review_verdict: null,
+        resume_state_source_session_id: "ses-original-progress",
+      },
+    });
+
+    const resume = findFeatureResume(root, featureId);
+    assert.equal(resume?.sessionId, resumedSession);
+    assert.equal(resume?.legacyApproved, true);
+
+    const promoted = adoptFeatureResume(root, resumedSession, resume);
+    assert.equal(promoted.ok, true);
+    const state = JSON.parse(fs.readFileSync(promoted.statePath, "utf8"));
+    assert.equal(state.plan_review_verdict, "APPROVE");
+    assert.equal(state.resume_state_source_session_id, "ses-original-progress");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("fails closed when unreviewed bound plan identities diverge", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-unreviewed-divergent-"));
   const revisionSession = "ses-resume-unreviewed-revision";
