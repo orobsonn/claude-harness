@@ -21,7 +21,7 @@ function isWriteTool(name: unknown): boolean {
 function isPlanAuthoringTool(name: unknown): boolean {
   if (typeof name !== "string") return false;
   const bare = name.toLowerCase().split(/[.:/]/).pop() ?? "";
-  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file"].includes(bare);
+  return ["write", "edit", "multiedit", "multi_edit", "write_file", "edit_file", "create_file", "apply_patch", "applypatch", "patch"].includes(bare);
 }
 
 function isPatchTool(name: unknown): boolean {
@@ -103,30 +103,37 @@ async function resolveOfficialPlannerIdentity(
     getMessages: async (sessionId: string) => unwrapSdkData(await options.client?.session?.messages?.({ path: { id: sessionId }, query: { directory: projectRoot } })),
   };
   let session: any;
-  let childMessages: any;
   try {
     session = await reader.getSession(childSessionId);
-    childMessages = await reader.getMessages(childSessionId);
   } catch {
     return { ok: false, reason: "official planner metadata unavailable" };
   }
   const parentSessionId = session?.id === childSessionId && typeof session?.parentID === "string" ? session.parentID : "";
   if (!parentSessionId) return { ok: false, reason: "planner child session has no official parent" };
+  if (session?.agent !== "planner") return { ok: false, reason: "official child session is not planner" };
+  let childMessages: any;
+  try {
+    childMessages = await reader.getMessages(childSessionId);
+  } catch {
+    return { ok: false, reason: "official planner metadata unavailable" };
+  }
   const writeMatches: any[] = [];
   for (const bundle of Array.isArray(childMessages) ? childMessages : []) {
     for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
       if (
         bundle?.info?.role === "assistant" && bundle?.info?.agent === "planner" &&
-        bundle?.info?.sessionID === childSessionId && typeof bundle?.info?.parentID === "string" &&
-        part?.type === "tool" && part?.callID === callId && part?.sessionID === childSessionId &&
-        part?.messageID === bundle.info.id && String(part?.tool).toLowerCase() === String(input?.tool).toLowerCase()
+        (bundle?.info?.sessionID == null || bundle.info.sessionID === childSessionId) && typeof bundle?.info?.parentID === "string" &&
+        part?.type === "tool" && part?.callID === callId &&
+        (part?.sessionID == null || part.sessionID === childSessionId) &&
+        (part?.messageID == null || part.messageID === bundle.info.id) &&
+        String(part?.tool).toLowerCase() === String(input?.tool).toLowerCase()
       ) writeMatches.push({ bundle, part });
     }
   }
   if (writeMatches.length !== 1) return { ok: false, reason: "official planner write call is missing or ambiguous" };
   const childParent = (Array.isArray(childMessages) ? childMessages : []).filter((bundle: any) =>
     bundle?.info?.id === writeMatches[0].bundle.info.parentID && bundle?.info?.role === "user" &&
-    bundle?.info?.sessionID === childSessionId && bundle?.info?.agent === "planner",
+    (bundle?.info?.sessionID == null || bundle.info.sessionID === childSessionId) && bundle?.info?.agent === "planner",
   );
   if (childParent.length !== 1) return { ok: false, reason: "official planner message relationship conflicts" };
   let parentMessages: any;
@@ -140,9 +147,11 @@ async function resolveOfficialPlannerIdentity(
     for (const part of Array.isArray(bundle?.parts) ? bundle.parts : []) {
       const toolName = String(part?.tool ?? "").toLowerCase();
       if (
-        bundle?.info?.role === "assistant" && bundle?.info?.sessionID === parentSessionId &&
+        bundle?.info?.role === "assistant" &&
+        (bundle?.info?.sessionID == null || bundle.info.sessionID === parentSessionId) &&
         part?.type === "tool" && ["task", "task_tool", "tasktool"].includes(toolName) &&
-        part?.sessionID === parentSessionId && part?.messageID === bundle.info.id &&
+        (part?.sessionID == null || part.sessionID === parentSessionId) &&
+        (part?.messageID == null || part.messageID === bundle.info.id) &&
         part?.state?.status === "running" && part?.state?.input?.subagent_type === "planner" &&
         part?.state?.metadata?.sessionId === childSessionId
       ) dispatches.push(part);
@@ -183,29 +192,38 @@ async function createPlanWriteGateHooks(
           ? extractPatchPaths(args)
           : extractOfficialWritePaths(args, extractWritePath);
       const canonicalTargets = rawPaths.filter((rawPath) => isCanonicalPlanPath(rawPath));
-      let plannerAuthenticated = false;
-      // Bash and patch never author the canonical plan. Write/Edit require an official
+      // Bash never authors the canonical plan. Write/Edit/apply_patch require an official
       // planner child identity; model-supplied agent aliases are not authority.
       if (bashTool) {
         throwIfDenied(decide({ args }));
         // Bash has only literal anti-forge friction. Resolving a writing-hand
         // identity here can reject read-only verification commands in eye sessions.
         return;
-      } else if (patchTool || canonicalTargets.length === 0 || !isPlanAuthoringTool(input?.tool)) {
+      } else if (isPlanAuthoringTool(input?.tool)) {
+        const resolvePlannerIdentity = deps.resolvePlannerIdentity ?? resolveOfficialPlannerIdentity;
+        const planner = await resolvePlannerIdentity(root, input, { client: deps.client, args });
+        if (planner?.ok && planner.role === "planner") {
+          if (rawPaths.length === 0) {
+            throw new Error("[plan-write-gate] Blocked: planner authoring exposed no parseable target paths.");
+          }
+          if (canonicalTargets.length !== rawPaths.length) {
+            throw new Error("[plan-write-gate] Blocked: planner may author only canonical execution plans.");
+          }
+          for (const rawPath of rawPaths) {
+            throwIfDenied(decide({ args: { filePath: rawPath } }, { actingRole: "planner" }));
+          }
+          return;
+        }
+        if (canonicalTargets.length > 0) {
+          throw new Error(`[plan-write-gate] Blocked: official planner identity required (${String(planner?.reason ?? "missing")}).`);
+        }
         for (const rawPath of rawPaths) {
           throwIfDenied(decide({ args: { filePath: rawPath } }));
         }
       } else {
-        const resolvePlannerIdentity = deps.resolvePlannerIdentity ?? resolveOfficialPlannerIdentity;
-        const planner = await resolvePlannerIdentity(root, input, { client: deps.client, args });
-        if (!planner?.ok || planner.role !== "planner") {
-          throw new Error(`[plan-write-gate] Blocked: official planner identity required (${String(planner?.reason ?? "missing")}).`);
-        }
-        plannerAuthenticated = true;
         for (const rawPath of rawPaths) {
-          throwIfDenied(decide({ args: { filePath: rawPath } }, { actingRole: "planner" }));
+          throwIfDenied(decide({ args: { filePath: rawPath } }));
         }
-        if (canonicalTargets.length === rawPaths.length) return;
       }
       const { resolveScopeRuntimeIdentity } = await import("./lib/scope-runtime-identity.mjs");
       const { normalizeProjectPath } = await import("../lib/dispatch-scope.mjs");
@@ -260,7 +278,7 @@ async function createPlanWriteGateHooks(
         const decision = normalized.ok
           ? decide(
               { args: { filePath: checkedPath }, tool_input: { file_path: checkedPath } },
-              { actingRole: plannerAuthenticated && canonicalTargets.includes(rawPath) ? "planner" : actingRole || undefined, isSubagent, dispatchRecord: record },
+              { actingRole: actingRole || undefined, isSubagent, dispatchRecord: record },
             )
           : { allow: false, reason: `[plan-write-gate] Blocked: '${rawPath}' is not a safe project path (${normalized.reason}).` };
         const scopeViolation = !normalized.ok || /OUTSIDE|armed hand dispatch|acting role identity/i.test(decision.reason ?? "");
