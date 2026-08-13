@@ -360,20 +360,29 @@ test("syncCallerRuntimeOverlay refreshes only exact harness cargo in a feature c
   }
 });
 
-test("syncCallerRuntimeOverlay never overwrites a locally modified harness file", () => {
+test("syncCallerRuntimeOverlay replaces divergent harness cargo while preserving product work", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-conflict-"));
   const caller = join(root, "caller");
   const source = join(root, "source");
   const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   try {
     execFileSync("git", ["init", "--initial-branch=main", caller], { stdio: "ignore" });
     git(caller, ["config", "user.email", "test@example.com"]);
     git(caller, ["config", "user.name", "Test"]);
     mkdirSync(join(caller, ".opencode"), { recursive: true });
+    mkdirSync(join(caller, "src"), { recursive: true });
     writeFileSync(join(caller, ".opencode", ".harness-version"), "v1-local-edit\n");
+    writeFileSync(join(caller, "src", "product.js"), "base\n");
     git(caller, ["add", "."]);
     git(caller, ["commit", "-m", "base"]);
     writeFileSync(join(caller, ".opencode", ".harness-version"), "operator edit\n");
+    writeFileSync(join(caller, "src", "product.js"), "staged product work\n");
+    git(caller, ["add", "src/product.js"]);
+    mkdirSync(join(caller, ".opencode", "plans"), { recursive: true });
+    writeFileSync(join(caller, ".opencode", "plans", "active.json"), "local plan\n");
+    const productStage = gitOut(caller, ["diff", "--cached", "--", "src/product.js"]);
+    const headBefore = gitOut(caller, ["rev-parse", "HEAD"]).trim();
 
     mkdirSync(join(source, ".opencode"), { recursive: true });
     writeFileSync(join(source, ".opencode", ".harness-version"), "v2\n");
@@ -385,15 +394,18 @@ test("syncCallerRuntimeOverlay never overwrites a locally modified harness file"
 
     assert.deepEqual(
       syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
-      { action: "skipped", reason: "local lifecycle files differ", paths: [".opencode/.harness-version"] },
+      { action: "synced", paths: [".opencode/.harness-owned-files.json", ".opencode/.harness-version"] },
     );
-    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "operator edit\n");
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v2\n");
+    assert.equal(readFileSync(join(caller, ".opencode", "plans", "active.json"), "utf8"), "local plan\n");
+    assert.equal(gitOut(caller, ["diff", "--cached", "--", "src/product.js"]), productStage);
+    assert.equal(gitOut(caller, ["rev-parse", "HEAD"]).trim(), headBefore);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("syncCallerRuntimeOverlay recognizes its prior overlay but stops for a later local edit", () => {
+test("syncCallerRuntimeOverlay reapplies the released runtime after a later owned-file edit", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-provenance-"));
   const caller = join(root, "caller");
   const source = join(root, "source");
@@ -425,11 +437,39 @@ test("syncCallerRuntimeOverlay recognizes its prior overlay but stops for a late
 
     writeFileSync(join(caller, ".opencode", ".harness-version"), "operator edit\n");
     writeSource("v4");
-    assert.deepEqual(
-      syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
-      { action: "skipped", reason: "local lifecycle files differ", paths: [".opencode/.harness-version"] },
+    assert.equal(syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }).action, "synced");
+    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "v4\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncCallerRuntimeOverlay refuses a harness path behind a symbolic link", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-runtime-symlink-"));
+  const caller = join(root, "caller");
+  const source = join(root, "source");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  try {
+    execFileSync("git", ["init", "--initial-branch=main", caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+    mkdirSync(join(caller, "src"), { recursive: true });
+    writeFileSync(join(caller, "src", ".harness-version"), "product file\n");
+    symlinkSync("src", join(caller, ".opencode"));
+
+    mkdirSync(join(source, ".opencode"), { recursive: true });
+    writeFileSync(join(source, ".opencode", ".harness-version"), "v2\n");
+    writeFileSync(join(source, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".opencode/.harness-version", ".opencode/.harness-owned-files.json"],
+      retired: [],
+    }));
+
+    assert.throws(
+      () => syncCallerRuntimeOverlay({ cwd: caller, sourceDirectory: source, runtimeTarget: "opencode" }),
+      /symbolic link/i,
     );
-    assert.equal(readFileSync(join(caller, ".opencode", ".harness-version"), "utf8"), "operator edit\n");
+    assert.equal(readFileSync(join(caller, "src", ".harness-version"), "utf8"), "product file\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

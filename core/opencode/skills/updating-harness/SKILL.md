@@ -84,12 +84,11 @@ The published CLI starts from a **clean clone of `origin/main`** (or `origin/mas
 pinned release, accepts only the exact generated harness manifest, creates the lifecycle-only commit,
 opens its PR, and merges it. It cleans the temporary clone in every outcome. After a `merged` or `noop`
 result, it fast-forwards the invoking default-branch checkout to `origin/main` (or `origin/master`) so
-the local harness files are synchronized in the same operation. A feature checkout receives an exact
-local runtime overlay from that verified clone, so a new OpenCode session there loads the same release
-without moving its branch. This overlay copies only manifest-owned harness files and retired files; it
-does so without staging, committing, merging, rebasing, stashing, or resetting product work. A locally
-edited owned harness file is reported as a conflict and is never overwritten. It never switches a feature branch
-and leaves any checkout Git cannot fast-forward unchanged. It never uses stash, reset, or a non-fast-forward merge.
+the local harness files are synchronized in the same operation. On a feature checkout, it copies the
+exact release-owned harness files from that verified clone into the current worktree, without moving
+its branch. This overwrites only those official files and removes only declared retired files; product
+work, plans, state, local plugins, index, and unrelated files remain untouched, without staging, committing,
+merging, rebasing, stashing, or resetting. It never switches a feature branch and never uses stash, reset, or a non-fast-forward merge.
 
 The PR contains only the release's exact harness files. Product work, plans, run state, local plugins,
 secrets, and unrelated staged files cannot enter it. The CLI requests the merge immediately; GitHub
@@ -98,14 +97,14 @@ never polls a just-created PR for checks, because that transient list can be emp
 
 ## Step 3 — close
 
-- `merged`: report version/PR, that it landed on the default branch, and whether the local branch or runtime synchronized.
+- `merged`: report version/PR, that it landed on the default branch, and that the current runtime synchronized.
 - `noop`: report that the requested version was already present and whether the local branch or runtime synchronized.
 - Any other result: report its command evidence and stop. Do not retry through a different branch,
   broad staging, reset, stash, direct commit, or another release tag.
 
 The running OpenCode process still has the old plugins and skills in memory. Require a **new OpenCode
 session** after a successful update, even when the local default-branch files synchronized or the feature
-checkout received its runtime overlay.
+checkout runtime synchronized.
 
 ## Anti-patterns
 
