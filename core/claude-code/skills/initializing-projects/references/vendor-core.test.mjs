@@ -616,6 +616,11 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
       assert.ok(existsSync(join(tempDir, rel)), `missing ${rel}`);
     }
     const ownership = JSON.parse(readFileSync(join(tempDir, ".opencode/.harness-owned-files.json"), "utf8"));
+    assert.equal(
+      ownership.files.includes("harness.routing.json"),
+      false,
+      "the lifecycle overlay may own only files actually vendored into the clone",
+    );
     assert.deepEqual(
       ownership.retired.filter((path) => path.includes("autonomy-controller")),
       [".opencode/plugin/autonomy-controller.ts", ".opencode/plugin/lib/autonomy-controller.mjs"],

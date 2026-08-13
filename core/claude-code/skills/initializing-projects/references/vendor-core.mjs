@@ -981,7 +981,6 @@ function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
     ".opencode/harness.routing.json",
     "opencode.json",
     "AGENTS.md",
-    "harness.routing.json",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
     ".dev.vars.example",
   ]) files.add(path);
