@@ -125,8 +125,13 @@ export async function executeClassify(
   if (transition.action === "fresh") {
     const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
     const resume = findFeatureResume(context.directory, finalFeatureId)
-    if (resume && resume.sessionId !== sessionID && finalMode === resume.state.mode) {
-      const adopted = adoptFeatureResume(context.directory, sessionID, resume, finalMode)
+    // A content-bound plan owns the ceremony chosen when it was approved.  A later
+    // request may be classified more conservatively (for example FULL after a prior
+    // LIGHT plan), but that is not authority to reinterpret or recreate the plan.
+    // Resume its frozen mode and model strategy; a genuinely new feature gets the
+    // current classification below.
+    if (resume && resume.sessionId !== sessionID && (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")) {
+      const adopted = adoptFeatureResume(context.directory, sessionID, resume, resume.state.mode)
       if (!adopted.ok) {
         return errorResult("feature resume failed", adopted.reason, finalFeatureId)
       }
@@ -134,10 +139,10 @@ export async function executeClassify(
         plan_path: adopted.planPath,
         mode: resume.state.mode,
         feature_id: finalFeatureId,
-        action: finalMode === resume.state.mode && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
+        action: resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
           (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
           ? "resume-approved-plan"
-          : finalMode === resume.state.mode && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === null &&
+          : resume.state.planner_status === "usable" && resume.state.plan_review_verdict === null &&
               (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
             ? "resume-bound-plan-review"
           : "resume",

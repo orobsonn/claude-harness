@@ -122,6 +122,26 @@ test("discovers and adopts a prior feature without copying its plan", () => {
   }
 });
 
+test("keeps the bound plan ceremony when a later request is classified more conservatively", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-bound-mode-"));
+  try {
+    const plan = fullPlan(featureId);
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan,
+      statePatch: { mode: "LIGHT" },
+    });
+    const adopted = adoptFeatureResume(root, targetSession, findFeatureResume(root, featureId), "FULL");
+    assert.equal(adopted.ok, true);
+    const state = JSON.parse(fs.readFileSync(adopted.statePath, "utf8"));
+    assert.equal(state.mode, "LIGHT");
+    assert.equal(state.peak_mode, "LIGHT");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ignores paths whose feature or session state identity does not match", () => {
   const f = fixture();
   try {
@@ -180,6 +200,109 @@ test("fails closed when separate approved plan revisions are both resumable", ()
     });
 
     assert.equal(findFeatureResume(root, featureId), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prefers an intact unreviewed bound plan over a newer classify stub", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-unreviewed-"));
+  try {
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId),
+      statePatch: { plan_review_verdict: null },
+    });
+    const stubPlanPath = path.join(root, ".opencode", "plans", `${targetSession}-${featureId}`, "execution-plan.json");
+    const stubStatePath = path.join(root, ".opencode", "plans", ".state", targetSession, "gate-state.json");
+    fs.mkdirSync(path.dirname(stubPlanPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stubStatePath), { recursive: true });
+    fs.writeFileSync(stubPlanPath, JSON.stringify({ kind: "stub", mode: "FULL", feature_id: featureId, tasks: [] }));
+    fs.writeFileSync(stubStatePath, JSON.stringify({
+      session_id: targetSession,
+      feature_id: featureId,
+      mode: "FULL",
+      planner_status: "not_started",
+      planner_active_attempt: null,
+    }));
+
+    const resume = findFeatureResume(root, featureId);
+    assert.equal(resume?.sessionId, sourceSession);
+    assert.equal(resume?.plan.kind, "full");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fails closed when unreviewed bound plan identities diverge", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-unreviewed-divergent-"));
+  const revisionSession = "ses-resume-unreviewed-revision";
+  try {
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId, "a"),
+      statePatch: { plan_review_verdict: null },
+    });
+    writeApprovedRun(root, {
+      sessionId: revisionSession,
+      featureId,
+      plan: fullPlan(featureId, "b"),
+      statePatch: { plan_review_verdict: null },
+    });
+    assert.equal(findFeatureResume(root, featureId), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("does not let a bound REVISE mask a missing review verdict", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-review-state-"));
+  const reviewSession = "ses-resume-reviewed";
+  try {
+    const plan = fullPlan(featureId);
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan,
+      statePatch: { plan_review_verdict: null },
+    });
+    writeApprovedRun(root, {
+      sessionId: reviewSession,
+      planSessionId: sourceSession,
+      featureId,
+      plan,
+      statePatch: { plan_review_verdict: "REVISE" },
+    });
+    assert.equal(findFeatureResume(root, featureId)?.sessionId, sourceSession);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prefers a bound REVISE over a newer classify stub when review-missing is absent", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-feature-resume-revise-"));
+  try {
+    writeApprovedRun(root, {
+      sessionId: sourceSession,
+      featureId,
+      plan: fullPlan(featureId),
+      statePatch: { plan_review_verdict: "REVISE" },
+    });
+    const stubPlanPath = path.join(root, ".opencode", "plans", `${targetSession}-${featureId}`, "execution-plan.json");
+    const stubStatePath = path.join(root, ".opencode", "plans", ".state", targetSession, "gate-state.json");
+    fs.mkdirSync(path.dirname(stubPlanPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stubStatePath), { recursive: true });
+    fs.writeFileSync(stubPlanPath, JSON.stringify({ kind: "stub", mode: "FULL", feature_id: featureId, tasks: [] }));
+    fs.writeFileSync(stubStatePath, JSON.stringify({
+      session_id: targetSession,
+      feature_id: featureId,
+      mode: "FULL",
+      planner_status: "not_started",
+      planner_active_attempt: null,
+    }));
+    assert.equal(findFeatureResume(root, featureId)?.sessionId, sourceSession);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
