@@ -67,7 +67,7 @@ test("planner output creates a canonical identity-bound plan", async () => {
   });
 });
 
-test("an APPROVE plan blocks a later planner dispatch in the same session", async () => {
+test("an APPROVE plan permits a later evidence-backed planner revision in the same session", async () => {
   await withRun(async (root, state) => {
     const hooks = await createPlannerRecoveryHooks(root, { token: () => "token" });
     const initialArgs = { subagent_type: "planner", prompt: "Produce a plan." };
@@ -75,15 +75,29 @@ test("an APPROVE plan blocks a later planner dispatch in the same session", asyn
     await hooks["tool.execute.after"]({ tool: "task", sessionID: sessionId, callID: "approved-plan", args: initialArgs }, { output: JSON.stringify(plan), metadata: {} });
     const approved = { ...state(), plan_review_verdict: "APPROVE" };
     fs.writeFileSync(path.join(root, ".opencode", "plans", ".state", sessionId, "gate-state.json"), JSON.stringify(approved));
-    await assert.rejects(
-      () => hooks["tool.execute.before"](
-        { tool: "task", sessionID: sessionId, callID: "late-planner" },
-        { args: { subagent_type: "planner", prompt: "Replan an already approved feature." } },
-      ),
-      /resumed approved plan must continue delivery/,
+    const revisionArgs = { subagent_type: "planner", prompt: "Replan the approved feature from concrete gate evidence." };
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "task", sessionID: sessionId, callID: "late-planner" },
+      { args: revisionArgs },
+    ));
+    assert.equal(state().planner_status, "running");
+    assert.equal(state().plan_review_verdict, "APPROVE", "the old binding remains authoritative until a new plan is bound");
+    const revisedPlan = {
+      ...plan,
+      tasks: [...plan.tasks, {
+        ...plan.tasks[0],
+        id: "task-2",
+        scope_paths: ["src/y.ts"],
+        locked_tests: [{ id: "lt-2", path: "src/y.test.ts", assertion: "Given y, When run, Then ok" }],
+        depends_on: ["task-1"],
+      }],
+    };
+    await hooks["tool.execute.after"](
+      { tool: "task", sessionID: sessionId, callID: "late-planner", args: revisionArgs },
+      { output: JSON.stringify(revisedPlan), metadata: {} },
     );
     assert.equal(state().planner_status, "usable");
-    assert.equal(state().plan_review_verdict, "APPROVE");
+    assert.equal(state().plan_review_verdict, null, "the revised binding requires its own review");
   });
 });
 

@@ -406,6 +406,42 @@ test("bound-plan gate replaces one terminal same-SHA partial block with canonica
   })
 })
 
+test("bound-plan gate repairs a terminal truncated same-SHA transport block", async () => {
+  await withTempRoot(async (root) => {
+    const { statePath } = seedUsableBoundProject(root)
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const sha = state.planner_plan_binding.snapshot_hash
+    const hooks = await createPlanGateHooks(root)
+    for (const truncatedTail of ["", "\n{\"task\":{\"id\":\""]) {
+      const output = { args: {
+        description: "implement",
+        subagent_type: "executor-low",
+        // This is the real recovery boundary: OpenCode may retain the opener at the end of a
+        // prior Task prompt while losing the payload and closing tag. The bound SHA proves
+        // which transport block is being repaired; the hook must replace it with canonical bytes.
+        prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\nImplement.\n\n[HARNESS_BOUND_PLAN sha256=${sha}]${truncatedTail}`,
+      } }
+      await assert.doesNotReject(() => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, output))
+      assert.match(output.args.prompt, new RegExp(`\\[HARNESS_BOUND_PLAN sha256=${sha}\\]`))
+      assert.match(output.args.prompt, /"feature_id":"feat-plan-gate"/)
+      assert.match(output.args.prompt, /\[\/HARNESS_BOUND_PLAN\]$/)
+    }
+
+    for (const prompt of [
+      `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\n[HARNESS_BOUND_PLAN sha256=${"c".repeat(64)}]`,
+      `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\n[HARNESS_BOUND_PLAN sha256=${sha}]\npartial\n[HARNESS_BOUND_PLAN sha256=${sha}]`,
+      `[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\n[HARNESS_BOUND_PLAN sha256=${sha}]\npartial\n[/HARNESS_BOUND_PLAN]\n[HARNESS_BOUND_PLAN`,
+      `[HARNESS_BOUND_PLAN malformed]\n[HARNESS_TASK_CONTEXT]{"task_id":"t0-skeleton"}[/HARNESS_TASK_CONTEXT]\n[HARNESS_BOUND_PLAN sha256=${sha}]`,
+    ]) {
+      const rejected = { args: { description: "implement", subagent_type: "executor-low", prompt } }
+      await assert.rejects(
+        () => hooks["tool.execute.before"]({ tool: "task", sessionID: SESSION }, rejected),
+        /conflicting bound-plan prompt marker/,
+      )
+    }
+  })
+})
+
 test("lt-pg-mismatch: bound plan snapshot diverging from disk artifact denies with mismatch reason [#ac-1.2]", async () => {
   await withTempRoot(async (root) => {
     seedProject(root, { feature_id: FEATURE }, GOLDEN_FULL)

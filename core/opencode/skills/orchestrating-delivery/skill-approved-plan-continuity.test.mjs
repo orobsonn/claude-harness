@@ -18,20 +18,24 @@ function section(heading) {
   return skill.slice(start, end === -1 ? undefined : end);
 }
 
-test("approved plan keeps same-contract engineering out of a new planner cycle", () => {
+test("approved plan keeps normal repairs in the task rail and permits only evidence-backed contract revisions", () => {
   const continuity = section("## Approved-plan continuity");
   assert.match(continuity, /plan-reviewer.*APPROVE/i);
-  assert.match(continuity, /do not dispatch.*planner.*plan-reviewer|do not dispatch.*plan-reviewer.*planner/i);
   assert.match(continuity, /shared_context.*does not grant.*write/i);
   assert.match(continuity, /current task.*scope_paths/i);
   assert.match(continuity, /pending task.*scope_paths/i);
+  assert.match(continuity, /concrete.*(?:locked test|gate|executor|compliance|security)/i);
+  assert.match(continuity, /minimum.*revision/i);
+  assert.match(continuity, /feature.*acceptance criteria.*decisions/i);
+  assert.match(continuity, /Review kind: REVISION/i);
 });
 
-test("out-of-scope evidence is classified without silently expanding the approved plan", () => {
+test("non-material evidence cannot silently expand an approved plan", () => {
   const continuity = section("## Approved-plan continuity");
   assert.match(continuity, /outside.*scope_paths.*open risk|open risk.*outside.*scope_paths/i);
-  assert.match(continuity, /plan-contract conflict/i);
+  assert.match(continuity, /routing.*drift|routing drift/i);
+  assert.match(continuity, /rare.*hypothesis|hypothesis.*rare/i);
   assert.match(continuity, /material.*security|security.*material/i);
-  assert.match(continuity, /do not write outside/i);
-  assert.match(continuity, /do not auto(?:matically)? re-plan/i);
+  assert.match(continuity, /product behavior.*contract/i);
+  assert.match(continuity, /do not automatically re-plan/i);
 });
