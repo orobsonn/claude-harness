@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.58](https://github.com/orobsonn/claude-harness/compare/v0.55.57...v0.55.58) (2026-08-13)
+
+
+### Bug Fixes
+
+* **vendor:** sync only existing OpenCode routing file ([#772](https://github.com/orobsonn/claude-harness/issues/772)) ([e67d4f7](https://github.com/orobsonn/claude-harness/commit/e67d4f7ff0eb70ac99bc0c0087a27536ff0bbb9a))
+
 ## [0.55.57](https://github.com/orobsonn/claude-harness/compare/v0.55.56...v0.55.57) (2026-08-13)
 
 
