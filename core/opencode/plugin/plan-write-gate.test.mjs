@@ -96,7 +96,7 @@ test("official planner identity binds the write call to its parent Task dispatch
     callID: "write-plan",
   }, {
     reader: {
-      getSession: async () => ({ id: child, parentID: parent }),
+      getSession: async () => ({ id: child, parentID: parent, agent: "planner" }),
       getMessages: async (sessionId) => sessionId === child
         ? [
             { info: { id: "user-child", role: "user", sessionID: child, agent: "planner" }, parts: [] },
@@ -117,6 +117,52 @@ test("official planner identity binds the write call to its parent Task dispatch
   });
 
   assert.deepEqual(result, { ok: true, role: "planner", parentSessionId: parent });
+});
+
+test("official planner identity accepts the real OpenCode message envelope", async () => {
+  const child = "ses_live_planner_child";
+  const parent = "ses_live_build_parent";
+  const result = await resolveOfficialPlannerIdentity("/work/project", {
+    tool: "apply_patch",
+    sessionID: child,
+    callID: "patch-plan",
+  }, {
+    reader: {
+      getSession: async () => ({ id: child, parentID: parent, agent: "planner" }),
+      getMessages: async (sessionId) => sessionId === child
+        ? [
+            { info: { id: "user-child", role: "user", agent: "planner" }, parts: [] },
+            { info: { id: "assistant-child", parentID: "user-child", role: "assistant", agent: "planner" }, parts: [
+              { type: "tool", tool: "apply_patch", callID: "patch-plan", state: { status: "pending" } },
+            ] },
+          ]
+        : [
+            { info: { id: "assistant-parent", role: "assistant", agent: "build" }, parts: [
+              { type: "tool", tool: "task", callID: "dispatch-planner", state: {
+                status: "running",
+                input: { subagent_type: "planner" },
+                metadata: { sessionId: child },
+              } },
+            ] },
+          ],
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, role: "planner", parentSessionId: parent });
+});
+
+test("authenticated planner may create only the stable plan through apply_patch", async () => {
+  const hooks = await createPlanWriteGateHooks("/work/project", {
+    resolvePlannerIdentity: async () => ({ ok: true, role: "planner" }),
+  });
+  await assert.doesNotReject(() => hooks["tool.execute.before"](
+    { tool: "apply_patch", sessionID: "ses_planner", callID: "patch-plan" },
+    { args: { patchText: "*** Begin Patch\n*** Add File: .opencode/plans/foo/execution-plan.json\n+{}\n*** End Patch" } },
+  ));
+  await assert.rejects(() => hooks["tool.execute.before"](
+    { tool: "apply_patch", sessionID: "ses_planner", callID: "patch-mixed" },
+    { args: { patchText: "*** Begin Patch\n*** Add File: .opencode/plans/foo/execution-plan.json\n+{}\n*** Add File: src/unauthorized.mjs\n+export {};\n*** End Patch" } },
+  ), /canonical plan|planner|scope/i);
 });
 
 test("literal Bash mutations against a canonical plan are frictioned while reads pass", () => {
