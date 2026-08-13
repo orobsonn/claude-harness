@@ -7,7 +7,7 @@
 import { tool } from "@opencode-ai/plugin/tool"
 import fs from "node:fs"
 import path from "node:path"
-import { resumedApprovedPlanMetadata } from "../lib/classify-resume.mjs"
+import { resumedApprovedPlanMetadata, resumedBoundPlanReviewMetadata } from "../lib/classify-resume.mjs"
 
 function errorResult(error: string, hint: string, received: string) {
   const payload = { error, hint, received }
@@ -125,8 +125,13 @@ export async function executeClassify(
   if (transition.action === "fresh") {
     const { adoptFeatureResume, findFeatureResume } = await import("../lib/feature-resume.mjs")
     const resume = findFeatureResume(context.directory, finalFeatureId)
-    if (resume && resume.sessionId !== sessionID && finalMode === resume.state.mode) {
-      const adopted = adoptFeatureResume(context.directory, sessionID, resume, finalMode)
+    // A content-bound plan owns the ceremony chosen when it was approved.  A later
+    // request may be classified more conservatively (for example FULL after a prior
+    // LIGHT plan), but that is not authority to reinterpret or recreate the plan.
+    // Resume its frozen mode and model strategy; a genuinely new feature gets the
+    // current classification below.
+    if (resume && resume.sessionId !== sessionID && (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")) {
+      const adopted = adoptFeatureResume(context.directory, sessionID, resume, resume.state.mode)
       if (!adopted.ok) {
         return errorResult("feature resume failed", adopted.reason, finalFeatureId)
       }
@@ -134,9 +139,12 @@ export async function executeClassify(
         plan_path: adopted.planPath,
         mode: resume.state.mode,
         feature_id: finalFeatureId,
-        action: finalMode === resume.state.mode && resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
+        action: resume.state.planner_status === "usable" && resume.state.plan_review_verdict === "APPROVE" &&
           (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
           ? "resume-approved-plan"
+          : resume.state.planner_status === "usable" && resume.state.plan_review_verdict === null &&
+              (resume.state.mode === "LIGHT" || resume.state.mode === "FULL")
+            ? "resume-bound-plan-review"
           : "resume",
         source_session_id: resume.sessionId,
       }
@@ -149,7 +157,8 @@ export async function executeClassify(
   }
 
   const resumedMetadata = transition.action === "noop"
-    ? resumedApprovedPlanMetadata(context.directory, finalFeatureId, prior)
+    ? resumedApprovedPlanMetadata(context.directory, finalFeatureId, prior) ??
+      resumedBoundPlanReviewMetadata(context.directory, finalFeatureId, prior)
     : null
   if (resumedMetadata) {
     return {

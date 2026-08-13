@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resumedApprovedPlanMetadata } from "./classify-resume.mjs";
+import { resumedApprovedPlanMetadata, resumedBoundPlanReviewMetadata } from "./classify-resume.mjs";
 
 test("replaying classify after approved-plan adoption keeps the delivery route and canonical path", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-classify-resume-"));
@@ -28,6 +28,33 @@ test("replaying classify after approved-plan adoption keeps the delivery route a
       mode: "FULL",
       feature_id: featureId,
       action: "resume-approved-plan",
+      source_session_id: resumedStateId,
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a resumed legacy binding without a verdict goes straight to review", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-classify-resume-review-"));
+  const featureId = "resume-bound-review";
+  const planSessionId = "ses-classify-source";
+  const resumedStateId = "ses-classify-progress";
+  const planPath = path.join(root, ".opencode", "plans", `${planSessionId}-${featureId}`, "execution-plan.json");
+  try {
+    fs.mkdirSync(path.dirname(planPath), { recursive: true });
+    fs.writeFileSync(planPath, "{}\n");
+    assert.deepEqual(resumedBoundPlanReviewMetadata(root, featureId, {
+      resumed_from_session_id: planSessionId,
+      resume_state_source_session_id: resumedStateId,
+      planner_status: "usable",
+      plan_review_verdict: null,
+      mode: "FULL",
+    }), {
+      plan_path: planPath,
+      mode: "FULL",
+      feature_id: featureId,
+      action: "resume-bound-plan-review",
       source_session_id: resumedStateId,
     });
   } finally {

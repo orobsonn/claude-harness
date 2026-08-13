@@ -119,6 +119,16 @@ function dominatesCaptureProgress(left, right) {
   return true;
 }
 
+/** @description Choose only one content-bound plan lineage; never resolve revisions by recency. */
+function selectBoundPlan(candidates) {
+  if (candidates.length === 0) return undefined;
+  const identities = new Set(candidates.map((candidate) => candidate.planIdentity));
+  if (identities.size !== 1) return null;
+  const dominant = candidates.filter((candidate) => candidates.every((other) => dominatesCaptureProgress(candidate, other)));
+  if (dominant.length === 0) return null;
+  return dominant.sort((a, b) => b.captured - a.captured || b.fidelity - a.fidelity || b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId))[0] ?? null;
+}
+
 /** @description Find the most advanced resumable state within one unambiguous approved plan identity. */
 export function findFeatureResume(projectRoot, featureId) {
   if (typeof projectRoot !== "string" || !isSafeFeatureId(featureId)) return null;
@@ -136,14 +146,20 @@ export function findFeatureResume(projectRoot, featureId) {
         }
       })
       .filter(Boolean);
-    const approved = candidates.filter((candidate) => candidate.approved);
-    if (approved.length > 0) {
-      const identities = new Set(approved.map((candidate) => candidate.planIdentity));
-      if (identities.size !== 1) return null;
-      const dominant = approved.filter((candidate) => approved.every((other) => dominatesCaptureProgress(candidate, other)));
-      if (dominant.length === 0) return null;
-      return dominant.sort((a, b) => b.captured - a.captured || b.fidelity - a.fidelity || b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId))[0] ?? null;
-    }
+    const approved = selectBoundPlan(candidates.filter((candidate) => candidate.approved));
+    if (approved !== undefined) return approved;
+    // A fresh session already owns a classify stub. It is a placeholder, not evidence that
+    // should outrank a valid full plan whose legacy reviewer verdict was never persisted.
+    const awaitingReview = selectBoundPlan(candidates.filter((candidate) =>
+      candidate.state.planner_status === "usable" && candidate.state.plan_review_verdict === null,
+    ));
+    if (awaitingReview !== undefined) return awaitingReview;
+    // REVISE remains semantically distinct from a missing verdict, but a bound revision still
+    // outranks a new empty stub when no review-missing candidate exists.
+    const revise = selectBoundPlan(candidates.filter((candidate) =>
+      candidate.state.planner_status === "usable" && candidate.state.plan_review_verdict === "REVISE",
+    ));
+    if (revise !== undefined) return revise;
     return candidates.sort((a, b) => b.planMtimeMs - a.planMtimeMs || b.mtimeMs - a.mtimeMs || a.sessionId.localeCompare(b.sessionId))[0] ?? null;
   } catch {
     return null;
@@ -158,9 +174,11 @@ export function adoptFeatureResume(projectRoot, targetSessionId, resume, request
   try {
     const source = resume.state;
     const binding = source.planner_plan_binding;
-    const ranks = { "no-ceremony": 0, QUICK: 1, LIGHT: 2, FULL: 3 };
     const sourceMode = typeof source.mode === "string" ? source.mode : "";
-    const mode = (ranks[requestedMode] ?? -1) > (ranks[sourceMode] ?? -1) ? requestedMode : sourceMode;
+    // The bound plan owns its ceremony. A new request can be classified at a higher
+    // mode, but changing it here would make a valid resumed plan look incompatible
+    // and force a needless planner pass.
+    const mode = sourceMode;
     const adopted = {
       ...source,
       session_id: targetSessionId,

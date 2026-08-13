@@ -22,4 +22,24 @@ export function resumedApprovedPlanMetadata(projectRoot, featureId, prior) {
   };
 }
 
-export default { resumedApprovedPlanMetadata };
+/**
+ * @description Recover a legacy resumed binding whose reviewer verdict was never persisted.
+ * The caller must send this exact immutable plan to plan-reviewer before delivery can continue.
+ */
+export function resumedBoundPlanReviewMetadata(projectRoot, featureId, prior) {
+  if (!isSafeFeatureId(featureId) || !prior || typeof prior !== "object" ||
+      !isSafeSessionId(prior.resumed_from_session_id) || !isSafeSessionId(prior.resume_state_source_session_id) ||
+      prior.planner_status !== "usable" || prior.plan_review_verdict !== null ||
+      (prior.mode !== "LIGHT" && prior.mode !== "FULL")) return null;
+  const planPath = path.join(projectRoot, ".opencode", "plans", `${prior.resumed_from_session_id}-${featureId}`, "execution-plan.json");
+  if (!fs.existsSync(planPath)) return null;
+  return {
+    plan_path: planPath,
+    mode: prior.mode,
+    feature_id: featureId,
+    action: "resume-bound-plan-review",
+    source_session_id: prior.resume_state_source_session_id,
+  };
+}
+
+export default { resumedApprovedPlanMetadata, resumedBoundPlanReviewMetadata };
