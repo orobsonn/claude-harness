@@ -119,6 +119,40 @@ Author it for FULL-equivalent scrutiny and tell the operator, in pt-br, that it 
 sizing rule below, unchanged. "It is all one PRD, all one theme" is theme-cohesion, not
 delivery-cohesion — the exact rationalization `rules/creating-issues.md` already warns about.
 
+## Parked unarmed defects — the record that keeps a park reviewable
+
+A finding classified `unarmed` and parked during a delivery (`rules/unarmed-defects.md`) leaves the run
+as an issue. **That issue is the park's only terminal** — the run buffers that carried it (`findings.md`,
+`shared_context.md`) are deleted at harvest — so two data points are what make it reviewable months
+later, and neither is optional:
+
+- **Trigger precondition** — the coincidence the trigger needs, and the cited reason intended-scale
+  operation does not produce it, with the **quoted source** of that intended scale.
+- **Rearm observable** — the concrete number or state that re-arms the defect, **verified false** at
+  parking time, with the query or command that checked it.
+
+Write them in the issue body under their own explicit label, exactly as model assumptions get theirs:
+
+```
+Defeito desarmado (parqueado — não corrigido na entrega <feature-id>):
+- Severidade honesta: <low|medium|high — inalterada pelo parqueamento>
+- Precondição do gatilho: <a coincidência que o gatilho exige>
+- Escala pretendida (fonte): <o documento que a declara>
+- Por que a escala pretendida não produz o gatilho: <índice único / lock / config / decisão travada / file:fn>
+- Observável de rearme: <o número ou estado concreto a vigiar>
+- Verificado falso hoje: <comando/consulta rodada + resultado>
+- Tentativa de reprodução: <reproduced | not-reproduced | traced | not-attempted> — <o que rodou>
+- Parqueamento aceito por: <ator>
+```
+
+**A parked-defect issue is created WITHOUT `harness:ready`** — the same inert, local-only path retrofit
+issues use, and for a sharper reason: `cron-a-select` picks only open `harness:ready`, so a labelled park
+would be picked up as the next autonomous delivery and un-parked within hours. A park waits on its rearm
+observable, never on the queue. Never invent a new label; never hand-apply `harness:queued`/`harness:blocked`.
+
+**An issue with no rearm observable is not a park** — it is a "depois eu vejo" with a ticket number.
+Refuse to create it and send the finding back to be fixed.
+
 ## Project glossary
 
 If `CONTEXT.md` exists at the project root, use its terms **verbatim** in issue titles and bodies. Do
@@ -185,3 +219,5 @@ Produce the form fields for each unit:
   are two separately labelled blocks, and nothing depending on `## Em aberto` went out `harness:ready`.
 - From a deepening candidate: every candidate field landed under `Suposições do modelo (atacáveis)`,
   one issue per slice, and **nothing** went out `harness:ready`.
+- From a parked unarmed defect: the trigger precondition and the rearm observable are both in the
+  body, the observable was verified false, and the issue went out **unlabelled**.

@@ -59,6 +59,15 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **Issue derivada de candidato é criada SEM `harness:ready` — é entrega LOCAL, com o operador olhando o resultado.** Reestruturar código que já funciona no escuro não pode merjar sozinho às 3h da manhã. O seletor só pega `harness:ready` aberta, então a issue sem label é inerte e nunca é despachada; isso exige contornar o form (que estampa a label sempre). Não invente label nova; `harness:queued` e `harness:blocked` continuam sendo do motor
 - **Por que a rota escala**: o eixo de risco de uma reforma é **raio de explosão**, não sensibilidade de domínio — a allowlist de path sensível não enxerga uma reestruturação grande de código comum que funciona. Sem essa escalada, o caso de maior raio de explosão cairia na cerimônia mais barata
 
+### Defeito desarmado parqueado como fonte (handoff do `orchestrating-delivery`)
+- Um achado classificado `unarmed` e parqueado numa entrega (rule `unarmed-defects`) sai do run como issue — e **a issue é o único terminal do parque**: `findings.md` e `shared_context.md` são buffers apagados no harvest
+- O corpo carrega obrigatoriamente **dois dados**, sem os quais não existe parque:
+  - **Precondição do gatilho** — a coincidência que o gatilho exige, com a razão citada de a escala pretendida não a produzir e a **fonte citada** dessa escala pretendida (spec/PRD/decisão travada — nunca inferida de seeds ou fixtures)
+  - **Observável de rearme** — o número ou estado concreto que rearma o defeito, **verificado falso** no momento do parqueamento, com o comando/consulta que checou
+- Junto deles vão a severidade honesta (inalterada pelo parqueamento), o status da tentativa de reprodução (`reproduced` / `not-reproduced` / `traced` / `not-attempted`) e quem aceitou o parqueamento
+- **Issue de defeito parqueado é criada SEM `harness:ready`** — mesma rota inerte do candidato a aprofundamento, por um motivo mais afiado: o seletor só pega `harness:ready` aberta, então uma issue de parque com label vira a próxima entrega autônoma e desparqueia o defeito em horas. Um parque espera o observável de rearme, nunca a fila
+- **Issue sem observável de rearme não é parque** — é "depois eu vejo" com número. Recusar a criação e devolver o achado para correção
+
 ### Glossário do projeto (`CONTEXT.md`)
 - Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que o planner e o executor leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`surveying-codebase` semeia, o `harvester` mantém)
 
@@ -89,3 +98,6 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **Candidato a aprofundamento entrando como "decisão travada"**: o candidato é dedução do modelo de ponta a ponta; se ele vira decisão, o adversário passa a DEFENDER a proposta de reforma em vez de atacá-la. Tudo dele é suposição
 - **PRD inteiro virando uma issue só**: "é tudo um PRD só" é o mesmo erro de coesão de tema abaixo, com outro nome. N fatias = N issues
 - **Issue grande demais "porque é do mesmo tema"**: coesão de tema ≠ coesão de entrega. Juntar 3 sub-features numa issue faz o retry, a entrega e o raio de explosão do merge virarem tudo-ou-nada — a 3ª sub-feature emperrada bloqueia as 2 boas e o gate revisa um diff grande de uma vez. Separe por ENTREGA (o que merjа/reverte sozinho), não por tema
+- **Issue de defeito parqueado criada com `harness:ready`**: o motor pega a issue, entrega o conserto sozinho e desparqueia o defeito em horas — o parque some sem ninguém decidir. Parque é registro inerte, sem label, sempre
+- **Parque sem observável de rearme**: vira exatamente o "depois eu vejo" que a rule de defeito desarmado existe para impedir — este repo já carregou 68 erros de tipo e um `npm ci` quebrado assim. Sem número vigiável, não crie a issue: mande corrigir
+- **Parque registrado só no `findings.md`/`shared_context.md`**: os dois são buffers do run e o harvester apaga ambos no fim. Achado parqueado sem issue é achado deletado

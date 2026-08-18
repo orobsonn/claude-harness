@@ -58,6 +58,38 @@ Por que isso e não "é só ter cuidado": o eixo de risco de uma reforma é **ra
 
 **PRD não autoriza issue maior.** Um PRD que gera N fatias vira N issues sob a mesma regra de tamanho. "É tudo um PRD só, é tudo o mesmo tema" é coesão de TEMA, não de ENTREGA — a exata racionalização contra a qual a rule já avisa.
 
+## Defeito desarmado parqueado — o registro que mantém o parque revisável
+
+Um achado classificado `unarmed` e parqueado durante uma entrega (`.opencode/rules/unarmed-defects.md`)
+sai do run como issue. **Essa issue é o único terminal do parque** — os buffers que o carregavam
+(`findings.md`, `shared_context.md`) são apagados no harvest. Dois dados tornam o parque revisável meses
+depois, e nenhum é opcional: a **precondição do gatilho** (a coincidência exigida, com a razão citada de
+a escala pretendida não a produzir e a **fonte citada** dessa escala) e o **observável de rearme** (o
+número ou estado concreto, **verificado falso** no momento do parqueamento, com o comando que checou).
+
+Ambos vão no `summary`, em bloco rotulado — mesma mecânica das suposições do modelo:
+
+```
+Defeito desarmado (parqueado — não corrigido na entrega <feature-id>):
+- Severidade honesta: <low|medium|high — inalterada pelo parqueamento>
+- Precondição do gatilho: <a coincidência que o gatilho exige>
+- Escala pretendida (fonte): <o documento que a declara>
+- Por que a escala pretendida não produz o gatilho: <índice único / lock / config / decisão travada / file:fn>
+- Observável de rearme: <o número ou estado concreto a vigiar>
+- Verificado falso hoje: <comando/consulta rodada + resultado>
+- Tentativa de reprodução: <reproduced | not-reproduced | traced | not-attempted> — <o que rodou>
+- Parqueamento aceito por: <ator>
+```
+
+**Issue de defeito parqueado nunca é `harness:ready`.** O `submit-issue.mjs` estampa `harness:ready`
+sempre, e o `cron-a-select` só pega `harness:ready` aberta — uma issue de parque com label vira a próxima
+entrega autônoma e desparqueia o defeito em horas. Portanto **defeito parqueado não passa pelo helper**:
+o registro é criado à mão, sem label, pela mesma rota inerte do candidato a aprofundamento. Não invente
+label nova; `harness:queued` / `harness:blocked` continuam sendo do motor.
+
+**Issue sem observável de rearme não é parque** — é "depois eu vejo" com número. Recuse criar e devolva
+o achado para correção.
+
 ## Glossário do projeto
 
 Se existir `CONTEXT.md` na raiz do projeto, use os termos dele **literalmente** no título e no corpo da issue. Não invente vocabulário paralelo e não crie nem edite o arquivo (`oc-surveying-codebase` semeia, o `harvester` mantém).

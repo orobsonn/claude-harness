@@ -22,6 +22,13 @@
 import { readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
 
+/**
+ * @description The merge's own arming resolution. A Symbol so a model-emitted `arming` key cannot forge
+ * it: the agent contracts state the declaration lives at the head of `description` and NEVER as a JSON
+ * field, and this keeps that true at the boundary instead of merely asking for it.
+ */
+export const MERGED_ARMING = Symbol("merged_arming");
+
 /** @description Normalizes a free-text field for dedup key construction. */
 function norm(s) {
   return String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -68,14 +75,56 @@ export function normalizeSeverity(severity) {
 }
 
 /**
- * @description Recomputes the security gate verdict from a final issue list. UNSAFE when ANY issue is
- * high or medium (mirrors core/agents/security.md verdict criteria), SECURE otherwise. Severity is
- * normalized first so a cross-family "Critical" still gates. PURE.
+ * @description Reads the DECLARED arming axis (rules/unarmed-defects.md) off an issue, or null when the
+ * issue declares nothing. The eyes declare it at the HEAD of `description` ("UNARMED · REPRO: …")
+ * rather than as a JSON key, so the canonical report schema stays exact-keyed — and so a model that
+ * simply invents an `arming` key cannot outrank its own prose. The merge records its OWN resolution
+ * under a Symbol key that no model output can forge. PURE.
+ * @param {object} issue
+ * @returns {"armed"|"unarmed"|null}
+ */
+export function declaredArming(issue) {
+  const merged = issue?.[MERGED_ARMING];
+  if (merged === "unarmed" || merged === "armed") return merged;
+  const head = norm(issue?.description);
+  if (/^unarmed\b/.test(head)) return "unarmed";
+  if (/^armed\b/.test(head)) return "armed";
+  return null;
+}
+
+/**
+ * @description Effective arming: an issue that declares nothing is **armed**, because the absence of a
+ * classification is not a classification and "in doubt → ARMED" is the standing default. PURE.
+ * @param {object} issue
+ * @returns {"armed"|"unarmed"}
+ */
+export function armingOf(issue) {
+  return declaredArming(issue) === "unarmed" ? "unarmed" : "armed";
+}
+
+/**
+ * @description Recomputes the security gate verdict from a final issue list. UNSAFE when ANY **ARMED**
+ * issue is high or medium (mirrors core/agents/security.md), SECURE otherwise. Severity is normalized
+ * first so a cross-family "Critical" still gates.
+ *
+ * **Parking is OPT-IN and defaults OFF.** `honorParking: true` excludes parked (unarmed) issues, which
+ * is what an ORCHESTRATOR-SUPERVISED checkpoint wants: there, a parked finding is routed away from the
+ * sniper, so if it still set UNSAFE the run would deadlock — nothing changes, the next audit returns
+ * UNSAFE again, forever.
+ *
+ * It defaults OFF because this function is NOT orchestrator-private: `core/vps/run-cron-review.mjs`
+ * imports it to decide UNATTENDED auto-merge eligibility. On that path there is no orchestrator, no
+ * park acceptance on the record, no operator warning, no tracked issue, and nobody verifying the rearm
+ * observable is false — so an eye's own prose head must never be able to clear a merge gate. Parking
+ * suppresses a fix dispatch under supervision; it never lowers a severity and never opens a merge.
+ * PURE.
  * @param {object[]} issues
+ * @param {{ honorParking?: boolean }} [options]
  * @returns {"SECURE"|"UNSAFE"}
  */
-export function securityVerdict(issues = []) {
+export function securityVerdict(issues = [], { honorParking = false } = {}) {
   const blocking = issues.some((i) => {
+    if (honorParking && armingOf(i) === "unarmed") return false;
     const sev = normalizeSeverity(i?.severity);
     return sev === "high" || sev === "medium";
   });
@@ -102,13 +151,13 @@ export function classifyFindings(claudeIssues = [], codexIssues = [], fields = D
   for (const raw of claudeIssues) {
     const issue = tag(raw, "claude");
     const k = dedupKey(issue, fields);
-    if (byKey.has(k)) { mergeFamilies(byKey.get(k), "claude"); }
+    if (byKey.has(k)) { mergeFamilies(byKey.get(k), "claude", issue); }
     else { byKey.set(k, issue); order.push(k); }
   }
   for (const raw of codexIssues) {
     const issue = tag(raw, "codex");
     const k = dedupKey(issue, fields);
-    if (byKey.has(k)) { mergeFamilies(byKey.get(k), "codex"); }
+    if (byKey.has(k)) { mergeFamilies(byKey.get(k), "codex", issue); }
     else { byKey.set(k, issue); order.push(k); }
   }
 
@@ -126,9 +175,42 @@ export function classifyFindings(claudeIssues = [], codexIssues = [], fields = D
   return { agreed, needsCrosscheck };
 }
 
-/** @description Adds a family to an issue's provenance, de-duplicated. Mutates in place. */
-function mergeFamilies(issue, family) {
-  if (!issue.found_by.includes(family)) issue.found_by.push(family);
+/**
+ * @description Adds a family to an issue's provenance, de-duplicated, and reconciles the arming axis
+ * across families. Mutates in place.
+ *
+ * The dedup key ignores `description`, so without this the first family's issue would win wholesale and
+ * a cross-family DISAGREEMENT about arming would be destroyed silently — one family calling a defect
+ * reachable and the other calling it parked is exactly the signal a second family exists to surface.
+ * Disagreement resolves to **armed** (conservative, matching "in doubt → ARMED") and is recorded in
+ * `arming_conflict` so the orchestrator can see it was contested rather than agreed.
+ */
+function mergeFamilies(issue, family, incoming) {
+  const sameFamily = issue.found_by.includes(family);
+  if (!sameFamily) issue.found_by.push(family);
+  if (!incoming || sameFamily) return; // a family duplicating itself is not a cross-family disagreement
+  const mine = declaredArming(issue);
+  const theirs = declaredArming(incoming);
+  if (mine === null || theirs === null) return; // a missing declaration is a format defect, not a contest
+  if (mine === theirs) {
+    issue[MERGED_ARMING] = mine;
+    return;
+  }
+  issue[MERGED_ARMING] = "armed";
+  issue.arming_conflict = {
+    armed_by: mine === "armed" ? issue.found_by[0] : family,
+    unarmed_by: mine === "unarmed" ? issue.found_by[0] : family,
+  };
+  // Make the resolution visible where every consumer actually looks. The dedup key ignores
+  // `description`, so the stored text is whichever family was seen first — leaving an "UNARMED" head on
+  // an issue the merge just resolved to ARMED would send the orchestrator's prose-driven triage to park
+  // it, the exact outcome this reconciliation exists to prevent.
+  if (mine === "unarmed") {
+    issue.description = String(issue.description ?? "").replace(
+      /^\s*unarmed\b/i,
+      `ARMED (contested: ${issue.arming_conflict.unarmed_by} called it unarmed)`,
+    );
+  }
 }
 
 /**

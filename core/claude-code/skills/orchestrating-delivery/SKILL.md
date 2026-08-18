@@ -18,7 +18,7 @@ All identifiers, JSON keys, and reasoning stay in English. **Every message to th
 ## Position in the system
 
 ```
-triaging-requests  →  orchestrating-delivery (you)  →  agents (workers)
+triaging-requests → orchestrating-delivery (you) → agents (workers)
                        owns: HARD-GATES + context curation + loop control
 ```
 
@@ -127,7 +127,7 @@ is re-reviewed at its new sha (#ac-1.4). Gate on the env var, not prose. **Full 
    **HEADLESS:** there is no human to brainstorm with, so **simulate the exploration by dispatching read-only subagents**: fan out a small set of exploration agents over the trigger (issue/PR/prompt) + the codebase, each with a **distinct lens** (e.g. user-journeys, edge-cases/failure-modes, constraints/non-functionals), then **synthesize** their outputs into the spec (UJs `#uj-N` + ACs `#ac-N.M`). Subagent dispatch is the **reliable mechanism** — **cloud routines do not have the `Workflow` tool** (confirmed: workflows are unavailable in cloud sessions and require interactive per-run approval). **Prefer a `Workflow`** only when the tool is actually available (e.g. headless-local via `claude -p`), for deterministic/reproducible orchestration. A thin one-line trigger may use inline derivation. Either way the synthesized spec then goes through the spec-validation gate (adversary attacks it). Never run an interactive brainstorm in headless, and never hard-depend on the `superpowers:brainstorming` plugin (it does not load in cloud routines).
 2. **Explicitly `Read`** the project's durable index — `.claude/memory/MEMORY.md` (the repo-committed project-pattern index; do not rely on native auto-load) and the root `CLAUDE.md` router table ("folder → what lives there") — to inform the spec. **Cold-start check:** if this is a non-trivial existing codebase and that index is cold (`.claude/memory/MEMORY.md` has no entries and the root `CLAUDE.md` router is unfilled), dispatch the `surveying-codebase` skill **first** to seed durable knowledge from the code itself, then read the now-populated index before shaping the spec. This is the orchestrator's macro view forming. There is no `learnings.md`.
 3. Produce a spec with UJs, ACs, constraints, and resolved product decisions.
-4. **Upfront spec-adversary (MANDATORY in both LIGHT and FULL):** Dispatch the **adversary** (opus, virgin) against the spec + the existing codebase (if any). The adversary surfaces tech-debt risks, threats to ACs, and contradictions before the plan is written. Then emit the checkpoint `node .claude/hooks/mark.mjs spec-adversaried --feature-id <feature-id> --verdict SHIP|BLOCK --findings <n>` BEFORE the HARD-GATE 1 stop branch below, so a BLOCK still records it. **INTERACTIVE:** the adversary's findings inform the operator's approval decision.
+4. **Upfront spec-adversary (MANDATORY in both LIGHT and FULL):** Dispatch the **adversary** (opus, virgin) against the spec + the existing codebase (if any). The adversary surfaces tech-debt risks, threats to ACs, and contradictions before the plan is written. Then emit the checkpoint `node .claude/hooks/mark.mjs spec-adversaried --feature-id <feature-id> --verdict SHIP|BLOCK --findings <n>` BEFORE the HARD-GATE 1 stop branch below, so a BLOCK still records it. **INTERACTIVE:** the adversary's findings inform the operator's approval decision. **Arming applies here too** — a finding parked as UNARMED at this stage has no PR and no run buffers yet, so its tracked issue is the ONLY record it will ever have (`references/unarmed-routing.md`).
 
 **HARD-GATE 1 — approve spec (pt-br, product-language):** present what the feature does and ask the operator to confirm. Do not show code or schema.
 **HEADLESS:** no operator to confirm. The upfront adversary attack has already run; if it surfaced no blocking issue, proceed and write the spec into the PR body. If a blocking issue cannot self-resolve, stop and report it in the PR — do not proceed on a guess.
@@ -277,15 +277,15 @@ through the CLI. The emitted **descriptor schema** (these exact keys):
 
 ```json
 {
-  "feature_id":       "<feature-id>",
-  "task_id":          "<task-id>",
-  "model":            "<DERIVED from the plan's approved ladder — never hand-typed>",
-  "brief_file":       "<absolute path to the scrubbed brief; the budget-capped curated shared_context is already folded in>",
-  "scope_paths":      ["<in-scope path>", "..."],
-  "locked_test":      "<path to the frozen locked test (the gate of record); frozen_paths is derived from it>",
-  "allowed_writes":   ["<per-dispatch allowed-write path>", "..."],
+  "feature_id": "<feature-id>",
+  "task_id": "<task-id>",
+  "model": "<DERIVED from the plan's approved ladder — never hand-typed>",
+  "brief_file": "<absolute path to the scrubbed brief; the budget-capped curated shared_context is already folded in>",
+  "scope_paths": ["<in-scope path>", "..."],
+  "locked_test": "<path to the frozen locked test (the gate of record); frozen_paths is derived from it>",
+  "allowed_writes": ["<per-dispatch allowed-write path>", "..."],
   "freeze_commit_sha":"<git rev-parse HEAD at the freeze-commit (step 1c-commit)>",
-  "test_runner":      "<test-runner adapter id (references/runner-adapters.mjs) — node-test | vitest>"
+  "test_runner": "<test-runner adapter id (references/runner-adapters.mjs) — node-test | vitest>"
 }
 ```
 
@@ -325,7 +325,7 @@ through the CLI. The emitted **descriptor schema** (these exact keys):
 
 **4-commit. impl-commit — a PRECONDITION of step 5 (the sniper), not an epilogue.** Once the step-4 gates are GREEN, the orchestrator COMMITS the production diff: `feat(<scope>): <task summary>` (Conventional Commit; no Co-Authored-By trailer per repo rules). Stage only the production files — `scope_paths` MINUS the frozen manifest closure. HEAD advances per task. **Never defer it past step 5:** the sniper spawns via the same `spawn-hand.mjs`, which refuses a tree dirty vs the freeze baseline — an uncommitted executor diff kills EVERY sniper dispatch as a config error (exit 2). Emit the sniper's descriptor AFTER this commit: `descriptor-emitter` re-derives `freeze_commit_sha` from the real HEAD, so the capture anchors on the impl-commit and attributes only the sniper's OWN writes. It asserts "the frozen gate is green", never "the task is reviewed".
 
-**5. sniper** — the **only fixer**. Applies **all** mapped issues from compliance + adversary + security + gates. Model = `hand_tiers[issue.severity]`, resolved by the emitter (`--role sniper`, below); dispatched via the SAME runnable live-dispatch command as the executor (schema + spawn path above), on the clean tree 4-commit left behind; Ollama cheap hand for ALL severities. Same capture rail as step 1d — the descriptor carries `feature_id`/`task_id`, and the orchestrator stamps `mark.mjs hand-finished` right after the sniper returns. **Severity resolution (total over all four sources):** use the finding's explicit `severity` when present; a gate failure or a compliance VIOLATED-locked-decision is auto-**high**; otherwise fall back to the owning `task.severity`; never below hand_tiers.medium for a fail-class finding.
+**5. sniper** — the **only fixer**. Applies **all** mapped **ARMED** issues from compliance + adversary + security + gates; **UNARMED** ones are parked, not fixed → load `references/unarmed-routing.md` on demand. **An UNARMED label is INERT until that file is loaded and its park record produced** — until then the finding is ARMED. Model = `hand_tiers[issue.severity]`, resolved by the emitter (`--role sniper`, below); dispatched via the SAME runnable live-dispatch command as the executor (schema + spawn path above), on the clean tree 4-commit left behind; Ollama cheap hand for ALL severities. Same capture rail as step 1d — the descriptor carries `feature_id`/`task_id`, and the orchestrator stamps `mark.mjs hand-finished` right after the sniper returns. **Severity resolution (total over all four sources):** use the finding's explicit `severity` when present; a gate failure or a compliance VIOLATED-locked-decision is auto-**high**; otherwise fall back to the owning `task.severity`; never below hand_tiers.medium for a fail-class finding.
 
 - **fail-class finding (the floor trigger, defined):** a fail-class finding = any finding in one of the 8 canonical-critical-classes, any gate failure, any compliance fail / VIOLATED-locked-decision, or any security UNSAFE. Any such finding floors the dispatch at `hand_tiers.medium` (never below), mechanically.
 - **Mixed-severity batch (the dispatch resolves over the APPLIED SET, not one issue):** the sniper applies the **batch** of mapped issues, so the dispatch model AND the re-gate trigger resolve from the **MAX resolved severity across the applied set** — never off whichever issue happens to be first or lowest. Concretely: dispatch on `hand_tiers[max(resolved_severity over applied set)]`, and **the re-gate fires whenever ANY finding in the applied set resolves to HIGH** (auto-high included), not "the issue's severity". A batch of one HIGH + several LOW dispatches at `hand_tiers.high` and triggers the re-gate. The emitter computes it (#361).
