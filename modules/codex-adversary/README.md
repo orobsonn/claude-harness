@@ -75,7 +75,14 @@ Two merge shapes, because the outputs differ:
 The **security** audit is findings-shaped, with two adjustments versus the adversary: it dedups on
 `(scope, severity, evidence)` because security findings carry no `category`, and its `SECURE | UNSAFE`
 gate verdict is recomputed from the merged findings (severity normalized across families, so a GPT
-`Critical` still gates). Run it via `--role security`. To keep the second family from blocking
+`Critical` still gates). The driver passes `honorParking: true`, so a parked `UNARMED` finding keeps its
+honest severity but does not set UNSAFE there — it is routed away from the sniper and would otherwise
+deadlock the run forever (`rules/unarmed-defects.md`). **`securityVerdict` itself defaults to
+arming-blind**: `core/vps/run-cron-review.mjs` imports it to decide UNATTENDED auto-merge eligibility,
+and on that path there is no orchestrator, no park acceptance, no issue and no operator warning — so an
+eye's own prose head must never be able to open a merge gate. When the two families DISAGREE on arming, the merge
+resolves to **armed** and records `arming_conflict` — the dedup key ignores `description`, so without
+that the first family's verdict would win wholesale and the disagreement would vanish silently. Run it via `--role security`. To keep the second family from blocking
 delivery on an unrefuted false-high, the verdict counts only `findings` that Claude has weighed in on
 (agreed + claude-only survivors); a **codex-only** finding waits in `pendingClaudeRefutation` and is a
 **delivery-blocking precondition** (recorded in gate-state like a `regate-pending`) until its Claude

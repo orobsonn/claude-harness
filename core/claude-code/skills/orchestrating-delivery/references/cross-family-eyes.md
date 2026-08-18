@@ -24,7 +24,11 @@ families and merge — at **every** checkpoint that runs an eye. The module is v
 - **security** (per-task step 3b, final dual-review): dispatch the Claude `security` auditor as today AND
   `node .claude/modules/codex-adversary/references/cross-family.mjs --role security --task <task.json> --claude <claude-issues.json>`.
   Same **policy B**, with a severity-based dedup (security issues carry no `category`). The driver returns
-  a `verdict` (SECURE|UNSAFE) computed ONLY from `findings` (Claude + agreed + claude-only survivors) —
+  a `verdict` (SECURE|UNSAFE) computed ONLY from `findings` (Claude + agreed + claude-only survivors),
+  with `honorParking: true` so a parked UNARMED finding keeps its severity but does not gate this
+  supervised checkpoint (see `references/unarmed-routing.md`; a head reading `ARMED (contested: …)` is
+  the merge resolving a cross-family arming disagreement conservatively). The unattended VPS review path
+  calls `securityVerdict` raw, where parking never applies —
   codex-only findings sit in `pendingClaudeRefutation` and do **NOT** escalate the gate until their Claude
   refute-pass runs and survivors are folded in. **Determinism (gate precondition):** a non-empty
   `pendingClaudeRefutation` is a **delivery-blocking precondition** — record it like a `regate-pending`

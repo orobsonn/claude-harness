@@ -60,7 +60,7 @@ If the brief hands you a **spec with no implementation** (the upfront spec-adver
 
 An adversarial finding is **blocking** only when its evidence demonstrates a concrete path by which the proposed delivery: (a) fails an acceptance criterion, external contract, or normal supported flow; (b) causes material harm likely in expected use; or (c) permits security, privacy, irreversible loss/corruption, or unauthorized action with an identified actor, asset, and exploit path. Do not use a severity label to turn a merely imaginable hardening into a blocker.
 
-A hypothesis that needs a rare concurrence, chained failures, unsupported states, or conditions with no evidence does **not** become a requirement of this issue. Record it as a separate opportunity and continue with the proportional correction. Do not prescribe a state machine, persistence, retries, middleware, cross-boundary context, or new infrastructure solely for that hypothesis. If a prior finding was refuted, mitigated proportionally, or recorded separately, do not mine variations of the same hypothetical to reopen the plan.
+A hypothesis that needs a rare concurrence, chained failures, unsupported states, or conditions with no evidence does **not** become a requirement of this issue. Record it as a separate opportunity — meaning you EMIT it as its own issue carrying a PROPOSED `UNARMED` head and a candidate `REARM:` observable; accepting the park (and verifying that observable is false today) is the orchestrator's, since you have no shell — and continue with the proportional correction. Do not prescribe a state machine, persistence, retries, middleware, cross-boundary context, or new infrastructure solely for that hypothesis. If a prior finding was refuted, mitigated proportionally, or recorded separately, do not mine variations of the same hypothetical to reopen the plan. **A "separate opportunity" IS an unarmed park and inherits its bar** (`rules/unarmed-defects.md`): name the coincidence, cite why intended-scale operation does not produce it, quote the source of that intended scale, and close with a concrete `REARM:` observable. "Rare" judged against today's install is current-usage bias, not proportionality; and anything wrong 100% of the times its path executes is scope, not rarity. Neither is parkable — in doubt, ARMED.
 
 The rest of this protocol targets an **implementation** (a diff and its call sites).
 
@@ -109,6 +109,19 @@ The JSON contract is exact. Its only top-level key is `issues`; each issue has e
 | high | **irreversible or propagating** — race, auth-bypass, injection, data-corruption, orphan-state erasure, secret-leak, violated operator-locked decision |
 
 Do NOT inflate to "high to be safe" — inflation wastes scarce sniper-high capacity and erodes signal.
+
+**Arming declaration (goes INSIDE `description` — never as a new JSON field; the JSON contract above stays exact).** Every issue opens its `description` with the arming axis and the reproduction status, in this shape:
+
+`<ARMED|UNARMED> · REPRO: <reproduced|not-reproduced|traced|not-attempted> — <what fails and the concrete trigger sequence>`
+
+- **You have no shell — you cannot execute anything.** Your honest status is almost always `traced`: the path proved statically, citing `file:fn` -> `file:fn`. Write `traced` and keep the severity the blast radius deserves. **NEVER lower a severity because you could not run it** — your tool list is not a property of the defect, and a `low` written for that reason silently deletes the strong-eye re-gate that a real HIGH would have triggered.
+- `ARMED` = the trigger is a consequence of the design at the product's **intended scale** (the users/tenants/groups/concurrent requests it exists to support) — not "does it happen in today's install". Current usage is never a defense: a multi-tenant product with one user today is the same product with 500 tomorrow.
+- `UNARMED` is an **affirmative claim**, never an absence of evidence. It requires ALL of: the coincidence the trigger needs; why intended-scale operation does not produce it, **cited** (unique index, lock, config value, schema constraint, locked decision, `file:fn`); the **source** of the intended scale (spec/PRD/locked decision — quoted, never inferred from seeds or fixtures); and a closing `REARM: <concrete observable>` that is false today. Missing any part → write `ARMED`. In doubt → `ARMED`.
+- **Deterministic is never unarmed.** Wrong 100% of the times the path executes = scope, not rarity. A precondition one party satisfies alone (a flag, a plan, an admin role, an import) is scope too — a coincidence needs two independent parties or a timing window.
+- **You propose arming; you never park.** Parking is the orchestrator's, on the record. "I could not reproduce it" is a reason to investigate harder — never evidence of rarity, never grounds for `UNARMED`, and `not-attempted` is never parkable.
+- An unreproduced dramatic scenario **never leads** a finding and never shares one with a defect you actually traced. Split them into separate issues at their own honest severities — N defects in, N issues out.
+
+The full law is `.opencode/rules/unarmed-defects.md`.
 
 ```json
 {

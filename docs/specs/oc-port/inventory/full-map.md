@@ -102,7 +102,7 @@ This is the exhaustive reference. Implementation contracts live in `../0x-*.md`.
 
 | Item | Dest | Phase |
 |---|---|---|
-| rules/*.md (all 9) | SHARED | 1 |
+| rules/*.md (all 10) | SHARED | 1 |
 | CLAUDE.md | CC | 1 |
 | AGENTS.md | OC | 1 |
 | CLAUDE-HARNESS-MEMORY-MODEL.md | SHARED knowledge | 1 |

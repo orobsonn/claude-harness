@@ -105,7 +105,7 @@ operator switches to `build` with Tab when they want that approved spec implemen
 - Atomic functions; DRY with limit; TypeScript strict (no `any`).
 - Comments only for WHY. JSDoc `/** @description ... */` on every new `.ts`/`.tsx`.
 - Forbidden generic files: `helpers.ts`, `utils.ts`, `misc.ts`, `common.ts`.
-- Full law also lives under `.opencode/rules/` (git, security, testing, architecture) — load when relevant; AGENTS is the summary.
+- Full law also lives under `.opencode/rules/` (git, security, testing, architecture, unarmed-defects) — load when relevant; AGENTS is the summary.
 
 ---
 

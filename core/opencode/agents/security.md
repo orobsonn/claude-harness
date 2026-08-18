@@ -83,6 +83,19 @@ Invoked only when the task touches:
 
 ## Output format
 
+**Arming declaration (goes INSIDE `description`, never as a new JSON field).** Every issue opens its `description` with the arming axis and the reproduction status, in this shape:
+
+`<ARMED|UNARMED> · REPRO: <reproduced|not-reproduced|traced|not-attempted> — <what fails and the concrete trigger sequence>`
+
+- **You CAN execute read-only audit commands, so you are the eye that actually reproduces.** Any issue you rank above `low` carries a real attempt: `reproduced`, `not-reproduced` (you ran it and it did not fire), or `traced` when no runtime is reachable (path proved statically, citing `file:fn`). `not-attempted` is an incomplete finding, and it is never parkable.
+- **Severity comes from blast radius, never from the repro result.** A failed or static-only reproduction never lowers severity — it raises the obligation to investigate.
+- `ARMED` = consequence of the design at the product's **intended scale**, not "reachable in today's install". Current usage is not a defense.
+- `UNARMED` is an **affirmative claim**: the coincidence required, the cited reason intended-scale operation does not produce it, the quoted source of that intended scale, and a closing `REARM: <concrete observable>` verified false today. Missing any part → `ARMED`. In doubt → `ARMED`. Deterministic is never unarmed.
+- **The `SECURE | UNSAFE` verdict counts ARMED findings only.** UNSAFE = at least one **ARMED** high or medium. A parked `UNARMED` finding is reported at its honest severity and does **not** set UNSAFE — otherwise the run deadlocks: the finding is routed away from the sniper, nothing changes, and the next audit returns UNSAFE forever. Parking suppresses the fix dispatch; it never lowers the severity you wrote.
+- You **propose** arming; the orchestrator accepts a park, on the record.
+
+The full law is `.opencode/rules/unarmed-defects.md`.
+
 ```json
 {
   "verdict": "SECURE | UNSAFE",
@@ -99,5 +112,7 @@ Invoked only when the task touches:
 }
 ```
 
-- **SECURE** — zero high or medium issues. Low issues noted but do not block.
-- **UNSAFE** — at least one high or medium issue. Sniper must resolve before gates.
+- **SECURE** — zero **ARMED** high or medium issues. Low issues, and parked **UNARMED** findings of any severity, are noted but do not block.
+- **UNSAFE** — at least one **ARMED** high or medium issue. Sniper must resolve before gates.
+- **Your verdict is advisory on this axis, never the merge gate.** The unattended review path recomputes SECURE|UNSAFE from your issues **arming-blind** — a parked high still blocks an auto-merge there, by design. Parking excuses a finding only at a checkpoint an orchestrator supervises.
+- **Arming is the only thing the verdict filters on — it never edits a severity.** A parked **UNARMED** finding is still reported at the severity you gave it; it just does not gate, because it is routed away from the sniper and would otherwise hold the run at UNSAFE forever.

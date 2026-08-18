@@ -168,7 +168,9 @@ export function runForRole({ role, taskJson, claudeInput, env, availability, run
  * codex false-high can never flip the gate behind the orchestrator's back.
  */
 function decorate(role, result) {
-  if (role === "security") result.verdict = securityVerdict(result.findings);
+  // Orchestrator-supervised checkpoint: parking is honored here (and ONLY here) because the
+  // orchestrator owns the park record. The unattended VPS review path calls securityVerdict raw.
+  if (role === "security") result.verdict = securityVerdict(result.findings, { honorParking: true });
   return result;
 }
 

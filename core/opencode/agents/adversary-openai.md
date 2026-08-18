@@ -104,6 +104,19 @@ The JSON contract is exact. Its only top-level key is `issues`; each issue has e
 
 Do NOT inflate to "high to be safe" — inflation wastes scarce sniper-high capacity and erodes signal.
 
+**Arming declaration (goes INSIDE `description` — never as a new JSON field; the JSON contract above stays exact).** Every issue opens its `description` with the arming axis and the reproduction status, in this shape:
+
+`<ARMED|UNARMED> · REPRO: <reproduced|not-reproduced|traced|not-attempted> — <what fails and the concrete trigger sequence>`
+
+- **You have no shell — you cannot execute anything.** Your honest status is almost always `traced`: the path proved statically, citing `file:fn` -> `file:fn`. Write `traced` and keep the severity the blast radius deserves. **NEVER lower a severity because you could not run it** — your tool list is not a property of the defect, and a `low` written for that reason silently deletes the strong-eye re-gate that a real HIGH would have triggered.
+- `ARMED` = the trigger is a consequence of the design at the product's **intended scale** (the users/tenants/groups/concurrent requests it exists to support) — not "does it happen in today's install". Current usage is never a defense: a multi-tenant product with one user today is the same product with 500 tomorrow.
+- `UNARMED` is an **affirmative claim**, never an absence of evidence. It requires ALL of: the coincidence the trigger needs; why intended-scale operation does not produce it, **cited** (unique index, lock, config value, schema constraint, locked decision, `file:fn`); the **source** of the intended scale (spec/PRD/locked decision — quoted, never inferred from seeds or fixtures); and a closing `REARM: <concrete observable>` that is false today. Missing any part → write `ARMED`. In doubt → `ARMED`.
+- **Deterministic is never unarmed.** Wrong 100% of the times the path executes = scope, not rarity. A precondition one party satisfies alone (a flag, a plan, an admin role, an import) is scope too — a coincidence needs two independent parties or a timing window.
+- **You propose arming; you never park.** Parking is the orchestrator's, on the record. "I could not reproduce it" is a reason to investigate harder — never evidence of rarity, never grounds for `UNARMED`, and `not-attempted` is never parkable.
+- An unreproduced dramatic scenario **never leads** a finding and never shares one with a defect you actually traced. Split them into separate issues at their own honest severities — N defects in, N issues out.
+
+The full law is `.opencode/rules/unarmed-defects.md`.
+
 ```json
 {
   "issues": [
