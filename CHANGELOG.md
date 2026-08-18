@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.70](https://github.com/orobsonn/claude-harness/compare/v0.55.69...v0.55.70) (2026-08-18)
+
+
+### Bug Fixes
+
+* **release:** adiciona package-lock.json para destravar o publish no npm ([#800](https://github.com/orobsonn/claude-harness/issues/800)) ([47942c6](https://github.com/orobsonn/claude-harness/commit/47942c6))
+
 ## [0.55.69](https://github.com/orobsonn/claude-harness/compare/v0.55.68...v0.55.69) (2026-08-18)
 
 
