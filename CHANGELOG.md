@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.69](https://github.com/orobsonn/claude-harness/compare/v0.55.68...v0.55.69) (2026-08-18)
+
+
+### Features
+
+* **harness:** adiciona criterio de defeito desarmado ([#796](https://github.com/orobsonn/claude-harness/issues/796)) ([33cfd91](https://github.com/orobsonn/claude-harness/commit/33cfd91))
+
 ## [0.55.68](https://github.com/orobsonn/claude-harness/compare/v0.55.67...v0.55.68) (2026-08-13)
 
 
