@@ -313,14 +313,21 @@ Spec pack: [`docs/specs/oc-port/`](docs/specs/oc-port/).
 
 Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado; motor VPS OC é fase 2.
 
-## Publicação no npm (mantenedor)
+## Distribuição (mantenedor)
 
-O workflow `.github/workflows/npm-publish.yml` dispara automaticamente em `release: [published]`.
+O canal de instalação é a **tag do GitHub**, não o npm:
 
-**Setup único (primeira vez):**
-1. No GitHub → Settings → Secrets and variables → Actions → New repository secret
-2. Nome: `NPM_TOKEN`
-3. Valor: token de publish do npm (com permissão para o pacote scoped `@orobsonn/claude-harness`)
-4. A primeira publicação (≥0.40.0) pode exigir OTP/2FA manual do mantenedor no npm.
+```bash
+npx -y "github:orobsonn/claude-harness#v0.55.71" init --target both
+```
 
-Subsequentes publicações são automáticas, sem passos manuais.
+Uma release nova é, portanto, `tag + GitHub Release` — nada além disso precisa acontecer para o harness
+ficar instalável.
+
+**Não há publicação no npm.** O workflow que publicava foi removido em favor da tag. Ele estava
+quebrado desde a 0.45.0 e ninguém sentiu falta em ~25 releases, o que é a evidência de que o npm nunca
+foi o canal real: `npm ci` falhava por falta de `package-lock.json`, o job estava pinado em Node 20
+(sem glob em `node --test`) e o secret `NPM_TOKEN` nunca existiu. Manter um segundo canal de
+distribuição que ninguém consome custa manutenção e produz release verde com publicação vermelha.
+
+O pacote segue com `bin` e `files` no `package.json` — é o que faz o `npx github:` resolver o CLI.
