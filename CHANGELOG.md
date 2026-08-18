@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.55.71](https://github.com/orobsonn/claude-harness/compare/v0.55.70...v0.55.71) (2026-08-18)
+
+
+### Bug Fixes
+
+* **release:** alinha npm-publish com Node 22 (glob de node --test) ([#802](https://github.com/orobsonn/claude-harness/issues/802)) ([4b37ca5](https://github.com/orobsonn/claude-harness/commit/4b37ca5fe61ab512483681e3ebcbfb79553fdddc))
+
 ## [0.55.70](https://github.com/orobsonn/claude-harness/compare/v0.55.69...v0.55.70) (2026-08-18)
 
 
