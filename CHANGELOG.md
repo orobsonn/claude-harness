@@ -5,6 +5,17 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.56.0](https://github.com/orobsonn/claude-harness/compare/v0.55.71...v0.56.0) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* `setup-vps` não instala mais os crons do motor da VPS nem pede credenciais de Telegram, e recusa rodar como root.
+
+### Features
+
+* Orca como ADE oficial + selector multi-projeto no lugar do motor de cron da VPS ([#805](https://github.com/orobsonn/claude-harness/issues/805)) ([1622831](https://github.com/orobsonn/claude-harness/commit/162283189f22a345f70846096a638b557a90c936))
+
 ## [0.55.71](https://github.com/orobsonn/claude-harness/compare/v0.55.70...v0.55.71) (2026-08-18)
 
 
