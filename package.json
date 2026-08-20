@@ -15,6 +15,7 @@
     "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
     "core/opencode",
     "core/github",
+    "core/orca",
     "core/shared",
     "core/claude-code"
   ],

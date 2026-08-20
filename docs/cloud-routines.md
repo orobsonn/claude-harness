@@ -36,7 +36,7 @@ Consequência crítica: "não trava" significa **aceitar qualquer coisa cegament
 
 A routine **não pausa** esperando humano. O padrão oficial é **abrir um PR (draft)** como entregável; o humano revisa de forma **assíncrona** no GitHub. Confirmado como o pattern pretendido para review de output de routine.
 
-No modo VPS (headless-local), essa revisão assíncrona ganha uma camada automatizada extra antes de chegar no humano: a **fase de revisão independente** (`cron-review`, detalhada em `usage.md` §6) reanalisa o diff do PR com olhos frescos e só auto-merge na conjunção completa dos vereditos (fresh + cross-family + 2nd-pass + `autoMergeEnabled`). É fail-closed — diff-fetch falha re-queue, sem a segunda família de modelo (cross-family), o PR fica em `harness:awaiting-merge` em vez de ser mergeado sozinho.
+No modo VPS (headless-local, hoje sobre o **[Orca](https://onorca.dev)** como ADE oficial), essa revisão assíncrona ganha uma camada automatizada extra antes de chegar no humano: uma **automação agendada de revisão de PR no Orca** (detalhada em `usage.md` §7) reanalisa o diff com olhos frescos e só merja na conjunção completa — veredito próprio de merjar, nenhum achado ARMADO de severidade alta, CI em `SUCCESS`, sem conflito, e `--match-head-commit` obrigatório. É fail-closed: qualquer perna ausente deixa o PR em `harness:awaiting-merge` em vez de ser mergeado sozinho. O antigo `cron-review` do motor de cron da VPS foi aposentado — ver `../core/vps/DEPRECATED.md`.
 
 ## Dependências e integrações opcionais
 

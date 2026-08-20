@@ -1,60 +1,38 @@
 /**
  * @description Interactive wizard behind `npx claude-harness setup-vps` / `node .../cli.mjs setup-vps`.
- * Runs ON the VPS, from inside the project you want to onboard. Designed for the MINIMUM typing:
- * it INFERS everything it can — the engine path (from the script's own location, or an auto-clone),
- * the project (current dir), and owner/repo (the dir's git remote) — so the operator only types what
- * cannot be guessed: the Telegram token + chat_id. Every inferred value is a prompt DEFAULT (Enter
- * accepts, or override).
+ * Runs ON the VPS, from inside the project you want to onboard, as the user that owns the Orca
+ * runtime (`orca`) — NEVER as root.
  *
- * STABLE-ENGINE contract (critical): the crontab install-crons writes points cron at
- * `<engineDir>/core/vps/run-cron-a.mjs`, so the engine MUST live at a durable path. Resolution:
- *   1. `deps.localEngineDir` — this script's own harness clone, when it actually contains core/vps
- *      (the normal case: run from a cloned harness). Stable.
- *   2. else `deps.stableEngineDir` (~/.claude/harness-core) — if core/vps is missing there (e.g. the
- *      wizard is running from the ephemeral npx cache, which does NOT ship core/vps), it is CLONED
- *      once via `deps.cloneEngine`. Never runs the engine from the npx cache.
+ * What it installs is the CURRENT design: **Orca dispatches, the repo's vendored `.claude/` harness
+ * executes**. Concretely, two artifacts and nothing else:
+ *   1. a per-project config JSON (`~/.config/claude-harness/projects/<slug>.json`) — the format is
+ *      `core/orca/project.example.json`;
+ *   2. one fenced crontab line running `core/orca/select-and-dispatch.mjs --config <that JSON>`.
  *
- * Secret hygiene: the bot token is written to ~/.claude/.dev.vars (0600) and NEVER printed/logged/
- * passed as an install-crons arg. Every side-effecting seam is injectable for hermetic testing.
- * Node builtins only, zero deps.
+ * It NO LONGER installs the retired VPS cron engine (`core/vps/install-crons.mjs`: Cron A, the review
+ * cron, drain, reaper, Telegram notify). That engine is retired — see `core/vps/DEPRECATED.md` for
+ * the measured reasons and the verification runbook that must precede deleting it. Notifications are
+ * no longer a wizard concern either: Orca runs are visible from desktop and phone, which is what the
+ * Telegram plumbing existed to simulate.
+ *
+ * The one thing this wizard CANNOT do for you is the PR-review + conditional-merge step: that is a
+ * scheduled Orca automation, configured in Orca, not code in this repo. The wizard prints its exact
+ * merge criteria at the end so the operator sets it up with the same contract every time.
+ *
+ * STABLE-ENGINE contract (critical): the crontab line points at
+ * `<engineDir>/core/orca/select-and-dispatch.mjs`, so the harness MUST live at a durable path.
+ * Resolution:
+ *   1. `deps.localEngineDir` — this script's own harness clone, when it actually contains
+ *      core/orca. Stable.
+ *   2. else `deps.stableEngineDir` (~/.claude/harness-core) — cloned once via `deps.cloneEngine` if
+ *      core/orca is missing there (e.g. the wizard is running from the ephemeral npx cache).
+ *      Never runs the selector from the npx cache.
+ *
+ * Every side-effecting seam is injectable for hermetic testing. Node builtins only, zero deps.
  */
 import { join, basename } from "node:path";
 
-/**
- * @description Self-explanatory guide (pt-br) shown before the Telegram questions: how to get the
- * bot token, add the bot to the group, and read the chat_id + message_thread_id.
- * @returns {string}
- */
-export function telegramGuide() {
-  return [
-    "",
-    "──────────────────────────────────────────────────────────────",
-    " Configurar o Telegram (uma vez) — como conseguir cada valor:",
-    "──────────────────────────────────────────────────────────────",
-    "",
-    " 1) BOT + TOKEN",
-    "    • No Telegram, fale com @BotFather → envie /newbot → siga os passos.",
-    "    • Ele devolve um token tipo 123456789:AAH...  ← esse é o TELEGRAM_BOT_TOKEN.",
-    "",
-    " 2) ADICIONAR O BOT AO GRUPO",
-    "    • Abra (ou crie) o grupo — supergroup com Tópicos ativados, se for usar tópico.",
-    "    • Adicione o seu bot como membro e dê permissão de postar (admin).",
-    "",
-    " 3) chat_id DO GRUPO",
-    "    • Poste qualquer mensagem no grupo.",
-    "    • Abra no navegador: https://api.telegram.org/bot<SEU_TOKEN>/getUpdates",
-    '      e procure  "chat":{"id":-100...}  → esse -100... é o chat_id.',
-    "    • (Atalho: adicione @RawDataBot ao grupo; ele mostra o chat id na hora.)",
-    "",
-    " 4) message_thread_id DO TÓPICO (opcional — só se usar Tópicos)",
-    "    • No link do tópico (t.me/c/<...>/<N>) o número final costuma ser o thread id.",
-    '      Ou procure "message_thread_id" no mesmo getUpdates.',
-    "",
-    " O token fica SÓ em ~/.claude/.dev.vars (0600, fora do git). Deixe-o à mão.",
-    "──────────────────────────────────────────────────────────────",
-    "",
-  ].join("\n");
-}
+export const CRON_FENCE_PREFIX = "harness-orca";
 
 /**
  * @description Parses `owner`/`repo` from a git remote URL (ssh `git@host:owner/repo.git`, https
@@ -68,59 +46,157 @@ export function parseGitRemote(url) {
 }
 
 /**
- * @description Builds the install-crons argv from the collected answers. The Telegram TOKEN is
- * deliberately NOT here — install-crons reads it from disk at runtime; only the non-secret
- * chat_id/thread_id/heartbeat coordinates are passed.
- * @param {object} a
- * @returns {string[]}
+ * @description Self-explanatory guide (pt-br) shown before the Orca questions: where to get the repo
+ * id, and why the concurrency ceiling is global rather than per-project.
+ * @returns {string}
  */
-export function buildInstallArgs(a) {
-  const args = [
-    "install",
-    "--project", a.project,
-    "--owner", a.owner,
-    "--repo", a.repo,
-    "--project-root", a.projectRoot,
-    "--state-dir", a.stateDir,
-    "--worktree-root", a.worktreeRoot,
-    "--home-dir", a.homeDir,
-    "--chat-id", String(a.chatId),
-  ];
-  if (a.threadId !== undefined && a.threadId !== null && String(a.threadId) !== "") {
-    args.push("--thread-id", String(a.threadId));
-  }
-  args.push("--heartbeat", a.heartbeat ? "true" : "false");
-  return args;
+export function orcaGuide() {
+  return [
+    "",
+    "──────────────────────────────────────────────────────────────",
+    " Orca — a ADE oficial do harness (https://onorca.dev)",
+    "──────────────────────────────────────────────────────────────",
+    "",
+    " O Orca despacha; o .claude/ vendorado deste repo executa.",
+    " Downloads: https://onorca.dev · https://github.com/stablyai/orca/releases",
+    "",
+    " 1) id DO REPO NO ORCA",
+    "    • Registre o repositório no Orca (desktop ou CLI) e rode:",
+    "        orca repo ls --json",
+    '    • Copie o campo "id" do repo — é o valor pedido abaixo.',
+    "",
+    " 2) TETO DE CONCORRÊNCIA (globalMaxWorking)",
+    "    • É um teto DA MÁQUINA, não do projeto: o selector conta os worktrees",
+    "      'working' de TODA a VPS via `orca worktree ps --json`.",
+    "    • Todos os projetos precisam do MESMO valor. Validado em 4 agentes",
+    "      Claude simultâneos numa VPS de 2 vCPU / 8 GB.",
+    "",
+    " 3) MODO CANÁRIO (titleIncludes)",
+    "    • Sem filtro, a issue escolhida é a `harness:ready` aberta MAIS ANTIGA —",
+    "      num backlog real isso costuma ser uma tarefa de anos atrás, não a que",
+    "      você quer observar primeiro. Comece com algo como [canary].",
+    "",
+    "──────────────────────────────────────────────────────────────",
+    "",
+  ].join("\n");
 }
 
 /**
- * @description PURE upsert of the TELEGRAM_BOT_TOKEN line into existing .dev.vars content: replaces
- * an existing `TELEGRAM_BOT_TOKEN=` line (tolerating an `export ` prefix) or appends one, preserving
- * every other line. A missing/empty file yields just the token line.
- * @param {string} content
- * @param {string} token
+ * @description Builds the project config object written to disk. Mirrors
+ * `core/orca/project.example.json` — the same shape `normalizeConfig` validates at every tick.
+ * @param {object} a
+ * @returns {object}
+ */
+export function buildProjectConfig(a) {
+  return {
+    project: a.project,
+    ghRepo: `${a.owner}/${a.repo}`,
+    orcaRepoId: a.orcaRepoId,
+    baseBranch: a.baseBranch,
+    agent: a.agent,
+    globalMaxWorking: a.globalMaxWorking,
+    titleIncludes: a.titleIncludes || null,
+    prompt: a.prompt,
+  };
+}
+
+/**
+ * @description Rejects a value that cannot appear literally in a crontab line. `%` is the killer —
+ * cron treats it as a newline and would silently truncate the command; a newline or a comment marker
+ * would let a config path inject extra crontab content.
+ * @param {string} value
+ * @param {string} field
  * @returns {string}
  */
-export function upsertTokenLine(content, token) {
-  const line = `TELEGRAM_BOT_TOKEN=${token}`;
-  if (!content) return `${line}\n`;
-  const lines = content.split("\n");
-  let found = false;
-  const out = lines.map((l) => {
-    if (/^\s*(export\s+)?TELEGRAM_BOT_TOKEN\s*=/.test(l)) {
-      found = true;
-      return line;
+export function assertCronSafe(value, field) {
+  const v = String(value ?? "");
+  if (v === "" || /[%\n\r#]/.test(v)) {
+    throw new Error(`setup-vps: "${field}" não pode ficar vazio nem conter % \\n ou # (quebraria a linha do cron)`);
+  }
+  return v;
+}
+
+/**
+ * @description Renders the fenced crontab block for one project. Fenced with literal
+ * `# >>> harness-orca:<slug> >>>` / `# <<< harness-orca:<slug> <<<` lines so `upsertCronBlock` can
+ * replace it idempotently and an operator can delete it by hand without guessing. No trailing newline.
+ * @param {{project:string,nodeBin:string,selectorPath:string,configPath:string,logPath:string,intervalMinutes:number}} args
+ * @returns {string}
+ */
+export function renderCronBlock({ project, nodeBin, selectorPath, configPath, logPath, intervalMinutes }) {
+  const slug = assertCronSafe(project, "project");
+  assertCronSafe(nodeBin, "nodeBin");
+  assertCronSafe(selectorPath, "selectorPath");
+  assertCronSafe(configPath, "configPath");
+  assertCronSafe(logPath, "logPath");
+  const minutes = Number(intervalMinutes);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 59) {
+    throw new Error('setup-vps: "intervalMinutes" precisa ser um inteiro entre 1 e 59');
+  }
+  const line = `*/${minutes} * * * * ${nodeBin} ${selectorPath} --config ${configPath} >> ${logPath} 2>&1`;
+  return [`# >>> ${CRON_FENCE_PREFIX}:${slug} >>>`, line, `# <<< ${CRON_FENCE_PREFIX}:${slug} <<<`].join("\n");
+}
+
+/**
+ * @description PURE idempotent upsert of a fenced block into crontab text: removes any existing
+ * block with the same fence, then appends the new one. Every other line — including OTHER projects'
+ * blocks and the operator's own unrelated crons — is preserved byte-for-byte.
+ * @param {string} crontabText
+ * @param {string} marker e.g. "harness-orca:oraculo-app"
+ * @param {string} blockText
+ * @returns {string}
+ */
+export function upsertCronBlock(crontabText, marker, blockText) {
+  const opener = `# >>> ${marker} >>>`;
+  const closer = `# <<< ${marker} <<<`;
+  const lines = String(crontabText ?? "").split("\n");
+  const kept = [];
+  let inside = false;
+  for (const line of lines) {
+    if (!inside && line.trim() === opener) {
+      inside = true;
+      continue;
     }
-    return l;
-  });
-  if (found) return out.join("\n");
-  const base = content.endsWith("\n") ? content : `${content}\n`;
-  return `${base}${line}\n`;
+    if (inside) {
+      if (line.trim() === closer) inside = false;
+      continue;
+    }
+    kept.push(line);
+  }
+  const base = kept.join("\n").replace(/\n+$/, "");
+  return `${base ? `${base}\n` : ""}${blockText}\n`;
+}
+
+/**
+ * @description The PR-review + conditional-merge contract, printed at the end. It is a scheduled
+ * ORCA automation, not code — but its criteria must not drift, so the wizard states them verbatim.
+ * @returns {string}
+ */
+export function reviewAutomationGuide() {
+  return [
+    "",
+    "──────────────────────────────────────────────────────────────",
+    " Passo manual restante: automação de revisão de PR no Orca",
+    "──────────────────────────────────────────────────────────────",
+    "",
+    " Crie uma automação AGENDADA no Orca para este repo. Ela só merja se:",
+    "   • o veredito próprio da revisão for: merjar;",
+    "   • NENHUM achado ARMADO de severidade alta;",
+    "   • CI concluído em SUCCESS;",
+    "   • sem conflito;",
+    "   • e o merge passar --match-head-commit <sha> (obrigatório).",
+    "",
+    " IMPORTANTE — o entry-gate do harness recusa alvo ambíguo em `gh pr merge`:",
+    "   o comando de merge NÃO pode passar -R/--repo (nem --auto). Rode dentro do",
+    "   checkout do repo alvo e passe só o número do PR.",
+    "",
+    "──────────────────────────────────────────────────────────────",
+    "",
+  ].join("\n");
 }
 
 /**
  * @description Trims an answer; throws a clear, field-named error when a required value is empty.
- * NEVER echoes a secret value.
  * @param {string} value
  * @param {string} field
  * @returns {string}
@@ -132,31 +208,31 @@ function required(value, field) {
 }
 
 /**
- * @description Resolves the STABLE engine dir (containing core/vps/install-crons.mjs): the script's
- * own clone when valid, else a stable clone dir (cloned once if missing). See module header.
+ * @description Resolves the STABLE path to `core/orca/select-and-dispatch.mjs`: this script's own
+ * clone when valid, else a stable clone dir (cloned once if missing). See the module header.
  * @param {object} deps
  * @param {(t: string) => void} out
- * @returns {string} installCronsPath
+ * @returns {string} selectorPath
  */
-function resolveInstallCronsPath(deps, out) {
-  const rel = ["core", "vps", "install-crons.mjs"];
+function resolveSelectorPath(deps, out) {
+  const rel = ["core", "orca", "select-and-dispatch.mjs"];
   let engineDir = deps.localEngineDir || null;
   if (!engineDir || !deps.exists(join(engineDir, ...rel))) {
     engineDir = deps.stableEngineDir;
     if (!deps.exists(join(engineDir, ...rel))) {
-      out(`\nMotor do harness (core/vps) não está aqui — clonando uma vez em ${engineDir}...`);
+      out(`\nHarness (core/orca) não está aqui — clonando uma vez em ${engineDir}...`);
       deps.cloneEngine(engineDir);
     }
   }
-  const installCronsPath = join(engineDir, ...rel);
-  if (!deps.exists(installCronsPath)) {
+  const selectorPath = join(engineDir, ...rel);
+  if (!deps.exists(selectorPath)) {
     throw new Error(
-      `setup-vps: não consegui disponibilizar o motor em ${installCronsPath}. ` +
+      `setup-vps: não consegui disponibilizar o selector em ${selectorPath}. ` +
         `Clone o harness num path estável (git clone https://github.com/orobsonn/claude-harness.git <destino>) ` +
         `e rode de dentro dele: node <destino>/core/claude-code/skills/initializing-projects/references/cli.mjs setup-vps`
     );
   }
-  return installCronsPath;
+  return selectorPath;
 }
 
 /**
@@ -168,32 +244,44 @@ function resolveInstallCronsPath(deps, out) {
  * @param {string} deps.cwd - current working directory (the project being onboarded).
  * @param {(dir: string) => string} deps.gitRemote - `git -C <dir> remote get-url origin` ('' on failure).
  * @param {string|null} deps.localEngineDir - this script's harness clone root, or null if not a clone.
- * @param {string} deps.stableEngineDir - fallback stable engine dir (~/.claude/harness-core).
+ * @param {string} deps.stableEngineDir - fallback stable harness dir (~/.claude/harness-core).
  * @param {(dir: string) => void} deps.cloneEngine - clones the harness (pinned) into dir.
+ * @param {string} deps.nodeBin - absolute node binary for the crontab line.
  * @param {(path: string) => boolean} deps.exists
- * @param {(path: string) => string} deps.readFileSafe
- * @param {(path: string, content: string) => void} deps.writeDevVars - 0600 write, never logs the token.
  * @param {(dir: string) => void} deps.ensureDir
- * @param {(path: string) => string} deps.devVarsPathFor
- * @param {(scriptPath: string, args: string[]) => void} deps.runInstall - execs the stable install-crons.
- * @returns {Promise<{ project: string, installArgs: string[], installCronsPath: string }>}
+ * @param {(path: string, json: object) => void} deps.writeJson
+ * @param {() => string} deps.readCrontab - current user's crontab text ('' when none).
+ * @param {(text: string) => void} deps.writeCrontab
+ * @param {() => string} [deps.whoami] - current user, for the never-as-root guard.
+ * @returns {Promise<{ project: string, configPath: string, selectorPath: string, config: object, cronBlock: string }>}
  */
 export async function runSetupVps(deps) {
-  const { ask, out, env, readFileSafe, writeDevVars, ensureDir, devVarsPathFor, runInstall, cwd, gitRemote } = deps;
+  const {
+    ask, out, env, cwd, gitRemote, nodeBin,
+    ensureDir, writeJson, readCrontab, writeCrontab, whoami = () => "",
+  } = deps;
 
-  const installCronsPath = resolveInstallCronsPath(deps, out);
+  // The selector is a USER cron. Running the engine as root — with every client's deploy token in
+  // the ambient environment — is one of the measured reasons the previous design was retired.
+  if (whoami() === "root") {
+    throw new Error(
+      "setup-vps: não rode como root. O selector é cron do usuário que roda o Orca (ex.: `orca`) — " +
+        "isso é o que faz a credencial escopada por projeto valer alguma coisa."
+    );
+  }
+
+  const selectorPath = resolveSelectorPath(deps, out);
 
   out(
     [
       "",
-      "=== claude-harness setup-vps — motor autônomo + notificações Telegram ===",
-      "Vou inferir o máximo do projeto atual. Enter aceita o valor entre [colchetes];",
-      "você só precisa digitar o token e o chat_id do Telegram.",
+      "=== claude-harness setup-vps — entrega autônoma via Orca ===",
+      "Orca despacha, o .claude/ vendorado deste repo executa.",
+      "Vou inferir o máximo do projeto atual; Enter aceita o valor entre [colchetes].",
       "",
     ].join("\n")
   );
 
-  // Inferred project coordinates — the operator mostly presses Enter.
   const homeDir = required((await ask(`Home dir [${env.HOME ?? ""}]: `)) || env.HOME, "home-dir");
   const projectRoot = required((await ask(`Path do projeto [${cwd}]: `)) || cwd, "project-root");
   const projectDefault = basename(projectRoot);
@@ -201,43 +289,58 @@ export async function runSetupVps(deps) {
   const remote = parseGitRemote(gitRemote(projectRoot));
   const owner = required((await ask(`Owner no GitHub [${remote.owner}]: `)) || remote.owner, "owner");
   const repo = required((await ask(`Repo [${remote.repo}]: `)) || remote.repo, "repo");
-  const stateDirDefault = join(projectRoot, ".claude", "state");
-  const stateDir = required((await ask(`State dir [${stateDirDefault}]: `)) || stateDirDefault, "state-dir");
-  const worktreeDefault = join(homeDir, ".claude", "harness-worktrees");
-  const worktreeRoot = required((await ask(`Worktree root [${worktreeDefault}]: `)) || worktreeDefault, "worktree-root");
 
-  out(telegramGuide());
+  out(orcaGuide());
 
-  const token = required(await ask("Cole o TELEGRAM_BOT_TOKEN (do @BotFather): "), "token");
-  const chatId = required(await ask("chat_id do grupo (ex: -1003044689525): "), "chat-id");
-  const threadId = String((await ask("message_thread_id do tópico (opcional — Enter pra pular): ")) ?? "").trim();
-  const hbAnswer = String((await ask("Ativar heartbeat (ping periódico de 'nada a fazer', ~a cada 4h)? [Y/n]: ")) ?? "").trim();
-  const heartbeat = !/^n(o|ão|ao)?$/i.test(hbAnswer);
+  const orcaRepoId = required(await ask("id do repo no Orca (orca repo ls --json): "), "orca-repo-id");
+  const baseBranch = String((await ask("Base branch [main]: ")) ?? "").trim() || "main";
+  const agent = String((await ask("Agente do Orca [claude]: ")) ?? "").trim() || "claude";
+  const ceilingAnswer = String((await ask("Teto GLOBAL de worktrees simultâneos [4]: ")) ?? "").trim() || "4";
+  const globalMaxWorking = Number(ceilingAnswer);
+  if (!Number.isInteger(globalMaxWorking) || globalMaxWorking < 1) {
+    throw new Error('setup-vps: "globalMaxWorking" precisa ser um inteiro >= 1');
+  }
+  const titleIncludes = String((await ask("Filtro de título / modo canário (Enter = sem filtro) [[canary]]: ")) ?? "").trim();
+  const intervalAnswer = String((await ask("Rodar o selector a cada quantos minutos? [20]: ")) ?? "").trim() || "20";
+  const intervalMinutes = Number(intervalAnswer);
 
-  // Persist the token to ~/.claude/.dev.vars (0600, never logged — only a value-free confirmation).
-  ensureDir(join(homeDir, ".claude"));
-  const devVarsPath = devVarsPathFor(homeDir);
-  writeDevVars(devVarsPath, upsertTokenLine(readFileSafe(devVarsPath), token));
-  out(`\n✓ Token salvo em ${devVarsPath} (0600, fora do git — nunca exibido nem logado).`);
-
-  const installArgs = buildInstallArgs({
-    project, owner, repo, projectRoot, stateDir, worktreeRoot, homeDir,
-    chatId: Number(chatId), threadId: threadId || undefined, heartbeat,
+  const config = buildProjectConfig({
+    project, owner, repo, orcaRepoId, baseBranch, agent, globalMaxWorking,
+    titleIncludes,
+    prompt:
+      "Rode em MODO AUTÔNOMO (headless). A issue é a spec. Siga a entry-policy do .claude/ deste " +
+      "repo: triaging -> orchestrating-delivery headless. Entregue PR (Closes #N) com memória + " +
+      "kaizen + testes. NUNCA AskUserQuestion nem plan-mode.",
   });
 
-  out(`\nRegistrando os crons + notify (via ${installCronsPath})...\n`);
-  runInstall(installCronsPath, installArgs);
+  const configDir = join(homeDir, ".config", "claude-harness", "projects");
+  const configPath = join(configDir, `${project}.json`);
+  const logDir = join(homeDir, ".local", "state", "claude-harness");
+  const logPath = join(logDir, `${project}.log`);
+  ensureDir(configDir);
+  ensureDir(logDir);
+  writeJson(configPath, config);
+  out(`\n✓ Config do projeto em ${configPath}`);
+
+  const cronBlock = renderCronBlock({
+    project, nodeBin, selectorPath, configPath, logPath, intervalMinutes,
+  });
+  writeCrontab(upsertCronBlock(readCrontab(), `${CRON_FENCE_PREFIX}:${project}`, cronBlock));
+  out(`✓ Cron do selector registrado (a cada ${intervalMinutes} min) — log em ${logPath}`);
+
+  out(reviewAutomationGuide());
 
   out(
     [
-      "",
-      `✓ Pronto! Projeto "${project}" instalado.`,
-      `  • Cron A (4h) + Cron B (6h) + reaper diário no crontab.`,
-      `  • Notificações Telegram: ${heartbeat ? "ON (com heartbeat)" : "ON (sem heartbeat)"}.`,
-      `  • O próximo ciclo do Cron A já deve avisar no grupo.`,
+      `✓ Pronto! Projeto "${project}" ligado na entrega autônoma via Orca.`,
+      `  • Selector: ${selectorPath}`,
+      `  • Paralelizar outro projeto = mais um JSON + mais uma linha (rode este wizard lá).`,
+      titleIncludes
+        ? `  • Modo canário ATIVO: só issues com "${titleIncludes}" no título entram.`
+        : `  • SEM filtro de título: a issue escolhida é a harness:ready aberta mais antiga.`,
       "",
     ].join("\n")
   );
 
-  return { project, installArgs, installCronsPath };
+  return { project, configPath, selectorPath, config, cronBlock };
 }

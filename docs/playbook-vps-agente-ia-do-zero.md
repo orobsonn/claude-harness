@@ -12,6 +12,17 @@
 > seu celular/computador.** Tudo o mais (gerar chave, instalar pacote, configurar serviço, subir
 > projeto) é a IA que faz.
 
+
+> **ADE oficial: [Orca](https://onorca.dev).** O Orca (*Agent Development Environment*) é o ambiente
+> oficial deste harness para rodar e observar entregas — no desktop e no celular. **Download:
+> https://onorca.dev** · releases (AppImage Linux + app desktop):
+> **https://github.com/stablyai/orca/releases**.
+>
+> O desenho são **duas camadas, não dois motores**: o **Orca despacha** (cria o worktree, lança o
+> agente, mostra a run) e o **`.claude/` vendorado no repo executa** (entry-policy, gates, hooks).
+> O que liga os dois é um selector fino — um JSON por projeto, uma linha de cron
+> (`core/orca/`, ver [`../core/orca/README.md`](../core/orca/README.md)).
+
 ## Specs da VPS
 
 **Mínimo recomendado: 2 vCPU / 8GB RAM, com swap habilitado.** Testamos com 1 vCPU/4GB/sem swap e
@@ -204,9 +215,12 @@ Deve listar seu computador e a VPS (o celular entra na Fase 5).
 
 ## Fase 3 — Orca headless (servidor sempre ativo)
 
-O [Orca](https://onorca.dev) é o painel visual pra orquestrar agentes de IA — worktrees isolados,
-terminais, múltiplos agentes em paralelo. Rodando como serviço na VPS, fica disponível 24/7:
-desligar seu computador não afeta nada, porque quem processa é a VPS.
+O [Orca](https://onorca.dev) é a **ADE oficial** deste harness — o painel visual pra orquestrar
+agentes de IA (worktrees isolados, terminais, múltiplos agentes em paralelo). Rodando como serviço na
+VPS, fica disponível 24/7: desligar seu computador não afeta nada, porque quem processa é a VPS.
+
+**Downloads:** https://onorca.dev · releases (AppImage Linux + app desktop):
+https://github.com/stablyai/orca/releases
 
 🤖 **A IA faz toda essa fase.**
 
@@ -323,7 +337,7 @@ orca status --environment <NOME_DA_VPS> --json   # confirma: "reachable": true, 
 Isso grava a configuração no mesmo lugar que o app Orca lê — 🧑 **você só precisa abrir o app** e
 o host já aparece disponível, pareado, sem passar por nenhum diálogo de "Add remote host".
 
-Instala o app se ainda não tiver: `brew install --cask orca` (Mac) ou baixa em onorca.dev/download.
+Instala o app se ainda não tiver: `brew install --cask orca` (Mac) ou baixa em **https://onorca.dev** (releases: https://github.com/stablyai/orca/releases).
 Trate o link/código de pareamento como senha — dá controle total do servidor pra quem tiver.
 
 ---

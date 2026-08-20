@@ -1,26 +1,30 @@
 /**
  * @description Frozen oracle for the setup-vps wizard. Every seam injected — ZERO real prompts/fs/
- * git/install-crons. Proves: inference from cwd + git remote (Enter accepts defaults), the STABLE
- * engine resolution (local clone, else auto-clone — never the npx cache), and that the bot token
- * NEVER reaches stdout or the install-crons args.
+ * git/crontab. Proves: inference from cwd + git remote (Enter accepts defaults), the STABLE selector
+ * resolution (local clone, else auto-clone — never the npx cache), that the wizard installs the ORCA
+ * selector (a project JSON + one fenced crontab line) and NOT the retired VPS cron engine, that the
+ * crontab upsert preserves every unrelated line, and that it refuses to run as root.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  telegramGuide,
+  CRON_FENCE_PREFIX,
   parseGitRemote,
-  buildInstallArgs,
-  upsertTokenLine,
+  orcaGuide,
+  buildProjectConfig,
+  assertCronSafe,
+  renderCronBlock,
+  upsertCronBlock,
+  reviewAutomationGuide,
   runSetupVps,
 } from "./setup-vps.mjs";
 import { parseCliArgs } from "./cli.mjs";
+import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 
-const TOKEN = "123456789:AAH-SECRET-BOT-TOKEN-value";
-
-// All-Enter for the inferred fields (home/projectRoot/project/owner/repo/stateDir/worktreeRoot),
-// then the Telegram values. Order matches runSetupVps's prompts.
-const INFER = ["", "", "", "", "", "", "", TOKEN, "-1003044689525", "613", ""];
+// All-Enter for the inferred fields (home/projectRoot/project/owner/repo), then the Orca answers.
+// Order matches runSetupVps's prompts.
+const INFER = ["", "", "", "", "", "repo_abc123", "", "", "", "[canary]", ""];
 
 function harness(opts = {}) {
   const {
@@ -31,141 +35,219 @@ function harness(opts = {}) {
     cwd = "/srv/myproject",
     exists,
     cloneEngine,
+    crontab = "",
+    whoami = () => "orca",
   } = opts;
   const queue = [...answers];
   const outLines = [];
-  const devVarsWrites = [];
-  const installCalls = [];
+  const jsonWrites = [];
+  const crontabWrites = [];
   const cloneCalls = [];
+  const dirs = [];
   const deps = {
     ask: async () => queue.shift(),
     out: (t) => outLines.push(t),
     env: { HOME: "/home/op" },
     cwd,
     gitRemote,
+    nodeBin: "/usr/bin/node",
     localEngineDir,
     stableEngineDir,
     cloneEngine: cloneEngine ?? ((dir) => cloneCalls.push(dir)),
-    // default: only the local engine's install-crons exists.
+    // default: only the local clone ships the selector.
     exists: exists ?? ((p) => localEngineDir != null && p.startsWith(localEngineDir)),
-    readFileSafe: () => "ANTHROPIC_AUTH_TOKEN=x\n",
-    writeDevVars: (p, content) => devVarsWrites.push({ p, content }),
-    ensureDir: () => {},
-    devVarsPathFor: (h) => `${h}/.claude/.dev.vars`,
-    runInstall: (scriptPath, args) => installCalls.push({ scriptPath, args }),
+    ensureDir: (d) => dirs.push(d),
+    writeJson: (p, json) => jsonWrites.push({ p, json }),
+    readCrontab: () => crontab,
+    writeCrontab: (text) => crontabWrites.push(text),
+    whoami,
   };
-  return { deps, outLines, devVarsWrites, installCalls, cloneCalls };
+  return { deps, outLines, jsonWrites, crontabWrites, cloneCalls, dirs };
 }
 
-test("telegramGuide explains how to obtain token / chat_id / thread_id", () => {
-  const g = telegramGuide();
-  assert.match(g, /@BotFather/);
-  assert.match(g, /\/newbot/);
-  assert.match(g, /getUpdates/);
-  assert.match(g, /chat_id/);
-  assert.match(g, /message_thread_id/);
-});
-
 test("parseGitRemote handles ssh, https, .git and trailing slash", () => {
-  assert.deepEqual(parseGitRemote("git@github.com:orobsonn/myproject.git"), { owner: "orobsonn", repo: "myproject" });
-  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject.git"), { owner: "orobsonn", repo: "myproject" });
-  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject"), { owner: "orobsonn", repo: "myproject" });
-  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/myproject/"), { owner: "orobsonn", repo: "myproject" });
-  assert.deepEqual(parseGitRemote(""), { owner: "", repo: "" });
+  assert.deepEqual(parseGitRemote("git@github.com:orobsonn/repo.git"), { owner: "orobsonn", repo: "repo" });
+  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/repo"), { owner: "orobsonn", repo: "repo" });
+  assert.deepEqual(parseGitRemote("https://github.com/orobsonn/repo.git/"), { owner: "orobsonn", repo: "repo" });
+  assert.deepEqual(parseGitRemote("lixo"), { owner: "", repo: "" });
 });
 
-test("buildInstallArgs produces the install-crons argv and NEVER includes the token", () => {
-  const args = buildInstallArgs({
-    project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/s",
-    worktreeRoot: "/w", homeDir: "/h", chatId: -100, threadId: 613, heartbeat: true,
+test("orcaGuide names Orca as the official ADE, links the download, and explains the repo id / global ceiling / canary knob", () => {
+  const g = orcaGuide();
+  assert.match(g, /ADE oficial/);
+  assert.match(g, /https:\/\/onorca\.dev/);
+  assert.match(g, /orca repo ls --json/);
+  assert.match(g, /orca worktree ps --json/);
+  assert.match(g, /canári/i);
+});
+
+test("buildProjectConfig produces a config the SELECTOR itself accepts (same shape as project.example.json)", () => {
+  const cfg = buildProjectConfig({
+    project: "myproject", owner: "orobsonn", repo: "myproject", orcaRepoId: "repo_abc123",
+    baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "[canary]", prompt: "vai",
   });
-  assert.equal(args[0], "install");
-  assert.equal(args[args.indexOf("--chat-id") + 1], "-100");
-  assert.equal(args[args.indexOf("--heartbeat") + 1], "true");
-  assert.ok(!args.some((a) => /AAH-SECRET|TELEGRAM_BOT_TOKEN/.test(a)), "token must never be an install-crons arg");
-  const noThread = buildInstallArgs({ project: "p", owner: "o", repo: "r", projectRoot: "/pr", stateDir: "/s", worktreeRoot: "/w", homeDir: "/h", chatId: -100, heartbeat: false });
-  assert.equal(noThread.includes("--thread-id"), false);
+  assert.equal(cfg.ghRepo, "orobsonn/myproject");
+  const normalized = normalizeConfig(cfg);
+  assert.equal(normalized.orcaRepoId, "repo_abc123");
+  assert.equal(normalized.titleIncludes, "[canary]");
+  assert.equal(normalized.globalMaxWorking, 4);
 });
 
-test("upsertTokenLine appends when absent, replaces when present, preserves other lines", () => {
-  assert.equal(upsertTokenLine("", "tok"), "TELEGRAM_BOT_TOKEN=tok\n");
-  assert.equal(upsertTokenLine("A=1\n", "tok"), "A=1\nTELEGRAM_BOT_TOKEN=tok\n");
-  assert.equal(upsertTokenLine("A=1\nTELEGRAM_BOT_TOKEN=old\nB=2", "new"), "A=1\nTELEGRAM_BOT_TOKEN=new\nB=2");
-  assert.equal(upsertTokenLine("export TELEGRAM_BOT_TOKEN=old\n", "new"), "TELEGRAM_BOT_TOKEN=new\n");
+test("buildProjectConfig maps an empty title filter to null (no filter), not to an empty string", () => {
+  const cfg = buildProjectConfig({
+    project: "p", owner: "o", repo: "r", orcaRepoId: "id",
+    baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "", prompt: "x",
+  });
+  assert.equal(cfg.titleIncludes, null);
 });
 
-test("runSetupVps INFERS project/owner/repo/paths from cwd + git remote (operator just presses Enter)", async () => {
-  const { deps, installCalls, cloneCalls } = harness();
-  const r = await runSetupVps(deps);
+test("assertCronSafe rejects the values that would silently break or inject into a crontab line", () => {
+  assert.equal(assertCronSafe("/usr/bin/node", "nodeBin"), "/usr/bin/node");
+  for (const bad of ["", "a%b", "a\nb", "a#b", "a\rb"]) {
+    assert.throws(() => assertCronSafe(bad, "x"), /não pode ficar vazio nem conter/);
+  }
+});
 
-  assert.equal(r.project, "myproject");
-  assert.equal(cloneCalls.length, 0, "a valid local engine must NOT trigger a clone");
-  assert.equal(installCalls.length, 1);
-  assert.equal(installCalls[0].scriptPath, "/srv/claude-harness/core/vps/install-crons.mjs", "runs the local clone's install-crons");
-  const args = installCalls[0].args;
-  assert.equal(args[args.indexOf("--project") + 1], "myproject", "project inferred from cwd basename");
-  assert.equal(args[args.indexOf("--owner") + 1], "orobsonn", "owner inferred from git remote");
-  assert.equal(args[args.indexOf("--repo") + 1], "myproject", "repo inferred from git remote");
-  assert.equal(args[args.indexOf("--project-root") + 1], "/srv/myproject", "project-root inferred from cwd");
-  assert.equal(args[args.indexOf("--state-dir") + 1], "/srv/myproject/.claude/state");
-  assert.equal(args[args.indexOf("--worktree-root") + 1], "/home/op/.claude/harness-worktrees");
-  assert.equal(args[args.indexOf("--home-dir") + 1], "/home/op");
-  assert.equal(args[args.indexOf("--chat-id") + 1], "-1003044689525");
+test("renderCronBlock renders one fenced line invoking the selector with --config, and validates the interval", () => {
+  const block = renderCronBlock({
+    project: "myproject",
+    nodeBin: "/usr/bin/node",
+    selectorPath: "/srv/claude-harness/core/orca/select-and-dispatch.mjs",
+    configPath: "/home/op/.config/claude-harness/projects/myproject.json",
+    logPath: "/home/op/.local/state/claude-harness/myproject.log",
+    intervalMinutes: 20,
+  });
+  assert.deepEqual(block.split("\n"), [
+    "# >>> harness-orca:myproject >>>",
+    "*/20 * * * * /usr/bin/node /srv/claude-harness/core/orca/select-and-dispatch.mjs --config /home/op/.config/claude-harness/projects/myproject.json >> /home/op/.local/state/claude-harness/myproject.log 2>&1",
+    "# <<< harness-orca:myproject <<<",
+  ]);
+  const base = {
+    project: "p", nodeBin: "/usr/bin/node", selectorPath: "/s", configPath: "/c", logPath: "/l",
+  };
+  assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 0 }), /intervalMinutes/);
+  assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 60 }), /intervalMinutes/);
+  assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 1.5 }), /intervalMinutes/);
+});
+
+test("upsertCronBlock is idempotent and preserves OTHER projects' blocks and the operator's own crons", () => {
+  const other = [
+    "0 5 * * * /usr/bin/backup.sh",
+    "# >>> harness-orca:outro >>>",
+    "*/20 * * * * /usr/bin/node /s --config /outro.json",
+    "# <<< harness-orca:outro <<<",
+  ].join("\n");
+  const block = "# >>> harness-orca:meu >>>\nLINHA\n# <<< harness-orca:meu <<<";
+  const once = upsertCronBlock(other, "harness-orca:meu", block);
+  assert.ok(once.includes("/usr/bin/backup.sh"));
+  assert.ok(once.includes("harness-orca:outro"));
+  assert.ok(once.includes("LINHA"));
+  const twice = upsertCronBlock(once, "harness-orca:meu", block);
+  assert.equal(twice, once, "re-running the wizard must not duplicate the block");
+  assert.equal(twice.match(/harness-orca:meu >>>/g).length, 1);
+});
+
+test("upsertCronBlock replaces a stale block rather than appending next to it", () => {
+  const stale = "# >>> harness-orca:meu >>>\nVELHO\n# <<< harness-orca:meu <<<";
+  const fresh = "# >>> harness-orca:meu >>>\nNOVO\n# <<< harness-orca:meu <<<";
+  const out = upsertCronBlock(stale, "harness-orca:meu", fresh);
+  assert.ok(out.includes("NOVO"));
+  assert.ok(!out.includes("VELHO"));
+});
+
+test("runSetupVps INFERS project/owner/repo/paths from cwd + git remote and writes the project JSON + one cron line", async () => {
+  const h = harness();
+  const result = await runSetupVps(h.deps);
+
+  assert.equal(result.project, "myproject");
+  assert.equal(result.configPath, "/home/op/.config/claude-harness/projects/myproject.json");
+  assert.equal(result.selectorPath, "/srv/claude-harness/core/orca/select-and-dispatch.mjs");
+
+  assert.equal(h.jsonWrites.length, 1);
+  assert.deepEqual(h.jsonWrites[0].json, {
+    project: "myproject",
+    ghRepo: "orobsonn/myproject",
+    orcaRepoId: "repo_abc123",
+    baseBranch: "main",
+    agent: "claude",
+    globalMaxWorking: 4,
+    titleIncludes: "[canary]",
+    prompt: h.jsonWrites[0].json.prompt,
+  });
+  assert.match(h.jsonWrites[0].json.prompt, /AUT[ÔO]NOMO/);
+
+  assert.equal(h.crontabWrites.length, 1);
+  assert.ok(h.crontabWrites[0].includes(`# >>> ${CRON_FENCE_PREFIX}:myproject >>>`));
+  assert.ok(h.crontabWrites[0].includes("core/orca/select-and-dispatch.mjs --config /home/op/.config/claude-harness/projects/myproject.json"));
+  assert.ok(h.crontabWrites[0].includes("*/20 * * * *"));
+});
+
+test("runSetupVps installs the ORCA selector — it never touches the retired VPS cron engine", async () => {
+  const h = harness();
+  await runSetupVps(h.deps);
+  const everything = [h.crontabWrites.join("\n"), h.outLines.join("\n")].join("\n");
+  for (const retired of ["install-crons", "run-cron-a", "run-cron-review", "run-drain", "run-reaper", "TELEGRAM_BOT_TOKEN"]) {
+    assert.ok(!everything.includes(retired), `setup-vps must no longer install/mention ${retired}`);
+  }
 });
 
 test("runSetupVps: an explicit answer overrides the inferred default", async () => {
-  const answers = ["", "/custom/project", "custom-slug", "acme", "custom-repo", "", "", TOKEN, "-100", "", "n"];
-  const { deps, installCalls } = harness({ answers });
-  await runSetupVps(deps);
-  const args = installCalls[0].args;
-  assert.equal(args[args.indexOf("--project-root") + 1], "/custom/project");
-  assert.equal(args[args.indexOf("--project") + 1], "custom-slug");
-  assert.equal(args[args.indexOf("--owner") + 1], "acme");
-  assert.equal(args[args.indexOf("--repo") + 1], "custom-repo");
-  assert.equal(args[args.indexOf("--state-dir") + 1], "/custom/project/.claude/state", "state-dir default follows the overridden project-root");
-  assert.equal(args.includes("--thread-id"), false, "empty thread-id omits the flag");
-  assert.equal(args[args.indexOf("--heartbeat") + 1], "false", "'n' turns heartbeat off");
-});
-
-test("runSetupVps: npx case (no local engine) auto-clones to the stable dir and runs from THERE", async () => {
-  let cloned = false;
-  const stable = "/home/op/.claude/harness-core";
-  const { deps, installCalls, cloneCalls } = harness({
-    localEngineDir: null,
-    exists: (p) => p.startsWith(stable) && cloned, // stable engine exists only after the clone
-    cloneEngine: (dir) => {
-      cloned = true;
-      cloneCalls.push?.(dir);
-    },
+  const h = harness({
+    answers: ["/home/outro", "/srv/x", "slug-custom", "acme", "produto", "repo_zzz", "develop", "claude", "2", "", "15"],
   });
-  // capture cloneCalls via the closure above
-  const clones = [];
-  deps.cloneEngine = (dir) => {
-    cloned = true;
-    clones.push(dir);
-  };
-  await runSetupVps(deps);
-  assert.deepEqual(clones, [stable], "the engine is cloned once into the stable dir");
-  assert.equal(installCalls[0].scriptPath, `${stable}/core/vps/install-crons.mjs`, "runs from the stable clone, never the npx cache");
+  const result = await runSetupVps(h.deps);
+  assert.equal(result.project, "slug-custom");
+  assert.deepEqual(h.jsonWrites[0].json.ghRepo, "acme/produto");
+  assert.equal(h.jsonWrites[0].json.baseBranch, "develop");
+  assert.equal(h.jsonWrites[0].json.globalMaxWorking, 2);
+  assert.equal(h.jsonWrites[0].json.titleIncludes, null);
+  assert.equal(h.jsonWrites[0].p, "/home/outro/.config/claude-harness/projects/slug-custom.json");
+  assert.ok(h.crontabWrites[0].includes("*/15 * * * *"));
 });
 
-test("runSetupVps: the bot TOKEN never appears in any stdout/out line (secret hygiene)", async () => {
-  const { deps, outLines, devVarsWrites } = harness();
-  await runSetupVps(deps);
-  assert.doesNotMatch(outLines.join("\n"), /AAH-SECRET-BOT-TOKEN/, "token must never be printed");
-  assert.match(devVarsWrites[0].content, /TELEGRAM_BOT_TOKEN=123456789:AAH-SECRET-BOT-TOKEN-value/, "token IS written to .dev.vars");
-  assert.match(devVarsWrites[0].content, /ANTHROPIC_AUTH_TOKEN=x/, "existing lines preserved");
+test("runSetupVps: npx case (no local clone) auto-clones to the stable dir and points cron at THERE, never at the npx cache", async () => {
+  const cloned = [];
+  const h = harness({
+    localEngineDir: null,
+    exists: (p) => cloned.length > 0 && p.startsWith("/home/op/.claude/harness-core"),
+    cloneEngine: (dir) => cloned.push(dir),
+  });
+  const result = await runSetupVps(h.deps);
+  assert.deepEqual(cloned, ["/home/op/.claude/harness-core"]);
+  assert.equal(result.selectorPath, "/home/op/.claude/harness-core/core/orca/select-and-dispatch.mjs");
+  assert.ok(h.crontabWrites[0].includes("/home/op/.claude/harness-core/core/orca/select-and-dispatch.mjs"));
 });
 
-test("runSetupVps: a missing token fails fast without installing", async () => {
-  const answers = ["", "", "", "", "", "", "", "", "-100", "", ""]; // empty token
-  const { deps, installCalls } = harness({ answers });
-  await assert.rejects(() => runSetupVps(deps), /token/);
-  assert.equal(installCalls.length, 0);
+test("runSetupVps REFUSES to run as root — the selector is a user cron, which is what makes scoped credentials mean anything", async () => {
+  const h = harness({ whoami: () => "root" });
+  await assert.rejects(() => runSetupVps(h.deps), /não rode como root/);
+  assert.equal(h.crontabWrites.length, 0);
+  assert.equal(h.jsonWrites.length, 0);
+});
+
+test("runSetupVps fails fast (no install) when a required answer is empty", async () => {
+  const h = harness({ answers: ["", "", "", "", "", "", "", "", "", "", ""] });
+  await assert.rejects(() => runSetupVps(h.deps), /orca-repo-id/);
+  assert.equal(h.crontabWrites.length, 0);
+  assert.equal(h.jsonWrites.length, 0);
+});
+
+test("runSetupVps prints the PR-review automation contract, including the entry-gate's no--R consequence", async () => {
+  const h = harness();
+  await runSetupVps(h.deps);
+  const printed = h.outLines.join("\n");
+  assert.ok(printed.includes("--match-head-commit"));
+  assert.ok(printed.includes("-R/--repo"));
+  assert.match(printed, /SUCCESS/);
+  assert.match(reviewAutomationGuide(), /ARMADO de severidade alta/);
+});
+
+test("runSetupVps warns explicitly when the canary title filter is left OFF", async () => {
+  const h = harness({ answers: ["", "", "", "", "", "repo_abc123", "", "", "", "", ""] });
+  await runSetupVps(h.deps);
+  assert.ok(h.outLines.join("\n").includes("SEM filtro de título"));
 });
 
 test("parseCliArgs passes the command through raw (init alias resolved by the dispatcher)", () => {
-  assert.equal(parseCliArgs(["node", "cli", "init"]).command, "init");
-  assert.equal(parseCliArgs(["node", "cli", "setup-local"]).command, "setup-local");
-  assert.equal(parseCliArgs(["node", "cli", "setup-vps"]).command, "setup-vps");
+  assert.equal(parseCliArgs(["node", "cli.mjs", "setup-vps"]).command, "setup-vps");
 });

@@ -89,6 +89,21 @@
  * to close — if a specific consumer tool needs an exception, add it here explicitly, reviewed case
  * by case, never widen the pattern itself.
  *
+ * [orca-cutover] PRODUCTION-DEPLOY class. With `Bash(npm run:*)` approved and a `package.json`
+ * carrying `"deploy": "wrangler deploy"`, there is an APPROVED path to production that never passes
+ * through a PR — the agent never types a denied command, it types `npm run deploy`. The entries
+ * below close the direct `wrangler` spellings that actually mutate production (`deploy`, `versions`,
+ * `secret`, `r2`, and `d1 execute --remote`; `d1 execute --local` stays allowed), their `npx
+ * wrangler` prefix form, and the `npm/pnpm/bun/yarn run deploy` indirection. They are DENY-only and
+ * overlap no allow entry, so they sit at the END of the deny block, before the trailing allow block
+ * whose last-position is load-bearing (see [#473] below).
+ * This is string-match defense-in-depth, NOT closure: an arbitrarily-named script (`npm run ship`,
+ * `npm run publish:prod`) still reaches `wrangler`, and no pattern list can enumerate a project's
+ * script names. The real closure is credential scoping — the fleet no longer carries deploy tokens
+ * in the ambient environment (`~/.bashrc`); each project's Cloudflare credential loads on demand
+ * from `~/.config/<project>/cloudflare.env` (chmod 600), so a non-interactive shell — the one cron
+ * and the agent inherit — has no production token at all. See `core/orca/README.md`.
+ *
  * [#473] `git push --force-with-lease*` (and, by the same mechanism, the #499 `npx` carve-outs)
  * are deliberately ALLOW entries placed LAST (after every deny they would otherwise collide with).
  * OpenCode's own permission engine resolves a pattern list with `Array.prototype.findLast`
@@ -150,6 +165,22 @@ export const DANGEROUS_BASH_DENYLIST = Object.freeze({
   "unzip *": "deny",
   "source *": "deny",
   ". *": "deny",
+  "wrangler deploy*": "deny",
+  "wrangler versions*": "deny",
+  "wrangler secret*": "deny",
+  "wrangler r2*": "deny",
+  "wrangler d1 execute --remote*": "deny",
+  "wrangler d1 execute * --remote*": "deny",
+  "npx wrangler deploy*": "deny",
+  "npx wrangler versions*": "deny",
+  "npx wrangler secret*": "deny",
+  "npx wrangler r2*": "deny",
+  "npx wrangler d1 execute --remote*": "deny",
+  "npx wrangler d1 execute * --remote*": "deny",
+  "npm run deploy*": "deny",
+  "pnpm run deploy*": "deny",
+  "yarn deploy*": "deny",
+  "bun run deploy*": "deny",
   "npx tsc --noEmit*": "allow",
   "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness": "allow",
   "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-update --target * --ref v*": "allow",

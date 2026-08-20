@@ -8,6 +8,18 @@ A ideia central: o humano toma **decisões de produto** (o que construir, aceita
 
 > **Filosofia barbell:** orquestração barata no alto volume, raciocínio caro só nas pontas. Um orquestrador **Sonnet** coordena e delega ao **Opus** apenas nos gates de fronteira. Mais fundo ainda: as **mãos que escrevem código** (executor, sniper, test-author) rodam em modelos **Ollama baratos**, enquanto os **olhos que julgam** (planner, compliance, adversary, security) ficam em Claude — *strong eyes, cheap hands*. O que mantém isso seguro não é confiar no modelo barato — são **trilhos determinísticos** (hooks, guards, plano resolvido, teste congelado, captura independente) que carregam o julgamento crítico.
 
+
+> **ADE oficial: [Orca](https://onorca.dev).** O Orca (*Agent Development Environment*) é o ambiente
+> oficial deste harness para rodar e observar entregas — no desktop e no celular.
+> **Download: https://onorca.dev** · releases (AppImage Linux + app desktop):
+> **https://github.com/stablyai/orca/releases**
+>
+> O desenho são **duas camadas, não dois motores**: o **Orca despacha** (cria o worktree, lança o
+> agente, mostra a run) e o **`.claude/` vendorado no repo executa** (entry-policy, gates, hooks) —
+> o pipeline vendorado É a pipeline. O que liga os dois é um selector de ~60 linhas efetivas
+> ([`core/orca/`](core/orca/README.md)): um JSON por projeto, uma linha de cron.
+> Instalação na VPS: [`docs/orca-headless-vps-playbook.md`](docs/orca-headless-vps-playbook.md).
+
 ---
 
 ## Como uma tarefa flui
@@ -261,13 +273,18 @@ npx @orobsonn/claude-harness setup-local     # (alias: init)
 
 Vendora o harness no `.claude/` do diretório atual (idempotente, non-clobber — preserva `memory/`, `kaizen.md`, `settings.json`), pinado na última release. Revise e commite o `.claude/`. Por baixo é o mesmo `vendor-core` do `updating-harness`.
 
-**Ligar o motor autônomo + notificações Telegram (na VPS) — wizard interativo:**
+**Ligar a entrega autônoma na VPS (via Orca) — wizard interativo:**
 
 ```bash
 npx @orobsonn/claude-harness setup-vps
 ```
 
-Roda **na VPS**. Pergunta o projeto/repo/paths e o Telegram (token, chat_id, thread_id, heartbeat), **explica como conseguir cada valor** (BotFather, `getUpdates`, topic id), grava o token só no `~/.claude/.dev.vars` (0600, fora do git) e registra os crons + notify via `install-crons`. Notificações são opt-out e fail-open — sem token, o motor roda idêntico.
+Roda **na VPS**, como o usuário que roda o Orca (**nunca root** — o wizard recusa). Pergunta o projeto/repo/paths e as coordenadas do Orca (id do repo, base branch, agente, teto global de concorrência, filtro de canário, intervalo), e instala exatamente **dois** artefatos:
+
+1. `~/.config/claude-harness/projects/<slug>.json` — a config do projeto (formato em [`core/orca/project.example.json`](core/orca/project.example.json));
+2. uma linha de cron cercada rodando [`core/orca/select-and-dispatch.mjs`](core/orca/select-and-dispatch.mjs).
+
+Ele **não instala mais** os crons do motor antigo da VPS (`install-crons`: Cron A, review, drain, reaper, Telegram) — esse motor está aposentado, ver [`core/vps/DEPRECATED.md`](core/vps/DEPRECATED.md). Notificação deixou de ser problema do wizard: as runs do Orca são visíveis do desktop e do celular. O único passo que sobra manual é a **automação de revisão de PR + merge condicional**, que é uma automação agendada **no Orca**, não código — o wizard imprime os critérios exatos no fim.
 
 Ver **[`docs/usage.md`](docs/usage.md)** — instalar/atualizar o harness num projeto (`vendor-core`), o padrão de issues (`harness-ready`), configurar a routine no Claude Code, e setar o modelo do orquestrador.
 
@@ -284,7 +301,8 @@ O harness tem layout dual-runtime em `core/`:
 | `core/shared/` | libs puras (nunca throw) — paths, validate-plan, merge, capture-oracle, … |
 | `core/claude-code/` | shell Claude Code (agents/skills/hooks) |
 | `core/opencode/` | shell OpenCode (agents/skills/plugin/tools + `harness.routing.json`) |
-| `core/vps/` | motor headless VPS (fase 2 OC driver **fora** do DoD fase 1) |
+| `core/orca/` | selector multi-projeto (Orca despacha, harness do repo executa) |
+| `core/vps/` | ~~motor headless VPS~~ — **APOSENTADO**, ver [`core/vps/DEPRECATED.md`](core/vps/DEPRECATED.md) |
 
 **Vendor OpenCode num projeto:**
 
@@ -311,7 +329,7 @@ Spec pack: [`docs/specs/oc-port/`](docs/specs/oc-port/).
 
 ## Status
 
-Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado; motor VPS OC é fase 2.
+Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado. A entrega autônoma roda sobre o **[Orca](https://onorca.dev) como ADE oficial** + o selector de [`core/orca/`](core/orca/README.md), validado de ponta a ponta; o motor de cron da VPS (`core/vps/`) está aposentado.
 
 ## Distribuição (mantenedor)
 
