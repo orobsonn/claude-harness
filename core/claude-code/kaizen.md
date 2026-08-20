@@ -953,3 +953,54 @@ manual-merge the queue.
   gate-state file, or scope `validateGateStateDualFields` to the patch delta rather than the whole state.
 - **Process gap:** add a `push: [main]` trigger (or a required merge-queue check) to `ci.yml` so a
   non-squash merge / direct push can't land a red `main` unseen — this is how #270 broke it.
+
+### 2026-08-20 — autonomous selection: "oldest open issue" with no scope filter makes a canary rollout impossible
+
+- **Observed:** the retired VPS engine's `cron-a-select.mjs` ranked open `harness:ready` issues by
+  `createdAt` ascending and applied **no title/scope filter**. On the `oraculo-app` backlog the
+  oldest such issue was a **PII hard-delete task from five months earlier** — so the very first thing
+  the autonomous pipeline would have picked, on its first live run, was one of the highest-blast-radius
+  tasks in the tracker. The failure is not that the ordering is wrong; oldest-first is a reasonable
+  tie-break. The failure is that ordering was the **only** filter, so the operator had no way to say
+  "run the pipeline, but only on this small observable thing first". Labelling alone doesn't fix it:
+  `harness:ready` is applied by the issue form at creation time, across a backlog, months before
+  anyone decides to turn autonomy on.
+- **Proposed change:** any harness surface that auto-selects work from a queue must ship an explicit
+  **scope knob that narrows the candidate set before the ordering runs** — not only a tie-break.
+  The Orca selector does this with `titleIncludes` (`core/orca/select-and-dispatch.mjs`), defaulting
+  to no filter but documented as "start with `[canary]`". The generalizable rule for the harness:
+  when a skill or script picks one item out of a tracker autonomously, the FIRST question in its
+  design is "how does the operator restrict this to a canary?", and the answer must be a config
+  field, not "curate the labels".
+- **Rationale:** turning autonomy on is itself the risky moment, and the first run is the one the
+  operator actually watches. A selector whose first pick is dictated by whatever is oldest in a
+  years-old backlog inverts that: it spends the operator's single most attentive observation on the
+  task they'd least want unattended, and it makes a staged rollout unavailable exactly when it is
+  worth the most. Cost of the knob: three lines and one config field.
+
+### 2026-08-20 — dependency gates must be anchored on delivery STATE, never on a branch name
+
+- **Observed:** the retired engine's `chain-release.mjs:dependencyMerged` counted a declared
+  dependency as satisfied only if `gh pr list --head harness/<N> --state merged` returned something —
+  i.e. only if the dependency had been delivered by a PR whose **head branch was literally named**
+  `harness/<N>`. Any issue delivered by an ordinary PR (a human fix, a differently-named branch, a
+  squash from another workflow) never satisfied it, so its dependents stayed `harness:queued`
+  **forever**. In `oraculo-app`, **4 of 14 issues were dead this way** — and nobody noticed, because
+  the pipeline's "nothing to do" state and its "everything is permanently blocked" state look
+  identical from outside. Worse: `chain-validate.mjs`, the tool whose whole job is validating the
+  dependency graph, **cannot detect this class of failure** — it checks cycles and dangling refs,
+  which are properties of the *graph*, while the bug lives in the *gate's predicate*.
+- **Proposed change:** two rules. (1) A gate predicate must read the **state that means the thing**,
+  not a naming convention that usually accompanies it — here, "is the dependency issue CLOSED?", which
+  is true however it was delivered (the Orca selector does exactly this). A convention-based predicate
+  is a silent dependency on a *producer* that the gate does not control. (2) A validator for a
+  dependency system must include at least one check on the **gate's own predicate against real data**
+  ("for each queued issue, would its gate ever open, given the current tracker state?"), not only on
+  the declared graph. Structural validation that never evaluates the predicate produces false
+  confidence precisely where the predicate is wrong.
+- **Rationale:** this is the second time this failure mode appeared in the harness in a different
+  costume (see the `locked_test` freeze note above: a test that "passes" while covering 1 of 7
+  branches). The common shape is **a check that validates the shape of a thing instead of the claim
+  the thing makes**. Both times it produced a green signal over a hole. And both times the cost of
+  detection was low — one assertion that actually runs the predicate — while the cost of the miss was
+  work silently not happening for months.

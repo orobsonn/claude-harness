@@ -1,6 +1,11 @@
-# Usage — instalar/atualizar o harness e configurar a routine
+# Usage — instalar/atualizar o harness e ligar a entrega autônoma
 
 Guia prático. Para o desenho e as decisões, ver `design.md`, `cloud-routines.md`, `audit.md`.
+
+> **ADE oficial: [Orca](https://onorca.dev)** — download em **https://onorca.dev**, releases em
+> **https://github.com/stablyai/orca/releases**. É o ambiente oficial para rodar e observar entregas
+> autônomas (desktop e celular). Instalação headless na VPS:
+> [`orca-headless-vps-playbook.md`](orca-headless-vps-playbook.md).
 
 ## Os dois repositórios
 
@@ -72,9 +77,9 @@ A pipeline transforma a issue em spec → plano → testes. Para issue **nova**,
 
 ---
 
-## 4. Configurar a routine no Claude Code (claude.ai/code)
+## 4. Alternativa: routine na nuvem (claude.ai/code)
 
-A routine roda na nuvem, autônoma. **Routine não dispara por issue** (triggers de GitHub só cobrem PR/Release) — o padrão é **agendada + poll** das issues `harness:ready`.
+Uma alternativa à VPS (seção 6), com limites de volume bem menores. A routine roda na nuvem, autônoma. **Routine não dispara por issue** (triggers de GitHub só cobrem PR/Release) — o padrão é **agendada + poll** das issues `harness:ready`.
 
 Passos em `claude.ai/code/routines` → **New routine**:
 1. **Repositório:** selecione o projeto (precisa ter o harness na `main`). Uma routine pode ter vários repos — mas roda **uma sessão independente por repo**, com o **mesmo prompt** e clonando a default branch.
@@ -118,31 +123,57 @@ Não há link automático PR→sessão nem notificação de falha. Valide assim:
 
 ---
 
-## 6. Fase de revisão independente do PR (opcional, VPS)
+## 6. Entrega autônoma na VPS — Orca despacha, o harness do repo executa
 
-Em runs autônomos via VPS (headless-local), depois que a issue vira PR existe uma **segunda etapa**, independente da sessão que implementou: uma sessão de revisão com olhos frescos que reanalisa o diff do PR do zero (adversary + compliance + security), sem herdar contexto de quem codou. Ela roda como cron próprio (`cron-review`), agendada `0 */6 * * *` (a cada 6h) — **substitui** o antigo Cron B fraco nesse mesmo horário. A implementação do **Cron A** (seleção e dispatch da issue) não muda: continua `0 */4 * * *` (a cada 4h).
+O modo headless de verdade deste operador não é a cloud routine: é uma VPS com o
+**[Orca](https://onorca.dev)** rodando headless (`orca serve` sob systemd, pareado por Tailscale).
 
-A sessão de revisão soma cross-family (segunda família de modelo, **Codex via ChatGPT subscription**, rodando **FOR REAL sobre o diff do PR**) e, se o diff toca a própria maquinaria de gate do harness, um segundo passe de gate-hardening. O veredito final é derivado pelo Node a partir dos outputs estruturados dos olhos (adversary + security), com os dois modelos em paralelo. Só auto-merge na **conjunção completa**: veredito fresco limpo + cross-family elegível + (quando aplicável) segundo passe limpo + `autoMergeEnabled` ativado.
+```
+cron do usuário `orca`  ──▶  core/orca/select-and-dispatch.mjs  ──▶  orca worktree create
+   (1 linha por projeto)          (escolhe a issue + trava)                │
+                                                                          ▼
+                                                     agente (claude) num worktree do Orca
+                                                                          │
+                                                                          ▼
+                                                     lê o .claude/ VENDORADO do repo
+```
 
-- **Kill switch:** a env var `HARNESS_REVIEW_ENABLED` liga/desliga a fase inteira (`1` = ativa — default do `settings.json` do core). Desligada, a etapa de revisão some sem afetar o Cron A.
-- **Fail-open só na ausência genuína da segunda família, nunca na reprovação:** sem o módulo `codex-adversary` instalado, com o switch de cross-family desligado, ou com o `codex` inalcançável — ou seja, quando não existe NENHUM veredito da segunda família — a elegibilidade de merge passa a depender só do veredito fresco do Claude (risco aceito explicitamente pelo operador, dado que o orçamento de Codex não sustenta rodar em todo PR). Mas se a segunda família **rodou** e produziu um veredito — mesmo que só parcialmente (ex.: um dos dois olhos falhou estruturalmente e o outro achou um problema real) — esse veredito **sempre** governa: um `BLOCKED` bloqueia sem exceção, incondicionalmente. Um veredito "CLEAN" isolado sem a segunda família de fato disponível também nunca é aceito (guarda contra veredito forjado/obsoleto). Quando o orçamento permitir rodar o Codex de novo, essa trava mais forte volta a valer sozinha — é comportamento de dados, não requer mudança de código.
-- **`autoMergeEnabled` — rollout lock separado:** além da conjunção acima, o auto-merge exige explicitamente `config.autoMergeEnabled === true`. Por default, está **desligado (OFF/false)** — mesmo com todas as checagens CLEAN, o PR vai para `harness:awaiting-merge` até que o operador ative essa flag. Isso decouple a validação cross-family do disparo do auto-merge, permitindo que o operador valide que a segunda família está rodando antes de confiar no merge automático. A flag passa a valer para revisões subsequentes (risco aberto documentado).
-- **Fail-closed na busca do diff:** uma falha transitória em `gh pr diff` (exit non-zero) é tratada como erro grave (`diffFailed: true`) e re-filega a revisão; **nunca** silencia e passa adiante (o antigo comportamento de diff vazio como OK foi corrigido).
-- Quando o merge sai automático, a notificação (Telegram) traz a reversão em uma linha: `git revert -m 1 <sha-do-merge>`.
+**São duas camadas, não dois motores.** O agente lançado num worktree do Orca lê o `.claude/` do
+próprio repositório, então a pipeline de entrega já está lá — o selector não precisa de despachante
+próprio. Ligar tudo:
 
----
+```bash
+npx @orobsonn/claude-harness setup-vps    # na VPS, como o usuário do Orca — nunca root
+```
 
-## 7. Auto-update do motor na VPS (blue/green)
+O wizard escreve `~/.config/claude-harness/projects/<slug>.json` e uma linha de cron cercada. Formato
+dos campos, teto de concorrência e as armadilhas evitadas: [`core/orca/README.md`](../core/orca/README.md).
 
-Com o auto-merge ligado, PRs entram na `main` sem intervenção humana — então o código que os crons da VPS executam (o *motor*, em `<engineDir>/core/vps/`) precisa acompanhar a `main`, senão os crons rodam uma versão estagnada do dia do setup. O mecanismo é uma troca **blue/green por symlink**:
+**Comece em modo canário.** O campo `titleIncludes` (ex.: `"[canary]"`) restringe as candidatas por
+título. Sem ele, a issue escolhida é simplesmente a `harness:ready` aberta **mais antiga** — num
+backlog real isso costuma ser uma tarefa de anos atrás, não a que você quer observar primeiro.
 
-- O motor é publicado como um symlink `~/.claude/harness-core` → `~/.claude/harness-core-versions/<sha>` (cada versão é um clone imutável).
-- O cron `run-cron-update.mjs` (fleet-level, um só para a VPS inteira, como o reaper) faz `git ls-remote` da `main`; se avançou, **clona a nova sha** numa pasta separada e **troca o symlink atomicamente** (`rename` de symlink é atômico). Nenhum lock é necessário: um cron que já resolveu o symlink no spawn continua na árvore antiga (inteira e consistente); o próximo spawn pega a nova. Nunca existe um instante meio-atualizado.
-- **Fail-safe:** se o motor **não** é um symlink gerenciado (instalação legada em pasta real, ou o clone de dev do operador), o cron faz **no-op** — nunca mexe num motor que não é dono.
-- **Grace de prune:** mantém as 3 versões mais recentes e **nunca** apaga uma versão criada há menos de 2h (uma sessão de review longa pode importar o módulo do motor tardiamente).
-- **Notificações:** `engine-updated` (motor atualizado de X→Y) e `engine-update-failed` (falha, VPS segue na versão anterior) via Telegram.
+**Dependências entre issues** continuam declaradas no bloco ```` ```harness-deps ```` do corpo da
+issue. Uma dependência conta como satisfeita quando a **issue da dependência está CLOSED** — o estado
+que significa "entregue", independente de como foi entregue. Estado ilegível é fail-closed.
 
-> **Estado:** o mecanismo (`engine-update.mjs` + `run-cron-update.mjs`) está entregue e testado. A **ativação automática no onboarding** — o `install-crons` registrar o cron de update e o `setup-vps` estabelecer o symlink versionado, migrando a frota — é o próximo passo (design validado; requer só o caminho `stableEngineDir`, o clone de dev do operador nunca é auto-atualizado).
+## 7. Revisão de PR + merge condicional (automação do Orca)
+
+**Não é código deste repo** — é uma automação **agendada no Orca**. Ela só merja quando: o veredito
+próprio da revisão é *merjar*, **nenhum** achado ARMADO de severidade alta, CI concluído em
+`SUCCESS`, e sem conflito — com `--match-head-commit` obrigatório.
+
+O hook `entry-gate.mjs` do harness continua valendo e é o que torna esse gate inescapável: ele lê o
+rollup de checks do PR antes de permitir `gh pr merge` e **recusa alvo ambíguo**. Consequência
+prática: o comando de merge da automação **não pode** passar `-R`/`--repo` (nem `--auto`) — precisa
+rodar dentro do checkout do repo alvo, passando só o número do PR.
+
+> **O motor de cron da VPS foi aposentado.** As antigas seções sobre `cron-review`,
+> `HARNESS_REVIEW_ENABLED`, `autoMergeEnabled` e o auto-update blue/green do motor descreviam
+> `core/vps/`, que não é mais o caminho — ver [`../core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md)
+> para os motivos medidos e para o procedimento de verificação antes de remover o diretório. Não há
+> mais "motor" separado para auto-atualizar: o pipeline é o `.claude/` vendorado no repo, atualizado
+> por PR como qualquer outro código.
 
 ---
 

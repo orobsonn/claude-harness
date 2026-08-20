@@ -1,21 +1,59 @@
 # Playbook — Orca headless server numa VPS (systemd + Tailscale)
 
-Passo a passo replicável de como instalamos o [Orca](https://onorca.dev) (ADE de orquestração de
-agentes, Electron) como serviço sempre-ativo numa VPS Ubuntu, pareado com o Orca desktop local via
-Tailscale. Testado em Ubuntu 24.04 / x86_64, Orca v1.4.177.
+> **O [Orca](https://onorca.dev) é a ADE oficial deste harness.**
+> Download / instalação: **https://onorca.dev** · releases (AppImage Linux, app desktop):
+> **https://github.com/stablyai/orca/releases**
+>
+> ADE = *Agent Development Environment*. É por ele que a entrega autônoma é despachada e observada —
+> do desktop e do celular. Não é um add-on opcional do desenho: é a camada de despacho.
 
-## Contexto e decisão
+Passo a passo replicável de como instalamos o Orca como serviço sempre-ativo numa VPS Ubuntu,
+pareado com o Orca desktop local via Tailscale. Testado em Ubuntu 24.04 / x86_64, Orca v1.4.177.
 
-Decisão consciente: instalar direto na mesma VPS que já roda o pipeline de cron do
-`claude-harness` (issues → PR → review) e guarda segredos de deploy de múltiplos client projects,
-em vez de isolar numa VPS separada — aceito depois de uma revisão adversarial que recomendava
-isolamento. Mitigação aplicada: usuário de sistema dedicado (`orca`, sem shell), nunca expor a
-porta pública (só Tailscale), e não copiar os segredos existentes (`~/.bashrc` do root) para o
-usuário `orca` — quem precisar disso conecta manualmente depois, por escopo.
+## Contexto e decisão — duas camadas, não dois motores
+
+O desenho em produção hoje:
+
+```
+cron do usuário `orca`  ──▶  core/orca/select-and-dispatch.mjs  ──▶  orca worktree create
+   (1 linha por projeto)          (escolhe a issue + trava)                │
+                                                                          ▼
+                                                     agente (claude) num worktree do Orca
+                                                                          │
+                                                                          ▼
+                                                     lê o .claude/ VENDORADO do repo
+                                                     → o pipeline vendorado É a pipeline
+```
+
+**Orca despacha; o harness do repositório executa.** O agente lançado num worktree do Orca lê o
+`.claude/` do próprio repo, então a pipeline de entrega (entry-policy, `triaging`,
+`orchestrating-delivery`, gates, hooks) já está lá. O selector não precisa — e não tem — despachante
+próprio.
+
+Isso **resolve** a antiga cláusula deste playbook ("não usar o motor de orquestração do Orca junto
+com o pipeline do claude-harness"). Ela nasceu de uma leitura correta de um desenho errado: naquele
+momento existiam de fato **dois motores** disputando o mesmo papel, porque o `claude-harness` trazia
+o seu próprio (`core/vps/`, crons na VPS selecionando issue, criando worktree, revisando PR,
+notificando). Com esse motor aposentado, não há competição: há uma camada de despacho (Orca) e uma
+camada de execução (o `.claude/` do repo).
+
+**O motor de cron da VPS foi aposentado** — por falhas medidas, não por preferência de arquitetura.
+O registro completo está em [`core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md); em resumo:
+seleção por issue mais antiga sem filtro de escopo (tornava modo canário impossível), gate de
+dependência ancorado em nome de branch (4 de 14 issues mortas em silêncio, invisíveis para o
+`chain-validate`), execução como root com tokens de vários clientes no ambiente, e uma frota
+bifurcada em duas cópias do motor com todos os crons PAUSED.
+
+Decisão de isolamento (mantida): o Orca roda na mesma VPS que guarda segredos de deploy de múltiplos
+client projects, em vez de numa VPS separada — aceito depois de uma revisão adversarial que
+recomendava isolamento. Mitigações aplicadas: usuário de sistema dedicado (`orca`), porta nunca
+exposta publicamente (só Tailscale), e **credencial escopada por projeto**, carregada sob demanda —
+nunca um `.bashrc` global com o token de todo cliente (ver a seção *Credencial escopada* abaixo).
 
 ## Pré-requisitos
 
 - VPS Ubuntu 20.04/22.04/24.04 ou Debian stable (glibc 2.31+), x86_64 ou arm64.
+- **Mínimo 2 vCPU / 8 GB com swap** — teto validado em 4 agentes Claude simultâneos.
 - Acesso root via SSH.
 - Uma conta Tailscale (grátis para uso pessoal).
 
@@ -33,8 +71,7 @@ conta Tailscale. Depois, confirmar o IP da VPS na tailnet (formato `100.x.x.x`):
 tailscale ip -4
 ```
 
-Guardar esse IP — é o `--pairing-address` usado em todos os passos seguintes (nesta instalação:
-`100.98.45.37`).
+Guardar esse IP — é o `--pairing-address` usado em todos os passos seguintes.
 
 ## 2. Dependências do sistema
 
@@ -53,6 +90,8 @@ Notas:
   automaticamente quando não há `$DISPLAY` setado. Não precisa de unit systemd separada pra isso.
 
 ## 3. Baixar o binário (versão pinada, não "latest")
+
+Página de download: **https://onorca.dev** · releases: **https://github.com/stablyai/orca/releases**
 
 ```bash
 ORCA_VERSION=v1.4.177   # conferir a tag atual: curl -s https://api.github.com/repos/stablyai/orca/releases/latest | grep tag_name
@@ -136,9 +175,10 @@ Confirmar: `Active: active (running)`, e no `journalctl -u orca-serve.service` a
 `Bound endpoint: ws://0.0.0.0:6768` (não uma porta aleatória — ver troubleshooting se aparecer
 `EADDRINUSE`).
 
-## 7. Parear um dispositivo cliente (Mac/desktop)
+## 7. Parear um dispositivo cliente (desktop / celular)
 
-No dispositivo cliente:
+Baixe o Orca desktop em **https://onorca.dev**. No dispositivo cliente:
+
 1. Instalar Tailscale (`brew install --cask tailscale-app` no Mac) e logar na **mesma conta** usada
    na VPS. Isso exige aprovar um prompt de extensão de sistema em Ajustes → Privacidade e
    Segurança — passo manual, não automatizável via script/SSH.
@@ -158,6 +198,77 @@ No dispositivo cliente:
 **Tratar a pairing URL/código como senha** — dá controle total do runtime pra quem a tiver. Cada
 pareamento novo gera um token revogável separado (não precisa reusar o mesmo).
 
+---
+
+## 8. Ligar a entrega autônoma (o selector)
+
+Com o Orca no ar, a entrega autônoma é **um JSON por projeto + uma linha de cron**. O artefato é
+[`core/orca/`](../core/orca/README.md) — leia esse README para o formato completo dos campos.
+
+```bash
+# 1) registrar o repo no Orca e pegar o id
+sudo -u orca orca repo ls --json
+
+# 2) um JSON por projeto
+sudo -u orca install -d -m 700 /home/orca/.config/claude-harness/projects
+sudo -u orca tee /home/orca/.config/claude-harness/projects/<slug>.json >/dev/null <<'JSON'
+{
+  "project": "<slug>",
+  "ghRepo": "<owner>/<repo>",
+  "orcaRepoId": "<id do passo 1>",
+  "baseBranch": "main",
+  "agent": "claude",
+  "globalMaxWorking": 4,
+  "titleIncludes": "[canary]"
+}
+JSON
+
+# 3) uma linha de cron por projeto — usuário `orca`, NUNCA root
+sudo -u orca crontab -e
+# */20 * * * * /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs \
+#   --config /home/orca/.config/claude-harness/projects/<slug>.json \
+#   >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
+```
+
+`globalMaxWorking` é o teto **global da máquina** (o selector conta os worktrees `working` de toda a
+VPS via `orca worktree ps --json`), então todos os JSONs carregam o mesmo valor. Paralelizar por
+projeto é mais um JSON e mais uma linha.
+
+Comece com `"titleIncludes": "[canary]"` — assim só issues explicitamente marcadas entram na
+pipeline. Sem esse filtro, a issue escolhida é simplesmente a `harness:ready` aberta mais antiga, e
+num backlog real isso é uma tarefa de anos atrás, não a que você quer observar primeiro.
+
+## 9. Revisão de PR + merge condicional
+
+**Não é código — é uma automação agendada do Orca.** Ela só merja quando: o veredito próprio é
+*merjar*, **nenhum** achado ARMADO de severidade alta, CI concluído em `SUCCESS`, e sem conflito —
+com `--match-head-commit` obrigatório.
+
+> **O `entry-gate.mjs` do harness continua valendo e é valioso:** ele lê o rollup de checks do PR
+> antes de permitir `gh pr merge` e **recusa alvo ambíguo**. Consequência prática: o comando de merge
+> da automação **não pode** passar `-R`/`--repo` (nem `--auto`) — ele precisa rodar dentro do
+> checkout do repo alvo, passando só o número do PR. Isso é o que mantém o gate de CI inescapável.
+
+## 10. Credencial escopada por projeto
+
+Nunca um `.bashrc` global com o token de todo cliente. No `~/.bashrc` do usuário `orca`, defina a
+**função**, não o carregamento:
+
+```bash
+cf() { set -a; . "$HOME/.config/$1/cloudflare.env"; set +a; }   # chmod 600 em cada arquivo
+```
+
+Um shell não-interativo — o que o cron e o agente herdam — fica **sem token nenhum** até alguém
+pedir explicitamente, por projeto.
+
+Complementarmente, a denylist vendorada bloqueia produção (`wrangler deploy|versions|secret|r2` e
+`d1 execute --remote`, mais as formas `npm/pnpm/bun/yarn run deploy`). Sem isso, `Bash(npm run:*)`
+aprovado + um script `"deploy": "wrangler deploy"` é caminho **aprovado** pra produção sem passar
+por PR. É defesa em profundidade por string-match, não sandbox — o fechamento real é a credencial
+escopada acima.
+
+---
+
 ## Troubleshooting
 
 | Sintoma | Causa | Fix |
@@ -167,6 +278,8 @@ pareamento novo gera um token revogável separado (não precisa reusar o mesmo).
 | Log mostra `[ws-transport] Failed to bind port ... EADDRINUSE, trying next candidate` e o `Advertised endpoint` sai numa porta diferente da configurada | processo zumbi de um teste anterior ainda com a porta presa (o AppImage se extrai como `orca-ide` num `/tmp/.mount_orca-*` — um `pkill -f orca-linux` não mata esses filhos) | `pkill -9 -u orca` (mata por usuário, não por nome de processo) antes de subir o serviço |
 | `dlopen(): error loading libfuse.so.2` | falta libfuse | Ubuntu 22.04: `libfuse2`; Ubuntu 24.04/Debian: `libfuse2t64` |
 | `Missing X server or $DISPLAY` | `xvfb` não instalado (Orca só sobe Xvfb sozinho se o pacote já existir) | `apt-get install -y xvfb` |
+| O selector nunca despacha e o log só diz `skip: ... worktrees working` | worktrees antigos presos em `working` consomem o teto global | `orca worktree ps --json` e encerrar os órfãos; o teto é global, não por projeto |
+| Uma issue ficou `harness:in-progress` sem worktree | o `worktree create` falhou **e** a devolução do label também | procurar `STUCK: #N` no log do selector e devolver o label à mão — é o único estado que exige reparo humano |
 
 ## Atualização (quando sair versão nova)
 
@@ -175,7 +288,7 @@ do binário — **rollback precisa restaurar os dois juntos**, nunca só o biná
 nova pode reescrever o schema do perfil ao iniciar).
 
 ```bash
-ORCA_VERSION=v1.X.Y   # nova versão
+ORCA_VERSION=v1.X.Y   # nova versão (ver https://github.com/stablyai/orca/releases)
 
 # 1. baixar novo binário
 curl -fL --retry 3 "https://github.com/stablyai/orca/releases/download/${ORCA_VERSION}/orca-linux.AppImage" \
@@ -200,11 +313,15 @@ Se algo quebrar: `systemctl stop orca-serve`, restaurar **binário e pasta de co
 
 ## O que NÃO fazer (decisões já tomadas)
 
-- **Não copiar os segredos de deploy (`~/.bashrc` do root com tokens Cloudflare) para o usuário
-  `orca`.** Quem precisar rodar algo autenticado a partir do Orca conecta a credencial específica
-  na hora, escopada — não replica o `.bashrc` global inteiro.
+- **Não copiar os segredos de deploy para o usuário `orca` num `.bashrc` global.** Quem precisar
+  rodar algo autenticado conecta a credencial específica na hora, escopada por projeto (seção 10).
+  Foi exatamente o oposto disso — root com 6 tokens Cloudflare de clientes diferentes em texto
+  plano, herdados por todo `claude -p` — que ajudou a aposentar o motor antigo.
 - **Não expor a porta 6768 publicamente** (sem Tailscale/WireGuard) — a pairing URL sozinha vira
   controle total do runtime pra qualquer um que a veja.
-- **Não usar o motor `orca orchestration` (run/task/dispatch/gate/worker/coordinator) junto com o
-  pipeline autônomo do `claude-harness` no mesmo repo/worktree sem coordenação** — são dois
-  motores de orquestração independentes competindo pelo mesmo papel.
+- **Não reviver o motor de cron da VPS** (`core/vps/`) ao lado do selector. Aí sim seriam dois
+  motores competindo pelo mesmo papel — que é o problema real que a antiga cláusula deste playbook
+  descrevia. Ver [`core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md), inclusive o procedimento de
+  verificação antes de remover o diretório (outros projetos ainda podem ter crontab apontando pra lá).
+- **Não rodar o selector como root.** Ele é cron do usuário `orca`, e é assim que a credencial
+  escopada faz sentido.

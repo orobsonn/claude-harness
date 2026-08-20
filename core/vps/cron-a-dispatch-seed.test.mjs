@@ -144,7 +144,7 @@ test("opencode.json + opencode.json.example: permission.bash contains the same b
 });
 
 test("opencode.json + opencode.json.example: Auto Mode allows routine Bash and denies destructive git, recursive deletion, and state mutation", () => {
-  const claudeDenyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
+  const claudeDenyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(git ")).length;
   assert.equal(claudeDenyCount, 6, "settings.json must carry exactly 6 destructive-git Bash denies");
   const configs = {
     root: JSON.parse(readFileSync(join(process.cwd(), "opencode.json"), "utf8")),
@@ -261,8 +261,33 @@ test("settings.json: git push --force-with-lease resolves allow (deny narrowed w
   assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin --force"), "deny");
   assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push -f origin main"), "deny");
   assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin -f"), "deny");
-  const denyCount = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash(")).length;
-  assert.equal(denyCount, 6, "settings.json permissions.deny must still carry exactly 6 destructive-git Bash denies");
+  const bashDenies = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash("));
+  const gitDenyCount = bashDenies.filter((p) => p.startsWith("Bash(git ")).length;
+  assert.equal(gitDenyCount, 6, "settings.json permissions.deny must still carry exactly 6 destructive-git Bash denies");
+
+  // [orca-cutover] Production-deploy class. `Bash(npm run:*)` is an ALLOW, so a package.json with
+  // `"deploy": "wrangler deploy"` was an approved path to production that never passed through a PR.
+  // Deny beats allow in Claude Code, so these close both the direct wrangler spellings that mutate
+  // production and the `npm run deploy` indirection. `d1 execute --local` must stay allowed.
+  for (const command of [
+    "wrangler deploy",
+    "wrangler versions upload",
+    "wrangler secret put API_KEY",
+    "wrangler r2 object delete bucket/key",
+    "wrangler d1 execute DB --remote --command \"delete from users\"",
+    "npx wrangler deploy",
+    "npm run deploy",
+    "pnpm run deploy",
+    "bun run deploy",
+  ]) {
+    assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, command), "deny", `settings.json must deny ${JSON.stringify(command)}`);
+  }
+  assert.notEqual(
+    resolveClaudeBash(CLAUDE_SETTINGS, "wrangler d1 execute DB --local --command \"select 1\""),
+    "deny",
+    "local d1 work must stay reachable — only --remote mutates production",
+  );
+  assert.equal(resolveClaudeBash(CLAUDE_SETTINGS, "npm run test"), "allow", "routine npm scripts must stay allowed");
 });
 
 const CRITICAL_SKILLS = ["triaging-requests", "orchestrating-delivery", "brainstorming"];
@@ -734,7 +759,7 @@ test("seedOpencodeRootConfig: double-fault — malformed projectRoot config AND 
 
 // --- #486 oc-fleet-seed-migration ---------------------------------------------------------
 
-test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-git classes from settings.json plus the #499 fleet-only hardening classes (bash -c/node -e/python -c/npx/bunx/tar/source and their sibling spellings) — no OpenCode-only extras (sudo/rm-rf/chmod/nc/dd/fork-bomb/git-add/no-verify) (#ac-1.3, denylist_final)", () => {
+test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-git classes from settings.json plus the #499 fleet-only hardening classes (bash -c/node -e/python -c/npx/bunx/tar/source and their sibling spellings) plus the orca-cutover production-deploy class (wrangler deploy/versions/secret/r2/d1 --remote and the npm-run-deploy indirection) — no OpenCode-only extras (sudo/rm-rf/chmod/nc/dd/fork-bomb/git-add/no-verify) (#ac-1.3, denylist_final)", () => {
   const denyKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
     .filter(([, value]) => value === "deny")
     .map(([key]) => key);
@@ -771,6 +796,22 @@ test("DANGEROUS_BASH_DENYLIST: frozen fallback denies EXACTLY the 6 destructive-
     "unzip *",
     "source *",
     ". *",
+    "wrangler deploy*",
+    "wrangler versions*",
+    "wrangler secret*",
+    "wrangler r2*",
+    "wrangler d1 execute --remote*",
+    "wrangler d1 execute * --remote*",
+    "npx wrangler deploy*",
+    "npx wrangler versions*",
+    "npx wrangler secret*",
+    "npx wrangler r2*",
+    "npx wrangler d1 execute --remote*",
+    "npx wrangler d1 execute * --remote*",
+    "npm run deploy*",
+    "pnpm run deploy*",
+    "yarn deploy*",
+    "bun run deploy*",
   ];
   assert.deepEqual(
     denyKeys,
@@ -1289,6 +1330,22 @@ test("seedOpencodeRootConfig: [orphan-state, double-fault] malformed source stil
       "unzip *": "deny",
       "source *": "deny",
       ". *": "deny",
+      "wrangler deploy*": "deny",
+      "wrangler versions*": "deny",
+      "wrangler secret*": "deny",
+      "wrangler r2*": "deny",
+      "wrangler d1 execute --remote*": "deny",
+      "wrangler d1 execute * --remote*": "deny",
+      "npx wrangler deploy*": "deny",
+      "npx wrangler versions*": "deny",
+      "npx wrangler secret*": "deny",
+      "npx wrangler r2*": "deny",
+      "npx wrangler d1 execute --remote*": "deny",
+      "npx wrangler d1 execute * --remote*": "deny",
+      "npm run deploy*": "deny",
+      "pnpm run deploy*": "deny",
+      "yarn deploy*": "deny",
+      "bun run deploy*": "deny",
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

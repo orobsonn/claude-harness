@@ -641,9 +641,10 @@ function askTTY(question) {
 
 /**
  * @description Real seams for the setup-vps wizard. Infers everything it can so the operator barely
- * types: the engine dir (this script's own clone if it ships core/vps, else a stable ~/.claude/
+ * types: the harness dir (this script's own clone if it ships core/orca, else a stable ~/.claude/
  * harness-core auto-cloned once — NEVER the ephemeral npx cache), the project (cwd), and owner/repo
- * (the dir's git remote). Token write is 0600 and never logs the token.
+ * (the dir's git remote). Installs a per-project config JSON + one fenced crontab line running the
+ * Orca selector; the retired VPS cron engine (core/vps/install-crons.mjs) is no longer touched.
  * @returns {object}
  */
 function setupVpsSeams() {
@@ -651,13 +652,13 @@ function setupVpsSeams() {
   // Dual-runtime layout: this file lives at
   // <harness>/core/claude-code/skills/initializing-projects/references/cli.mjs — 5 up is the harness
   // root. Legacy flat layout (core/skills/…/references) is 4 up. Prefer the candidate that actually
-  // ships core/vps (a real clone, not npx).
+  // ships core/orca (a real clone, not npx).
   const candidates = [
     join(here, "..", "..", "..", "..", ".."),
     join(here, "..", "..", "..", ".."),
   ];
   const localCandidate =
-    candidates.find((dir) => existsSync(join(dir, "core", "vps", "install-crons.mjs"))) ?? null;
+    candidates.find((dir) => existsSync(join(dir, "core", "orca", "select-and-dispatch.mjs"))) ?? null;
   const localEngineDir = localCandidate;
   const home = process.env.HOME || process.env.USERPROFILE || ".";
   const stableEngineDir = join(home, ".claude", "harness-core");
@@ -666,6 +667,7 @@ function setupVpsSeams() {
     out: (t) => process.stdout.write(`${t}\n`),
     env: process.env,
     cwd: process.cwd(),
+    nodeBin: process.execPath,
     gitRemote: (dir) => {
       try {
         return execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], {
@@ -686,24 +688,25 @@ function setupVpsSeams() {
       execFileSync("git", args, { stdio: "inherit" });
     },
     exists: (p) => existsSync(p),
-    readFileSafe: (p) => {
+    ensureDir: (d) => mkdirSync(d, { recursive: true, mode: 0o700 }),
+    writeJson: (p, json) => writeFileSync(p, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 }),
+    // `crontab -l` exits non-zero when the user simply has no crontab yet — that is an empty
+    // crontab, not an error, and must never abort the install.
+    readCrontab: () => {
       try {
-        return readFileSync(p, "utf8");
+        return execFileSync("crontab", ["-l"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
       } catch {
         return "";
       }
     },
-    writeDevVars: (p, content) => {
-      writeFileSync(p, content, { mode: 0o600 });
+    writeCrontab: (text) => execFileSync("crontab", ["-"], { input: text, stdio: ["pipe", "inherit", "inherit"] }),
+    whoami: () => {
       try {
-        chmodSync(p, 0o600);
+        return execFileSync("id", ["-un"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
       } catch {
-        // best-effort tighten — a pre-existing file may resist chmod under some mounts
+        return "";
       }
     },
-    ensureDir: (d) => mkdirSync(d, { recursive: true }),
-    devVarsPathFor: (h) => join(h, ".claude", ".dev.vars"),
-    runInstall: (scriptPath, args) => execFileSync(process.execPath, [scriptPath, ...args], { stdio: "inherit" }),
   };
 }
 
