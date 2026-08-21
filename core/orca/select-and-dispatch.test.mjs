@@ -7,13 +7,20 @@
  *   • the label lock is taken BEFORE `worktree create`, and released if the create fails;
  *   • the canary title filter actually narrows the oldest-first pick;
  *   • the worktree is created from the REMOTE base ref, after a fetch, and an unfetchable base
- *     skips the tick without taking the lock.
+ *     skips the tick without taking the lock;
+ *   • the Orca response envelope is read from a CAPTURED fixture, never from an invented shape —
+ *     the defect this pins shipped precisely because the old oracle asserted the same guess the
+ *     code made, so both passed and both were wrong.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { readFileSync } from "node:fs";
+
 import {
   parseWorktreePs,
+  unwrapOrca,
+  OrcaRefusedError,
   countWorking,
   eligibleIssues,
   selectIssue,
@@ -85,13 +92,59 @@ const issue = (number, over = {}) => ({
   ...over,
 });
 
-test("parseWorktreePs accepts an array, a {worktrees} envelope and a JSON string; anything else is null (unreadable, not empty)", () => {
+// The one shape that actually comes out of the CLI. Captured from a live headless AppImage and
+// redacted; it is the anchor for every boundary assertion below. If Orca changes the contract, this
+// file stops matching reality and the tests must be re-captured — which is the only thing a boundary
+// test is for. Never hand-edit it into agreement with the code.
+const PS_FIXTURE = JSON.parse(
+  readFileSync(new URL("./__fixtures__/worktree-ps.json", import.meta.url), "utf8"),
+);
+
+test("the captured fixture IS the documented envelope — {id, ok, result:{worktrees,totalCount,truncated}}", () => {
+  assert.deepEqual(Object.keys(PS_FIXTURE).sort(), ["_meta", "id", "ok", "result"]);
+  assert.equal(PS_FIXTURE.ok, true);
+  assert.ok(Array.isArray(PS_FIXTURE.result.worktrees));
+  assert.equal(typeof PS_FIXTURE.result.truncated, "boolean");
+  assert.equal(typeof PS_FIXTURE.result.totalCount, "number");
+  // The shape the shipped v0.57.0 code read. Pinning its ABSENCE is the point: it never existed.
+  assert.equal(PS_FIXTURE.worktrees, undefined);
+});
+
+test("parseWorktreePs reads the REAL captured response — this is the v0.57.0 defect: it read value.worktrees, a shape that never existed, and skipped every tick in silence", () => {
+  const entries = parseWorktreePs(PS_FIXTURE);
+  assert.ok(Array.isArray(entries), "the captured envelope must parse, not come back null");
+  assert.equal(entries.length, PS_FIXTURE.result.worktrees.length);
+  assert.equal(countWorking(entries), 1, "the fixture carries exactly one working worktree");
+  // Same input as a JSON string — what the real seam hands over.
+  assert.deepEqual(parseWorktreePs(JSON.stringify(PS_FIXTURE)), entries);
+});
+
+test("parseWorktreePs still accepts the bare shapes an injected seam hands over; anything else is null (unreadable, not empty)", () => {
   assert.deepEqual(parseWorktreePs([{ status: "working" }]), [{ status: "working" }]);
   assert.deepEqual(parseWorktreePs({ worktrees: [{ status: "idle" }] }), [{ status: "idle" }]);
   assert.deepEqual(parseWorktreePs('[{"status":"working"}]'), [{ status: "working" }]);
   assert.equal(parseWorktreePs("not json"), null);
   assert.equal(parseWorktreePs(null), null);
   assert.equal(parseWorktreePs(undefined), null);
+});
+
+test("parseWorktreePs treats truncated:true as UNREADABLE — a truncated list undercounts the busy worktrees, and an undercounted ceiling is no ceiling", () => {
+  const truncated = { ...PS_FIXTURE, result: { ...PS_FIXTURE.result, truncated: true } };
+  assert.equal(parseWorktreePs(truncated), null);
+});
+
+test("unwrapOrca is a BOUNDARY unwrapper, not a per-command parser — the envelope belongs to the CLI, so every command lands on it", () => {
+  // Measured on a live AppImage: status, repo list, worktree list and worktree ps all answer this.
+  assert.deepEqual(unwrapOrca({ id: "x", ok: true, result: { repos: [1] }, _meta: {} }), { repos: [1] });
+  assert.deepEqual(unwrapOrca({ id: "x", ok: true, result: { worktrees: [] }, _meta: {} }), { worktrees: [] });
+  // Bare shapes pass through so an injected seam can hand over a plain array.
+  assert.deepEqual(unwrapOrca([1, 2]), [1, 2]);
+  assert.deepEqual(unwrapOrca({ worktrees: [] }), { worktrees: [] });
+});
+
+test("unwrapOrca: ok:false is a REFUSAL, not an unreadable answer — Orca ran, understood, and said no, which is a different repair from Orca being down", () => {
+  assert.throws(() => unwrapOrca({ id: "x", ok: false, result: null, _meta: {} }), OrcaRefusedError);
+  assert.throws(() => parseWorktreePs({ id: "x", ok: false, result: null, _meta: {} }), OrcaRefusedError);
 });
 
 test("countWorking counts only status === 'working'", () => {
@@ -171,10 +224,14 @@ test("runTick dispatches the oldest ready issue: label lock FIRST, then orca wor
   assert.deepEqual(create, [
     "worktree", "create",
     "--repo", "id:repo_abc123",
+    // The review automation selects PRs by headRefName =~ /harness-[0-9]+$/. Without --name, Orca
+    // names the worktree itself and the review half silently never picks the delivery up.
+    "--name", "harness-2",
     "--issue", "2",
     "--agent", "claude",
     // REMOTE ref, never the bare local name — see the stale-base test below.
     "--base-branch", "origin/main",
+    "--no-parent",
     "--prompt", CONFIG.prompt,
   ]);
 
@@ -337,6 +394,19 @@ test("runTick skips cleanly when the ceiling probe THROWS (the real seam shells 
   });
   assert.deepEqual(result, { ok: false, dispatched: false, reason: "ps-unreadable" });
   assert.equal(ghCalls.length, 0, "a skipped tick must not touch the issue tracker");
+});
+
+test("runTick reports a REFUSAL separately from an unreadable answer — one log line cannot stand for both an Orca that is down and an Orca that said no", () => {
+  const logs = [];
+  const result = runTick({
+    config: CONFIG,
+    orca: (args) => (args[1] === "ps" ? { id: "x", ok: false, result: null, _meta: {} } : ""),
+    gh: () => [],
+    git: () => "",
+    log: (t) => logs.push(t),
+  });
+  assert.deepEqual(result, { ok: false, dispatched: false, reason: "ps-refused" });
+  assert.match(logs.join("\n"), /ok:false/);
 });
 
 test("runTick skips cleanly when the issue LIST throws — nothing is mutated yet, so the next tick simply retries", () => {
