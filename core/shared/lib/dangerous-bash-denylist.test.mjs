@@ -1,7 +1,14 @@
 /**
  * @description Locked tests for the shared DANGEROUS_BASH_DENYLIST resolver (issue #516) — the
- * canonical source consumed by both `core/vps/cron-a-dispatch.mjs` (config seeding) and
- * `core/opencode/plugin/entry-gate.ts` (the plugin-level choke-point).
+ * canonical source consumed by `core/opencode/plugin/entry-gate.ts` (the plugin-level choke-point).
+ *
+ * [orca-cutover] The FROZEN key list and the production-deploy class used to be pinned only in
+ * `core/vps/cron-a-dispatch-seed.test.mjs`. That file died with the retired VPS engine, so those
+ * assertions were rehomed HERE before the delete — otherwise removing a folder full of dead engine
+ * code would have silently unpinned a live security invariant, which is exactly the failure shape
+ * `kaizen.md` records twice (a check that validates the shape of a thing instead of the claim it
+ * makes). The frozen list below is the reason a new deny or a new carve-out cannot slip in
+ * unreviewed: widening it must update this test.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -178,4 +185,148 @@ test("decideDangerousBashDenylist: single-segment allow/deny decisions keep thei
   const allowed = decideDangerousBashDenylist("git push --force-with-lease origin branch");
   assert.equal(allowed.allow, true);
   assert.equal(allowed.matchedPattern, "git push --force-with-lease*");
+});
+
+test("DANGEROUS_BASH_DENYLIST: the FULL deny-key list is FROZEN — order is load-bearing (findLast wins), so no extras, none missing, order preserved", () => {
+  const denyKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
+    .filter(([, value]) => value === "deny")
+    .map(([key]) => key);
+  assert.deepEqual(
+    denyKeys,
+    [
+      "git push --force*",
+      "git push * --force*",
+      "git push -f*",
+      "git push * -f*",
+      "git reset --hard*",
+      "git clean -f*",
+      "bash -c*",
+      "sh -c*",
+      "zsh -c*",
+      "*/bash -c*",
+      "env bash -c*",
+      "node -e*",
+      "node --eval*",
+      "node -p*",
+      "node --print*",
+      "python -c*",
+      "python3 -c*",
+      "python3.* -c*",
+      "python* -m*",
+      "npx *",
+      "npm exec*",
+      "npm x *",
+      "pnpm dlx*",
+      "yarn dlx*",
+      "bun x*",
+      "bunx *",
+      "tar -x*",
+      "tar --extract*",
+      "tar x*",
+      "unzip *",
+      "source *",
+      ". *",
+      "wrangler deploy*",
+      "wrangler versions*",
+      "wrangler secret*",
+      "wrangler r2*",
+      "wrangler d1 execute --remote*",
+      "wrangler d1 execute * --remote*",
+      "npx wrangler deploy*",
+      "npx wrangler versions*",
+      "npx wrangler secret*",
+      "npx wrangler r2*",
+      "npx wrangler d1 execute --remote*",
+      "npx wrangler d1 execute * --remote*",
+      "npm run deploy*",
+      "pnpm run deploy*",
+      "yarn deploy*",
+      "bun run deploy*",
+    ],
+    `deny keys drifted from the pinned list, got ${JSON.stringify(denyKeys)}`,
+  );
+});
+
+test("DANGEROUS_BASH_DENYLIST: the FULL allow-key list is pinned too — a widened carve-out must be reviewed here, not slipped in", () => {
+  const allowKeys = Object.entries(DANGEROUS_BASH_DENYLIST)
+    .filter(([, value]) => value === "allow")
+    .map(([key]) => key);
+  assert.deepEqual(
+    allowKeys,
+    [
+      "git push --force-with-lease*",
+      "git push * --force-with-lease*",
+      "npx tsc --noEmit*",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-snapshot updating-harness",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness lifecycle-update --target * --ref v*",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init*",
+      "npx github:orobsonn/claude-harness#v* init*",
+      "npx -y github:orobsonn/claude-harness#v* init*",
+      'npx -y "github:orobsonn/claude-harness#v*" init*',
+      "npx @orobsonn/claude-harness init*",
+      "npx @orobsonn/claude-harness setup-*",
+      "npx vitest*",
+      "npx jest*",
+      "npx mocha*",
+      "npx --no-install vitest*",
+      "npx --no-install jest*",
+      "npx --no-install mocha*",
+      "npx -y vitest*",
+      "npx -y jest*",
+      "npx -y mocha*",
+      "npx --yes vitest*",
+      "npx --yes jest*",
+      "npx --yes mocha*",
+    ],
+    `allow keys drifted from the pinned list, got ${JSON.stringify(allowKeys)}`,
+  );
+});
+
+test("resolveDangerousBashCommand: the production-deploy class is denied — including the `npm run deploy` indirection that an approved `Bash(npm run:*)` would otherwise wave through", () => {
+  for (const command of [
+    "wrangler deploy",
+    "wrangler deploy --env production",
+    "wrangler versions upload",
+    "wrangler versions deploy",
+    "wrangler secret put API_KEY",
+    "wrangler secret delete API_KEY",
+    "wrangler r2 object delete bucket/key",
+    'wrangler d1 execute DB --remote --command "delete from users"',
+    "wrangler d1 execute DB --remote",
+    "npx wrangler deploy",
+    "npm run deploy",
+    "npm run deploy --workspace=api",
+    "pnpm run deploy",
+    "bun run deploy",
+    "yarn deploy",
+  ]) {
+    assert.equal(
+      resolveDangerousBashCommand(command),
+      "deny",
+      `production-mutating command must be denied: ${JSON.stringify(command)}`,
+    );
+  }
+});
+
+test("resolveDangerousBashCommand: local development against the same tools stays reachable — only the production-mutating verbs are denied", () => {
+  for (const command of [
+    'wrangler d1 execute DB --local --command "select 1"',
+    "wrangler dev",
+    "wrangler types",
+    "npm run test",
+    "npm run build",
+    "npm run typecheck",
+  ]) {
+    assert.equal(
+      resolveDangerousBashCommand(command),
+      "allow",
+      `local/dev command must stay allowed: ${JSON.stringify(command)}`,
+    );
+  }
+});
+
+test("decideDangerousBashDenylist: a production deploy chained after a harmless command is still denied (segment split, not whole-string match)", () => {
+  const decision = decideDangerousBashDenylist("npm run build && npm run deploy");
+  assert.equal(decision.allow, false);
+  assert.equal(decision.segment, "npm run deploy");
 });
