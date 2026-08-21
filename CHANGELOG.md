@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.57.1](https://github.com/orobsonn/claude-harness/compare/v0.57.0...v0.57.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **orca:** le o envelope de resposta do CLI e nomeia o worktree no dispatch ([#815](https://github.com/orobsonn/claude-harness/issues/815)) ([52a0f20](https://github.com/orobsonn/claude-harness/commit/52a0f208a1d323f09f9c3ee840172045122e6a17))
+
 ## [0.57.0](https://github.com/orobsonn/claude-harness/compare/v0.56.0...v0.57.0) (2026-08-21)
 
 
