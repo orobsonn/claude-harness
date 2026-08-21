@@ -70,10 +70,43 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
 Uma linha por projeto, no crontab do usuário `orca` (**nunca root**):
 
 ```cron
-*/20 * * * * /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs --config /home/orca/.config/claude-harness/projects/oraculo-app.json >> /home/orca/.local/state/claude-harness/oraculo-app.log 2>&1
+*/20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs --config /home/orca/.config/claude-harness/projects/oraculo-app.json >> /home/orca/.local/state/claude-harness/oraculo-app.log 2>&1
 ```
 
+**`ORCA_BIN` não é opcional na prática.** O Orca instalado como AppImage **não fica no PATH** — mora
+em `/opt/orca/orca-linux.AppImage`. Sem essa variável a linha de cron dá `ENOENT`, e como o tick
+falha antes de qualquer seleção, o sintoma é o mesmo de tudo mais que dá errado aqui: nada é
+entregue, em silêncio.
+
 Paralelizar por projeto é literalmente: mais um JSON, mais uma linha.
+
+## O envelope de resposta do Orca (a armadilha de fronteira)
+
+**Todo** comando `--json` do CLI do Orca responde com o mesmo envelope — medido num AppImage
+headless vivo (`status`, `repo list`, `worktree list`, `worktree ps`):
+
+```json
+{ "id": "...", "ok": true, "result": { "worktrees": [...], "totalCount": 9, "truncated": false }, "_meta": { "runtimeId": "..." } }
+```
+
+A carga está sob **`result`**, não no topo. A v0.57.0 despachou um `parseWorktreePs` que lia
+`value.worktrees` — uma forma que nunca existiu — e o selector **pulou 100% dos ticks em silêncio**:
+`skip: could not read 'orca worktree ps --json'`, sem erro, sem stack, sem entrega.
+
+Três consequências viraram regra aqui:
+
+1. **Desembrulhar na fronteira, uma vez** (`unwrapOrca`), nunca um parser por comando. O envelope é
+   propriedade do CLI, então parser por comando rearma a mesma mina pro próximo integrador.
+2. **`ok:false` é recusa, não ilegibilidade.** O Orca rodou, entendeu e disse não — reparo diferente
+   de "Orca fora do ar". O selector loga e retorna razões distintas (`ps-refused` vs `ps-unreadable`).
+3. **`truncated: true` conta como ilegível.** Lista truncada subconta os worktrees ocupados, e teto
+   subcontado é teto nenhum — a falha exata que este arquivo existe pra evitar.
+
+**E a forma vem de fixture capturada**, `__fixtures__/worktree-ps.json`, não de suposição. O oráculo
+congelado não pegou o defeito porque afirmava a *mesma* forma inventada que o código lia: teste e
+código concordavam entre si e discordavam da realidade juntos. Um teste de fronteira só vale se a
+forma vier da fronteira — daí a fixture, mais o `smoke-orca-cli.test.mjs`, que chama o CLI de verdade
+e **pula** quando não há binário (`ORCA_BIN`).
 
 ## As duas armadilhas que o motor antigo tinha (e que este não repete)
 

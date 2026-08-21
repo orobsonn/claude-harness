@@ -23,6 +23,17 @@
  *     dead this way, and `chain-validate.mjs` could not see it — it only catches cycles and dangling
  *     refs). Here a dependency is satisfied when the dependency ISSUE is CLOSED: the state that
  *     actually means "delivered", independent of how it was delivered.
+ *   • It does not GUESS the shape of anything the Orca CLI returns. Every `--json` command answers
+ *     with the envelope `{ id, ok, result, _meta }`; the payload is under `result`. v0.57.0 shipped a
+ *     `parseWorktreePs` that read `value.worktrees` — a shape nobody ever observed — so every tick
+ *     skipped with "could not read", silently, forever. The frozen oracle did not catch it because
+ *     the oracle asserted the SAME invented shape: test and code agreed with each other and both
+ *     disagreed with reality. Boundary shapes are now anchored on a CAPTURED fixture
+ *     (`__fixtures__/worktree-ps.json`) and unwrapped ONCE at the boundary by `unwrapOrca`, never
+ *     per command — the envelope belongs to the CLI, so a parser per command re-arms the same mine
+ *     for the next integrator. This is the same class of defect as the two above (local base ref,
+ *     and the branch-name gate the retired engine died of): a piece assuming what another will say
+ *     without ever having looked.
  *   • It does not dispatch on a LOCAL base ref. Passing `--base-branch main` looks right and is
  *     silently wrong: Orca resolves it against the clone it builds worktrees from, and that clone
  *     fetches from the remote but never advances its local branch. Every run then starts from
@@ -56,25 +67,70 @@ export const LABEL_READY = "harness:ready";
 export const LABEL_IN_PROGRESS = "harness:in-progress";
 
 /**
- * @description Normalizes whatever `orca worktree ps --json` returned into a flat array. Accepts a
- * bare array, a `{ worktrees: [...] }` envelope, or a JSON string. Anything else yields `null` —
- * DISTINCT from `[]`, because "the ceiling could not be read" must skip the tick rather than be
- * mistaken for "nothing is running" (that mistake is how a concurrency ceiling silently becomes no
- * ceiling at all under a transient CLI failure).
+ * @description Thrown when the Orca CLI answers with `ok: false`. This is a REPORTED FAILURE, which
+ * is a different state from "I could not read the answer" — the CLI ran, understood the request, and
+ * said no. Collapsing the two into one skip reason produces a log line that cannot distinguish an
+ * Orca that is down from an Orca that refused, and those need different repairs.
+ */
+export class OrcaRefusedError extends Error {}
+
+/**
+ * @description Unwraps the Orca CLI's response envelope at the BOUNDARY, once, for every command.
+ *
+ * Every `--json` command answers with the same envelope — measured on a live headless AppImage:
+ *   `orca status`, `orca repo list`, `orca worktree list`, `orca worktree ps`
+ *   → `{ id, ok, result, _meta }`
+ * The payload lives under `result`; `worktree ps` puts `{ worktrees, totalCount, truncated }` there.
+ *
+ * This is deliberately NOT a per-command parser. The envelope is a property of the CLI, not of any
+ * one command, so a parser per command re-arms the same mine for whoever integrates the next one —
+ * which is exactly how `parseWorktreePs` shipped reading `value.worktrees` (a shape that never
+ * existed) and made the selector skip 100% of its ticks in silence.
+ *
+ * Bare shapes still pass through untouched, so an injected test seam can hand over a plain array.
+ * @param {unknown} raw parsed JSON, or a JSON string
+ * @returns {unknown} the unwrapped payload
+ * @throws {OrcaRefusedError} when the envelope carries `ok: false`
+ */
+export function unwrapOrca(raw) {
+  let value = raw;
+  if (typeof value === "string") value = JSON.parse(value);
+  if (value && typeof value === "object" && !Array.isArray(value) && "ok" in value) {
+    if (value.ok !== true) {
+      throw new OrcaRefusedError(`orca answered ok:false — ${JSON.stringify(value).slice(0, 200)}`);
+    }
+    return value.result;
+  }
+  return value;
+}
+
+/**
+ * @description Normalizes whatever `orca worktree ps --json` returned into a flat array. Accepts the
+ * real response envelope, a bare `{ worktrees: [...] }`, a bare array, or a JSON string of any of
+ * those. Anything else yields `null` — DISTINCT from `[]`, because "the ceiling could not be read"
+ * must skip the tick rather than be mistaken for "nothing is running" (that mistake is how a
+ * concurrency ceiling silently becomes no ceiling at all under a transient CLI failure).
+ *
+ * `truncated: true` is treated as UNREADABLE for the same reason: a truncated list undercounts the
+ * busy worktrees, and an undercounted ceiling is no ceiling. The fixture in `__fixtures__/` is a
+ * captured real response — the shape here is observed, never assumed.
  * @param {unknown} raw
  * @returns {object[]|null}
+ * @throws {OrcaRefusedError} propagated from unwrapOrca — a refusal is not an unreadable answer
  */
 export function parseWorktreePs(raw) {
-  let value = raw;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return null;
-    }
+  let value;
+  try {
+    value = unwrapOrca(raw);
+  } catch (err) {
+    if (err instanceof OrcaRefusedError) throw err;
+    return null; // malformed JSON → unreadable
   }
   if (Array.isArray(value)) return value;
-  if (value && typeof value === "object" && Array.isArray(value.worktrees)) return value.worktrees;
+  if (value && typeof value === "object" && Array.isArray(value.worktrees)) {
+    if (value.truncated === true) return null;
+    return value.worktrees;
+  }
   return null;
 }
 
@@ -199,7 +255,13 @@ export function runTick(deps) {
   let entries;
   try {
     entries = parseWorktreePs(orca(["worktree", "ps", "--json"]));
-  } catch {
+  } catch (err) {
+    // A REFUSAL is not an unreadable answer. Orca ran, understood, and said no — that is a different
+    // repair from "Orca is down", and a shared skip reason would hide which one happened.
+    if (err instanceof OrcaRefusedError) {
+      log(`[${config.project}] skip: ${err.message}`);
+      return { ok: false, dispatched: false, reason: "ps-refused" };
+    }
     entries = null;
   }
   if (entries === null) {
@@ -283,9 +345,15 @@ export function runTick(deps) {
     orca([
       "worktree", "create",
       "--repo", `id:${config.orcaRepoId}`,
+      // `--name` is load-bearing, not cosmetic: the PR-review automation selects the PRs it may
+      // merge with `headRefName` matching /harness-[0-9]+$/. Let Orca name the worktree itself and
+      // nothing ever matches — the delivery half runs and the review half silently never picks it up.
+      "--name", `harness-${picked.number}`,
       "--issue", String(picked.number),
       "--agent", config.agent,
       "--base-branch", baseRef,
+      // Explicit: without it Orca infers lineage from the calling context, and a cron has none.
+      "--no-parent",
       "--prompt", config.prompt,
     ]);
   } catch (err) {
