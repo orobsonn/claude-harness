@@ -23,8 +23,9 @@ import { parseCliArgs } from "./cli.mjs";
 import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 
 // All-Enter for the inferred fields (home/projectRoot/project/owner/repo), then the Orca answers.
+// clonePath sits right after orcaRepoId: both come from the same `orca repo ls --json` row.
 // Order matches runSetupVps's prompts.
-const INFER = ["", "", "", "", "", "repo_abc123", "", "", "", "[canary]", ""];
+const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", ""];
 
 function harness(opts = {}) {
   const {
@@ -84,6 +85,7 @@ test("orcaGuide names Orca as the official ADE, links the download, and explains
 test("buildProjectConfig produces a config the SELECTOR itself accepts (same shape as project.example.json)", () => {
   const cfg = buildProjectConfig({
     project: "myproject", owner: "orobsonn", repo: "myproject", orcaRepoId: "repo_abc123",
+    clonePath: "/clones/myproject",
     baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "[canary]", prompt: "vai",
   });
   assert.equal(cfg.ghRepo, "orobsonn/myproject");
@@ -93,9 +95,21 @@ test("buildProjectConfig produces a config the SELECTOR itself accepts (same sha
   assert.equal(normalized.globalMaxWorking, 4);
 });
 
+test("buildProjectConfig carries clonePath through — the selector cannot fetch the base without it, and a config missing it must fail at setup, not at 3am", () => {
+  const cfg = buildProjectConfig({
+    project: "p", owner: "o", repo: "r", orcaRepoId: "id", clonePath: "/clones/r",
+    baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "", prompt: "x",
+  });
+  assert.equal(cfg.clonePath, "/clones/r");
+  assert.equal(normalizeConfig(cfg).clonePath, "/clones/r");
+
+  const { clonePath, ...without } = cfg;
+  assert.throws(() => normalizeConfig(without), /"clonePath" is required/);
+});
+
 test("buildProjectConfig maps an empty title filter to null (no filter), not to an empty string", () => {
   const cfg = buildProjectConfig({
-    project: "p", owner: "o", repo: "r", orcaRepoId: "id",
+    project: "p", owner: "o", repo: "r", orcaRepoId: "id", clonePath: "/c",
     baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "", prompt: "x",
   });
   assert.equal(cfg.titleIncludes, null);
@@ -168,6 +182,7 @@ test("runSetupVps INFERS project/owner/repo/paths from cwd + git remote and writ
     project: "myproject",
     ghRepo: "orobsonn/myproject",
     orcaRepoId: "repo_abc123",
+    clonePath: "/clones/myproject",
     baseBranch: "main",
     agent: "claude",
     globalMaxWorking: 4,
@@ -193,7 +208,7 @@ test("runSetupVps installs the ORCA selector — it never touches the retired VP
 
 test("runSetupVps: an explicit answer overrides the inferred default", async () => {
   const h = harness({
-    answers: ["/home/outro", "/srv/x", "slug-custom", "acme", "produto", "repo_zzz", "develop", "claude", "2", "", "15"],
+    answers: ["/home/outro", "/srv/x", "slug-custom", "acme", "produto", "repo_zzz", "/clones/produto", "develop", "claude", "2", "", "15"],
   });
   const result = await runSetupVps(h.deps);
   assert.equal(result.project, "slug-custom");
@@ -226,7 +241,7 @@ test("runSetupVps REFUSES to run as root — the selector is a user cron, which 
 });
 
 test("runSetupVps fails fast (no install) when a required answer is empty", async () => {
-  const h = harness({ answers: ["", "", "", "", "", "", "", "", "", "", ""] });
+  const h = harness({ answers: ["", "", "", "", "", "", "", "", "", "", "", ""] });
   await assert.rejects(() => runSetupVps(h.deps), /orca-repo-id/);
   assert.equal(h.crontabWrites.length, 0);
   assert.equal(h.jsonWrites.length, 0);
@@ -243,7 +258,7 @@ test("runSetupVps prints the PR-review automation contract, including the entry-
 });
 
 test("runSetupVps warns explicitly when the canary title filter is left OFF", async () => {
-  const h = harness({ answers: ["", "", "", "", "", "repo_abc123", "", "", "", "", ""] });
+  const h = harness({ answers: ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "", ""] });
   await runSetupVps(h.deps);
   assert.ok(h.outLines.join("\n").includes("SEM filtro de título"));
 });

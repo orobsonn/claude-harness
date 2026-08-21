@@ -2,6 +2,7 @@
   "project": "oraculo-app",
   "ghRepo": "orobsonn/oraculo-app",
   "orcaRepoId": "PASTE-THE-ID-FROM-`orca repo ls --json`",
+  "clonePath": "/home/orca/orca/projects/<slug>/<repo>",
   "baseBranch": "main",
   "agent": "claude",
   "globalMaxWorking": 4,

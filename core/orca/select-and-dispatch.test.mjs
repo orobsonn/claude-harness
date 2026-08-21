@@ -5,7 +5,9 @@
  *   • a dependency is satisfied by the dependency ISSUE being CLOSED, never by a branch name;
  *   • an unreadable dependency state is fail-CLOSED;
  *   • the label lock is taken BEFORE `worktree create`, and released if the create fails;
- *   • the canary title filter actually narrows the oldest-first pick.
+ *   • the canary title filter actually narrows the oldest-first pick;
+ *   • the worktree is created from the REMOTE base ref, after a fetch, and an unfetchable base
+ *     skips the tick without taking the lock.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -24,6 +26,7 @@ const CONFIG = normalizeConfig({
   project: "oraculo-app",
   ghRepo: "orobsonn/oraculo-app",
   orcaRepoId: "repo_abc123",
+  clonePath: "/clones/oraculo-app",
   globalMaxWorking: 4,
 });
 
@@ -36,11 +39,18 @@ function harness(opts = {}) {
     createThrows = false,
     lockThrows = false,
     unlockThrows = false,
+    fetchThrows = false,
     config = CONFIG,
   } = opts;
   const orcaCalls = [];
   const ghCalls = [];
+  const gitCalls = [];
   const logs = [];
+  const git = (args) => {
+    gitCalls.push(args);
+    if (fetchThrows) throw new Error("git: fetch boom");
+    return "";
+  };
   const orca = (args) => {
     orcaCalls.push(args);
     if (args[1] === "ps") return ps;
@@ -63,7 +73,7 @@ function harness(opts = {}) {
     }
     return "";
   };
-  return { deps: { config, orca, gh, log: (t) => logs.push(t) }, orcaCalls, ghCalls, logs };
+  return { deps: { config, orca, gh, git, log: (t) => logs.push(t) }, orcaCalls, ghCalls, gitCalls, logs };
 }
 
 const issue = (number, over = {}) => ({
@@ -163,7 +173,8 @@ test("runTick dispatches the oldest ready issue: label lock FIRST, then orca wor
     "--repo", "id:repo_abc123",
     "--issue", "2",
     "--agent", "claude",
-    "--base-branch", "main",
+    // REMOTE ref, never the bare local name — see the stale-base test below.
+    "--base-branch", "origin/main",
     "--prompt", CONFIG.prompt,
   ]);
 
@@ -172,6 +183,37 @@ test("runTick dispatches the oldest ready issue: label lock FIRST, then orca wor
   assert.ok(editIdx >= 0 && createIdx >= 0);
   // The lock must exist before any worktree does; `create` is the LAST orca call of the tick.
   assert.equal(h.orcaCalls[h.orcaCalls.length - 1][1], "create");
+});
+
+test("runTick freshens the base BEFORE the lock and dispatches the REMOTE ref — a local base name silently ages and is the bug this pins", () => {
+  const h = harness({ ps: [], issues: [issue(2)] });
+  runTick(h.deps);
+
+  assert.deepEqual(
+    h.gitCalls,
+    [["-C", "/clones/oraculo-app", "fetch", "origin", "main", "--quiet"]],
+    "the tick fetches the base in the clone Orca builds worktrees from",
+  );
+
+  const create = h.orcaCalls.find((a) => a[1] === "create");
+  const base = create[create.indexOf("--base-branch") + 1];
+  assert.equal(base, "origin/main");
+  assert.notEqual(base, "main", "the clone's LOCAL branch never advances — asking for it by bare name reuses a stale base");
+
+  // Fetching without asking for the remote ref would leave the bug intact, so the ORDER matters:
+  // the fetch has to happen, and it has to happen before anything is mutated.
+  assert.equal(h.gitCalls.length, 1);
+  assert.ok(h.ghCalls.every((a) => a[1] !== "edit") === false, "sanity: the lock was still taken");
+});
+
+test("runTick: an unfetchable base SKIPS the tick without taking the lock — dispatching on a base we could not verify is the failure being prevented", () => {
+  const h = harness({ ps: [], issues: [issue(2)], fetchThrows: true });
+  const result = runTick(h.deps);
+
+  assert.deepEqual(result, { ok: false, dispatched: false, reason: "fetch-failed" });
+  assert.equal(h.ghCalls.find((a) => a[1] === "edit"), undefined, "no label was flipped");
+  assert.equal(h.orcaCalls.find((a) => a[1] === "create"), undefined, "no worktree was created");
+  assert.match(h.logs.join("\n"), /could not fetch main/);
 });
 
 test("runTick: dependency satisfaction reads the ISSUE STATE, not a harness/<N> branch — an issue closed by an ORDINARY PR releases its dependent", () => {
@@ -234,18 +276,20 @@ test("runTick is a clean no-op on an empty queue", () => {
 
 test("normalizeConfig fills the optional fields and REJECTS a config missing a required one (a misconfigured project fails loudly, never selects silently)", () => {
   const cfg = normalizeConfig({
-    project: "p", ghRepo: "o/r", orcaRepoId: "id", globalMaxWorking: 4,
+    project: "p", ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 4,
   });
   assert.equal(cfg.baseBranch, "main");
   assert.equal(cfg.agent, "claude");
   assert.equal(cfg.titleIncludes, null);
   assert.ok(cfg.prompt.length > 0);
 
-  assert.throws(() => normalizeConfig({ ghRepo: "o/r", orcaRepoId: "id", globalMaxWorking: 4 }), /"project" is required/);
-  assert.throws(() => normalizeConfig({ project: "p", orcaRepoId: "id", globalMaxWorking: 4 }), /"ghRepo" is required/);
-  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", globalMaxWorking: 4 }), /"orcaRepoId" is required/);
-  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", orcaRepoId: "id" }), /globalMaxWorking/);
-  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", orcaRepoId: "id", globalMaxWorking: 0 }), /globalMaxWorking/);
+  assert.throws(() => normalizeConfig({ ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 4 }), /"project" is required/);
+  assert.throws(() => normalizeConfig({ project: "p", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 4 }), /"ghRepo" is required/);
+  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", clonePath: "/c", globalMaxWorking: 4 }), /"orcaRepoId" is required/);
+  // clonePath has NO default on purpose: a default would silently restore the stale-base bug.
+  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", orcaRepoId: "id", globalMaxWorking: 4 }), /"clonePath" is required/);
+  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c" }), /globalMaxWorking/);
+  assert.throws(() => normalizeConfig({ project: "p", ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 0 }), /globalMaxWorking/);
 });
 
 test("the documented CLI is REAL: main() exists, refuses a missing --config, and is wired to a module entry block", async () => {
@@ -315,7 +359,7 @@ test("main() never lets a seam failure escape as a raw Node stack trace into the
   const configPath = join(dir, "p.json");
   writeFileSync(
     configPath,
-    JSON.stringify({ project: "demo", ghRepo: "o/r", orcaRepoId: "id", globalMaxWorking: 4 }),
+    JSON.stringify({ project: "demo", ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 4 }),
   );
   const captured = [];
   const originalErr = process.stderr.write;

@@ -23,6 +23,13 @@
  *     dead this way, and `chain-validate.mjs` could not see it — it only catches cycles and dangling
  *     refs). Here a dependency is satisfied when the dependency ISSUE is CLOSED: the state that
  *     actually means "delivered", independent of how it was delivered.
+ *   • It does not dispatch on a LOCAL base ref. Passing `--base-branch main` looks right and is
+ *     silently wrong: Orca resolves it against the clone it builds worktrees from, and that clone
+ *     fetches from the remote but never advances its local branch. Every run then starts from
+ *     wherever the clone was created and conflicts with everything merged since — and because the
+ *     symptom only appears hours later, at merge time, as a conflict in files the run never touched,
+ *     it reads as a harness bug rather than a base bug. Fetching alone does not fix it either: the
+ *     local branch still does not move. The base must be asked for by its REMOTE name.
  *   • It does not run as root out of a shell carrying every client's deploy tokens. It is a user
  *     cron; credentials load per project, on demand (see `core/orca/README.md`).
  *
@@ -137,7 +144,7 @@ export function selectIssue(opts) {
  * select nothing (a silent no-op is indistinguishable from an empty queue, which is how the old
  * fleet sat fully PAUSED without anyone noticing).
  * @param {object} raw parsed project JSON
- * @returns {{project:string,ghRepo:string,orcaRepoId:string,baseBranch:string,agent:string,globalMaxWorking:number,titleIncludes:string|null,prompt:string}}
+ * @returns {{project:string,ghRepo:string,orcaRepoId:string,clonePath:string,baseBranch:string,agent:string,globalMaxWorking:number,titleIncludes:string|null,prompt:string}}
  */
 export function normalizeConfig(raw) {
   const cfg = raw && typeof raw === "object" ? raw : {};
@@ -156,6 +163,10 @@ export function normalizeConfig(raw) {
     project: required("project"),
     ghRepo: required("ghRepo"),
     orcaRepoId: required("orcaRepoId"),
+    // REQUIRED, and required for a reason — see the stale-base contract in the module header.
+    // Without a clone to fetch in, `baseBranch` can only be resolved as the clone's LOCAL ref, which
+    // never advances. Defaulting this field would restore exactly the silent bug it exists to kill.
+    clonePath: required("clonePath"),
     baseBranch: typeof cfg.baseBranch === "string" && cfg.baseBranch.trim() !== "" ? cfg.baseBranch.trim() : "main",
     agent: typeof cfg.agent === "string" && cfg.agent.trim() !== "" ? cfg.agent.trim() : "claude",
     globalMaxWorking: ceiling,
@@ -174,11 +185,12 @@ export function normalizeConfig(raw) {
  * @param {object} deps.config normalized project config
  * @param {(args: string[]) => any} deps.orca `orca` CLI seam (returns parsed JSON for `--json` calls)
  * @param {(args: string[]) => any} deps.gh `gh` CLI seam
+ * @param {(args: string[]) => any} deps.git `git` CLI seam (used only to freshen the base ref)
  * @param {(text: string) => void} [deps.log]
  * @returns {{ok:boolean, dispatched:boolean, reason?:string, issue?:number}}
  */
 export function runTick(deps) {
-  const { config, orca, gh, log = () => {} } = deps;
+  const { config, orca, gh, git, log = () => {} } = deps;
 
   // 1) GLOBAL concurrency ceiling, read fresh. Unreadable → skip (never assume "nothing running").
   //    THROWING is the common failure here, not garbage output: the real seam shells out, and a
@@ -237,6 +249,22 @@ export function runTick(deps) {
     return { ok: true, dispatched: false, reason: "deps-pending" };
   }
 
+  // 3.5) Freshen the base ref BEFORE taking the lock. The clone Orca builds worktrees from fetches
+  //      from the remote but never advances its LOCAL branch, so `--base-branch main` resolves to
+  //      wherever that clone happened to be when it was created — a base that silently ages by a
+  //      commit every time anything merges. Every run then starts behind and conflicts with work it
+  //      never touched, and the symptom only surfaces hours later, at merge time. Fetching is not
+  //      enough on its own: the local branch still does not move, so the dispatch below must ask for
+  //      the REMOTE ref by name. A failed fetch skips the tick — nothing has been mutated yet, and
+  //      dispatching on a base we could not verify is the bug this step exists to prevent.
+  try {
+    git(["-C", config.clonePath, "fetch", "origin", config.baseBranch, "--quiet"]);
+  } catch (err) {
+    log(`[${config.project}] skip: could not fetch ${config.baseBranch} in ${config.clonePath} — ${err?.message ?? err}`);
+    return { ok: false, dispatched: false, reason: "fetch-failed" };
+  }
+  const baseRef = `origin/${config.baseBranch}`;
+
   // 4) Take the lock BEFORE any worktree exists.
   try {
     gh([
@@ -257,7 +285,7 @@ export function runTick(deps) {
       "--repo", `id:${config.orcaRepoId}`,
       "--issue", String(picked.number),
       "--agent", config.agent,
-      "--base-branch", config.baseBranch,
+      "--base-branch", baseRef,
       "--prompt", config.prompt,
     ]);
   } catch (err) {
@@ -326,6 +354,7 @@ export function main(argv) {
       config,
       orca: cliSeam(process.env.ORCA_BIN || "orca"),
       gh: cliSeam(process.env.GH_BIN || "gh"),
+      git: cliSeam(process.env.GIT_BIN || "git"),
       log: (t) => process.stdout.write(`${t}\n`),
     });
   } catch (err) {
