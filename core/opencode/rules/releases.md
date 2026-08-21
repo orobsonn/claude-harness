@@ -11,7 +11,8 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 ## Conventions
 
 ### Release-please (fonte primaria quando configurado)
-- Projeto com `release-please-config.json` na raiz: release-please e a fonte UNICA do CHANGELOG e do PR de release — deriva tudo dos Conventional Commits, sem intervencao manual
+- Projeto com release-please configurado de QUALQUER forma — `release-please-config.json` na raiz, `.release-please-manifest.json`, ou um workflow em `.github/workflows/` que roda `release-please-action`: release-please e a fonte UNICA do CHANGELOG e do PR de release — deriva tudo dos Conventional Commits, sem intervencao manual
+- Checar as TRES formas: da pra configurar release-please so por input de workflow, sem arquivo de config na raiz. Uma deteccao presa ao arquivo de raiz le esse projeto como "manual", apenda no CHANGELOG o que o release-please vai escrever de novo, e isso e conflito garantido entre duas runs concorrentes
 - O harness NAO edita `CHANGELOG.md` nem abre PR `chore: release` manual nesses projetos — o harvester delega essa responsabilidade (ver `core/agents/harvester.md`)
 - O restante desta rule (secoes de CHANGELOG manual, versionamento, fluxo de PR de release, skill `oc-releasing-versions`) e o **fallback** para projetos SEM release-please configurado
 - Semver e Conventional Commits continuam obrigatorios em AMBOS os casos — release-please so automatiza a derivacao, nao muda a convencao de commit

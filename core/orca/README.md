@@ -8,6 +8,7 @@ necessário:
 |---|---|
 | `select-and-dispatch.mjs` | o selector: escolhe a issue, trava, despacha pro Orca |
 | `project.example.json` | o formato de config — **um JSON por projeto** |
+| `review-prompt.md` | o prompt da automação de review+merge — **template versionado**, ver abaixo |
 | `select-and-dispatch.test.mjs` | oráculo congelado (seams injetados, zero CLI real) |
 
 ## O desenho: duas camadas, não dois motores
@@ -53,7 +54,8 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
 | `project` | sim | slug, só para log |
 | `ghRepo` | sim | `owner/repo` — passado como `--repo` pro `gh` |
 | `orcaRepoId` | sim | id do repo no Orca (`orca repo ls --json`) |
-| `baseBranch` | não (`main`) | base do worktree |
+| `clonePath` | **sim** | caminho do clone que o Orca usa de base — ver "A base tem que ser remota" |
+| `baseBranch` | não (`main`) | **nome** do branch base; o selector despacha em `origin/<baseBranch>` |
 | `agent` | não (`claude`) | agente do Orca |
 | `globalMaxWorking` | sim | **teto GLOBAL** — ver abaixo |
 | `titleIncludes` | não (`null`) | filtro de título, case-insensitive — o **modo canário** |
@@ -98,9 +100,39 @@ O flip `harness:ready` → `harness:in-progress` acontece **antes de existir qua
 `orca worktree create` falhar, o selector devolve a issue à fila. Se *essa* devolução também falhar,
 ele grita `STUCK: #N` no log — é o único estado que exige reparo humano, e ele nunca é silencioso.
 
+## A base tem que ser remota (`clonePath` existe por isso)
+
+`--base-branch main` **parece** certo e é silenciosamente errado. O Orca resolve esse nome contra o
+**clone** de onde ele cria worktrees — e esse clone busca do remoto mas **nunca avança o branch
+local**. Medido em produção:
+
+```
+main local do clone: 74da7e1   ← parado onde ele foi clonado
+origin/main:         5e60d14   ← atualizado, fetch de minutos atrás
+```
+
+Toda run nasceu de `74da7e1` e conflitou com tudo que merjou desde então. O sintoma aparece **horas
+depois**, no merge, como conflito em arquivo que a run nem tocou — e lê como bug do harness, não da
+base. Pior: uma base velha o bastante pode ser *anterior* a uma decisão de projeto (foi o caso com a
+adoção do release-please), e aí o agente toma a decisão certa **para a base errada**.
+
+Por isso o selector faz, antes de pegar a trava:
+
+```bash
+git -C "$clonePath" fetch origin "$baseBranch" --quiet   # falhou → pula o tick
+orca worktree create ... --base-branch "origin/$baseBranch"
+```
+
+**O `fetch` sozinho não resolve** — o branch local continua parado. A base precisa ser pedida pelo
+nome **remoto**. E `clonePath` é obrigatório de propósito: com default, o bug volta calado.
+
 ## Revisão de PR + merge condicional
 
-**Não é código deste repo.** É uma **automação agendada do Orca**. Ela só merja quando:
+**O prompt é versionado aqui** (`review-prompt.md`) — substitua `<OWNER/REPO>` e `<BASE>` e instale
+como prompt da automação. Ele nasceu artesanal em cada VPS, e o passo que faltava em todas era o
+STEP 3.5 (abaixo): ninguém descobre que ele é necessário antes de perder uma noite de PRs.
+
+**O motor não é código deste repo.** É uma **automação agendada do Orca**. Ela só merja quando:
 
 - o veredito próprio da revisão é *merjar*;
 - **nenhum** achado ARMADO de severidade alta;
@@ -114,6 +146,36 @@ ele grita `STUCK: #N` no log — é o único estado que exige reparo humano, e e
 > resolvem para "ambíguo" por construção (um leitor escopado a um repositório não deve inspecionar um
 > e merjar outro). A automação precisa rodar **dentro do checkout do repo alvo** e passar só o número
 > do PR. Isso é feature, não obstáculo: mantém o gate de CI inescapável.
+
+### STEP 3.5 — quem concilia os arquivos de anotação é o revisor
+
+Duas runs paralelas partem da mesma base e **ambas acrescentam linha** nos mesmos arquivos de
+anotação do harness: `.claude/memory/MEMORY.md`, `.claude/kaizen.md` e o `CLAUDE.md` da pasta tocada.
+Isso conflita **sempre** — é consequência do desenho, não azar de timing. E o efeito em cascata é o
+que dói:
+
+```
+conflito em kaizen.md  →  GitHub não computa o merge commit  →  checks de pull_request nunca rodam
+                       →  revisão recusa (sem CI verde)      →  entrega para por bookkeeping
+```
+
+Recusar é o comportamento certo do gate. O erro é deixar o conflito de pé: os dois lados só
+**acrescentam item em lista**, então a resolução correta é sempre **união** — e quem integra é quem
+concilia. Daí o STEP 3.5 do `review-prompt.md`: se o PR está em conflito, o revisor faz
+`git merge origin/<BASE>` no checkout, resolve por união **somente** dentro da allowlist
+(`MEMORY.md`, `kaizen.md`, qualquer `CLAUDE.md`), lê o resultado, empurra, e só então merja.
+Conflito **fora** dessa lista aborta o merge e vai para `harness:needs-human` — código de produto
+nunca é conciliado por um agente.
+
+Duas armadilhas que o passo precisa carregar por escrito:
+
+- **`merge=union` no `.gitattributes` não resolve isso sozinho.** O GitHub não honra `.gitattributes`
+  do usuário no merge server-side — nem driver custom, nem o `union`, que é built-in (o Kubernetes
+  removeu o deles justamente por isso). Ele funciona no `git` **local**, que é exatamente onde o
+  revisor roda — por isso a conciliação é do revisor, e não uma configuração do repositório.
+- **O `--match-head-commit` fica velho.** O SHA registrado no STEP 1 não vale mais depois do push do
+  próprio revisor, e o guard recusaria justamente o merge que ele acabou de destravar. Re-registrar
+  o head SHA depois do push faz parte do passo.
 
 ## Credencial escopada por projeto
 

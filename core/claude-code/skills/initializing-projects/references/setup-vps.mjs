@@ -92,6 +92,7 @@ export function buildProjectConfig(a) {
     project: a.project,
     ghRepo: `${a.owner}/${a.repo}`,
     orcaRepoId: a.orcaRepoId,
+    clonePath: a.clonePath,
     baseBranch: a.baseBranch,
     agent: a.agent,
     globalMaxWorking: a.globalMaxWorking,
@@ -293,6 +294,12 @@ export async function runSetupVps(deps) {
   out(orcaGuide());
 
   const orcaRepoId = required(await ask("id do repo no Orca (orca repo ls --json): "), "orca-repo-id");
+  // Asked, never guessed: the selector fetches HERE before dispatching, and a wrong path means every
+  // run is born from a base that silently ages (see core/orca/README.md, "A base tem que ser remota").
+  const clonePath = required(
+    await ask("Caminho do clone que o Orca usa de base (orca repo ls --json → path): "),
+    "clone-path",
+  );
   const baseBranch = String((await ask("Base branch [main]: ")) ?? "").trim() || "main";
   const agent = String((await ask("Agente do Orca [claude]: ")) ?? "").trim() || "claude";
   const ceilingAnswer = String((await ask("Teto GLOBAL de worktrees simultâneos [4]: ")) ?? "").trim() || "4";
@@ -305,7 +312,7 @@ export async function runSetupVps(deps) {
   const intervalMinutes = Number(intervalAnswer);
 
   const config = buildProjectConfig({
-    project, owner, repo, orcaRepoId, baseBranch, agent, globalMaxWorking,
+    project, owner, repo, orcaRepoId, clonePath, baseBranch, agent, globalMaxWorking,
     titleIncludes,
     prompt:
       "Rode em MODO AUTÔNOMO (headless). A issue é a spec. Siga a entry-policy do .claude/ deste " +

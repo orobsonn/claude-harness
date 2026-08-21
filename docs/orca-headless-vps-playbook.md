@@ -216,6 +216,7 @@ sudo -u orca tee /home/orca/.config/claude-harness/projects/<slug>.json >/dev/nu
   "project": "<slug>",
   "ghRepo": "<owner>/<repo>",
   "orcaRepoId": "<id do passo 1>",
+  "clonePath": "<caminho do clone que o Orca usa de base>",
   "baseBranch": "main",
   "agent": "claude",
   "globalMaxWorking": 4,
@@ -234,15 +235,34 @@ sudo -u orca crontab -e
 VPS via `orca worktree ps --json`), então todos os JSONs carregam o mesmo valor. Paralelizar por
 projeto é mais um JSON e mais uma linha.
 
+**`clonePath` não é opcional, e o motivo não é óbvio.** O clone de onde o Orca cria worktrees busca
+do remoto mas **nunca avança o branch local**. Se o selector pedisse `--base-branch main`, o Orca
+resolveria o ref **local** — parado no commit de quando aquele clone nasceu — e toda run começaria
+desatualizada, conflitando com tudo que merjou desde então. O sintoma só aparece **horas depois**, no
+merge, como conflito em arquivo que a run nem tocou. Por isso o selector faz `git -C <clonePath>
+fetch origin <baseBranch>` antes de pegar a trava e despacha em `origin/<baseBranch>`. **O `fetch`
+sozinho não basta** — o branch local continua parado; a base tem que ser pedida pelo nome remoto.
+
 Comece com `"titleIncludes": "[canary]"` — assim só issues explicitamente marcadas entram na
 pipeline. Sem esse filtro, a issue escolhida é simplesmente a `harness:ready` aberta mais antiga, e
 num backlog real isso é uma tarefa de anos atrás, não a que você quer observar primeiro.
 
 ## 9. Revisão de PR + merge condicional
 
-**Não é código — é uma automação agendada do Orca.** Ela só merja quando: o veredito próprio é
-*merjar*, **nenhum** achado ARMADO de severidade alta, CI concluído em `SUCCESS`, e sem conflito —
-com `--match-head-commit` obrigatório.
+**Não é código — é uma automação agendada do Orca.** O prompt dela é versionado em
+[`core/orca/review-prompt.md`](../core/orca/review-prompt.md): substitua `<OWNER/REPO>` e `<BASE>` e
+instale. Ela só merja quando: o veredito próprio é *merjar*, **nenhum** achado ARMADO de severidade
+alta, CI concluído em `SUCCESS`, e sem conflito — com `--match-head-commit` obrigatório.
+
+**O STEP 3.5 do prompt é o passo que ninguém inventa sozinho.** Runs paralelas partem da mesma base
+e todas **acrescentam linha** nos mesmos arquivos de anotação do harness (`.claude/memory/MEMORY.md`,
+`.claude/kaizen.md`, o `CLAUDE.md` da pasta tocada). Isso conflita **sempre** — e um PR em conflito
+faz o GitHub não computar o merge commit, então os checks de `pull_request` **nunca rodam**: a
+entrega para por bookkeeping, não por qualidade. Quem integra é quem concilia: o revisor faz o merge
+da base no checkout, resolve por **união** somente dentro da allowlist, e aborta indo para
+`harness:needs-human` se qualquer conflito cair fora dela. Não tente resolver isso com `merge=union`
+no `.gitattributes` — o GitHub **não honra** `.gitattributes` do usuário no merge server-side; aquilo
+só vale no `git` local, que é justamente onde o revisor roda.
 
 > **O `entry-gate.mjs` do harness continua valendo e é valioso:** ele lê o rollup de checks do PR
 > antes de permitir `gh pr merge` e **recusa alvo ambíguo**. Consequência prática: o comando de merge
@@ -279,6 +299,8 @@ escopada acima.
 | `dlopen(): error loading libfuse.so.2` | falta libfuse | Ubuntu 22.04: `libfuse2`; Ubuntu 24.04/Debian: `libfuse2t64` |
 | `Missing X server or $DISPLAY` | `xvfb` não instalado (Orca só sobe Xvfb sozinho se o pacote já existir) | `apt-get install -y xvfb` |
 | O selector nunca despacha e o log só diz `skip: ... worktrees working` | worktrees antigos presos em `working` consomem o teto global | `orca worktree ps --json` e encerrar os órfãos; o teto é global, não por projeto |
+| Todo PR da noite conflita, e **só** em `MEMORY.md` / `kaizen.md` / `CLAUDE.md` — nunca em código | é do desenho: runs paralelas acrescentam linha nos mesmos arquivos de anotação. O PR em conflito impede o GitHub de computar o merge, então o CI nunca roda e a revisão recusa por falta de CI verde | é o STEP 3.5 do `core/orca/review-prompt.md` — o revisor concilia por união dentro da allowlist antes de merjar. Se o seu prompt de review foi escrito à mão antes disso, ele não tem esse passo |
+| Conflito em arquivos que a run **não tocou**, aparecendo só na hora do merge | worktree nasceu de base desatualizada: `--base-branch main` resolve o ref **local** do clone, que nunca avança | `clonePath` no JSON do projeto + `fetch` antes da trava + despachar em `origin/<base>` (§8). Só `fetch` não resolve |
 | Uma issue ficou `harness:in-progress` sem worktree | o `worktree create` falhou **e** a devolução do label também | procurar `STUCK: #N` no log do selector e devolver o label à mão — é o único estado que exige reparo humano |
 
 ## Atualização (quando sair versão nova)
