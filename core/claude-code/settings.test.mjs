@@ -283,6 +283,49 @@ test("permissions baseline preserved and unchanged", () => {
 });
 
 /**
+ * @description [orca-cutover] The production-deploy denies were pinned only in
+ * `core/vps/cron-a-dispatch-seed.test.mjs`, which died with the retired VPS engine. Rehomed here
+ * before that delete so removing dead engine code could not silently unpin a live invariant.
+ *
+ * The attack this closes is indirection, not a typed command: `Bash(npm run:*)` is an ALLOW, so a
+ * project whose `package.json` carries `"deploy": "wrangler deploy"` had an APPROVED path to
+ * production that never passed through a PR — the agent never types a denied command. Deny beats
+ * allow in Claude Code, so both the direct wrangler verbs and the `npm run deploy` spelling are
+ * denied. `d1 execute --local` must stay reachable: only `--remote` mutates production.
+ *
+ * This is string-match defense-in-depth, NOT a sandbox — an arbitrarily-named script
+ * (`npm run ship`) still reaches wrangler, and no pattern list can enumerate a project's script
+ * names. The real closure is credential scoping (`core/orca/README.md`).
+ */
+test("[orca-cutover] permissions.deny closes the production-deploy path, including the npm-run indirection", () => {
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const deny = settings.permissions.deny;
+
+  for (const rule of [
+    "Bash(wrangler deploy*)",
+    "Bash(wrangler versions*)",
+    "Bash(wrangler secret*)",
+    "Bash(wrangler r2*)",
+    "Bash(wrangler d1 execute --remote*)",
+    "Bash(wrangler d1 execute * --remote*)",
+    "Bash(npm run deploy*)",
+    "Bash(pnpm run deploy*)",
+    "Bash(yarn deploy*)",
+    "Bash(bun run deploy*)",
+  ]) {
+    ok(deny.includes(rule), `permissions.deny must carry ${rule}`);
+  }
+
+  // The 6 destructive-git denies are a separate, older class — they must survive untouched.
+  const gitDenies = deny.filter((p) => p.startsWith("Bash(git "));
+  ok(gitDenies.length === 6, `expected exactly 6 destructive-git denies, got ${gitDenies.length}`);
+
+  // No deny may swallow local d1 work or routine npm scripts.
+  ok(!deny.includes("Bash(wrangler d1 execute*)"), "a blanket d1-execute deny would block local dev");
+  ok(!deny.some((p) => p === "Bash(npm run:*)" || p === "Bash(npm run*)"), "routine npm scripts must stay allowed");
+});
+
+/**
  * @description Given core/settings.json, When parsed as JSON, Then it is valid JSON AND
  * settings.env is an object containing keys HARNESS_CODEX_ADVERSARY and
  * HARNESS_REVIEW_ENABLED, each with a string value (the env block was previously empty {}).
