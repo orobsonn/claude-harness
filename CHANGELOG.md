@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.57.0](https://github.com/orobsonn/claude-harness/compare/v0.56.0...v0.57.0) (2026-08-21)
+
+
+### Features
+
+* **orca:** despacha da base remota e versiona o prompt de review ([#813](https://github.com/orobsonn/claude-harness/issues/813)) ([3908b42](https://github.com/orobsonn/claude-harness/commit/3908b422b4604cce4dfab9f956e8cafaef6bfbde))
+
 ## [0.56.0](https://github.com/orobsonn/claude-harness/compare/v0.55.71...v0.56.0) (2026-08-20)
 
 
