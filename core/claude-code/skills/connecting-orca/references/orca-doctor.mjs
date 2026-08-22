@@ -97,8 +97,14 @@ const VERB_ALTERNATION = SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/
  */
 const SOCKET_READ_WRITE = "\\b(?:read|write)\\s+(?:tcp|udp)\\b[^\\n]*(?:Operation not permitted|EPERM)|\\b(?:read|write)\\s+EPERM\\b";
 
-/** A library method call (`socket.send: …`) — never a systemd unit path (`foo.socket:` has no method). */
-const SOCKET_METHOD = "\\bsocket\\.\\w+\\s*:[^\\n]*(?:Operation not permitted|EPERM)";
+/**
+ * A library call on a socket, with the method list CLOSED to operations a network sandbox can actually
+ * deny. Accepting any method (`socket\.\w+`) answered `socket.timeout:`, `socket.gaierror:` and
+ * `socket.close:` — a timeout, a DNS failure and a close — with "disable the sandbox". A systemd unit
+ * path (`foo.socket:`) has no method after the dot and never matched either way.
+ */
+const SOCKET_METHOD =
+  "\\bsocket\\.(?:connect|connect_ex|send|sendall|sendto|sendmsg|bind|create_connection|error)\\s*:[^\\n]*(?:Operation not permitted|EPERM)";
 
 const SANDBOX_MATCH = new RegExp(
   `(?:\\b(?:${VERB_ALTERNATION})\\b\\s*(?::|\\(|\\s+to\\b)[^\\n]*(?:Operation not permitted|EPERM)` +
@@ -114,12 +120,17 @@ export const BARRIERS = [
     match: SANDBOX_MATCH,
     // D-Bus speaks the same words and has nothing to do with the network sandbox. Anchored on the
     // colon, or a host merely NAMED `bus.example.com` loses its barrier entirely.
-    veto: /\bto (?:the )?bus\s*:|(?:^|[^A-Za-z])s?d[-_]?bus|system_bus_socket/i,
+    // A D-Bus address may follow the word `bus` separated by a space (`to bus tcp:host=…`), not only
+    // by a colon.
+    veto: /\bto (?:the )?bus\s*(?::|(?=\s+(?:tcp|unix|autolaunch):))|(?:^|[^A-Za-z])s?d[-_]?bus|system_bus_socket/i,
     // …unless the line carries a network co-signal. The veto pattern has no anchor, so a HOST named
     // `sdbus.internal` or `dbus-vps.tail.ts.net` was losing its barrier entirely — the veto reopening,
     // one letter to the side, the very class the anchor closed. Real D-Bus messages carry no port,
     // no IP and no `tcp`.
-    vetoUnless: /\bport \d+|\b\d{1,3}(?:\.\d{1,3}){3}\b|\btcp\b/i,
+    // The co-signal must be a co-signal of a REMOTE CONNECTION, not of the word `tcp`: D-Bus over TCP
+    // (`tcp:host=100.98.45.37,port=5555`) carries both a `tcp` and an IP and is still D-Bus. A real
+    // connection error writes `port 22` with a space; a D-Bus address writes `port=5555`.
+    vetoUnless: /\bport \d+|(?<!host=)\b\d{1,3}(?:\.\d{1,3}){3}\b/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",

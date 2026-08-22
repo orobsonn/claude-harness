@@ -111,6 +111,7 @@ const FIXTURES = {
     // co-signal on the line.
     "ssh: connect to host sdbus.internal port 22: Operation not permitted",
     "ssh: connect to host dbus-vps.tail.ts.net port 22: Operation not permitted",
+    "socket.error: [Errno 1] Operation not permitted",
   ],
   "known-hosts": [
     "Host key verification failed.",
@@ -189,6 +190,18 @@ test("an ordinary filesystem denial is NOT the network sandbox — the verbs are
     "dbus[1]: Operation not permitted",
     // A systemd unit path ends in `.socket` with no method after it.
     "chmod: changing permissions of '/etc/systemd/system/x.socket': Operation not permitted",
+    // A socket EXCEPTION is not a socket denial: a timeout, a DNS failure and a close are not the
+    // sandbox, and answering them with "disable the sandbox" is advice that cannot help.
+    "socket.timeout: The read operation timed out; cleanup failed: Operation not permitted",
+    "socket.gaierror: [Errno -2] Name or service not known; chmod: Operation not permitted",
+    "java.net.SocketException: socket.close: Operation not permitted",
+    // D-Bus over TCP carries a `tcp` AND an IP and is still D-Bus — the co-signal has to be a co-signal
+    // of a remote CONNECTION (`port 22`, with a space), not of the word `tcp`.
+    "dbus[1]: Unable to connect to tcp:host=100.98.45.37,port=5555: Operation not permitted",
+    "Failed to connect to bus tcp:host=localhost,port=55556: Operation not permitted",
+    // Real file-write denials from the tools that emit them.
+    "dd: writing to '/dev/sda': Operation not permitted",
+    'rsync: write failed on "/mnt/x": Operation not permitted (1)',
   ];
   for (const message of filesystem) {
     const barrier = classifyFailure(message);
