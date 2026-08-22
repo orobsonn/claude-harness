@@ -175,6 +175,11 @@ and branch protection status (applied, not applied due to missing token, or fail
 `.claude/` (so cloud routines see it), and — for an existing codebase with cold memory — running
 `surveying-codebase` to seed `.claude/memory/`.
 
+**Then say what is still missing, because vendoring alone delivers nothing.** The pipeline is now in the
+repo, but nothing dispatches it: that needs an Orca runtime and a queue. Offer `connecting-orca`, which
+takes it from here to a canary issue actually delivered. Do not let the operator leave thinking a
+vendored `.claude/` is autonomous delivery — it is the half that executes, not the half that dispatches.
+
 ---
 
 ## Idempotency contract

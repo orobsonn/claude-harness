@@ -108,6 +108,17 @@ no longer relying on the orchestrator to remember from prose. Advisory and fail-
 switch off, or `codex` unreachable → the hook skips silently and the checkpoint runs Claude-only.
 See the vendored `.claude/modules/codex-adversary/`.
 
+## Never conclude "no access" to a remote machine
+
+Three ordinary failures — `Permission denied (publickey)`, `Host key verification failed`,
+`Operation not permitted` — all read as missing permission and none of them is. Stacked, they cost a
+whole session: an agent concluded it could not reach the VPS and handed the work back, while another
+session on the same machine operated it fine. **Before stating that you cannot reach the VPS / the Orca
+runtime — and before returning the task to the operator — run
+`node .claude/skills/connecting-orca/references/orca-doctor.mjs` and report the barrier and its fix.**
+The `vps-access-nudge` hook injects that reminder automatically when one of those messages appears; the
+rule holds even when the hook does not fire (a different message, a tool other than Bash).
+
 ## Language convention
 
 - All harness artifacts — skills (`SKILL.md`), agents (`.md`), rules, JSON keys/values, inline

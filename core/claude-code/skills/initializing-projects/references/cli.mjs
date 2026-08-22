@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 /**
- * @description Thin CLI dispatcher for `npx claude-harness`. Two commands:
+ * @description Thin CLI dispatcher for `npx claude-harness`. Three commands:
  *   - `setup-local` (alias: `init`) — installs a new harness locally or updates an existing
  *     harness through the isolated lifecycle operation.
- *   - `setup-vps` — interactive wizard (setup-vps.mjs) run ON the VPS: configures the autonomous
- *     engine + Telegram notifications (token → ~/.claude/.dev.vars, then install-crons).
+ *   - `setup-orca` (alias: `setup-vps`) — interactive wizard (setup-vps.mjs) run ON the machine that
+ *     owns the Orca runtime: writes the per-project config JSON + the selector's fenced crontab line.
+ *     It installs the CURRENT design (Orca dispatches, the repo's vendored `.claude/` executes) — the
+ *     `setup-vps` spelling is kept because it is what every existing doc and muscle-memory types, and
+ *     it is NOT the retired VPS cron engine (see core/vps/DEPRECATED.md).
+ *   - `orca-doctor` — read-only diagnosis of whether THIS session can operate the VPS, naming the
+ *     barrier + fix for each blocked path. Available without vendoring precisely because the moment
+ *     you need it is the moment nothing else is reachable.
  * Node builtins only.
  */
 
@@ -17,6 +23,7 @@ import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 
 import { runSetupVps } from "./setup-vps.mjs";
+import { runOrcaDoctor } from "../../connecting-orca/references/orca-doctor.mjs";
 
 export const SOURCE_URL = "https://github.com/orobsonn/claude-harness.git";
 
@@ -710,6 +717,21 @@ function setupVpsSeams() {
   };
 }
 
+/**
+ * @description Maps a typed command onto its canonical name. Both aliases are permanent: `init` is
+ * what years of docs say, and `setup-vps` is what every playbook and every operator's muscle memory
+ * types — while the thing it installs is the Orca design, not the retired VPS cron engine. Renaming
+ * without keeping the alias would strand exactly the operators the command exists for. PURE.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function resolveCommand(raw) {
+  const command = String(raw ?? "");
+  if (command === "init") return "setup-local";
+  if (command === "setup-vps") return "setup-orca";
+  return command;
+}
+
 async function main() {
   let parsed;
   try {
@@ -724,16 +746,22 @@ async function main() {
     runtimeTarget,
     releaseRef,
   } = parsed;
-  // `init` is a backward-compatible alias for `setup-local` (vendors the harness locally).
-  const command = rawCommand === "init" ? "setup-local" : rawCommand;
+  const command = resolveCommand(rawCommand);
 
-  if (command === "setup-vps") {
+  if (command === "setup-orca") {
     try {
       await runSetupVps(setupVpsSeams());
     } catch (err) {
       process.stderr.write(`[claude-harness] ${err.message}\n`);
       process.exit(1);
     }
+    return;
+  }
+
+  if (command === "orca-doctor") {
+    // Always exits 0: a blocked path is a diagnosis to read, not a command that failed. An exit code
+    // here would be read as "the tool broke", which is the same wrong conclusion it exists to prevent.
+    await runOrcaDoctor(process.argv.slice(3), (t) => process.stdout.write(`${t}\n`));
     return;
   }
 
@@ -772,7 +800,8 @@ async function main() {
         "  npx claude-harness setup-local [--target opencode|claude|both] [--with-codex]\n" +
       "  npx claude-harness lifecycle-snapshot updating-harness\n" +
       "  npx claude-harness lifecycle-update --target opencode|claude|both --ref <release-tag>\n" +
-      "  npx claude-harness setup-vps\n"
+      "  npx claude-harness setup-orca            (alias: setup-vps)\n" +
+      "  npx claude-harness orca-doctor [--environment <nome>] [--ssh-host <alias>] [--json]\n"
     );
     process.exit(1);
   }

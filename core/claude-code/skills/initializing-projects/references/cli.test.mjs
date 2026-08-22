@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLifecycleClone, hasInstalledHarness, parseCliArgs, runInit, runIsolatedLifecycleUpdate, syncCallerCheckout, syncCallerRuntimeOverlay, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
+import { createLifecycleClone, hasInstalledHarness, parseCliArgs, resolveCommand, runInit, runIsolatedLifecycleUpdate, syncCallerCheckout, syncCallerRuntimeOverlay, SOURCE_URL, isDirectCli, decideCodex, withCodexToggle } from "./cli.mjs";
 
 const cliSource = readFileSync(fileURLToPath(new URL("./cli.mjs", import.meta.url)), "utf8");
 
@@ -677,4 +677,21 @@ test("runIsolatedLifecycleUpdate rejects an ownership manifest path that escapes
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("resolveCommand keeps every historical spelling working — an alias is a promise, not a courtesy", () => {
+  assert.equal(resolveCommand("init"), "setup-local", "years of docs say `init`");
+  assert.equal(resolveCommand("setup-vps"), "setup-orca", "every playbook and every operator types `setup-vps`");
+  assert.equal(resolveCommand("setup-orca"), "setup-orca");
+  assert.equal(resolveCommand("setup-local"), "setup-local");
+  assert.equal(resolveCommand("bogus"), "bogus", "an unknown command must stay unknown, not resolve to something runnable");
+});
+
+test("the usage text teaches the two commands an operator cannot guess: setup-orca and orca-doctor", () => {
+  const cliPath = fileURLToPath(new URL("./cli.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [cliPath, "definitely-not-a-command"], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /npx claude-harness setup-orca/);
+  assert.match(result.stderr, /alias: setup-vps/, "the old spelling must stay discoverable, not silently vanish");
+  assert.match(result.stderr, /npx claude-harness orca-doctor/);
 });
