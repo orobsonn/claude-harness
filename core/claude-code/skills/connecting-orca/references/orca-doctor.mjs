@@ -267,8 +267,13 @@ export function isSafeEnvironmentName(name) {
 export function classifyFailure(text) {
   const t = String(text ?? "");
   if (!t.trim()) return null;
-  const vetoed = (b) => Boolean(b.veto?.test(t)) && !b.vetoUnless?.test(t);
-  return BARRIERS.find((b) => b.match.test(t) && !vetoed(b)) ?? null;
+  // Line-scoped, deliberately: every `match` already ends at a newline, so evaluating the veto over
+  // the whole blob let an unrelated line lift it — a stray IP anywhere in a multi-line dump made a
+  // pure D-Bus error read as a sandbox denial. A barrier counts when SOME line matches it and is not
+  // vetoed ON THAT LINE, which also keeps a real block classifying when D-Bus noise precedes it.
+  const lines = t.split("\n");
+  const vetoedOn = (b, line) => Boolean(b.veto?.test(line)) && !b.vetoUnless?.test(line);
+  return BARRIERS.find((b) => lines.some((line) => b.match.test(line) && !vetoedOn(b, line))) ?? null;
 }
 
 /**

@@ -587,3 +587,30 @@ test("parseDoctorArgs", () => {
   });
   assert.deepEqual(parseDoctorArgs([]), { environment: "", sshHost: "", json: false });
 });
+
+test("the veto is judged on the line that matched, not on the whole blob", () => {
+  // The hook classifies arbitrary multi-line Bash output. With the veto evaluated over the blob, a
+  // stray IP on an unrelated line lifted the veto of a line that was not its own — pure D-Bus noise
+  // read as a sandbox denial.
+  assert.notEqual(
+    classifyFailure("dbus[1]: Failed to bind: Operation not permitted\nRunning on 100.98.45.37")?.id,
+    "sandbox-network",
+  );
+  assert.notEqual(
+    classifyFailure("Failed to connect to bus: Operation not permitted\nlistening on port 8080")?.id,
+    "sandbox-network",
+  );
+
+  // …and the symmetric failure the line-scoped rule must NOT introduce: a real denial that arrives
+  // after D-Bus noise still classifies.
+  assert.equal(
+    classifyFailure(
+      "dbus[1]: Failed to connect to bus: Operation not permitted\nssh: connect to host 100.98.45.37 port 22: Operation not permitted",
+    )?.id,
+    "sandbox-network",
+  );
+  assert.equal(
+    classifyFailure("systemd[1]: Failed to connect to bus: Operation not permitted\nUnknown environment: \"vps\"")?.id,
+    "unknown-environment",
+  );
+});
