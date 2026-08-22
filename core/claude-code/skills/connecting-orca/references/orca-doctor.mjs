@@ -11,12 +11,21 @@
  * and `core/orca/docs-contract.test.mjs` pins that the playbook's diagnostic table carries the same
  * rows, so code and doc cannot drift apart.
  *
- * Probe rule — ASK A REAL QUESTION, never a version flag. Measured on the live VPS build:
- * `orca --version` exits 3, and the PATH shim registered by Orca Settings can answer `--help` with
- * `bad option: --no-sandbox` (a node arg-parse error from its own ELECTRON_RUN_AS_NODE wrapper) while
- * `/opt/orca/orca-linux.AppImage` answers every command correctly. A liveness probe built on a flag
- * therefore reports "no CLI" on a machine whose CLI works. The probe here is a real command with
- * `--json`, validated against the response envelope.
+ * A CONFIDENT WRONG ANSWER HERE IS WORSE THAN NO ANSWER. The first version of this module reported
+ * "operável pelo CLI do Orca (tudo que é do Orca vai por --environment)" on a machine with ZERO paired
+ * environments and no SSH probe — the incident's defect inverted, produced by the tool built to prevent
+ * it. Hence `diagnose` separates three independent facts and never merges them:
+ *   1. does the CLI answer at all?  2. is there a runtime THIS machine already drives (it may BE the
+ *   host)?  3. is a REMOTE environment reachable (the only fact that proves a client can reach a VPS)?
+ * A verdict may only claim what a probe actually returned, and each blocked path carries its own
+ * barriers — an environment failure is never reported as an SSH failure.
+ *
+ * Probe rule — ASK A REAL QUESTION, never a version flag. Measured on the live VPS build: the `orca`
+ * shim registered on PATH can answer any command with `bad option: --no-sandbox` (a node arg-parse
+ * error from its own ELECTRON_RUN_AS_NODE wrapper) while `/opt/orca/orca-linux.AppImage` answers
+ * correctly, and `--version` exits non-zero whenever another instance already holds the profile lock —
+ * i.e. always, on a machine running `orca-serve`. A liveness check built on a flag reports "no CLI" on
+ * a machine whose CLI works. The probe here is a real command with `--json`, validated as an envelope.
  *
  * Read-only and fail-soft: it never writes, never repairs, never throws on a failed probe. Node
  * builtins only, every side-effecting seam injected, so the oracle runs hermetically.
@@ -30,9 +39,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * The failure classes that READ as "no access" but are not. Ordered: the first match wins, outermost
- * barrier first — a sandbox denial happens before the packet leaves the machine, so it cannot be a
- * key or host-key problem underneath.
+ * The failure classes that READ as "no access" but are not. Ordered: the first match wins.
+ *
+ * Two ordering rules, both learned by getting them wrong:
+ *   - The sandbox pattern is ANCHORED to a connection attempt. An unanchored `Operation not permitted`
+ *     hijacks any multi-line stderr that merely contains those words (an unreadable identity file, for
+ *     one) and then prescribes DISABLING THE SANDBOX — a security downgrade recommended for a cause
+ *     that has nothing to do with the sandbox.
+ *   - Unreachable-network siblings (`Network is unreachable`, `No route to host`) live with
+ *     `Could not resolve hostname`, not with the sandbox: same root cause (the tailnet is not up /
+ *     the host is not there), same fix. Splitting them sent two halves of one failure to contradictory
+ *     repairs.
  *
  * Every entry carries `docToken`: the substring the playbook's diagnostic row MUST contain for that
  * barrier. It is what the docs oracle asserts, so a fix can never live in code without living in the
@@ -41,11 +58,11 @@ import { fileURLToPath } from "node:url";
 export const BARRIERS = [
   {
     id: "sandbox-network",
-    match: /Operation not permitted|EPERM|Network is unreachable/i,
+    match: /(?:connect(?:ing|\(\))?(?: to)?|Failed to connect|bind|sendto|socket)[^\n]*(?:Operation not permitted|EPERM)/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",
-    fix: "repetir o comando com o sandbox desligado",
+    fix: "reexecutar o MESMO comando com o sandbox do Bash desligado",
     docToken: "sandbox do Claude Code",
   },
   {
@@ -68,10 +85,10 @@ export const BARRIERS = [
   },
   {
     id: "ssh-host-unresolved",
-    match: /Could not resolve hostname|Name or service not known|No route to host/i,
+    match: /Could not resolve hostname|Name or service not known|No route to host|Network is unreachable/i,
     symptom: "Could not resolve hostname",
     readsAs: "a VPS sumiu",
-    cause: "o alias não existe no ~/.ssh/config, ou a tailnet não está de pé nesta máquina",
+    cause: "o alias não existe no ~/.ssh/config, ou a tailnet não está de pé nesta máquina (mesma família: No route to host, Network is unreachable)",
     fix: "tailscale status para confirmar o IP, e criar o bloco Host no ~/.ssh/config",
     docToken: "tailscale status",
   },
@@ -102,10 +119,46 @@ export const BARRIERS = [
     fix: "ler o campo suggestions do próprio erro JSON e usar o nome que ele devolve",
     docToken: "suggestions",
   },
+  {
+    // Last on purpose: ENOENT is how a MISSING binary surfaces, and putting it earlier would let an
+    // unrelated "no such file" line in a longer stderr outrank a real ssh diagnosis.
+    id: "orca-cli-missing",
+    match: /ENOENT|command not found/i,
+    symptom: "ENOENT",
+    readsAs: "esta máquina não fala com o Orca",
+    cause: "o CLI do Orca não está instalado aqui (o caso normal num laptop), ou ORCA_BIN aponta pro lugar errado",
+    fix: "instalar o Orca desktop (https://onorca.dev) ou exportar ORCA_BIN apontando pro binário",
+    docToken: "ORCA_BIN",
+  },
 ];
 
 /** Orca CLI candidates, in order. `ORCA_BIN` (when set) is prepended by `orcaCandidates`. */
 export const DEFAULT_ORCA_CANDIDATES = ["/opt/orca/orca-linux.AppImage", "orca"];
+
+/**
+ * Per-probe ceiling. Deliberately small: this module runs when a session is already stuck, and the
+ * previous 120s budget meant a silent doctor for up to ten minutes across candidates — long enough
+ * that an agent gives up on the tool that exists to stop it giving up. A real answer takes ~1s.
+ * (It also bounds the `orca` PATH candidate colliding with GNOME's `orca` screen reader on a desktop:
+ * whatever that launches, it never answers the envelope, and it is killed in seconds.)
+ */
+export const PROBE_TIMEOUT_MS = 15_000;
+
+/** Hostnames/aliases that may be handed to `ssh`. Anything else is refused — see `isSafeHost`. */
+const SAFE_HOST = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+
+/**
+ * @description Whether a host/alias is safe to pass to `ssh` in argument position. A value starting
+ * with `-` is parsed by ssh as an OPTION, so `--ssh-host "-oProxyCommand=…"` would execute an
+ * arbitrary command — the diagnosis tool becoming an execution primitive. Anything not matching a
+ * plain hostname (optionally `user@host`) is refused rather than sanitized. Pure.
+ * @param {string} host
+ * @returns {boolean}
+ */
+export function isSafeHost(host) {
+  const value = String(host ?? "").trim();
+  return value.length > 0 && value.length <= 255 && SAFE_HOST.test(value);
+}
 
 /**
  * @description Classifies a failure's output into a known barrier. Pure. Returns null when the text
@@ -128,13 +181,21 @@ export function classifyFailure(text) {
  * @returns {{ readable: boolean, ok: boolean, result: any, errorMessage: string }}
  */
 export function readEnvelope(stdout) {
+  const text = String(stdout ?? "");
   let raw;
   try {
-    raw = JSON.parse(String(stdout ?? ""));
+    raw = JSON.parse(text);
   } catch {
-    return { readable: false, ok: false, result: null, errorMessage: "" };
+    // A wrapper may print a banner before the JSON; the envelope still starts at the first `{`.
+    const start = text.indexOf("{");
+    if (start === -1) return { readable: false, ok: false, result: null, errorMessage: "" };
+    try {
+      raw = JSON.parse(text.slice(start));
+    } catch {
+      return { readable: false, ok: false, result: null, errorMessage: "" };
+    }
   }
-  if (!raw || typeof raw !== "object" || !("ok" in raw)) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !("ok" in raw)) {
     return { readable: false, ok: false, result: null, errorMessage: "" };
   }
   return {
@@ -170,20 +231,46 @@ export function sshConfigDeclaresHost(configText, host) {
 }
 
 /**
+ * @description The `HostName` an alias resolves to, or "" when the alias is not declared. Needed
+ * because `known_hosts` stores the real hostname/IP and NEVER the alias — comparing an alias against
+ * it would report "host missing" on a machine that already trusts the host. Pure.
+ * @param {string} configText
+ * @param {string} host
+ * @returns {string}
+ */
+export function sshConfigHostName(configText, host) {
+  const alias = String(host ?? "").trim();
+  if (!alias) return "";
+  let inside = false;
+  for (const line of String(configText ?? "").split("\n")) {
+    if (/^\s*Host\s+/i.test(line)) {
+      inside = line.trim().split(/\s+/).slice(1).includes(alias);
+      continue;
+    }
+    if (inside) {
+      const m = line.match(/^\s*HostName\s+(\S+)/i);
+      if (m) return m[1];
+    }
+  }
+  return "";
+}
+
+/**
  * @description Whether `known_hosts` covers this host. Hashed entries (`ssh-keyscan -H`, the form the
  * playbook tells you to write) are opaque by construction, so ABSENCE is never reported as proof —
- * the answer is "unknown". Reporting a hashed known_hosts as "host missing" would invent barrier 2 on
- * a machine that already trusts the host.
+ * the answer is "unknown". Both the alias and its resolved `HostName` are checked, since only the
+ * latter is what ssh actually stores.
  * @param {string} knownHostsText
- * @param {string} host
+ * @param {string[]} names
  * @returns {"yes"|"no"|"unknown"}
  */
-export function knownHostsCovers(knownHostsText, host) {
+export function knownHostsCovers(knownHostsText, names) {
   const text = String(knownHostsText ?? "");
-  const needle = String(host ?? "").trim();
+  const needles = (Array.isArray(names) ? names : [names]).map((n) => String(n ?? "").trim()).filter(Boolean);
   if (!text.trim()) return "no";
-  if (needle && text.split("\n").some((l) => l.split(/[\s,]+/).includes(needle))) return "yes";
-  return text.split("\n").some((l) => l.startsWith("|1|")) ? "unknown" : "no";
+  const lines = text.split("\n");
+  if (needles.some((needle) => lines.some((l) => l.split(/[\s,]+/).includes(needle)))) return "yes";
+  return lines.some((l) => l.startsWith("|1|")) ? "unknown" : "no";
 }
 
 /**
@@ -209,9 +296,27 @@ export async function probeOrcaBin(deps) {
 }
 
 /**
- * @description Probes the paired remote environment: with a name, a real round-trip
+ * @description Does THIS machine already drive a runtime (i.e. is it the Orca host itself)? On the VPS
+ * the local CLI IS the runtime and no environment is ever paired — without this probe, "zero
+ * environments" would be reported as "no path to the runtime" on the very machine that runs it.
+ * @param {object} deps
+ * @param {string} bin
+ * @returns {Promise<{status:"ok"|"absent"|"unreadable", state?:string}>}
+ */
+export async function probeLocalRuntime(deps, bin) {
+  const r = await deps.run(bin, ["status", "--json"]);
+  const env = readEnvelope(r.stdout);
+  if (!env.readable || !env.ok) return { status: "unreadable" };
+  const runtime = env.result?.runtime ?? {};
+  return runtime.reachable === true
+    ? { status: "ok", state: String(runtime.state ?? "") }
+    : { status: "absent", state: String(runtime.state ?? "") };
+}
+
+/**
+ * @description Probes the paired REMOTE environment: with a name, a real round-trip
  * (`status --environment <name> --json` → reachable/state); without one, the list of environments
- * this machine has paired.
+ * this machine has paired. This is the only fact that proves a CLIENT machine reaches a VPS.
  * @param {object} deps
  * @param {string} bin
  * @returns {Promise<object>}
@@ -225,6 +330,9 @@ export async function probeEnvironment(deps, bin) {
       ? env.result.environments.map((e) => String(e?.name ?? e?.id ?? "")).filter(Boolean)
       : [];
     return { status: names.length ? "listed" : "none", environments: names };
+  }
+  if (!isSafeHost(name)) {
+    return { status: "skipped", environment: name, reason: "nome de ambiente inválido (não foi usado)" };
   }
   const r = await deps.run(bin, ["status", "--environment", name, "--json"]);
   const env = readEnvelope(r.stdout);
@@ -265,9 +373,16 @@ export async function probeEnvironment(deps, bin) {
 export async function probeSsh(deps) {
   const host = String(deps.sshHost ?? "").trim();
   if (!host) return { status: "skipped", reason: "nenhum alias SSH informado (--ssh-host)" };
+  if (!isSafeHost(host)) {
+    // Never sanitized, never passed through: `ssh` reads a leading `-` as an option, so an alias like
+    // `-oProxyCommand=…` would make this read-only diagnosis execute a command.
+    return { status: "skipped", host, reason: "alias SSH inválido — recusado sem executar nada" };
+  }
+  const config = deps.readFile(join(deps.home, ".ssh", "config"));
+  const declared = sshConfigDeclaresHost(config, host);
+  const hostName = sshConfigHostName(config, host);
+  const known = knownHostsCovers(deps.readFile(join(deps.home, ".ssh", "known_hosts")), [hostName, host]);
   const r = await deps.run("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "true"]);
-  const declared = sshConfigDeclaresHost(deps.readFile(join(deps.home, ".ssh", "config")), host);
-  const known = knownHostsCovers(deps.readFile(join(deps.home, ".ssh", "known_hosts")), host);
   if (r.code === 0) return { status: "ok", host, declared, known };
   const output = `${r.stderr ?? ""}\n${r.stdout ?? ""}`;
   return {
@@ -307,7 +422,9 @@ export const CAPABILITIES = {
 
 /**
  * @description Runs every probe and returns the structured report. NEVER concludes "no access": when
- * a path is blocked it carries the barrier that blocked it and that barrier's fix.
+ * a path is blocked it carries the barrier that blocked it and that barrier's fix. It also never
+ * claims a path a probe did not actually prove — `ok` means "some route to the runtime answered",
+ * not "the CLI is installed".
  * @param {object} deps
  * @param {(cmd:string, args:string[]) => Promise<{code:number,stdout:string,stderr:string}>} deps.run
  * @param {Record<string,string|undefined>} [deps.env]
@@ -319,48 +436,70 @@ export const CAPABILITIES = {
  */
 export async function diagnose(deps) {
   const orca = await probeOrcaBin(deps);
-  const environment = orca.status === "ok" ? await probeEnvironment(deps, orca.bin) : { status: "skipped", reason: "sem CLI do Orca utilizável" };
+  const cliOk = orca.status === "ok";
+  const localRuntime = cliOk ? await probeLocalRuntime(deps, orca.bin) : { status: "skipped" };
+  const environment = cliOk ? await probeEnvironment(deps, orca.bin) : { status: "skipped", reason: "sem CLI do Orca utilizável" };
   const ssh = await probeSsh(deps);
 
-  const barriers = [];
-  const collect = (b) => {
-    if (b && !barriers.some((x) => x.id === b.id)) barriers.push(b);
+  const dedupe = (list) => {
+    const out = [];
+    for (const b of list) if (b && !out.some((x) => x.id === b.id)) out.push(b);
+    return out;
   };
-  for (const a of orca.attempts) collect(a.barrier);
-  collect(environment.barrier);
-  collect(ssh.barrier);
+  // Barriers stay attributed to the path they blocked. Reporting an environment failure under "SSH
+  // blocked by …" sends the operator to repair the wrong thing.
+  const orcaBarriers = dedupe([...orca.attempts.map((a) => a.barrier), environment.barrier]);
+  const sshBarriers = dedupe([ssh.barrier]);
 
-  const orcaOpen = orca.status === "ok";
+  const remoteOpen = environment.status === "ok";
+  const localOpen = localRuntime.status === "ok";
   const sshOpen = ssh.status === "ok";
+
   return {
-    ok: orcaOpen || sshOpen,
+    ok: remoteOpen || localOpen || sshOpen,
     orca,
+    localRuntime,
     environment,
     ssh,
-    barriers,
+    barriers: dedupe([...orcaBarriers, ...sshBarriers]),
+    orcaBarriers,
+    sshBarriers,
     capabilities: CAPABILITIES,
-    verdict: buildVerdict({ orcaOpen, sshOpen, environment, barriers }),
+    verdict: buildVerdict({ cliOk, localOpen, remoteOpen, sshOpen, environment, orcaBarriers, sshBarriers }),
   };
 }
 
 /**
- * @description The one line the caller is most likely to act on. It never says "sem acesso": with
- * every path blocked it says the barriers are NOT missing access and points at the fixes.
- * @param {{orcaOpen:boolean, sshOpen:boolean, environment:object, barriers:Array<object>}} args
+ * @description The one line the caller is most likely to act on — so it may only state what a probe
+ * returned. It never says "sem acesso": with every path blocked it says the barriers are NOT missing
+ * access and points at the fixes.
+ * @param {object} args
  * @returns {string}
  */
-export function buildVerdict({ orcaOpen, sshOpen, environment, barriers }) {
-  const names = barriers.map((b) => b.id).join(", ");
-  if (orcaOpen && sshOpen) return "VPS operável pelos dois caminhos: CLI do Orca e SSH.";
-  if (orcaOpen && !sshOpen) {
-    const suffix = barriers.length ? ` SSH bloqueado por: ${names} — cada uma com correção abaixo.` : "";
-    return `Operável pelo CLI do Orca (tudo que é do Orca vai por --environment).${suffix}`;
+export function buildVerdict({ cliOk, localOpen, remoteOpen, sshOpen, environment, orcaBarriers = [], sshBarriers = [] }) {
+  const ids = (list) => list.map((b) => b.id).join(", ");
+  const sshNote = sshOpen
+    ? " SSH aberto."
+    : sshBarriers.length
+      ? ` SSH bloqueado por: ${ids(sshBarriers)} — correção abaixo.`
+      : "";
+
+  if (remoteOpen) {
+    return `Operável: o ambiente "${environment.environment}" respondeu (reachable). Tudo que é do Orca vai por --environment.${sshNote}`;
   }
-  if (!orcaOpen && sshOpen) {
-    return "Operável por SSH. O CLI local do Orca não respondeu — o que é do Orca pode ser feito por SSH na VPS.";
+  if (localOpen) {
+    const paired = environment.status === "listed" ? ` Ambientes pareados aqui: ${environment.environments.join(", ")} — rode com --environment <nome> para provar o round-trip.` : "";
+    return `Este CLI opera o runtime desta MÁQUINA (nenhum ambiente remoto provado). Se a VPS é outra máquina, pareie (orca environment add) ou use SSH.${paired}${sshNote}`;
   }
-  return barriers.length
-    ? `Nenhum caminho aberto AINDA — e isto NÃO é falta de acesso: ${names}. Cada barreira tem correção abaixo; aplique e rode de novo.`
+  if (sshOpen) {
+    return "Operável por SSH. Nenhum runtime do Orca respondeu localmente — o que é do Orca pode ser feito por SSH na VPS.";
+  }
+  const all = ids([...orcaBarriers, ...sshBarriers]);
+  if (all) {
+    return `Nenhum caminho aberto AINDA — e isto NÃO é falta de acesso: ${all}. Cada barreira tem correção abaixo; aplique e rode de novo.`;
+  }
+  return cliOk
+    ? "O CLI respondeu, mas nenhum runtime foi alcançado e nenhuma barreira conhecida apareceu — reporte a saída bruta ao operador, sem concluir que falta acesso."
     : "Nenhum caminho aberto e nenhuma barreira conhecida reconhecida — reporte a saída bruta ao operador, sem concluir que falta acesso.";
 }
 
@@ -376,24 +515,32 @@ export function renderReport(report) {
   L.push("");
   L.push(`VEREDITO: ${report.verdict}`);
   L.push("");
-  L.push(`CLI do Orca : ${report.orca.status === "ok" ? `ok (${report.orca.bin})` : "bloqueado"}`);
+  L.push(`CLI do Orca  : ${report.orca.status === "ok" ? `ok (${report.orca.bin})` : "bloqueado"}`);
   for (const a of report.orca.attempts) {
     if (a.status === "blocked") L.push(`  · ${a.bin} → ${a.barrier ? a.barrier.id : "falha não classificada"}: ${a.detail}`);
   }
+  L.push(
+    `Runtime local: ${report.localRuntime.status === "ok" ? `ok (state=${report.localRuntime.state}) — esta máquina É um host Orca` : report.localRuntime.status === "absent" ? "nenhum runtime rodando aqui" : "não verificado"}`,
+  );
   if (report.environment.status === "ok") {
-    L.push(`Ambiente    : ok — ${report.environment.environment} (state=${report.environment.state}, reachable=true)`);
+    L.push(`Ambiente     : ok — ${report.environment.environment} (state=${report.environment.state}, reachable=true)`);
   } else if (report.environment.status === "listed") {
-    L.push(`Ambiente    : pareados nesta máquina — ${report.environment.environments.join(", ")}`);
+    L.push(`Ambiente     : pareados aqui — ${report.environment.environments.join(", ")} (round-trip NÃO provado: rode com --environment <nome>)`);
   } else if (report.environment.status === "none") {
-    L.push("Ambiente    : nenhum pareado nesta máquina — `orca environment add --name <nome> --pairing-code <code>`");
-  } else if (report.environment.status !== "skipped") {
-    L.push(`Ambiente    : ${report.environment.status} — ${report.environment.detail ?? ""}`);
+    L.push("Ambiente     : nenhum pareado nesta máquina — `orca environment add --name <nome> --pairing-code <code>`");
+  } else if (report.environment.status === "unreachable") {
+    L.push(`Ambiente     : ${report.environment.environment} pareado, mas NÃO alcançável (state=${report.environment.state})`);
+  } else if (report.environment.status === "blocked") {
+    L.push(`Ambiente     : bloqueado — ${report.environment.detail ?? ""}`);
   }
   L.push(
-    `SSH         : ${report.ssh.status === "ok" ? `ok (${report.ssh.host})` : report.ssh.status === "skipped" ? `pulado — ${report.ssh.reason}` : `bloqueado — ${report.ssh.detail}`}`,
+    `SSH          : ${report.ssh.status === "ok" ? `ok (${report.ssh.host})` : report.ssh.status === "skipped" ? `pulado — ${report.ssh.reason}` : `bloqueado — ${report.ssh.detail}`}`,
   );
-  if (report.ssh.status !== "skipped" && report.ssh.declared === false) {
+  if (report.ssh.status === "blocked" && report.ssh.declared === false) {
     L.push(`  · sem bloco Host para "${report.ssh.host}" no ~/.ssh/config — é ele que fixa a chave certa`);
+  }
+  if (report.ssh.status === "blocked" && report.ssh.barrier?.id === "known-hosts" && report.ssh.known === "no") {
+    L.push("  · o host não aparece no ~/.ssh/known_hosts (nenhuma entrada hasheada para desempatar)");
   }
 
   if (report.barriers.length) {
@@ -417,7 +564,9 @@ export function renderReport(report) {
 
 /**
  * @description Real seams. `run` never throws and never inherits stdio: a failed probe is DATA here,
- * not an exception, because every interesting case in this module is a failure.
+ * not an exception, because every interesting case in this module is a failure. `LC_ALL=C` is forced
+ * because the barrier table matches C-locale strings — under pt_BR, `ssh` prints `strerror(errno)`
+ * translated ("Operação não permitida") and every classification silently returns null.
  * @returns {object}
  */
 export function realDeps(argv = {}) {
@@ -435,13 +584,14 @@ export function realDeps(argv = {}) {
       }
     },
     run: async (cmd, args) => {
+      const options = {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: PROBE_TIMEOUT_MS,
+        env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      };
       try {
-        const stdout = execFileSync(cmd, args, {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-          timeout: 120_000,
-        });
-        return { code: 0, stdout, stderr: "" };
+        return { code: 0, stdout: execFileSync(cmd, args, options), stderr: "" };
       } catch (err) {
         return {
           code: typeof err?.status === "number" ? err.status : 1,

@@ -150,6 +150,10 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/stamp-triage.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/vps-access-nudge.mjs"
           }
         ]
       },

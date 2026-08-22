@@ -24,7 +24,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
 import { parseWorktreePs, countWorking, unwrapOrca } from "./select-and-dispatch.mjs";
-import { orcaCandidates, readEnvelope } from "../claude-code/skills/connecting-orca/references/orca-doctor.mjs";
+import { PROBE_TIMEOUT_MS, orcaCandidates, readEnvelope } from "../claude-code/skills/connecting-orca/references/orca-doctor.mjs";
 
 /** @returns {string|null} the first candidate that ANSWERS the envelope, or null when none does. */
 function resolveOrca() {
@@ -33,7 +33,9 @@ function resolveOrca() {
       const stdout = execFileSync(bin, ["worktree", "ps", "--json"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: 120_000,
+        // Bounded per candidate: a mute binary must not hold the whole suite hostage. At the previous
+        // 120s, two silent candidates meant four minutes of a test run with nothing on stdout.
+        timeout: PROBE_TIMEOUT_MS,
       });
       if (readEnvelope(stdout).readable) return bin;
     } catch (error) {
@@ -44,11 +46,21 @@ function resolveOrca() {
   return null;
 }
 
-const ORCA = resolveOrca();
-const skip = ORCA ? false : `no Orca binary answered (tried: ${orcaCandidates(process.env).join(", ")})`;
+// Resolved LAZILY. At module scope this ran a real subprocess during test COLLECTION — before any
+// reporter output — so a slow binary looked like a hung suite rather than a slow probe.
+let resolved;
+/** @returns {string|null} */
+function orcaBin() {
+  if (resolved === undefined) resolved = resolveOrca();
+  return resolved;
+}
+/** @returns {false|string} node:test's `skip` value: false to run, a reason string to skip. */
+function skipReason() {
+  return orcaBin() ? false : `no Orca binary answered (tried: ${orcaCandidates(process.env).join(", ")})`;
+}
 
-test("SMOKE: `orca worktree ps --json` parses, and the concurrency ceiling can actually be counted from it", { skip }, () => {
-  const stdout = execFileSync(ORCA, ["worktree", "ps", "--json"], {
+test("SMOKE: `orca worktree ps --json` parses, and the concurrency ceiling can actually be counted from it", { skip: skipReason() }, () => {
+  const stdout = execFileSync(orcaBin(), ["worktree", "ps", "--json"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 120_000,
@@ -67,13 +79,13 @@ test("SMOKE: `orca worktree ps --json` parses, and the concurrency ceiling can a
   assert.ok(working <= entries.length);
 });
 
-test("SMOKE: the response envelope is a property of the CLI, not of one command", { skip }, () => {
+test("SMOKE: the response envelope is a property of the CLI, not of one command", { skip: skipReason() }, () => {
   // If this ever fails for a command, the boundary contract changed for ALL of them — which is the
   // whole reason unwrapOrca lives at the boundary instead of one parser per command.
   for (const argv of [["status"], ["repo", "list"], ["worktree", "list"], ["worktree", "ps"]]) {
     let stdout;
     try {
-      stdout = execFileSync(ORCA, [...argv, "--json"], {
+      stdout = execFileSync(orcaBin(), [...argv, "--json"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 120_000,

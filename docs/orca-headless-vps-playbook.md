@@ -265,17 +265,21 @@ realmente precisam de SSH.
 |---|---|---|
 | `Permission denied (publickey)` | a chave padrão não é a da VPS — a chave certa nunca chegou a ser oferecida | `ssh -i <chave-da-vps>`, ou um bloco `Host` no `~/.ssh/config` com `IdentityFile` + `IdentitiesOnly yes` |
 | `Host key verification failed` | host ausente do `known_hosts` — sessão não-interativa falha seca, sem prompt | `ssh-keyscan -H <ip-tailscale> >> ~/.ssh/known_hosts` |
-| `Operation not permitted` (rede) | sandbox do Claude Code — o IP da VPS não está na allowlist | repetir o comando com o sandbox desligado |
-| `Could not resolve hostname` | o alias não existe no `~/.ssh/config`, ou a tailnet não está de pé aqui | `tailscale status` pra confirmar o IP, e criar o bloco `Host` |
+| `Operation not permitted` **numa tentativa de conexão** | sandbox do Claude Code — o IP da VPS não está na allowlist | reexecutar o MESMO comando com o sandbox do Bash desligado (se a sua sessão não puder, é passo do operador) |
+| `Could not resolve hostname` | o alias não existe no `~/.ssh/config`, ou a tailnet não está de pé aqui — mesma família: `No route to host`, `Network is unreachable` | `tailscale status` pra confirmar o IP, e criar o bloco `Host` |
 | `Unknown environment: <id>` | o runtime do Orca reiniciou e o pareamento não sobreviveu | `systemctl restart orca-serve` na VPS e parear de novo (`orca environment add`) |
 | `bad option: --no-sandbox` | o shim `orca` do `PATH` quebra, mas o AppImage responde — são binários diferentes | chamar `/opt/orca/orca-linux.AppImage` direto, ou exportar `ORCA_BIN` apontando pra ele |
 | `Unknown command: <cmd>` | a build instalada não tem esse subcomando (`repo ls` não existe — é `repo list`) | ler o campo `suggestions` do próprio erro JSON e usar o nome que ele devolve |
+| `ENOENT` / `command not found` | o CLI do Orca não está instalado nesta máquina — o caso normal num laptop | instalar o Orca (https://onorca.dev) ou exportar `ORCA_BIN` apontando pro binário |
 
-As três últimas linhas foram medidas nesta VPS, não deduzidas — e são as que mais parecem "o acesso
-quebrou": `orca --version` sai com **código 3**, o shim do `PATH` responde `--help` com erro de
-argumento de node, e um subcomando recusado volta `ok:false` com código de saída 1. Daí a regra de
-sondagem: **pergunte algo de verdade** (`orca worktree ps --json`) e leia o envelope
-(`{ id, ok, result, _meta }`, carga sob `result`) — nunca uma flag de versão.
+As últimas linhas foram medidas nesta VPS, não deduzidas — e são as que mais parecem "o acesso
+quebrou": o shim do `PATH` responde qualquer comando com erro de argumento de node, e um subcomando
+recusado volta `ok:false` (com saída não-zero). **Flag de versão não serve como sonda de vida:** aqui
+`--version` sai não-zero porque o runtime já segura o lock de perfil
+(`[single-instance] Another Orca instance is already running`) — o resultado depende de estado que
+você não controla, e numa máquina sem instância ativa ele responde outra coisa. Daí a regra:
+**pergunte algo de verdade** (`orca worktree ps --json`) e leia o envelope
+(`{ id, ok, result, _meta }`, carga sob `result`).
 
 ### Não conclua — diagnostique
 

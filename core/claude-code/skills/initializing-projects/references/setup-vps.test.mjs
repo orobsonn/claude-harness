@@ -25,7 +25,7 @@ import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 // All-Enter for the inferred fields (home/projectRoot/project/owner/repo), then the Orca answers.
 // clonePath sits right after orcaRepoId: both come from the same `orca repo list --json` row.
 // Order matches runSetupVps's prompts.
-const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", ""];
+const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", "", ""];
 
 function harness(opts = {}) {
   const {
@@ -125,6 +125,7 @@ test("assertCronSafe rejects the values that would silently break or inject into
 test("renderCronBlock renders one fenced line invoking the selector with --config, and validates the interval", () => {
   const block = renderCronBlock({
     project: "myproject",
+    orcaBin: "/opt/orca/orca-linux.AppImage",
     nodeBin: "/usr/bin/node",
     selectorPath: "/srv/claude-harness/core/orca/select-and-dispatch.mjs",
     configPath: "/home/op/.config/claude-harness/projects/myproject.json",
@@ -133,12 +134,14 @@ test("renderCronBlock renders one fenced line invoking the selector with --confi
   });
   assert.deepEqual(block.split("\n"), [
     "# >>> harness-orca:myproject >>>",
-    "*/20 * * * * /usr/bin/node /srv/claude-harness/core/orca/select-and-dispatch.mjs --config /home/op/.config/claude-harness/projects/myproject.json >> /home/op/.local/state/claude-harness/myproject.log 2>&1",
+    "*/20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage /usr/bin/node /srv/claude-harness/core/orca/select-and-dispatch.mjs --config /home/op/.config/claude-harness/projects/myproject.json >> /home/op/.local/state/claude-harness/myproject.log 2>&1",
     "# <<< harness-orca:myproject <<<",
   ]);
   const base = {
-    project: "p", nodeBin: "/usr/bin/node", selectorPath: "/s", configPath: "/c", logPath: "/l",
+    project: "p", orcaBin: "/opt/orca/orca-linux.AppImage", nodeBin: "/usr/bin/node", selectorPath: "/s", configPath: "/c", logPath: "/l",
   };
+  // The queue must never be installed without the binary the selector resolves through.
+  assert.throws(() => renderCronBlock({ ...base, orcaBin: "", intervalMinutes: 20 }), /orcaBin/);
   assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 0 }), /intervalMinutes/);
   assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 60 }), /intervalMinutes/);
   assert.throws(() => renderCronBlock({ ...base, intervalMinutes: 1.5 }), /intervalMinutes/);
@@ -265,4 +268,15 @@ test("runSetupVps warns explicitly when the canary title filter is left OFF", as
 
 test("parseCliArgs passes the command through raw (init alias resolved by the dispatcher)", () => {
   assert.equal(parseCliArgs(["node", "cli.mjs", "setup-vps"]).command, "setup-vps");
+});
+
+test("the installed cron line carries ORCA_BIN — without it every tick dies before selecting anything", async () => {
+  const h = harness();
+  await runSetupVps(h.deps);
+  const written = h.crontabWrites[0];
+  assert.match(written, /ORCA_BIN=\/opt\/orca\/orca-linux\.AppImage /);
+  assert.ok(
+    written.indexOf("ORCA_BIN=") < written.indexOf("/usr/bin/node"),
+    "the variable must prefix the command, not trail it as an argument",
+  );
 });

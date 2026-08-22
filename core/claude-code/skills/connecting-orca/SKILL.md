@@ -35,15 +35,27 @@ session on the same machine, in the same minute, operates the VPS fine.
 Run the deterministic diagnosis instead of concluding:
 
 ```bash
-node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host <alias> --environment <nome>
+node .claude/skills/connecting-orca/references/orca-doctor.mjs [--ssh-host <alias>] [--environment <nome>]
 ```
 
-(from a machine with no harness vendored: `npx @orobsonn/claude-harness orca-doctor --ssh-host <alias>`)
+**Both flags are optional, and on a first run you usually have neither** — the environment name is
+produced by Phase 1, and the SSH alias by the playbook's `~/.ssh/config` block. Run it bare first: it
+still reports whether the CLI answers, whether this machine drives a runtime, and what is paired.
+(From a machine with no harness vendored: `npx @orobsonn/claude-harness orca-doctor`.)
 
-It probes the Orca CLI, the paired environment and SSH, and prints, for each blocked path, the
-barrier + its fix. Its table is the same one in the playbook section *"Operando a VPS a partir de uma
-sessão de agente"* — a docs oracle pins them together, so what you read here cannot drift from what the
-operator reads there.
+It probes the Orca CLI, the runtime this machine drives, the paired environment and SSH, and prints,
+for each blocked path, the barrier + its fix. Its table is the same one in
+`docs/orca-headless-vps-playbook.md` §8 *"Operando a VPS a partir de uma sessão de agente"* — a docs
+oracle pins them together, so what you read here cannot drift from what the operator reads there.
+
+**A verdict may only claim what a probe returned.** A local CLI that answers is not a VPS you can
+reach: without a proven `--environment` round-trip (or SSH), say so plainly instead of implying the
+shortcut works. The first version of this tool got that wrong and produced exactly the kind of
+confident wrong conclusion it exists to prevent.
+
+**When the barrier is the sandbox,** the fix is to re-run *that same command* with the Bash sandbox
+disabled. If your session cannot do that itself, it is an operator step — say which command needs it
+and why, and do not treat it as missing access.
 
 **The rule this phase exists for: never report "não tenho acesso à VPS".** Report the barrier and its
 fix, or the raw output. "No access" is a conclusion the doctor is designed to make unnecessary.
@@ -69,7 +81,14 @@ two commands that actually need it".
 
 ## Phase 1 — Runtime up, and this machine paired to it
 
-1. Service alive (on the VPS): `systemctl status orca-serve` → `active (running)`, and
+**Everything in this phase that touches the machine runs ON the VPS.** From a laptop that means SSH,
+and the alias is the one from the playbook's `~/.ssh/config` block:
+
+```bash
+ssh <alias> 'systemctl status orca-serve'
+```
+
+1. Service alive: `systemctl status orca-serve` → `active (running)`, and
    `journalctl -u orca-serve --no-pager | grep "Bound endpoint" | tail -1` on the configured port.
    Not installed yet? That is the VPS playbook, §1–§6 — install first, come back here.
 2. Pair this machine, if `orca environment list --json` shows nothing:
@@ -113,8 +132,12 @@ Two artifacts, and nothing else: **one config JSON per project** + **one cron li
 the scoped credential only means something because the selector is that user's cron):
 
 ```bash
-npx @orobsonn/claude-harness setup-orca      # alias: setup-vps (same wizard)
+ssh -t <alias> 'cd <caminho-do-repo> && npx @orobsonn/claude-harness setup-orca'   # alias: setup-vps
 ```
+
+**The `-t` is not optional.** The wizard is interactive (it reads answers from a TTY); a plain
+`ssh host 'npx …'` gives it no terminal and it aborts on the first required field. Running directly on
+the VPS, drop the `ssh -t` and just run the command.
 
 The wizard writes `~/.config/claude-harness/projects/<slug>.json` and one fenced crontab block. Field
 reference: `core/orca/README.md` in the harness repo. Three answers decide whether this works:
@@ -128,9 +151,11 @@ reference: `core/orca/README.md` in the harness repo. Three answers decide wheth
 - **Start with `titleIncludes: "[canary]"`.** Without a filter the chosen issue is simply the oldest open
   `harness:ready` — in a real backlog, a task from years ago, not the one you want to watch first.
 
-Then confirm the cron will actually run: the AppImage is **not on `PATH`**, so the line needs
-`ORCA_BIN=/opt/orca/orca-linux.AppImage`. Without it the tick dies at `ENOENT` before selecting
-anything — and every failure in this layer looks identical from outside: nothing gets delivered, silently.
+Then confirm the cron line the wizard wrote (`crontab -l`) starts with
+`ORCA_BIN=/opt/orca/orca-linux.AppImage`. The AppImage is **not on `PATH`**, and the shim that
+sometimes is, is broken — without the variable the tick dies before selecting anything, and every
+failure in this layer looks identical from outside: nothing gets delivered, silently. The current
+wizard writes it; a queue installed by an older one does not have it.
 
 The labels the queue reads must exist in the repo (idempotent):
 
@@ -145,10 +170,16 @@ gh label create "harness:done"        -c "#5319E7" -d "PR aberto"               
 ## Phase 4 — The review + conditional-merge automation (the other half of the queue)
 
 Dispatch alone gives you PRs that nobody merges. The reviewer is **a scheduled Orca automation, not
-code in this repo** — its prompt is versioned in the harness repo at
-`core/orca/review-prompt.md`: replace `<OWNER/REPO>` and `<BASE>`, and
-install it as the automation's prompt (`orca automations list --environment <nome> --json` shows what
-already exists there).
+code in this repo** — its prompt is versioned in the harness repo at `core/orca/review-prompt.md`. That path is **not
+vendored into a project** (`.claude/` carries agents/skills/rules/hooks, not `core/orca/`), so fetch it:
+
+```bash
+gh api repos/orobsonn/claude-harness/contents/core/orca/review-prompt.md \
+  -H 'Accept: application/vnd.github.raw' > /tmp/review-prompt.md
+```
+
+Replace `<OWNER/REPO>` and `<BASE>`, then install it as the automation's prompt
+(`orca automations list --environment <nome> --json` shows what already exists there).
 
 It merges only when: its own verdict is *merge*, **no** ARMED high-severity finding, CI concluded
 `SUCCESS`, no conflict — and the merge passes `--match-head-commit <sha>`.

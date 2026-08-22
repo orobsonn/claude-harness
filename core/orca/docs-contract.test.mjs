@@ -106,13 +106,35 @@ function agentSection() {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+const DIAGNOSTIC_HEADER = "| Mensagem | Causa provável | Ação |";
+
+/**
+ * @description Returns the diagnostic table's DATA rows (header and separator dropped), sliced from
+ * its header to the first non-table line. Counting every line that starts with `|` inside the whole
+ * section was wrong: a pipe inside a fenced code block (`| jq ...`) counted as a row and failed the
+ * oracle against an untouched table, telling the next author to edit BARRIERS.
+ * @param {string} section
+ * @returns {string[]}
+ */
+function diagnosticRows(section) {
+  const lines = section.split("\n");
+  const start = lines.findIndex((line) => line.trim() === DIAGNOSTIC_HEADER);
+  assert.notEqual(start, -1, `the section must carry the diagnostic table header: ${DIAGNOSTIC_HEADER}`);
+  const rows = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim().startsWith("|")) break;
+    if (/^\|[\s|:-]+\|$/.test(line.trim())) continue; // markdown separator
+    rows.push(line);
+  }
+  return rows;
+}
+
 test("every barrier the doctor can diagnose has a row in the playbook, carrying that barrier's fix", async () => {
   // The doctor's table is the single source of the fixes it prints. If a fix could live in code
   // without living in the doc the operator reads, the next agent hits the barrier with no way out —
   // which is exactly the incident this section was written for.
   const { BARRIERS } = await import("../claude-code/skills/connecting-orca/references/orca-doctor.mjs");
-  const section = agentSection();
-  const rows = section.split("\n").filter((line) => line.trim().startsWith("|"));
+  const rows = diagnosticRows(agentSection());
 
   for (const barrier of BARRIERS) {
     const row = rows.find((line) => line.includes(barrier.symptom));
@@ -123,13 +145,15 @@ test("every barrier the doctor can diagnose has a row in the playbook, carrying 
     );
   }
 
-  // Bidirectional: a row nobody can diagnose is a fix the doctor will never print. `- 2` drops the
-  // markdown header + separator lines.
-  assert.equal(
-    rows.length - 2,
-    BARRIERS.length,
-    "the diagnostic table and the doctor's BARRIERS table must hold the same rows",
-  );
+  // Bidirectional, by CONTENT not by count: a row nobody can diagnose is a fix the doctor will never
+  // print, and the operator would follow advice no probe can ever produce.
+  for (const row of rows) {
+    assert.ok(
+      BARRIERS.some((b) => row.includes(b.symptom)),
+      `this diagnostic row matches no barrier the doctor can classify: ${row}`,
+    );
+  }
+  assert.equal(rows.length, BARRIERS.length, "one row per barrier, no more");
 });
 
 test("the section states the SSH-free shortcut AND what it cannot do — the split that decides the repair", () => {

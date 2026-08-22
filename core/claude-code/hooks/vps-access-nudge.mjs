@@ -1,0 +1,140 @@
+/**
+ * @description PostToolUse(Bash) hook that fires when a command's output carries one of the failures
+ * that READ as "I have no access to the VPS" — and injects the barrier, its fix, and the command that
+ * diagnoses it.
+ *
+ * Why it must be a hook and not documentation: the session that was lost to this never read the
+ * playbook. The agent hit `Permission denied (publickey)`, concluded it had no access, and stopped —
+ * a doc it never opened cannot reach a conclusion already made. This is the same lesson the
+ * `codex-eye-nudge` hook records: a reminder that depends on the model remembering a piece of prose is
+ * not a mechanism. The signatures come from `orca-doctor`'s own BARRIERS table, imported rather than
+ * copied, so the hook can never drift from the table the docs oracle pins.
+ *
+ * Fail-open: exits 0 on ANY error, injects nothing when unsure. Never blocks a Bash call.
+ */
+
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// Statically imported, by literal path, for two reasons: the signatures must have ONE source (a copy
+// here would drift from the table the docs oracle pins), and a literal specifier keeps the vendoring
+// integrity check able to see this dependency — an opaque loader would hide it from both the check
+// and the repo's auditable-import rule. The relative depth is identical in the framework source
+// (core/claude-code/hooks → core/claude-code/skills) and in a vendored project (.claude/hooks →
+// .claude/skills), so one path serves both.
+import { classifyFailure } from '../skills/connecting-orca/references/orca-doctor.mjs';
+
+/**
+ * Barriers whose message is unambiguous on its own — no command context needed. `Permission denied
+ * (publickey)` is never about anything but ssh.
+ */
+const UNAMBIGUOUS = new Set(['known-hosts', 'ssh-identity', 'ssh-host-unresolved', 'unknown-environment', 'orca-cli-shim']);
+
+/**
+ * Barriers whose message is common enough elsewhere that firing on it alone would be noise
+ * (`command not found`, `Unknown command`, a sandbox denial on any network call). These only nudge
+ * when the command itself was reaching for the VPS or for Orca.
+ */
+const REMOTE_COMMAND = /\b(ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b|\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/i;
+
+/**
+ * @description PostToolUse(Bash) may deliver tool_response as a string OR as an object with
+ * stdout/stderr. Both forms are flattened to the text the signatures are matched against.
+ * @param {object} payload
+ * @returns {string}
+ */
+export function responseText(payload) {
+  const raw = payload?.tool_response ?? payload?.tool_output ?? '';
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') {
+    return [raw.stdout, raw.stderr, raw.output, raw.error]
+      .filter((part) => typeof part === 'string')
+      .join('\n');
+  }
+  return '';
+}
+
+/**
+ * @description Pure decision layer. Returns {action:'inject', barrier, context} or {action:'none'}.
+ * Never throws.
+ * @param {object} payload - the hook payload
+ * @param {(text: string) => object|null} classify - orca-doctor's classifier, injected
+ * @returns {{action:string, barrier?:object, context?:string}}
+ */
+export function decide(payload, classify) {
+  try {
+    const command = String(payload?.tool_input?.command ?? '');
+    const output = responseText(payload);
+    if (!output.trim()) return { action: 'none' };
+
+    const barrier = classify(output);
+    if (!barrier) return { action: 'none' };
+    if (!UNAMBIGUOUS.has(barrier.id) && !REMOTE_COMMAND.test(command)) return { action: 'none' };
+
+    return {
+      action: 'inject',
+      barrier,
+      context: [
+        `[vps-access-nudge] Esse comando falhou com "${barrier.symptom}".`,
+        `Isso NÃO é falta de acesso à VPS — lê como "${barrier.readsAs}", mas é: ${barrier.cause}.`,
+        `Correção: ${barrier.fix}.`,
+        'Antes de concluir QUALQUER coisa sobre acesso (e antes de devolver o trabalho ao operador),',
+        'rode: node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host <alias> [--environment <nome>]',
+        'e reporte a barreira + a correção que ele imprimir.',
+      ].join(' '),
+    };
+  } catch {
+    return { action: 'none' };
+  }
+}
+
+/**
+ * @description Full input path: parse, classify, emit. Always returns exit code 0.
+ * @param {string} raw - stdin payload
+ * @param {(text: string) => object|null} [classify] - injected for tests. OMITTED means "use the
+ *   skill's classifier"; passing null explicitly means "there is none", and must stay distinguishable
+ *   — otherwise the fail-open path is untestable.
+ * @returns {Promise<{exitCode:number, output:string|null}>}
+ */
+export async function processInput(raw, classify) {
+  try {
+    const resolve = classify === undefined ? classifyFailure : classify;
+    if (typeof resolve !== 'function') return { exitCode: 0, output: null };
+    const payload = JSON.parse(raw);
+    const d = decide(payload, resolve);
+    if (d.action !== 'inject') return { exitCode: 0, output: null };
+    return {
+      exitCode: 0,
+      output: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          additionalContext: d.context,
+        },
+      }),
+    };
+  } catch {
+    return { exitCode: 0, output: null };
+  }
+}
+
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(process.argv[1]) === modulePath;
+  } catch {
+    return process.argv[1] === modulePath;
+  }
+}
+
+if (isDirectCli()) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(0, 'utf8');
+  } catch {
+    process.exit(0);
+  }
+  const result = await processInput(raw);
+  if (result.output !== null) process.stdout.write(result.output);
+  process.exit(0);
+}

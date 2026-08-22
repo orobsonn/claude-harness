@@ -34,6 +34,9 @@ import { join, basename } from "node:path";
 
 export const CRON_FENCE_PREFIX = "harness-orca";
 
+/** Where the AppImage install puts the binary. It is never on PATH — hence the cron line carries it. */
+export const DEFAULT_ORCA_BIN = "/opt/orca/orca-linux.AppImage";
+
 /**
  * @description Parses `owner`/`repo` from a git remote URL (ssh `git@host:owner/repo.git`, https
  * `https://host/owner/repo(.git)`, or trailing slash). Returns empty strings when unparseable.
@@ -121,11 +124,18 @@ export function assertCronSafe(value, field) {
  * @description Renders the fenced crontab block for one project. Fenced with literal
  * `# >>> harness-orca:<slug> >>>` / `# <<< harness-orca:<slug> <<<` lines so `upsertCronBlock` can
  * replace it idempotently and an operator can delete it by hand without guessing. No trailing newline.
- * @param {{project:string,nodeBin:string,selectorPath:string,configPath:string,logPath:string,intervalMinutes:number}} args
+ *
+ * `ORCA_BIN` is part of the LINE, not an optional nicety: the selector falls back to `orca` on PATH,
+ * the AppImage install is NOT on PATH (and the shim that sometimes is, is broken), and cron inherits a
+ * minimal environment. Without it every tick dies before selecting anything and logs
+ * `skip: could not read 'orca worktree ps --json'` — indistinguishable from "Orca is down". A wizard
+ * that writes a queue which never dispatches is worse than one that refuses to write it.
+ * @param {{project:string,orcaBin:string,nodeBin:string,selectorPath:string,configPath:string,logPath:string,intervalMinutes:number}} args
  * @returns {string}
  */
-export function renderCronBlock({ project, nodeBin, selectorPath, configPath, logPath, intervalMinutes }) {
+export function renderCronBlock({ project, orcaBin, nodeBin, selectorPath, configPath, logPath, intervalMinutes }) {
   const slug = assertCronSafe(project, "project");
+  assertCronSafe(orcaBin, "orcaBin");
   assertCronSafe(nodeBin, "nodeBin");
   assertCronSafe(selectorPath, "selectorPath");
   assertCronSafe(configPath, "configPath");
@@ -134,7 +144,7 @@ export function renderCronBlock({ project, nodeBin, selectorPath, configPath, lo
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 59) {
     throw new Error('setup-vps: "intervalMinutes" precisa ser um inteiro entre 1 e 59');
   }
-  const line = `*/${minutes} * * * * ${nodeBin} ${selectorPath} --config ${configPath} >> ${logPath} 2>&1`;
+  const line = `*/${minutes} * * * * ORCA_BIN=${orcaBin} ${nodeBin} ${selectorPath} --config ${configPath} >> ${logPath} 2>&1`;
   return [`# >>> ${CRON_FENCE_PREFIX}:${slug} >>>`, line, `# <<< ${CRON_FENCE_PREFIX}:${slug} <<<`].join("\n");
 }
 
@@ -310,6 +320,11 @@ export async function runSetupVps(deps) {
   const titleIncludes = String((await ask("Filtro de título / modo canário (Enter = sem filtro) [[canary]]: ")) ?? "").trim();
   const intervalAnswer = String((await ask("Rodar o selector a cada quantos minutos? [20]: ")) ?? "").trim() || "20";
   const intervalMinutes = Number(intervalAnswer);
+  // Asked, never assumed: the cron line carries it, and a wrong path makes every tick fail silently.
+  const orcaBin = required(
+    (await ask(`Binário do Orca para o cron [${DEFAULT_ORCA_BIN}]: `)) || DEFAULT_ORCA_BIN,
+    "orca-bin",
+  );
 
   const config = buildProjectConfig({
     project, owner, repo, orcaRepoId, clonePath, baseBranch, agent, globalMaxWorking,
@@ -330,10 +345,10 @@ export async function runSetupVps(deps) {
   out(`\n✓ Config do projeto em ${configPath}`);
 
   const cronBlock = renderCronBlock({
-    project, nodeBin, selectorPath, configPath, logPath, intervalMinutes,
+    project, orcaBin, nodeBin, selectorPath, configPath, logPath, intervalMinutes,
   });
   writeCrontab(upsertCronBlock(readCrontab(), `${CRON_FENCE_PREFIX}:${project}`, cronBlock));
-  out(`✓ Cron do selector registrado (a cada ${intervalMinutes} min) — log em ${logPath}`);
+  out(`✓ Cron do selector registrado (a cada ${intervalMinutes} min, ORCA_BIN=${orcaBin}) — log em ${logPath}`);
 
   out(reviewAutomationGuide());
 
