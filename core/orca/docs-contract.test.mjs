@@ -116,6 +116,15 @@ const DIAGNOSTIC_HEADER = "| Mensagem | Causa provável | Ação |";
  * @param {string} section
  * @returns {string[]}
  */
+/**
+ * @description The cells of a markdown table row, without the leading/trailing empties.
+ * @param {string} row
+ * @returns {string[]}
+ */
+function cellsOf(row) {
+  return row.trim().split("|").slice(1, -1);
+}
+
 function diagnosticRows(section) {
   const lines = section.split("\n");
   const start = lines.findIndex((line) => line.trim() === DIAGNOSTIC_HEADER);
@@ -136,12 +145,18 @@ test("every barrier the doctor can diagnose has a row in the playbook, carrying 
   const { BARRIERS } = await import("../claude-code/skills/connecting-orca/references/orca-doctor.mjs");
   const rows = diagnosticRows(agentSection());
 
+  // The token must live in the ACTION cell, not merely somewhere on the line: a fix that appears in
+  // the "cause" column is a description, and the operator acts on the last column.
+  // Honest limit: this pins PRESENCE, not truthfulness — a row could carry the token and still tell
+  // the reader to do the opposite. Only a reader (or an adversarial pass) catches that; the oracle
+  // exists to stop the drift that silence produces, not to referee prose.
   for (const barrier of BARRIERS) {
-    const row = rows.find((line) => line.includes(barrier.symptom));
+    const row = rows.find((line) => cellsOf(line)[0]?.includes(barrier.symptom));
     assert.ok(row, `no diagnostic row for the symptom "${barrier.symptom}" (barrier ${barrier.id})`);
+    const action = cellsOf(row).at(-1) ?? "";
     assert.ok(
-      row.includes(barrier.docToken),
-      `the row for "${barrier.symptom}" must carry its fix (expected to contain "${barrier.docToken}"): ${row}`,
+      action.includes(barrier.docToken),
+      `the ACTION cell for "${barrier.symptom}" must carry its fix (expected "${barrier.docToken}"): ${action}`,
     );
   }
 
@@ -149,7 +164,7 @@ test("every barrier the doctor can diagnose has a row in the playbook, carrying 
   // print, and the operator would follow advice no probe can ever produce.
   for (const row of rows) {
     assert.ok(
-      BARRIERS.some((b) => row.includes(b.symptom)),
+      BARRIERS.some((b) => cellsOf(row)[0]?.includes(b.symptom)),
       `this diagnostic row matches no barrier the doctor can classify: ${row}`,
     );
   }

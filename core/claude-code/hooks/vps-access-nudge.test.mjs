@@ -111,3 +111,39 @@ test("a publickey denial from a CODE FORGE never nudges — the delivery loop pu
   assert.equal(decide(payload("ssh harness-vps hostname", "root@vps: Permission denied (publickey)."), classifyFailure).action, "inject");
   assert.equal(decide(payload("scp file.json harness-vps:/tmp/", "Host key verification failed."), classifyFailure).action, "inject");
 });
+
+test("`orca` must be a COMMAND token — /home/orca is the home directory of the playbook's own user", () => {
+  // Regression: `\borca\b` matched any path under /home/orca, so a trivial local ENOENT on this very
+  // machine fired "isso NÃO é falta de acesso à VPS… instalar o Orca desktop". That is the fastest
+  // way to teach the model to ignore the hook, which puts us back at the incident.
+  const localNoise = [
+    ["node /home/orca/dev/app/build.mjs", "Error: ENOENT: no such file or directory, open '/home/orca/dev/app/x.json'"],
+    ["cat /home/orca/notes.md", "cat: /home/orca/notes.md: command not found"],
+  ];
+  for (const [command, stderr] of localNoise) {
+    assert.equal(decide(payload(command, stderr), classifyFailure).action, "none", `must stay silent for: ${command}`);
+  }
+  assert.equal(decide(payload("orca worktree ps --json", "sh: 1: orca: command not found"), classifyFailure).action, "inject");
+  assert.equal(decide(payload("sudo -u orca crontab -l", "Unknown command: x"), classifyFailure).action, "inject");
+});
+
+test("a tailnet address identifies the VPS even when it appears only in the OUTPUT", () => {
+  // `git fetch` against a repo hosted on the VPS names the host in the error, never in the command.
+  const d = decide(
+    payload("git fetch origin", "ssh: connect to host 100.98.45.37 port 22: Operation not permitted"),
+    classifyFailure,
+  );
+  assert.equal(d.action, "inject");
+  assert.equal(d.barrier.id, "sandbox-network");
+});
+
+test("fail-open is real: a hook whose sibling skill is missing exits 0 with no output", async () => {
+  // The promise in this file's header ("exits 0 on ANY error") cannot be kept by a static import —
+  // a missing module kills the process before any try/catch runs.
+  const { loadClassifier } = await import("./vps-access-nudge.mjs");
+  assert.equal(typeof await loadClassifier(), "function", "with the skill present it must resolve");
+  assert.deepEqual(await processInput(JSON.stringify(payload("ssh v", "Host key verification failed.")), null), {
+    exitCode: 0,
+    output: null,
+  });
+});

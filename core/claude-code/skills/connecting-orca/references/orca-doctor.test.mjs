@@ -20,6 +20,8 @@ import assert from "node:assert/strict";
 import {
   BARRIERS,
   CAPABILITIES,
+  SANDBOX_VERBS,
+  isSafeEnvironmentName,
   buildVerdict,
   classifyFailure,
   diagnose,
@@ -86,10 +88,19 @@ function vpsResponses(extra = {}) {
  * the two uncovered alternatives of the sandbox pattern were exactly the ones misclassifying.
  */
 const FIXTURES = {
+  // One per verb in SANDBOX_VERBS — the meta-test below proves none is left unexercised. Anchoring
+  // the pattern silently dropped three of these forms, and no fixture noticed.
   "sandbox-network": [
     "ssh: connect to host 100.98.45.37 port 22: Operation not permitted",
-    "curl: (7) Failed to connect to 100.98.45.37 port 6768 after 0 ms: Operation not permitted",
     "Error: connect EPERM 100.98.45.37:6768",
+    "Failed to connect to 100.98.45.37 port 6768: Operation not permitted",
+    "bind: Operation not permitted",
+    "ping: sendto: Operation not permitted",
+    "ping: sendmsg: Operation not permitted",
+    "ping: socket: Operation not permitted",
+    "Error: getaddrinfo EPERM vps.tail.ts.net",
+    "ssh_exchange_identification: read: Operation not permitted",
+    "write: Operation not permitted",
   ],
   "known-hosts": [
     "Host key verification failed.",
@@ -106,7 +117,9 @@ const FIXTURES = {
     "ssh: connect to host 100.98.45.37 port 22: Network is unreachable",
   ],
   "unknown-environment": ['Unknown environment: "harness-vps"'],
-  "orca-cli-shim": [SHIM_BREAK, "/tmp/.mount_orca-abc/orca-ide: bad option: --no-sandbox"],
+  // Split deliberately: both alternatives of the pattern must be exercised ALONE, or one of them can
+  // rot untested behind the other.
+  "orca-cli-shim": ["bad option: --no-sandbox", "/tmp/.mount_orca-abc/orca-ide: bad option"],
   "orca-unknown-command": ["Unknown command: repo ls"],
   "orca-cli-missing": [
     "spawnSync /opt/orca/orca-linux.AppImage ENOENT",
@@ -128,6 +141,21 @@ test("every barrier classifies EVERY message form it claims to cover", () => {
   }
   assert.equal(classifyFailure(""), null, "empty output must not be guessed at");
   assert.equal(classifyFailure("some brand new failure"), null, "an unknown failure is reported, not invented");
+});
+
+test("every verb the sandbox pattern claims has a fixture — an unexercised alternative is where it broke", () => {
+  for (const verb of SANDBOX_VERBS) {
+    const covered = FIXTURES["sandbox-network"].filter((m) => new RegExp(verb, "i").test(m));
+    assert.ok(covered.length > 0, `no fixture exercises the "${verb}" verb`);
+    for (const message of covered) assert.equal(classifyFailure(message)?.id, "sandbox-network");
+  }
+});
+
+test("D-Bus speaks the same words and is NOT the network sandbox", () => {
+  // `systemctl --user` on a machine with no session bus produces this constantly. Prescribing
+  // "disable the sandbox" for it is advice that cannot possibly help.
+  assert.equal(classifyFailure("systemd[1]: Failed to connect to bus: Operation not permitted"), null);
+  assert.equal(classifyFailure("Failed to connect to D-Bus: Operation not permitted"), null);
 });
 
 test("the sandbox barrier is ANCHORED to a connection attempt — it must not hijack unrelated stderr", () => {
@@ -370,6 +398,38 @@ test("an alias that ssh would read as an OPTION is refused without running anyth
   assert.equal(isSafeHost("harness-vps"), true);
   assert.equal(isSafeHost("root@100.98.45.37"), true);
   assert.equal(isSafeHost("-oProxyCommand=x"), false);
+});
+
+test("the guard accepts the tailnet's own IPv6 — refusing it refuses the network it exists to reach", () => {
+  // Tailscale gives EVERY node an address in fd7a:115c:a1e0::/48. The first guard rejected all of
+  // them, silently dropping the only path the operator had asked for: not running the wrong thing,
+  // but running nothing and reporting a path that was never probed.
+  for (const addr of ["fd7a:115c:a1e0::3f1", "[fd7a:115c:a1e0::3f1]", "fe80::1%tailscale0", "root@fd7a:115c:a1e0::3f1", "::1"]) {
+    assert.equal(isSafeHost(addr), true, `${addr} is a destination ssh accepts`);
+  }
+  assert.equal(isSafeHost("-fd7a::1"), false, "a leading dash is still an option, not an address");
+});
+
+test("an environment NAME is a human field, not a hostname — the wrong guard degraded the verdict", () => {
+  for (const name of ["harness-vps", "vps são paulo", "_prod", "VPS 2 (staging)"]) {
+    assert.equal(isSafeEnvironmentName(name), true, `${name} is a legitimate --name value`);
+  }
+  for (const name of ["", "   ", "-o something", "a\nb"]) {
+    assert.equal(isSafeEnvironmentName(name), false);
+  }
+});
+
+test("a glob Host block declares the host — `Host harness-*` is the ordinary way to write a tailnet config", () => {
+  const glob = "Host harness-*\n  HostName 100.98.45.37\n  IdentitiesOnly yes\n";
+  assert.equal(sshConfigDeclaresHost(glob, "harness-vps"), true);
+  assert.equal(sshConfigHostName(glob, "harness-vps"), "100.98.45.37");
+  assert.equal(sshConfigDeclaresHost(glob, "other-box"), false);
+
+  // A `Match` block's condition is not statically resolvable, so "not declared" becomes unsayable.
+  assert.equal(sshConfigDeclaresHost("Match host harness-vps\n  User root\n", "harness-vps"), true);
+
+  // `%h` is expanded by ssh at connect time; returning it literally is a hostname that exists nowhere.
+  assert.equal(sshConfigHostName("Host harness-vps\n  HostName %h.tail.ts.net\n", "harness-vps"), "");
 });
 
 test("known_hosts is compared against the resolved HostName, not the alias ssh never stores", () => {

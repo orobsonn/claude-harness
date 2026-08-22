@@ -16,13 +16,24 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Statically imported, by literal path, for two reasons: the signatures must have ONE source (a copy
-// here would drift from the table the docs oracle pins), and a literal specifier keeps the vendoring
-// integrity check able to see this dependency — an opaque loader would hide it from both the check
-// and the repo's auditable-import rule. The relative depth is identical in the framework source
-// (core/claude-code/hooks → core/claude-code/skills) and in a vendored project (.claude/hooks →
-// .claude/skills), so one path serves both.
-import { classifyFailure } from '../skills/connecting-orca/references/orca-doctor.mjs';
+/**
+ * @description Loads the signature table from the sibling skill. The specifier is a LITERAL — that is
+ * what keeps the dependency visible to the vendoring integrity check and to the repo's
+ * auditable-import rule — but the import is deferred so it can FAIL. A static import of a file that a
+ * partial vendor may not have written kills the process before any try/catch: the header promises
+ * "exits 0 on ANY error" and a static import cannot keep that promise. The relative depth is identical
+ * in the framework source (core/claude-code/hooks → core/claude-code/skills) and in a vendored project
+ * (.claude/hooks → .claude/skills), so one path serves both.
+ * @returns {Promise<((text: string) => object|null)|null>}
+ */
+export async function loadClassifier() {
+  try {
+    const mod = await import('../skills/connecting-orca/references/orca-doctor.mjs');
+    return typeof mod.classifyFailure === 'function' ? mod.classifyFailure : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Barriers that name Orca itself, so no command context is needed to know which machine is meant.
@@ -39,7 +50,14 @@ const UNAMBIGUOUS = new Set(['unknown-environment', 'orca-cli-shim']);
  * Every other barrier only nudges when the command itself was reaching for a remote machine. Keeps
  * `command not found` in an ordinary build, and a publickey denial from a git remote, silent.
  */
-const REMOTE_COMMAND = /\b(ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b|\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/i;
+const REMOTE_COMMAND = /(?:^|[\s;|&(])(?:ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b/i;
+
+/**
+ * A tailnet address (100.64.0.0/10, CGNAT — never a code forge) identifies the VPS wherever it shows
+ * up, including in OUTPUT only: `git fetch` against a repo hosted on the VPS names the host in the
+ * error, never in the command.
+ */
+const TAILNET_ADDR = /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
 
 /**
  * A code forge is never the VPS. `ssh -T git@github.com` and `git push` both fail with the same
@@ -79,7 +97,8 @@ export function decide(payload, classify) {
 
     const barrier = classify(output);
     if (!barrier) return { action: 'none' };
-    if (!UNAMBIGUOUS.has(barrier.id) && !REMOTE_COMMAND.test(command)) return { action: 'none' };
+    const remote = REMOTE_COMMAND.test(command) || TAILNET_ADDR.test(command) || TAILNET_ADDR.test(output);
+    if (!UNAMBIGUOUS.has(barrier.id) && !remote) return { action: 'none' };
     if (FORGE_HOST.test(command) || FORGE_HOST.test(output)) return { action: 'none' };
 
     return {
@@ -109,7 +128,7 @@ export function decide(payload, classify) {
  */
 export async function processInput(raw, classify) {
   try {
-    const resolve = classify === undefined ? classifyFailure : classify;
+    const resolve = classify === undefined ? await loadClassifier() : classify;
     if (typeof resolve !== 'function') return { exitCode: 0, output: null };
     const payload = JSON.parse(raw);
     const d = decide(payload, resolve);

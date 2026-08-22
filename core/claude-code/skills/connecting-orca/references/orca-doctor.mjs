@@ -55,15 +55,31 @@ import { fileURLToPath } from "node:url";
  * barrier. It is what the docs oracle asserts, so a fix can never live in code without living in the
  * doc the operator actually reads.
  */
+/**
+ * The syscall vocabulary of a DENIED connection, declared as data so the oracle can prove every verb
+ * has a real fixture. It is not a guess: `ping` fails at `sendmsg`/`socket`, a resolver at
+ * `getaddrinfo`, ssh mid-handshake at `read`. Anchoring on `connect` alone made those vanish
+ * entirely — a barrier that disappears is worse than one that over-matches, because the operator is
+ * left with no fix at all. (`connect` also covers `connecting`, `connect()` and `connect to`.)
+ */
+export const SANDBOX_VERBS = ["connect", "bind", "sendto", "sendmsg", "socket", "getaddrinfo", "read", "write"];
+
+const SANDBOX_MATCH = new RegExp(
+  `(?:${SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})[^\\n]*(?:Operation not permitted|EPERM)`,
+  "i",
+);
+
 export const BARRIERS = [
   {
     id: "sandbox-network",
-    match: /(?:connect(?:ing|\(\))?(?: to)?|Failed to connect|bind|sendto|socket)[^\n]*(?:Operation not permitted|EPERM)/i,
+    match: SANDBOX_MATCH,
+    // D-Bus speaks the same words and has nothing to do with the network sandbox.
+    veto: /to bus|dbus|d-bus/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",
     fix: "reexecutar o MESMO comando com o sandbox do Bash desligado",
-    docToken: "sandbox do Claude Code",
+    docToken: "sandbox do Bash desligado",
   },
   {
     id: "known-hosts",
@@ -144,20 +160,46 @@ export const DEFAULT_ORCA_CANDIDATES = ["/opt/orca/orca-linux.AppImage", "orca"]
  */
 export const PROBE_TIMEOUT_MS = 15_000;
 
-/** Hostnames/aliases that may be handed to `ssh`. Anything else is refused — see `isSafeHost`. */
-const SAFE_HOST = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+/** A plain hostname or alias. Must start alphanumeric, which is what keeps `-oProxyCommand=…` out. */
+const SAFE_HOSTNAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * An IPv6 literal, optionally bracketed and with a zone id. Tailscale assigns EVERY node an address
+ * in `fd7a:115c:a1e0::/48`, so refusing IPv6 refuses the tailnet — the first guard did exactly that
+ * and silently dropped the only path the operator had asked for, which is worse than the injection it
+ * was written to stop: it does not run the wrong thing, it runs nothing and says nothing useful.
+ */
+const SAFE_IPV6 = /^\[?[0-9A-Fa-f:]*:[0-9A-Fa-f:]*\]?(?:%[A-Za-z0-9._-]+)?$/;
 
 /**
  * @description Whether a host/alias is safe to pass to `ssh` in argument position. A value starting
  * with `-` is parsed by ssh as an OPTION, so `--ssh-host "-oProxyCommand=…"` would execute an
- * arbitrary command — the diagnosis tool becoming an execution primitive. Anything not matching a
- * plain hostname (optionally `user@host`) is refused rather than sanitized. Pure.
+ * arbitrary command — the diagnosis tool becoming an execution primitive. Accepts what ssh accepts as
+ * a destination (`host`, `user@host`, an IPv6 literal); anything else is refused, never sanitized.
  * @param {string} host
  * @returns {boolean}
  */
 export function isSafeHost(host) {
   const value = String(host ?? "").trim();
-  return value.length > 0 && value.length <= 255 && SAFE_HOST.test(value);
+  if (!value || value.length > 255) return false;
+  const match = value.match(/^(?:([A-Za-z0-9][A-Za-z0-9._-]*)@)?(.+)$/);
+  if (!match) return false;
+  const target = match[2];
+  return SAFE_HOSTNAME.test(target) || SAFE_IPV6.test(target);
+}
+
+/**
+ * @description Whether an Orca environment NAME is usable. Deliberately NOT `isSafeHost`: a name is a
+ * human field (`orca environment add --name "vps são paulo"`) that travels in argv after
+ * `--environment`, never through a shell — applying a hostname regex to it rejected legitimate names
+ * and degraded the verdict for no security gain. Only a leading `-` (an option to the CLI) and
+ * newlines are refused. Pure.
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isSafeEnvironmentName(name) {
+  const value = String(name ?? "").trim();
+  return value.length > 0 && value.length <= 255 && !value.startsWith("-") && !/[\n\r]/.test(value);
 }
 
 /**
@@ -169,7 +211,7 @@ export function isSafeHost(host) {
 export function classifyFailure(text) {
   const t = String(text ?? "");
   if (!t.trim()) return null;
-  return BARRIERS.find((b) => b.match.test(t)) ?? null;
+  return BARRIERS.find((b) => b.match.test(t) && !(b.veto && b.veto.test(t))) ?? null;
 }
 
 /**
@@ -225,9 +267,38 @@ export function orcaCandidates(env = {}) {
 export function sshConfigDeclaresHost(configText, host) {
   const alias = String(host ?? "").trim();
   if (!alias) return false;
+  // `Host harness-*` is the ordinary way to write a tailnet config; exact-token matching reported
+  // "no Host block" for a config that declares the host perfectly well.
+  if (hasMatchBlock(configText)) return true;
   return String(configText ?? "")
     .split("\n")
-    .some((line) => /^\s*Host\s+/i.test(line) && line.trim().split(/\s+/).slice(1).includes(alias));
+    .some((line) => /^\s*Host\s+/i.test(line) && patternsOf(line).some((p) => globMatches(p, alias)));
+}
+
+/** @description Tokens after the `Host`/`Match` keyword. @param {string} line @returns {string[]} */
+function patternsOf(line) {
+  return line.trim().split(/\s+/).slice(1);
+}
+
+/**
+ * @description ssh_config glob: `*` any run, `?` one char. Negated patterns (`!host`) are treated as
+ * non-matching rather than parsed. Pure.
+ * @param {string} pattern @param {string} value @returns {boolean}
+ */
+function globMatches(pattern, value) {
+  if (!pattern || pattern.startsWith("!")) return false;
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`).test(value);
+}
+
+/**
+ * @description Does the config use `Match` blocks? Their conditions (`exec`, `originalhost`, …) are
+ * not statically resolvable here, so their presence makes any "this host is not declared" claim
+ * unsound — the doctor stays silent instead of asserting something it cannot know.
+ * @param {string} configText @returns {boolean}
+ */
+function hasMatchBlock(configText) {
+  return String(configText ?? "").split("\n").some((line) => /^\s*Match\s+\S/i.test(line));
 }
 
 /**
@@ -243,13 +314,15 @@ export function sshConfigHostName(configText, host) {
   if (!alias) return "";
   let inside = false;
   for (const line of String(configText ?? "").split("\n")) {
-    if (/^\s*Host\s+/i.test(line)) {
-      inside = line.trim().split(/\s+/).slice(1).includes(alias);
+    if (/^\s*(?:Host|Match)\s+/i.test(line)) {
+      inside = /^\s*Host\s+/i.test(line) && patternsOf(line).some((p) => globMatches(p, alias));
       continue;
     }
     if (inside) {
       const m = line.match(/^\s*HostName\s+(\S+)/i);
-      if (m) return m[1];
+      // `%h` and friends are ssh tokens expanded at connect time; returning one literally would be a
+      // hostname that exists nowhere.
+      if (m) return m[1].includes("%") ? "" : m[1];
     }
   }
   return "";
@@ -331,7 +404,7 @@ export async function probeEnvironment(deps, bin) {
       : [];
     return { status: names.length ? "listed" : "none", environments: names };
   }
-  if (!isSafeHost(name)) {
+  if (!isSafeEnvironmentName(name)) {
     return { status: "skipped", environment: name, reason: "nome de ambiente inválido (não foi usado)" };
   }
   const r = await deps.run(bin, ["status", "--environment", name, "--json"]);
@@ -456,7 +529,10 @@ export async function diagnose(deps) {
   const sshOpen = ssh.status === "ok";
 
   return {
+    // `ok` means "some runtime answered", which on the Orca host itself is the local one. A machine
+    // reader that needs "can I reach the VPS from here" must read `paths`, not `ok`.
     ok: remoteOpen || localOpen || sshOpen,
+    paths: { remote: remoteOpen, local: localOpen, ssh: sshOpen },
     orca,
     localRuntime,
     environment,

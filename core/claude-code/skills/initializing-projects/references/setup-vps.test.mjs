@@ -117,7 +117,9 @@ test("buildProjectConfig maps an empty title filter to null (no filter), not to 
 
 test("assertCronSafe rejects the values that would silently break or inject into a crontab line", () => {
   assert.equal(assertCronSafe("/usr/bin/node", "nodeBin"), "/usr/bin/node");
-  for (const bad of ["", "a%b", "a\nb", "a#b", "a\rb"]) {
+  // A space is the likeliest of these in a real answer (`~/Applications/Orca App/`) and splits the
+  // unquoted cron command into two argv entries — a queue that installs cleanly and never dispatches.
+  for (const bad of ["", "a%b", "a\nb", "a#b", "a\rb", "/opt/my orca/orca.AppImage", "a\tb"]) {
     assert.throws(() => assertCronSafe(bad, "x"), /não pode ficar vazio nem conter/);
   }
 });

@@ -606,7 +606,7 @@ só, o OOM killer começou a matar processo — inclusive sessões importantes n
       automação de review no Orca — as duas metades. O caminho guiado, do diagnóstico até uma issue
       canária entregue, é a skill
       [`connecting-orca`](../core/claude-code/skills/connecting-orca/SKILL.md)
-- [ ] Uma sessão de agente consegue **operar** a VPS: `npx @orobsonn/claude-harness orca-doctor`.
+- [ ] Uma sessão de agente consegue **operar** a VPS: `node .claude/skills/connecting-orca/references/orca-doctor.mjs` (ou `npx @orobsonn/claude-harness orca-doctor`, da release que traz o comando).
       Três falhas comuns leem como *"não tenho acesso"* e nenhuma delas é — barreiras, causas e
       correções em [`orca-headless-vps-playbook.md` §8](orca-headless-vps-playbook.md)
 

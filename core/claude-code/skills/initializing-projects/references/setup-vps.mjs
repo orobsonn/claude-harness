@@ -107,15 +107,18 @@ export function buildProjectConfig(a) {
 /**
  * @description Rejects a value that cannot appear literally in a crontab line. `%` is the killer —
  * cron treats it as a newline and would silently truncate the command; a newline or a comment marker
- * would let a config path inject extra crontab content.
+ * would let a config path inject extra crontab content. WHITESPACE is refused for the same reason and
+ * is the likeliest of all: the line is unquoted, so a binary at `~/Applications/Orca App/orca` splits
+ * into two argv entries and the tick dies at `sh: orca: not found` — a queue that never dispatches,
+ * which is the exact failure this wizard exists to avoid.
  * @param {string} value
  * @param {string} field
  * @returns {string}
  */
 export function assertCronSafe(value, field) {
   const v = String(value ?? "");
-  if (v === "" || /[%\n\r#]/.test(v)) {
-    throw new Error(`setup-vps: "${field}" não pode ficar vazio nem conter % \\n ou # (quebraria a linha do cron)`);
+  if (v === "" || /[%\n\r#\s]/.test(v)) {
+    throw new Error(`setup-vps: "${field}" não pode ficar vazio nem conter espaço, % \\n ou # (quebraria a linha do cron)`);
   }
   return v;
 }

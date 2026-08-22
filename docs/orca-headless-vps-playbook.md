@@ -265,7 +265,7 @@ realmente precisam de SSH.
 |---|---|---|
 | `Permission denied (publickey)` | a chave padrão não é a da VPS — a chave certa nunca chegou a ser oferecida | `ssh -i <chave-da-vps>`, ou um bloco `Host` no `~/.ssh/config` com `IdentityFile` + `IdentitiesOnly yes` |
 | `Host key verification failed` | host ausente do `known_hosts` — sessão não-interativa falha seca, sem prompt | `ssh-keyscan -H <ip-tailscale> >> ~/.ssh/known_hosts` |
-| `Operation not permitted` **numa tentativa de conexão** | sandbox do Claude Code — o IP da VPS não está na allowlist | reexecutar o MESMO comando com o sandbox do Bash desligado (se a sua sessão não puder, é passo do operador) |
+| `Operation not permitted` **numa tentativa de conexão** | sandbox do Claude Code — o IP da VPS não está na allowlist | reexecutar o MESMO comando com o **sandbox do Bash desligado** (se a sua sessão não puder, é passo do operador) |
 | `Could not resolve hostname` | o alias não existe no `~/.ssh/config`, ou a tailnet não está de pé aqui — mesma família: `No route to host`, `Network is unreachable` | `tailscale status` pra confirmar o IP, e criar o bloco `Host` |
 | `Unknown environment: <id>` | o runtime do Orca reiniciou e o pareamento não sobreviveu | `systemctl restart orca-serve` na VPS e parear de novo (`orca environment add`) |
 | `bad option: --no-sandbox` | o shim `orca` do `PATH` quebra, mas o AppImage responde — são binários diferentes | chamar `/opt/orca/orca-linux.AppImage` direto, ou exportar `ORCA_BIN` apontando pra ele |
@@ -287,7 +287,8 @@ você não controla, e numa máquina sem instância ativa ele responde outra coi
 # num projeto com o harness vendorado
 node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host harness-vps --environment harness-vps
 
-# em qualquer máquina, sem vendorar nada
+# em qualquer máquina, sem vendorar nada (precisa da release que traz o comando —
+# numa versão anterior o npx responde usage + exit 1)
 npx @orobsonn/claude-harness orca-doctor --ssh-host harness-vps
 ```
 
@@ -325,10 +326,9 @@ JSON
 
 # 3) uma linha de cron por projeto — usuário `orca`, NUNCA root
 sudo -u orca crontab -e
-# */20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage \
-#   /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs \
-#   --config /home/orca/.config/claude-harness/projects/<slug>.json \
-#   >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
+# (UMA linha só — crontab não tem continuação: o `\` só escapa `%`, e um arquivo quebrado em
+#  várias linhas é recusado inteiro com `bad minute`)
+# */20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs --config /home/orca/.config/claude-harness/projects/<slug>.json >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
 ```
 
 **`ORCA_BIN` faz parte da linha.** O AppImage não fica no `PATH`, e o selector cai em `orca` quando a
