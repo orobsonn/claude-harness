@@ -64,8 +64,18 @@ import { fileURLToPath } from "node:url";
  */
 export const SANDBOX_VERBS = ["connect", "bind", "sendto", "sendmsg", "socket", "getaddrinfo", "read", "write"];
 
+/**
+ * A verb only counts when it appears as a SYSCALL TOKEN — immediately followed by `:`, `(`, ` to`, or
+ * ` EPERM`. Joining the verbs raw was worse than the unanchored pattern it replaced: `read` is a
+ * substring of `already` and `pthread`, `write` of `write-cache`, `socket` of `docker.socket`, so an
+ * ordinary filesystem `Operation not permitted` was answered with "disable the sandbox" — advice that
+ * cannot help, for a cause that is not the sandbox. Word boundaries alone do not fix it (a path like
+ * `./read-only-dir` still has them); the qualifier does, because a denied syscall always names itself.
+ */
+const VERB_ALTERNATION = SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 const SANDBOX_MATCH = new RegExp(
-  `(?:${SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})[^\\n]*(?:Operation not permitted|EPERM)`,
+  `(?:\\b(?:${VERB_ALTERNATION})\\b\\s*(?::|\\(|\\s+to\\b)[^\\n]*(?:Operation not permitted|EPERM)` +
+    `|\\b(?:${VERB_ALTERNATION})\\b\\s+EPERM\\b)`,
   "i",
 );
 
@@ -73,8 +83,9 @@ export const BARRIERS = [
   {
     id: "sandbox-network",
     match: SANDBOX_MATCH,
-    // D-Bus speaks the same words and has nothing to do with the network sandbox.
-    veto: /to bus|dbus|d-bus/i,
+    // D-Bus speaks the same words and has nothing to do with the network sandbox. Anchored on the
+    // colon, or a host merely NAMED `bus.example.com` loses its barrier entirely.
+    veto: /\bto (?:the )?bus\s*:|\bd-?bus\b|system_bus_socket/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",
@@ -272,7 +283,13 @@ export function sshConfigDeclaresHost(configText, host) {
   if (hasMatchBlock(configText)) return true;
   return String(configText ?? "")
     .split("\n")
-    .some((line) => /^\s*Host\s+/i.test(line) && patternsOf(line).some((p) => globMatches(p, alias)));
+    .some((line) => {
+      if (!/^\s*Host\s+/i.test(line)) return false;
+      const patterns = patternsOf(line);
+      // ssh semantics: a matching NEGATED pattern excludes the host from the block entirely.
+      if (patterns.some((p) => p.startsWith("!") && globMatches(p.slice(1), alias))) return false;
+      return patterns.some((p) => globMatches(p, alias));
+    });
 }
 
 /** @description Tokens after the `Host`/`Match` keyword. @param {string} line @returns {string[]} */

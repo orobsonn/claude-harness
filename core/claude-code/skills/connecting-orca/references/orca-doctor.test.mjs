@@ -143,12 +143,47 @@ test("every barrier classifies EVERY message form it claims to cover", () => {
   assert.equal(classifyFailure("some brand new failure"), null, "an unknown failure is reported, not invented");
 });
 
-test("every verb the sandbox pattern claims has a fixture — an unexercised alternative is where it broke", () => {
+test("every verb the sandbox pattern claims has a fixture — as a TOKEN, not as a substring", () => {
+  // Matching the fixture with a bare substring here would repeat production's own bug: accidental
+  // coverage (`read` inside `already`) would read as a covered verb. The fixture must carry the verb
+  // the way a denied syscall names itself.
   for (const verb of SANDBOX_VERBS) {
-    const covered = FIXTURES["sandbox-network"].filter((m) => new RegExp(verb, "i").test(m));
-    assert.ok(covered.length > 0, `no fixture exercises the "${verb}" verb`);
+    const asToken = new RegExp(`\\b${verb}\\b\\s*(?::|\\(|\\s+to\\b|\\s+EPERM\\b)`, "i");
+    const covered = FIXTURES["sandbox-network"].filter((m) => asToken.test(m));
+    assert.ok(covered.length > 0, `no fixture exercises the "${verb}" verb as a syscall token`);
     for (const message of covered) assert.equal(classifyFailure(message)?.id, "sandbox-network");
   }
+});
+
+test("an ordinary filesystem denial is NOT the network sandbox — the verbs are substrings of real words", () => {
+  // Every one of these classified as sandbox-network when the verbs were joined without a qualifier,
+  // answering a permission error on a FILE with "disable the sandbox". `already` and `pthread`
+  // contain `read`; `docker.socket` contains `socket`; `write-cache` contains `write`.
+  const filesystem = [
+    "tar: ./read-only-dir: Cannot mkdir: Operation not permitted",
+    "chown: /home/x/.cache/write-cache: Operation not permitted",
+    "rm: cannot remove '/var/run/docker.socket': Operation not permitted",
+    "setfacl: /etc/NetworkManager/connections/wifi: Operation not permitted",
+    "ln: '/usr/bin/bindfs': Operation not permitted",
+    "git: index already locked; chmod .git/index.lock: Operation not permitted",
+    "pthread_create: Operation not permitted",
+  ];
+  for (const message of filesystem) {
+    const barrier = classifyFailure(message);
+    assert.notEqual(
+      barrier?.id,
+      "sandbox-network",
+      `a file-permission error must not prescribe disabling the sandbox: ${message}`,
+    );
+  }
+});
+
+test("the D-Bus veto is anchored — a host merely NAMED bus keeps its barrier", () => {
+  assert.equal(
+    classifyFailure("curl: (7) Failed to connect to bus.example.com port 443: Operation not permitted")?.id,
+    "sandbox-network",
+    "vetoing on the substring `to bus` silently deleted the diagnosis for any host starting with bus",
+  );
 });
 
 test("D-Bus speaks the same words and is NOT the network sandbox", () => {
@@ -427,6 +462,10 @@ test("a glob Host block declares the host — `Host harness-*` is the ordinary w
 
   // A `Match` block's condition is not statically resolvable, so "not declared" becomes unsayable.
   assert.equal(sshConfigDeclaresHost("Match host harness-vps\n  User root\n", "harness-vps"), true);
+
+  // ssh semantics: a matching negated pattern EXCLUDES the host from the block.
+  assert.equal(sshConfigDeclaresHost("Host *-vps !harness-vps\n  User root\n", "harness-vps"), false);
+  assert.equal(sshConfigDeclaresHost("Host *-vps !other-vps\n  User root\n", "harness-vps"), true);
 
   // `%h` is expanded by ssh at connect time; returning it literally is a hostname that exists nowhere.
   assert.equal(sshConfigHostName("Host harness-vps\n  HostName %h.tail.ts.net\n", "harness-vps"), "");

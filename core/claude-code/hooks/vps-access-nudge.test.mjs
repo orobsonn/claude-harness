@@ -156,3 +156,40 @@ test("the tailnet's IPv6 ULA identifies the VPS just like its IPv4 range", () =>
   assert.equal(d.action, "inject", "an IPv6-only tailnet remote must not be invisible to the nudge");
   assert.equal(decide(payload("curl https://api.example.com", "connect EPERM 93.184.216.34:443"), classifyFailure).action, "none");
 });
+
+test("the command may be an absolute path, a quoted string, or backticked — the incident's own form", () => {
+  // Requiring whitespace before the verb made `/usr/bin/ssh harness-vps true` silent: the exact
+  // command shape of the incident, missed by the hook written for it.
+  const remote = [
+    "/usr/bin/ssh harness-vps true",
+    'bash -lc "ssh harness-vps true"',
+    "`ssh harness-vps true`",
+    "env FOO=1 ssh harness-vps true",
+    "cd /repo && ssh harness-vps 'systemctl status orca-serve'",
+  ];
+  for (const command of remote) {
+    assert.equal(
+      decide(payload(command, "root@vps: Permission denied (publickey)."), classifyFailure).action,
+      "inject",
+      `must nudge for: ${command}`,
+    );
+  }
+  // …and the home directory of the playbook's own user still must not count as the `orca` command.
+  assert.equal(
+    decide(payload("node /home/orca/dev/app/build.mjs", "Error: ENOENT: no such file or directory"), classifyFailure).action,
+    "none",
+  );
+});
+
+test("only the CGNAT range is a tailnet address — 100.0.0.0/8 includes ordinary public hosts", () => {
+  const publicIp = decide(
+    payload("npm run build", "fetch failed 100.24.16.1: connect EPERM 100.24.16.1:443"),
+    classifyFailure,
+  );
+  assert.equal(publicIp.action, "none", "100.24.x.x is AWS, not the tailnet");
+  const tailnet = decide(
+    payload("git fetch origin", "ssh: connect to host 100.98.45.37 port 22: Operation not permitted"),
+    classifyFailure,
+  );
+  assert.equal(tailnet.action, "inject");
+});

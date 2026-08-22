@@ -49,15 +49,23 @@ const UNAMBIGUOUS = new Set(['unknown-environment', 'orca-cli-shim']);
 /**
  * Every other barrier only nudges when the command itself was reaching for a remote machine. Keeps
  * `command not found` in an ordinary build, and a publickey denial from a git remote, silent.
+ *
+ * Two details are load-bearing. An absolute path counts (`/usr/bin/ssh …`, `bash -lc "ssh …"`,
+ * backticks) — requiring whitespace before the verb made the incident's own command silent. And the
+ * verb must END the path segment (`(?=\s|$|:)`), because `/home/orca/…` is the home directory of the
+ * user this playbook creates: matching `orca` inside it fired the nudge on every trivial local ENOENT.
  */
-const REMOTE_COMMAND = /(?:^|[\s;|&(])(?:ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b/i;
+const REMOTE_COMMAND =
+  /(?:^|[\s;|&("'`])(?:\S*\/)?(?:ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)(?=\s|$|:)/i;
 
 /**
  * A tailnet address identifies the VPS wherever it shows up, including in OUTPUT only: `git fetch`
  * against a repo hosted on the VPS names the host in the error, never in the command. Both families
  * count — 100.64.0.0/10 (CGNAT, never a code forge) and Tailscale's `fd7a:115c:a1e0::/48` ULA.
+ * The range matters: `100.` alone is 100.0.0.0/8, which includes ordinary AWS addresses, so any build
+ * output carrying one plus an unrelated EPERM would have fired the nudge.
  */
-const TAILNET_ADDR = /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|\bfd7a:115c:a1e0:[0-9A-Fa-f:]*/i;
+const TAILNET_ADDR = /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b|\bfd7a:115c:a1e0:[0-9A-Fa-f:]*/i;
 
 /**
  * A code forge is never the VPS. `ssh -T git@github.com` and `git push` both fail with the same
