@@ -200,14 +200,109 @@ pareamento novo gera um token revogável separado (não precisa reusar o mesmo).
 
 ---
 
-## 8. Ligar a entrega autônoma (o selector)
+## 8. Operando a VPS a partir de uma sessão de agente
+
+Um agente **tem** acesso a esta VPS e mesmo assim conclui que não tem. Três barreiras produzem
+mensagens que leem como falta de permissão, e **nenhuma delas sugere a própria correção**. Empilhadas,
+dão a conclusão errada com alta confiança: *"não tenho acesso à VPS"* — a sessão para e devolve o
+trabalho pro operador, enquanto outra sessão, na mesma máquina, no mesmo minuto, opera a VPS normalmente.
+A diferença nunca foi permissão. Foi saber contornar as três.
+
+**1. Chave SSH — `Permission denied (publickey)`.** O `ssh` oferece os nomes padrão (`id_ed25519`,
+`id_rsa`). Numa máquina com uma chave dedicada pra VPS e outra pro GitHub, o padrão é a do GitHub, e a
+VPS recusa. Com o `ssh-agent` vazio (`ssh-add -l` → *"The agent has no identities"*) não há fallback. Lê
+como *"minha chave não está autorizada lá"* — quando a chave certa nunca chegou a ser oferecida.
+
+**2. Host key — `Host key verification failed`.** Primeira conexão a um host ausente do `known_hosts`
+falha seca, **sem prompt**, em sessão não-interativa. Lê como *"o alias está quebrado"*.
+
+**3. Sandbox do Claude Code — `Operation not permitted`.** O IP da VPS não está na allowlist de rede;
+o comando sandboxado falha **antes de sair da máquina**. Lê como *"não tenho permissão pra isso"*.
+
+### Setup, uma vez por máquina — resolve as barreiras 1 e 2 pra sempre
+
+```bash
+# ~/.ssh/config
+Host harness-vps
+  HostName <ip-tailscale>
+  User root
+  IdentityFile ~/.ssh/<chave-da-vps>
+  IdentitiesOnly yes
+```
+
+`IdentitiesOnly yes` é o que faz diferença: sem ele o `ssh` continua tentando as outras chaves antes
+(e pode estourar `Too many authentication failures` num servidor com limite baixo).
+
+```bash
+ssh-keyscan -H <ip-tailscale> >> ~/.ssh/known_hosts   # confia no host uma vez
+ssh harness-vps 'hostname'                            # prova
+```
+
+### Por sessão — a barreira 3
+
+`Operation not permitted` num comando **de rede** é sandbox, não credencial: repita com o sandbox
+desligado. Nenhuma quantidade de chave certa passa por essa.
+
+### O atalho que dispensa SSH
+
+O CLI local fala com o runtime da VPS por `--environment <nome>` — **sem SSH nenhum**:
+
+```bash
+orca repo list        --environment harness-vps --json
+orca worktree ps      --environment harness-vps --json
+orca automations list --environment harness-vps --json
+```
+
+Serve pra tudo que é **estado do Orca** (repo, worktree, automação, dispatch). Não serve pra nada que
+é **estado da máquina**: escrever `~/.config/claude-harness/projects/<slug>.json`, mexer no crontab do
+usuário `orca`, `systemctl`/`journalctl`, atualizar o AppImage — isso precisa de SSH. Vale dizer essa
+divisão em voz alta: na maioria das vezes "bloqueado" significa bloqueado só para os dois comandos que
+realmente precisam de SSH.
+
+### Diagnóstico
+
+| Mensagem | Causa provável | Ação |
+|---|---|---|
+| `Permission denied (publickey)` | a chave padrão não é a da VPS — a chave certa nunca chegou a ser oferecida | `ssh -i <chave-da-vps>`, ou um bloco `Host` no `~/.ssh/config` com `IdentityFile` + `IdentitiesOnly yes` |
+| `Host key verification failed` | host ausente do `known_hosts` — sessão não-interativa falha seca, sem prompt | `ssh-keyscan -H <ip-tailscale> >> ~/.ssh/known_hosts` |
+| `Operation not permitted` (rede) | sandbox do Claude Code — o IP da VPS não está na allowlist | repetir o comando com o sandbox desligado |
+| `Could not resolve hostname` | o alias não existe no `~/.ssh/config`, ou a tailnet não está de pé aqui | `tailscale status` pra confirmar o IP, e criar o bloco `Host` |
+| `Unknown environment: <id>` | o runtime do Orca reiniciou e o pareamento não sobreviveu | `systemctl restart orca-serve` na VPS e parear de novo (`orca environment add`) |
+| `bad option: --no-sandbox` | o shim `orca` do `PATH` quebra, mas o AppImage responde — são binários diferentes | chamar `/opt/orca/orca-linux.AppImage` direto, ou exportar `ORCA_BIN` apontando pra ele |
+| `Unknown command: <cmd>` | a build instalada não tem esse subcomando (`repo ls` não existe — é `repo list`) | ler o campo `suggestions` do próprio erro JSON e usar o nome que ele devolve |
+
+As três últimas linhas foram medidas nesta VPS, não deduzidas — e são as que mais parecem "o acesso
+quebrou": `orca --version` sai com **código 3**, o shim do `PATH` responde `--help` com erro de
+argumento de node, e um subcomando recusado volta `ok:false` com código de saída 1. Daí a regra de
+sondagem: **pergunte algo de verdade** (`orca worktree ps --json`) e leia o envelope
+(`{ id, ok, result, _meta }`, carga sob `result`) — nunca uma flag de versão.
+
+### Não conclua — diagnostique
+
+```bash
+# num projeto com o harness vendorado
+node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host harness-vps --environment harness-vps
+
+# em qualquer máquina, sem vendorar nada
+npx @orobsonn/claude-harness orca-doctor --ssh-host harness-vps
+```
+
+O `orca-doctor` sonda os três caminhos (CLI do Orca, ambiente pareado, SSH) e imprime, pra cada um
+bloqueado, **a barreira e a correção** — a mesma tabela acima, que um oráculo de docs mantém amarrada
+ao código (`core/orca/docs-contract.test.mjs`). Ele nunca conclui "sem acesso", porque essa conclusão é
+o defeito. Para o caminho completo — do diagnóstico até uma issue canária entregue — use a skill
+[`connecting-orca`](../core/claude-code/skills/connecting-orca/SKILL.md).
+
+---
+
+## 9. Ligar a entrega autônoma (o selector)
 
 Com o Orca no ar, a entrega autônoma é **um JSON por projeto + uma linha de cron**. O artefato é
 [`core/orca/`](../core/orca/README.md) — leia esse README para o formato completo dos campos.
 
 ```bash
-# 1) registrar o repo no Orca e pegar o id
-sudo -u orca orca repo ls --json
+# 1) registrar o repo no Orca e pegar o id + o `path` do clone (vira o clonePath)
+sudo -u orca orca repo list --json   # `repo ls` NÃO existe: o erro devolve `suggestions`
 
 # 2) um JSON por projeto
 sudo -u orca install -d -m 700 /home/orca/.config/claude-harness/projects
@@ -247,7 +342,7 @@ Comece com `"titleIncludes": "[canary]"` — assim só issues explicitamente mar
 pipeline. Sem esse filtro, a issue escolhida é simplesmente a `harness:ready` aberta mais antiga, e
 num backlog real isso é uma tarefa de anos atrás, não a que você quer observar primeiro.
 
-## 9. Revisão de PR + merge condicional
+## 10. Revisão de PR + merge condicional
 
 **Não é código — é uma automação agendada do Orca.** O prompt dela é versionado em
 [`core/orca/review-prompt.md`](../core/orca/review-prompt.md): substitua `<OWNER/REPO>` e `<BASE>` e
@@ -269,7 +364,7 @@ só vale no `git` local, que é justamente onde o revisor roda.
 > da automação **não pode** passar `-R`/`--repo` (nem `--auto`) — ele precisa rodar dentro do
 > checkout do repo alvo, passando só o número do PR. Isso é o que mantém o gate de CI inescapável.
 
-## 10. Credencial escopada por projeto
+## 11. Credencial escopada por projeto
 
 Nunca um `.bashrc` global com o token de todo cliente. No `~/.bashrc` do usuário `orca`, defina a
 **função**, não o carregamento:
@@ -300,7 +395,7 @@ escopada acima.
 | `Missing X server or $DISPLAY` | `xvfb` não instalado (Orca só sobe Xvfb sozinho se o pacote já existir) | `apt-get install -y xvfb` |
 | O selector nunca despacha e o log só diz `skip: ... worktrees working` | worktrees antigos presos em `working` consomem o teto global | `orca worktree ps --json` e encerrar os órfãos; o teto é global, não por projeto |
 | Todo PR da noite conflita, e **só** em `MEMORY.md` / `kaizen.md` / `CLAUDE.md` — nunca em código | é do desenho: runs paralelas acrescentam linha nos mesmos arquivos de anotação. O PR em conflito impede o GitHub de computar o merge, então o CI nunca roda e a revisão recusa por falta de CI verde | é o STEP 3.5 do `core/orca/review-prompt.md` — o revisor concilia por união dentro da allowlist antes de merjar. Se o seu prompt de review foi escrito à mão antes disso, ele não tem esse passo |
-| Conflito em arquivos que a run **não tocou**, aparecendo só na hora do merge | worktree nasceu de base desatualizada: `--base-branch main` resolve o ref **local** do clone, que nunca avança | `clonePath` no JSON do projeto + `fetch` antes da trava + despachar em `origin/<base>` (§8). Só `fetch` não resolve |
+| Conflito em arquivos que a run **não tocou**, aparecendo só na hora do merge | worktree nasceu de base desatualizada: `--base-branch main` resolve o ref **local** do clone, que nunca avança | `clonePath` no JSON do projeto + `fetch` antes da trava + despachar em `origin/<base>` (§9). Só `fetch` não resolve |
 | Uma issue ficou `harness:in-progress` sem worktree | o `worktree create` falhou **e** a devolução do label também | procurar `STUCK: #N` no log do selector e devolver o label à mão — é o único estado que exige reparo humano |
 
 ## Atualização (quando sair versão nova)
@@ -336,7 +431,7 @@ Se algo quebrar: `systemctl stop orca-serve`, restaurar **binário e pasta de co
 ## O que NÃO fazer (decisões já tomadas)
 
 - **Não copiar os segredos de deploy para o usuário `orca` num `.bashrc` global.** Quem precisar
-  rodar algo autenticado conecta a credencial específica na hora, escopada por projeto (seção 10).
+  rodar algo autenticado conecta a credencial específica na hora, escopada por projeto (seção 11).
   Foi exatamente o oposto disso — root com 6 tokens Cloudflare de clientes diferentes em texto
   plano, herdados por todo `claude -p` — que ajudou a aposentar o motor antigo.
 - **Não expor a porta 6768 publicamente** (sem Tailscale/WireGuard) — a pairing URL sozinha vira

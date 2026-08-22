@@ -9,31 +9,43 @@
  * what proves the assumption agrees with the CLI, and it would have failed in the first minute.
  *
  * It SKIPS when no Orca binary is resolvable, so CI and any dev machine without Orca stay green.
- * Set `ORCA_BIN` to point at an AppImage that is not on PATH — the usual install
- * (`/opt/orca/orca-linux.AppImage`) is not.
+ * `ORCA_BIN` still wins when set, but it is no longer required: the candidate order comes from
+ * `orcaCandidates` (the same one `orca-doctor` uses), so the usual install
+ * (`/opt/orca/orca-linux.AppImage`, which is NOT on PATH) is found on its own.
+ *
+ * The probe was `--help` until it was measured on a live VPS: the `orca` shim registered on `PATH`
+ * answers it with `bad option: --no-sandbox` (a node arg-parse error from its own wrapper) while the
+ * AppImage answers every command correctly — so this smoke skipped 2/2 on the one machine that HAS
+ * Orca, which is precisely the silent hole its own header warned about, one level up. A liveness
+ * probe here asks a REAL question and validates the envelope; nothing else proves the CLI answers.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
 import { parseWorktreePs, countWorking, unwrapOrca } from "./select-and-dispatch.mjs";
+import { orcaCandidates, readEnvelope } from "../claude-code/skills/connecting-orca/references/orca-doctor.mjs";
 
-/** @returns {string|null} a runnable Orca binary, or null when none is available. */
+/** @returns {string|null} the first candidate that ANSWERS the envelope, or null when none does. */
 function resolveOrca() {
-  const bin = process.env.ORCA_BIN || "orca";
-  try {
-    // `--help`, not `--version`: this build exits 3 on every version flag it was probed with
-    // (`--version`, `-v`, `version`) and 0 only on `--help`. Probing with the wrong flag makes the
-    // smoke SKIP on a machine that has Orca — a silent hole in exactly the test meant to close one.
-    execFileSync(bin, ["--help"], { stdio: "ignore", timeout: 60_000 });
-    return bin;
-  } catch {
-    return null;
+  for (const bin of orcaCandidates(process.env)) {
+    try {
+      const stdout = execFileSync(bin, ["worktree", "ps", "--json"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 120_000,
+      });
+      if (readEnvelope(stdout).readable) return bin;
+    } catch (error) {
+      // A refusal (`ok:false`, non-zero exit) is still an answer — the binary works, it said no.
+      if (readEnvelope(String(error?.stdout ?? "")).readable) return bin;
+    }
   }
+  return null;
 }
 
 const ORCA = resolveOrca();
-const skip = ORCA ? false : "no Orca binary (set ORCA_BIN to run this smoke)";
+const skip = ORCA ? false : `no Orca binary answered (tried: ${orcaCandidates(process.env).join(", ")})`;
 
 test("SMOKE: `orca worktree ps --json` parses, and the concurrency ceiling can actually be counted from it", { skip }, () => {
   const stdout = execFileSync(ORCA, ["worktree", "ps", "--json"], {

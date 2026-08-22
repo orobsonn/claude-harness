@@ -602,6 +602,13 @@ só, o OOM killer começou a matar processo — inclusive sessões importantes n
 - [ ] Projetos clonados sob `/home/orca/dev/` e registrados no Orca
 - [ ] Teste de ponta a ponta: worktree criado com `--agent opencode` retornando
       `createdWithAgent: "opencode"` e terminal disparado
+- [ ] **Entrega autônoma ligada**: fila de implementação (JSON do projeto + linha do selector) **e**
+      automação de review no Orca — as duas metades. O caminho guiado, do diagnóstico até uma issue
+      canária entregue, é a skill
+      [`connecting-orca`](../core/claude-code/skills/connecting-orca/SKILL.md)
+- [ ] Uma sessão de agente consegue **operar** a VPS: `npx @orobsonn/claude-harness orca-doctor`.
+      Três falhas comuns leem como *"não tenho acesso"* e nenhuma delas é — barreiras, causas e
+      correções em [`orca-headless-vps-playbook.md` §8](orca-headless-vps-playbook.md)
 
 Com isso, desligar seu computador ou celular não afeta nada — o trabalho continua rodando na VPS, e
 você reconecta de onde quiser pra ver o estado exato de onde parou.

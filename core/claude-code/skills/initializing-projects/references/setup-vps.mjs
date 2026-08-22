@@ -62,7 +62,7 @@ export function orcaGuide() {
     "",
     " 1) id DO REPO NO ORCA",
     "    • Registre o repositório no Orca (desktop ou CLI) e rode:",
-    "        orca repo ls --json",
+    "        orca repo list --json",
     '    • Copie o campo "id" do repo — é o valor pedido abaixo.',
     "",
     " 2) TETO DE CONCORRÊNCIA (globalMaxWorking)",
@@ -293,11 +293,11 @@ export async function runSetupVps(deps) {
 
   out(orcaGuide());
 
-  const orcaRepoId = required(await ask("id do repo no Orca (orca repo ls --json): "), "orca-repo-id");
+  const orcaRepoId = required(await ask("id do repo no Orca (orca repo list --json): "), "orca-repo-id");
   // Asked, never guessed: the selector fetches HERE before dispatching, and a wrong path means every
   // run is born from a base that silently ages (see core/orca/README.md, "A base tem que ser remota").
   const clonePath = required(
-    await ask("Caminho do clone que o Orca usa de base (orca repo ls --json → path): "),
+    await ask("Caminho do clone que o Orca usa de base (orca repo list --json → path): "),
     "clone-path",
   );
   const baseBranch = String((await ask("Base branch [main]: ")) ?? "").trim() || "main";

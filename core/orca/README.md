@@ -32,6 +32,13 @@ pipeline de entrega (entry-policy, `triaging`, `orchestrating-delivery`, gates, 
 Orca **despacha**; o harness do repo **executa**. As runs ficam visíveis do desktop e do celular,
 que é o que o antigo `notify-telegram.mjs` existia para simular.
 
+Este README é a **referência de campo** (formato, armadilhas, contratos). Para *ligar* um projeto do
+zero — diagnóstico, pareamento, repo, fila, review, canário — o caminho guiado é a skill
+[`connecting-orca`](../claude-code/skills/connecting-orca/SKILL.md); e quando uma sessão de agente
+acha que não alcança a VPS, o diagnóstico determinístico é
+[`orca-doctor.mjs`](../claude-code/skills/connecting-orca/references/orca-doctor.mjs)
+(`npx @orobsonn/claude-harness orca-doctor`).
+
 ## O JSON de projeto
 
 Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>.json`:
@@ -53,7 +60,7 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
 |---|---|---|
 | `project` | sim | slug, só para log |
 | `ghRepo` | sim | `owner/repo` — passado como `--repo` pro `gh` |
-| `orcaRepoId` | sim | id do repo no Orca (`orca repo ls --json`) |
+| `orcaRepoId` | sim | id do repo no Orca (`orca repo list --json`) |
 | `clonePath` | **sim** | caminho do clone que o Orca usa de base — ver "A base tem que ser remota" |
 | `baseBranch` | não (`main`) | **nome** do branch base; o selector despacha em `origin/<baseBranch>` |
 | `agent` | não (`claude`) | agente do Orca |

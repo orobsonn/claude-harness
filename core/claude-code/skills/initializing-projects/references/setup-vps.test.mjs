@@ -23,7 +23,7 @@ import { parseCliArgs } from "./cli.mjs";
 import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 
 // All-Enter for the inferred fields (home/projectRoot/project/owner/repo), then the Orca answers.
-// clonePath sits right after orcaRepoId: both come from the same `orca repo ls --json` row.
+// clonePath sits right after orcaRepoId: both come from the same `orca repo list --json` row.
 // Order matches runSetupVps's prompts.
 const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", ""];
 
@@ -77,7 +77,7 @@ test("orcaGuide names Orca as the official ADE, links the download, and explains
   const g = orcaGuide();
   assert.match(g, /ADE oficial/);
   assert.match(g, /https:\/\/onorca\.dev/);
-  assert.match(g, /orca repo ls --json/);
+  assert.match(g, /orca repo list --json/);
   assert.match(g, /orca worktree ps --json/);
   assert.match(g, /canári/i);
 });

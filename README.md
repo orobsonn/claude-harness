@@ -276,7 +276,7 @@ Vendora o harness no `.claude/` do diretório atual (idempotente, non-clobber �
 **Ligar a entrega autônoma na VPS (via Orca) — wizard interativo:**
 
 ```bash
-npx @orobsonn/claude-harness setup-vps
+npx @orobsonn/claude-harness setup-orca      # alias: setup-vps
 ```
 
 Roda **na VPS**, como o usuário que roda o Orca (**nunca root** — o wizard recusa). Pergunta o projeto/repo/paths e as coordenadas do Orca (id do repo, base branch, agente, teto global de concorrência, filtro de canário, intervalo), e instala exatamente **dois** artefatos:
@@ -285,6 +285,16 @@ Roda **na VPS**, como o usuário que roda o Orca (**nunca root** — o wizard re
 2. uma linha de cron cercada rodando [`core/orca/select-and-dispatch.mjs`](core/orca/select-and-dispatch.mjs).
 
 Ele **não instala mais** os crons do motor antigo da VPS (`install-crons`: Cron A, review, drain, reaper, Telegram) — esse motor está aposentado, ver [`core/vps/DEPRECATED.md`](core/vps/DEPRECATED.md). Notificação deixou de ser problema do wizard: as runs do Orca são visíveis do desktop e do celular. O único passo que sobra manual é a **automação de revisão de PR + merge condicional**, que é uma automação agendada **no Orca**, não código — o wizard imprime os critérios exatos no fim.
+
+**Do harness instalado até uma issue entregue, num passo só:** a skill [`connecting-orca`](core/claude-code/skills/connecting-orca/SKILL.md) percorre diagnóstico → runtime/pareamento → repo → fila de implementação → automação de review → issue canária, e só se dá por pronta quando uma issue de verdade atravessou tudo.
+
+**E quando uma sessão de agente conclui que "não tem acesso à VPS":** quase sempre não é isso. Três falhas comuns (`Permission denied (publickey)`, `Host key verification failed`, `Operation not permitted`) leem como falta de permissão e nenhuma delas é — nem sugerem a própria correção. Diagnóstico determinístico, que nunca conclui "sem acesso":
+
+```bash
+npx @orobsonn/claude-harness orca-doctor --ssh-host <alias> --environment <nome>
+```
+
+Tabela de barreiras → causa → ação: [playbook §8](docs/orca-headless-vps-playbook.md).
 
 Ver **[`docs/usage.md`](docs/usage.md)** — instalar/atualizar o harness num projeto (`vendor-core`), o padrão de issues (`harness-ready`), configurar a routine no Claude Code, e setar o modelo do orquestrador.
 

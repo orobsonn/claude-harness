@@ -143,11 +143,24 @@ próprio repositório, então a pipeline de entrega já está lá — o selector
 próprio. Ligar tudo:
 
 ```bash
-npx @orobsonn/claude-harness setup-vps    # na VPS, como o usuário do Orca — nunca root
+npx @orobsonn/claude-harness setup-orca   # na VPS, como o usuário do Orca — nunca root
+                                          # (alias: setup-vps — mesmo wizard, nome antigo)
 ```
 
 O wizard escreve `~/.config/claude-harness/projects/<slug>.json` e uma linha de cron cercada. Formato
 dos campos, teto de concorrência e as armadilhas evitadas: [`core/orca/README.md`](../core/orca/README.md).
+
+**Ligar tudo de ponta a ponta, incluindo a revisão:** a skill
+[`connecting-orca`](../core/claude-code/skills/connecting-orca/SKILL.md) faz o caminho completo —
+diagnóstico, pareamento, repo, fila de implementação, automação de review e uma issue canária
+entregue. **E se uma sessão de agente concluir que "não tem acesso à VPS", quase sempre não é isso:**
+são três barreiras cujas mensagens enganam. Diagnóstico determinístico:
+
+```bash
+npx @orobsonn/claude-harness orca-doctor --ssh-host <alias> --environment <nome>
+```
+
+Barreiras, causas e correções: [playbook §8](orca-headless-vps-playbook.md#8-operando-a-vps-a-partir-de-uma-sessão-de-agente).
 
 **Comece em modo canário.** O campo `titleIncludes` (ex.: `"[canary]"`) restringe as candidatas por
 título. Sem ele, a issue escolhida é simplesmente a `harness:ready` aberta **mais antiga** — num
