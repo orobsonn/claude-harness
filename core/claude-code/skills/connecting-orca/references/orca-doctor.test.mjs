@@ -100,7 +100,7 @@ const FIXTURES = {
     "ping: socket: Operation not permitted",
     "Error: getaddrinfo EPERM vps.tail.ts.net",
     "ssh_exchange_identification: read: Operation not permitted",
-    "write: Operation not permitted",
+    "Connecting to 100.98.45.37:443... failed: Operation not permitted.",
   ],
   "known-hosts": [
     "Host key verification failed.",
@@ -167,6 +167,14 @@ test("an ordinary filesystem denial is NOT the network sandbox — the verbs are
     "ln: '/usr/bin/bindfs': Operation not permitted",
     "git: index already locked; chmod .git/index.lock: Operation not permitted",
     "pthread_create: Operation not permitted",
+    // `strace` is what someone runs WHILE investigating a permission error — answering it with
+    // "disable the sandbox" is the worst possible moment to be wrong. These are file descriptors.
+    "read(3, 0x7ffd, 4096) = -1 EPERM (Operation not permitted)",
+    "write(2, 0x55a0, 12) = -1 EPERM (Operation not permitted)",
+    "tar: /var/log/audit/audit.log: Cannot read: Operation not permitted",
+    "dd: failed to open '/dev/sda' for read: Operation not permitted",
+    // sd-bus is D-Bus by another name.
+    "sd_bus_open_system: connect: Operation not permitted",
   ];
   for (const message of filesystem) {
     const barrier = classifyFailure(message);

@@ -62,7 +62,16 @@ import { fileURLToPath } from "node:url";
  * entirely — a barrier that disappears is worse than one that over-matches, because the operator is
  * left with no fix at all. (`connect` also covers `connecting`, `connect()` and `connect to`.)
  */
-export const SANDBOX_VERBS = ["connect", "bind", "sendto", "sendmsg", "socket", "getaddrinfo", "read", "write"];
+export const SANDBOX_VERBS = [
+  "connect",
+  "connecting", // wget: `Connecting to 100.98.45.37:443... failed: Operation not permitted.`
+  "bind",
+  "sendto",
+  "sendmsg",
+  "socket",
+  "getaddrinfo",
+  "ssh_exchange_identification", // the ssh handshake form, which is where a `read:` legitimately means the socket
+];
 
 /**
  * A verb only counts when it appears as a SYSCALL TOKEN — immediately followed by `:`, `(`, ` to`, or
@@ -71,6 +80,11 @@ export const SANDBOX_VERBS = ["connect", "bind", "sendto", "sendmsg", "socket", 
  * ordinary filesystem `Operation not permitted` was answered with "disable the sandbox" — advice that
  * cannot help, for a cause that is not the sandbox. Word boundaries alone do not fix it (a path like
  * `./read-only-dir` still has them); the qualifier does, because a denied syscall always names itself.
+ *
+ * `read` and `write` are NOT in the list, and that is the point: as tokens they are overwhelmingly
+ * file operations — `strace` prints `read(3, …) = -1 EPERM` for a file descriptor, and `strace` is
+ * exactly what someone runs while investigating a permission error. The one form where a `read:`
+ * really is the socket is the ssh handshake, so that form is named directly instead.
  */
 const VERB_ALTERNATION = SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 const SANDBOX_MATCH = new RegExp(
@@ -85,7 +99,7 @@ export const BARRIERS = [
     match: SANDBOX_MATCH,
     // D-Bus speaks the same words and has nothing to do with the network sandbox. Anchored on the
     // colon, or a host merely NAMED `bus.example.com` loses its barrier entirely.
-    veto: /\bto (?:the )?bus\s*:|\bd-?bus\b|system_bus_socket/i,
+    veto: /\bto (?:the )?bus\s*:|(?:^|[^A-Za-z])s?d[-_]?bus|system_bus_socket/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",
