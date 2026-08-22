@@ -324,8 +324,10 @@ export async function runSetupVps(deps) {
   const intervalAnswer = String((await ask("Rodar o selector a cada quantos minutos? [20]: ")) ?? "").trim() || "20";
   const intervalMinutes = Number(intervalAnswer);
   // Asked, never assumed: the cron line carries it, and a wrong path makes every tick fail silently.
-  const orcaBin = required(
-    (await ask(`Binário do Orca para o cron [${DEFAULT_ORCA_BIN}]: `)) || DEFAULT_ORCA_BIN,
+  // Validado AQUI, antes de qualquer escrita: `renderCronBlock` também valida, mas só depois do JSON
+  // do projeto já estar no disco — e aí um caminho com espaço deixa config órfã sem cron nenhum.
+  const orcaBin = assertCronSafe(
+    required((await ask(`Binário do Orca para o cron [${DEFAULT_ORCA_BIN}]: `)) || DEFAULT_ORCA_BIN, "orca-bin"),
     "orca-bin",
   );
 

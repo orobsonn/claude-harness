@@ -98,8 +98,9 @@ sudo -u orca $EDITOR /home/orca/.config/claude-harness/projects/<slug>.json
 
 # b) registrar a linha do selector no crontab do usuário `orca`
 sudo -u orca crontab -e
-#    */20 * * * * /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs \
-#      --config /home/orca/.config/claude-harness/projects/<slug>.json >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
+#    (UMA linha só, e com ORCA_BIN — crontab não tem continuação de linha, e sem a variável
+#     o selector procura `orca` no PATH, onde o AppImage não está)
+#    */20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs --config /home/orca/.config/claude-harness/projects/<slug>.json >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
 
 # c) criar a automação de revisão de PR do projeto no Orca (ver core/orca/README.md)
 

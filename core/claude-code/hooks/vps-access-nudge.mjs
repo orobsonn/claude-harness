@@ -53,11 +53,11 @@ const UNAMBIGUOUS = new Set(['unknown-environment', 'orca-cli-shim']);
 const REMOTE_COMMAND = /(?:^|[\s;|&(])(?:ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b/i;
 
 /**
- * A tailnet address (100.64.0.0/10, CGNAT — never a code forge) identifies the VPS wherever it shows
- * up, including in OUTPUT only: `git fetch` against a repo hosted on the VPS names the host in the
- * error, never in the command.
+ * A tailnet address identifies the VPS wherever it shows up, including in OUTPUT only: `git fetch`
+ * against a repo hosted on the VPS names the host in the error, never in the command. Both families
+ * count — 100.64.0.0/10 (CGNAT, never a code forge) and Tailscale's `fd7a:115c:a1e0::/48` ULA.
  */
-const TAILNET_ADDR = /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
+const TAILNET_ADDR = /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|\bfd7a:115c:a1e0:[0-9A-Fa-f:]*/i;
 
 /**
  * A code forge is never the VPS. `ssh -T git@github.com` and `git push` both fail with the same

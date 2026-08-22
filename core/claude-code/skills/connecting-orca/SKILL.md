@@ -41,7 +41,8 @@ node .claude/skills/connecting-orca/references/orca-doctor.mjs [--ssh-host <alia
 **Both flags are optional, and on a first run you usually have neither** — the environment name is
 produced by Phase 1, and the SSH alias by the playbook's `~/.ssh/config` block. Run it bare first: it
 still reports whether the CLI answers, whether this machine drives a runtime, and what is paired.
-(From a machine with no harness vendored: `npx @orobsonn/claude-harness orca-doctor`.)
+(From a machine with no harness vendored: `npx @orobsonn/claude-harness orca-doctor` — needs the
+release that ships the command; an older one answers usage and exits 1.)
 
 It probes the Orca CLI, the runtime this machine drives, the paired environment and SSH, and prints,
 for each blocked path, the barrier + its fix. Its table is the same one in

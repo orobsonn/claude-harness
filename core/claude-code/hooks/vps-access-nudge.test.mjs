@@ -147,3 +147,12 @@ test("fail-open is real: a hook whose sibling skill is missing exits 0 with no o
     output: null,
   });
 });
+
+test("the tailnet's IPv6 ULA identifies the VPS just like its IPv4 range", () => {
+  const d = decide(
+    payload("git fetch origin", "ssh: connect to host fd7a:115c:a1e0::3f1 port 22: Operation not permitted"),
+    classifyFailure,
+  );
+  assert.equal(d.action, "inject", "an IPv6-only tailnet remote must not be invisible to the nudge");
+  assert.equal(decide(payload("curl https://api.example.com", "connect EPERM 93.184.216.34:443"), classifyFailure).action, "none");
+});

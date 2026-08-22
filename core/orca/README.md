@@ -37,7 +37,7 @@ zero — diagnóstico, pareamento, repo, fila, review, canário — o caminho gu
 [`connecting-orca`](../claude-code/skills/connecting-orca/SKILL.md); e quando uma sessão de agente
 acha que não alcança a VPS, o diagnóstico determinístico é
 [`orca-doctor.mjs`](../claude-code/skills/connecting-orca/references/orca-doctor.mjs)
-(`npx @orobsonn/claude-harness orca-doctor`).
+(`npx @orobsonn/claude-harness orca-doctor`, da release que traz o comando).
 
 ## O JSON de projeto
 
