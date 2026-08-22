@@ -157,7 +157,12 @@ entregue. **E se uma sessão de agente concluir que "não tem acesso à VPS", qu
 são três barreiras cujas mensagens enganam. Diagnóstico determinístico:
 
 ```bash
-npx @orobsonn/claude-harness orca-doctor --ssh-host <alias> --environment <nome>
+# num projeto com o harness vendorado (sempre disponível)
+node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host <alias> --environment <nome>
+
+# em qualquer máquina, sem vendorar nada — precisa da release que traz o comando;
+# numa versão anterior o npx responde usage + exit 1
+npx @orobsonn/claude-harness orca-doctor --ssh-host <alias>
 ```
 
 Barreiras, causas e correções: [playbook §8](orca-headless-vps-playbook.md#8-operando-a-vps-a-partir-de-uma-sessão-de-agente).

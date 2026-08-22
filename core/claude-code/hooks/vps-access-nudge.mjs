@@ -25,17 +25,27 @@ import { fileURLToPath } from 'node:url';
 import { classifyFailure } from '../skills/connecting-orca/references/orca-doctor.mjs';
 
 /**
- * Barriers whose message is unambiguous on its own — no command context needed. `Permission denied
- * (publickey)` is never about anything but ssh.
+ * Barriers that name Orca itself, so no command context is needed to know which machine is meant.
+ *
+ * The ssh-shaped barriers are deliberately NOT here, and that is the whole precision problem: an ssh
+ * message says a key/host failed, never WHICH host. `ssh-identity` was in this set and fired on
+ * `git push` — `git@github.com: Permission denied (publickey)` — asserting "this is NOT missing access
+ * to the VPS" inside the delivery loop, where every run pushes. A hook that exists to stop a confident
+ * wrong conclusion must not manufacture one in the other direction.
  */
-const UNAMBIGUOUS = new Set(['known-hosts', 'ssh-identity', 'ssh-host-unresolved', 'unknown-environment', 'orca-cli-shim']);
+const UNAMBIGUOUS = new Set(['unknown-environment', 'orca-cli-shim']);
 
 /**
- * Barriers whose message is common enough elsewhere that firing on it alone would be noise
- * (`command not found`, `Unknown command`, a sandbox denial on any network call). These only nudge
- * when the command itself was reaching for the VPS or for Orca.
+ * Every other barrier only nudges when the command itself was reaching for a remote machine. Keeps
+ * `command not found` in an ordinary build, and a publickey denial from a git remote, silent.
  */
 const REMOTE_COMMAND = /\b(ssh|scp|rsync|sftp|orca|tailscale|journalctl|systemctl|crontab)\b|\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/i;
+
+/**
+ * A code forge is never the VPS. `ssh -T git@github.com` and `git push` both fail with the same
+ * ssh strings, so the host has to veto the nudge even when the command looks remote.
+ */
+const FORGE_HOST = /github\.com|gitlab\.com|bitbucket\.org|codeberg\.org/i;
 
 /**
  * @description PostToolUse(Bash) may deliver tool_response as a string OR as an object with
@@ -70,6 +80,7 @@ export function decide(payload, classify) {
     const barrier = classify(output);
     if (!barrier) return { action: 'none' };
     if (!UNAMBIGUOUS.has(barrier.id) && !REMOTE_COMMAND.test(command)) return { action: 'none' };
+    if (FORGE_HOST.test(command) || FORGE_HOST.test(output)) return { action: 'none' };
 
     return {
       action: 'inject',

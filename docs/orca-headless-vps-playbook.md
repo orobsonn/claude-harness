@@ -325,10 +325,16 @@ JSON
 
 # 3) uma linha de cron por projeto — usuário `orca`, NUNCA root
 sudo -u orca crontab -e
-# */20 * * * * /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs \
+# */20 * * * * ORCA_BIN=/opt/orca/orca-linux.AppImage \
+#   /usr/bin/node /home/orca/.claude/harness-core/core/orca/select-and-dispatch.mjs \
 #   --config /home/orca/.config/claude-harness/projects/<slug>.json \
 #   >> /home/orca/.local/state/claude-harness/<slug>.log 2>&1
 ```
+
+**`ORCA_BIN` faz parte da linha.** O AppImage não fica no `PATH`, e o selector cai em `orca` quando a
+variável falta — no ambiente mínimo do cron isso é `ENOENT`, e o tick morre antes de selecionar
+qualquer coisa, logando `skip: could not read 'orca worktree ps --json'`, que lê como "Orca fora do
+ar". O wizard `setup-orca` escreve a variável sozinho; quem instala à mão, por aqui, precisa colar.
 
 `globalMaxWorking` é o teto **global da máquina** (o selector conta os worktrees `working` de toda a
 VPS via `orca worktree ps --json`), então todos os JSONs carregam o mesmo valor. Paralelizar por

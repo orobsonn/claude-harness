@@ -90,3 +90,24 @@ test("processInput emits the PostToolUse additionalContext envelope the runtime 
   assert.equal(parsed.hookSpecificOutput.hookEventName, "PostToolUse");
   assert.match(parsed.hookSpecificOutput.additionalContext, /ssh-keyscan/);
 });
+
+test("a publickey denial from a CODE FORGE never nudges — the delivery loop pushes on every run", () => {
+  // Regression: `ssh-identity` was treated as unambiguous, so `git push` failing against GitHub made
+  // the hook assert "this is NOT missing access to the VPS" and send the agent to orca-doctor. The
+  // hook exists to stop a confident wrong conclusion; manufacturing one in the delivery loop is worse
+  // than staying quiet.
+  const forge = [
+    ["git push", "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."],
+    ["gh pr create --fill", "git@github.com: Permission denied (publickey)."],
+    ["git clone git@gitlab.com:acme/app.git", "git@gitlab.com: Permission denied (publickey)."],
+    ["ssh -T git@github.com", "git@github.com: Permission denied (publickey)."],
+    ["git fetch origin", "Host key verification failed.\nfatal: Could not read from remote repository (github.com)."],
+  ];
+  for (const [command, stderr] of forge) {
+    assert.equal(decide(payload(command, stderr), classifyFailure).action, "none", `must stay silent for: ${command}`);
+  }
+
+  // …while the real thing still fires.
+  assert.equal(decide(payload("ssh harness-vps hostname", "root@vps: Permission denied (publickey)."), classifyFailure).action, "inject");
+  assert.equal(decide(payload("scp file.json harness-vps:/tmp/", "Host key verification failed."), classifyFailure).action, "inject");
+});

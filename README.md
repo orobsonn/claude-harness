@@ -291,7 +291,8 @@ Ele **não instala mais** os crons do motor antigo da VPS (`install-crons`: Cron
 **E quando uma sessão de agente conclui que "não tem acesso à VPS":** quase sempre não é isso. Três falhas comuns (`Permission denied (publickey)`, `Host key verification failed`, `Operation not permitted`) leem como falta de permissão e nenhuma delas é — nem sugerem a própria correção. Diagnóstico determinístico, que nunca conclui "sem acesso":
 
 ```bash
-npx @orobsonn/claude-harness orca-doctor --ssh-host <alias> --environment <nome>
+node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host <alias> --environment <nome>
+npx @orobsonn/claude-harness orca-doctor --ssh-host <alias>   # sem harness vendorado, da release que traz o comando
 ```
 
 Tabela de barreiras → causa → ação: [playbook §8](docs/orca-headless-vps-playbook.md).
