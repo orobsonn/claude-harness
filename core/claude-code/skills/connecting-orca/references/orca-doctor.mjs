@@ -87,9 +87,24 @@ export const SANDBOX_VERBS = [
  * really is the socket is the ssh handshake, so that form is named directly instead.
  */
 const VERB_ALTERNATION = SANDBOX_VERBS.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+
+/**
+ * `read`/`write` stay OUT of the verb list (they are file operations far more often than socket ones),
+ * but the forms where they unambiguously name a socket are matched directly: Go's `net.OpError`
+ * (`write tcp 10.0.0.2:5000->100.98.45.37:22: write: operation not permitted`) and Node's
+ * `Error: write EPERM` — and this harness is Node end to end. `read(3, …)` from strace and
+ * `Cannot read:` from tar match neither.
+ */
+const SOCKET_READ_WRITE = "\\b(?:read|write)\\s+(?:tcp|udp)\\b[^\\n]*(?:Operation not permitted|EPERM)|\\b(?:read|write)\\s+EPERM\\b";
+
+/** A library method call (`socket.send: …`) — never a systemd unit path (`foo.socket:` has no method). */
+const SOCKET_METHOD = "\\bsocket\\.\\w+\\s*:[^\\n]*(?:Operation not permitted|EPERM)";
+
 const SANDBOX_MATCH = new RegExp(
   `(?:\\b(?:${VERB_ALTERNATION})\\b\\s*(?::|\\(|\\s+to\\b)[^\\n]*(?:Operation not permitted|EPERM)` +
-    `|\\b(?:${VERB_ALTERNATION})\\b\\s+EPERM\\b)`,
+    `|\\b(?:${VERB_ALTERNATION})\\b\\s+EPERM\\b` +
+    `|${SOCKET_READ_WRITE}` +
+    `|${SOCKET_METHOD})`,
   "i",
 );
 
@@ -100,6 +115,11 @@ export const BARRIERS = [
     // D-Bus speaks the same words and has nothing to do with the network sandbox. Anchored on the
     // colon, or a host merely NAMED `bus.example.com` loses its barrier entirely.
     veto: /\bto (?:the )?bus\s*:|(?:^|[^A-Za-z])s?d[-_]?bus|system_bus_socket/i,
+    // …unless the line carries a network co-signal. The veto pattern has no anchor, so a HOST named
+    // `sdbus.internal` or `dbus-vps.tail.ts.net` was losing its barrier entirely — the veto reopening,
+    // one letter to the side, the very class the anchor closed. Real D-Bus messages carry no port,
+    // no IP and no `tcp`.
+    vetoUnless: /\bport \d+|\b\d{1,3}(?:\.\d{1,3}){3}\b|\btcp\b/i,
     symptom: "Operation not permitted",
     readsAs: "não tenho permissão pra isso",
     cause: "sandbox do Claude Code — o IP da VPS não está na allowlist de rede",
@@ -236,7 +256,8 @@ export function isSafeEnvironmentName(name) {
 export function classifyFailure(text) {
   const t = String(text ?? "");
   if (!t.trim()) return null;
-  return BARRIERS.find((b) => b.match.test(t) && !(b.veto && b.veto.test(t))) ?? null;
+  const vetoed = (b) => Boolean(b.veto?.test(t)) && !b.vetoUnless?.test(t);
+  return BARRIERS.find((b) => b.match.test(t) && !vetoed(b)) ?? null;
 }
 
 /**
