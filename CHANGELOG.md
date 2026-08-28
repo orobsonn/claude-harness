@@ -5,6 +5,18 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.58.0](https://github.com/orobsonn/claude-harness/compare/v0.57.1...v0.58.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hands:** projetos já vendorizados sem `.claude/hand-config/hands.json` passam a planejar na escada Claude. Um plano com ids Ollama é recusado alto na escrita, com a mensagem nomeando o comando de troca — nunca silenciosamente. Rode `node .claude/shared/lib/hand-model-ladder.mjs use ollama` para manter o comportamento anterior. A mão Claude precisa de `claude setup-token` + `export CLAUDE_HAND_TOKEN=…`.
+
+### Features
+
+* **hands:** toggle de família das mãos — Claude (padrão) ou Ollama ([#819](https://github.com/orobsonn/claude-harness/issues/819)) ([f0d4424](https://github.com/orobsonn/claude-harness/commit/f0d44248792b75d5fd079d48ca84567b16a14bc3))
+* **orca:** skill connecting-orca + orca-doctor pras barreiras que leem como "sem acesso" ([#817](https://github.com/orobsonn/claude-harness/issues/817)) ([a2d489a](https://github.com/orobsonn/claude-harness/commit/a2d489aa8f93c32f993bf0ecceaf27b333d4c401))
+
 ## [0.57.1](https://github.com/orobsonn/claude-harness/compare/v0.57.0...v0.57.1) (2026-08-21)
 
 
