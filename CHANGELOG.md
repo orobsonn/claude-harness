@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.59.1](https://github.com/orobsonn/claude-harness/compare/v0.59.0...v0.59.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **entry-policy:** aplica o carve-out de migration aditiva na variante OpenCode ([#823](https://github.com/orobsonn/claude-harness/issues/823)) ([04a4de9](https://github.com/orobsonn/claude-harness/commit/04a4de98a265c9eb5dd3d5ed804d9a48ba6c2b68))
+
 ## [0.59.0](https://github.com/orobsonn/claude-harness/compare/v0.58.0...v0.59.0) (2026-08-28)
 
 
