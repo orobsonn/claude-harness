@@ -8,7 +8,6 @@ import {
   HAND_LADDERS,
   HAND_FAMILIES,
   HAND_EFFORT_BY_TIER,
-  HAND_TOKEN_ENV_KEYS,
   APPROVED_HAND_MODELS,
   DEFAULT_HAND_FAMILY,
   defaultHandModelFor,
@@ -21,7 +20,8 @@ import {
   readActiveHandFamily,
   resolveHandEffort,
   resolveHandModel,
-  transportFor,
+  dispatchModeFor,
+  agentTypeForRung,
   writeActiveHandFamily,
 } from "./hand-model-ladder.mjs";
 
@@ -60,7 +60,7 @@ test("ladders: every family is three DISTINCT rungs as (model, effort) pairs", (
   }
 });
 
-test("ladders: the two families share no model id (an id alone identifies its transport)", () => {
+test("ladders: the two families share no model id (an id alone identifies its dispatch mode)", () => {
   const ollama = new Set(Object.values(HAND_LADDERS.ollama));
   for (const model of Object.values(HAND_LADDERS.claude)) {
     assert.equal(ollama.has(model), false, `${model} must belong to exactly one family`);
@@ -154,35 +154,27 @@ test("detectHandFamily: derives the plan's family from its ids, and refuses a MI
   assert.equal(detectHandFamily([]), null);
 });
 
-test("transportFor: the model id alone decides endpoint and token key — no config read", () => {
-  const ollama = transportFor("glm-5.2");
-  assert.equal(ollama.family, "ollama");
-  assert.equal(ollama.baseUrl, "https://ollama.com");
-  assert.equal(ollama.envKey, "OLLAMA_HAND_TOKEN");
-  assert.equal(ollama.childEnvKey, "ANTHROPIC_AUTH_TOKEN");
-
-  const claude = transportFor("sonnet");
-  assert.equal(claude.family, "claude");
-  // No base-url override: a claude hand talks to the Anthropic API, not to a third-party endpoint.
-  assert.equal(claude.baseUrl, null);
-  assert.equal(claude.envKey, "CLAUDE_HAND_TOKEN");
-  assert.equal(claude.childEnvKey, "CLAUDE_CODE_OAUTH_TOKEN");
-  assert.match(claude.setup, /setup-token/);
-
-  assert.throws(() => transportFor("opus"), /no approved transport/);
+test("dispatchModeFor: the model id alone decides HOW the hand is dispatched — no config read", () => {
+  // ollama rungs are external children (token + endpoint + frozen-test gate + independent
+  // capture); claude rungs are ordinary subagents on the session's own auth.
+  assert.equal(dispatchModeFor("glm-5.2"), "spawn-hand");
+  assert.equal(dispatchModeFor("gemma4"), "spawn-hand");
+  assert.equal(dispatchModeFor("sonnet"), "agent");
+  assert.equal(dispatchModeFor("haiku"), "agent");
+  assert.throws(() => dispatchModeFor("opus"), /no approved dispatch mode/);
 });
 
-test("transportFor: BOTH families need a token — the fail-closed guard stays un-bypassable", () => {
-  // Authenticating a claude hand by inheriting the operator's own Claude Code config would also
-  // inherit its permission allowlist and additionalDirectories (measured: such a child runs Bash
-  // and writes outside the repo). A token per family keeps the isolation AND the guard.
-  for (const family of HAND_FAMILIES) {
-    const transport = transportFor(defaultHandModelFor(family));
-    assert.ok(transport.envKey.length > 0);
-    assert.ok(HAND_TOKEN_ENV_KEYS.includes(transport.envKey));
-  }
-  assert.equal(HAND_TOKEN_ENV_KEYS.length, HAND_FAMILIES.length);
+test("agentTypeForRung: the effort rung gets its own agent definition", () => {
+  // The Agent tool takes a `model` override but NO effort parameter, so the rung whose escalation
+  // IS the effort has to be a separate agent definition (`effort:` frontmatter).
+  assert.equal(agentTypeForRung("executor", "haiku", "low"), "executor");
+  assert.equal(agentTypeForRung("executor", "sonnet", "medium"), "executor");
+  assert.equal(agentTypeForRung("executor", "sonnet", "high"), "executor-high");
+  assert.equal(agentTypeForRung("sniper", "sonnet", "high"), "sniper-high");
+  // An ollama rung never routes through the Agent tool at all.
+  assert.equal(agentTypeForRung("executor", "kimi-k2.7-code", "high"), "executor");
 });
+
 
 test("formatApprovedLadder: renders every tier and model of the named family", () => {
   for (const family of HAND_FAMILIES) {

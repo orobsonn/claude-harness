@@ -50,16 +50,6 @@ export const AUTH_TOKEN_KEY = "ANTHROPIC_AUTH_TOKEN";
 export const HAND_ENV_TOKEN_KEY = "OLLAMA_HAND_TOKEN";
 // Keys accepted when parsing a `.dev.vars` blob (the fallback tier when no env key is set).
 const DEV_VARS_TOKEN_KEYS = [HAND_ENV_TOKEN_KEY, AUTH_TOKEN_KEY];
-// The claude-family pair, same shape and same reasoning: the LOCAL key is one Claude Code does
-// NOT honor for its own auth (so `export CLAUDE_HAND_TOKEN=…` in a shell rc cannot hijack the
-// parent session), mapped to the key the CHILD honors only inside spawn-hand's childEnv.
-export const CLAUDE_HAND_ENV_TOKEN_KEY = "CLAUDE_HAND_TOKEN";
-export const CLAUDE_CHILD_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
-/** @description Accepted token keys per hand family, most-preferred first. */
-export const TOKEN_KEYS_BY_FAMILY = Object.freeze({
-  ollama: Object.freeze([HAND_ENV_TOKEN_KEY, AUTH_TOKEN_KEY]),
-  claude: Object.freeze([CLAUDE_HAND_ENV_TOKEN_KEY, CLAUDE_CHILD_TOKEN_KEY]),
-});
 export const UPSTREAM_BODY_MAX = 500;
 
 /** @description Run outcomes. Truth = git diff + locked-test exit + status, never prose. */
@@ -70,11 +60,11 @@ export const OUTCOME = {
 };
 
 /**
- * @description Resolves a hand auth token, preferring process.env over a parsed `.dev.vars`
- * blob. `keys` selects the family's key pair (`TOKEN_KEYS_BY_FAMILY`), most-preferred first, and
- * defaults to the ollama pair so every existing caller keeps its behavior: the env tier prefers
- * OLLAMA_HAND_TOKEN (sandbox-safe, Claude-Code-inert) and falls back to ANTHROPIC_AUTH_TOKEN
- * (headless/cloud injects this as a secret). Returns undefined when no source carries a key.
+ * @description Resolves the Ollama auth token, preferring process.env over a parsed `.dev.vars`
+ * blob. Only the ollama family needs one — a claude-family hand is an ordinary subagent on the
+ * session's own auth, never a spawned child. The env tier prefers OLLAMA_HAND_TOKEN (sandbox-safe,
+ * Claude-Code-inert) and falls back to ANTHROPIC_AUTH_TOKEN (headless/cloud injects this as a
+ * secret). Returns undefined when no source carries a key.
  * @param {Record<string,string|undefined>} env
  * @param {string} [devVarsContent] raw contents of a `.dev.vars` file
  * @param {readonly string[]} [keys] accepted token keys, most-preferred first
@@ -385,12 +375,9 @@ export function buildRunRecord({ dispatch, child, token, logs = [] }) {
 
   const record = {
     model: dispatch.model,
-    // The claude ladder pins the SAME model id on medium and high — what escalates is the
-    // reasoning effort. Without both stamped here, "did the escalation change anything?" is
-    // unanswerable from the record, and a `high` dispatch that silently lost its effort would
-    // read exactly like a `medium` one. Null (never absent) when the dispatch carries neither.
+    // Which RUNG ran, not just which model: the escalation is a property of the tier, and a
+    // record that only carries the id cannot answer "did the escalation change anything?".
     tier: dispatch.tier ?? null,
-    effort: dispatch.effort ?? null,
     // #361: a fallback that does not announce itself is how the dead qwen3-coder:480b default
     // survived unnoticed. Always a boolean, so the record never leaves it ambiguous.
     modelFallbackUsed: dispatch.modelFallbackUsed === true,

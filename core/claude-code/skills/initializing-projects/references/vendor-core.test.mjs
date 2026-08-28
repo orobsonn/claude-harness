@@ -9,7 +9,6 @@
 
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { HAND_TOKEN_ENV_KEYS } from "../../../../shared/lib/hand-model-ladder.mjs";
 import {
   execFileSync,
   spawnSync,
@@ -358,19 +357,15 @@ test("vendor-core: installs .dev.vars.example placeholder when absent", async (t
     );
 
     const content = readFileSync(placeholder, "utf8");
-    // One key per hand family, every one empty: a placeholder that shipped a value would be a
-    // committed secret, and a family missing its key would leave that family unconfigurable.
-    for (const key of HAND_TOKEN_ENV_KEYS) {
-      assert.match(
-        content,
-        new RegExp(`^${key}=\\s*$`, "m"),
-        `placeholder must carry ${key} with no real value`
-      );
-      assert.ok(
-        !new RegExp(`${key}=\\S`).test(content),
-        `placeholder must NOT contain a real value for ${key}`
-      );
-    }
+    assert.match(
+      content,
+      /ANTHROPIC_AUTH_TOKEN=\s*$/m,
+      "placeholder must carry the token key with no real value"
+    );
+    assert.ok(
+      !/ANTHROPIC_AUTH_TOKEN=\S/.test(content),
+      "placeholder must NOT contain a real token value"
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

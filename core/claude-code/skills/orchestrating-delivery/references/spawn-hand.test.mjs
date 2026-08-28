@@ -115,88 +115,47 @@ describe("buildSpawnArgs no-bare no-bash", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Locked test 3a — the TRANSPORT follows the model id, for both hand families
+// Locked test 3a — this spawn layer serves the OLLAMA family only
 // ---------------------------------------------------------------------------
-describe("dispatchHand transport per hand family", () => {
-  /** Runs one dispatch with a fake spawn and returns what the child would have received. */
-  async function captureChild({ model, env, effort }) {
-    let capturedEnv = null;
-    let capturedArgs = null;
-    const fakeSpawn = (cmd, args, opts) => {
-      if (args?.includes("--test")) return { status: 0, stdout: "# tests 3\n", stderr: "", output: [] };
-      capturedEnv = opts?.env ?? {};
-      capturedArgs = args;
-      return { status: 0, stdout: "", stderr: "", output: [] };
-    };
-    const dispatch = {
-      model,
-      ...(effort ? { effort } : {}),
-      brief: "do the thing",
-      scope_paths: ["core/"],
-      allowed_writes: ["core/"],
-      locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
-    };
-    await dispatchHand(dispatch, { spawn: fakeSpawn, gitStatus: () => "", devVarsContent: "", env });
-    return { capturedEnv, capturedArgs };
-  }
-
-  it("a claude-family model authenticates with CLAUDE_CODE_OAUTH_TOKEN and NO base-url override", async () => {
-    // The claude hand must reach the Anthropic API — never a third-party endpoint — and must do it
-    // with a token of its own, so the fail-closed "no token → no hand" guard still applies to it.
-    const { capturedEnv } = await captureChild({ model: "sonnet", env: { CLAUDE_HAND_TOKEN: "claude-tok" } });
-    assert.equal(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN, "claude-tok");
-    assert.equal(capturedEnv.ANTHROPIC_BASE_URL, undefined, "a claude hand must NOT be pointed at Ollama");
-    assert.equal(capturedEnv.ANTHROPIC_AUTH_TOKEN, undefined);
-    assert.ok(capturedEnv.CLAUDE_CONFIG_DIR, "the ephemeral config dir isolates BOTH families");
+describe("dispatchHand hand-family routing", () => {
+  const dispatchFor = (model) => ({
+    model,
+    brief: "do the thing",
+    scope_paths: ["core/"],
+    allowed_writes: ["core/"],
+    locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
   });
-
-  it("an ollama-family model keeps the Ollama endpoint and its own token key", async () => {
-    const { capturedEnv } = await captureChild({ model: "glm-5.2", env: { OLLAMA_HAND_TOKEN: "ollama-tok" } });
-    assert.equal(capturedEnv.ANTHROPIC_BASE_URL, "https://ollama.com");
-    assert.equal(capturedEnv.ANTHROPIC_AUTH_TOKEN, "ollama-tok");
-    assert.equal(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-  });
-
-  it("a transport env key inherited from the operator's shell is CLEARED, never carried through", async () => {
-    // A stale ANTHROPIC_BASE_URL in the parent environment would silently route a claude hand to
-    // Ollama (and a leftover CLAUDE_EFFORT would override the rung's own effort).
-    const { capturedEnv } = await captureChild({
-      model: "sonnet",
-      env: {
-        CLAUDE_HAND_TOKEN: "claude-tok",
-        ANTHROPIC_BASE_URL: "https://ollama.com",
-        ANTHROPIC_AUTH_TOKEN: "stale",
-        ANTHROPIC_API_KEY: "stale",
-        OLLAMA_HAND_TOKEN: "stale",
-        CLAUDE_EFFORT: "max",
-      },
+  const run = (model, env) =>
+    dispatchHand(dispatchFor(model), {
+      spawn: (cmd, args) =>
+        args?.includes("--test")
+          ? { status: 0, stdout: "# tests 3\n", stderr: "", output: [] }
+          : { status: 0, stdout: "", stderr: "", output: [] },
+      gitStatus: () => "",
+      devVarsContent: "",
+      env,
     });
-    assert.equal(capturedEnv.ANTHROPIC_BASE_URL, undefined);
-    assert.equal(capturedEnv.ANTHROPIC_AUTH_TOKEN, undefined);
-    assert.equal(capturedEnv.ANTHROPIC_API_KEY, undefined);
-    assert.equal(capturedEnv.OLLAMA_HAND_TOKEN, undefined);
-    assert.equal(capturedEnv.CLAUDE_EFFORT, undefined);
+
+  it("refuses a claude-family rung and names the path that DOES serve it", async () => {
+    // haiku/sonnet are legitimate hand rungs — of the family that dispatches with the Agent tool.
+    // Spawning them here would need a token and an endpoint that deliberately do not exist.
+    for (const model of ["haiku", "sonnet"]) {
+      await assert.rejects(
+        () => run(model, { OLLAMA_HAND_TOKEN: "t" }),
+        /dispatches as an ordinary Agent subagent/,
+        `expected ${model} to be routed away from spawn-hand`,
+      );
+    }
   });
 
-  it("the claude family's token is required too — no token, no spawn", async () => {
-    await assert.rejects(
-      () => captureChild({ model: "sonnet", env: { OLLAMA_HAND_TOKEN: "wrong-family" } }),
-      /no CLAUDE_HAND_TOKEN resolved/,
-    );
+  it("refuses `opus` — not a rung at all (the legacy Claude `tiers` shape)", async () => {
+    await assert.rejects(() => run("opus", { OLLAMA_HAND_TOKEN: "t" }), /Claude alias/);
   });
 
-  it("--effort reaches the child argv, and an unapproved level is refused before spawning", async () => {
-    const { capturedArgs } = await captureChild({
-      model: "sonnet",
-      effort: "xhigh",
-      env: { CLAUDE_HAND_TOKEN: "claude-tok" },
-    });
-    assert.ok(capturedArgs.includes("--effort"));
-    assert.equal(capturedArgs[capturedArgs.indexOf("--effort") + 1], "xhigh");
-
+  it("still refuses any id outside BOTH ladders, naming both", async () => {
     await assert.rejects(
-      () => captureChild({ model: "sonnet", effort: "ludicrous", env: { CLAUDE_HAND_TOKEN: "claude-tok" } }),
-      /not an approved level/,
+      () => run("gpt-oss:120b", { OLLAMA_HAND_TOKEN: "t" }),
+      /gemma4(.|\n)*haiku|haiku(.|\n)*gemma4/,
     );
   });
 });
@@ -397,41 +356,6 @@ describe("dispatchHand ephemeral .claude.json trust is scoped to a single projec
 // ---------------------------------------------------------------------------
 // Locked test 4 — brief/system-prompt file has ZERO occurrences of the token
 // ---------------------------------------------------------------------------
-describe("dispatchHand legacy-tiers guard", () => {
-  const legacyDispatch = (model) => ({
-    model,
-    brief: "x",
-    scope_paths: ["core/"],
-    allowed_writes: ["core/"],
-    locked_test: "core/skills/orchestrating-delivery/references/spawn-hand.test.mjs",
-  });
-
-  it("rejects `opus` — the tell of the legacy Claude `tiers` shape — with an actionable diagnosis", async () => {
-    // haiku and sonnet ARE claude-family rungs now, so opus is the only alias that still
-    // identifies the retired shape unambiguously.
-    await assert.rejects(
-      () => dispatchHand(legacyDispatch("opus"), {
-        spawn: () => ({ status: 0, stdout: "", stderr: "", output: [] }),
-        gitStatus: () => "",
-        devVarsContent: "",
-        env: { OLLAMA_HAND_TOKEN: "t" },
-      }),
-      /legacy(.|\n)*tiers/
-    );
-  });
-
-  it("still refuses any id outside BOTH ladders, naming both", async () => {
-    await assert.rejects(
-      () => dispatchHand(legacyDispatch("gpt-oss:120b"), {
-        spawn: () => ({ status: 0, stdout: "", stderr: "", output: [] }),
-        gitStatus: () => "",
-        devVarsContent: "",
-        env: { OLLAMA_HAND_TOKEN: "t" },
-      }),
-      /gemma4(.|\n)*haiku|haiku(.|\n)*gemma4/
-    );
-  });
-});
 
 describe("dispatchHand brief scrubbing", () => {
   it("the brief/system-prompt file written to disk contains ZERO occurrences of the token", async () => {

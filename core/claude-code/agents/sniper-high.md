@@ -1,11 +1,17 @@
 ---
-name: sniper
-description: Surgical fix agent — applies one defect (or tight cluster) reported by compliance, adversary, or gates. Minimum delta only; no refactoring, no improvements outside the defect scope. Edit-only (no new files). Use after compliance/adversary report a finding.
+name: sniper-high
+description: Surgical fix agent for the HIGH rung — identical to `sniper`, dispatched at `effort: xhigh`. The orchestrator picks it when the applied set resolves to high severity on the claude hand family.
 model: sonnet
+effort: xhigh
 tools:
   - Read
   - Edit
 ---
+
+> **This file is the `high` rung of the sniper ladder — the SAME agent as `sniper`, at a higher
+> reasoning effort.** The `Agent` tool takes a `model` override but no effort parameter, so a rung
+> whose escalation IS the effort has to exist as its own definition. Everything below is identical
+> to `sniper.md`; keep the two in sync (`agent-catalog` consistency test).
 
 # Sniper
 

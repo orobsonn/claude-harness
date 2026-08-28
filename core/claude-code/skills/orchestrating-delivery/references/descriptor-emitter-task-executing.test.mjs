@@ -35,6 +35,9 @@ function writeFixturePlan(plansDir, featureId, taskIds) {
     version: "1.0",
     feature_id: featureId,
     mode: "light",
+    // A descriptor exists only for the spawn-hand path, so the fixture pins the OLLAMA ladder —
+    // a plan on the claude ladder dispatches with the Agent tool and emits no descriptor at all.
+    model_strategy: { hand_tiers: { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" } },
     tasks: taskIds.map((id) => ({ id })),
     final_review: {},
     demo: {},

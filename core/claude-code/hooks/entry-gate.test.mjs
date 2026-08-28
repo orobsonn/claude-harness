@@ -15,6 +15,17 @@ import { fileURLToPath } from "node:url";
 
 import { decide, processInput, computeGitState, adviseIssueForm, isRoutineSession } from "./entry-gate.mjs";
 
+/**
+ * Every pre-existing assertion in this file was written for the spawn-hand rail — i.e. the OLLAMA
+ * hand family. State that explicitly at each call site instead of inheriting whatever
+ * `.claude/hand-config/hands.json` the test process's cwd happens to have: the family decides
+ * which dispatch path the hand roles take, so a test that leaves it implicit is asserting against
+ * the machine it runs on. Injected FIRST in each literal, so a test that names the family itself
+ * still wins.
+ */
+const OLLAMA_HANDS = () => ({ family: "ollama", source: "config" });
+const CLAUDE_HANDS = () => ({ family: "claude", source: "default" });
+
 const ENTRY_GATE_PATH = fileURLToPath(new URL("./entry-gate.mjs", import.meta.url));
 
 // ---------------------------------------------------------------------------
@@ -71,7 +82,7 @@ test(
     const payload = makeAgentPayload("ses_gate1_exec", "executor");
     const readTriage = () => null; // no triage.json
 
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
 
     assert.equal(verdict.allow, false, "should be denied");
     assert.equal(
@@ -98,7 +109,7 @@ test(
     const payload = makeAgentPayload("ses_nondel", "general-purpose");
     const readTriage = () => null; // triage.json absent — irrelevant for non-delivery
 
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
 
     assert.equal(verdict.allow, true, "non-delivery role must always be allowed");
   },
@@ -116,7 +127,7 @@ test(
     const payload = makeAgentPayload("ses_subagent", "executor", { agent_id: "ag_1" });
     const readTriage = () => null; // irrelevant — agent_id check fires first
 
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
 
     assert.equal(verdict.allow, true, "subagent context must be allowed unconditionally");
   },
@@ -139,7 +150,7 @@ test(
     const readGateStateFn = () => ({ escalation_fallback: ["my-feature/task-1"] });
     const readHandRecordFn = (qid) => (qid === "my-feature/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn });
 
     assert.equal(verdict.allow, true, "executor with FULL triage + ticket mapping to a FAILED record must be allowed");
   },
@@ -155,7 +166,7 @@ test("role-scoped records prevent a sniper failure from authorizing the executor
       : null;
 
   assert.equal(
-    decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow,
+    decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn }).allow,
     false,
     "an executor may only consume executor evidence for its K=1 fallback",
   );
@@ -177,7 +188,7 @@ test(
       const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "some-feat" });
 
       // Use real mergeGateState (default) via chdir'd tmpdir
-      const verdict = decide(payload, { readTriage });
+      const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
 
       assert.equal(verdict.allow, true, "adversary dispatch must be allowed");
 
@@ -204,7 +215,7 @@ test(
     const readTriage = () => ({ session_id: "ses_plan_no_adv", mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ brainstormed: true }); // adversary_fired absent
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "planner must be denied without adversary_fired");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -229,7 +240,7 @@ test(
     const readTriage = () => ({ session_id: "ses_plan_no_bs", mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ adversary_fired: true }); // brainstormed absent
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "planner must be denied without brainstormed");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -254,7 +265,7 @@ test(
     const readTriage = () => ({ session_id: "ses_plan_light", mode: "LIGHT", feature_id: "feat" });
     const readGateStateFn = () => ({}); // neither brainstormed nor adversary_fired
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "Gate 2 must apply in LIGHT mode too");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -274,7 +285,7 @@ test(
     const readTriage = () => ({ session_id: "ses_plan_ok", mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ brainstormed: true, adversary_fired: true });
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, true, "planner must be allowed when both gates pass");
   },
@@ -317,7 +328,7 @@ test("decide: executor with LIGHT triage + ticket mapping to an on-disk FAILED r
   const readTriage = () => ({ mode: "LIGHT", feature_id: "feat" });
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = (qid) => (qid === "feat/task-1" ? { outcome: { status: "FAILED" } } : null);
-  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow, true);
+  assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn }).allow, true);
 });
 
 test("decide: executor with ticket but NO on-disk record (config error) → deny", () => {
@@ -326,7 +337,7 @@ test("decide: executor with ticket but NO on-disk record (config error) → deny
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => null; // no record on disk
-  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn });
   assert.equal(verdict.allow, false, "a ticket without a FAILED run-record must NOT unlock the Claude hand");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -346,7 +357,7 @@ test("decide: HEADLESS executor + fidelity_pass=[] → deny (fidelity rail now g
   const payload = makeAgentPayload("ses_exec_headless_deny", "executor");
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ fidelity_pass: [] });
-  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => true, readGateStateFn });
   assert.equal(verdict.allow, false, "headless executor must be denied when fidelity_pass is empty");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -356,7 +367,7 @@ test("decide: HEADLESS executor + fidelity_pass=[feat/task-1] → allow (matchin
   const payload = makeAgentPayload("ses_exec_headless_allow", "executor");
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ fidelity_pass: ["feat/task-1"] });
-  const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => true, readGateStateFn });
   assert.equal(verdict.allow, true, "headless executor must be allowed when fidelity_pass has a matching feature entry");
 });
 
@@ -367,7 +378,7 @@ test("decide: HEADLESS test-author and sniper → allow regardless of fidelity_p
   const readGateStateFn = () => ({ fidelity_pass: [] }); // empty — would deny executor
   for (const role of ["test-author", "sniper"]) {
     const payload = makeAgentPayload(`ses_headless_${role.replace("-", "")}`, role);
-    const verdict = decide(payload, { readTriage, isHeadlessFn: () => true, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => true, readGateStateFn });
     assert.equal(
       verdict.allow,
       true,
@@ -379,7 +390,7 @@ test("decide: HEADLESS test-author and sniper → allow regardless of fidelity_p
 test("decide: LOCAL (not headless) hand-role Agent without evidence → still deny", () => {
   const payload = makeAgentPayload("ses_exec_local", "executor");
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
-  const verdict = decide(payload, { readTriage, isHeadlessFn: () => false });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => false });
   assert.equal(verdict.allow, false, "local hand-role Agent without a FAILED record stays denied");
 });
 
@@ -391,7 +402,7 @@ test("decide: executor with ticket mapping to a NOT_DONE record (empty diff — 
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => ({ outcome: { status: "NOT_DONE" } });
   assert.equal(
-    decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow,
+    decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn }).allow,
     true,
     "a NOT_DONE genuine run must authorize the K=1 escalation (no deadlock)"
   );
@@ -403,7 +414,7 @@ test("decide: ticket + FAILED record whose freeze MATCHES current HEAD → allow
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "abc123" });
   const headShaFn = () => "abc123"; // HEAD == record's freeze → fresh
-  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
+  assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
 });
 
 test("decide: ticket + FAILED record whose freeze DIFFERS from HEAD (stale) → deny", () => {
@@ -414,7 +425,7 @@ test("decide: ticket + FAILED record whose freeze DIFFERS from HEAD (stale) → 
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "OLD-freeze" });
   const headShaFn = () => "NEW-head"; // HEAD advanced past the record's freeze → stale
-  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn, headShaFn });
   assert.equal(verdict.allow, false, "a stale record (freeze != HEAD) must NOT unlock the Claude hand");
 });
 
@@ -426,7 +437,7 @@ test("decide: ticket + FAILED record, HEAD unreadable → allow (freshness fails
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => ({ outcome: { status: "FAILED" }, freezeCommitSha: "abc123" });
   const headShaFn = () => null; // git unavailable
-  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
+  assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn, headShaFn }).allow, true);
 });
 
 test("decide: executor with ticket but record outcome DONE (not FAILED) → deny", () => {
@@ -435,7 +446,7 @@ test("decide: executor with ticket but record outcome DONE (not FAILED) → deny
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ escalation_fallback: ["feat/task-1"] });
   const readHandRecordFn = () => ({ outcome: { status: "DONE" } });
-  const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn });
   assert.equal(verdict.allow, false, "a DONE run-record must NOT unlock the Claude hand escape");
 });
 
@@ -446,7 +457,7 @@ test("decide: executor with non-empty ticket array but only a FORGED (recordless
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ escalation_fallback: ["feat/forged-task"] });
   const readHandRecordFn = () => null;
-  assert.equal(decide(payload, { readTriage, readGateStateFn, readHandRecordFn }).allow, false);
+  assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn }).allow, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -474,7 +485,7 @@ test(
         : null;
     const headShaFn = () => "abc123"; // HEAD matches the record's freeze → fresh
 
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       readGateStateFn,
       readHandRecordFn,
@@ -500,7 +511,7 @@ test(
       qid === "feat/task-1" ? { outcome: { status: "DONE" }, freezeCommitSha: "abc123" } : null;
     const headShaFn = () => "abc123";
 
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       readGateStateFn,
       readHandRecordFn,
@@ -529,7 +540,7 @@ test(
         : null;
     const headShaFn = () => "NEW-head"; // HEAD advanced past the record's freeze → stale
 
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       readGateStateFn,
       readHandRecordFn,
@@ -557,7 +568,7 @@ test(
         : null;
     const headShaFn = () => "abc123";
 
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       readGateStateFn,
       readHandRecordFn,
@@ -585,7 +596,7 @@ test(
         : null;
     const headShaFn = () => "abc123";
 
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       readGateStateFn,
       readHandRecordFn,
@@ -604,7 +615,7 @@ test(
 test("decide: executor with triage mode QUICK → deny (Gate 1: QUICK not in {LIGHT,FULL})", () => {
   const payload = makeAgentPayload("ses_exec_quick", "executor");
   const readTriage = () => ({ mode: "QUICK", feature_id: "feat" });
-  const verdict = decide(payload, { readTriage });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
   assert.equal(verdict.allow, false);
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -612,7 +623,7 @@ test("decide: executor with triage mode QUICK → deny (Gate 1: QUICK not in {LI
 test("decide: executor with triage mode no-ceremony → deny (Gate 1)", () => {
   const payload = makeAgentPayload("ses_exec_nc", "executor");
   const readTriage = () => ({ mode: "no-ceremony", feature_id: "feat" });
-  const verdict = decide(payload, { readTriage });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
   assert.equal(verdict.allow, false);
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -632,7 +643,7 @@ test("decide: all 9 delivery roles are gated (Gate 1 deny without triage.json)",
   const readTriage = () => null;
   for (const role of deliveryRoles) {
     const payload = makeAgentPayload(`ses_role_${role.replace("-", "")}`, role);
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
     assert.equal(
       verdict.allow,
       false,
@@ -646,7 +657,7 @@ test("decide: non-delivery roles pass freely even without triage.json", () => {
   const readTriage = () => null;
   for (const role of freeRoles) {
     const payload = makeAgentPayload("ses_free", role);
-    assert.equal(decide(payload, { readTriage }).allow, true, `role '${role}' must be allowed`);
+    assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage }).allow, true, `role '${role}' must be allowed`);
   }
 });
 
@@ -657,7 +668,7 @@ test("decide: missing session_id → allow (infra error, fail-open)", () => {
     // no session_id
   };
   const readTriage = () => null;
-  assert.equal(decide(payload, { readTriage }).allow, true);
+  assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage }).allow, true);
 });
 
 test("decide: adversary_fired write failure never blocks (mergeGateStateFn throws)", () => {
@@ -666,7 +677,7 @@ test("decide: adversary_fired write failure never blocks (mergeGateStateFn throw
   const mergeGateStateFn = () => { throw new Error("disk full"); };
 
   // Must return allow despite the write failure
-  const verdict = decide(payload, { readTriage, mergeGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, mergeGateStateFn });
   assert.equal(verdict.allow, true, "write failure must not block adversary dispatch");
 });
 
@@ -675,7 +686,7 @@ test("decide: planner with BOTH missing → deny reason names both brainstorming
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({});
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false);
   // The combined-missing message names both steps
   const reason = verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase();
@@ -712,7 +723,7 @@ test("decide: gh pr merge is denied when CI evidence is pending", () => {
     tool_name: "Bash",
     tool_input: { command: "gh pr merge 42 --squash" },
   };
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
     readGateStateFn: () => ({}),
     readMergeCheckRollupFn: () => [{ __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null }],
@@ -728,7 +739,7 @@ test("decide: gh pr merge passes the literal PR target to one green-rollup reade
     tool_name: "Bash",
     tool_input: { command: "gh pr merge 42 --squash" },
   };
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     gitStateFn: () => ({ branch: "feat/x", commitsAhead: 1, defaultBranch: "main" }),
     readGateStateFn: () => ({}),
     readMergeCheckRollupFn: (value) => {
@@ -747,7 +758,7 @@ test("decide: gh pr merge passes the literal PR target to one green-rollup reade
 test("decide: session_id '../../evil' + delivery role → allow (fail-open, not brick)", () => {
   const payload = makeAgentPayload("../../evil", "planner");
   const readTriage = () => null; // irrelevant — unsafe session_id check fires first
-  const verdict = decide(payload, { readTriage });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
   assert.equal(verdict.allow, true, "unsafe session_id must fail-open, never deny");
 });
 
@@ -760,7 +771,7 @@ test("decide: planner deny reason contains real feature_id from triage", () => {
   const readTriage = () => ({ mode: "FULL", feature_id: "my-real-feature" });
   const readGateStateFn = () => ({}); // neither brainstormed nor adversary_fired
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false);
   assert.ok(
     verdict.hookSpecificOutput.permissionDecisionReason.includes("my-real-feature"),
@@ -773,7 +784,7 @@ test("decide: planner deny (brainstorm only missing) reason contains real featur
   const readTriage = () => ({ mode: "FULL", feature_id: "another-feature" });
   const readGateStateFn = () => ({ adversary_fired: true }); // brainstormed absent
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false);
   assert.ok(
     verdict.hookSpecificOutput.permissionDecisionReason.includes("another-feature"),
@@ -791,7 +802,7 @@ test("decide: planner denied when gateState.feature_id !== triage.feature_id eve
   // Stale state from a previous feature: both flags set, but stamped for feature-a
   const readGateStateFn = () => ({ feature_id: "feature-a", brainstormed: true, adversary_fired: true });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false, "stale flags from another feature must not allow the planner");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
   const reason = verdict.hookSpecificOutput.permissionDecisionReason.toLowerCase();
@@ -804,7 +815,7 @@ test("decide: planner allowed when gateState.feature_id === triage.feature_id an
   const readTriage = () => ({ mode: "FULL", feature_id: "feature-a" });
   const readGateStateFn = () => ({ feature_id: "feature-a", brainstormed: true, adversary_fired: true });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, true, "matching feature_id with both flags must allow");
 });
 
@@ -817,7 +828,7 @@ test("decide: 'harness:planner' is subject to Gate 2 (denied without ceremony)",
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({});
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false, "namespaced planner must hit Gate 2");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -828,7 +839,7 @@ test("decide: 'harness:adversary' records adversary_fired and allows", () => {
     const payload = makeAgentPayload(sessionId, "harness:adversary");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
 
-    const verdict = decide(payload, { readTriage }); // real mergeGateState via cwd
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage }); // real mergeGateState via cwd
     assert.equal(verdict.allow, true, "namespaced adversary must be allowed");
 
     const state = JSON.parse(
@@ -853,7 +864,7 @@ test("decide: adversary records adversary_fired without dropping pre-existing br
     const payload = makeAgentPayload(sessionId, "adversary");
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
 
-    const verdict = decide(payload, { readTriage }); // uses real mergeGateState via cwd
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage }); // uses real mergeGateState via cwd
     assert.equal(verdict.allow, true);
 
     const state = JSON.parse(fs.readFileSync(path.join(stateDir, "gate-state.json"), "utf8"));
@@ -871,7 +882,7 @@ test("decide: shipper with unmatched regate_pending (no matching regate_passed) 
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ regate_pending: ["task-1"] }); // no regate_passed
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, false, "shipper must be denied while a re-gate is unmatched");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
   assert.ok(
@@ -890,7 +901,7 @@ test("decide: shipper with regate_pending matched by an ancestor-sha regate_pass
   // Absolutions are sha-qualified `<feature>/<task>@<sha>`; the pending obligation is unqualified.
   const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1@abc123"] });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, isAncestorFn: () => true });
   assert.equal(verdict.allow, true, "shipper must be allowed once every re-gate is matched by an ancestor-sha absolution");
 });
 
@@ -900,7 +911,7 @@ test("decide: shipper with regate_passed at a DIVERGENT (non-ancestor) sha → d
   const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1@stale99"] });
 
   // A re-dispatch discarded the prior attempt → the old absolution's sha is not an ancestor of HEAD.
-  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => false });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, isAncestorFn: () => false });
   assert.equal(verdict.allow, false, "a non-ancestor (divergent) absolution must not clear the obligation");
   assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
 });
@@ -910,7 +921,7 @@ test("decide: shipper with a legacy UNqualified regate_passed → deny (no @sha 
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({ regate_pending: ["task-1"], regate_passed: ["task-1"] });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, isAncestorFn: () => true });
   assert.equal(verdict.allow, false, "an unqualified (pre-migration) absolution must be treated as absent");
 });
 
@@ -924,7 +935,7 @@ test("decide: shipper with feature-qualified unmatched regate_pending → deny n
     regate_passed: ["feature-b/task-1@abc123"],
   });
 
-  const verdict = decide(payload, { readTriage, readGateStateFn, isAncestorFn: () => true });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, isAncestorFn: () => true });
   assert.equal(verdict.allow, false, "shipper must be denied while feature-a/task-1 is unmatched");
   assert.ok(
     verdict.hookSpecificOutput.permissionDecisionReason.includes("feature-a/task-1"),
@@ -941,7 +952,7 @@ test("decide: shipper with no re-gate markers at all → allow (nothing to consu
   const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
   const readGateStateFn = () => ({});
 
-  const verdict = decide(payload, { readTriage, readGateStateFn });
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
   assert.equal(verdict.allow, true, "shipper without any pending re-gate must be allowed");
 });
 
@@ -978,7 +989,7 @@ test(
     const payload = makeBashPayload("ses_bash_push_blocked", "git push origin main");
     const readGateStateFn = () => ({ regate_pending: ["task-1"] }); // no regate_passed
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     assert.equal(verdict.allow, false, "git push must be denied while regate is unmatched");
     assert.equal(
@@ -1004,7 +1015,7 @@ test(
     const payload = makeBashPayload("ses_bash_pr_create_blocked", "gh pr create --title 'My PR'");
     const readGateStateFn = () => ({ regate_pending: ["task-1"] });
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     assert.equal(verdict.allow, false, "gh pr create must be denied while regate is unmatched");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1031,7 +1042,7 @@ test(
       regate_passed: ["task-1@abc123"],
     });
 
-    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn, isAncestorFn: () => true });
 
     assert.equal(verdict.allow, true, "git push must be allowed once every regate is matched by an ancestor-sha absolution");
   },
@@ -1050,7 +1061,7 @@ test(
 
     for (const cmd of readOnlyCmds) {
       const payload = makeBashPayload("ses_bash_readonly", cmd);
-      const verdict = decide(payload, { readGateStateFn });
+      const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
       assert.equal(
         verdict.allow,
         true,
@@ -1073,7 +1084,7 @@ test(
 
     let verdict;
     assert.doesNotThrow(() => {
-      verdict = decide(payload, { readGateStateFn });
+      verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
     }, "decide must not throw on empty gate-state");
     assert.equal(verdict.allow, true, "delivery command allowed when gate-state has no regate_pending");
   },
@@ -1093,7 +1104,7 @@ test(
       { tool_input: { command: "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json", run_in_background: true } },
     );
 
-    const verdict = decide(payload);
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS });
 
     assert.equal(verdict.allow, false, "backgrounded spawn-hand dispatch must be denied");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1112,7 +1123,7 @@ test(
       tool_input: { command: cmd, run_in_background: true },
     });
 
-    const verdict = decide(payload);
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS });
 
     assert.equal(verdict.allow, false, "backgrounded cross-family dispatch must be denied");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1142,7 +1153,7 @@ test(
       tool_input: { command: cmd, run_in_background: true },
     });
     // Not a delivery command, not a hand dispatch → allowed (rail is scoped to the hand dispatch).
-    assert.equal(decide(payload).allow, true, "background npm build must not be denied — rail is hand-scoped");
+    assert.equal(decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS }).allow, true, "background npm build must not be denied — rail is hand-scoped");
   },
 );
 
@@ -1161,7 +1172,7 @@ test(
     const payload = makeWakeupPayload("ses_wakeup_routine");
     const isRoutineFn = () => isRoutineSession({ HARNESS_NOTIFY_PROJECT: "my-project" });
 
-    const verdict = decide(payload, { isRoutineFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, isRoutineFn });
 
     assert.equal(verdict.allow, false, "ScheduleWakeup must be denied in a routine session");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1177,7 +1188,7 @@ test(
   () => {
     for (const env of [{ CLAUDE_CODE_REMOTE: "1" }, { HARNESS_OBSERVABILITY_RUN_PATH: "/run/x" }]) {
       const payload = makeWakeupPayload("ses_wakeup_env");
-      const verdict = decide(payload, { isRoutineFn: () => isRoutineSession(env) });
+      const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, isRoutineFn: () => isRoutineSession(env) });
       assert.equal(verdict.allow, false, `ScheduleWakeup must be denied when routine env is ${JSON.stringify(env)}`);
     }
   },
@@ -1189,7 +1200,7 @@ test(
     const payload = makeWakeupPayload("ses_wakeup_interactive");
     const isRoutineFn = () => isRoutineSession({}); // no markers → interactive
 
-    const verdict = decide(payload, { isRoutineFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, isRoutineFn });
 
     assert.equal(verdict.allow, true, "ScheduleWakeup must be allowed in a plain interactive session");
     assert.equal(verdict.hookSpecificOutput, undefined, "no deny output on the interactive allow path");
@@ -1215,7 +1226,7 @@ test(
     const payload = makeBashPayload("ses_bash_C_push", "git -C /repo push origin main");
     const readGateStateFn = () => ({ regate_pending: ["my-feature/task-1"] });
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     assert.equal(verdict.allow, false, "git -C /repo push must be gated like a bare git push");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1234,7 +1245,7 @@ test(
       "git --git-dir=/repo/.git --work-tree=/repo push",
     );
     const readGateStateFn = () => ({ regate_pending: ["feat/t1"] });
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
     assert.equal(verdict.allow, false, "git --git-dir/--work-tree push must be gated");
   },
 );
@@ -1244,7 +1255,7 @@ test(
   () => {
     const payload = makeBashPayload("ses_bash_C_status", "git -C /repo status");
     const readGateStateFn = () => ({ regate_pending: ["feat/t1"] });
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
     assert.equal(verdict.allow, true, "git -C /repo status is read-only and must always pass");
   },
 );
@@ -1298,7 +1309,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({}); // no escalation_fallback ticket
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "main-loop executor must be denied without a fallback ticket");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1317,7 +1328,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({});
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "main-loop sniper must be denied without a fallback ticket");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1333,7 +1344,7 @@ test(
     const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
     const readHandRecordFn = (qid) => (qid === "feat-a/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn });
 
     assert.equal(verdict.allow, true, "executor must be allowed when a ticket maps to a FAILED run-record");
   },
@@ -1351,7 +1362,7 @@ test(
       return true;
     };
 
-    const verdict = decide(payload, { readTriage, readGateStateFn, mergeGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, mergeGateStateFn });
 
     assert.equal(verdict.allow, true, "adversary (eye) must remain allowed without a fallback ticket");
     assert.equal(recorded, true, "adversary must still record adversary_fired");
@@ -1365,7 +1376,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({ brainstormed: true, adversary_fired: true }); // no ticket
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, true, "planner (eye) must be allowed by its own gate, not the hand gate");
   },
@@ -1378,7 +1389,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({});
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "namespaced executor must be normalized and denied");
     assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
@@ -1396,7 +1407,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({}); // no escalation_fallback ticket — no longer needed for test-author
 
-    const verdict = decide(payload, { readTriage, isHeadlessFn: () => false, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => false, readGateStateFn });
 
     assert.equal(verdict.allow, true, "test-author must always be allowed in LOCAL — it is the fidelity-pass producer and has no spawn-hand path");
   },
@@ -1410,7 +1421,7 @@ test(
     const readGateStateFn = () => ({ escalation_fallback: ["feat-a/task-1"] });
     const readHandRecordFn = (qid) => (qid === "feat-a/task-1" ? { outcome: { status: "FAILED" } } : null);
 
-    const verdict = decide(payload, { readTriage, readGateStateFn, readHandRecordFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn, readHandRecordFn });
 
     assert.equal(verdict.allow, true, "test-author must be allowed for the transcription fallback when a ticket maps to a FAILED record");
   },
@@ -1426,7 +1437,7 @@ test(
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({}); // no ticket — no longer needed for test-author
 
-    const verdict = decide(payload, { readTriage, isHeadlessFn: () => false, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, isHeadlessFn: () => false, readGateStateFn });
 
     assert.equal(verdict.allow, true, "namespaced test-author must also be allowed — bareRole normalization resolves to 'test-author', early-return fires");
   },
@@ -1439,7 +1450,7 @@ test(
     const readTriage = () => null; // no triage.json
     const readGateStateFn = () => ({}); // no ticket — but Gate 1 must fire FIRST
 
-    const verdict = decide(payload, { readTriage, readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage, readGateStateFn });
 
     assert.equal(verdict.allow, false, "no-triage executor must still be denied");
     assert.ok(
@@ -1464,7 +1475,7 @@ test(
     const payload = makeBashPayload("ses_cap_blocked", "git push origin main");
     const readGateStateFn = () => ({ hand_finished: ["feat-a/task-1"] }); // no capture_verified
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     // Both stamps ride on mark.mjs stdout; chaining them into one Bash command loses the
     // capture-verified one, so this state means "the marker was swallowed", never "the hand was
@@ -1483,7 +1494,7 @@ test(
       capture_verified: ["feat-a/task-1@abc123"],
     });
 
-    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn, isAncestorFn: () => true });
 
     assert.equal(verdict.allow, true, "git push must be allowed once every capture is matched by an ancestor-sha absolution");
   },
@@ -1495,7 +1506,7 @@ test(
     const payload = makeBashPayload("ses_cap_readonly", "git status");
     const readGateStateFn = () => ({ hand_finished: ["feat-a/task-1"] }); // no capture_verified
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     assert.equal(verdict.allow, true, "read-only git status must always pass regardless of capture state");
   },
@@ -1507,7 +1518,7 @@ test(
     const payload = makeBashPayload("ses_cap_regate_intact", "git push origin main");
     const readGateStateFn = () => ({ regate_pending: ["feat-a/x"] }); // no regate_passed, no hand_finished
 
-    const verdict = decide(payload, { readGateStateFn });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn });
 
     assert.equal(verdict.allow, false, "the existing regate rail must still fire post-extension");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1527,7 +1538,7 @@ test(
       hand_finished: ["feat-a/task-1"],
     });
 
-    const verdict = decide(payload, { readGateStateFn, isAncestorFn: () => true });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn, isAncestorFn: () => true });
 
     assert.equal(verdict.allow, false, "an unmatched re-gate must still deny delivery");
     assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
@@ -1546,7 +1557,7 @@ test(
 
 test("real-file capture rail: denies push when a real DONE hand-record has no capturedVerifiedAt (hand_finished was never stamped)", () => {
   const payload = makeBashPayload("ses_realfile_1", "git push");
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1569,7 +1580,7 @@ test("real-file capture rail: denies push when a real DONE hand-record has no ca
 
 test("real-file capture rail: denies delivery when an upgrade finds a legacy flat hand-record", () => {
   const payload = makeBashPayload("ses_legacy_record", "git push");
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-legacy" }),
     gitStateFn: () => null,
     isAncestorFn: () => true,
@@ -1584,7 +1595,7 @@ test("real-file capture rail: denies delivery when an upgrade finds a legacy fla
 
 test("real-file capture rail: allows push when the real hand-record already carries capturedVerifiedAt", () => {
   const payload = makeBashPayload("ses_realfile_2", "git push");
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1604,7 +1615,7 @@ test("real-file capture rail: allows push when the real hand-record already carr
 
 test("real-file capture rail: denies push with a distinct hard-stop message on a scope violation, even if capturedVerifiedAt is set", () => {
   const payload = makeBashPayload("ses_realfile_3", "git push");
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1626,7 +1637,7 @@ test("real-file capture rail: denies push with a distinct hard-stop message on a
 
 test("real-file capture rail: ignores a hand-record whose freezeCommitSha is not an ancestor of HEAD (abandoned/unrelated branch)", () => {
   const payload = makeBashPayload("ses_realfile_4", "git push");
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1642,7 +1653,7 @@ test("real-file capture rail: ignores a hand-record whose freezeCommitSha is not
 
 test("real-file capture rail: denies a freeze-commit for the NEXT task (best-effort early trigger) when the current feature has an unresolved hand-record", () => {
   const payload = makeBashPayload("ses_freeze_early", 'git commit -m "test(cron): freeze locked tests for task-2"');
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1659,7 +1670,7 @@ test("real-file capture rail: denies a freeze-commit for the NEXT task (best-eff
 
 test("real-file capture rail: allows an ordinary git commit (not a freeze-commit message) even with an unresolved hand-record — the freeze-commit trigger is best-effort, not the mandatory gate", () => {
   const payload = makeBashPayload("ses_freeze_ordinary", 'git commit -m "chore: update memory notes"');
-  const result = decide(payload, {
+  const result = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({ feature_id: "feat-real" }),
     gitStateFn: () => null,
     isHeadlessFn: () => false,
@@ -1682,7 +1693,7 @@ test("real-file capture rail: allows an ordinary git commit (not a freeze-commit
 
 test("push-branch-gate: git push from main → deny", () => {
   const payload = makeBashPayload("ses_pbg1", "git push origin main");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "main", commitsAhead: 3 }),
   });
@@ -1693,7 +1704,7 @@ test("push-branch-gate: git push from main → deny", () => {
 
 test("push-branch-gate: git push from master → deny", () => {
   const payload = makeBashPayload("ses_pbg2", "git push");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "master", commitsAhead: 1 }),
   });
@@ -1703,7 +1714,7 @@ test("push-branch-gate: git push from master → deny", () => {
 
 test("push-branch-gate: feature branch with commits ahead → allow (this rail)", () => {
   const payload = makeBashPayload("ses_pbg3", "git push -u origin feat/x");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "feat/x", commitsAhead: 2 }),
   });
@@ -1712,7 +1723,7 @@ test("push-branch-gate: feature branch with commits ahead → allow (this rail)"
 
 test("push-branch-gate: feature branch with ZERO commits ahead → deny naming commit", () => {
   const payload = makeBashPayload("ses_pbg4", "gh pr create");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "feat/x", commitsAhead: 0 }),
   });
@@ -1722,7 +1733,7 @@ test("push-branch-gate: feature branch with ZERO commits ahead → deny naming c
 
 test("push-branch-gate: base unresolved (commitsAhead null) on feature branch → allow (branch floor only)", () => {
   const payload = makeBashPayload("ses_pbg5", "git push");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "feat/x", commitsAhead: null }),
   });
@@ -1731,7 +1742,7 @@ test("push-branch-gate: base unresolved (commitsAhead null) on feature branch �
 
 test("push-branch-gate: git probe error (gitStateFn null) → allow (fail-open, never brick)", () => {
   const payload = makeBashPayload("ses_pbg6", "git push");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => null,
   });
@@ -1740,7 +1751,7 @@ test("push-branch-gate: git probe error (gitStateFn null) → allow (fail-open, 
 
 test("push-branch-gate: read-only command on main → allow (not a delivery command)", () => {
   const payload = makeBashPayload("ses_pbg7", "git status");
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readGateStateFn: () => ({}),
     gitStateFn: () => ({ branch: "main", commitsAhead: 0 }),
   });
@@ -1749,7 +1760,7 @@ test("push-branch-gate: read-only command on main → allow (not a delivery comm
 
 test("push-branch-gate: decide() WITHOUT gitStateFn is inert (back-compat — existing callers unaffected)", () => {
   const payload = makeBashPayload("ses_pbg8", "git push");
-  const verdict = decide(payload, { readGateStateFn: () => ({}) }); // no gitStateFn injected
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn: () => ({}) }); // no gitStateFn injected
   assert.equal(verdict.allow, true, "the branch rail must not fire without an injected git probe");
 });
 
@@ -1975,7 +1986,7 @@ test(
       tool_input: { command: "gh issue create --title foo" },
       cwd: "/abs/repo",
     };
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       issueFormExistsFn: () => true,
       readGateStateFn: () => ({}),
     });
@@ -2008,7 +2019,7 @@ test(
       tool_input: { command: "gh issue create --title foo && git push origin HEAD" },
       cwd: "/abs/repo",
     };
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       issueFormExistsFn: () => true,
       readGateStateFn: () => ({}),
       gitStateFn: () => ({ branch: "feat/x", commitsAhead: 0 }),
@@ -2096,7 +2107,7 @@ test(
       cwd: "/abs/repo",
     };
     // No issueFormExistsFn injected — default inside decide() is () => false
-    const verdict = decide(payload, { readGateStateFn: () => ({}) });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readGateStateFn: () => ({}) });
     assert.equal(verdict.allow, true, "inert default must allow");
     assert.equal(
       verdict.hookSpecificOutput,
@@ -2149,7 +2160,7 @@ test(
   "LOCKED default-branch #3: decideBash denies delivery from the default branch (develop) even with commits ahead",
   () => {
     const payload = makeBashPayload("ses_db3", "git push");
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readGateStateFn: () => ({}),
       gitStateFn: () => ({ branch: "develop", commitsAhead: 3, defaultBranch: "develop" }),
     });
@@ -2170,7 +2181,7 @@ test(
   "LOCKED default-branch #4: decideBash allows a feature branch when defaultBranch is develop",
   () => {
     const payload = makeBashPayload("ses_db4", "git push -u origin feat/x");
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readGateStateFn: () => ({}),
       gitStateFn: () => ({ branch: "feat/x", commitsAhead: 2, defaultBranch: "develop" }),
     });
@@ -2203,7 +2214,7 @@ test(
   "LOCKED default-branch #6: feature/develop-stuff must NOT be denied — only exact branch match denies",
   () => {
     const payload = makeBashPayload("ses_db6", "git push -u origin feature/develop-stuff");
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readGateStateFn: () => ({}),
       gitStateFn: () => ({ branch: "feature/develop-stuff", commitsAhead: 2, defaultBranch: "develop" }),
     });
@@ -2229,7 +2240,7 @@ test(
     // gate-state with NO escalation_fallback (old hand-routing rail would deny without this)
     const readTriage = () => ({ mode: "FULL", feature_id: "feat" });
     const readGateStateFn = () => ({}); // no escalation_fallback ticket
-    const verdict = decide(payload, {
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
       readTriage,
       isHeadlessFn: () => false,
       readGateStateFn,
@@ -2252,7 +2263,7 @@ test("plan-reviewer: first dispatch allows and increments plan_review_count to 1
     const payload = makeAgentPayload(sessionId, "plan-reviewer");
     const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
 
-    const verdict = decide(payload, { readTriage });
+    const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS, readTriage });
 
     assert.equal(verdict.allow, true, "first plan-review dispatch must be allowed");
     assert.ok(!verdict.hookSpecificOutput?.additionalContext, "no warning on the first round");
@@ -2269,7 +2280,7 @@ test("plan-reviewer: past the cap (count>3) allows WITH an additionalContext war
   const payload = makeAgentPayload(sessionId, "plan-reviewer");
   const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
   const readGateStateFn = () => ({ plan_review_count: 3 }); // this dispatch becomes round 4
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readTriage,
     readGateStateFn,
     mergeGateStateFn: () => {},
@@ -2290,7 +2301,7 @@ test("plan-reviewer: past the runaway ceiling (count>10) INTERACTIVE denies", ()
   const payload = makeAgentPayload(sessionId, "plan-reviewer");
   const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
   const readGateStateFn = () => ({ plan_review_count: 10 }); // this dispatch becomes round 11
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readTriage,
     readGateStateFn,
     mergeGateStateFn: () => {},
@@ -2307,7 +2318,7 @@ test("plan-reviewer: past the ceiling HEADLESS never denies (warn-only — no op
   const payload = makeAgentPayload(sessionId, "plan-reviewer");
   const readTriage = () => ({ session_id: sessionId, mode: "FULL", feature_id: "feat-x" });
   const readGateStateFn = () => ({ plan_review_count: 10 }); // round 11
-  const verdict = decide(payload, {
+  const verdict = decide(payload, { readActiveHandFamilyFn: OLLAMA_HANDS,
     readTriage,
     readGateStateFn,
     mergeGateStateFn: () => {},
@@ -2316,4 +2327,77 @@ test("plan-reviewer: past the ceiling HEADLESS never denies (warn-only — no op
 
   assert.equal(verdict.allow, true, "HEADLESS must never hard-deny — a deadlock with no operator is worse");
   assert.ok(verdict.hookSpecificOutput?.additionalContext, "HEADLESS still gets the visible warning");
+});
+
+// ---------------------------------------------------------------------------
+// Hand family toggle — with the ollama hands OFF, the hand roles are ORDINARY subagents
+// ---------------------------------------------------------------------------
+
+test("hands off (family=claude): a main-loop Agent(sniper) is ALLOWED — no spawn-hand, no ticket", () => {
+  // The spawn-hand rail exists for the ollama family. On the claude family the rungs ARE ordinary
+  // subagents, so demanding an escalation ticket would deny the intended dispatch.
+  const payload = makeAgentPayload("ses_family_sniper", "sniper");
+  const verdict = decide(payload, {
+    readActiveHandFamilyFn: CLAUDE_HANDS,
+    readTriage: () => ({ mode: "FULL", feature_id: "feat" }),
+    readGateStateFn: () => ({}),
+    isHeadlessFn: () => false,
+  });
+  assert.equal(verdict.allow, true, "a sniper subagent must be allowed when the ollama hands are off");
+});
+
+test("hands off (family=claude): the executor still waits for the frozen test (fidelity_pass)", () => {
+  // The one rail that does NOT come from the spawn path: an executor must never write
+  // implementation code before the test-author has produced a RED locked test.
+  const payload = makeAgentPayload("ses_family_exec", "executor");
+  const deps = {
+    readActiveHandFamilyFn: CLAUDE_HANDS,
+    readTriage: () => ({ mode: "FULL", feature_id: "feat" }),
+    isHeadlessFn: () => false,
+  };
+  const denied = decide(payload, { ...deps, readGateStateFn: () => ({}) });
+  assert.equal(denied.allow, false, "no fidelity_pass → the executor must still be denied");
+
+  const allowed = decide(payload, {
+    ...deps,
+    readGateStateFn: () => ({ fidelity_pass: ["feat/task-1"] }),
+  });
+  assert.equal(allowed.allow, true, "with a fidelity_pass for this feature the executor runs");
+});
+
+test("hands off (family=claude): the -high rung is gated exactly like its plain role", () => {
+  // `executor-high` is the same role at effort xhigh (the Agent tool has no effort parameter, so
+  // the rung lives in the agent definition). A rail that only knew `executor` would let it past.
+  const deps = {
+    readActiveHandFamilyFn: CLAUDE_HANDS,
+    readTriage: () => ({ mode: "FULL", feature_id: "feat" }),
+    isHeadlessFn: () => false,
+  };
+  const denied = decide(makeAgentPayload("ses_high_exec", "executor-high"), { ...deps, readGateStateFn: () => ({}) });
+  assert.equal(denied.allow, false, "executor-high without a fidelity_pass must be denied");
+
+  const sniperHigh = decide(makeAgentPayload("ses_high_snipe", "sniper-high"), { ...deps, readGateStateFn: () => ({}) });
+  assert.equal(sniperHigh.allow, true, "sniper-high is allowed like sniper");
+});
+
+test("hands ON (family=ollama): the spawn-hand rail is untouched — a ticketless executor is denied", () => {
+  const verdict = decide(makeAgentPayload("ses_family_ollama", "executor"), {
+    readActiveHandFamilyFn: OLLAMA_HANDS,
+    readTriage: () => ({ mode: "FULL", feature_id: "feat" }),
+    readGateStateFn: () => ({}),
+    isHeadlessFn: () => false,
+  });
+  assert.equal(verdict.allow, false);
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /spawn-hand/);
+});
+
+test("a corrupt hands.json falls back to the STRICT rail, never to the open one", () => {
+  // Fail-closed on an unreadable toggle: an unknowable family must not open the hand-role gate.
+  const verdict = decide(makeAgentPayload("ses_family_boom", "executor"), {
+    readActiveHandFamilyFn: () => { throw new Error("hands.json is not readable JSON"); },
+    readTriage: () => ({ mode: "FULL", feature_id: "feat" }),
+    readGateStateFn: () => ({}),
+    isHeadlessFn: () => false,
+  });
+  assert.equal(verdict.allow, false, "an unreadable toggle must not open the gate");
 });

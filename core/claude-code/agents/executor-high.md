@@ -1,7 +1,8 @@
 ---
-name: executor
-description: Implementation agent — receives one task from an execution-plan.json and delivers the code change. Stays strictly inside scope_paths and applies resolved_judgments literally. Use for every implement step of the orchestrating-delivery orchestrator.
+name: executor-high
+description: Implementation agent for the HIGH rung — identical to `executor`, dispatched at `effort: xhigh`. The orchestrator picks it from `hand_tiers.high` on the claude hand family; never invoke it directly for a low/medium task.
 model: sonnet
+effort: xhigh
 tools:
   - Read
   - Write
@@ -11,6 +12,11 @@ tools:
   - Bash
   - Skill
 ---
+
+> **This file is the `high` rung of the executor ladder — the SAME agent as `executor`, at a higher
+> reasoning effort.** The `Agent` tool takes a `model` override but no effort parameter, so a rung
+> whose escalation IS the effort has to exist as its own definition. Everything below is identical
+> to `executor.md`; keep the two in sync (`agent-catalog` consistency test).
 
 # Executor
 

@@ -5,7 +5,7 @@ import { isSafeFeatureId } from '../../../hooks/lib/gate-lib.mjs';
 import { readRunnerConfig as defaultReadRunnerConfig } from './runner-adapters.mjs';
 import { parseFlags, isDirectCli } from './cli-flags.mjs';
 import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../vps/obs-outbox.mjs';
-import { resolveHandModel, resolveHandEffort, detectHandFamily } from '../../../../shared/lib/hand-model-ladder.mjs';
+import { resolveHandModel, resolveHandEffort, detectHandFamily, dispatchModeFor, familyOfHandModel, agentTypeForRung } from '../../../../shared/lib/hand-model-ladder.mjs';
 import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity.mjs';
 
 /**
@@ -35,8 +35,7 @@ import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity
  * @param {(() => string) | undefined} [params.readRunnerConfig] - Injectable seam that returns the
  *   project's selected test-runner adapter id (`runner-adapters.mjs`). Defaults to reading
  *   `.claude/hand-config/test-runner.json` from `process.cwd()` (→ `node-test` when absent).
- * @param {string} [params.effort] - Reasoning effort of the resolved rung, when it has one.
- * @returns {{ feature_id: string, task_id: string, model: string, effort?: string, brief_file: string,
+ * @returns {{ feature_id: string, task_id: string, model: string, brief_file: string,
  *   role: "executor"|"sniper", scope_paths: string[], locked_test: string, allowed_writes: string[], freeze_commit_sha: string,
  *   test_runner: string }}
  *   The fully resolved spawn-hand descriptor.
@@ -45,7 +44,6 @@ export function emitDescriptor({
   featureId,
   taskId,
   model,
-  effort,
   modelFallbackUsed = false,
   modelResolution,
   briefFile,
@@ -58,6 +56,16 @@ export function emitDescriptor({
   const role = modelResolution?.role;
   if (role !== "executor" && role !== "sniper") {
     throw new Error("descriptor-emitter: modelResolution.role must be executor or sniper");
+  }
+  // FAIL CLOSED: a descriptor exists to feed spawn-hand. A claude-family rung dispatches as an
+  // ordinary Agent subagent, so emitting one here would produce a file whose only consumer refuses
+  // it — the error belongs at the fork, naming the right path, not three steps downstream.
+  if (dispatchModeFor(model) !== "spawn-hand") {
+    throw new Error(
+      `descriptor-emitter: ${model} belongs to the ${familyOfHandModel(model)} hand family, which ` +
+        `dispatches as an ordinary Agent subagent — there is no descriptor to emit. Dispatch ` +
+        `\`Agent(${modelResolution.agent_type ?? role}, model=${model})\` instead.`,
+    );
   }
   // Resolve the freeze commit SHA via the injectable seam or default git call.
   const resolveHeadSha = headSha ?? defaultHeadSha;
@@ -87,10 +95,6 @@ export function emitDescriptor({
     // the runtime to infer it from the model tier (executor and sniper may share a tier/task).
     role,
     model,
-    // The claude ladder pins the same model id on medium and high — the effort IS the rung.
-    // Emitted explicitly (never left to the spawn layer to infer) so the descriptor states the
-    // whole route; spawn-hand re-derives it from (model, tier) and refuses a contradiction.
-    ...(effort ? { effort } : {}),
     // #361: the fallback always announces itself, on the descriptor as well as the run-record.
     modelFallbackUsed: modelFallbackUsed === true,
     ...(modelResolution ? { model_resolution: modelResolution } : {}),
@@ -173,8 +177,10 @@ export function resolveExecutorModel({ plan, taskId }) {
     model,
     modelFallbackUsed,
     effort: resolveHandEffort(model, tier),
+    agent_type: agentTypeForRung('executor', model, tier),
     model_resolution: {
       role: 'executor',
+      agent_type: agentTypeForRung('executor', model, tier),
       tier: tier ?? null,
       tier_source: task.complexity !== undefined ? 'task.complexity' : 'task.severity',
       modelFallbackUsed,
@@ -245,8 +251,10 @@ export function resolveSniperModel({ plan, severities, gateFailure = false, fail
     model,
     modelFallbackUsed,
     effort: resolveHandEffort(model, tier),
+    agent_type: agentTypeForRung('sniper', model, tier),
     model_resolution: {
       role: 'sniper',
+      agent_type: agentTypeForRung('sniper', model, tier),
       tier,
       // The INPUTS, persisted: the record must distinguish an arithmetic result from an assertion.
       applied_severities: set,
@@ -407,7 +415,6 @@ if (isDirectCli(import.meta.url)) {
     featureId: args['feature-id'],
     taskId: args['task-id'],
     model: resolved.model,
-    effort: resolved.effort,
     modelFallbackUsed: resolved.modelFallbackUsed,
     modelResolution: resolved.model_resolution,
     briefFile: args['brief-file'],
