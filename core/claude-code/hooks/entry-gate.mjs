@@ -66,6 +66,7 @@ import {
   corruptRegatePendingReason,
 } from "../../shared/lib/regate-classify.mjs";
 import { computeGitState } from "../../shared/lib/git-state.mjs";
+import { readActiveHandFamily } from "../../shared/lib/hand-model-ladder.mjs";
 import { checkRealFileCaptureRail as sharedCheckRealFileCaptureRail } from "../../shared/lib/real-file-capture-rail.mjs";
 import { decideMergeChecks, isGhPrMergeCommand, mergeTargetFromCommand } from "../../shared/lib/merge-check-gate.mjs";
 
@@ -198,15 +199,25 @@ function checkRealFileCaptureRail(featureId, { listHandRecordsForFeatureFn, isAn
 }
 
 /**
- * HAND roles — executor, sniper, and test-author write code/tests and are normally
- * dispatched as cheap-hand spawns via spawn-hand.mjs (Ollama), NOT as main-loop Agents.
+ * HAND roles — executor, sniper, and test-author write code/tests. On the OLLAMA hand family they
+ * are dispatched as cheap-hand spawns via spawn-hand.mjs, NOT as main-loop Agents.
  * A main-loop Agent of one of these (no agent_id) is only the legitimate K=1
  * escalation/transcription fallback, gated below by the escalation_fallback ticket.
  * NOTE: gate-lib's isDeliveryRole is FALSE for 'test-author' (it is not in DELIVERY_ROLES),
  * so HAND_ROLES is checked independently to keep the early-allow from leaking a main-loop
  * test-author through.
  */
-const HAND_ROLES = new Set(["executor", "sniper", "test-author"]);
+const HAND_ROLES = new Set([
+  "executor",
+  "sniper",
+  "test-author",
+  // The `-high` variants are the same roles at `effort: xhigh` (the Agent tool takes a model
+  // override but no effort, so the rung's effort lives in the agent definition's frontmatter).
+  // They must be gated identically — a rail that only knew `executor` would let `executor-high`
+  // walk straight past it.
+  "executor-high",
+  "sniper-high",
+]);
 
 // ---------------------------------------------------------------------------
 // Default I/O implementations (used by CLI; tests inject alternatives)
@@ -745,6 +756,9 @@ export function decide(payload, deps = {}) {
     readHandRecordFn = readHandRecord,
     headShaFn = defaultHeadSha,
     isHeadlessFn = defaultIsHeadless,
+    // The operator's hand-family toggle (which dispatch path the hand roles take). Injectable so a
+    // test states the family it is asserting under instead of inheriting the process cwd's config.
+    readActiveHandFamilyFn = readActiveHandFamily,
     // Routine (headless-local / cloud cron) detector for the ScheduleWakeup death rail (#ac-1.3).
     // Default reads process.env; tests inject to exercise the marker set deterministically.
     isRoutineFn = isRoutineSession,
@@ -1078,17 +1092,28 @@ export function decide(payload, deps = {}) {
       return { allow: true };
     }
 
-    // HEADLESS: cheap hands is a LOCAL-only capability. In the cloud there is no Ollama hand, so the
-    // hand roles run on the standard Claude model — a main-loop Agent(executor|sniper|test-author) is
-    // the INTENDED dispatch, not a silent fallback to deny.
-    if (isHeadlessFn()) {
+    // HANDS OFF / HEADLESS: the spawn-hand rail exists for the OLLAMA hand family, which is a
+    // LOCAL-only capability. Two situations have no Ollama hand at all, and in BOTH a main-loop
+    // Agent(executor|sniper|test-author) is the INTENDED dispatch, not a silent fallback to deny:
+    //   • the operator's toggle selects the `claude` family (the default) — those rungs ARE
+    //     ordinary subagents, dispatched with the Agent tool on the session's own auth;
+    //   • the session is a cloud routine (no Ollama endpoint reachable there).
+    // A config read that throws (a corrupt hands.json) must not brick the gate: the family is
+    // unknowable, so fall back to the strict spawn-hand rail below rather than opening it.
+    let handsOnAgentPath = false;
+    try {
+      handsOnAgentPath = readActiveHandFamilyFn().family === "claude";
+    } catch {
+      handsOnAgentPath = false;
+    }
+    if (handsOnAgentPath || isHeadlessFn()) {
       // test-author (the fidelity-pass producer) and sniper (the post-gate fixer) are unconditionally
-      // allowed in headless — they must never be blocked by the fidelity rail they serve. Only the
+      // allowed here — they must never be blocked by the fidelity rail they serve. Only the
       // executor consumer is gated: it must not run before the test-author has produced a red test.
-      if (role !== "executor") {
+      if (bareRole(role) !== "executor" && bareRole(role) !== "executor-high") {
         return { allow: true };
       }
-      // Headless executor: additionally requires at least one fidelity_pass entry for the current
+      // The executor on the Agent path: additionally requires at least one fidelity_pass entry for the current
       // triage's feature_id. This ensures the test-author has produced a failing locked test before
       // the executor writes implementation code in the cloud. Qualified-id match (not just non-empty):
       // fidelity_pass entries for OTHER features never unlock this session's executor.
@@ -1184,13 +1209,11 @@ export function decide(payload, deps = {}) {
           "exists; what is almost always missing is the hand token, not the script. To learn the " +
           "EXACT cause, RUN the dispatch: `node .claude/skills/orchestrating-delivery/references/" +
           "spawn-hand.mjs --descriptor <descriptor.json>` and read its exit-2 JSON `reason` (e.g. " +
-          "'no CLAUDE_HAND_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
+          "'no OLLAMA_HAND_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
           "verbatim reason to the critical-exception path: stamp `mark.mjs hand-config-error " +
           "--reason \"<reason, translated to product-language>\"` and surface it to the operator with " +
-          "the fix (missing token → export the ACTIVE family's key in the shell rc: `CLAUDE_HAND_TOKEN` " +
-          "from `claude setup-token`, or `OLLAMA_HAND_TOKEN` — env survives the command-sandbox; a " +
-          "token in .dev.vars does NOT, because the sandbox denies reading it. The reason names the " +
-          "exact key). " +
+          "the fix (missing token → `export OLLAMA_HAND_TOKEN=…` in the shell rc — env survives the " +
+          "command-sandbox; a token in .dev.vars does NOT, because the sandbox denies reading it). " +
           "Never a silent Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + " +
           "on-disk record) is the ONLY thing that authorizes this Claude hand.",
       },

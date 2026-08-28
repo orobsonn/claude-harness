@@ -6,7 +6,7 @@ Um framework de uso do **Claude Code** para **não desenvolvedores** (product ma
 
 A ideia central: o humano toma **decisões de produto** (o que construir, aceitar/recusar risco); o sistema resolve a **engenharia** (como construir, testar, revisar) dentro de um loop de agentes especializados.
 
-> **Filosofia barbell:** orquestração barata no alto volume, raciocínio caro só nas pontas. Um orquestrador **Sonnet** coordena e delega ao **Opus** apenas nos gates de fronteira. Mais fundo ainda: as **mãos que escrevem código** (executor, sniper, test-author) rodam num degrau barato — `haiku`/`sonnet` por padrão, ou modelos **Ollama** quando você liga o toggle — enquanto os **olhos que julgam** (planner, compliance, adversary, security) ficam sempre no topo — *strong eyes, cheap hands*. O que mantém isso seguro não é confiar no modelo barato — são **trilhos determinísticos** (hooks, guards, plano resolvido, teste congelado, captura independente) que carregam o julgamento crítico.
+> **Filosofia barbell:** orquestração barata no alto volume, raciocínio caro só nas pontas. Um orquestrador **Sonnet** coordena e delega ao **Opus** apenas nos gates de fronteira. Mais fundo ainda: as **mãos que escrevem código** (executor, sniper, test-author) rodam num degrau barato — `haiku`/`sonnet` por padrão, ou modelos **Ollama** fora da subscription quando você liga o toggle — enquanto os **olhos que julgam** (planner, compliance, adversary, security) ficam sempre no topo — *strong eyes, cheap hands*. O que mantém isso seguro não é confiar no modelo barato — são **trilhos determinísticos** (hooks, guards, plano resolvido, teste congelado, captura independente) que carregam o julgamento crítico.
 
 
 > **ADE oficial: [Orca](https://onorca.dev).** O Orca (*Agent Development Environment*) é o ambiente
@@ -142,7 +142,7 @@ Outros trilhos: o guard `<PLANNER-ONLY>` impede o orquestrador de gerar o plano 
 
 ## Strong eyes, cheap hands
 
-As mãos que escrevem código rodam no **degrau barato da família ativa** — `haiku`/`sonnet` por padrão, modelos **Ollama** com `node .claude/shared/lib/hand-model-ladder.mjs use ollama`. O que torna isso seguro não é confiar na mão — é nunca acreditar na prosa dela. Cada task é um par **freeze → impl** com captura independente:
+As mãos que escrevem código rodam no **degrau barato da família ativa** — `haiku`/`sonnet` como subagentes normais por padrão, ou modelos **Ollama** num processo isolado com `node .claude/shared/lib/hand-model-ladder.mjs use ollama`. O trilho abaixo é o da família Ollama. O que torna isso seguro não é confiar na mão — é nunca acreditar na prosa dela. Cada task é um par **freeze → impl** com captura independente:
 
 ```mermaid
 flowchart TD
@@ -164,7 +164,7 @@ O que carrega a segurança:
 - **Teste congelado antes da implementação.** O `planner` pina uma asserção observável, a mão `test-author` a transcreve, um olho Claude (`compliance`) valida a fidelidade, e o teste é congelado por content-hash. A mão de implementação escreve contra um teste **read-only** que não pode tocar.
 - **Captura independente é o gate de registro.** O resultado da task não vem da prosa da mão — o harness reconstrói o diff via `git diff --name-only <freeze_sha>` ∪ `git ls-files --others` e roda `node --test` por conta própria (com guard anti-verde-vazio). Escopo, manifest congelado e teste verde são verificados pelo harness, não relatados pelo modelo.
 - **Escape on-disk não-forjável.** Uma escalação para uma mão Claude (K=1) só é liberada quando existe um **run-record on-disk** — escrito pela captura independente — cujo `outcome` é uma run genuína não-`DONE`, ancorada ao `freeze_commit_sha`. Um ticket forjado por `echo` não autoriza nada.
-- **Token nunca vaza.** O auth da mão (`CLAUDE_HAND_TOKEN` ou `OLLAMA_HAND_TOKEN`, conforme a família) vive só no env do processo filho, nunca em argv/brief/settings; redação on-disk; fail-close se vazar no descriptor. As duas famílias exigem token e rodam no mesmo `CLAUDE_CONFIG_DIR` efêmero — herdar o `~/.claude` do operador daria à mão o allowlist de permissões e os `additionalDirectories` dele (medido: `Bash` liberado e escrita fora do repo).
+- **Token nunca vaza.** O auth do Ollama vive só no env do processo filho, nunca em argv/brief/settings; redação on-disk; fail-close se vazar no descriptor. O filho roda num `CLAUDE_CONFIG_DIR` efêmero — herdar o `~/.claude` do operador daria à mão o allowlist de permissões e os `additionalDirectories` dele (medido: `Bash` liberado e escrita fora do repo).
 
 > Provado ao vivo: uma mão `qwen3-coder-next` autorou um diff in-scope e o teste congelado ficou verde na captura independente (`outcome DONE`) — sem gastar um token da subscription na escrita.
 

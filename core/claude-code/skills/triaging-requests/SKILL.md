@@ -51,7 +51,7 @@ Useful questions (ask only what is still unclear):
 |---|---|
 | **QUICK** | Inline, no `orchestrating-delivery`. Two entry shapes: **`fix`** — obvious hotfix, 1–2 files, no sensitive path, scope fully clear. **`craft`** — net-new self-contained **visual artifact** (page, quiz, landing, component, static section) routed to an artisan skill; no novel integration, no sensitive path, any file count. See **Step 2.1**. |
 | **LIGHT** | Small feature. Clear scope. No sensitive domain. May touch several files but the change is bounded and well understood. |
-| **FULL** | Multi-file change OR high severity OR touches a sensitive domain (auth, payment, billing, SQL, migrations, `.env*`, `package.json` deps). |
+| **FULL** | Multi-file change OR high severity OR touches a sensitive domain (auth, payment, billing, `.env*`, `package.json` deps, **destructive** SQL/migrations). A **purely additive** migration (`ADD COLUMN` / new `CREATE TABLE` / `CREATE INDEX` only) is NOT sensitive on its own — ceremony tracks the complexity of the change, not the file extension. |
 
 ---
 
@@ -74,13 +74,19 @@ A net-new **visual artifact** (page, quiz, landing, component, static section) c
 **Rail 2 — sensitive-path glob (deterministic).** This replaces the planner's `scope_paths` override (there is no planner in QUICK). Glob the touched + untracked files against the sensitive-path allowlist; **any match aborts the fast lane and escalates to LIGHT.**
 
 ```bash
+# 1) paths that are sensitive regardless of content
 git status --porcelain | awk '{print $2}' \
-  | grep -E '(^|/)(auth|payment|billing|migrations)/|\.sql$|(^|/)\.env|(^|/)package\.json$' \
-  && echo "SENSITIVE → abort QUICK-craft, escalate to LIGHT" \
-  || echo "clean → run gates, then commit"
+  | grep -E '(^|/)(auth|payment|billing)/|(^|/)\.env|(^|/)package\.json$' \
+  && echo "SENSITIVE → abort QUICK-craft, escalate to LIGHT"
+
+# 2) SQL/migrations: sensitive only when NOT purely additive
+git status --porcelain | awk '{print $2}' | grep -E '(^|/)migrations/|\.sql$' \
+  | xargs -r grep -ilE '\b(DROP|RENAME|UPDATE|DELETE|INSERT|PRAGMA)\b' \
+  && echo "DESTRUCTIVE SQL → abort QUICK-craft, escalate to LIGHT" \
+  || echo "clean (additive-only migration is fine) → run gates, then commit"
 ```
 
-Allowlist (same as the planner override): `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (deps).
+Allowlist (same as the planner override): `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/.env*`, `**/package.json` (deps), plus `**/*.sql` / `**/migrations/**` **only when the migration is not purely additive** (additive-migration carve-out).
 
 **Escalate-out (mid-build):** if the artifact turns out to need integration beyond its frozen template, stop the fast lane and re-classify as LIGHT.
 

@@ -195,11 +195,23 @@ triaging-requests
 
 **Modelos:** a tabela de roteamento é fixa e mora no `orchestrating-delivery` (não há skill de routing no Claude Code — isso é do OpenCode). Em linhas gerais: orquestrador **sonnet** (é quem consome mais token — é aí que está a economia), `planner` / `plan-reviewer` / `security` / adversary de fronteira **opus**, `compliance` / `test-author` / `harvester` / `shipper` **sonnet**, adversary por task **flexiona** (opus quando a task é grave ou toca path sensível, senão sonnet). Você pode sobrepor o modelo da sessão com `/model`.
 
-**Mãos externas (toggle de família):** `executor` e `sniper` rodam como processo `claude -p` isolado, via `spawn-hand` — **capacidade local**. A família é sua escolha, gravada em `.claude/hand-config/hands.json`:
+**Mãos (toggle de família):** quem escreve código (`executor`, `sniper`) roda numa das duas famílias, e a família decide **como** a mão é despachada:
+
+| família | low | medium | high | como despacha |
+|---|---|---|---|---|
+| `claude` (padrão) | `haiku` | `sonnet` | `sonnet` com `effort: xhigh` | subagente normal (Agent), na sua própria sessão — nada pra configurar |
+| `ollama` (opt-in) | `gemma4` | `glm-5.2` | `kimi-k2.7-code` | processo `claude -p` isolado, com `OLLAMA_HAND_TOKEN`, gate de teste congelado e captura independente |
+
+```bash
+node .claude/shared/lib/hand-model-ladder.mjs show          # qual família está ativa
+node .claude/shared/lib/hand-model-ladder.mjs use ollama    # troca (vale do PRÓXIMO plano em diante)
+```
+
+Basta pedir ("quero as mãos baratas do Ollama") — o harness roda o comando. A troca vale para o **próximo plano**: um plano congelado continua despachando do jeito que os ids nele sempre implicaram. **O que a família `claude` não tem:** o gate de teste congelado, a captura independente e o run-record são propriedades do caminho de spawn — no caminho de subagente o executor continua barrado até o teste vermelho existir, mas a maquinaria de "nunca acredite na prosa da mão" é da família Ollama. É o mesmo trade que o headless já faz. Numa routine de nuvem não há mão Ollama: `executor` e `sniper` viram Agents Claude. O `test-author` **sempre** é Agent Claude, nos dois modos.
 
 | família | low | medium | high | token (env) |
 |---|---|---|---|---|
-| `claude` (padrão) | `haiku` | `sonnet` | `sonnet` + `--effort xhigh` | `CLAUDE_HAND_TOKEN` (gere com `claude setup-token`) |
+| `claude` (padrão) | `haiku` | `sonnet` | `sonnet` com `effort: xhigh` | subagente normal (Agent), na sua própria sessão — nada pra configurar |
 | `ollama` (opt-in) | `gemma4` | `glm-5.2` | `kimi-k2.7-code` | `OLLAMA_HAND_TOKEN` |
 
 ```bash

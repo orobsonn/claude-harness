@@ -28,7 +28,6 @@ import {
   redactDeep,
   buildRunRecord,
   OUTCOME,
-  TOKEN_KEYS_BY_FAMILY,
 } from "./dispatch-hand.mjs";
 import { captureResult, realGit, realTestRunner, snapshotMainWorktree } from "./capture-hand.mjs";
 import { resolveHookCommand } from "./hand-config/resolve-hook-command.mjs";
@@ -36,12 +35,10 @@ import { isSafeFeatureId } from "../../../hooks/lib/gate-lib.mjs";
 import { resolveRunnerAdapter, DEFAULT_RUNNER_ID } from "./runner-adapters.mjs";
 import {
   resolveHandModel,
-  resolveHandEffort,
-  transportFor,
+  dispatchModeFor,
+  familyOfHandModel,
   formatApprovedLadder,
   formatAllApprovedLadders,
-  APPROVED_HAND_EFFORTS,
-  HAND_TOKEN_ENV_KEYS,
   OLLAMA_BASE_URL,
 } from "../../../../shared/lib/hand-model-ladder.mjs";
 
@@ -51,28 +48,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const HAND_CONFIG_SETTINGS_TEMPLATE = join(__dirname, "hand-config", "settings.json");
 
 /**
- * @description Claude model aliases that are NOT hand rungs. `opus` is the tell of the legacy
- * Claude `tiers` shape (low:haiku / medium:sonnet / high:opus): haiku and sonnet ARE approved
- * claude-family hands now, so only opus still identifies that shape unambiguously. Guarded in
- * dispatchHand purely to keep the actionable "legacy plan" diagnosis — the ladder allowlist
- * would refuse it either way.
+ * @description Claude model aliases that must NEVER reach this spawn layer. `haiku`/`sonnet` are
+ * legitimate hand rungs — but of the `claude` FAMILY, which dispatches as an ordinary `Agent`
+ * subagent, not as a spawned child (there is no token and no endpoint for it here). `opus` is the
+ * tell of the legacy Claude `tiers` shape. Both are refused with the diagnosis that names the
+ * right path, instead of a generic not-in-the-ladder.
  */
-const LEGACY_CLAUDE_TIER_ALIASES = new Set(["opus"]);
-
-/**
- * @description Env keys that select a hand's upstream. Every one is CLEARED from the child env
- * before the resolved transport sets its own: an `ANTHROPIC_BASE_URL` inherited from the
- * operator's shell would silently point a claude-family hand at Ollama (and vice versa), and an
- * inherited `CLAUDE_EFFORT` would override the effort the tier resolved to.
- */
-const TRANSPORT_ENV_KEYS = [
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_API_KEY",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_EFFORT",
-  ...HAND_TOKEN_ENV_KEYS,
-];
+const CLAUDE_ALIASES = new Set(["haiku", "sonnet", "opus"]);
 
 /**
  * @description Default wall-clock timeout for the hand's own spawnSync, in milliseconds (9 minutes).
@@ -143,24 +125,18 @@ function isRateLimited(child) {
  * @description Builds the argv array for `claude -p` with the required flags.
  * PURE: no side effects, no token in argv. The token is NEVER an element of this array.
  *
- * `--effort` is appended ONLY when the rung resolves one (the claude family's high rung). It is
- * what makes that rung a real escalation over medium, which pins the same model id — so an
- * omitted flag is a silent demotion, not a cosmetic difference.
- *
- * @param {{ model: string, briefFile: string, effort?: string }} params
- * @param {string} params.model - The resolved hand model identifier.
+ * @param {{ model: string, briefFile: string }} params
+ * @param {string} params.model - The resolved Ollama model identifier.
  * @param {string} params.briefFile - Absolute path to the scrubbed brief/system-prompt file.
- * @param {string} [params.effort] - Reasoning effort for this rung, when it has one.
  * @returns {string[]} The argv array to pass after the `claude` binary name.
  */
-export function buildSpawnArgs({ model, briefFile, effort }) {
+export function buildSpawnArgs({ model, briefFile }) {
   return [
     "-p",
     "--allowedTools", "Read,Write,Edit",
     "--permission-mode", "acceptEdits",
     "--output-format", "json",
     "--model", model,
-    ...(effort ? ["--effort", effort] : []),
     "--append-system-prompt-file", briefFile,
   ];
 }
@@ -228,14 +204,16 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
     );
   }
 
-  // FAIL CLOSED: a hand model outside the approved ladders is refused BEFORE anything else — the
-  // legacy-alias branch runs first only to keep the more actionable diagnosis. `opus` is the tell
-  // of the legacy Claude `tiers` shape; haiku/sonnet are legitimate claude-family rungs now.
-  if (LEGACY_CLAUDE_TIER_ALIASES.has(dispatch.model)) {
+  // FAIL CLOSED: this spawn layer serves the OLLAMA family only. A claude-family rung is an
+  // ordinary subagent (`Agent`) on the session's own auth — spawning it here would need a token
+  // and an endpoint that deliberately do not exist. `opus` is not a rung at all (the legacy
+  // `tiers` shape). Both get the diagnosis that names the right path.
+  if (CLAUDE_ALIASES.has(dispatch.model)) {
     throw new Error(
-      `dispatchHand: hand model "${dispatch.model}" is not a hand rung — this is the legacy ` +
-      `model_strategy (Claude \`tiers\` shape: low:haiku / medium:sonnet / high:opus). Use ` +
-      `\`hand_tiers\` with one approved ladder: ${formatAllApprovedLadders()}.`
+      `dispatchHand: hand model "${dispatch.model}" is a Claude alias — the claude hand family ` +
+      `dispatches as an ordinary Agent subagent, never through spawn-hand. Either dispatch it ` +
+      `with the Agent tool, or switch to the ollama family ` +
+      `(\`node .claude/shared/lib/hand-model-ladder.mjs use ollama\`). Ladders: ${formatAllApprovedLadders()}.`
     );
   }
 
@@ -245,46 +223,26 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
   // authorize a Claude escalation. Idempotent when runLiveDispatch already resolved (an approved
   // id resolves to itself); the record's fallback signal is stamped there, on the dispatch, not
   // here — this call only decides WHICH model the child gets.
-  const { model } = resolveHandModel(dispatch.model);
+  // family: this layer IS the ollama path, so an absent model falls back to the OLLAMA medium —
+  // never to the default family's rung, which this layer would then refuse.
+  const { model } = resolveHandModel(dispatch.model, { family: "ollama" });
 
-  // The TRANSPORT is derived from the resolved model id — the frozen plan's own contract — never
-  // from a config file read here. Flipping the operator's toggle mid-delivery therefore cannot
-  // strand an in-flight plan: its ids keep implying the transport they always did.
-  const transport = transportFor(model);
-
-  // Resolve the family's auth token from env / .dev.vars / global ~/.claude/.dev.vars.
+  // Resolve the Ollama auth token from env / .dev.vars / global ~/.claude/.dev.vars.
   // devVarsContent and env are injectable so unit tests never touch real files.
   // When devVarsContent is provided (test injection), use the pure readAuthToken so tests
   // remain deterministic. In live mode, resolveAuthToken applies the full three-tier lookup.
   const resolvedEnv = env ?? process.env;
-  const tokenKeys = TOKEN_KEYS_BY_FAMILY[transport.family];
   const token = devVarsContent !== undefined
-    ? readAuthToken(resolvedEnv, devVarsContent, tokenKeys)
-    : resolveAuthToken(resolvedEnv, { keys: tokenKeys });
+    ? readAuthToken(resolvedEnv, devVarsContent)
+    : resolveAuthToken(resolvedEnv);
 
   // FAIL CLOSED: captureResult already throws on an undefined token; the two modules must agree.
-  // With an empty token the spawn would 401 upstream AND redaction degrades to a no-op
+  // With an empty token the spawn would 401 against Ollama AND redaction degrades to a no-op
   // (redact('') matches nothing) — every live stdout/stderr tee would leak unredacted. Refuse
   // here, among the other pre-spawn guards, BEFORE mkdtemp (no ephemeral dir to leak on throw).
-  // BOTH families need a token: authenticating a claude hand by inheriting the operator's own
-  // Claude Code config would also inherit its permission allowlist and additionalDirectories —
-  // measured, such a child runs Bash and writes outside the repo, where the capture rail cannot
-  // see it. A token keeps the isolation AND keeps this guard un-bypassable.
   if (!token) {
     throw new Error(
-      `dispatchHand: no ${transport.envKey} resolved (env/.dev.vars) — refusing to spawn a ` +
-      `${transport.family} hand that would 401 with empty-redaction streams. Set it up with ` +
-      `${transport.setup} and \`export ${transport.envKey}=…\` in your shell rc.`
-    );
-  }
-
-  // FAIL CLOSED: an effort outside what `claude --effort` accepts would abort the child at argv
-  // parse time, after the ephemeral dir and brief are already on disk.
-  const effort = dispatch.effort ?? undefined;
-  if (effort !== undefined && !APPROVED_HAND_EFFORTS.has(effort)) {
-    throw new Error(
-      `dispatchHand: effort ${JSON.stringify(effort)} is not an approved level — ` +
-      `expected one of ${[...APPROVED_HAND_EFFORTS].join(", ")}.`
+      "dispatchHand: no OLLAMA_HAND_TOKEN resolved (.dev.vars/env) — refusing to spawn a hand that would 401 with empty-redaction streams"
     );
   }
 
@@ -404,19 +362,19 @@ export async function dispatchHand(dispatch, { spawn = defaultSpawn, gitStatus =
     writeFileSync(briefFile, scrubbedBrief, "utf8");
 
     // Build argv
-    const argv = buildSpawnArgs({ model, briefFile, effort });
+    const argv = buildSpawnArgs({ model, briefFile });
 
-    // Compose child env: token only here, never in argv. Every transport-selecting key inherited
-    // from the parent shell is CLEARED first, then the resolved transport sets exactly its own —
-    // so a stale `ANTHROPIC_BASE_URL` in the operator's environment can never silently redirect a
-    // hand to the other family's endpoint, and a stale `CLAUDE_EFFORT` can never override the
-    // effort this rung resolved to. CLAUDE_CONFIG_DIR stays ephemeral for BOTH families: it is
-    // what keeps the global ~/.claude laws (permission allowlist, additionalDirectories, CLAUDE.md,
-    // MCP servers) out of the hand's session.
-    const childEnv = { ...resolvedEnv, CLAUDE_CONFIG_DIR: ephemeralDir };
-    for (const key of TRANSPORT_ENV_KEYS) delete childEnv[key];
-    if (transport.baseUrl) childEnv.ANTHROPIC_BASE_URL = transport.baseUrl;
-    childEnv[transport.childEnvKey] = token ?? "";
+    // Compose child env: token only here, never in argv. The ephemeral CLAUDE_CONFIG_DIR is what
+    // keeps the global ~/.claude laws (permission allowlist, additionalDirectories, CLAUDE.md, MCP
+    // servers) out of the hand's session — measured: a child that inherits the operator's config
+    // runs Bash despite `--allowedTools Read,Write,Edit` and writes OUTSIDE the repo, where the
+    // capture rail cannot see it.
+    const childEnv = {
+      ...resolvedEnv,
+      ANTHROPIC_BASE_URL: OLLAMA_BASE_URL,
+      ANTHROPIC_AUTH_TOKEN: token ?? "",
+      CLAUDE_CONFIG_DIR: ephemeralDir,
+    };
 
     // Determine timeout value: dispatch.timeout_ms when positive number (clamped to the
     // ceiling so a per-task override can only lower the wall-clock, never raise it past
@@ -697,21 +655,26 @@ export async function runLiveDispatch(descriptor, {
   const resolvedReadStreak = readStreak ?? defaultReadStreak(descriptor, stateDir);
   const resolvedWriteStreak = writeStreak ?? defaultWriteStreak(descriptor, stateDir);
 
-  // (2a) Resolve the hand model and, from the model id alone, its TRANSPORT — which family it
-  // belongs to, which endpoint it dispatches over, and which token key authenticates it. Derived
-  // from the FROZEN plan's own id (never from a config file read here), so flipping the operator's
-  // hand-family toggle mid-delivery cannot strand an in-flight plan.
-  const resolvedHand = resolveHandModel(descriptor.model);
-  const transport = transportFor(resolvedHand.model);
+  // (2a) Resolve the hand model and, from the id alone, HOW it dispatches. This layer serves the
+  // spawn-hand mode only: a claude-family rung is an ordinary `Agent` subagent and must never
+  // arrive here. Derived from the FROZEN plan's own id (never from a config file read here), so
+  // flipping the operator's hand-family toggle mid-delivery cannot strand an in-flight plan.
+  const resolvedHand = resolveHandModel(descriptor.model, { family: "ollama" });
+  if (dispatchModeFor(resolvedHand.model) !== "spawn-hand") {
+    throw new Error(
+      `runLiveDispatch: hand model "${resolvedHand.model}" belongs to the ${familyOfHandModel(resolvedHand.model)} ` +
+      `family, which dispatches as an ordinary Agent subagent — not through spawn-hand. Dispatch it ` +
+      `with the Agent tool, or switch families with ` +
+      `\`node .claude/shared/lib/hand-model-ladder.mjs use ollama\`.`
+    );
+  }
 
-  // (2b) Resolve THIS family's auth token (env → .dev.vars tiers). Token is env-only — never
+  // (2b) Resolve the Ollama auth token (env → .dev.vars tiers). Token is env-only — never
   // argv/descriptor.
-  const token = resolveAuthToken(env, { keys: TOKEN_KEYS_BY_FAMILY[transport.family] });
+  const token = resolveAuthToken(env);
   if (!token) {
     throw new Error(
-      `runLiveDispatch: no ${transport.envKey} resolved (env/.dev.vars) — refusing to spawn a ` +
-      `${transport.family} hand that would 401. Set it up with ${transport.setup} and ` +
-      `\`export ${transport.envKey}=…\` in your shell rc.`
+      "runLiveDispatch: no OLLAMA_HAND_TOKEN resolved (.dev.vars/env) — refusing to spawn a hand that would 401"
     );
   }
 
@@ -780,35 +743,12 @@ export async function runLiveDispatch(descriptor, {
   // signal. An out-of-ladder id throws there → the CLI's exit-2 configError path → no record →
   // no Claude escape.
   //
-  // EFFORT is recomputed from (model, tier) rather than trusted from the descriptor: the claude
-  // ladder pins the same model id on medium and high, so a `high` dispatch that lost its effort
-  // would run as a medium one and look identical in the record. A descriptor that DISAGREES with
-  // the rung it declares is refused, never silently corrected — that disagreement means the
-  // emitter and the ladder have drifted.
   const tier = descriptor.model_resolution?.tier ?? null;
-  const rungEffort = resolveHandEffort(resolvedHand.model, tier);
-  const declaredEffort = descriptor.effort ?? undefined;
-  if (declaredEffort !== undefined && !APPROVED_HAND_EFFORTS.has(declaredEffort)) {
-    throw new Error(
-      `runLiveDispatch: descriptor.effort ${JSON.stringify(declaredEffort)} is not an approved ` +
-      `level — expected one of ${[...APPROVED_HAND_EFFORTS].join(", ")}.`
-    );
-  }
-  if (tier !== null && declaredEffort !== undefined && declaredEffort !== rungEffort) {
-    throw new Error(
-      `runLiveDispatch: descriptor.effort ${JSON.stringify(declaredEffort)} contradicts the ` +
-      `${tier} rung of ${resolvedHand.model} (${rungEffort === undefined ? "no effort" : rungEffort}) — ` +
-      `refusing to dispatch a rung other than the one the plan declared.`
-    );
-  }
-  const effort = rungEffort ?? declaredEffort;
   const dispatch = {
     model: resolvedHand.model,
     modelFallbackUsed: resolvedHand.modelFallbackUsed,
-    // Stamped onto the run-record: with a non-injective ladder the model id alone no longer says
-    // which rung ran.
+    // Stamped onto the run-record: which RUNG ran, not just which model.
     tier,
-    effort: effort ?? null,
     brief: briefContent,
     shared_context: "",
     scope_paths: descriptor.scope_paths,
@@ -970,13 +910,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.stderr.write("[spawn-hand] --descriptor <descriptor.json> is required\n");
     process.exit(1);
   }
-  // Resolve the tokens first so a descriptor parse-error can redact a leaked snippet. The family
-  // is not known until the descriptor parses, so redact with EVERY hand token this environment
-  // carries — redacting one family's token only would leak the other's out of the error path.
-  const tokens = Object.values(TOKEN_KEYS_BY_FAMILY)
-    .map((keys) => resolveAuthToken(process.env, { keys }))
-    .filter(Boolean);
-  const redactAll = (text) => tokens.reduce((acc, secret) => redact(acc, secret), String(text));
+  // Resolve the token first so a descriptor parse-error can redact a leaked snippet.
+  const token = resolveAuthToken(process.env);
+  const redactAll = (text) => redact(String(text), token);
   let descriptor;
   try {
     descriptor = JSON.parse(readFileSync(args.descriptor, "utf8"));

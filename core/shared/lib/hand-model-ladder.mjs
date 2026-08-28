@@ -5,11 +5,14 @@
  * resolution rail) and `plan-write-gate.mjs` (the authoring rail), so the ladders can never
  * drift between them.
  *
- * TWO FAMILIES, one allowlist:
- *   - `ollama` — the cheap external hands (dispatch to https://ollama.com with a hand token).
- *   - `claude` — subscription hands (no base-url override; authenticated by their OWN token, so
- *     the ephemeral CLAUDE_CONFIG_DIR keeps isolating them; the `high` rung is the SAME model as
- *     `medium` run at a higher reasoning effort).
+ * TWO FAMILIES, two DISPATCH MODES — the model id decides which:
+ *   - `ollama` — external hands: an isolated `claude -p` child against https://ollama.com, with a
+ *     hand token, the frozen-test gate armed in an ephemeral config dir, and an independent
+ *     capture (`spawn-hand.mjs`).
+ *   - `claude` — ordinary subagents: dispatched with the `Agent` tool like every other role, on
+ *     the operator's own session auth. No token, no third-party endpoint, no spawn layer. The
+ *     `high` rung is the SAME model as `medium` at a higher reasoning effort (`effort` in the
+ *     agent's frontmatter), which is why the rung — not the id — is the unit of escalation.
  *
  * ALLOWLIST, not a denylist: closing the door only on the model that burned a run
  * (`gpt-oss:120b`, whose tool-calling breaks in a multi-step agentic loop) would leave every
@@ -18,7 +21,7 @@
  *
  * WHICH FAMILY IS ACTIVE is an AUTHORING-time decision, never a dispatch-time one
  * (`readActiveHandFamily`, consumed only by the plan-write gate). Once a plan is frozen, the
- * model ids IN THE PLAN are the contract: `transportFor` derives how to dispatch them from the
+ * model ids IN THE PLAN are the contract: `dispatchModeFor` derives how to dispatch them from the
  * id itself. Flipping the toggle mid-delivery therefore cannot strand a frozen plan whose ids
  * belong to the other family — it only decides what the NEXT plan may pin.
  */
@@ -63,7 +66,7 @@ export const HAND_EFFORT_BY_TIER = Object.freeze({
   claude: Object.freeze({ high: "xhigh" }),
 });
 
-/** @description Effort levels `claude --effort` accepts. A value outside this set is refused. */
+/** @description Effort levels an agent definition's `effort:` frontmatter accepts. */
 export const APPROVED_HAND_EFFORTS = Object.freeze(new Set(["low", "medium", "high", "xhigh", "max"]));
 
 /**
@@ -211,57 +214,43 @@ export function resolveHandEffort(model, tier) {
   return HAND_EFFORT_BY_TIER[/** @type {keyof typeof HAND_EFFORT_BY_TIER} */ (family)][tier];
 }
 
+/** @description The two ways a hand can be dispatched, keyed by family. */
+export const DISPATCH_MODES = Object.freeze({ ollama: "spawn-hand", claude: "agent" });
+
 /**
- * @description How a hand model is dispatched. Derived from the MODEL ID — the frozen plan's own
- * contract — never from a config file read at dispatch time. That is what makes flipping the
- * toggle mid-delivery harmless: an in-flight plan keeps dispatching over the transport its ids
- * always implied.
- *
- * BOTH families need a token, and that symmetry is load-bearing: it keeps the fail-closed
- * "no token → no hand" guard un-bypassable. A family that authenticated by inheriting the
- * operator's own Claude Code config would ALSO inherit its permission allowlist and
- * `additionalDirectories` — measured: such a child runs Bash and writes OUTSIDE the repo, where
- * the capture rail (a git diff of the project) cannot see it. The ephemeral CLAUDE_CONFIG_DIR
- * therefore stays for both families, and the claude family authenticates the same way the ollama
- * one does: a token, in the child env, and nowhere else.
- *
- *   - `envKey`    — the LOCAL env key an operator exports (inert to the parent session's own auth).
- *   - `childEnvKey` — the key that same secret is mapped to in the CHILD env, and nowhere else.
- *   - `setup`     — how the operator obtains the secret, quoted verbatim in the failure message.
- *
+ * @description HOW a hand model is dispatched — `"spawn-hand"` (an isolated `claude -p` child
+ * against the Ollama endpoint) or `"agent"` (an ordinary subagent on the operator's own session).
+ * Derived from the MODEL ID — the frozen plan's own contract — never from a config file read at
+ * dispatch time. That is what makes flipping the toggle mid-delivery harmless: an in-flight plan
+ * keeps dispatching the way its ids always implied.
  * @param {unknown} model
- * @returns {{ family: string, baseUrl: string|null, envKey: string, childEnvKey: string, setup: string }}
+ * @returns {"spawn-hand"|"agent"}
  * @throws {Error} on a model outside both ladders.
  */
-export function transportFor(model) {
+export function dispatchModeFor(model) {
   const family = familyOfHandModel(model);
   if (!family) {
     throw new Error(
-      `hand model ${JSON.stringify(model)} has no approved transport — ` +
+      `hand model ${JSON.stringify(model)} has no approved dispatch mode — ` +
         `approved models: ${formatAllApprovedLadders()}.`,
     );
   }
-  return family === "ollama"
-    ? {
-        family,
-        baseUrl: OLLAMA_BASE_URL,
-        envKey: "OLLAMA_HAND_TOKEN",
-        childEnvKey: "ANTHROPIC_AUTH_TOKEN",
-        setup: "an Ollama API key",
-      }
-    : {
-        family,
-        baseUrl: null,
-        envKey: "CLAUDE_HAND_TOKEN",
-        childEnvKey: "CLAUDE_CODE_OAUTH_TOKEN",
-        setup: "`claude setup-token` (a long-lived subscription token)",
-      };
+  return DISPATCH_MODES[/** @type {keyof typeof DISPATCH_MODES} */ (family)];
 }
 
-/** @description Every LOCAL env key that carries a hand token — none may reach a hand's brief. */
-export const HAND_TOKEN_ENV_KEYS = Object.freeze(
-  HAND_FAMILIES.map((family) => transportFor(ladderFor(family).medium).envKey),
-);
+/**
+ * @description The subagent type that carries a rung's reasoning effort. The `Agent` tool takes a
+ * `model` override but no effort, so the effort lives in the agent DEFINITION's frontmatter —
+ * `<role>-high` is the same role at `effort: xhigh`. Returns the plain role when the rung has no
+ * effort, so the caller always has one name to dispatch.
+ * @param {string} role - `executor` | `sniper`
+ * @param {unknown} model
+ * @param {unknown} tier
+ * @returns {string}
+ */
+export function agentTypeForRung(role, model, tier) {
+  return resolveHandEffort(model, tier) ? `${role}-high` : role;
+}
 
 // ---------------------------------------------------------------------------
 // The operator toggle — AUTHORING-time only
