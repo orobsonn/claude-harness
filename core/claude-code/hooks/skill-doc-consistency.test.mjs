@@ -7,6 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { HAND_LADDERS, HAND_FAMILIES } from "../../shared/lib/hand-model-ladder.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -50,18 +51,16 @@ test("AC1 — creating-plans Step 7 presents hand_tiers as the only shape and pi
     /only shape/i,
     "Step 7 must present hand_tiers as the only valid shape",
   );
-  assert.ok(
-    step7.includes("gemma4"),
-    "Step 7 must pin the cravado ladder value gemma4 (low)",
-  );
-  assert.ok(
-    step7.includes("glm-5.2"),
-    "Step 7 must pin the cravado ladder value glm-5.2 (medium)",
-  );
-  assert.ok(
-    step7.includes("kimi-k2.7-code"),
-    "Step 7 must pin the cravado ladder value kimi-k2.7-code (high)",
-  );
+  // Derived from the module, never re-typed here: a literal copy of the ladder in the test is the
+  // very drift this consistency suite exists to catch.
+  for (const family of HAND_FAMILIES) {
+    for (const [tier, model] of Object.entries(HAND_LADDERS[family])) {
+      assert.ok(
+        step7.includes(model),
+        `Step 7 must pin the ${family} ladder value ${model} (${tier})`,
+      );
+    }
+  }
   assert.match(
     step7,
     /removed|rejected/i,

@@ -9,6 +9,7 @@
 
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
+import { HAND_TOKEN_ENV_KEYS } from "../../../../shared/lib/hand-model-ladder.mjs";
 import {
   execFileSync,
   spawnSync,
@@ -253,16 +254,41 @@ test("vendor-core: vendored skill references importing core/shared actually reso
 
     // And the gate — a hook, deeper in the tree — enforces the ladder with no project config.
     const gate = await import(pathToFileURL(join(tempDir, ".claude/hooks/plan-write-gate.mjs")).href);
+    const ladderModule = await import(pathToFileURL(join(tempDir, ".claude/shared/lib/hand-model-ladder.mjs")).href);
+    // The vendored project's OWN toggle state (the test process's cwd is the harness repo).
+    const inProject = { readActiveFamily: () => ladderModule.readActiveHandFamily(tempDir) };
+    const OLLAMA_MS = '{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
+    const CLAUDE_MS = '{"model_strategy":{"hand_tiers":{"low":"haiku","medium":"sonnet","high":"sonnet"},"planner":"opus"}}';
+
     const refused = gate.checkPlanContent(
       '{"model_strategy":{"hand_tiers":{"low":"gpt-oss:20b","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}',
+      inProject,
     );
     assert.match(refused ?? "", /gpt-oss:20b/, "a fresh vendored project must refuse an off-ladder tier");
-    assert.equal(
-      gate.checkPlanContent(
-        '{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}',
-      ),
-      null,
-      "the approved ladder must pass",
+
+    // FACTORY DEFAULT: a freshly vendored project runs claude hands — no token file, no third-party
+    // endpoint, nothing to configure. The ollama ladder is refused until the operator opts in.
+    assert.equal(gate.checkPlanContent(CLAUDE_MS, inProject), null, "the default claude ladder must pass");
+    assert.match(
+      gate.checkPlanContent(OLLAMA_MS, inProject) ?? "",
+      /active hand family is claude/,
+      "the ollama ladder must be refused until the operator opts in",
+    );
+
+    // THE OPERATOR FLOW, end to end: one command in the project flips the family, and the gate
+    // that governs plan authoring immediately enforces the other ladder.
+    const flip = spawnSync("node", [join(tempDir, ".claude/shared/lib/hand-model-ladder.mjs"), "use", "ollama"], {
+      cwd: tempDir,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    assert.equal(flip.status, 0, `the hand-family CLI failed: ${flip.stderr || flip.stdout}`);
+    assert.match(flip.stdout, /ollama/);
+    assert.equal(gate.checkPlanContent(OLLAMA_MS, inProject), null, "after the flip the ollama ladder must pass");
+    assert.match(
+      gate.checkPlanContent(CLAUDE_MS, inProject) ?? "",
+      /active hand family is ollama/,
+      "after the flip the claude ladder must be refused",
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -332,15 +358,19 @@ test("vendor-core: installs .dev.vars.example placeholder when absent", async (t
     );
 
     const content = readFileSync(placeholder, "utf8");
-    assert.match(
-      content,
-      /ANTHROPIC_AUTH_TOKEN=\s*$/m,
-      "placeholder must carry the token key with no real value"
-    );
-    assert.ok(
-      !/ANTHROPIC_AUTH_TOKEN=\S/.test(content),
-      "placeholder must NOT contain a real token value"
-    );
+    // One key per hand family, every one empty: a placeholder that shipped a value would be a
+    // committed secret, and a family missing its key would leave that family unconfigurable.
+    for (const key of HAND_TOKEN_ENV_KEYS) {
+      assert.match(
+        content,
+        new RegExp(`^${key}=\\s*$`, "m"),
+        `placeholder must carry ${key} with no real value`
+      );
+      assert.ok(
+        !new RegExp(`${key}=\\S`).test(content),
+        `placeholder must NOT contain a real value for ${key}`
+      );
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

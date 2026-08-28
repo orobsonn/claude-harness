@@ -1004,3 +1004,30 @@ manual-merge the queue.
   the thing makes**. Both times it produced a green signal over a hole. And both times the cost of
   detection was low — one assertion that actually runs the predicate — while the cost of the miss was
   work silently not happening for months.
+
+## The frozen-test Stop hook has never blocked anything (measured)
+
+- **Observed:** `hand-config/resolve-hook-command.mjs` builds the Stop hook as a bare
+  `node --test <frozen test>` (via the runner adapter), and `spawn-hand.mjs` calls that gate "the
+  entire safety basis of the cheap hand". Measured against a real `claude -p` child on this
+  machine: **a Stop hook that exits `1` does not block** — the hook runs once and the session ends
+  normally; only **exit `2`** blocks and feeds stderr back for another turn (verified by a counting
+  hook: exit 2 → 3 invocations, exit 1 → 1 invocation). `node --test` exits **1** when a test fails.
+  So for every cheap-hand dispatch to date, the armed gate has been inert: a hand that stopped on a
+  red frozen test was never told to keep going.
+- **Blast radius (why it did not show up as an incident):** the rail that actually protects the
+  harness is the INDEPENDENT capture (`capture-hand.mjs` re-runs the frozen test and derives
+  `touchedPaths` from a real git diff), and that one works. The Stop hook was the "keep working
+  until green" nudge, not the verdict. The cost is therefore wasted dispatches: a hand that would
+  have converged in one more turn returns NOT_DONE and burns a K=1 escalation instead. On the
+  `claude` hand family that waste is paid in subscription tokens, which makes it worth fixing now.
+- **Proposed change:** wrap the adapter command so a non-zero exit becomes exit `2`, and bound the
+  re-invocation with a counter file inside the ephemeral config dir (N ≤ 2) so a permanently red
+  test cannot loop the hand to its 9-minute wall clock. Deliberately NOT folded into the
+  hand-family delivery: it changes iteration behaviour for every existing dispatch and deserves its
+  own freeze → impl pair with its own metering.
+- **Rationale:** same shape as the two notes above — a check whose *shape* was verified (the hook is
+  written, the settings.json is asserted on disk, a test proves the command string) while the
+  *claim* it makes ("blocks the hand until the frozen test is green") was never once exercised
+  end-to-end. The cheap detection was one counting hook and two probes; the miss survived every
+  green suite because no assertion ever ran the predicate against a live child.

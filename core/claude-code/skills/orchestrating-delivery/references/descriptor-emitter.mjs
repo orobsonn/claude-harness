@@ -5,7 +5,7 @@ import { isSafeFeatureId } from '../../../hooks/lib/gate-lib.mjs';
 import { readRunnerConfig as defaultReadRunnerConfig } from './runner-adapters.mjs';
 import { parseFlags, isDirectCli } from './cli-flags.mjs';
 import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../vps/obs-outbox.mjs';
-import { resolveHandModel } from '../../../../shared/lib/hand-model-ladder.mjs';
+import { resolveHandModel, resolveHandEffort, detectHandFamily } from '../../../../shared/lib/hand-model-ladder.mjs';
 import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity.mjs';
 
 /**
@@ -35,7 +35,8 @@ import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity
  * @param {(() => string) | undefined} [params.readRunnerConfig] - Injectable seam that returns the
  *   project's selected test-runner adapter id (`runner-adapters.mjs`). Defaults to reading
  *   `.claude/hand-config/test-runner.json` from `process.cwd()` (→ `node-test` when absent).
- * @returns {{ feature_id: string, task_id: string, model: string, brief_file: string,
+ * @param {string} [params.effort] - Reasoning effort of the resolved rung, when it has one.
+ * @returns {{ feature_id: string, task_id: string, model: string, effort?: string, brief_file: string,
  *   role: "executor"|"sniper", scope_paths: string[], locked_test: string, allowed_writes: string[], freeze_commit_sha: string,
  *   test_runner: string }}
  *   The fully resolved spawn-hand descriptor.
@@ -44,6 +45,7 @@ export function emitDescriptor({
   featureId,
   taskId,
   model,
+  effort,
   modelFallbackUsed = false,
   modelResolution,
   briefFile,
@@ -85,6 +87,10 @@ export function emitDescriptor({
     // the runtime to infer it from the model tier (executor and sniper may share a tier/task).
     role,
     model,
+    // The claude ladder pins the same model id on medium and high — the effort IS the rung.
+    // Emitted explicitly (never left to the spawn layer to infer) so the descriptor states the
+    // whole route; spawn-hand re-derives it from (model, tier) and refuses a contradiction.
+    ...(effort ? { effort } : {}),
     // #361: the fallback always announces itself, on the descriptor as well as the run-record.
     modelFallbackUsed: modelFallbackUsed === true,
     ...(modelResolution ? { model_resolution: modelResolution } : {}),
@@ -122,6 +128,17 @@ function readPlan(featureId, plansDir) {
 }
 
 /**
+ * @description The family a plan's ladder was authored against, as a `resolveHandModel` option.
+ * Omitted (so the module default applies) when the plan pins no recognizable single family.
+ * @param {unknown} handTiers
+ * @returns {{ family?: string }}
+ */
+function familyOpt(handTiers) {
+  const family = detectHandFamily(handTiers);
+  return family ? { family } : {};
+}
+
+/**
  * @description Resolves the EXECUTOR's hand model from the plan — the model is never typed by the
  * orchestrator. Tier = `tasks[i].complexity ?? tasks[i].severity` (complexity FIRST: it measures the
  * residual reasoning left after the plan resolved every judgment, which is what picks the hand;
@@ -146,12 +163,16 @@ export function resolveExecutorModel({ plan, taskId }) {
   const tier = task.complexity ?? task.severity;
   const handTiers = plan?.model_strategy?.hand_tiers;
   const pinned = handTiers && typeof handTiers === 'object' ? handTiers[tier] : undefined;
+  // An ABSENT tier falls back inside the plan's OWN family (detected from the ids it pinned), so a
+  // missing rung can never silently cross to the other transport.
   const { model, modelFallbackUsed } = resolveHandModel(pinned, {
     source: `plan model_strategy.hand_tiers.${tier}`,
+    ...familyOpt(handTiers),
   });
   return {
     model,
     modelFallbackUsed,
+    effort: resolveHandEffort(model, tier),
     model_resolution: {
       role: 'executor',
       tier: tier ?? null,
@@ -218,10 +239,12 @@ export function resolveSniperModel({ plan, severities, gateFailure = false, fail
   const pinned = handTiers && typeof handTiers === 'object' ? handTiers[tier] : undefined;
   const { model, modelFallbackUsed } = resolveHandModel(pinned, {
     source: `plan model_strategy.hand_tiers.${tier}`,
+    ...familyOpt(handTiers),
   });
   return {
     model,
     modelFallbackUsed,
+    effort: resolveHandEffort(model, tier),
     model_resolution: {
       role: 'sniper',
       tier,
@@ -384,6 +407,7 @@ if (isDirectCli(import.meta.url)) {
     featureId: args['feature-id'],
     taskId: args['task-id'],
     model: resolved.model,
+    effort: resolved.effort,
     modelFallbackUsed: resolved.modelFallbackUsed,
     modelResolution: resolved.model_resolution,
     briefFile: args['brief-file'],

@@ -1181,14 +1181,16 @@ export function decide(payload, deps = {}) {
           "genuine cheap-hand run that failed its locked test). No such failure evidence here. " +
           "Do NOT improvise a cause — in particular NEVER conclude 'spawn-hand.mjs is missing': it is " +
           "vendored at .claude/skills/orchestrating-delivery/references/spawn-hand.mjs and the file " +
-          "exists; what is almost always missing is the Ollama token, not the script. To learn the " +
+          "exists; what is almost always missing is the hand token, not the script. To learn the " +
           "EXACT cause, RUN the dispatch: `node .claude/skills/orchestrating-delivery/references/" +
           "spawn-hand.mjs --descriptor <descriptor.json>` and read its exit-2 JSON `reason` (e.g. " +
-          "'no ANTHROPIC_AUTH_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
+          "'no CLAUDE_HAND_TOKEN resolved', 'dirty baseline', 'gate not armed'). Then route that " +
           "verbatim reason to the critical-exception path: stamp `mark.mjs hand-config-error " +
           "--reason \"<reason, translated to product-language>\"` and surface it to the operator with " +
-          "the fix (missing token → `export OLLAMA_HAND_TOKEN=…` in the shell rc — env survives the " +
-          "command-sandbox; a token in .dev.vars does NOT, because the sandbox denies reading it). " +
+          "the fix (missing token → export the ACTIVE family's key in the shell rc: `CLAUDE_HAND_TOKEN` " +
+          "from `claude setup-token`, or `OLLAMA_HAND_TOKEN` — env survives the command-sandbox; a " +
+          "token in .dev.vars does NOT, because the sandbox denies reading it. The reason names the " +
+          "exact key). " +
           "Never a silent Claude fallback. A genuine run that FAILED its locked test (CLI exit 1 + " +
           "on-disk record) is the ONLY thing that authorizes this Claude hand.",
       },

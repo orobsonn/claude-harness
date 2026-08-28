@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isSafeFeatureId } from "./feature-id.mjs";
-import { APPROVED_HAND_LADDER } from "./hand-model-ladder.mjs";
+import { HAND_LADDERS, HAND_FAMILIES, formatAllApprovedLadders } from "./hand-model-ladder.mjs";
 import { validateRouting } from "./routing-validate.mjs";
 import { isCompleteExpectedModelStrategy, projectExpectedModelStrategy } from "./model-strategy-projection.mjs";
 
@@ -39,9 +39,14 @@ function validateModelStrategy(strategy, expectedStrategy, errors, expectedSuppl
   if (expectedSupplied && !hasCompleteExpectedStrategy) {
     errors.push("expectedModelStrategy must be a complete authoritative projection");
   }
-  const approvedHands = hasCompleteExpectedStrategy
-    ? /** @type {Record<string, unknown>} */ (expectedStrategy).hand_tiers
-    : APPROVED_HAND_LADDER;
+  // With a routing projection the approved ladder is EXACTLY that projection (the OpenCode lane's
+  // single source). Without one, any ONE of the approved families is valid — which family a plan
+  // was authored against is the operator's toggle, read at plan-WRITE time by the authoring gate,
+  // not re-litigated by a validator that may run long after the plan froze. Mixing two families in
+  // one ladder stays invalid: it would leave the escalation crossing transports mid-run.
+  const approvedLadders = hasCompleteExpectedStrategy
+    ? [/** @type {Record<string, unknown>} */ (expectedStrategy).hand_tiers]
+    : HAND_FAMILIES.map((family) => HAND_LADDERS[family]);
   for (const key of Object.keys(value)) {
     if (!MODEL_STRATEGY_KEYS.has(key)) errors.push(`model_strategy.${key} is not allowed`);
   }
@@ -50,11 +55,25 @@ function validateModelStrategy(strategy, expectedStrategy, errors, expectedSuppl
     errors.push("model_strategy.hand_tiers must be an object with low, medium, high");
   } else {
     const tiers = /** @type {Record<string, unknown>} */ (handTiers);
-    for (const key of Object.keys(tiers)) {
-      if (!Object.hasOwn(approvedHands, key)) errors.push(`model_strategy.hand_tiers.${key} is not allowed`);
-    }
-    for (const [key, model] of Object.entries(approvedHands)) {
-      if (!Object.hasOwn(tiers, key) || tiers[key] !== model) errors.push(`model_strategy.hand_tiers.${key} must equal ${model}`);
+    const score = (ladder) => Object.entries(ladder).filter(([key, model]) => tiers[key] === model).length;
+    const perfect = (ladder) =>
+      score(ladder) === Object.keys(ladder).length &&
+      Object.keys(tiers).every((key) => Object.hasOwn(ladder, key));
+    if (!approvedLadders.some(perfect)) {
+      // Diagnose against the CLOSEST candidate so the errors still name the offending tier — a
+      // single "does not match any ladder" line would make the operator diff two maps by eye.
+      const closest = approvedLadders.reduce((best, l) => (score(l) > score(best) ? l : best), approvedLadders[0]);
+      for (const key of Object.keys(tiers)) {
+        if (!Object.hasOwn(closest, key)) errors.push(`model_strategy.hand_tiers.${key} is not allowed`);
+      }
+      for (const [key, model] of Object.entries(closest)) {
+        if (!Object.hasOwn(tiers, key) || tiers[key] !== model) {
+          errors.push(`model_strategy.hand_tiers.${key} must equal ${model}`);
+        }
+      }
+      if (!hasCompleteExpectedStrategy) {
+        errors.push(`model_strategy.hand_tiers must equal one approved ladder (${formatAllApprovedLadders()})`);
+      }
     }
   }
   for (const key of MODEL_STRATEGY_EYE_KEYS) {

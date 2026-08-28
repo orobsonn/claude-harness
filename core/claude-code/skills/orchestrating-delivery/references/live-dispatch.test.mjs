@@ -284,11 +284,13 @@ describe("runLiveDispatch fail-closed on an unapproved hand model (#361)", () =>
         gitStatus: () => "",
         headSha: () => FREEZE_SHA,
         capture: ({ child }) => ({ child: { ...child, touchedPaths: [], lockedTestExitCode: 0 } }),
-        env: { ANTHROPIC_AUTH_TOKEN: "tok-abc" },
+        // An absent model falls back to the DEFAULT family's medium rung, so the token that must
+        // be present is that family's — the transport follows the resolved model, not the env.
+        env: { CLAUDE_HAND_TOKEN: "tok-abc" },
         // The seam is writeRecord(path, content) — the record is the serialized second arg.
         writeRecord: (_path, content) => { record = JSON.parse(content); },
       });
-      assert.equal(record.model, "glm-5.2", "absence falls back to the medium rung");
+      assert.equal(record.model, "sonnet", "absence falls back to the default family's medium rung");
       assert.equal(record.modelFallbackUsed, true, "the fallback must never be silent on the record");
     } finally {
       rmSync(dir, { recursive: true, force: true });
