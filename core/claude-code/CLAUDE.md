@@ -58,10 +58,28 @@ When the planner produces `scope_paths`, a deterministic check forces FULL if an
 **/auth/**
 **/payment/**
 **/billing/**
-**/*.sql
-**/migrations/**
 **/.env*
 **/package.json   (when adding or upgrading deps)
+**/*.sql          — only when NOT purely additive (see carve-out)
+**/migrations/**  — same carve-out
+```
+
+**Additive-migration carve-out.** Ceremony must track the **complexity and irreversibility of the
+change**, never the file extension. A migration whose every statement is purely additive — `ALTER
+TABLE ... ADD COLUMN`, `CREATE TABLE` of a NEW table, `CREATE INDEX` — cannot rewrite or destroy an
+existing row (a column added without a default is `NULL` for every existing row), so it does **not**
+force FULL on its own; the ceremony follows the rest of the plan's complexity.
+
+Anything else in a `.sql` file **does** force FULL — in particular `DROP`, `RENAME`, `UPDATE`,
+`DELETE`, `INSERT` (data backfill), `PRAGMA`, and the SQLite create-copy-drop table rebuild. When the
+statement set is ambiguous, it forces FULL.
+
+Deterministic content check on the migration bodies in `scope_paths`:
+
+```bash
+grep -iE '\b(DROP|RENAME|UPDATE|DELETE|INSERT|PRAGMA)\b' <migration files> \
+  && echo "DESTRUCTIVE SQL → force FULL" \
+  || echo "additive only → ceremony follows the rest of the plan"
 ```
 
 Judgment on entry (triage). Determinism on the plan (planner → orchestrating-delivery).
