@@ -6,7 +6,7 @@ Um framework de uso do **Claude Code** para **não desenvolvedores** (product ma
 
 A ideia central: o humano toma **decisões de produto** (o que construir, aceitar/recusar risco); o sistema resolve a **engenharia** (como construir, testar, revisar) dentro de um loop de agentes especializados.
 
-> **Filosofia barbell:** orquestração barata no alto volume, raciocínio caro só nas pontas. Um orquestrador **Sonnet** coordena e delega ao **Opus** apenas nos gates de fronteira. Mais fundo ainda: as **mãos que escrevem código** (executor, sniper, test-author) rodam em modelos **Ollama baratos**, enquanto os **olhos que julgam** (planner, compliance, adversary, security) ficam em Claude — *strong eyes, cheap hands*. O que mantém isso seguro não é confiar no modelo barato — são **trilhos determinísticos** (hooks, guards, plano resolvido, teste congelado, captura independente) que carregam o julgamento crítico.
+> **Filosofia barbell:** orquestração barata no alto volume, raciocínio caro só nas pontas. Um orquestrador **Sonnet** coordena e delega ao **Opus** apenas nos gates de fronteira. Mais fundo ainda: as **mãos que escrevem código** (executor, sniper, test-author) rodam num degrau barato — `haiku`/`sonnet` por padrão, ou modelos **Ollama** quando você liga o toggle — enquanto os **olhos que julgam** (planner, compliance, adversary, security) ficam sempre no topo — *strong eyes, cheap hands*. O que mantém isso seguro não é confiar no modelo barato — são **trilhos determinísticos** (hooks, guards, plano resolvido, teste congelado, captura independente) que carregam o julgamento crítico.
 
 
 > **ADE oficial: [Orca](https://onorca.dev).** O Orca (*Agent Development Environment*) é o ambiente
@@ -74,11 +74,11 @@ Os três **HARD-GATES** humanos — aprovar spec, aprovar plano, testar demo —
 
 ## Roteamento de modelos (barbell)
 
-O orquestrador é o maior consumidor de tokens → é onde está a economia. Mais fundo, as **mãos** rodam fora do Claude (Ollama barato); os **olhos** Claude entram só nos pontos certos, por override no dispatch:
+O orquestrador é o maior consumidor de tokens → é onde está a economia. Mais fundo, as **mãos** rodam no degrau mais barato da família ativa (`haiku`/`sonnet`, ou Ollama por opt-in); os **olhos** entram só nos pontos certos, por override no dispatch:
 
 ```mermaid
 flowchart LR
-    subgraph MAOS ["Mãos — escrevem código, Ollama barato"]
+    subgraph MAOS ["Mãos — escrevem código, degrau barato"]
         EXE["executor<br/><i>hand_tiers</i>"]
         SNP["sniper<br/><i>hand_tiers</i>"]
         TAU["test-author<br/><i>hand_tiers</i>"]
@@ -106,7 +106,7 @@ flowchart LR
 | Papel | Modelo | Por quê |
 |---|---|---|
 | **orquestrador** (main loop) | **Sonnet** | maior volume de tokens → a economia real |
-| executor / sniper / test-author | **mão Ollama** (`hand_tiers`) | escrevem código — barato, contido pelo trilho determinístico |
+| executor / sniper / test-author | **mão externa** (`hand_tiers`) | escrevem código — barato, contido pelo trilho determinístico |
 | compliance | Sonnet | spec-vs-implementação |
 | planner | Opus | raciocínio nível arquitetura |
 | plan-reviewer (gate inicial) | Opus | audita o plano antes da execução |
@@ -142,11 +142,11 @@ Outros trilhos: o guard `<PLANNER-ONLY>` impede o orquestrador de gerar o plano 
 
 ## Strong eyes, cheap hands
 
-As mãos que escrevem código rodam num modelo **Ollama barato**, fora da subscription Claude. O que torna isso seguro não é confiar na mão — é nunca acreditar na prosa dela. Cada task é um par **freeze → impl** com captura independente:
+As mãos que escrevem código rodam no **degrau barato da família ativa** — `haiku`/`sonnet` por padrão, modelos **Ollama** com `node .claude/shared/lib/hand-model-ladder.mjs use ollama`. O que torna isso seguro não é confiar na mão — é nunca acreditar na prosa dela. Cada task é um par **freeze → impl** com captura independente:
 
 ```mermaid
 flowchart TD
-    PIN["planner pina<br/>asserção observável"] --> TA["test-author (mão Ollama)<br/>transcreve 1 teste"]
+    PIN["planner pina<br/>asserção observável"] --> TA["test-author<br/>transcreve 1 teste"]
     TA --> CV["compliance (olho Claude)<br/>valida fidelidade"]
     CV --> FRZ[("teste congelado<br/>content-hash manifest")]
     FRZ --> SPAWN["spawn-hand<br/>claude -p contra ollama.com<br/>token só no env"]
@@ -164,7 +164,7 @@ O que carrega a segurança:
 - **Teste congelado antes da implementação.** O `planner` pina uma asserção observável, a mão `test-author` a transcreve, um olho Claude (`compliance`) valida a fidelidade, e o teste é congelado por content-hash. A mão de implementação escreve contra um teste **read-only** que não pode tocar.
 - **Captura independente é o gate de registro.** O resultado da task não vem da prosa da mão — o harness reconstrói o diff via `git diff --name-only <freeze_sha>` ∪ `git ls-files --others` e roda `node --test` por conta própria (com guard anti-verde-vazio). Escopo, manifest congelado e teste verde são verificados pelo harness, não relatados pelo modelo.
 - **Escape on-disk não-forjável.** Uma escalação para uma mão Claude (K=1) só é liberada quando existe um **run-record on-disk** — escrito pela captura independente — cujo `outcome` é uma run genuína não-`DONE`, ancorada ao `freeze_commit_sha`. Um ticket forjado por `echo` não autoriza nada.
-- **Token nunca vaza.** O auth do Ollama vive só no env do processo filho (`~/.claude/.dev.vars`, resolvido uma vez), nunca em argv/brief/settings; redação on-disk; fail-close se vazar no descriptor.
+- **Token nunca vaza.** O auth da mão (`CLAUDE_HAND_TOKEN` ou `OLLAMA_HAND_TOKEN`, conforme a família) vive só no env do processo filho, nunca em argv/brief/settings; redação on-disk; fail-close se vazar no descriptor. As duas famílias exigem token e rodam no mesmo `CLAUDE_CONFIG_DIR` efêmero — herdar o `~/.claude` do operador daria à mão o allowlist de permissões e os `additionalDirectories` dele (medido: `Bash` liberado e escrita fora do repo).
 
 > Provado ao vivo: uma mão `qwen3-coder-next` autorou um diff in-scope e o teste congelado ficou verde na captura independente (`outcome DONE`) — sem gastar um token da subscription na escrita.
 
@@ -240,7 +240,7 @@ core/                 # núcleo distribuível → vai pro .claude/ do projeto
   agents/             # agentes de delivery (planner, executor, adversary, …)
   skills/             # skills da pipeline (triaging, orchestrating, …)
     orchestrating-delivery/references/   # runners da mão barata
-                      #   spawn-hand · dispatch-hand · capture-hand (Ollama)
+                      #   spawn-hand · dispatch-hand · capture-hand (mão externa)
   rules/              # rules universais (git, security, code-quality, architecture, …)
   hooks/              # trilhos determinísticos (entry-gate, plan-write-gate,
                       #   codex-eye-nudge — nudge da segunda família, …)
@@ -340,7 +340,7 @@ Spec pack: [`docs/specs/oc-port/`](docs/specs/oc-port/).
 
 ## Status
 
-Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata Ollama com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado. A entrega autônoma roda sobre o **[Orca](https://onorca.dev) como ADE oficial** + o selector de [`core/orca/`](core/orca/README.md), validado de ponta a ponta; o motor de cron da VPS (`core/vps/`) está aposentado.
+Em evolução ativa. Versionado por marco (ver [`CHANGELOG.md`](CHANGELOG.md) e os releases). Núcleo da pipeline, trilho determinístico de entrada, mão barata (Claude ou Ollama, por toggle) com captura independente (*strong eyes, cheap hands*) e medidor de custo já operacionais. Dual-runtime OpenCode (fase 1) + cutover global documentado. A entrega autônoma roda sobre o **[Orca](https://onorca.dev) como ADE oficial** + o selector de [`core/orca/`](core/orca/README.md), validado de ponta a ponta; o motor de cron da VPS (`core/vps/`) está aposentado.
 
 ## Distribuição (mantenedor)
 

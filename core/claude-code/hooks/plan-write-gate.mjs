@@ -26,7 +26,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bareRole, isSafeSessionId, readGateState } from "./lib/gate-lib.mjs";
-import { formatApprovedLadder, isApprovedHandModel } from "../../shared/lib/hand-model-ladder.mjs";
+import {
+  formatApprovedLadder,
+  formatAllApprovedLadders,
+  readActiveHandFamily,
+  ladderFor,
+  HAND_FAMILY_CONFIG_PATH,
+} from "../../shared/lib/hand-model-ladder.mjs";
 
 /**
  * @description Hand roles whose subagent writes are constrained to the active dispatch's scope_paths
@@ -188,6 +194,23 @@ function isForbiddenStateBasename(filePath) {
 }
 
 /**
+ * Tests whether a file_path resolves to a file under `.claude/hand-config/` — the operator's
+ * hand configuration (`hands.json`, which family the authoring rail approves; `test-runner.json`,
+ * which command the frozen-test gate runs). Both DECIDE what a gate enforces, so a tool write to
+ * either would let the gated party pick its own gate: a hand that can rewrite `hands.json` moves
+ * the ladder the plan-write gate validates against, and one that can rewrite `test-runner.json`
+ * moves the command that proves its work green. The operator changes these through the CLI
+ * (`node .claude/shared/lib/hand-model-ladder.mjs use <family>`), never through Write/Edit.
+ * @param {unknown} filePath
+ * @returns {boolean}
+ */
+function isHandConfigPath(filePath) {
+  const segs = pathSegments(filePath);
+  const i = segs.indexOf(".claude");
+  return i !== -1 && segs[i + 1] === "hand-config" && segs.length > i + 2;
+}
+
+/**
  * Tests whether a file_path resolves to a JSON file under a .claude/plans/.state/ directory
  * (gate-state.json, triage.json). These files are the deterministic gates' state and must be
  * written ONLY by the stamp-triage/entry-gate hooks (which use fs directly, never a tool call) —
@@ -221,9 +244,10 @@ function isStateFilePath(filePath) {
  * Claude-alias guard is the backstop at the consumer. A parse failure on a Write IS a positive
  * invalid signal (a Write carries the whole document) → DENY, not fail-open.
  * @param {unknown} content - payload.tool_input.content
+ * @param {{ readActiveFamily?: () => { family: string } }} [deps] - injectable toggle reader.
  * @returns {string|null} a deny reason, or null when acceptable / not checkable
  */
-export function checkPlanContent(content) {
+export function checkPlanContent(content, { readActiveFamily = readActiveHandFamily } = {}) {
   if (typeof content !== "string") return null; // Edit / anomalous → fail open
   let plan;
   try {
@@ -235,23 +259,42 @@ export function checkPlanContent(content) {
   if (!ms || typeof ms !== "object" || Array.isArray(ms)) {
     return "[plan-write-gate] Blocked: model_strategy is missing or malformed. It must carry `hand_tiers` (the cheap-hand model ladder) plus the 7 Claude eye roles.";
   }
+  // The legacy shape is rejected by SHAPE, never by its values — `haiku`/`sonnet` are legitimate
+  // claude-family rungs now, so only the key `tiers` still identifies the retired form.
   if (ms.tiers !== undefined) {
-    return "[plan-write-gate] Blocked: model_strategy uses the legacy Claude `tiers` shape (e.g. low:haiku / medium:sonnet / high:opus). Cheap hands dispatch to the Ollama endpoint — a Claude model id 404s there. Use `hand_tiers` with model ids that exist in the Ollama endpoint (list with GET /v1/models).";
+    return "[plan-write-gate] Blocked: model_strategy uses the legacy Claude `tiers` shape (e.g. low:haiku / medium:sonnet / high:opus). Use `hand_tiers`, the only valid hand-routing shape.";
   }
   if (ms.hand_tiers === undefined) {
-    return "[plan-write-gate] Blocked: model_strategy.hand_tiers is required — the executor/sniper resolve their Ollama model from it. Add hand_tiers: { low, medium, high } with real Ollama model ids.";
+    return `[plan-write-gate] Blocked: model_strategy.hand_tiers is required — the executor/sniper resolve their hand model from it. Add hand_tiers: { low, medium, high } from an approved ladder (${formatAllApprovedLadders()}).`;
   }
   // #ac-2.1: the VALUES, not just the shape. A tier pinned to an unapproved id (gpt-oss, whose
-  // tool-calling collapses in an agentic loop; a retired id; a Claude alias) is caught HERE, when
-  // the planner writes the plan — not after a whole run has burned on it. Same constant spawn-hand
-  // enforces at dispatch, so the two rails can never disagree.
+  // tool-calling collapses in an agentic loop; a retired id; opus) is caught HERE, when the planner
+  // writes the plan — not after a whole run has burned on it.
+  //
+  // EQUALITY with the ACTIVE family's ladder, not mere membership: the claude ladder pins the same
+  // id on medium and high, so a membership check would wave through a FLAT `{low: sonnet, medium:
+  // sonnet, high: sonnet}` — an escalation ladder with no escalation in it. This is also the ONE
+  // place the operator's toggle is read: it decides what a NEW plan may pin, never how a frozen
+  // plan dispatches (that follows from the ids the plan already carries).
+  let active;
+  try {
+    active = readActiveFamily();
+  } catch (err) {
+    return `[plan-write-gate] Blocked: ${err instanceof Error ? err.message : String(err)} Fix ${HAND_FAMILY_CONFIG_PATH} before writing a plan.`;
+  }
   const ht = ms.hand_tiers;
   if (!ht || typeof ht !== "object" || Array.isArray(ht)) {
-    return `[plan-write-gate] Blocked: model_strategy.hand_tiers must be an object mapping low/medium/high to an approved hand model (${formatApprovedLadder()}).`;
+    return `[plan-write-gate] Blocked: model_strategy.hand_tiers must be an object mapping low/medium/high to the active ${active.family} ladder (${formatApprovedLadder(active.family)}).`;
   }
-  for (const [tier, model] of Object.entries(ht)) {
-    if (!isApprovedHandModel(model)) {
-      return `[plan-write-gate] Blocked: model_strategy.hand_tiers.${tier} = ${JSON.stringify(model)} is not an approved hand model. Only these may run as a cheap hand: ${formatApprovedLadder()}.`;
+  const ladder = ladderFor(active.family);
+  for (const tier of Object.keys(ht)) {
+    if (!Object.hasOwn(ladder, tier)) {
+      return `[plan-write-gate] Blocked: model_strategy.hand_tiers.${tier} is not a rung — expected exactly low, medium and high.`;
+    }
+  }
+  for (const [tier, model] of Object.entries(ladder)) {
+    if (ht[tier] !== model) {
+      return `[plan-write-gate] Blocked: model_strategy.hand_tiers.${tier} = ${JSON.stringify(ht[tier])} — the active hand family is ${active.family}, whose ladder is ${formatApprovedLadder(active.family)}. Either pin that ladder, or switch families with \`node .claude/shared/lib/hand-model-ladder.mjs use <family>\` before planning.`;
     }
   }
   return null;
@@ -264,7 +307,7 @@ export function checkPlanContent(content) {
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
 export function decide(payload, deps = {}) {
-  const { readGateStateFn = readGateState } = deps;
+  const { readGateStateFn = readGateState, readActiveFamilyFn = readActiveHandFamily } = deps;
 
   // Non-object payload → infra error → fail-open
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -317,6 +360,24 @@ export function decide(payload, deps = {}) {
     };
   }
 
+  // Hand-config files decide what the gates enforce — never writable by a tool call. Same
+  // absolute-security tier as the state-file rails above (not scope-relaxed), and same test
+  // carve-out so the harness's own fixtures are never false-blocked.
+  if (!carved && isHandConfigPath(filePath)) {
+    return {
+      allow: false,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "[plan-write-gate] Blocked: .claude/hand-config/ decides which ladder the authoring rail " +
+          "approves (hands.json) and which command the frozen-test gate runs (test-runner.json). " +
+          "A Write/Edit here would let the gated party choose its own gate. Change the hand family " +
+          "with `node .claude/shared/lib/hand-model-ladder.mjs use <family>`.",
+      },
+    };
+  }
+
   // A3 scope rail: an executor/sniper SUBAGENT write outside its dispatch's scope_paths/allowed_writes
   // is denied. Runs AFTER the state-file rails (those are absolute security, never scope-relaxed) and
   // BEFORE the plan-authorship rail. Fail-open when scope is unknown (see checkScopeRail).
@@ -337,7 +398,7 @@ export function decide(payload, deps = {}) {
   if (isSubagent && bareRole(payload.agent_type) === "planner") {
     // Authorized author — now the CONTENT cancela: reject a legacy/malformed model_strategy
     // before it ever reaches disk, so a Claude-tiers plan can never be executed (the furo).
-    const contentReason = checkPlanContent(payload?.tool_input?.content);
+    const contentReason = checkPlanContent(payload?.tool_input?.content, { readActiveFamily: readActiveFamilyFn });
     if (contentReason) {
       return {
         allow: false,

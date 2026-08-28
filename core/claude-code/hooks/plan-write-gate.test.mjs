@@ -31,7 +31,16 @@ function makeWritePayload(toolName, filePath, extra = {}) {
 const PLAN_PATH = ".claude/plans/x/execution-plan.json";
 
 // --- content cancela (model_strategy furo) ---
+// The active hand family is the operator's toggle, so every content assertion states which family
+// it is asserting under — a fixture that silently depended on the default would start failing the
+// day the default flips, telling nobody why.
+const asFamily = (family) => ({ readActiveFamily: () => ({ family, source: "config" }) });
+const OLLAMA = asFamily("ollama");
+const CLAUDE = asFamily("claude");
 const VALID_MS = '{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
+const VALID_CLAUDE_MS = '{"model_strategy":{"hand_tiers":{"low":"haiku","medium":"sonnet","high":"sonnet"},"planner":"opus"}}';
+// The trap a membership check would wave through: three rungs, one model, zero escalation.
+const FLAT_CLAUDE_MS = '{"model_strategy":{"hand_tiers":{"low":"sonnet","medium":"sonnet","high":"sonnet"},"planner":"opus"}}';
 const LEGACY_MS = '{"model_strategy":{"tiers":{"low":"haiku","medium":"sonnet","high":"opus"}}}';
 // #ac-1.2: an id that EXISTS in the API but is outside the approved ladder — the fixture that
 // proves this rail is an allowlist, not a pointed veto of gpt-oss.
@@ -39,36 +48,55 @@ const OFF_LADDER_MS = '{"model_strategy":{"hand_tiers":{"low":"deepseek-v4-pro",
 const GPT_OSS_MS = '{"model_strategy":{"hand_tiers":{"low":"gpt-oss:20b","medium":"glm-5.2","high":"kimi-k2.7-code"},"planner":"opus"}}';
 
 test("checkPlanContent: legacy Claude `tiers` shape → deny reason", () => {
-  assert.match(checkPlanContent(LEGACY_MS), /legacy Claude `tiers`/);
+  // Rejected by SHAPE under BOTH families: haiku/sonnet are legitimate claude rungs now, so only
+  // the `tiers` key still identifies the retired form.
+  assert.match(checkPlanContent(LEGACY_MS, OLLAMA), /legacy Claude `tiers`/);
+  assert.match(checkPlanContent(LEGACY_MS, CLAUDE), /legacy Claude `tiers`/);
 });
 test("checkPlanContent: valid hand_tiers → null (accept)", () => {
-  assert.equal(checkPlanContent(VALID_MS), null);
+  assert.equal(checkPlanContent(VALID_MS, OLLAMA), null);
+});
+test("checkPlanContent: the claude ladder is valid under family=claude, and the ollama one is not", () => {
+  assert.equal(checkPlanContent(VALID_CLAUDE_MS, CLAUDE), null);
+  const reason = checkPlanContent(VALID_MS, CLAUDE);
+  assert.match(reason, /active hand family is claude/, "the deny must name the ACTIVE family");
+  assert.match(reason, /hand-model-ladder\.mjs use/, "the deny must name the way to switch");
+});
+test("checkPlanContent: a FLAT claude ladder is refused — three rungs, one model, zero escalation", () => {
+  assert.match(checkPlanContent(FLAT_CLAUDE_MS, CLAUDE), /hand_tiers\.low/);
+});
+test("checkPlanContent: the ollama ladder is refused under family=claude and vice versa (symmetry)", () => {
+  assert.match(checkPlanContent(VALID_CLAUDE_MS, OLLAMA), /active hand family is ollama/);
+});
+test("checkPlanContent: an unreadable toggle is a DENY, never a silent default", () => {
+  const boom = { readActiveFamily: () => { throw new Error("hands.json names an unknown hand family \"olama\""); } };
+  assert.match(checkPlanContent(VALID_MS, boom), /unknown hand family/);
 });
 test("checkPlanContent: #ac-2.1 hand_tiers.low = gpt-oss → deny naming the tier and the refused id", () => {
-  const reason = checkPlanContent(GPT_OSS_MS);
+  const reason = checkPlanContent(GPT_OSS_MS, OLLAMA);
   assert.match(reason, /hand_tiers\.low/, "the deny must name the offending tier");
   assert.match(reason, /gpt-oss:20b/, "the deny must name the refused id");
   assert.match(reason, /gemma4/, "the deny must name the approved ladder");
 });
 test("checkPlanContent: #ac-1.2 an off-ladder id that EXISTS is refused too (allowlist, not a gpt-oss veto)", () => {
-  const reason = checkPlanContent(OFF_LADDER_MS);
+  const reason = checkPlanContent(OFF_LADDER_MS, OLLAMA);
   assert.match(reason, /hand_tiers\.low/);
   assert.match(reason, /deepseek-v4-pro/);
 });
 test("checkPlanContent: a Claude alias in a hand tier is refused (the doc's 'escape hatch' never existed)", () => {
   assert.match(
-    checkPlanContent('{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"opus"},"planner":"opus"}}'),
+    checkPlanContent('{"model_strategy":{"hand_tiers":{"low":"gemma4","medium":"glm-5.2","high":"opus"},"planner":"opus"}}', OLLAMA),
     /hand_tiers\.high/,
   );
 });
 test("checkPlanContent: #ac-2.2 the approved ladder → null (accept)", () => {
-  assert.equal(checkPlanContent(VALID_MS), null);
+  assert.equal(checkPlanContent(VALID_MS, OLLAMA), null);
 });
 test("checkPlanContent: hand_tiers missing → deny reason", () => {
-  assert.match(checkPlanContent('{"model_strategy":{"planner":"opus"}}'), /hand_tiers is required/);
+  assert.match(checkPlanContent('{"model_strategy":{"planner":"opus"}}', OLLAMA), /hand_tiers is required/);
 });
 test("checkPlanContent: invalid JSON in a Write → deny reason (positive invalid signal)", () => {
-  assert.match(checkPlanContent("{not json"), /not valid JSON/);
+  assert.match(checkPlanContent("{not json", OLLAMA), /not valid JSON/);
 });
 test("checkPlanContent: non-string content (Edit/anomalous) → null (fail open)", () => {
   assert.equal(checkPlanContent(undefined), null);
@@ -81,7 +109,7 @@ test("decide: planner Write with legacy tiers content → deny", () => {
 });
 test("decide: planner Write with valid hand_tiers content → allow", () => {
   const payload = { session_id: "s", tool_name: "Write", tool_input: { file_path: PLAN_PATH, content: VALID_MS }, agent_id: "ag", agent_type: "planner" };
-  assert.equal(decide(payload).allow, true);
+  assert.equal(decide(payload, { readActiveFamilyFn: () => ({ family: "ollama" }) }).allow, true);
 });
 
 // LOCKED TEST 1 — main-loop Write to a plan path (no agent_id) → deny naming the rule

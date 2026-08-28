@@ -216,32 +216,50 @@ Read the harness settings (project or global config). Freeze the resolved tier a
 
 **The only shape — `hand_tiers` (hands/eyes split).** This is the single valid shape; the legacy
 Claude-only `tiers` map is removed and rejected by validation. `hand_tiers` decouples the hand
-execution models (cheap, escalating weak→strong) from the eye judgment roles (always Claude). Pin
-the cravado escalation ladder verbatim — three *different* models, weakest at `low`, strongest at
-`high`, never three identical aliases:
+execution models (escalating weak→strong) from the eye judgment roles (always Claude).
+
+**Pin the ACTIVE family's ladder, verbatim.** Which family is active is the operator's toggle —
+read it before assembling the strategy:
+
+```bash
+node .claude/shared/lib/hand-model-ladder.mjs show
+```
+
+| family | low | medium | high |
+|---|---|---|---|
+| `claude` (default) | `haiku` | `sonnet` | `sonnet` + `--effort xhigh` |
+| `ollama` (opt-in) | `gemma4` | `glm-5.2` | `kimi-k2.7-code` |
 
 ```json
 "model_strategy": {
-  "hand_tiers": { "low": "gemma4", "medium": "glm-5.2", "high": "kimi-k2.7-code" },
+  "hand_tiers": { "low": "haiku", "medium": "sonnet", "high": "sonnet" },
   "planner": "opus", "plan-reviewer": "opus", "compliance": "sonnet",
   "adversary": "opus", "security": "opus", "shipper": "sonnet", "harvester": "sonnet"
 }
 ```
 
-The `low → medium → high` ladder is a genuine escalation (`gemma4` → `glm-5.2` →
-`kimi-k2.7-code`), so a harder task gets a stronger hand. Do **not** flatten it into one repeated model.
+The `low → medium → high` ladder is a genuine escalation, so a harder task gets a stronger hand.
+Do **not** flatten it, and do **not** mix families in one ladder. On the `claude` family the top
+rung is the same model id at a higher reasoning effort — the escalation is the **effort**, and the
+descriptor-emitter derives it from the tier (`high` → `xhigh`); you never write it into the plan.
 
-**The ladder above is an ALLOWLIST, and it is the whole list.** These three ids — and only these —
-may run as a hand. `hand_tiers` values are **not** free-form: `plan-write-gate` blocks the Write of a
-plan pinning anything else, and `spawn-hand` refuses to dispatch it. Both read one constant
+**The two ladders are an ALLOWLIST, and they are the whole list.** These ids — and only these — may
+run as a hand. `hand_tiers` values are **not** free-form: `plan-write-gate` blocks the Write of a
+plan that does not pin the ACTIVE family's ladder exactly (a flat `sonnet/sonnet/sonnet` is refused
+too), and `spawn-hand` refuses to dispatch an id outside both. Both read one constant
 (`shared/lib/hand-model-ladder.mjs`), so the two rails can never drift apart. This closes a real
-failure: a run whose plan declared this ladder dispatched all three hands on `gpt-oss:120b` instead
-— the one model this skill already said to avoid — and burned 12 sniper passes, because `gpt-oss`'s
-tool-calling collapses after a few steps in an agentic loop (the executor edits files in a loop, so
-reliable tool-use beats raw benchmark).
+failure: a run whose plan declared the ollama ladder dispatched all three hands on `gpt-oss:120b`
+instead — the one model this skill already said to avoid — and burned 12 sniper passes, because
+`gpt-oss`'s tool-calling collapses after a few steps in an agentic loop (the executor edits files in
+a loop, so reliable tool-use beats raw benchmark).
 
-**Changing the ladder is a code change, not a plan change** — edit the constant, with the new id
-verified against `GET https://ollama.com/v1/models` (Bearer = the Ollama token) first.
+**A frozen plan keeps the ladder it was authored with.** The toggle decides what a NEW plan may
+pin; dispatch derives the endpoint and the token from the model ids already in the plan. Flipping
+families mid-delivery therefore never strands a plan in flight.
+
+**Changing a ladder is a code change, not a plan change** — edit the constant. A new ollama id is
+verified against `GET https://ollama.com/v1/models` (Bearer = the Ollama token) first; a new Claude
+alias against `claude --model <alias>`.
 
 **No Claude escape hatch.** A Claude alias (`opus`, `sonnet`, `haiku`) in a `hand_tiers` tier is
 **refused** — hands always dispatch to the Ollama endpoint, where a Claude id 404s. (Earlier text

@@ -1,5 +1,14 @@
 # Claude Harness — "strong eyes, cheap hands" dispatch runner.
-# Copy this file to .dev.vars (gitignored) and set the token below.
-# Ollama auth token used by `claude -p` with ANTHROPIC_BASE_URL=https://ollama.com.
-# NEVER commit the real value — .dev.vars must stay out of git.
-ANTHROPIC_AUTH_TOKEN=
+# Copy this file to .dev.vars (gitignored) and set the token for the hand family you use.
+# NEVER commit a real value — .dev.vars must stay out of git.
+#
+# Preferred setup is an `export` in your shell rc instead of this file: env reads survive the
+# command-sandbox, which denies reading .dev.vars. This file is the fallback for environments
+# without the sandbox (and the source `generate-ci` derives the CI secret names from).
+
+# claude family (the default). Generate with `claude setup-token` (requires a Claude subscription).
+CLAUDE_HAND_TOKEN=
+
+# ollama family (opt-in: `node .claude/shared/lib/hand-model-ladder.mjs use ollama`).
+# Used by `claude -p` with ANTHROPIC_BASE_URL=https://ollama.com.
+OLLAMA_HAND_TOKEN=

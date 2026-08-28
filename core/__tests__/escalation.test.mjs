@@ -206,7 +206,7 @@ test("orchestrating-delivery Phase 2: escalation reset is verify-then-stash (`gi
  * Then: in v1, a medium-tier failure escalates directly to the Claude hand fallback;
  *       hand_tiers.high becomes the escalation target only after the v2 flip.
  */
-test("orchestrating-delivery Phase 2: v1 medium-tier failure escalates directly to Claude hand fallback; hand_tiers.high only after v2 flip", () => {
+test("orchestrating-delivery Phase 2: the escalation names its LAST rung, per hand family", () => {
   const section = extractSection(orchestratingMd, "Phase 2");
   assert(
     section.length > 0,
@@ -215,26 +215,28 @@ test("orchestrating-delivery Phase 2: v1 medium-tier failure escalates directly 
 
   const sectionLower = section.toLowerCase();
 
-  // In v1, a medium-tier failure escalates directly to the Claude hand fallback.
-  // Checked with "medium-tier" (hyphenated form) to avoid false positives on
-  // "hand_tiers.medium" which appears in the sniper fail-class floor.
-  const hasMediumClaudeFallback =
-    (sectionLower.includes("medium-tier") || sectionLower.includes("medium tier")) &&
-    (sectionLower.includes("claude hand fallback") ||
-      (sectionLower.includes("claude hand") && sectionLower.includes("fallback")));
+  // The tier walk itself. What matters is that a failed tier steps UP within hand_tiers before
+  // anything leaves the ladder — an escalation that jumped straight out would make the ladder
+  // decorative.
   assert(
-    hasMediumClaudeFallback,
-    "Phase 2 escalation must state that in v1 a medium-tier failure escalates directly to the Claude hand fallback"
+    sectionLower.includes("low → medium → high") || sectionLower.includes("low -> medium -> high"),
+    "Phase 2 escalation must state the low → medium → high walk within hand_tiers"
   );
 
-  // hand_tiers.high becomes the escalation target only after the v2 flip.
-  // "v2 flip" is the specific phrase that won't appear until the executor escalation section.
-  const hasV2Flip =
-    sectionLower.includes("v2 flip") ||
-    (sectionLower.includes("v2") && sectionLower.includes("flip"));
+  // The LAST rung is family-dependent, and stating it is the whole point: on the ollama family the
+  // top of the ladder escapes to the Claude hand fallback (the K=1 entry-gate ticket), while on the
+  // claude family the hand already IS Claude — there is no rung above, so it must route to the
+  // critical exception instead of silently re-dispatching a fourth time.
+  const hasOllamaFallback =
+    sectionLower.includes("claude hand fallback") ||
+    (sectionLower.includes("claude hand") && sectionLower.includes("fallback"));
   assert(
-    hasV2Flip,
-    "Phase 2 escalation must note that hand_tiers.high becomes the escalation target only after the v2 flip"
+    hasOllamaFallback,
+    "Phase 2 escalation must name the Claude hand fallback as the ollama family's final target"
+  );
+  assert(
+    sectionLower.includes("critical exception"),
+    "Phase 2 escalation must state that on the claude family a HIGH-tier failure goes to the critical exception (no rung above)"
   );
 });
 

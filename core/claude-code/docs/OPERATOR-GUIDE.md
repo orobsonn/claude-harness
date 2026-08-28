@@ -195,7 +195,19 @@ triaging-requests
 
 **Modelos:** a tabela de roteamento é fixa e mora no `orchestrating-delivery` (não há skill de routing no Claude Code — isso é do OpenCode). Em linhas gerais: orquestrador **sonnet** (é quem consome mais token — é aí que está a economia), `planner` / `plan-reviewer` / `security` / adversary de fronteira **opus**, `compliance` / `test-author` / `harvester` / `shipper` **sonnet**, adversary por task **flexiona** (opus quando a task é grave ou toca path sensível, senão sonnet). Você pode sobrepor o modelo da sessão com `/model`.
 
-**Mãos baratas (Ollama):** `executor` e `sniper` rodam num modelo Ollama fora da subscription, via `spawn-hand` — **capacidade local**. Numa routine de nuvem (`$CLAUDE_CODE_REMOTE` setado) não há mão Ollama: `executor` e `sniper` são despachados como Agents Claude normais. O `test-author` **sempre** é Agent Claude, nos dois modos.
+**Mãos externas (toggle de família):** `executor` e `sniper` rodam como processo `claude -p` isolado, via `spawn-hand` — **capacidade local**. A família é sua escolha, gravada em `.claude/hand-config/hands.json`:
+
+| família | low | medium | high | token (env) |
+|---|---|---|---|---|
+| `claude` (padrão) | `haiku` | `sonnet` | `sonnet` + `--effort xhigh` | `CLAUDE_HAND_TOKEN` (gere com `claude setup-token`) |
+| `ollama` (opt-in) | `gemma4` | `glm-5.2` | `kimi-k2.7-code` | `OLLAMA_HAND_TOKEN` |
+
+```bash
+node .claude/shared/lib/hand-model-ladder.mjs show          # qual família está ativa
+node .claude/shared/lib/hand-model-ladder.mjs use ollama    # troca (vale do PRÓXIMO plano em diante)
+```
+
+Basta pedir ("quero as mãos baratas do Ollama") — o harness roda o comando. A troca vale para o **próximo plano**: um plano já congelado continua despachando na escada com que foi escrito, porque o endpoint e o token saem dos ids que já estão nele. As duas famílias exigem token e rodam no mesmo `CLAUDE_CONFIG_DIR` efêmero — é esse isolamento que impede a mão de herdar o allowlist de permissões e os `additionalDirectories` do seu `~/.claude` (medido: uma mão que herda isso roda `Bash` e escreve fora do repo, onde a captura não enxerga). Numa routine de nuvem (`$CLAUDE_CODE_REMOTE` setado) não há mão externa: `executor` e `sniper` são despachados como Agents Claude normais. O `test-author` **sempre** é Agent Claude, nos dois modos.
 
 ---
 

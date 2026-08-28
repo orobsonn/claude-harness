@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveExecutorModel, resolveSniperModel } from "./descriptor-emitter.mjs";
+import { defaultHandModelFor } from "../../../../shared/lib/hand-model-ladder.mjs";
 
 const LADDER = { low: "gemma4", medium: "glm-5.2", high: "kimi-k2.7-code" };
 
@@ -55,10 +56,40 @@ test("#ac-1.4 executor: a tier absent from hand_tiers falls back to glm-5.2 and 
   assert.equal(r.model_resolution.modelFallbackUsed, true);
 });
 
-test("executor: a plan with no model_strategy at all falls back, still announced", () => {
+test("executor: a plan with no model_strategy at all falls back to the DEFAULT family, still announced", () => {
+  // No ladder means no family to preserve, so the fallback lands on the default family's medium
+  // rung — announced, never silent.
   const r = resolveExecutorModel({ plan: { tasks: [{ id: "task-1", complexity: "low" }] }, taskId: "task-1" });
-  assert.equal(r.model, "glm-5.2");
+  assert.equal(r.model, defaultHandModelFor());
   assert.equal(r.modelFallbackUsed, true);
+});
+
+test("executor: a MISSING tier falls back inside the plan's OWN family, never across transports", () => {
+  // The plan pins the ollama ladder; a tier absent from it must not resolve to a claude rung that
+  // needs a token this project may not even have (and vice versa).
+  const ollamaPlan = planWith([{ id: "t", complexity: "high" }], { low: "gemma4", medium: "glm-5.2" });
+  const fromOllama = resolveExecutorModel({ plan: ollamaPlan, taskId: "t" });
+  assert.equal(fromOllama.model, "glm-5.2");
+  assert.equal(fromOllama.modelFallbackUsed, true);
+
+  const claudePlan = planWith([{ id: "t", complexity: "high" }], { low: "haiku", medium: "sonnet" });
+  const fromClaude = resolveExecutorModel({ plan: claudePlan, taskId: "t" });
+  assert.equal(fromClaude.model, "sonnet");
+  assert.equal(fromClaude.modelFallbackUsed, true);
+});
+
+test("executor: the claude high rung carries the xhigh effort; every other rung carries none", () => {
+  // medium and high pin the SAME model id — the effort is what makes high an escalation, so an
+  // emitter that dropped it would silently dispatch a medium hand for a high task.
+  const claudeLadder = { low: "haiku", medium: "sonnet", high: "sonnet" };
+  const high = resolveExecutorModel({ plan: planWith([{ id: "t", complexity: "high" }], claudeLadder), taskId: "t" });
+  assert.equal(high.model, "sonnet");
+  assert.equal(high.effort, "xhigh");
+  const medium = resolveExecutorModel({ plan: planWith([{ id: "t", complexity: "medium" }], claudeLadder), taskId: "t" });
+  assert.equal(medium.model, "sonnet");
+  assert.equal(medium.effort, undefined);
+  const ollamaHigh = resolveExecutorModel({ plan: planWith([{ id: "t", complexity: "high" }], LADDER), taskId: "t" });
+  assert.equal(ollamaHigh.effort, undefined, "the ollama endpoint has no effort control");
 });
 
 test("#ac-1.1/#ac-1.2 executor: an off-ladder tier is refused, never laundered into the fallback", () => {
