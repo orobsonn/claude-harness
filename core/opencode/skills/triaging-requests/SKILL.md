@@ -121,7 +121,7 @@ Useful questions (ask only what is still unclear):
 |---|---|
 | **QUICK** | Obvious hotfix. **1–2 files max** after Step 2.0. Zero ambiguity. No sensitive path. Scope fully clear. **Or** QUICK-craft (Step 2.1). |
 | **LIGHT** | Small feature. Clear scope. No sensitive domain. May touch several files but the change is bounded and well understood. |
-| **FULL** | Multi-file change OR high severity OR touches a sensitive domain (auth, payment, billing, SQL, migrations, `.env*`, `package.json` deps) OR **harness gate/hook/marker machinery** OR multi-AC issue with delivery rails. |
+| **FULL** | Multi-file change OR high severity OR touches a sensitive domain (auth, payment, billing, `.env*`, `package.json` deps, **destructive** SQL/migrations) OR **harness gate/hook/marker machinery** OR multi-AC issue with delivery rails. A **purely additive** migration (`ADD COLUMN` / new `CREATE TABLE` / `CREATE INDEX` only) is NOT sensitive on its own — ceremony tracks the complexity of the change, not the file extension. |
 
 **Bright-line rules (override file-count optimism):**
 - A request that **introduces new behavior** — new param, new validation, new feature, or any **product decision** — is **LIGHT minimum**, regardless of file count.
@@ -137,10 +137,16 @@ Net-new self-contained UI (page/quiz/landing/component) with **no novel integrat
 Before commit: run cheap gates (tsc/lint/build if present) + sensitive-path glob on touched files.
 
 ```bash
+# 1) paths that are sensitive regardless of content
 git status --porcelain | awk '{print $2}' \
-  | grep -E '(^|/)(auth|payment|billing|migrations)/|\.sql$|(^|/)\.env|(^|/)package\.json$' \
-  && echo "SENSITIVE → abort QUICK-craft, escalate to LIGHT" \
-  || echo "clean → run gates, then commit"
+  | grep -E '(^|/)(auth|payment|billing)/|(^|/)\.env|(^|/)package\.json$' \
+  && echo "SENSITIVE → abort QUICK-craft, escalate to LIGHT"
+
+# 2) SQL/migrations: sensitive only when NOT purely additive
+git status --porcelain | awk '{print $2}' | grep -E '(^|/)migrations/|\.sql$' \
+  | xargs -r grep -ilE '\b(DROP|RENAME|UPDATE|DELETE|INSERT|PRAGMA)\b' \
+  && echo "DESTRUCTIVE SQL → abort QUICK-craft, escalate to LIGHT" \
+  || echo "clean (additive-only migration is fine) → run gates, then commit"
 ```
 
 ### Step 3 — Safety rule: only escalate, never downgrade

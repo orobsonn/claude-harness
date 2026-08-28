@@ -115,13 +115,23 @@ operator switches to `build` with Tab when they want that approved spec implemen
 **/auth/**
 **/payment/**
 **/billing/**
-**/*.sql
-**/migrations/**
 **/.env*
 **/package.json   (when adding or upgrading deps)
+**/*.sql          — only when NOT purely additive (see carve-out)
+**/migrations/**  — same carve-out
 ```
 
 Any match in plan `scope_paths` forces FULL mode.
+
+**Additive-migration carve-out.** Ceremony tracks the **complexity and irreversibility of the
+change**, never the file extension. A migration whose every statement is purely additive — `ALTER
+TABLE ... ADD COLUMN`, `CREATE TABLE` of a NEW table, `CREATE INDEX` — cannot rewrite or destroy an
+existing row (a column added without a default is `NULL` for every existing row), so it does **not**
+force FULL on its own; ceremony follows the rest of the plan's complexity.
+
+Anything else in a `.sql` file **does** force FULL — in particular `DROP`, `RENAME`, `UPDATE`,
+`DELETE`, `INSERT` (data backfill), `PRAGMA`, and the SQLite create-copy-drop table rebuild. When the
+statement set is ambiguous, it forces FULL.
 
 ---
 

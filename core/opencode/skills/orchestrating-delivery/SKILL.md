@@ -202,7 +202,11 @@ not workflow authority.
    evidence, then continue its unfinished task. Do not run brainstorming, planner, or plan-reviewer again
    unless the operator asks or `validate-plan` reports a structural error.
 5. **DETERMINISTIC sensitive-path override:** compare the plan's `scope_paths` against the allowlist:
-   `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/*.sql`, `**/migrations/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).
+   `**/auth/**`, `**/payment/**`, `**/billing/**`, `**/.env*`, `**/package.json` (when adding/upgrading deps).
+   For `**/*.sql` and `**/migrations/**` apply the **additive-migration carve-out** (see AGENTS.md §7):
+   grep the migration bodies for `DROP|RENAME|UPDATE|DELETE|INSERT|PRAGMA` — a hit forces FULL; a purely
+   additive migration (`ADD COLUMN` / new `CREATE TABLE` / `CREATE INDEX` only) does **not** force FULL on
+   its own, and ceremony follows the rest of the plan's complexity.
    **ANY match FORCES FULL**, overriding triage. Determinism on the plan; judgment on entry.
 
 **HARD-GATE 2 — approve plan (pt-br, product-language):** present the **plan-reviewer's product summary** — what gets built, task count, product-relevant risks. **Never expose the JSON.**  
