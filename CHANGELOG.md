@@ -5,6 +5,17 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.59.0](https://github.com/orobsonn/claude-harness/compare/v0.58.0...v0.59.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hands:** `CLAUDE_HAND_TOKEN` / `claude setup-token` deixam de existir — a família claude não precisa de credencial nenhuma. Quem configurou isso na 0.58.0 pode remover a variável do shell rc.
+
+### Features
+
+* **hands:** com as mãos Ollama desligadas, o executor vira subagente normal ([#820](https://github.com/orobsonn/claude-harness/issues/820)) ([d18c29c](https://github.com/orobsonn/claude-harness/commit/d18c29c7939668b0e8be42929245de08440b1f24))
+
 ## [0.58.0](https://github.com/orobsonn/claude-harness/compare/v0.57.1...v0.58.0) (2026-08-28)
 
 
