@@ -79,6 +79,14 @@ export function orcaGuide() {
     "      num backlog real isso costuma ser uma tarefa de anos atrás, não a que",
     "      você quer observar primeiro. Comece com algo como [canary].",
     "",
+    " 4) SETUP DO WORKTREE (setup)",
+    "    • `run` roda os hooks de setup do repo na criação do worktree — é o",
+    "      `--setup` do `orca worktree create`. Sem isso, todo worktree novo",
+    "      nasce sem node_modules e o agente gasta os primeiros minutos de TODA",
+    "      run instalando dependência, ocupando um slot do teto global.",
+    "    • `skip` para projeto sem dependência a instalar; `inherit` para deixar",
+    "      a config do Orca decidir.",
+    "",
     "──────────────────────────────────────────────────────────────",
     "",
   ].join("\n");
@@ -99,6 +107,7 @@ export function buildProjectConfig(a) {
     baseBranch: a.baseBranch,
     agent: a.agent,
     globalMaxWorking: a.globalMaxWorking,
+    setup: a.setup || null,
     titleIncludes: a.titleIncludes || null,
     prompt: a.prompt,
   };
@@ -321,6 +330,14 @@ export async function runSetupVps(deps) {
     throw new Error('setup-vps: "globalMaxWorking" precisa ser um inteiro >= 1');
   }
   const titleIncludes = String((await ask("Filtro de título / modo canário (Enter = sem filtro) [[canary]]: ")) ?? "").trim();
+  // Default `run`, and it is NOT the harness inventing a default: the operator was shown the choice
+  // and pressed Enter, exactly like `baseBranch [main]` and `agent [claude]`. The "omit the flag"
+  // default in select-and-dispatch governs a hand-written JSON that never mentions `setup`; a JSON
+  // this wizard writes always mentions it, because someone was asked.
+  const setup = String((await ask("Rodar os hooks de setup do repo no worktree novo? run/skip/inherit [run]: ")) ?? "").trim() || "run";
+  if (!["run", "skip", "inherit"].includes(setup)) {
+    throw new Error('setup-vps: "setup" precisa ser run, skip ou inherit');
+  }
   const intervalAnswer = String((await ask("Rodar o selector a cada quantos minutos? [20]: ")) ?? "").trim() || "20";
   const intervalMinutes = Number(intervalAnswer);
   // Asked, never assumed: the cron line carries it, and a wrong path makes every tick fail silently.
@@ -333,6 +350,7 @@ export async function runSetupVps(deps) {
 
   const config = buildProjectConfig({
     project, owner, repo, orcaRepoId, clonePath, baseBranch, agent, globalMaxWorking,
+    setup,
     titleIncludes,
     prompt:
       "Rode em MODO AUTÔNOMO (headless). A issue é a spec. Siga a entry-policy do .claude/ deste " +

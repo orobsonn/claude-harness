@@ -200,7 +200,7 @@ export function selectIssue(opts) {
  * select nothing (a silent no-op is indistinguishable from an empty queue, which is how the old
  * fleet sat fully PAUSED without anyone noticing).
  * @param {object} raw parsed project JSON
- * @returns {{project:string,ghRepo:string,orcaRepoId:string,clonePath:string,baseBranch:string,agent:string,globalMaxWorking:number,titleIncludes:string|null,prompt:string}}
+ * @returns {{project:string,ghRepo:string,orcaRepoId:string,clonePath:string,baseBranch:string,agent:string,globalMaxWorking:number,setup:string|null,titleIncludes:string|null,prompt:string}}
  */
 export function normalizeConfig(raw) {
   const cfg = raw && typeof raw === "object" ? raw : {};
@@ -215,6 +215,21 @@ export function normalizeConfig(raw) {
   if (!Number.isInteger(ceiling) || ceiling < 1) {
     throw new Error('select-and-dispatch: project config field "globalMaxWorking" must be an integer >= 1');
   }
+  // `setup` has THREE shapes on purpose:
+  //   absent (missing / null / blank) -> null, and `--setup` is NOT passed at all: the default is
+  //     Orca's to choose, never one the harness invents under the table;
+  //   run | skip | inherit            -> that value, verbatim (Orca's own vocabulary, no aliases);
+  //   anything else                   -> throw naming the field, the same discipline as
+  //     `globalMaxWorking`: an opinion we cannot honor is refused loudly, never guessed at.
+  const SETUP_VALUES = ["run", "skip", "inherit"];
+  const rawSetup = cfg.setup;
+  let setup = null;
+  if (!(rawSetup === undefined || rawSetup === null || (typeof rawSetup === "string" && rawSetup.trim() === ""))) {
+    setup = typeof rawSetup === "string" ? rawSetup.trim() : rawSetup;
+    if (!SETUP_VALUES.includes(setup)) {
+      throw new Error('select-and-dispatch: project config field "setup" must be one of run, skip or inherit');
+    }
+  }
   return {
     project: required("project"),
     ghRepo: required("ghRepo"),
@@ -226,6 +241,7 @@ export function normalizeConfig(raw) {
     baseBranch: typeof cfg.baseBranch === "string" && cfg.baseBranch.trim() !== "" ? cfg.baseBranch.trim() : "main",
     agent: typeof cfg.agent === "string" && cfg.agent.trim() !== "" ? cfg.agent.trim() : "claude",
     globalMaxWorking: ceiling,
+    setup,
     titleIncludes:
       typeof cfg.titleIncludes === "string" && cfg.titleIncludes.trim() !== "" ? cfg.titleIncludes.trim() : null,
     prompt:
@@ -354,6 +370,11 @@ export function runTick(deps) {
       "--base-branch", baseRef,
       // Explicit: without it Orca infers lineage from the calling context, and a cron has none.
       "--no-parent",
+      // Omitted, never defaulted: a project that says nothing about `setup` gets no flag, and Orca
+      // decides. Measured on the oraculo-app canary: with `run`, the worktree is born with its
+      // dependencies installed instead of burning the first minutes of every run — and a global
+      // ceiling means that slot was occupied installing rather than delivering.
+      ...(config.setup ? ["--setup", config.setup] : []),
       "--prompt", config.prompt,
     ]);
   } catch (err) {

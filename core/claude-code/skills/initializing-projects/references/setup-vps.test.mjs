@@ -25,7 +25,7 @@ import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 // All-Enter for the inferred fields (home/projectRoot/project/owner/repo), then the Orca answers.
 // clonePath sits right after orcaRepoId: both come from the same `orca repo list --json` row.
 // Order matches runSetupVps's prompts.
-const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", "", ""];
+const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", "", "", ""];
 
 function harness(opts = {}) {
   const {
@@ -40,13 +40,14 @@ function harness(opts = {}) {
     whoami = () => "orca",
   } = opts;
   const queue = [...answers];
+  const asked = [];
   const outLines = [];
   const jsonWrites = [];
   const crontabWrites = [];
   const cloneCalls = [];
   const dirs = [];
   const deps = {
-    ask: async () => queue.shift(),
+    ask: async (q) => (asked.push(String(q)), queue.shift()),
     out: (t) => outLines.push(t),
     env: { HOME: "/home/op" },
     cwd,
@@ -63,7 +64,7 @@ function harness(opts = {}) {
     writeCrontab: (text) => crontabWrites.push(text),
     whoami,
   };
-  return { deps, outLines, jsonWrites, crontabWrites, cloneCalls, dirs };
+  return { deps, asked, outLines, jsonWrites, crontabWrites, cloneCalls, dirs };
 }
 
 test("parseGitRemote handles ssh, https, .git and trailing slash", () => {
@@ -80,6 +81,8 @@ test("orcaGuide names Orca as the official ADE, links the download, and explains
   assert.match(g, /orca repo list --json/);
   assert.match(g, /orca worktree ps --json/);
   assert.match(g, /canári/i);
+  assert.match(g, /SETUP DO WORKTREE/);
+  assert.match(g, /inherit/);
 });
 
 test("buildProjectConfig produces a config the SELECTOR itself accepts (same shape as project.example.json)", () => {
@@ -113,6 +116,27 @@ test("buildProjectConfig maps an empty title filter to null (no filter), not to 
     baseBranch: "main", agent: "claude", globalMaxWorking: 4, titleIncludes: "", prompt: "x",
   });
   assert.equal(cfg.titleIncludes, null);
+  // Same idiom for `setup`: a caller that omits it must still produce a null-VALUED key, never an
+  // `undefined` one — `JSON.stringify` drops the key, and a deepStrictEqual against the documented
+  // shape then fails for a reason nobody can read.
+  assert.equal(cfg.setup, null);
+  assert.ok("setup" in cfg);
+});
+
+test("#ac-2.2 every value the wizard ACCEPTS is a value the SELECTOR accepts — the two vocabularies cannot drift", async () => {
+  // Driven through runSetupVps, NOT through buildProjectConfig: the wizard carries a SECOND,
+  // hand-typed copy of Orca's vocabulary (the `["run","skip","inherit"]` accept-list guarding the
+  // ask), and buildProjectConfig never consults it. A typo there — `inherits` — makes the wizard
+  // REFUSE a value the selector happily accepts, and only a test that actually answers the question
+  // can see it. runSetupVps calls buildProjectConfig on the way, so this subsumes the direct check.
+  for (const v of ["run", "skip", "inherit"]) {
+    const h = harness({
+      answers: ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", v, "", ""],
+    });
+    await runSetupVps(h.deps);
+    assert.equal(h.jsonWrites[0].json.setup, v, `the wizard must ACCEPT \`${v}\``);
+    assert.equal(normalizeConfig(h.jsonWrites[0].json).setup, v, `and the selector must accept what the wizard wrote for \`${v}\``);
+  }
 });
 
 test("assertCronSafe rejects the values that would silently break or inject into a crontab line", () => {
@@ -191,6 +215,7 @@ test("runSetupVps INFERS project/owner/repo/paths from cwd + git remote and writ
     baseBranch: "main",
     agent: "claude",
     globalMaxWorking: 4,
+    setup: "run",
     titleIncludes: "[canary]",
     prompt: h.jsonWrites[0].json.prompt,
   });
@@ -213,13 +238,14 @@ test("runSetupVps installs the ORCA selector — it never touches the retired VP
 
 test("runSetupVps: an explicit answer overrides the inferred default", async () => {
   const h = harness({
-    answers: ["/home/outro", "/srv/x", "slug-custom", "acme", "produto", "repo_zzz", "/clones/produto", "develop", "claude", "2", "", "15"],
+    answers: ["/home/outro", "/srv/x", "slug-custom", "acme", "produto", "repo_zzz", "/clones/produto", "develop", "claude", "2", "", "skip", "15"],
   });
   const result = await runSetupVps(h.deps);
   assert.equal(result.project, "slug-custom");
   assert.deepEqual(h.jsonWrites[0].json.ghRepo, "acme/produto");
   assert.equal(h.jsonWrites[0].json.baseBranch, "develop");
   assert.equal(h.jsonWrites[0].json.globalMaxWorking, 2);
+  assert.equal(h.jsonWrites[0].json.setup, "skip");
   assert.equal(h.jsonWrites[0].json.titleIncludes, null);
   assert.equal(h.jsonWrites[0].p, "/home/outro/.config/claude-harness/projects/slug-custom.json");
   assert.ok(h.crontabWrites[0].includes("*/15 * * * *"));
@@ -266,6 +292,29 @@ test("runSetupVps warns explicitly when the canary title filter is left OFF", as
   const h = harness({ answers: ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "", ""] });
   await runSetupVps(h.deps);
   assert.ok(h.outLines.join("\n").includes("SEM filtro de título"));
+});
+
+test("#ac-2.2 the wizard ASKS for setup and writes it into the project JSON — Enter lands on `run`, the value that stops every worktree being born without node_modules", async () => {
+  const h = harness();
+  await runSetupVps(h.deps);
+  assert.equal(h.jsonWrites[0].json.setup, "run");
+  // The question was actually asked, with its default visible — not silently filled in.
+  const q = h.asked.find((x) => /setup/i.test(x));
+  assert.ok(q, "the wizard must ASK for setup, not fill it in silently");
+  assert.match(q, /\[run\]/, "the default must be VISIBLE in the prompt, like `Base branch [main]`");
+  for (const v of ["run", "skip", "inherit"]) assert.ok(q.includes(v), `the prompt must offer ${v}`);
+  assert.ok(h.outLines.join("\n").includes("SETUP DO WORKTREE")); // the guide, a separate claim
+  // And the written JSON is a config the selector itself accepts.
+  assert.equal(normalizeConfig(h.jsonWrites[0].json).setup, "run");
+});
+
+test("#ac-2.2 the wizard REFUSES a setup value outside run|skip|inherit, and refuses it BEFORE writing anything — no config órfã, no cron", async () => {
+  const h = harness({
+    answers: ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", "sim", "", ""],
+  });
+  await assert.rejects(() => runSetupVps(h.deps), /"setup" precisa ser run, skip ou inherit/);
+  assert.equal(h.jsonWrites.length, 0);
+  assert.equal(h.crontabWrites.length, 0);
 });
 
 test("parseCliArgs passes the command through raw (init alias resolved by the dispatcher)", () => {
