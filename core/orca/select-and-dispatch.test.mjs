@@ -37,6 +37,17 @@ const CONFIG = normalizeConfig({
   globalMaxWorking: 4,
 });
 
+// Same config, plus the knob #809 adds. Kept separate so the untouched dispatch test above stays the
+// proof that a config WITHOUT `setup` produces an argv without the flag.
+const CONFIG_WITH_SETUP = normalizeConfig({
+  project: "oraculo-app",
+  ghRepo: "orobsonn/oraculo-app",
+  orcaRepoId: "repo_abc123",
+  clonePath: "/clones/oraculo-app",
+  globalMaxWorking: 4,
+  setup: "run",
+});
+
 /** Builds injected seams over scripted `orca`/`gh` responses, recording every call. */
 function harness(opts = {}) {
   const {
@@ -240,6 +251,74 @@ test("runTick dispatches the oldest ready issue: label lock FIRST, then orca wor
   assert.ok(editIdx >= 0 && createIdx >= 0);
   // The lock must exist before any worktree does; `create` is the LAST orca call of the tick.
   assert.equal(h.orcaCalls[h.orcaCalls.length - 1][1], "create");
+});
+
+test("#ac-1.1 runTick passes --setup through to `orca worktree create` when the project asks for it — a worktree born without node_modules burns the first minutes of EVERY run, on a slot the global ceiling already paid for", () => {
+  const h = harness({ ps: [], issues: [issue(2)], config: CONFIG_WITH_SETUP });
+  assert.deepEqual(runTick(h.deps), { ok: true, dispatched: true, issue: 2 });
+
+  const create = h.orcaCalls.find((a) => a[1] === "create");
+  assert.deepEqual(create, [
+    "worktree", "create",
+    "--repo", "id:repo_abc123",
+    "--name", "harness-2",
+    "--issue", "2",
+    "--agent", "claude",
+    "--base-branch", "origin/main",
+    "--no-parent",
+    "--setup", "run",
+    "--prompt", CONFIG_WITH_SETUP.prompt,
+  ]);
+});
+
+test("#ac-1.2 a project config WITHOUT `setup` dispatches an argv with NO --setup at all — the default belongs to Orca, and a harness that picked one would be choosing under the table for every project that never opted in", () => {
+  const h = harness({ ps: [], issues: [issue(2)] }); // CONFIG has no `setup`
+  assert.deepEqual(runTick(h.deps), { ok: true, dispatched: true, issue: 2 });
+
+  const create = h.orcaCalls.find((a) => a[1] === "create");
+  // FULL deepEqual, not a negative membership check: it pins length, order and every neighbour, so
+  // an argv that appends ["--setup", undefined], inserts the pair at the wrong index, or drops an
+  // unrelated flag all FAIL here.
+  assert.deepEqual(create, [
+    "worktree", "create",
+    "--repo", "id:repo_abc123",
+    "--name", "harness-2",
+    "--issue", "2",
+    "--agent", "claude",
+    "--base-branch", "origin/main",
+    "--no-parent",
+    "--prompt", CONFIG.prompt,
+  ]);
+  // Redundant on purpose, and STRICTLY WEAKER — it reads as documentation of the AC, never as its proof.
+  assert.ok(!create.includes("--setup"));
+  assert.equal(CONFIG.setup, null, "absent in the JSON normalizes to null, which is what suppresses the flag");
+});
+
+test("#ac-1.3 normalizeConfig REFUSES a `setup` outside run|skip|inherit, naming the field — same discipline as globalMaxWorking; and treats every 'no opinion' shape as ABSENT, which is what omits the flag", () => {
+  const base = { project: "p", ghRepo: "o/r", orcaRepoId: "id", clonePath: "/c", globalMaxWorking: 4 };
+
+  for (const value of ["run", "skip", "inherit"]) {
+    assert.equal(normalizeConfig({ ...base, setup: value }).setup, value);
+  }
+  assert.equal(normalizeConfig({ ...base, setup: "  run  " }).setup, "run", "trimmed like every other field");
+
+  // ABSENT in every shape an operator actually writes it. `null` is the shape project.example.json
+  // already ships for a knob that is off (titleIncludes) — refusing it here would make the house
+  // style a landmine, and a throw inside a cron tick stops the whole project's queue.
+  assert.equal(normalizeConfig(base).setup, null);
+  assert.equal(normalizeConfig({ ...base, setup: null }).setup, null);
+  assert.equal(normalizeConfig({ ...base, setup: "" }).setup, null);
+  assert.equal(normalizeConfig({ ...base, setup: "   " }).setup, null);
+
+  // An opinion we cannot honor is refused, never guessed at — including a case variant, because
+  // folding case is itself a guess about Orca's vocabulary.
+  for (const bad of ["yes", "true", "RUN", "Run", "run skip", "--setup run", 1, 0, true, [], {}]) {
+    assert.throws(
+      () => normalizeConfig({ ...base, setup: bad }),
+      /"setup" must be one of run, skip or inherit/,
+      `\`setup: ${JSON.stringify(bad)}\` must fail loudly and name the field`,
+    );
+  }
 });
 
 test("runTick freshens the base BEFORE the lock and dispatches the REMOTE ref — a local base name silently ages and is the bug this pins", () => {
@@ -451,4 +530,16 @@ test("main() never lets a seam failure escape as a raw Node stack trace into the
   const output = captured.join("");
   assert.ok(!output.includes("at ModuleJob"), `a stack trace leaked into the log: ${output}`);
   assert.match(output, /could not read 'orca worktree ps --json'/);
+});
+
+test("#ac-2.1 the shipped example and the README table agree with normalizeConfig on `setup` — nothing else pins B/C/D parity", async () => {
+  const { readFileSync } = await import("node:fs");
+  const example = JSON.parse(readFileSync(new URL("./project.example.json", import.meta.url), "utf8"));
+  assert.equal(normalizeConfig(example).setup, "run", "the shipped example must carry a REAL example value");
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((l) => l.trim().startsWith("| `setup`"));
+  assert.ok(row, "core/orca/README.md must document `setup` as a row of the config table");
+  for (const token of ["run", "skip", "inherit"]) assert.ok(row.includes(token), `the row must name ${token}`);
+  assert.match(readme, /`setup`[\s\S]*`--setup`/, "the prose must tie the field to the Orca flag it forwards");
+  assert.ok(readme.includes('"setup": "run"'), "the README's JSON snippet must carry the same example value as project.example.json");
 });

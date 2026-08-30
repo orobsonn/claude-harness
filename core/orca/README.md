@@ -51,6 +51,7 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
   "baseBranch": "main",
   "agent": "claude",
   "globalMaxWorking": 4,
+  "setup": "run",
   "titleIncludes": null,
   "prompt": "Rode em MODO AUTÔNOMO (headless). ..."
 }
@@ -65,12 +66,31 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
 | `baseBranch` | não (`main`) | **nome** do branch base; o selector despacha em `origin/<baseBranch>` |
 | `agent` | não (`claude`) | agente do Orca |
 | `globalMaxWorking` | sim | **teto GLOBAL** — ver abaixo |
+| `setup` | não (omitido) | `run` \| `skip` \| `inherit` — hooks de setup do repo na criação do worktree; **sem o campo, o flag não é passado** e o default é do Orca — ver abaixo |
 | `titleIncludes` | não (`null`) | filtro de título, case-insensitive — o **modo canário** |
 | `prompt` | não | gatilho entregue ao agente |
 
 `globalMaxWorking` é uma propriedade **da máquina, não do projeto**: o selector conta os worktrees
 `working` de *toda* a VPS via `orca worktree ps --json`, então todos os JSONs precisam carregar o
 **mesmo** valor. Validado em **4 agentes Claude simultâneos numa VPS de 2 vCPU / 8 GB**.
+
+`setup` decide se o Orca roda os **hooks de setup do repo** ao criar o worktree — é o `--setup` do
+`orca worktree create`, repassado tal e qual:
+
+- **`run`** — projeto com instalação cara (`node_modules`, `venv`, build de dependência). Medido no
+  canário do `oraculo-app`: sem isso **todo** worktree novo nasce sem `node_modules` e o agente gasta
+  os primeiros minutos de **toda** run instalando. Como o teto de concorrência é global, esse slot
+  fica ocupado instalando em vez de entregando.
+- **`skip`** — projeto sem dependência a instalar, ou setup lento que não se paga por run. O worktree
+  nasce cru e o agente resolve se precisar.
+- **`inherit`** — herda o que já estiver configurado no repo/ambiente do Orca. Use quando quem manda
+  na decisão é a config do Orca, não a do projeto no harness.
+
+**Sem o campo no JSON, o selector não passa `--setup`** — quem decide é o Orca, e o harness não
+escolhe por baixo do pano. Campo vazio, `null` ou só espaço conta como ausente (mesma leitura de
+`titleIncludes`). Um valor **fora** de `run`/`skip`/`inherit` **derruba o tick com erro nomeando o
+campo**, na mesma disciplina do `globalMaxWorking`: opinião que não dá para honrar é recusada alto,
+nunca adivinhada.
 
 ## Cron
 
