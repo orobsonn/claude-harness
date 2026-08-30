@@ -5,8 +5,10 @@ metadata:
   type: project
 ---
 
-**Why:** `appendEvent` in `core/hooks/obs-outbox.mjs` unconditionally adds a `ts` timestamp to every
-event it writes, regardless of what the producer passed in. A test that builds an expected event
+**Why:** `appendEvent` in `core/shared/lib/obs-outbox.mjs` (it lived at `core/vps/obs-outbox.mjs`
+until #807 — see `docs/vps-retirement.md`; this memory previously said `core/hooks/`, which was never
+its address) unconditionally adds a `ts` timestamp to every event it writes, regardless of what the
+producer passed in. A test that builds an expected event
 object and compares it with `assert.deepEqual(actualEvent, expectedEvent)` will always fail — not
 because the producer is wrong, but because the expected object can never predict the stamped `ts`.
 This broke task-2's (`stamp-triage.mjs`) fidelity gate on first pass in the `spec-adversary-checkpoint`
