@@ -1,6 +1,6 @@
 ---
 name: vps-retention-sweep-fail-closed-guards
-description: Fail-closed guard patterns for any destructive/irreversible sweep in core/vps (retention deletes, orphan cleanup) — numeric config coercion, opts propagation, ambiguous-empty seam results, and positional-index invalidation on truncate.
+description: "[RETIRED ENGINE] Fail-closed guard patterns first paid for in the retired VPS retention sweep (#807 deleted the engine) — the five traps generalize to ANY destructive/irreversible sweep: numeric config coercion, opts propagation, ambiguous-empty seam results, unreadable-vs-empty readers, and positional-index invalidation on truncate."
 metadata:
   type: project
 ---
@@ -8,9 +8,10 @@ metadata:
 **Why:** `retention-sweep-delete-stale-topics` (#178) added the first Telegram-`deleteForumTopic`
 irreversible path in the VPS reaper. Five distinct fail-OPEN defects were found and fixed across
 review rounds, all in the same shape: a value or a seam result that reads as "safe to proceed" in
-the exact case where the real answer is unknown. Any future destructive/irreversible sweep in
-`core/vps/` (a second delete path, a purge command, a bulk-archive) will re-derive these same traps
-unless they are checked explicitly.
+the exact case where the real answer is unknown. That reaper was **[RETIRED ENGINE]** — `core/vps/`
+was deleted in #807 (see `docs/vps-retirement.md`) — but the five traps are properties of values and
+seams, not of that codebase: any future destructive/irreversible path (a delete, a purge, a
+bulk-archive, an auto-merge) re-derives them unless they are checked explicitly.
 
 **How to apply:**
 
@@ -34,8 +35,10 @@ unless they are checked explicitly.
   distinguish "nothing to report" from "could not ask" — so it can never authorize a destructive
   action. Any destructive-path probe over `gh` must use the RAW spawn seam (which exposes
   `status`/`error`) and fail OPEN (treat "could not ask" as "assume yes, don't delete") on that path.
-  See `mainReaper`'s `makeDefaultPrOpen`/`makeDefaultPrOpenViaGh` for the concrete precedent: production
-  never injects the `gh`-based probe, so it always falls through to the raw-spawn default.
+  See `mainReaper`'s `makeDefaultPrOpen`/`makeDefaultPrOpenViaGh` for the concrete precedent (that
+  precedent lived in the retired engine; the RULE — a destructive probe must read a seam that can say
+  "could not ask" — is what carries over): production never injected the `gh`-based probe, so it
+  always fell through to the raw-spawn default.
 - **A log/events reader that returns `[]` for "unreadable" and `[]` for "genuinely empty" makes both
   ambiguous downstream.** `readEvents` returning `[]` for a corrupted/unreadable events log vacuously
   satisfies both an "all criticals acknowledged" guard and a "drain cursor caught up" guard — an
@@ -46,4 +49,5 @@ unless they are checked explicitly.
   positional-index field in the SAME logical operation, and the truncate must happen BEFORE the
   meta write that reflects the reset — a concurrent process reading the reset meta against the
   still-intact old log will re-derive stale (now-wrong) indices and can re-send or re-suppress
-  events it shouldn't. See `createRun`'s `awaiting-review` reuse branch in `obs-outbox.mjs`.
+  events it shouldn't. See `createRun`'s `awaiting-review` reuse branch in
+  `core/shared/lib/obs-outbox.mjs`.

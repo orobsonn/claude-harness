@@ -1,9 +1,32 @@
 ---
 name: independent-pr-review-phase
-description: Architecture of the independent PR-review phase (cron-review.mjs + run-cron-review.mjs) that replaces the editable-PR-body auto-merge verdict with a fresh, fail-closed, cross-family conjunction. spawnReviewSession is LIVE (real claude -p actuator); the real 2nd-family (Codex) actuator is now WIRED (runCodexRole direct, deriveSecondFamilyVerdict, autoMergeEnabled rollout lock); breaker now-threading and the idempotency gap are fixed; open risks before flipping autoMergeEnabled=true are tracked below.
+description: "[RETIRED ENGINE] Architecture of the VPS engine's independent PR-review phase, deleted in #807 — the cron-review composition named below is gone, but the cross-family driver was NOT part of it and is live (`driveCrossFamily`/`runCodexRole` in `modules/codex-adversary/references/`, `securityVerdict` in `core/shared/lib/merge-findings.mjs`). Kept for the traps that outlive it: NODE (never the LLM session) derives the canonical verdict; erase the derivation INPUT not just the output; never coerce a fail-closed sentinel to []; scrub hand tokens from a child fed an untrusted patch; a gate predicate must stay synchronous; nonce-delimited stdin, never argv."
 metadata:
   type: project
 ---
+
+> **[RETIRED ENGINE] — historical, read for the traps not the wiring.** The whole composition
+> described here — `run-cron-review.mjs`, `cron-review.mjs`, `run-cron-a.mjs`/`run-cron-b.mjs`,
+> `cron-a-dispatch.mjs`, `cron-b.mjs`, `install-crons.mjs`, `spawn-review-session.mjs`,
+> `review-verdict-source.mjs`, `review-routing.mjs` — was deleted with the VPS cron engine in #807 /
+> PR #830 (see `docs/vps-retirement.md`). **Nothing below is an instruction to run, install, or flip
+> anything**; `autoMergeEnabled` no longer exists to flip, and the "open risks" list is a record of
+> what was still open when the engine was retired, not a backlog.
+>
+> **What carries forward to today's PR-review automation (scheduled Orca automation, per
+> `core/orca/README.md`):** (1) an LLM review session emits only raw eye-outputs — a deterministic
+> non-LLM step derives and writes the canonical CLEAN/BLOCKED; (2) erase the derivation INPUT before
+> every run, not only the output — a stale all-CLEAN input file forges a CLEAN on a run that exits 0
+> without writing fresh output; (3) a fail-closed sentinel must never be coerced back to `[]`;
+> (4) scrub `ANTHROPIC_AUTH_TOKEN`/hand tokens from any child fed an untrusted PR patch; (5) a gate
+> predicate stays SYNCHRONOUS — a Promise there is always truthy and silently opens the gate;
+> (6) untrusted PR title/body go in as nonce-delimited stdin, never argv; (7) cross-family latency
+> makes per-step nudging impractical — carry it at boundary gates only; (8) **the cross-family fold is
+> not history — it is live code.** `driveCrossFamily` / `driveCrossFamilyVerdict`
+> (`modules/codex-adversary/references/cross-family.mjs`) and `securityVerdict`
+> (`core/shared/lib/merge-findings.mjs`) survived the engine, so RD-1 below is a rule about what ships
+> today: never drive a cross-family role with a hardcoded `claudeIssues: []` — that shape produces a
+> permanent false-CLEAN.
 
 **Why:** Cron B's original auto-merge read the merge verdict from the PR body text
 (`parseVerdictBlock(bodyText)`), which is editable by anyone with push access — an open auto-merge
@@ -14,14 +37,14 @@ the conjunction, the label taxonomy, and — critically — that the phase does 
 
 **How to apply:**
 
-- **Composition root:** `run-cron-review.mjs` is the production entry point; `cron-review.mjs` is the
-  pure per-PR review/route/merge logic it drives (parallel to `cron-a-dispatch.mjs` /
-  `run-cron-a.mjs` for the delivery side). `install-crons` schedules `run-cron-review.mjs` and
-  **no longer schedules `run-cron-b.mjs`** — but `run-cron-b.mjs`/`cron-b.mjs` still exist on disk
-  and will keep running the OLD weak verdict path on any box whose crontab isn't re-installed after
-  the update (different lock scope than the review phase, so no mutual exclusion). Always re-run
-  `install-crons` after pulling this change; consider making `run-cron-b.mjs` a no-op that logs
-  "retired — re-run install-crons".
+- **Composition root:** `run-cron-review.mjs` was the production entry point; `cron-review.mjs` was
+  the pure per-PR review/route/merge logic it drove (parallel to `cron-a-dispatch.mjs` /
+  `run-cron-a.mjs` for the delivery side). `install-crons` scheduled `run-cron-review.mjs` and
+  **no longer scheduled `run-cron-b.mjs`** — but `run-cron-b.mjs`/`cron-b.mjs` stayed on disk and
+  would keep running the OLD weak verdict path on any box whose crontab wasn't re-installed after the
+  update (different lock scope than the review phase, so no mutual exclusion): the engine required
+  re-running `install-crons` after such a change — a crontab that was not reinstalled kept running the
+  OLD weak verdict path.
 
 - **The merge conjunction (auto-merge gate):** a PR only merges when ALL of: (1) the harness/* branch
   signal (or a future `engineKnows` secondary signal — currently hardcoded `false`, so only the
@@ -42,8 +65,8 @@ the conjunction, the label taxonomy, and — critically — that the phase does 
   `available:false`) → `harness:done` (merged + counter reset) / `harness:blocked` (ceiling reached).
   `review-routing.mjs` handles reject → re-enqueue to `harness:in-review` → `harness:ready` on repair.
 
-- **`spawnReviewSession` is now WIRED (LIVE actuator).** `core/vps/spawn-review-session.mjs`
-  implements a real synchronous `claude -p` spawn: it feeds the diff/title/body brief via **stdin**
+- **`spawnReviewSession` was the LIVE actuator.** `core/vps/spawn-review-session.mjs` (deleted, #807)
+  implemented a real synchronous `claude -p` spawn: it fed the diff/title/body brief via **stdin**
   (never argv), with per-invocation `randomUUID` nonce delimiters around the untrusted PR
   title/body/changedFiles (defeats a static-delimiter forgery from the PR body). The SESSION emits
   only its **raw eye-outputs** (adversary/compliance/security) to

@@ -1,4 +1,11 @@
-# VPS cron notify — Telegram one-way (`core/vps/notify-telegram.mjs`)
+# Telegram notifier — best-effort one-way (`core/notify/notify-telegram.mjs`)
+
+> **Address:** this module was `core/vps/notify-telegram.mjs` until the VPS cron engine was retired
+> (#807 / PR #830); it MOVED unchanged-but-for-import-specifiers to `core/notify/notify-telegram.mjs`
+> and is live. Sections tagged **[RETIRED ENGINE]** below describe how the retired cron engine wired
+> it (`install-crons.mjs`, `cron-a-exit.mjs`, `cron-a-dispatch.mjs` — all deleted with the engine, see
+> `docs/vps-retirement.md`). The wiring is history; the traps it records are not, which is why they
+> stay.
 
 Durable patterns from the `vps-notify-telegram` feature (v0.22.0). **Promoted to `core/` (tracked) on
 2026-07-09 by the `retention-sweep-delete-stale-topics` (#178) harvest** — this topic previously
@@ -17,17 +24,19 @@ review. See `core/kaizen.md`'s dogfood-mirror-drift entry for the general gap th
   instead of throwing a ReferenceError that could become an unhandledRejection and crash the cron
   process that does real PR merges / lock releases. NEVER retries (429 swallowed).
 - Every root wraps its `notify(event)` in try/catch too, and each `isMain` async wrapper ends with
-  `.catch(...)` (mirror `cron-a-exit.mjs`). Roots take `deps.notify ?? (() => {})` (a no-op default)
-  so injected spies are observable in tests and an unconfigured project is byte-identical.
+  `.catch(...)` (the retired engine's `cron-a-exit.mjs` was the reference implementation). Roots take
+  `deps.notify ?? (() => {})` (a no-op default) so injected spies are observable in tests and an
+  unconfigured project is byte-identical.
 
 ## Secret hygiene (the token never leaves the box)
 
 - `TELEGRAM_BOT_TOKEN` lives ONLY in `~/.claude/.dev.vars`, read at send time via the exported
-  `parseDevVars` from `scoped-env.mjs` (do NOT hand-roll a second env parser). It is NEVER in the
-  config, crontab, argv, or any log. A send failure logs ONLY `{op,type,project,status}` — never
-  `err.message`/stack (the `/bot<token>/` URL would leak), never the URL/body/chat_id.
+  `parseDevVars` from `core/notify/scoped-env.mjs` (do NOT hand-roll a second env parser). It is
+  NEVER in the config, crontab, argv, or any log. A send failure logs ONLY
+  `{op,type,project,status}` — never `err.message`/stack (the `/bot<token>/` URL would leak), never
+  the URL/body/chat_id.
 
-## How notify config reaches the DETACHED cron-a-exit session (non-obvious)
+## [RETIRED ENGINE] How notify config reached the DETACHED cron-a-exit session (non-obvious)
 
 - `cron-a-exit` runs inside the tmux session AFTER `claude -p`, in the same shell that already did
   `set -a; . <envfile>; set +a`. So `dispatch` writes the **non-secret** `HARNESS_NOTIFY_CHATID/
@@ -35,14 +44,14 @@ review. See `core/kaizen.md`'s dogfood-mirror-drift entry for the general gap th
   (+ the token from disk). The token is NEVER threaded through the env-file/argv. No `--config` flag
   change to the session command was needed.
 
-## install-crons frozen-oracle rule (repeats a prior gotcha)
+## [RETIRED ENGINE] install-crons frozen-oracle rule (repeats a prior gotcha)
 
 - `generateProjectConfig` has exact-key frozen tests — do NOT add `notify` inside it. Layer the
   optional `notify` block AFTER the call (in `installProject`) and into the fleet base (in
   `reconcileFleet`). `validateInstallCoordinates` validates `notify:{chatId,threadId,heartbeat}`
   (numeric/boolean). See [[harness-repo-constraints]].
 
-## Additive-return wiring (pure logic → root translates)
+## [RETIRED ENGINE] Additive-return wiring (pure logic → root translates)
 
 - The pure cron functions gained ADDITIVE returns the roots translate to events: `cronAExit` →
   `{outcome,issueNumber,hadPr,finding}`; `cronB` → `[{number,outcome:merged|blocked,finding?,url}]`;
