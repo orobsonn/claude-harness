@@ -1,9 +1,185 @@
 ---
 name: releasing-versions
-description: Pipeline de release versionado via PR — abre PR chore/release-X.Y.Z (bump + CHANGELOG), aguarda merge, e ai cria tag + GitHub Release. Use quando voce tem mudancas merged em main prontas pra virar versao.
+description: Release versionada. Se o projeto tem release-please configurado, o fluxo E release-please — commits convencionais na main, a action abre sozinha o PR de release, e mergear esse PR gera tag + GitHub Release. Sem release-please, cai no fallback manual de PR de release. Use quando ha mudancas em main prontas pra virar versao.
 ---
 
 # Release
+
+Esta skill tem **dois regimes**, e o regime e **detectado, nunca assumido**:
+
+- **Regime release-please** — o projeto tem release-please configurado. A action e a dona do CHANGELOG, da versao e da tag. Voce so escreve commits convencionais.
+- **Regime manual (fallback)** — o projeto NAO tem release-please. Vale o fluxo de PR de release descrito no fim deste arquivo.
+
+A rule que governa isso e `~/.claude/rules/releases.md`, secao "Release-please (fonte primaria quando configurado)". Em caso de divergencia, a rule ganha.
+
+## 0. Detectar o regime (SEMPRE o primeiro passo)
+
+```bash
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+RP=""
+[ -f "$ROOT/release-please-config.json" ] && RP="config"
+[ -z "$RP" ] && [ -f "$ROOT/.release-please-manifest.json" ] && RP="manifest"
+[ -z "$RP" ] && grep -rq "release-please-action" "$ROOT/.github/workflows/" 2>/dev/null && RP="workflow"
+echo "${RP:-manual}"
+```
+
+- Saida `config` / `manifest` / `workflow` → **REGIME RELEASE-PLEASE** → seguir as secoes 1 a 4. O fallback manual **nao se aplica**; nem leia.
+- Saida `manual` → **REGIME MANUAL** → pular direto pro fallback no fim do arquivo.
+
+Duas coisas nao negociaveis nesse passo:
+
+- **Checar as TRES formas.** Da pra configurar release-please so por input de workflow, sem arquivo de config na raiz. Uma deteccao presa ao arquivo de raiz le esse projeto como "manual", escreve no `CHANGELOG.md` o que a action vai reescrever, e isso e conflito garantido (`rules/releases.md`).
+- **Ancorar na raiz do repo.** Os tres testes sao relativos ao diretorio; rodar de um subdiretorio da falso `manual`. Por isso `ROOT=$(git rev-parse --show-toplevel)`.
+
+---
+
+## 1. Regime release-please — este e o fluxo
+
+### 1.1 Divisao de trabalho
+
+| Voce faz | A action faz |
+| --- | --- |
+| Escreve commits em **Conventional Commits** (`feat:`, `fix:`, `feat!:` …) | Deriva a versao a partir dos commits desde a ultima tag |
+| Manda esses commits pra `main` **via PR** | Escreve o `CHANGELOG.md` inteiro |
+| Revisa e mergeia o PR que a action abre | Bumpa a `version` do `package.json` |
+| Decide (opcional) forcar uma versao com `Release-As:` | Atualiza os `extra-files` — inclusive o badge do README pelo marcador `x-release-please-version` |
+| | Abre / atualiza o PR `chore(main): release X.Y.Z` |
+| | No merge desse PR: cria a **tag** e a **GitHub Release** |
+
+**O que a action NAO faz neste repo:** publicar no npm. O workflow `release-please.yml` roda so a `release-please-action`; nao ha workflow de publish. Mergear o PR do bot produz **a tag e a GitHub Release, e nada alem disso** — quem consome por `npx` continua recebendo a versao anterior ate alguem publicar. Se o projeto precisa de npm, isso e uma decisao de operador fora desta skill.
+
+### 1.2 Anatomia do fluxo
+
+```
+commits convencionais na main
+        ↓
+a action abre "chore(main): release X.Y.Z"
+        ↓
+merge desse PR
+        ↓
+tag + GitHub Release, automaticamente (e so isso — sem publish)
+```
+
+### 1.3 O que NUNCA fazer neste regime
+
+- NUNCA editar `CHANGELOG.md` a mao — a action reescreve e o conflito e garantido <!-- release-please:prohibition -->
+- NUNCA rodar `npm version` nem bumpar `package.json` a mao <!-- release-please:prohibition -->
+- NUNCA trocar o badge do README a mao — o marcador `x-release-please-version` faz isso <!-- release-please:prohibition -->
+- NUNCA `git tag` nem `gh release create` a mao — a action cria os dois no merge <!-- release-please:prohibition -->
+- NUNCA mover a secao `## [Unreleased]` — release-please nem usa essa secao <!-- release-please:prohibition -->
+- NUNCA commitar release direto na `main` — tudo vai por PR, inclusive o commit que carrega `Release-As:`. O unico commit que aterrissa sem PR humano e o da propria action.
+
+### 1.4 Inspecionar o estado (read-only)
+
+```bash
+gh pr list --search 'author:app/github-actions "chore(main): release"'
+gh release view --json tagName,publishedAt
+cat "$ROOT/.release-please-manifest.json"
+```
+
+---
+
+## 2. Forcar uma versao — `Release-As: X.Y.Z`
+
+O unico jeito de mandar na versao e um rodape `Release-As:` no **corpo do commit** que aterrissa na `main`:
+
+```
+chore: release 1.0.0
+
+Release-As: 1.0.0
+```
+
+**Gotcha do squash.** Num repo que so permite squash merge, a action le o rodape do **commit de squash** que aterrissa na `main`. Um `Release-As:` que existe so no commit da branch e descartado pelo squash e ignorado. Receita:
+
+```bash
+git checkout -b chore/release-as-1.0.0
+git commit --allow-empty -m "chore: release 1.0.0" -m "Release-As: 1.0.0"
+git push -u origin chore/release-as-1.0.0
+gh pr create --title "chore: release 1.0.0" --body "Release-As: 1.0.0"
+```
+
+Na hora de mergear, garantir que o **body do squash commit** contem a linha `Release-As: 1.0.0`. Nunca commitar isso direto na `main`.
+
+### 2.1 Por que um `feat!` em 0.55.71 da 0.56.0 e nao 1.0.0
+
+Derivado do `release-please-config.json` deste repo:
+
+| config | valor | efeito enquanto a versao e `< 1.0.0` |
+| --- | --- | --- |
+| `bump-minor-pre-major` | `true` | breaking change (`feat!`, `BREAKING CHANGE:`) bumpa **minor**, nao major → `0.55.71` + `feat!` = **`0.56.0`**, nao `1.0.0` |
+| `bump-patch-for-minor-pre-major` | `false` | `feat:` continua bumpando **minor** (`0.55.71` → `0.56.0`); `fix:` bumpa patch (`0.55.71` → `0.55.72`) |
+
+Conclusao explicita: **pre-1.0 nao existe caminho automatico pra `1.0.0`.** Nenhum commit, por mais breaking que seja, leva ate la. A unica forma e `Release-As: 1.0.0`.
+
+### 2.2 Bump major: confirmar DUAS vezes
+
+- `Release-As: 1.0.0` (ou qualquer major) exige confirmar com o operador **duas vezes** — pergunta explicita, resposta explicita, duas vezes, antes de escrever o rodape.
+
+---
+
+## 3. Release travado: PR do `github-actions[bot]` sem CI
+
+### Sintoma
+
+O PR `chore(main): release X.Y.Z` e autorado pelo `github-actions[bot]`, o CI aparece em `action_required` ou com **zero jobs**, e o entry-gate nega o merge com:
+
+```
+No CI checks are reported; merge is denied.
+```
+
+### Por que
+
+Um PR aberto com o `GITHUB_TOKEN` padrao **nao dispara** workflows `on: pull_request` — e a protecao anti-recursao do GitHub, incondicional e nao desligavel por toggle. Quando existe run mas ele depende de aprovacao, ele fica em `action_required` sem materializar job nenhum. Nos dois casos o gate nega, e nos dois casos **o gate esta certo**: rollup vazio → `state: "missing"`; `ACTION_REQUIRED` → classificado como **red**.
+
+### Diagnostico
+
+```bash
+gh pr view <N> --json statusCheckRollup      # exatamente o que o entry-gate le
+gh run list --branch release-please--branches--main --json status,conclusion,databaseId
+```
+
+### Desbloqueio — fazer o CI existir
+
+As duas formas de falha sao observaveis diferentes e tem saidas diferentes:
+
+**A) Existe run, parado em `action_required`** → aprovar o run:
+- GitHub UI: aba **Actions** → o run pendente → **Approve and run**; ou
+- `gh api -X POST repos/{owner}/{repo}/actions/runs/{run_id}/approve`
+
+**B) Nao existe run nenhum** (o caso do `GITHUB_TOKEN`) → nao ha o que aprovar. Saidas:
+1. **Um humano fecha e reabre o PR** (`gh pr close <N> && gh pr reopen <N>`, ou pelos botoes) — o evento `reopened` fica atribuido a uma pessoa e o `on: pull_request` dispara. Esta e a saida que sempre existe e nao encosta no gate.
+2. Dar um PAT a `release-please-action` via `token:`, pra o PR ter autoria humana — **decisao de operador, fora desta skill**.
+3. Acrescentar ao workflow de CI um trigger que cubra a branch de release — **decisao de operador, fora desta skill**.
+
+Sobre o toggle **Settings → Actions → General** ("Allow GitHub Actions to create and approve pull requests" e a politica de aprovacao de runs): ele governa se a Actions pode criar/aprovar PR e como runs pendentes sao aprovados. Ele **nao** faz um `on: pull_request` disparar pra PR autorado pelo `GITHUB_TOKEN` — nao adianta procurar a cura so ali.
+
+### Nunca contornar o gate
+
+- NUNCA contornar o entry-gate: nada de `gh pr merge --admin`, nada de desligar o gate, nada de mergear "porque o CI nao existe". Rollup vazio negando merge **e o gate funcionando** — a saida e fazer o CI existir, nunca fazer o gate calar.
+
+O ramo FAIL-SOFT do fallback manual (mais abaixo) vale **so** naquele fallback, num projeto que nao tem workflow de CI nenhum. Sob release-please, saida vazia significa run esperando aprovacao ou run que nunca nasceu — fail-closed, sempre.
+
+---
+
+## 4. Reportar
+
+- A versao que a action vai publicar (do titulo do PR do bot ou do `.release-please-manifest.json`).
+- A URL do PR `chore(main): release X.Y.Z`.
+- Que o merge produz tag + GitHub Release, e nada alem disso.
+- Que **deploy continua desacoplado** — release publica versao, deploy promove em prod, decisoes separadas (`/deploy`).
+
+PARAR aqui. Merge e deploy sao decisoes explicitas do operador.
+
+---
+<!-- release-please:fallback-start -->
+
+## Fallback manual — SO para projetos SEM release-please
+
+> **PARE.** Se o passo 0 detectou release-please configurado por qualquer uma das tres
+> formas, esta secao inteira NAO se aplica — volte pra secao 1. Este fallback existe
+> porque esta skill e vendorizada em projetos SEM release-please, e pra eles o fluxo
+> manual de PR de release e o fluxo legitimo (`rules/releases.md`: "o restante desta
+> rule ... e o fallback para projetos SEM release-please configurado").
 
 Cria release versionada via PR seguindo `~/.claude/rules/releases.md`. Tem 2 modos:
 
@@ -135,7 +311,7 @@ STATES=$(gh pr checks "$PR_NUMBER" --json state -q '.[].state' 2>/dev/null)
 ```
 Avaliar o conteudo de `$STATES` em tres ramos — contra o STATE, nao o exit code:
 
-- **Saida vazia** (`$STATES` em branco): repo nao tem CI workflow → **FAIL-SOFT** (warn, nao bloqueia). Avisar usuario que nenhum CI workflow esta configurado, mas prosseguir.
+- **Saida vazia** (`$STATES` em branco): repo nao tem CI workflow → **FAIL-SOFT** (warn, nao bloqueia). Avisar usuario que nenhum CI workflow esta configurado, mas prosseguir. Este FAIL-SOFT vale SO aqui, neste fallback manual de projeto sem nenhum workflow de CI — sob release-please, saida vazia significa run esperando aprovacao (ou run que nunca nasceu) e o comportamento e fail-closed (secao 3).
 - **Contem `FAILURE`, `ERROR`, `CANCELLED` ou `TIMED_OUT`**: CI esta **red** → **refuse** the release — nao criar tag. Parar e reportar checks que falharam. Reverter via `git revert -m 1 <merge-sha>` + PR de revert (ou botao "Revert" no GitHub via `gh pr view <N> --web`).
 - **Apenas `SUCCESS`, `SKIPPED`, `NEUTRAL` ou `PENDING` resolvidos**: CI esta verde → prosseguir.
 
@@ -178,7 +354,7 @@ PARAR aqui. Deploy e decisao explicita.
 
 ---
 
-## Regras
+## Regras do fallback manual
 
 - NUNCA commit de release direto em `main` — sempre via PR `chore/release-X.Y.Z`
 - NUNCA criar tag antes do merge do PR — tag apontaria pra commit fora da main
@@ -203,3 +379,4 @@ PARAR aqui. Deploy e decisao explicita.
 - Deploy = promover bits pra prod
 - As 2 acoes podem acontecer em momentos diferentes (release agora, deploy depois de gate de homologacao)
 - Forcar acoplamento esconde o passo critico de smoke test do `/deploy`
+<!-- release-please:fallback-end -->
