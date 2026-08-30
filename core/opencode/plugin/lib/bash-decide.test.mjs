@@ -13,6 +13,11 @@ import {
   decideBashAdvisory,
   applyAdvisory,
   adviseIssueForm,
+  detectHarnessLabelWrite,
+  decideBashHarnessLabel,
+  isRoutineSession,
+  isSubagentActingAgent,
+  throwIfDenied,
 } from "./bash-decide.mjs";
 
 const SID = "ses_test_delivery_1";
@@ -824,4 +829,212 @@ test("#ac-2.4 #ac-2.11: opencode.json.example bash permission baseline", () => {
   assert.equal(Object.hasOwn(bash, "node .opencode/plugin/lib/mark-gate.mjs *"), false);
   assert.equal(Object.hasOwn(bash, "node core/opencode/plugin/lib/mark-gate.mjs *"), false);
   assert.equal(bash["gh *"], "allow");
+});
+
+// ── LOCKED — #808 queue-contamination rail (spec §6.2): a routine/subagent session may not
+// ATTACH a harness:* label. Ported from the Claude Code suite (entry-gate.test.mjs) so the two
+// lanes cannot drift; the Decision shape ({ ok, decision, reason }) is the only difference. ──
+
+const HARNESS_LABEL_ATTACH_SHAPES = [
+  ["gh issue create --label harness:ready", "harness:ready"],
+  ["gh issue create --label=harness:ready", "harness:ready"],
+  ["gh issue create -l harness:ready", "harness:ready"],
+  ["gh issue create -l=harness:ready", "harness:ready"],
+  ["gh issue create -lharness:ready", "harness:ready"],
+  ['gh issue create --label "harness:ready"', "harness:ready"],
+  ["gh issue create --label 'harness:ready'", "harness:ready"],
+  ["gh issue create --label bug,harness:ready", "harness:ready"],
+  ['gh issue create --label "needs review,harness:ready"', "harness:ready"],
+  ["gh issue create --label bug --label harness:ready", "harness:ready"],
+  ["gh issue edit 401 --add-label harness:ready", "harness:ready"],
+  ["gh issue new --label harness:ready", "harness:ready"],
+  ["gh issue create --label harness:queued", "harness:queued"],
+  ["gh issue create --label harness:blocked", "harness:blocked"],
+  ["gh issue create --label harness:in-progress", "harness:in-progress"],
+  ["gh issue create --label harness:done", "harness:done"],
+];
+
+test("#808 §6.2-a: detectHarnessLabelWrite matches every ATTACH shape, for every harness:* member", () => {
+  for (const [command, expected] of HARNESS_LABEL_ATTACH_SHAPES) {
+    assert.equal(detectHarnessLabelWrite(command), expected, `shape: ${command}`);
+  }
+});
+
+test("#808 §6.2-a: non-attaching shapes return null — --remove-label, reads, non-harness labels", () => {
+  for (const command of [
+    "ls -la",
+    'gh issue list --state open --search "harness:ready"',
+    "gh issue view 401 --json labels",
+    "gh label create harness:ready",
+    "gh issue create --label bug",
+    'gh issue create --title "harness:ready"',
+    "gh issue edit 401 --remove-label harness:in-progress",
+    "gh issue edit 401 --remove-label harness:ready",
+    "gh issue create --label harness-ready",
+  ]) {
+    assert.equal(detectHarnessLabelWrite(command), null, `shape: ${command}`);
+  }
+  for (const bad of [null, undefined, 42, {}, []]) {
+    assert.equal(detectHarnessLabelWrite(bad), null);
+  }
+});
+
+test("#808 §6.2-a: statefulness guard — the global regex must reset lastIndex between calls", () => {
+  const command = "gh issue create --label harness:ready";
+  assert.equal(detectHarnessLabelWrite(command), "harness:ready");
+  assert.equal(detectHarnessLabelWrite(command), "harness:ready");
+});
+
+test("#808 correction 3: an unresolvable label value fails CLOSED, not open", () => {
+  for (const command of [
+    'gh issue create --label "$L"',
+    'gh issue create --label "$(echo harness:ready)"',
+    "L=harness:ready; gh issue create --label $L",
+    "gh issue create --label `echo harness:ready`",
+  ]) {
+    assert.equal(detectHarnessLabelWrite(command), "<unresolvable label value>", `shape: ${command}`);
+  }
+});
+
+test("#808 correction 3: `gh api ...labels...` is an independent trigger", () => {
+  assert.equal(
+    detectHarnessLabelWrite('gh api repos/o/r/issues/401/labels -f "labels[]=harness:ready"'),
+    "<unresolvable label value>",
+  );
+});
+
+test("#808 correction 2: submit-issue.mjs is detected BY NAME — it hardcodes harness:ready and carries no --label flag", () => {
+  // core/opencode/rules/creating-issues.md mandates this script as the ONLY sanctioned submission
+  // path, and submit-issue.mjs hardcodes READY_LABEL = "harness:ready" with no opt-out. Without
+  // this shape the rail is dead code on the exact path an OC harvest would take.
+  assert.equal(
+    detectHarnessLabelWrite("node .opencode/skills/creating-issues/references/submit-issue.mjs --title x"),
+    "harness:ready",
+  );
+});
+
+test("#808 §6.2-b: ROUTINE session denies every ATTACH shape, and the deny carries the dedup command", () => {
+  for (const [command] of HARNESS_LABEL_ATTACH_SHAPES) {
+    const d = decideBashHarnessLabel({ command, isRoutine: true, isSubagent: false });
+    assert.equal(d.decision, "deny", `shape: ${command}`);
+    assert.equal(d.ok, false);
+    assert.match(d.reason, /\[entry-gate\] Blocked:/);
+    assert.match(d.reason, /gh issue list --state open/);
+    assert.throws(() => throwIfDenied(d), /\[entry-gate\] Blocked:/);
+  }
+});
+
+test("#808 §6.2-b: SUBAGENT with NO env marker denies — the production Orca shape (correction 1)", () => {
+  // core/orca/select-and-dispatch.mjs sets no env at all, so isRoutine is FALSE in the very run
+  // that produced the incident. Deleting the isSubagent half of the predicate turns this red.
+  const d = decideBashHarnessLabel({
+    command: "gh issue create --title x --label harness:ready",
+    isRoutine: isRoutineSession({}),
+    isSubagent: true,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /\[entry-gate\] Blocked:/);
+});
+
+test("#808 §6.2-b: INTERACTIVE main loop (no routine marker, no subagent) is ALLOWED (#ac-3.2)", () => {
+  for (const [command] of HARNESS_LABEL_ATTACH_SHAPES) {
+    const d = decideBashHarnessLabel({
+      command,
+      isRoutine: isRoutineSession({}),
+      isSubagent: false,
+    });
+    assert.equal(d.decision, "allow", `shape: ${command}`);
+    assert.equal(d.ok, true);
+    assert.equal(d.reason, "interactive-main-loop");
+    assert.doesNotThrow(() => throwIfDenied(d));
+  }
+});
+
+test("#808 §6.2-d: --remove-label (un-queuing) is never denied, in any session kind", () => {
+  for (const isRoutine of [true, false]) {
+    for (const isSubagent of [true, false]) {
+      const d = decideBashHarnessLabel({
+        command: "gh issue edit 401 --remove-label harness:in-progress",
+        isRoutine,
+        isSubagent,
+      });
+      assert.equal(d.decision, "allow");
+      assert.equal(d.reason, "no-harness-label");
+    }
+  }
+});
+
+test("#808 §6.2-e / #ac-2.3: a routine/subagent create with NO harness label is ALLOWED — the harvest can still file its finding", () => {
+  for (const command of [
+    'gh issue create --title "[harness] x" --body-file /tmp/b.md',
+    "gh issue comment 401 --body-file /tmp/b.md",
+    'gh issue list --state open --limit 50 --search "meta-publish.ts" --json number,title,url,labels',
+  ]) {
+    const d = decideBashHarnessLabel({ command, isRoutine: true, isSubagent: true });
+    assert.equal(d.decision, "allow", `shape: ${command}`);
+    assert.equal(d.reason, "no-harness-label");
+  }
+});
+
+test("#808 §6.2-g: decideBashHarnessLabel never throws — a hostile input fails open", () => {
+  for (const input of [undefined, {}, { command: null }, { command: 42 }]) {
+    const d = decideBashHarnessLabel(input);
+    assert.equal(d.decision, "allow");
+  }
+});
+
+test("#808 §6.2: isRoutineSession parity with the Claude Code contract — all four env cases", () => {
+  assert.equal(isRoutineSession(undefined), false); // no env object at all -> fail-open
+  assert.equal(isRoutineSession(null), false);
+  assert.equal(isRoutineSession({}), false);
+  assert.equal(isRoutineSession({ CLAUDE_CODE_REMOTE: "1" }), true);
+  assert.equal(isRoutineSession({ HARNESS_NOTIFY_PROJECT: "p" }), true);
+  assert.equal(isRoutineSession({ HARNESS_OBSERVABILITY_RUN_PATH: "/run" }), true);
+});
+
+test("#808 #ac-3.2: isSubagentActingAgent must NOT classify OC's mode:primary agents as subagents", () => {
+  // core/opencode/agents/*.md — build.md, plan.md and harness-config.md are `mode: primary`;
+  // they ARE the operator's own top-level lane. Reading any non-empty agent name as a subagent
+  // would deny the operator's hand-applied harness:ready and break #ac-3.2 in production.
+  for (const primary of ["build", "plan", "harness-config", "Build", " build ", "build.md"]) {
+    assert.equal(isSubagentActingAgent(primary), false, `primary: ${primary}`);
+  }
+  for (const sub of ["harvester", "shipper", "executor-high", "adversary", "test-author"]) {
+    assert.equal(isSubagentActingAgent(sub), true, `subagent: ${sub}`);
+  }
+  // Absence is NOT evidence of a subagent — the caller falls back to the session-parent probe.
+  for (const empty of [null, undefined, "", "   ", 42, {}]) {
+    assert.equal(isSubagentActingAgent(empty), false);
+  }
+});
+
+test("#808 §6.2-h: the advisory splits on isRoutine — routine text carries the dedup, interactive text is unchanged", () => {
+  const routine = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, true);
+  assert.match(routine, /gh issue list --state open/);
+  assert.match(routine, /NO `harness:\*` label/);
+  assert.equal(/label `harness:ready`/.test(routine), false);
+
+  // 4th arg omitted => interactive, byte-identical to the pre-#808 behaviour.
+  const interactive = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+  assert.match(interactive, /label `harness:ready`/);
+  assert.equal(
+    interactive,
+    adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, false),
+  );
+  assert.notEqual(routine, interactive);
+});
+
+test("#808 §6.2-h: decideBashAdvisory forwards isRoutine to the advisory selector", () => {
+  const routine = decideBashAdvisory({
+    command: "gh issue create --title x",
+    cwd: "/abs/repo",
+    isRoutine: true,
+  });
+  const interactive = decideBashAdvisory({ command: "gh issue create --title x", cwd: "/abs/repo" });
+  // Both are non-blocking allows; only the prose differs.
+  assert.equal(routine.decision, "allow");
+  assert.equal(interactive.decision, "allow");
+  if (routine.advisory || interactive.advisory) {
+    assert.notEqual(routine.advisory, interactive.advisory);
+  }
 });

@@ -14,7 +14,7 @@
  * exception to the "readable file → fail open" line above: silently coercing a corrupt non-array
  * to [] would re-open the regate-pending delivery door the gate exists to hold.
  *
- * Bash gate (delivery-bash-gate + issue-form advisory):
+ * Bash gate (delivery-bash-gate + issue-form advisory + #808 queue-contamination rail):
  *   Delivery commands (git push, gh pr create, gh pr merge) are denied when gate-state has
  *   any unmatched regate_pending (a regate_pending task_id with no matching regate_passed).
  *   Capture is guarded by the real-file rail (the on-disk run-record), NOT by an
@@ -27,6 +27,14 @@
  *   (.github/ISSUE_TEMPLATE/harness-task.yml). A composite command containing both
  *   `gh issue create` and a delivery verb always hits the delivery deny rails — the advisory
  *   attaches ONLY at the non-delivery allow return, never on a delivery-command string.
+ *   #808 queue-contamination rail: `gh issue create|new|edit` (or `gh api …labels…`, or a
+ *   `submit-issue.mjs` invocation) that would ATTACH a `harness:*` label is DENIED — fail-closed,
+ *   never fail-open — when the caller is a SUBAGENT (payload.agent_id present, e.g. the
+ *   harvester) OR a HARNESS ROUTINE session (isRoutineFn). `harness:ready` is exactly the label
+ *   the autonomous selector (core/orca/select-and-dispatch.mjs) picks up, so a labelled harvest
+ *   finding would queue the engine's own future work as its own next delivery. `--remove-label`
+ *   is never matched (un-queuing is always safe). A plain interactive main-loop session
+ *   (#ac-3.2) is untouched. See detectHarnessLabelWrite / HARNESS_LABEL_DENY_REASON.
  *
  * Agent gate order:
  *   1. agent_id present → ALLOW (subagent context, no state pollution)
@@ -383,18 +391,142 @@ function defaultIssueFormExists(cwd) {
   }
 }
 
+// #808: a HARNESS ROUTINE / subagent session (harvester and friends) reads a DIFFERENT advisory
+// than the interactive operator. The interactive text stays byte-identical to before (zero
+// regression on the operator's sanctioned `harness:ready` + chained-roadmap path, #ac-3.2) — this
+// is a SEPARATE constant, not a reword, because a single text cannot honestly serve both
+// audiences: the routine path must never be told "create EVERY issue with `harness:ready`" (the
+// exact prompt-level instruction that produced the incident, oraculo-app #401), while the
+// interactive path still needs that instruction for its legitimate chained-roadmap use.
+const ROUTINE_ISSUE_ADVISORY =
+  "You are in a harness ROUTINE session (headless-local / cloud cron), so the issue you are about " +
+  "to open is a RUN FINDING, not operator-authored work: it takes NO `harness:*` label at all. " +
+  "The selector only picks `harness:ready`, so a labelled issue becomes the engine's next " +
+  "autonomous delivery — work no human decided should exist. The entry-gate DENIES a `--label` / " +
+  "`--add-label` carrying `harness:*` here, so do not try. Before creating anything, search for an " +
+  "existing open issue and let that search show up in the transcript: `gh issue list --state open " +
+  "--limit 50 --search \"<file basename>\" --json number,title,url,labels`. Match on FILE + " +
+  "SYMPTOM, never on line number — the same defect moves between lines. On a hit, add the new " +
+  "evidence as a comment on that issue (`gh issue comment <N> --body-file <path>`); never close " +
+  "it and never rewrite its body. On a miss, create it label-free: `gh issue create --title " +
+  "\"[harness] <slug>\" --body-file <path>`, replicating the form's body (#uj-N, #ac-N.M, scope, " +
+  "sensitive domain, priority, size). Report in your summary that it was opened without a label, " +
+  "so the operator knows it is waiting for his decision.";
+
 /** @description Best-effort advisory: nudge toward the harness issue form when an agent runs
  * `gh issue create` in a repo that vendors the form. Returns the advisory string, or null when
  * no nudge applies. Regex detection is best-effort (may match the phrase inside quoted text) —
- * acceptable because the result is a NON-blocking hint, never a deny. */
-export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists) {
+ * acceptable because the result is a NON-blocking hint, never a deny.
+ * @param {string} command
+ * @param {string} cwd
+ * @param {function} [existsFn]
+ * @param {boolean} [isRoutine] - #808: selects ROUTINE_ISSUE_ADVISORY over ISSUE_FORM_ADVISORY.
+ *   Defaults to false so every pre-existing 3-arg call site keeps its current (interactive)
+ *   expectation unchanged. NOTE: the `harness:ready` early-return below is only a NON-nudge on the
+ *   routine path when a bare mention appears with no label flag (e.g. inside `--body` prose) — the
+ *   mechanical deny rail in decideBash fires first whenever an actual `--label`/`--add-label`
+ *   flag is present, so this early-return is not unreachable, just secondary to the deny. */
+export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists, isRoutine = false) {
   if (typeof command !== "string") return null;
   if (!/\bgh\s+issue\s+create\b/.test(command)) return null;
   if (/harness:ready/.test(command)) return null; // already following convention → no nag/re-nudge
   if (typeof cwd !== "string" || !path.isAbsolute(cwd)) return null; // relative/absent cwd → fail-open, no nudge
   if (!existsFn(cwd)) return null; // portable: no form vendored → no nudge
-  return ISSUE_FORM_ADVISORY;
+  return isRoutine ? ROUTINE_ISSUE_ADVISORY : ISSUE_FORM_ADVISORY;
 }
+
+// ---------------------------------------------------------------------------
+// #808 queue-contamination rail — detectHarnessLabelWrite (pure, exported for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * @description Matches an ADD-shaped label flag and captures its raw value. Deliberately global
+ * (`g`) — a command may repeat `--label`, and only ONE occurrence needs to carry a harness label.
+ * Covers every real gh/cobra shape: `--label v`, `--label=v`, `-l v`, `-l=v`, `-lv`,
+ * `--add-label v` (issue edit), quoted values, and comma-joined lists. `--remove-label` is NOT
+ * matched (un-queuing is always safe) — the alternation requires a `--label` / `--add-label` / `-l`
+ * token preceded by start-of-string or a shell separator, and inside `--remove-label` neither
+ * `--label` nor `-l` sits on such a boundary.
+ */
+const HARNESS_LABEL_FLAG_RE =
+  /(?:^|[\s;|&(])(?:--label|--add-label|-l)(?:=\s*|\s+)?("[^"]*"|'[^']*'|[^\s;|&)]+)/gi;
+
+/** @description gh verbs that can attach a label at write time. `new` is not a real gh verb but
+ * is a common operator alias for `create`; matching it costs nothing and closes that shape. */
+const ISSUE_WRITE_VERB_RE = /\bgh\s+issue\s+(?:create|new|edit)\b/i;
+
+/** @description `gh api` can attach a label off the beaten `gh issue` path entirely
+ * (`gh api repos/o/r/issues/N/labels -f "labels[]=harness:ready"`). There is zero legitimate
+ * in-session traffic on this shape (`grep -rn "add-label\|--label\|remove-label" core/claude-code
+ * core/opencode --include=*.md` has no hits at all), so any `gh api` call that mentions `label(s)`
+ * anywhere in the command is treated as an unconditional harness-label write — see the
+ * REQUIRED-CORRECTIONS fail-closed note on `detectHarnessLabelWrite` below. */
+const GH_API_LABEL_RE = /\bgh\s+api\b[\s\S]*\blabels?\b/i;
+
+/** @description `submit-issue.mjs` (the OpenCode lane's ONLY sanctioned issue-submission path,
+ * `core/opencode/rules/creating-issues.md`) hardcodes `harness:ready` internally
+ * (`submit-issue.mjs:18`) and shells nothing — its Bash command string carries no `--label` flag
+ * at all, so the flag-based detector below is blind to it. Matched by name (mirrored into the OC
+ * lane's own copy of this function for parity) so a harvest that shells out to the submitter is
+ * still caught. Kept here too, even though the CC lane has no such submitter today
+ * (`core/claude-code/skills/creating-issues/references/` does not exist), so the two lanes'
+ * detectors do not diverge on this shape by accident. */
+const SUBMITTER_RE = /\bsubmit-issue\.mjs\b/i;
+
+/**
+ * @description Returns the first `harness:*` label a `gh issue create|new|edit` command (or an
+ * off-path `gh api …labels…` / `submit-issue.mjs` invocation) would ATTACH, or null. Pure and
+ * exported for tests. Never throws.
+ *
+ * Fail-CLOSED on an unresolvable value (`$VAR`, `` `cmd` ``, `$(cmd)`): this file's own
+ * descriptor rail already establishes "evidence required but absent → deny", and a value we
+ * cannot statically read is exactly that — silently allowing it would let
+ * `L=harness:ready; gh issue create --label $L` walk straight through. The sentinel is passed as
+ * the "label" through to the deny reason so the caller sees why (§1.5's accepted-gap list: this
+ * closes the cheap, common indirection shapes, not full shell evaluation).
+ * @param {unknown} command
+ * @returns {string|null}
+ */
+export function detectHarnessLabelWrite(command) {
+  if (typeof command !== "string") return null;
+  // Off-path shapes first: neither carries a `--label` flag the regex below could see.
+  if (SUBMITTER_RE.test(command)) return "harness:ready";
+  if (GH_API_LABEL_RE.test(command)) return "<unresolvable label value>";
+  if (!ISSUE_WRITE_VERB_RE.test(command)) return null;
+  HARNESS_LABEL_FLAG_RE.lastIndex = 0; // a `g` regex carries state between calls
+  let m;
+  while ((m = HARNESS_LABEL_FLAG_RE.exec(command)) !== null) {
+    const raw = m[1].replace(/^["']|["']$/g, "");
+    for (const part of raw.split(",")) {
+      const label = part.trim();
+      if (/[$`]/.test(label)) return "<unresolvable label value>"; // fail-closed: can't statically read it
+      if (/^harness:[A-Za-z0-9._-]+$/i.test(label)) return label;
+    }
+  }
+  return null;
+}
+
+/** @description Deny-reason builder for the #808 queue-contamination rail. Tells the caller
+ * WHAT to do instead (search → comment-on-hit / create-label-free-on-miss), matching this file's
+ * convention that every deny names the escape route, not just the block. */
+const HARNESS_LABEL_DENY_REASON = (label) =>
+  `[entry-gate] Blocked: attaching \`${label}\` to a GitHub issue from a subagent or a harness ` +
+  "routine (headless-local / cloud cron) session. `harness:ready` is exactly the label the " +
+  "autonomous queue selector picks up, so an issue labelled by the run puts the engine's own " +
+  "future work into the engine's own queue — the next tick delivers a backlog item no human " +
+  "decided should exist. `harness:queued`, `harness:in-progress`, `harness:blocked` and " +
+  "`harness:done` are the engine's own vocabulary and are never written by hand either. RECORD " +
+  "THE FINDING ANYWAY — the record has value, the queue entry does not. (1) SEARCH first, so the " +
+  "dedup is auditable in the transcript: `gh issue list --state open --limit 50 --search \"<file " +
+  "basename>\" --json number,title,url,labels`. (2) On a HIT (same file + same symptom — never " +
+  "compare line numbers, they drift), post the new evidence as a COMMENT on the existing issue " +
+  "(`gh issue comment <N> --body-file <path>`) and create nothing; never close it, never rewrite " +
+  "its body. (3) On a MISS, create it with NO label at all: " +
+  "`gh issue create --title \"[harness] <slug>\" --body-file <path>` — no `--label` flag. " +
+  "The issue is inert without the label (the selector only picks `harness:ready`) and waits for " +
+  "the operator, who applies the label by hand when he decides it should be delivered. Say in " +
+  "your summary that you opened it label-free, so it is not an inert issue nobody knows about. " +
+  "This rail does not apply to a plain interactive main-loop session.";
 
 // ---------------------------------------------------------------------------
 // Bash gate — decideBash (internal)
@@ -417,11 +549,14 @@ export function adviseIssueForm(command, cwd, existsFn = defaultIssueFormExists)
  * @param {function} deps.readGateStateFn - (sessionId: string) => object
  * @param {function} deps.readDescriptorFn - (descriptorPath: string) => object|null
  * @param {function} deps.adviseIssueFormFn - (command: string, cwd: string) => string|null
+ * @param {function} deps.isRoutineFn - () => boolean — #808 queue-contamination rail's routine
+ *   detector (shared with the ScheduleWakeup death rail); combined with subagent-context
+ *   detection (payload.agent_id presence) so the rail fires on BOTH signals, not routine alone.
  * @returns {{ allow: true }
  *         | { allow: true, hookSpecificOutput: { hookEventName: string, additionalContext: string } }
  *         | { allow: false, hookSpecificOutput: { hookEventName: string, permissionDecision: string, permissionDecisionReason: string } }}
  */
-function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn, readMergeCheckRollupFn }) {
+function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn, readMergeCheckRollupFn, isRoutineFn }) {
   const command = payload?.tool_input?.command;
   // Non-string command → infra error → fail-open
   if (typeof command !== "string") {
@@ -458,6 +593,54 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
           "Bash timeout of 600000 (the tool max) instead of backgrounding.",
       },
     };
+  }
+
+  // #808 queue-contamination rail: neither a SUBAGENT (the harvester always is one) nor a HARNESS
+  // ROUTINE (headless-local / cloud cron) session may ATTACH a `harness:*` label to an issue.
+  // `harness:ready` is exactly what the autonomous selector picks up
+  // (core/orca/select-and-dispatch.mjs) — a run that labels its own harvest finding puts the
+  // engine's own future work into the engine's own queue, and the next tick delivers a backlog
+  // item no human decided should exist (the real incident: oraculo-app #401).
+  //
+  // REQUIRED CORRECTION over the original spec: `isRoutineFn` alone is FALSE on the production
+  // Orca dispatch path that produced the incident — `isRoutineSession` reads env markers
+  // (CLAUDE_CODE_REMOTE / HARNESS_NOTIFY_PROJECT / HARNESS_OBSERVABILITY_RUN_PATH) that are only
+  // ever written by the RETIRED core/vps/ dispatcher (see core/vps/DEPRECATED.md); the live
+  // `orca worktree create` spawn sets no env at all — its autonomy signal lives in the PROMPT
+  // string, not the environment. The signal that DOES survive Orca dispatch is subagent context:
+  // the harvester is always a subagent, and `payload.agent_id` presence is the same signal
+  // plan-write-gate.mjs (:73-ish) already keys on for its own PreToolUse(Write|Edit) rail. So this
+  // fires on isSubagentCall (presence, not truthiness — never throws) OR routine (env markers;
+  // fail-open only on this half, mirroring the ScheduleWakeup rail's try/catch — a session with no
+  // markers and no agent_id, i.e. the interactive main-loop operator, is #ac-3.2 and stays untouched).
+  // REMOVING a label (`--remove-label`) is never matched by detectHarnessLabelWrite — un-queuing is
+  // always safe. Placed ABOVE the `isDeliveryCommand` branch below: `gh issue create` is not a
+  // delivery command (a rail placed after that branch would never run), and a composite
+  // `gh issue create --label harness:ready && git push` IS a delivery command and must not be able
+  // to route around this rail by riding along with a delivery verb.
+  const attachedHarnessLabel = detectHarnessLabelWrite(command);
+  if (attachedHarnessLabel !== null) {
+    const isSubagentCall = Object.prototype.hasOwnProperty.call(payload, "agent_id");
+    let routine = false;
+    try {
+      routine = Boolean(isRoutineFn?.());
+    } catch {
+      routine = false;
+    }
+    if (isSubagentCall || routine) {
+      console.error(
+        `[entry-gate] denied harness-label write from a subagent/routine session — ` +
+          `${attachedHarnessLabel} on a gh issue create/edit.`,
+      );
+      return {
+        allow: false,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: HARNESS_LABEL_DENY_REASON(attachedHarnessLabel),
+        },
+      };
+    }
   }
 
   // Fidelity rail — spawn-hand.mjs dispatch is gated until the task's fidelity-pass is stamped.
@@ -816,14 +999,26 @@ export function decide(payload, deps = {}) {
     };
   }
 
-  // Bash tool: delivery-bash-gate + fidelity rail + issue-form advisory.
+  // Bash tool: delivery-bash-gate + fidelity rail + issue-form advisory + #808 label rail.
   // The delivery-bash-gate closes the second delivery door (a direct git push / gh pr create /
   // gh pr merge bypasses the Agent shipper gate). The fidelity rail gates spawn-hand.mjs
   // dispatches until the task's fidelity-pass is stamped (test-author must produce a red locked
-  // test first). The advisory nudges toward the harness issue form on bare `gh issue create`.
-  const adviseIssueFormFn = (cmd, cwd) => adviseIssueForm(cmd, cwd, issueFormExistsFn);
+  // test first). The advisory nudges toward the harness issue form on bare `gh issue create`,
+  // routed to the routine text (ROUTINE_ISSUE_ADVISORY) instead of the interactive one
+  // (ISSUE_FORM_ADVISORY) under the SAME subagent-or-routine predicate the #808 label rail
+  // itself deny-decides on, so an allowed (no-label) `gh issue create` from that same caller
+  // gets told the dedup-and-label-free procedure rather than "label it `harness:ready`".
+  let routineForAdvisory = false;
+  try {
+    routineForAdvisory = Boolean(isRoutineFn?.());
+  } catch {
+    routineForAdvisory = false;
+  }
+  const isSubagentCallForAdvisory = Object.prototype.hasOwnProperty.call(payload, "agent_id");
+  const adviseIssueFormFn = (cmd, cwd) =>
+    adviseIssueForm(cmd, cwd, issueFormExistsFn, isSubagentCallForAdvisory || routineForAdvisory);
   if (payload.tool_name === "Bash") {
-    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn, readMergeCheckRollupFn });
+    return decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, adviseIssueFormFn, isAncestorFn, listHandRecordsForFeatureFn, readMergeCheckRollupFn, isRoutineFn });
   }
 
   // Step 1: agent_id present → subagent context, always allow (no state pollution)

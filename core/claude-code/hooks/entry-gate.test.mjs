@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { decide, processInput, computeGitState, adviseIssueForm, isRoutineSession } from "./entry-gate.mjs";
+import { decide, processInput, computeGitState, adviseIssueForm, isRoutineSession, detectHarnessLabelWrite } from "./entry-gate.mjs";
 
 /**
  * Every pre-existing assertion in this file was written for the spawn-hand rail — i.e. the OLLAMA
@@ -2401,3 +2401,283 @@ test("a corrupt hands.json falls back to the STRICT rail, never to the open one"
   });
   assert.equal(verdict.allow, false, "an unreadable toggle must not open the gate");
 });
+
+// ---------------------------------------------------------------------------
+// LOCKED — #808 queue-contamination rail (harvest cannot label its own issues)
+//
+// Written to the SPEC's final contract, i.e. the approved spec AS CORRECTED by the adversarial
+// review — the corrections OVERRIDE the original spec text on conflict. The load-bearing
+// correction for this suite is #1: the deny predicate is `isSubagentCall || routine`, NOT
+// `routine` alone, because `isRoutineSession()` is FALSE on the production Orca dispatch path
+// (core/orca/select-and-dispatch.mjs sets no env markers — the autonomy signal lives in the
+// prompt string) and TRUE only on the retiring core/vps/ dispatch + cloud path. A suite that
+// only ever injects a routine env marker would stay green while the rail is inert on the exact
+// path that produced the incident (oraculo-app #401) — see the "production Orca env" tests below,
+// which are the ones that actually pin #ac-3.1 for the shipped engine.
+// ---------------------------------------------------------------------------
+
+/** @description Bash payload builder for the #808 rail. `extra` lets a test add `agent_id` to
+ * simulate the harvester (always a subagent) vs. the operator's own main-loop Bash call. */
+const harnessBash = (command, extra = {}) => ({
+  session_id: "ses_808",
+  tool_name: "Bash",
+  cwd: "/abs/repo",
+  tool_input: { command },
+  ...extra,
+});
+
+// A ROUTINE session per isRoutineSession's own three-marker contract (the retiring core/vps/
+// dispatch + cloud cron path). Used only to prove the routine HALF of the predicate; it is
+// deliberately NOT how the production Orca-dispatched harvester is modeled (see below).
+const ROUTINE_DEPS = { isRoutineFn: () => isRoutineSession({ HARNESS_NOTIFY_PROJECT: "p" }) };
+// The plain interactive operator: no routine env marker, no subagent context.
+const INTERACTIVE_DEPS = { isRoutineFn: () => isRoutineSession({}) };
+
+// Every command shape the spec's HARNESS_LABEL_FLAG_RE / ISSUE_WRITE_VERB_RE must recognize as
+// ATTACHING a harness:* label (§1.2, §6.1-a of the spec).
+const HARNESS_LABEL_CREATE_SHAPES = [
+  "gh issue create --title x --label harness:ready",
+  "gh issue create --title x --label=harness:ready",
+  "gh issue create --title x -l harness:ready",
+  "gh issue create --title x -l=harness:ready",
+  "gh issue create --title x -lharness:ready",
+  'gh issue create --title x --label "harness:ready"',
+  "gh issue create --title x --label 'harness:ready'",
+  "gh issue create --title x --label bug,harness:ready",
+  'gh issue create --title x --label "needs review,harness:ready"',
+  "gh issue create --title x --label bug --label harness:ready",
+  "gh issue new --title x --label harness:ready",
+];
+const HARNESS_LABEL_EDIT_SHAPES = ["gh issue edit 401 --add-label harness:ready"];
+const ALL_HARNESS_LABEL_SHAPES = [...HARNESS_LABEL_CREATE_SHAPES, ...HARNESS_LABEL_EDIT_SHAPES];
+
+// ---------------------------------------------------------------------------
+// detectHarnessLabelWrite — pure function, table-driven (spec §1.2 / §6.1-a)
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 detectHarnessLabelWrite: every enumerated ATTACH shape returns a harness:* label", () => {
+  for (const command of ALL_HARNESS_LABEL_SHAPES) {
+    const label = detectHarnessLabelWrite(command);
+    assert.match(label ?? "", /^harness:/i, `expected a harness: label for: ${command}`);
+  }
+});
+
+test("LOCKED #808 detectHarnessLabelWrite: every other harness:* member is matched too (§1.1 — all harness:*, not just harness:ready)", () => {
+  for (const member of ["harness:queued", "harness:blocked", "harness:in-progress", "harness:done"]) {
+    const label = detectHarnessLabelWrite(`gh issue edit 401 --add-label ${member}`);
+    assert.equal(label, member, `member ${member} must be detected, matching the all-harness:* scope`);
+  }
+});
+
+test("LOCKED #808 detectHarnessLabelWrite: non-attaching / non-label shapes return null", () => {
+  const negatives = [
+    42, // non-string
+    "ls -la",
+    'gh issue list --search "harness:ready"',
+    "gh issue view 401 --json labels",
+    "gh label create harness:ready",
+    "gh issue create --title x --label bug",
+    'gh issue create --title "harness:ready"', // no --label flag at all
+    "gh issue edit 401 --remove-label harness:in-progress", // un-queuing — never matched
+    "gh issue create --title x --label harness-ready", // not a harness:* shape (no colon)
+  ];
+  for (const command of negatives) {
+    assert.equal(detectHarnessLabelWrite(command), null, `expected null for: ${JSON.stringify(command)}`);
+  }
+});
+
+test("LOCKED #808 detectHarnessLabelWrite: statefulness guard — calling twice on the same command still matches (catches a missing lastIndex=0 on the `g` regex)", () => {
+  const command = "gh issue create --title x --label harness:ready";
+  const first = detectHarnessLabelWrite(command);
+  const second = detectHarnessLabelWrite(command);
+  assert.match(first ?? "", /^harness:/i);
+  assert.match(second ?? "", /^harness:/i);
+});
+
+// ---------------------------------------------------------------------------
+// Correction 3 — bypasses the spec says it CLOSES: unresolvable shell values, and `gh api ... labels`.
+// These are additive fail-closed detections; run only against the pure function so a red result
+// here pins the exact defect (not a decide()-level side effect).
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 detectHarnessLabelWrite: unresolvable label value ($VAR / $(cmd) / backtick) is closed, fail-closed", () => {
+  const unresolvable = [
+    'gh issue create --title x --label "$L"',
+    'gh issue create --title x --label "$(echo harness:ready)"',
+    "gh issue create --title x --label `echo harness:ready`",
+  ];
+  for (const command of unresolvable) {
+    const label = detectHarnessLabelWrite(command);
+    assert.notEqual(label, null, `an unresolvable label value must fail CLOSED (deny), not open: ${command}`);
+  }
+});
+
+test("LOCKED #808 detectHarnessLabelWrite: `gh api .../labels` is an independent trigger (spec correction 3 — zero legitimate in-session traffic to break)", () => {
+  const label = detectHarnessLabelWrite('gh api repos/o/r/issues/401/labels -f "labels[]=harness:ready"');
+  assert.notEqual(label, null, "gh api label writes must be detected too, not just gh issue create/edit");
+});
+
+// ---------------------------------------------------------------------------
+// decide() — both directions through the Bash gate (#ac-3.1 / #ac-3.2, spec §6.1-b)
+//
+// NOTE (correction 4a): these ROUTINE-env tests exercise only the routine HALF of the predicate.
+// They alone would pass even if the implementation forgot the subagent half entirely, so #ac-3.1
+// is NOT considered proven by these — see "production Orca env" below for the test that actually
+// pins it for the shipped engine.
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 ac-3.1 (routine half): a ROUTINE session denies every create/edit label shape", () => {
+  for (const command of ALL_HARNESS_LABEL_SHAPES) {
+    const verdict = decide(harnessBash(command), ROUTINE_DEPS);
+    assert.equal(verdict.allow, false, `expected deny for: ${command}`);
+    assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  }
+});
+
+test("LOCKED #808 ac-3.2: the SAME shapes in a plain INTERACTIVE session (no agent_id, no routine marker) are ALLOWED — the operator is untouched", () => {
+  for (const command of ALL_HARNESS_LABEL_SHAPES) {
+    const verdict = decide(harnessBash(command), INTERACTIVE_DEPS);
+    assert.equal(verdict.allow, true, `operator command must be allowed: ${command}`);
+  }
+});
+
+test("LOCKED #808 ac-3.1 (production Orca env — THE headline test): agent_id present + isRoutineFn()===false still DENIES — this is the shape that actually reproduces the incident, since core/orca/select-and-dispatch.mjs sets no env markers", () => {
+  // The harvester is always a subagent (agent_id present). isRoutineFn is wired exactly as it
+  // is in production for an Orca-dispatched run: no env markers set, so isRoutineSession({}) is
+  // false. If the implementation used `routine` alone (the ORIGINAL, uncorrected spec text) this
+  // test goes red — that is the point: it is the regression guard for correction #1.
+  const verdict = decide(
+    harnessBash("gh issue create --title x --label harness:ready", { agent_id: "ag_harvester_1" }),
+    { isRoutineFn: () => isRoutineSession({}) },
+  );
+  assert.equal(verdict.allow, false, "a subagent (harvester) attaching a harness:* label must be denied even with isRoutineFn()===false — production has NO env markers");
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(
+    verdict.hookSpecificOutput.permissionDecisionReason,
+    /harness:\*|no label|inert|label-free/i,
+    "deny reason must tell the agent what to do instead, not just that it is blocked",
+  );
+  assert.match(
+    verdict.hookSpecificOutput.permissionDecisionReason,
+    /gh issue list/,
+    "deny reason must carry the dedup search command (§1.4)",
+  );
+});
+
+test("LOCKED #808 ac-3.2 (subagent context, no label): a subagent Bash call with NO harness:* label is unaffected — proves the predicate keys on the LABEL, not merely on agent_id", () => {
+  const verdict = decide(
+    harnessBash("gh issue create --title x --body-file /tmp/b.md", { agent_id: "ag_harvester_1" }),
+    { isRoutineFn: () => isRoutineSession({}) },
+  );
+  assert.equal(verdict.allow, true, "no label flag present → must allow (harvest can still file genuinely new, unlabeled findings — #ac-2.3)");
+});
+
+test("LOCKED #808: precedes the agent_id early-allow (subagent context) — same shape as ac-3.1's headline test, stated for the `edit` verb too", () => {
+  const verdict = decide(
+    harnessBash("gh issue edit 401 --add-label harness:ready", { agent_id: "ag_harvester_1" }),
+    { isRoutineFn: () => isRoutineSession({}) },
+  );
+  assert.equal(verdict.allow, false, "gh issue edit --add-label harness:* from a subagent must be denied");
+});
+
+test("LOCKED #808: interactive main-loop session (no agent_id, isRoutineFn throws) fails OPEN — mirrors the ScheduleWakeup rail's try/catch", () => {
+  const verdict = decide(
+    harnessBash("gh issue create --title x --label harness:ready"),
+    { isRoutineFn: () => { throw new Error("boom"); } },
+  );
+  assert.equal(verdict.allow, true, "routine detection throwing must fail open when there is also no subagent context");
+});
+
+// ---------------------------------------------------------------------------
+// #ac-2.3 — the harvest can still file genuinely new findings (no label at all → allowed)
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 ac-2.3: routine session, gh issue create with NO harness:* label at all → allowed", () => {
+  const verdict = decide(harnessBash("gh issue create --title x --body-file /tmp/finding.md"), ROUTINE_DEPS);
+  assert.equal(verdict.allow, true, "a label-free issue create must never be denied by this rail");
+});
+
+// ---------------------------------------------------------------------------
+// Un-queuing is never denied (spec §1.5 point 2, §6.1-d) — --remove-label is excluded BY
+// CONSTRUCTION in detectHarnessLabelWrite (already asserted above); this locks it end-to-end
+// through decide() too, in both a routine AND a subagent context.
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 §6.1-d: `--remove-label harness:in-progress` is never denied, routine or subagent", () => {
+  const command = "gh issue edit 401 --remove-label harness:in-progress";
+  const routineVerdict = decide(harnessBash(command), ROUTINE_DEPS);
+  assert.equal(routineVerdict.allow, true, "un-queuing must be allowed even in a routine session");
+  const subagentVerdict = decide(harnessBash(command, { agent_id: "ag_1" }), { isRoutineFn: () => isRoutineSession({}) });
+  assert.equal(subagentVerdict.allow, true, "un-queuing must be allowed even from a subagent");
+});
+
+// ---------------------------------------------------------------------------
+// Ordering (spec §6.1-f): the rail must run ABOVE isDeliveryCommand, so a composite command
+// cannot route around it into the delivery rails (or the reverse — never bypass this deny by
+// riding a delivery-command classification).
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 §6.1-f: composite `gh issue create --label harness:ready && git push` is denied by THIS rail (not silently swallowed by delivery rails)", () => {
+  const verdict = decide(harnessBash("gh issue create --title x --label harness:ready && git push origin HEAD"), ROUTINE_DEPS);
+  assert.equal(verdict.allow, false);
+  assert.match(verdict.hookSpecificOutput.permissionDecisionReason, /harness:\*|no label|inert|label-free/i);
+});
+
+test("LOCKED #808 §6.1-f: routine session with a label-carrying create, even when the issue form is vendored, DENIES rather than returning the (allow+)advisory", () => {
+  const verdict = decide(harnessBash("gh issue create --title x --label harness:ready"), {
+    ...ROUTINE_DEPS,
+    issueFormExistsFn: () => true,
+  });
+  assert.equal(verdict.allow, false, "the deny must win over the advisory allow when a label is present");
+});
+
+// ---------------------------------------------------------------------------
+// Advisory split (spec §2 / §6.1-h): a routine session with NO label gets the routine-specific
+// dedup-carrying advisory; the interactive text stays byte-identical to what shipped before #808
+// (this is what makes #ac-3.2 actually hold on the advisory path, not just the deny path).
+// ---------------------------------------------------------------------------
+
+test("LOCKED #808 §6.1-h: adviseIssueForm(..., isRoutine=true) returns the routine advisory — carries the dedup search, omits the old blanket instruction", () => {
+  const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, true);
+  assert.ok(result, "routine advisory must be a truthy string");
+  assert.match(result, /gh issue list/, "must carry the dedup search command");
+  assert.doesNotMatch(result, /create EVERY issue with/, "must NOT keep the blanket instruction that failed in the incident");
+});
+
+test("LOCKED #808 §6.1-h: adviseIssueForm's 4th param defaults to false — the interactive text is UNCHANGED (byte-identical call sites, #ac-3.2 regression lock)", () => {
+  const withDefault = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
+  const withExplicitFalse = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, false);
+  assert.equal(withDefault, withExplicitFalse, "omitting isRoutine must behave exactly like passing false");
+  assert.match(withDefault, /label `harness:ready`/, "interactive advisory must still tell the operator to label harness:ready");
+  assert.match(withDefault, /chain-validate\.mjs/, "interactive advisory must still carry the chained-roadmap DAG lint");
+});
+
+test("LOCKED #808 §6.1-h: decide() wires isRoutineFn into the advisory too — a routine, label-free create gets the ROUTINE text, not the interactive one", () => {
+  const verdict = decide(harnessBash("gh issue create --title x --body-file /tmp/f.md"), {
+    ...ROUTINE_DEPS,
+    issueFormExistsFn: () => true,
+  });
+  assert.equal(verdict.allow, true);
+  assert.ok(verdict.hookSpecificOutput?.additionalContext, "must carry an advisory");
+  assert.match(verdict.hookSpecificOutput.additionalContext, /gh issue list/, "must be the routine (dedup) advisory");
+  assert.doesNotMatch(verdict.hookSpecificOutput.additionalContext, /create EVERY issue with/, "must not be the interactive advisory");
+});
+
+// ---------------------------------------------------------------------------
+// Accepted, out-of-reach bypasses (spec §1.5 / correction 3's closing paragraph) — documented
+// here deliberately rather than silently ignored. NOT asserted as denied; asserted as OUT OF
+// SCOPE for this static, non-shell-parsing detector:
+//   - `L=harness:ready; gh issue create --label $L` (a variable assigned on an earlier statement,
+//     then referenced bare — the unresolvable-value guard only fires when the SAME flag's value
+//     token itself contains `$` or a backtick; a bare `$L` with no quoting still contains `$` and
+//     IS caught, but a fully de-referenced case reaching the detector as a literal is not
+//     reproducible without a shell, so it is not asserted here).
+//   - a label written by some OTHER future argv-array `gh` caller the session spawns as a child
+//     process outside any Bash tool call (mirrors why the Orca/vps selector's own label writes are
+//     provably out of this hook's reach — PreToolUse only sees Bash TOOL calls, not arbitrary
+//     child processes).
+//   - a label applied later, from OUTSIDE the session entirely (e.g. by hand, via the GitHub UI,
+//     minutes after the session exits).
+// The spec is explicit that these are accepted, not silently missed — see spec §1.5 point 4 and
+// correction 3's final paragraph.
+// ---------------------------------------------------------------------------

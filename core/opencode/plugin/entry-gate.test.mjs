@@ -1435,3 +1435,182 @@ test("obs-first then entry terminal after keeps hand record and capture-pending 
     assert.equal(fs.existsSync(exactDispatchPath(root, SID, "call-obs-first")), true)
   })
 })
+
+// --- #808 queue-contamination rail: routine/subagent session cannot ATTACH a harness:* label ---
+
+/** All three routine markers isRoutineSession reads, cleared together: a test asserting the
+ * "no marker" premise is silently vacuous if an ambient one leaks in from the outer env. */
+const NO_ROUTINE_MARKERS = {
+  CLAUDE_CODE_REMOTE: undefined,
+  HARNESS_NOTIFY_PROJECT: undefined,
+  HARNESS_OBSERVABILITY_RUN_PATH: undefined,
+  HARNESS_OC_DATA_HOME: undefined,
+}
+
+test("#808: routine session (HARNESS_NOTIFY_PROJECT set) denies `gh issue create --label harness:ready`", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: "test-project" }, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "bash", sessionID: SID },
+            { args: { command: "gh issue create --title x --label harness:ready" } },
+          ),
+        (err) => {
+          assert.ok(err instanceof Error)
+          assert.match(err.message, /\[entry-gate\] Blocked:/)
+          return true
+        },
+      )
+    })
+  })
+})
+
+test("#808 #ac-3.2: interactive main-loop session is NOT denied — operator path untouched, including the REAL `build` primary-agent shape", async () => {
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      // Two shapes, both of which the operator's own session really produces: the host may or
+      // may not surface an acting agent, and when it does for the top-level lane it is `build`
+      // (core/opencode/agents/build.md is `mode: primary`). Reading ANY non-empty agent as a
+      // subagent would deny the operator here — that is what this case exists to catch.
+      for (const input of [
+        { tool: "bash", sessionID: SID },
+        { tool: "bash", sessionID: SID, agent: "build" },
+        { tool: "bash", sessionID: SID, agent: "plan" },
+        { tool: "bash", sessionID: SID, agent: "harness-config" },
+      ]) {
+        await assert.doesNotReject(
+          () => before(input, { args: { command: "gh issue create --title x --label harness:ready" } }),
+          `operator shape must not be denied: agent=${input.agent ?? "(none)"}`,
+        )
+      }
+    })
+  })
+})
+
+test("#808 #ac-3.1: a CHILD SESSION (parentID present) with no env marker at all is denied — the authoritative OC subagent signal", async () => {
+  // The host does not surface an acting agent on every path, so the session's parentID is the
+  // signal that actually survives an Orca dispatch. Same signal core/shared/lib/classify-authority.mjs
+  // uses to detect a child session. With getSessionParentIdFn returning null this must NOT deny.
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(
+      async (hooks, root) => {
+        writeGateState(root, SID, {})
+        const before = hooks["tool.execute.before"]
+        await assert.rejects(
+          () =>
+            before(
+              { tool: "bash", sessionID: SID },
+              { args: { command: "gh issue create --title x --label harness:ready" } },
+            ),
+          /\[entry-gate\] Blocked:/,
+        )
+      },
+      { getSessionParentIdFn: async () => "ses_parent" },
+    )
+  })
+})
+
+test("#808 #ac-2.3: a subagent may still file the finding — a LABEL-FREE create is allowed, and so are the dedup search and the comment", async () => {
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      for (const command of [
+        'gh issue create --title "[harness] x" --body-file /tmp/b.md',
+        'gh issue list --state open --limit 50 --search "meta-publish.ts" --json number,title,url,labels',
+        "gh issue comment 401 --body-file /tmp/b.md",
+      ]) {
+        await assert.doesNotReject(
+          () => before({ tool: "bash", sessionID: SID, agent: "harvester" }, { args: { command } }),
+          `harvest must still be able to run: ${command}`,
+        )
+      }
+    })
+  })
+})
+
+test("#808 correction 2: a subagent shelling submit-issue.mjs is denied — it hardcodes harness:ready with no --label flag", async () => {
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "bash", sessionID: SID, agent: "harvester" },
+            {
+              args: {
+                command:
+                  "node .opencode/skills/creating-issues/references/submit-issue.mjs --title x --body-file /tmp/b.md",
+              },
+            },
+          ),
+        /\[entry-gate\] Blocked:/,
+      )
+      // ...and the operator running the SAME sanctioned submitter by hand is untouched.
+      await assert.doesNotReject(() =>
+        before(
+          { tool: "bash", sessionID: SID, agent: "build" },
+          {
+            args: {
+              command:
+                "node .opencode/skills/creating-issues/references/submit-issue.mjs --title x --body-file /tmp/b.md",
+            },
+          },
+        ),
+      )
+    })
+  })
+})
+
+test("#808 #ac-3.1: PRODUCTION case — Orca dispatch sets no env marker at all, but the caller is a subagent (acting agent `harvester`) — still denied", async () => {
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.rejects(
+        () =>
+          before(
+            { tool: "bash", sessionID: SID, agent: "harvester" },
+            { args: { command: "gh issue edit 401 --add-label harness:ready" } },
+          ),
+        /\[entry-gate\] Blocked:/,
+      )
+    })
+  })
+})
+
+test("#808: --remove-label (un-queuing) is never denied — routine session, harness:in-progress", async () => {
+  await withEnv({ HARNESS_NOTIFY_PROJECT: "test-project" }, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before(
+          { tool: "bash", sessionID: SID },
+          { args: { command: "gh issue edit 401 --remove-label harness:in-progress" } },
+        ),
+      )
+    })
+  })
+})
+
+test("#808: --remove-label (un-queuing) is never denied — subagent caller, harness:ready", async () => {
+  await withEnv(NO_ROUTINE_MARKERS, async () => {
+    await withHooks(async (hooks, root) => {
+      writeGateState(root, SID, {})
+      const before = hooks["tool.execute.before"]
+      await assert.doesNotReject(() =>
+        before(
+          { tool: "bash", sessionID: SID, agent: "harvester" },
+          { args: { command: "gh issue edit 401 --remove-label harness:ready" } },
+        ),
+      )
+    })
+  })
+})
