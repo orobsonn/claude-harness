@@ -11,8 +11,14 @@
  * PR-review automation's merge criteria are stated; and the `entry-gate` consequence (no `-R` on the
  * merge command) is written down, because it is the one constraint an operator would otherwise
  * discover only by having a merge denied.
+ *
+ * Plus the four canary facts of #810: the current head-branch format, the entry-gate's ambiguity
+ * refusal (pipe/redirect included), worktree ps as liveness-not-progress, and the release-please
+ * repo toggle.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -23,6 +29,7 @@ const DOCS = {
   fromZero: new URL("../../docs/playbook-vps-agente-ia-do-zero.md", import.meta.url),
   selector: new URL("./README.md", import.meta.url),
   deprecated: new URL("../vps/DEPRECATED.md", import.meta.url),
+  kaizen: new URL("../claude-code/kaizen.md", import.meta.url),
 };
 
 /** @param {URL} fileUrl @returns {string} */
@@ -64,9 +71,13 @@ test("the PR-review automation's merge criteria are documented, including the ma
 });
 
 test("the entry-gate consequence is written down: the merge command cannot pass -R/--repo", () => {
-  const combined = [DOCS.usage, DOCS.playbook, DOCS.selector].map(readDoc).join("\n");
+  // Flattened: the two flags are named as ONE restriction, and which column the author wrapped at
+  // is not part of the contract. Order-independent for the same reason — pinning `--repo` BEFORE
+  // `-R` pinned a word order nobody promised, and the #810 rewrite broke it without weakening the
+  // doc.
+  const combined = flat([DOCS.usage, DOCS.playbook, DOCS.selector].map(readDoc).join("\n"));
   assert.match(combined, /entry-gate/);
-  assert.match(combined, /-R\/--repo|--repo.*-R/);
+  assert.match(combined, /`?-R`?\/`?--repo`?|`?--repo`?\/`?-R`?/, "both flags must be named as one restriction");
   assert.match(combined, /amb[íi]gu/i, "the gate denies an ambiguous merge target");
 });
 
@@ -193,4 +204,248 @@ test("no doc still tells the operator to run `orca repo ls` — the build refuse
       assert.doesNotMatch(line, /orca repo ls/, `${key} still instructs \`orca repo ls\`: ${line}`);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// #810 — canary learnings: branch name, entry-gate ambiguity, worktree ps, release-please toggle
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+/**
+ * @description Every markdown doc the contract polices: the root README plus everything under
+ * `docs/` and `core/`, minus `core/vps/` — issue #807 deletes that tree, so no oracle may grow a
+ * dependency on it — and minus `node_modules`/`.git`.
+ * @returns {string[]} absolute paths
+ */
+function markdownDocs() {
+  const files = [fileURLToPath(DOCS.readme)];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        if (path.relative(REPO_ROOT, full) === path.join("core", "vps")) continue;
+        walk(full);
+      } else if (entry.name.endsWith(".md")) {
+        files.push(full);
+      }
+    }
+  };
+  for (const tree of ["docs", "core"]) walk(path.join(REPO_ROOT, tree));
+  return files;
+}
+
+/** @description Blank-line-delimited [start, end) line ranges. @param {string[]} lines */
+function paragraphRanges(lines) {
+  const ranges = [];
+  let start = null;
+  lines.forEach((line, index) => {
+    if (line.trim() !== "" && start === null) start = index;
+    if (line.trim() === "" && start !== null) {
+      ranges.push([start, index]);
+      start = null;
+    }
+  });
+  if (start !== null) ranges.push([start, lines.length]);
+  return ranges;
+}
+
+/**
+ * @description Line indices that sit INSIDE a fenced code block. A `# comment` in a shell sample is
+ * not a heading: letting it count as one would let an unmarked claim borrow a marker word from a
+ * nearby code block, and it makes the failure message point at a line no reader calls a heading.
+ * @param {string[]} lines @returns {Set<number>}
+ */
+function fencedLines(lines) {
+  const inside = new Set();
+  let open = false;
+  lines.forEach((line, index) => {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      open = !open;
+      inside.add(index);
+      return;
+    }
+    if (open) inside.add(index);
+  });
+  return inside;
+}
+
+/** @description A `## ` section, heading → next `## `. @param {string} doc @param {string} heading */
+function sliceSection(doc, heading) {
+  const start = doc.indexOf(heading);
+  assert.notEqual(start, -1, `the doc must carry the section "${heading}"`);
+  const rest = doc.slice(start + heading.length);
+  const end = rest.search(/\n## /);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/**
+ * @description Collapses line wraps and blockquote markers so an asserted phrase survives a
+ * re-wrap. Doc contracts must pin WORDS, not the column the author happened to break at.
+ * @param {string} doc @returns {string}
+ */
+function flat(doc) {
+  return doc.split("\n").map((line) => line.replace(/^\s*>?\s?/, "")).join(" ").replace(/\s+/g, " ");
+}
+
+const BRANCH_HEADING = "## O nome do branch é `<owner>/harness-<N>` — e casar prefixo é anti-padrão";
+
+test("#ac-1.1 the selector README pins the CURRENT branch format `<owner>/harness-<N>`, names prefix-matching an anti-pattern, and explains why the review automation's SUFFIX regex still matches", () => {
+  const section = flat(sliceSection(readDoc(DOCS.selector), BRANCH_HEADING));
+  assert.match(section, /<owner>\/harness-<N>/, "the current head-branch format must be written literally");
+  assert.match(
+    section,
+    /[A-Za-z][\w.-]*\/harness-\d+/,
+    "…alongside a concrete owner-prefixed example, not the placeholder alone",
+  );
+  assert.match(section, /anti-?padr[ãa]o/i, "matching a branch PREFIX must be named an anti-pattern");
+  assert.match(section, /estado da issue/i, "the doc must say the right question is the ISSUE's state");
+  assert.match(section, /CLOSED/, "…and name the state that means delivered");
+  assert.match(section, /kaizen\.md/, "the doc must cross-reference the kaizen entry on branch-name-anchored gates");
+  // Without this half a reader "fixes" a selector that is not broken.
+  assert.match(section, /\/harness-\[0-9\]\+\$\//, "the review automation's regex must be quoted verbatim");
+  assert.match(section, /sufixo/i, "…and explained as a SUFFIX match, which is why the `<owner>/` prefix does not break it");
+});
+
+/** Placeholder-shaped mentions only: a FORMAT claim, not a concrete past branch (`harness/84`). */
+const OLD_BRANCH_FORMAT = /harness\/(?:<[Nn]>|\$\{?N\}?|N\b)/;
+/** Any one of these, in the mention's paragraph or its nearest heading, marks it as history. */
+const RETIRED_ENGINE_MARKERS =
+  /motor antigo|motor aposentado|aposentad|retirad|retired|legacy|hist[óo]ric|chain-release|cron-a-select/i;
+
+test("#ac-1.2 no doc presents `harness/<N>` as the CURRENT branch format — every mention sits in a paragraph (or under a heading) marked as the retired engine's history", () => {
+  let mentions = 0;
+  for (const file of markdownDocs()) {
+    const lines = readFileSync(file, "utf-8").split("\n");
+    const fenced = fencedLines(lines);
+    for (const [start, end] of paragraphRanges(lines)) {
+      const paragraph = lines.slice(start, end).join("\n");
+      if (!OLD_BRANCH_FORMAT.test(paragraph)) continue;
+      mentions += 1;
+      const heading = lines
+        .slice(0, start)
+        .reduce((found, line, index) => (!fenced.has(index) && /^#{1,6}\s/.test(line) ? line : found), "");
+      assert.match(
+        `${heading}\n${paragraph}`,
+        RETIRED_ENGINE_MARKERS,
+        `${path.relative(REPO_ROOT, file)}:${start + 1} presents \`harness/<N>\` with nothing marking it as the RETIRED engine's format. ` +
+          "Either mark it (name the retired engine / `chain-release.mjs` in the same paragraph or its heading), " +
+          "or state the CURRENT format instead: `<owner>/harness-<N>`.",
+      );
+    }
+  }
+  // Not vacuous, and not an invitation to delete the history: the lesson stays on record.
+  assert.ok(mentions >= 1, "the retired engine's `harness/<N>` bug must remain documented somewhere, as history");
+  assert.match(
+    readDoc(DOCS.kaizen),
+    OLD_BRANCH_FORMAT,
+    "the kaizen entry `dependency gates must be anchored on delivery STATE` must keep the literal old format it is about",
+  );
+});
+
+test("#ac-2.1 every doc that shows the merge command states the entry-gate refuses an ambiguous target — pipe and redirect included — and none of them SHOWS `-R`/`--repo` on a merge command", async () => {
+  const { reviewAutomationGuide } = await import(
+    "../claude-code/skills/initializing-projects/references/setup-vps.mjs"
+  );
+  const sites = [
+    ["core/orca/README.md", readDoc(DOCS.selector)],
+    ["docs/usage.md", readDoc(DOCS.usage)],
+    ["docs/orca-headless-vps-playbook.md", readDoc(DOCS.playbook)],
+    ["the setup-vps printed guide", reviewAutomationGuide()],
+  ];
+  for (const [name, doc] of sites) {
+    const flatDoc = flat(doc);
+    assert.match(flatDoc, /entry-gate/, `${name} must name the gate`);
+    assert.match(flatDoc, /amb[íi]gu/i, `${name} must say the gate refuses an ambiguous target`);
+    assert.match(flatDoc, /-R\b/, `${name} must name the -R half of the restriction`);
+    assert.match(flatDoc, /--repo/, `${name} must name the --repo half of the restriction`);
+    assert.match(flatDoc, /\bpipe\b/i, `${name} must say a PIPE in the same command makes the target ambiguous`);
+    assert.match(flatDoc, /redirecionamento|redirect/i, `${name} must say a REDIRECT does too`);
+    // The literal the operator will grep when the terminal denies the merge. Measured against the
+    // live hook (entry-gate.mjs:779/787); duplicated on purpose — it is a constant, not prose. Flattened
+    // because a printed 78-column CLI guide legitimately wraps mid-sentence.
+    assert.match(
+      flatDoc,
+      /PR target is ambiguous; merge is denied\./,
+      `${name} must quote the gate's real refusal line verbatim`,
+    );
+    // "Shows" is the AC's word: an EXAMPLE command must not carry the flag. Prose that forbids the
+    // flag necessarily mentions it, so only command-shaped lines are policed.
+    for (const line of doc.split("\n")) {
+      if (!/^\s*>?\s*gh pr merge\b/.test(line)) continue;
+      // A measured refusal line is evidence, not an instruction: it exists precisely to show what
+      // the gate rejects, so it may carry the flag it is being rejected for.
+      if (/\[entry-gate\] Blocked:/.test(line)) continue;
+      assert.doesNotMatch(
+        line,
+        /(^|\s)(-R\b|--repo\b|--repo=)/,
+        `${name} shows a merge command carrying -R/--repo: ${line.trim()}`,
+      );
+    }
+  }
+});
+
+test("#ac-2.2 the docs state the entry-gate is DESIRED and must stay — never an obstacle to work around", () => {
+  for (const key of ["selector", "usage", "playbook"]) {
+    assert.match(
+      flat(readDoc(DOCS[key])),
+      /feature,? n[ãa]o obst[áa]culo/i,
+      `${key} must say the gate is a feature, not an obstacle`,
+    );
+  }
+  const selector = flat(readDoc(DOCS.selector));
+  assert.match(selector, /deve continuar assim/i, "the canonical site must say the gate must STAY");
+  assert.match(selector, /n[ãa]o contorne/i, "…and forbid working around it");
+  assert.match(
+    selector,
+    /adapte o comando ao gate/i,
+    "…in the sentence that settles which side adapts",
+  );
+});
+
+const LIVENESS_HEADING = "## Sinal de vida ≠ sinal de progresso (`orca worktree ps`)";
+
+test("#ac-3.1 the selector README separates LIVENESS from PROGRESS: `orca worktree ps` feeds the concurrency ceiling; commits and the PR are what say a run moved", () => {
+  const section = flat(sliceSection(readDoc(DOCS.selector), LIVENESS_HEADING));
+  assert.match(section, /orca worktree ps/, "the section must be about the command it names");
+  assert.match(section, /agente vivo/i, "`worktree ps` must be stated as a LIVENESS signal");
+  assert.match(section, /globalMaxWorking/, "…whose job here is feeding the concurrency ceiling");
+  assert.match(section, /n[ãa]o diz onde a run est[áa]/i, "the doc must deny it as a PROGRESS signal");
+  assert.match(section, /minutos/i, "the last-message lag must be quantified as MINUTES, not 'a bit'");
+  assert.match(section, /commits? e o PR/i, "real progress must be named: commits and the PR");
+  assert.match(section, /gh pr list/, "…with a runnable way to ask for the PR");
+  assert.match(section, /git .*log/, "…and a runnable way to ask for the commits");
+});
+
+test("#ac-4.1 the repo SETUP checklist carries the release-please toggle, with the symptom that does not look like a permission error", () => {
+  const usage = flat(readDoc(DOCS.usage));
+  assert.match(usage, /can_approve_pull_request_reviews/, "the API-level toggle name must be greppable");
+  assert.match(
+    usage,
+    /Allow GitHub Actions to create and approve pull requests/,
+    "…and the exact label the operator clicks in Settings → Actions → General",
+  );
+  assert.match(usage, /release-please/i, "the item must say which tool needs it");
+  assert.match(usage, /cria o branch e a commit/i, "the symptom: the action gets as far as branch + commit");
+  assert.match(usage, /falha\s+\*{0,2}na abertura do PR/i, "…and fails AT PR CREATION");
+  assert.match(usage, /n[ãa]o parece de permiss[ãa]o/i, "…with an error that does not look like a permission error");
+});
+
+test("#ac-4.2 the checklist records the neighbouring symptom (github-actions[bot] PR, CI `action_required`, zero jobs, gate correctly denying) and does NOT claim the toggle cures the default-GITHUB_TOKEN case", () => {
+  const rawUsage = readDoc(DOCS.usage);
+  const usage = flat(rawUsage);
+  assert.match(usage, /github-actions\[bot\]/, "the PR's author must be named");
+  assert.match(usage, /action_required/, "the CI state must be named literally");
+  assert.match(usage, /zero jobs/i, "…including that no job materializes");
+  assert.match(usage, /aprovar o workflow run/i, "…and that a human must approve the workflow run");
+  assert.match(usage, /corretamente/i, "the doc must say the entry-gate is RIGHT to deny while the rollup is empty");
+  assert.match(rawUsage, /No CI checks are reported; merge is denied\./, "…quoting the gate's real line");
+  // The trap this half exists to prevent: believing the toggle fixes everything.
+  assert.match(usage, /GITHUB_TOKEN/, "the case the toggle does NOT cure must be named");
+  assert.match(usage, /n[ãa]o cura esse caso/i, "…and explicitly excluded from the toggle's effect");
+  assert.match(usage, /releasing-versions/, "the checklist must POINT AT the skill");
+  // Cross-reference, not a second copy: the procedure lives in the skill and drifts if duplicated.
+  assert.doesNotMatch(usage, /Approve and run/i, "the unblock steps belong to the releasing-versions skill");
+  assert.doesNotMatch(usage, /actions\/runs\/\{run_id\}\/approve/, "…same for the approve API call");
 });
