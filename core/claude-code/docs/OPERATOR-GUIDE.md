@@ -252,7 +252,7 @@ O harness **não** carrega todas as skills o tempo todo — elas entram sob dema
 | **`updating-harness`** | "Atualiza o harness", "instala o harness aqui" | Vendora `.claude/` da última release |
 | **`initializing-projects`** | Primeira adoção num projeto | Onboarding completo (labels, settings, issue form) |
 | **`connecting-orca`** | Depois de instalar o harness: "liga a entrega autônoma", "conecta no Orca/VPS" | Diagnóstico → pareamento → repo → fila de implementação → automação de review → issue canária. Também é a saída quando uma sessão acha que "não tem acesso à VPS" |
-| **`releasing-versions`** | Release versionada do **seu** produto | PR de release → tag → GitHub Release |
+| **`releasing-versions`** | Release versionada do **seu** produto | Detecta o regime. Com **release-please** configurado: commits convencionais na `main` → a action abre o PR `chore(main): release X.Y.Z` → o merge desse PR gera tag + GitHub Release, automaticamente. Sem release-please, o fluxo manual de PR de release é o **fallback** |
 | **`authoring-rules`** | Nova lei de pasta/área | Cria/edita rule em `.claude/rules/` |
 
 ### Memória e melhoria (geralmente no harvest)

@@ -191,7 +191,7 @@ As demais continuam sendo skills que o `build` carrega quando o pedido é claro:
 | Skill | Quando pedir (exemplos) | O que faz |
 |---|---|---|
 | **`oc-committing-changes`** | Commit avulso fora do ship full | Commit seletivo |
-| **`oc-releasing-versions`** | Release versionada do **seu** produto | CHANGELOG + tag (se o projeto usa o fluxo) |
+| **`oc-releasing-versions`** | Release versionada do **seu** produto | Com **release-please** configurado: commits convencionais na `main` → a action abre o PR `chore(main): release X.Y.Z` → o merge gera tag + GitHub Release, automaticamente. Sem release-please, o fluxo manual de CHANGELOG + tag é o **fallback** |
 | **`oc-creating-issues`** | “Abre issue harness-ready” | Issue no formato do pipeline |
 
 ### Memória e melhoria (geralmente no harvest)
