@@ -264,6 +264,10 @@ async function createEntryGateHooks(
     applyAdvisory,
     decideBashDelivery,
     isDeliveryCommand,
+    isRoutineSession,
+    isSubagentActingAgent,
+    detectHarnessLabelWrite,
+    decideBashHarnessLabel,
     throwIfDenied: throwIfBashDenied,
   } = await import("./lib/bash-decide.mjs")
   const {
@@ -460,7 +464,73 @@ async function createEntryGateHooks(
           }
         }
 
-        applyAdvisory(decideBashAdvisory({ command, cwd: root }), output)
+        // #808 queue-contamination rail: neither a HARNESS ROUTINE session nor ANY subagent
+        // (the harvester is always dispatched as a child session) may ATTACH a `harness:*`
+        // label to a GitHub issue. `harness:ready` is exactly what the autonomous selector
+        // (core/orca/select-and-dispatch.mjs) picks up on its next tick, so a run that labels
+        // its own harvest finding puts the engine's own future work into the engine's own queue
+        // -- the real incident: oraculo-app #401, a duplicate opened with no dedup search.
+        //
+        // BOTH signals are needed, and neither alone would have caught the incident. The live
+        // Orca dispatch sets NO env markers (its autonomy signal lives in the PROMPT string), so
+        // `isRoutineSession` is false there; the retiring core/vps/ cron path conversely sets the
+        // markers but need not be a child session. Mirrors the Claude Code rail
+        // (core/claude-code/hooks/entry-gate.mjs decideBash, which reads `payload.agent_id`).
+        //
+        // Subagent detection is TWO-STAGE and both stages are deliberate:
+        //   1. the acting agent name (sync, already resolved for the classify-authority check
+        //      above). A name is only a subagent when it is NOT one of OC's `mode: primary`
+        //      agents -- build / plan / harness-config. Treating any non-empty agent as a
+        //      subagent would classify the OPERATOR's own `build` main loop as one and deny his
+        //      hand-applied label, breaking #ac-3.2.
+        //   2. the session's parentID (async, the same signal shared/lib/classify-authority.mjs
+        //      uses to detect a child session) -- the authoritative one, since the host does not
+        //      surface an acting agent on every path.
+        // Both stages run ONLY when the cheap pure detector has already found a harness label
+        // write, so no ordinary bash call pays for the session round trip.
+        const attachedHarnessLabel = detectHarnessLabelWrite(command)
+        // The advisory needs the same predicate as the deny: a label-FREE `gh issue create` from
+        // a subagent is the #ac-2.3 happy path, and it is precisely the caller that must read the
+        // ROUTINE advisory (dedup + label-free) rather than the interactive one, whose text still
+        // says to label the issue `harness:ready` -- the instruction that produced the incident.
+        const labelRailRelevant =
+          attachedHarnessLabel !== null || /\bgh\s+issue\s+create\b/.test(command)
+        let routineSession = false
+        if (labelRailRelevant) {
+          routineSession = isRoutineSession(process.env)
+        }
+        let isSubagentForLabelRail = false
+        if (labelRailRelevant && !routineSession) {
+          isSubagentForLabelRail = isSubagentActingAgent(resolveActingAgentFn(input, output))
+          if (
+            !isSubagentForLabelRail &&
+            typeof sessionId === "string" &&
+            sessionId &&
+            typeof getSessionParentIdFn === "function"
+          ) {
+            try {
+              isSubagentForLabelRail = Boolean(await getSessionParentIdFn(sessionId))
+            } catch {
+              isSubagentForLabelRail = false // fail-open on an infra error, never a new block
+            }
+          }
+        }
+        throwIfBashDenied(
+          decideBashHarnessLabel({
+            command,
+            isRoutine: routineSession,
+            isSubagent: isSubagentForLabelRail,
+          }),
+        )
+
+        applyAdvisory(
+          decideBashAdvisory({
+            command,
+            cwd: root,
+            isRoutine: routineSession || isSubagentForLabelRail,
+          }),
+          output,
+        )
 
         const sid =
           typeof sessionId === "string" && sessionId.length > 0

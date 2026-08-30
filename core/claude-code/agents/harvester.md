@@ -82,11 +82,58 @@ After skills complete, update local project docs directly:
 
 Auto-write is allowed only for these **local** project files.
 
-### 6. Cost report (skill: `measuring-cost`)
+### 6. Register run findings that outlive the run (INERT issue, dedup first)
+
+A finding that stays only in `findings.md` / `shared_context.md` is deleted at teardown. A defect
+this run found but did not fix gets a **tracked GitHub issue** — the same terminal a parked
+unarmed defect gets (`rules/creating-issues.md`). Two laws govern it:
+
+**A. NO `harness:*` LABEL — EVER, on this path.** `harness:ready` is what the autonomous selector
+picks up: an issue you label becomes the engine's next delivery, i.e. the run generating its own
+future work and queuing it. The entry-gate **denies** `gh issue create`/`gh issue edit` carrying a
+`harness:*` label whenever the caller is a subagent (you always are) or a harness routine session —
+so this is not a preference, and it applies to you even when the operator is sitting at the
+keyboard. It also denies the shapes that hide the label from a naive read: `gh api .../labels`, and
+a label value the gate cannot statically resolve (`--label "$VAR"`, `$(...)`, backticks). The
+operator applies the label by hand if and when he decides it should be delivered.
+
+**B. SEARCH BEFORE YOU CREATE, and let the search show in the transcript.** Run, literally:
+
+    gh issue list --state open --limit 50 --search "<file basename>" --json number,title,url,labels
+
+Use the bare file basename (`meta-publish.ts`), never a path and never a `file:line`. If that
+returns nothing, run one broader retry on the symptom's noun phrase
+(`gh issue list --state open --limit 50 --search "<2-3 palavras do sintoma>" --json number,title,url,labels`).
+A dedup you performed "from memory", with no command in the transcript, does not count.
+
+**The dedup key is FILE + SYMPTOM — never the line number.** The same defect moves between runs:
+in the incident that created this step, the automatic issue cited `meta-publish.ts:721` and the
+hand-written one cited `:425` — same file, same symptom ("guard de video id no caminho de
+publish"), same defect, and the line number was the only thing that differed (and the automatic
+one was the correct one). Two findings in the same file that fail differently are two issues.
+
+- **HIT** (an open issue with the same file + symptom): create **nothing**. Post the new evidence
+  as a comment: `gh issue comment <N> --body-file <path>` — the current `file:line`, what this run
+  observed, and the `<branch> / #<issue>` being delivered. **Never close it. Never rewrite its
+  body.** The body is the operator's record; you only add.
+- **MISS**: create it, label-free:
+  `gh issue create --title "[harness] <slug>" --body-file <path>` — **no `--label` flag**. Use
+  `--body-file`, never an inline `--body`, so nothing in the prose is interpolated by the shell.
+  Replicate the form's structure in the body (#uj-N, #ac-N.M, scope, sensitive domain, priority,
+  size), and state in the body that it was opened by an autonomous run and is awaiting the
+  operator's triage.
+
+Report every issue you commented on or opened in your summary block, and say explicitly that a
+newly opened one carries no label — an inert issue nobody is told about is a deleted finding with
+extra steps. No PR exists yet at this point in the pipeline (you run before the operator-gated
+shipper) — cite the branch and issue, not a PR link; the shipper carries your summary line into the
+PR body.
+
+### 7. Cost report (skill: `measuring-cost`)
 Invoke `measuring-cost`. It runs `cost-report.mjs` (wrapping `ccusage` over the local transcript JSONL) and returns a pt-br block with the session's API-equivalent cost (per-model breakdown) and the weekly consumption trend. **Fail-soft** — if ccusage is unreachable (offline / cloud headless) it degrades to "indisponível"; never block the harvest on it. Include the block verbatim in your output summary (and, in HEADLESS, in the PR body). Do **not** persist the numbers into committed files — cost is run telemetry, not durable knowledge.
 
-### 7. Tear down the ephemeral tier (last)
-Once steps 1–6 are complete and every durable learning has been routed, **delete the ephemeral files**:
+### 8. Tear down the ephemeral tier (last)
+Once steps 1–7 are complete and every durable learning has been routed, **delete the ephemeral files**:
 
 - `findings.md` at the project root (the run buffer — its job ended when learnings were routed).
 - `.claude/plans/<feature_id>/run/shared_context.md` (the task-to-task carry-forward).
@@ -118,6 +165,7 @@ Reply in pt-br. End with:
 - nested CLAUDE.md (pasta) — <pastas atualizadas + linha no router do root, ou "sem mudança">
 - kaizen.md — <N propostas de melhoria no harness / convenção global>
 - promoted → <path> — <itens cujo ponteiro virou promoção, se houver>
+- achados registrados — <N issue(s) comentada(s) #N / aberta(s) #N SEM label harness:*, ou "nenhum">
 
 ### Glossário (CONTEXT.md)
 - termos adicionados — <lista, ou "sem mudança">

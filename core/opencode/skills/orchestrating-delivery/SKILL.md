@@ -380,6 +380,7 @@ Generate a demo script derived from the **UJs/ACs** (`demo.scenarios_from_refs`)
 ## Phase 5 — Harvest + ship
 
 - Dispatch `harvester` once: consolidates `findings.md`, routes durable learnings by blast-radius (project pattern → native MEMORY.md + index · law of one folder → that folder's nested `AGENTS.md` + root router row · global convention → kaizen proposal), then deletes the ephemeral `findings.md` buffer. It owns `oc-recording-findings` / `oc-distilling-learnings` / `oc-proposing-improvements`. It never auto-writes to memory.
+- It also **registers run findings that outlive the run as tracked issues — always INERT, with no `harness:*` label, and only after an auditable dedup search** (`gh issue list --state open --limit 50 --search "<file basename>"`, keyed on file + symptom, never on line number: on a hit it comments the new evidence on the existing issue and creates nothing; on a miss it creates the issue with no `--label` flag, by hand, not through `submit-issue.mjs`). `harness:ready` is what the autonomous selector picks up, so a labelled harvest issue makes the engine queue its own future work — the entry-gate denies that write in this kind of session, and the operator is the only one who labels.
 - For LIGHT/FULL, dispatch `shipper` with the literal stable path returned by classify:
   `.opencode/plans/<feature_id>/execution-plan.json`. QUICK omits `plan_path`, because it has no plan.
   Delivery uses the authority already present in the task request and never expands its scope.
