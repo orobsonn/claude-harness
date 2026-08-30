@@ -207,7 +207,7 @@ git checkout main && git fetch origin && git pull --ff-only
 LAST_MSG=$(git log -1 --format=%s)
 ```
 
-- Se `$LAST_MSG` casa com `^chore: release v[0-9]+\.[0-9]+\.[0-9]+$` E nao existe tag pra essa versao → **MODO FINISH**
+- Se `$LAST_MSG` casa com `^chore: release v[0-9]+\.[0-9]+\.[0-9]+( \(#[0-9]+\))?$` E nao existe tag pra essa versao → **MODO FINISH**
 - Se ha branch local ou PR aberto `chore/release-*` → reportar estado e perguntar (provavel meio caminho)
 - Caso contrario → **MODO OPEN**
 
@@ -309,11 +309,15 @@ Extrair PR number do commit message (sufixo `(#N)`) e validar CI — usar parsin
 PR_NUMBER=$(echo "$LAST_MSG" | sed -nE 's/.*\(#([0-9]+)\).*/\1/p')  # ex.: "chore: release v0.13.0 (#41)" → 41
 STATES=$(gh pr checks "$PR_NUMBER" --json state -q '.[].state' 2>/dev/null)
 ```
-Avaliar o conteudo de `$STATES` em tres ramos — contra o STATE, nao o exit code:
+
+Se `$PR_NUMBER` vier vazio, o commit nao carrega `(#N)` — parar e perguntar. A deteccao de modo aceita o sufixo como opcional, entao este caso e alcancavel; e `gh pr checks ""` nao reclama do argumento vazio: cai no PR do branch atual (sai 1 com `no pull requests found for branch <nome>`), degradando o gate silenciosamente pro ramo FAIL-SOFT abaixo — ou gateando no PR errado.
+
+Avaliar o conteudo de `$STATES` em quatro ramos — contra o STATE, nao o exit code:
 
 - **Saida vazia** (`$STATES` em branco): repo nao tem CI workflow → **FAIL-SOFT** (warn, nao bloqueia). Avisar usuario que nenhum CI workflow esta configurado, mas prosseguir. Este FAIL-SOFT vale SO aqui, neste fallback manual de projeto sem nenhum workflow de CI — sob release-please, saida vazia significa run esperando aprovacao (ou run que nunca nasceu) e o comportamento e fail-closed (secao 3).
 - **Contem `FAILURE`, `ERROR`, `CANCELLED` ou `TIMED_OUT`**: CI esta **red** → **refuse** the release — nao criar tag. Parar e reportar checks que falharam. Reverter via `git revert -m 1 <merge-sha>` + PR de revert (ou botao "Revert" no GitHub via `gh pr view <N> --web`).
 - **Apenas `SUCCESS`, `SKIPPED`, `NEUTRAL` ou `PENDING` resolvidos**: CI esta verde → prosseguir.
+- **Qualquer outro estado** (`ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, `QUEUED`, `IN_PROGRESS`, `WAITING`, `REQUESTED`, `EXPECTED` — todos valores reais dos enums `CheckConclusionState` / `CheckStatusState` / `StatusState` do GitHub): **NAO e verde** → parar e perguntar. `ACTION_REQUIRED`, `STARTUP_FAILURE` e `STALE` sao conclusoes de nao-sucesso; os demais dizem que o run ainda nao concluiu. Nunca ler "nenhum dos quatro tokens vermelhos esta presente" como verde.
 
 Se falhar por Red CI, parar e reportar.
 

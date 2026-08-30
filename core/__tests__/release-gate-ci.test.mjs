@@ -176,6 +176,31 @@ function loadTarget(target) {
 
 const TARGETS = SHELLS.map(releaseSkillOf).filter(Boolean);
 
+// ---------------------------------------------------------------------------
+// #840 — CC catches up to OC on three points: the "(#N)" suffix in mode detection, the empty
+// PR-number guard, and the non-green fourth branch. Both files now carry the same trigger, the
+// same verdict and the same action at each point.
+//
+// Two differences remain, both PROSE and both file-wide conventions that predate this issue,
+// not rules one shell enforces and the other does not (paridade_nao_superacao is about rules):
+//   1. language and mode labels — CC is pt-br-without-accents with "MODO FINISH" and no trailing
+//      period on its bullets; OC is English with "FINISH mode". Normalizing that is another issue.
+//   2. CC's guard additionally names the mechanism verified in #833 — `gh` resolves the CURRENT
+//      BRANCH's PR and exits 1 with "no pull requests found for branch <name>". Same rule, same
+//      trigger, same action; CC just states why the degradation happens.
+// The guard rationale is therefore asserted at its SEMANTIC CORE (/fail-soft|silent|silenci|degrad/),
+// which both files satisfy today, and never at CC's extra clause: #840 forbids adding a single line
+// of prose to the OpenCode file, so no assertion here may push a future author toward editing it.
+// ---------------------------------------------------------------------------
+
+const NON_GREEN = [
+  "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
+  "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED",
+];
+// Word-bounded on purpose: a naive includes() reads "FAILURE" inside "STARTUP_FAILURE" and the
+// branch-partition assertions below collapse into false positives.
+const tokenRe = (tok) => new RegExp(`\\b${tok}\\b`);
+
 for (const t of TARGETS) {
   test(`#833 ac-1.1 — the FINISH mode gates on gh pr checks before creating the tag (${t.label})`, () => {
     const { finish } = loadTarget(t);
@@ -334,4 +359,96 @@ for (const t of TARGETS) {
       `${t.label}: "gh pr checks" appears after the fence ends — it must live only inside the manual fallback`
     );
   });
+
+  test(`#840 ac-1.1 — mode detection accepts the "(#N)" squash suffix as optional (${t.label})`, () => {
+    const { fallback } = loadTarget(t);
+    const detect = fallback.split("\n").find((l) => l.includes("chore: release v[0-9]"));
+    assert.ok(detect, `${t.label}: no mode-detection line carrying the release-commit regex`);
+    const literal = detect.match(/`(\^chore: release v[^`]*)`/);
+    assert.ok(literal, `${t.label}: the mode-detection regex must be a backticked, ^-anchored literal`);
+    const re = new RegExp(literal[1]);
+
+    assert.ok(re.test("chore: release v1.0.0 (#839)"),
+      `${t.label}: the detection regex rejects the squash commit this same file documents as expected ` +
+      `("chore: release vX.Y.Z (#N)") — FINISH is never detected and the skill opens a SECOND release PR`);
+    assert.ok(re.test("chore: release v1.0.0"),
+      `${t.label}: the "(#N)" suffix must stay OPTIONAL — a non-squash merge must still enter FINISH`);
+    assert.ok(!re.test("chore: release v1.0.0 (#839) and then some"),
+      `${t.label}: the regex must stay anchored — trailing text must not match`);
+  });
+
+  test(`#840 ac-1.2 — an empty PR number stops the release and says why (${t.label})`, () => {
+    const { finish } = loadTarget(t);
+    const guard = finish.split("\n").find(
+      (l) =>
+        l.includes("PR_NUMBER") &&
+        /(empty|vazio|blank)/i.test(l) &&
+        /(stop|par(ar|e)\b|ask|pergunt)/i.test(l)
+    );
+    assert.ok(guard,
+      `${t.label}: nothing stops the release on an empty PR_NUMBER — \`gh pr checks ""\` does not reject ` +
+      `the empty argument, it resolves the CURRENT BRANCH's PR, so the gate degrades to FAIL-SOFT or gates the wrong PR`);
+
+    assert.match(guard, /(fail-soft|silent|silenci|degrad)/i,
+      `${t.label}: the guard gives no reason it exists — a guard that reads like boilerplate is deleted by the ` +
+      `next author. It must say the empty number degrades the gate silently rather than erroring`);
+
+    const tagAt = finish.search(/^\s*git tag v/m);
+    assert.ok(finish.indexOf(guard) < tagAt, `${t.label}: the guard must come before "git tag vX.Y.Z"`);
+  });
+
+  test(`#840 ac-2.1 — a STATE in none of the known lists is NOT green: stop and ask (${t.label})`, () => {
+    const lines = loadTarget(t).finish.split("\n");
+
+    const otherLine = lines.find(
+      (l) => NON_GREEN.every((tok) => tokenRe(tok).test(l)) &&
+             /(stop|par(ar|e)\b|ask|pergunt)/i.test(l)
+    );
+    assert.ok(otherLine,
+      `${t.label}: no branch enumerates ${NON_GREEN.join("/")} and stops on them — reading "none of the four ` +
+      `red tokens is present" as green is the hole (ACTION_REQUIRED is the state this repo's v1.0.0 release PR sat in)`);
+    assert.match(otherLine, /(not green|nao e verde|não é verde)/i,
+      `${t.label}: the branch must state the verdict: NOT green`);
+
+    const redLine   = lines.find((l) =>  /(refuse|recus)/i.test(l) && RED.some((tok) => l.includes(tok)));
+    const greenLine = lines.find((l) => !/(refuse|recus)/i.test(l) && GREEN.every((tok) => l.includes(tok)));
+    assert.ok(redLine && greenLine, `${t.label}: the red and green branches must both still exist`);
+
+    // Partition: each STATE is claimed by exactly one branch. This is the #833 lesson made structural —
+    // moving TIMED_OUT from red to green left every presence assertion green; it cannot here.
+    for (const tok of NON_GREEN) {
+      assert.ok(!tokenRe(tok).test(greenLine), `${t.label}: non-green STATE "${tok}" is listed as a reason to PROCEED`);
+      assert.ok(!tokenRe(tok).test(redLine),   `${t.label}: "${tok}" is on the red branch — it is not a failure, it is unconcluded`);
+    }
+    for (const tok of [...RED, ...GREEN]) {
+      assert.ok(!tokenRe(tok).test(otherLine), `${t.label}: known STATE "${tok}" leaked into the "any other state" branch`);
+    }
+
+    assert.match(loadTarget(t).finish, /\b(four|quatro)\s+(branch|ramo)/i,
+      `${t.label}: the gate preamble still announces the old branch count — the file contradicts itself`);
+  });
 }
+
+// #840 ac-4.1 — the detection regex is the one rule both shells must carry CHARACTER for
+// character; it is protocol, not prose, so language cannot excuse a difference. Locked across
+// every discovered shell so a semantically-equal rewrite (\d for [0-9], \s for the literal space)
+// cannot re-open the drift this issue closed while the behavior assertions above stay green.
+test("#840 ac-4.1 — every shell carries the SAME mode-detection regex, character for character", () => {
+  const literals = TARGETS.map((t) => {
+    const { fallback } = loadTarget(t);
+    const detect = fallback.split("\n").find((l) => l.includes("chore: release v[0-9]"));
+    assert.ok(detect, `${t.label}: no mode-detection line carrying the release-commit regex`);
+    const m = detect.match(/`(\^chore: release v[^`]*)`/);
+    assert.ok(m, `${t.label}: the mode-detection regex must be a backticked, ^-anchored literal`);
+    return { label: t.label, re: m[1] };
+  });
+  const [first, ...rest] = literals;
+  for (const other of rest) {
+    assert.equal(
+      other.re,
+      first.re,
+      `${other.label} and ${first.label} carry DIFFERENT mode-detection regexes ` +
+        `(${other.re} vs ${first.re}) — #840 closed this drift; a shell may not re-open it`
+    );
+  }
+});
