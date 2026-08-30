@@ -56,8 +56,9 @@ body:
         Issues que precisam MERJAR antes desta rodar. MANTENHA o bloco fechado ` ```harness-deps `
         abaixo e edite só os números (`#N`, um por linha) — o motor só libera esta issue quando
         TODAS as dependências têm PR merjado na main. Deixe vazio (apague o bloco) se a issue não
-        depende de nenhuma outra. Rode `node core/vps/chain-validate.mjs` depois de criar o roadmap
-        pra checar ciclos e dependências inexistentes.
+        depende de nenhuma outra. Não existe lint automático para o grafo: antes de criar o
+        roadmap, confira à mão que não há ciclo (`#A` → `#B` → `#A`) e que todo `#N` citado existe
+        — um ciclo deixa as duas issues `harness:queued` para sempre, sem nó morto para notificar.
       value: |
         ```harness-deps
         #

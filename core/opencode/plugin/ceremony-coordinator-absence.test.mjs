@@ -29,7 +29,9 @@ test("ceremony coordinator paths stay absent", () => {
 
 test("live OC sources contain no ceremony-next API consumer", () => {
   const liveFiles = [join(repositoryRoot, "core/opencode/docs/OPERATOR-GUIDE.md")];
-  for (const root of ["core/opencode", "core/shared", "core/vps", "scripts"]) {
+  // #807: `core/vps` retired and was deleted; `core/notify/` (the notify modules extracted from it)
+  // takes its place in this scan so the absence guarantee still covers every live source tree.
+  for (const root of ["core/opencode", "core/shared", "core/notify", "scripts"]) {
     liveFiles.push(...liveSourceFiles(join(repositoryRoot, root)));
   }
 

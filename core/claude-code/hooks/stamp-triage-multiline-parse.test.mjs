@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { decide, handle } from "./stamp-triage.mjs";
-import { createRun, appendEvent, readEvents } from "../vps/obs-outbox.mjs";
+import { createRun, appendEvent, readEvents } from "../../shared/lib/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // #ac-1.1 — hand-ran on a REAL multi-line (pretty-printed) run-record

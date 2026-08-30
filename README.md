@@ -284,7 +284,7 @@ Roda **na VPS**, como o usuário que roda o Orca (**nunca root** — o wizard re
 1. `~/.config/claude-harness/projects/<slug>.json` — a config do projeto (formato em [`core/orca/project.example.json`](core/orca/project.example.json));
 2. uma linha de cron cercada rodando [`core/orca/select-and-dispatch.mjs`](core/orca/select-and-dispatch.mjs).
 
-Ele **não instala mais** os crons do motor antigo da VPS (`install-crons`: Cron A, review, drain, reaper, Telegram) — esse motor está aposentado, ver [`core/vps/DEPRECATED.md`](core/vps/DEPRECATED.md). Notificação deixou de ser problema do wizard: as runs do Orca são visíveis do desktop e do celular. O único passo que sobra manual é a **automação de revisão de PR + merge condicional**, que é uma automação agendada **no Orca**, não código — o wizard imprime os critérios exatos no fim.
+Ele **não instala mais** os crons do motor antigo da VPS (`install-crons`: Cron A, review, drain, reaper, Telegram) — esse motor está aposentado, ver [`docs/vps-retirement.md`](docs/vps-retirement.md). Notificação deixou de ser problema do wizard: as runs do Orca são visíveis do desktop e do celular. O único passo que sobra manual é a **automação de revisão de PR + merge condicional**, que é uma automação agendada **no Orca**, não código — o wizard imprime os critérios exatos no fim.
 
 **Do harness instalado até uma issue entregue, num passo só:** a skill [`connecting-orca`](core/claude-code/skills/connecting-orca/SKILL.md) percorre diagnóstico → runtime/pareamento → repo → fila de implementação → automação de review → issue canária, e só se dá por pronta quando uma issue de verdade atravessou tudo.
 
@@ -313,7 +313,7 @@ O harness tem layout dual-runtime em `core/`:
 | `core/claude-code/` | shell Claude Code (agents/skills/hooks) |
 | `core/opencode/` | shell OpenCode (agents/skills/plugin/tools + `harness.routing.json`) |
 | `core/orca/` | selector multi-projeto (Orca despacha, harness do repo executa) |
-| `core/vps/` | ~~motor headless VPS~~ — **APOSENTADO**, ver [`core/vps/DEPRECATED.md`](core/vps/DEPRECATED.md) |
+| `core/notify/` | notificação Telegram do motor aposentado — mantida fora de `core/shared/` de propósito: `shared/` é espelhado inteiro em todo projeto vendorado, e este módulo lê `TELEGRAM_BOT_TOKEN` de `~/.claude/.dev.vars`; nenhum caminho do instalador o copia (ver o teste-armadilha em `vendor-core.test.mjs`) |
 
 **Vendor OpenCode num projeto:**
 

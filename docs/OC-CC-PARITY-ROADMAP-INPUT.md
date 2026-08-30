@@ -10,7 +10,8 @@
 dependências no bloco `harness-deps`). Cada item abaixo já obedece à regra de sizing do repo
 (1 issue = 1 coisa que sobe e reverte sozinha, ≤ ~400 linhas de diff, sensível isolado). A fonte
 dos vereditos é `docs/OC-CC-PARITY-REPORT.md` (revisão final, seção 3d pós-adversarial + Lote 1b).
-Depois de criar o conjunto, rodar `node core/vps/chain-validate.mjs --config <project.json>`.
+Não existe lint automático para o grafo de dependências: depois de criar o conjunto, confira à mão
+que não há ciclo (`#A` → `#B` → `#A`) e que todo `#N` citado existe.
 
 **Fato que governa a sequência:** fix em core/ é INERTE até re-vendorizar. Os itens 5 e 6 (migração)
 são o que faz TODOS os outros chegarem a um projeto real — em qualquer geração anterior (13 projetos

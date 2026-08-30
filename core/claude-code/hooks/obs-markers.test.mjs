@@ -3,8 +3,8 @@
  * Transcribes the 11 pinned assertions from
  * .claude/plans/vps-run-observability/run/task-6-assertions.md — one test() per
  * assertion, in order. Exercises the REAL mark.mjs (parseArgs/run), the REAL
- * stamp-triage.mjs (handle), the REAL core/vps/obs-outbox.mjs (createRun/readEvents/
- * updateMeta), the REAL core/vps/notify-telegram.mjs (drainTelegramOutbox), and reads
+ * stamp-triage.mjs (handle), the REAL core/shared/lib/obs-outbox.mjs (createRun/readEvents/
+ * updateMeta), the REAL core/notify/notify-telegram.mjs (drainTelegramOutbox), and reads
  * the REAL core/skills/orchestrating-delivery/SKILL.md content — no fakes stand in for
  * production code; the only injected seams are the `send` callback (network boundary)
  * and (test 7) a throwing appendEvent seam to prove the fail-open contract.
@@ -26,8 +26,8 @@ import { fileURLToPath } from "node:url";
 
 import { parseArgs, run } from "./mark.mjs";
 import { handle } from "./stamp-triage.mjs";
-import { createRun, readEvents, updateMeta, appendEvent } from "../vps/obs-outbox.mjs";
-import { drainTelegramOutbox } from "../vps/notify-telegram.mjs";
+import { createRun, readEvents, updateMeta, appendEvent } from "../../shared/lib/obs-outbox.mjs";
+import { drainTelegramOutbox } from "../../notify/notify-telegram.mjs";
 
 // ---------------------------------------------------------------------------
 // Test helpers

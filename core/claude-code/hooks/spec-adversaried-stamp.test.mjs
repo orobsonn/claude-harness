@@ -5,7 +5,7 @@
  * gate-state.json for a session that only ever sends this marker (observability-only,
  * not a gate side effect), and never dedupes repeated same-verdict passes (unlike
  * plan-reviewed's dedupe behavior). Exercises the REAL stamp-triage.mjs (handle) and
- * the REAL core/vps/obs-outbox.mjs (createRun/readEvents) — no fakes stand in for
+ * the REAL core/shared/lib/obs-outbox.mjs (createRun/readEvents) — no fakes stand in for
  * production code.
  * Zero-dep (node:test + node:assert/strict + node builtins only).
  * Run with: node --test core/hooks/spec-adversaried-stamp.test.mjs
@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { handle } from "./stamp-triage.mjs";
-import { createRun, readEvents } from "../vps/obs-outbox.mjs";
+import { createRun, readEvents } from "../../shared/lib/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -28,7 +28,7 @@ const DOCS = {
   playbook: new URL("../../docs/orca-headless-vps-playbook.md", import.meta.url),
   fromZero: new URL("../../docs/playbook-vps-agente-ia-do-zero.md", import.meta.url),
   selector: new URL("./README.md", import.meta.url),
-  deprecated: new URL("../vps/DEPRECATED.md", import.meta.url),
+  deprecated: new URL("../../docs/vps-retirement.md", import.meta.url),
   kaizen: new URL("../claude-code/kaizen.md", import.meta.url),
 };
 
@@ -87,7 +87,7 @@ test("core/vps is documented as retired, and its removal is gated on a verificat
   assert.match(deprecated, /run-drain/, "the runbook must name the crontab entries other projects may still have");
   assert.match(deprecated, /run-reaper/);
   assert.match(deprecated, /crontab -l/, "the runbook must show how to inventory the surviving crons");
-  assert.match(readDoc(DOCS.readme), /core\/vps\/DEPRECATED\.md/, "the README must point at the retirement notice");
+  assert.match(readDoc(DOCS.readme), /docs\/vps-retirement\.md/, "the README must point at the retirement notice");
 });
 
 test("the two measured failures are recorded where an operator will hit them — canary filter and CLOSED-issue dependency gate", () => {

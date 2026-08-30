@@ -420,7 +420,7 @@ async function createEntryGateHooks(
         // this check survives even if a future agent is authored with `bash: allow` again, before
         // the agents permission-lockdown test catches it in CI.
         // Deliberately scoped to fleet dispatch only, keyed SOLELY on HARNESS_NOTIFY_PROJECT — the
-        // one signal `core/vps/cron-a-dispatch.mjs` sets UNCONDITIONALLY for every VPS dispatch
+        // one signal the retired VPS cron dispatcher set UNCONDITIONALLY for every VPS dispatch
         // (never guarded by an `if`). HARNESS_OC_DATA_HOME was deliberately dropped from this check
         // (#516 adversarial review): `core/opencode/skills/triaging-requests/SKILL.md` already
         // documents it as NOT a reliable headless/fleet signal — "a manually-started operator
@@ -473,7 +473,7 @@ async function createEntryGateHooks(
         //
         // BOTH signals are needed, and neither alone would have caught the incident. The live
         // Orca dispatch sets NO env markers (its autonomy signal lives in the PROMPT string), so
-        // `isRoutineSession` is false there; the retiring core/vps/ cron path conversely sets the
+        // `isRoutineSession` is false there; the retired VPS cron path conversely set the
         // markers but need not be a child session. Mirrors the Claude Code rail
         // (core/claude-code/hooks/entry-gate.mjs decideBash, which reads `payload.agent_id`).
         //

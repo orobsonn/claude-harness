@@ -1,7 +1,7 @@
 /**
  * @description Pure fail-open observability outbox append/read for session-side producers.
  * Vendored into `.opencode/shared` — must NOT import core/vps (absent in project vendors).
- * Semantics mirror core/vps/obs-outbox appendEvent/readEvents (JSONL + ts stamp).
+ * Semantics mirror core/shared/lib/obs-outbox.mjs appendEvent/readEvents (JSONL + ts stamp).
  */
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";

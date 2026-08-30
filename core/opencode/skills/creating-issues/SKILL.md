@@ -131,4 +131,4 @@ O helper valida o repo atual contra o `origin` e exige `harness:ready`. Por padr
 
 ## Roadmap
 
-Submeta na ordem necessária apenas para obter os números reais citados pelo pedido. Depois, valide o grafo com o comando de `chain-validate` definido na rule. Nunca crie issue real em testes.
+Submeta na ordem necessária apenas para obter os números reais citados pelo pedido. Depois, valide o grafo **à mão**, conforme a checagem manual definida na rule (não há lint automático). Nunca crie issue real em testes.

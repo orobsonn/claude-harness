@@ -88,7 +88,7 @@ Universal — sem `paths:`, carrega em toda conversa.
 - O motor gateia sozinho: o seletor **adia** (`harness:ready → harness:queued`) qualquer issue cujas dependências ainda não têm **PR merjado na main**, e o review cron a **libera** (`harness:queued → harness:ready`) assim que TODAS merjаram. Uma issue sem dependências roda normalmente
 - Garantia de ordem = gate (dependente espera as deps merjarem) + serialização do run-lock por-projeto (uma issue por vez). Não há execução paralela racing das mesmas issues
 - Se uma dependência morre (`harness:blocked`), a dependente é encalhada (`harness:blocked`) e o operador é notificado — a corrente abaixo de um nó morto não fica parada em silêncio
-- **Depois de criar o roadmap**, rode `node core/vps/chain-validate.mjs --config <project.json>` para checar **ciclos** e **dependências inexistentes** (`#N` de issue que não existe) — o runtime não detecta esses erros de autoria, só o lint
+- **Depois de criar o roadmap**, confira **à mão** que não há **ciclo** (`#A` → `#B` → `#A`) e que todo `#N` citado **existe** — não há lint automático do grafo, e o runtime não detecta esses erros de autoria
 - Mantenha `#N` apontando para números de issue REAIS e abertos/merjados; um typo (`#9999`) deixa a dependente encalhada esperando um PR que nunca virá
 
 ## Gotchas
@@ -98,7 +98,7 @@ Universal — sem `paths:`, carrega em toda conversa.
 - **Label `harness:ready` ausente**: issue visível no GitHub mas invisível para a routine autônoma — entregável perdido. Exceções deliberadas: candidato a aprofundamento, defeito parqueado e achado de run de entrega — as três rotas inertes, que esperam decisão do operador
 - **Slug vago no título**: `[harness] fix` ou `[harness] melhoria` não identificam o escopo; usar `[harness] <feature-id>` curto e descritivo (kebab-case, max ~40 chars)
 - **Bloco `harness-deps` quebrado**: se o operador apagar/corromper a cerca ` ```harness-deps `, o parser não vê dependência e a issue roda IMEDIATAMENTE (sem gate) — possível race de ordem. Manter a cerca intacta; editar só os `#N` dentro dela
-- **Ciclo de dependência** (`#A` depende de `#B` e `#B` de `#A`): ambas ficam `harness:queued` pra sempre, sem nó morto pra notificar. Só o `chain-validate.mjs` pega — rode-o após montar o roadmap
+- **Ciclo de dependência** (`#A` depende de `#B` e `#B` de `#A`): ambas ficam `harness:queued` pra sempre, sem nó morto pra notificar. Nada detecta isso automaticamente — confira o grafo à mão depois de montar o roadmap
 - **Suposição do modelo virando "decisão travada"**: se as `## Suposições do modelo` do PRD entram no corpo misturadas com as `## Decisões travadas`, o adversário passa a DEFENDER um palpite em vez de atacá-lo — o erro atravessa o pipeline inteiro sem ninguém autorizado a contestá-lo. Dois blocos, cada um com seu rótulo
 - **Issue criada com pergunta do `## Em aberto` ainda aberta**: a issue entra `harness:ready`, o motor roda sozinho e INVENTA a decisão que faltava — e ela merjа. Segure a fatia fora do lote até a pergunta fechar
 - **Candidato a aprofundamento virando issue `harness:ready`**: a reforma entra na fila autônoma, o motor reestrutura código que funcionava e o PR merjа sozinho — com o eixo de risco (raio de explosão) invisível pra allowlist de path sensível. Reforma é entrega local, sem label, sempre

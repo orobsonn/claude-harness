@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { decide, handle } from "./stamp-triage.mjs";
-import { createRun, readEvents } from "../vps/obs-outbox.mjs";
+import { createRun, readEvents } from "../../shared/lib/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // Test helpers

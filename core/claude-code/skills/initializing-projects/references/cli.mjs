@@ -7,7 +7,7 @@
  *     owns the Orca runtime: writes the per-project config JSON + the selector's fenced crontab line.
  *     It installs the CURRENT design (Orca dispatches, the repo's vendored `.claude/` executes) — the
  *     `setup-vps` spelling is kept because it is what every existing doc and muscle-memory types, and
- *     it is NOT the retired VPS cron engine (see core/vps/DEPRECATED.md).
+ *     it is NOT the retired VPS cron engine (see docs/vps-retirement.md).
  *   - `orca-doctor` — read-only diagnosis of whether THIS session can operate the VPS, naming the
  *     barrier + fix for each blocked path. Available without vendoring precisely because the moment
  *     you need it is the moment nothing else is reachable.
@@ -651,7 +651,7 @@ function askTTY(question) {
  * types: the harness dir (this script's own clone if it ships core/orca, else a stable ~/.claude/
  * harness-core auto-cloned once — NEVER the ephemeral npx cache), the project (cwd), and owner/repo
  * (the dir's git remote). Installs a per-project config JSON + one fenced crontab line running the
- * Orca selector; the retired VPS cron engine (core/vps/install-crons.mjs) is no longer touched.
+ * Orca selector; the retired VPS cron engine (see docs/vps-retirement.md) is no longer touched.
  * @returns {object}
  */
 function setupVpsSeams() {

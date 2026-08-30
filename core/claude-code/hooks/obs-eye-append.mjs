@@ -19,7 +19,7 @@ import {
   appendEvent as defaultAppendEvent,
   readMeta as defaultReadMeta,
   readEvents as defaultReadEvents,
-} from '../vps/obs-outbox.mjs';
+} from '../../shared/lib/obs-outbox.mjs';
 
 // ---------------------------------------------------------------------------
 // Eye roles that trigger an observability append

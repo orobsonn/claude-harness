@@ -12,8 +12,8 @@
  * reformatting — far less fragile than a free-text `depends-on:` prose line, which an operator's
  * reflow or a GitHub render could silently mangle.
  *
- * This module lives in `core/shared/lib/` (not the retiring `core/vps/`) because BOTH the old VPS
- * cron engine (`core/vps/chain-deps.mjs`, which now re-exports from here) and the Orca selector
+ * This module lives in `core/shared/lib/` (never in the now-deleted `core/vps/`) because BOTH the
+ * retired VPS cron engine (which re-exported from here until it was deleted) and the Orca selector
  * (`core/orca/select-and-dispatch.mjs`) parse the same block. What differs is how each one decides
  * a dependency is SATISFIED — see the note in `core/orca/README.md`: the VPS engine anchored on a
  * merged PR whose head branch is literally `harness/<N>`, which is a branch-NAME test, not a
