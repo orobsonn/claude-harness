@@ -469,12 +469,13 @@ test("vendor-core: a clean vendor creates NO .claude/vps/, and every vendored fi
 /**
  * @description #807 §2.6 — re-expression of the retired `.claude/vps/notify-telegram.mjs` /
  * `.claude/vps/scoped-env.mjs` absence checks now that `.claude/vps/` no longer exists at all.
- * Strictly stronger than the original: notify-telegram.mjs's only live consumer is a test file
- * (core/claude-code/hooks/obs-markers.test.mjs), so it — and its sole dependent scoped-env.mjs —
- * must never appear ANYWHERE in a vendored tree, not merely absent from one retired directory.
- * `core/notify/` (their new home) sits in no FRAMEWORK_OWNED list, no shared/ mirror, and no
- * OPT_IN_MODULES sibling — this test is the tripwire that keeps that true. cron-a-dispatch.mjs
- * (the dead engine's composition root) is included for the same reason.
+ * `core/notify/notify-telegram.mjs` and `core/notify/scoped-env.mjs` (the modules #807 moved
+ * `.claude/vps/`'s notifier to) were themselves retired and DELETED in #834 — see
+ * docs/vps-retirement.md — once the cron engine's removal left the module with no production
+ * caller at all (its only prior consumers were test files). This test now guards against either
+ * one being resurrected into a vendored tree by accident: neither name may sit in any
+ * FRAMEWORK_OWNED list, shared/ mirror, or OPT_IN_MODULES sibling. cron-a-dispatch.mjs (the dead
+ * engine's composition root) is included for the same reason and is unaffected by #834.
  */
 test("vendor-core: retired-engine runtime never ships into a vendored project (#807)", async (t) => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));

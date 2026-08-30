@@ -66,9 +66,10 @@ function liveSourceFiles(directory) {
 }
 
 test("live OC sources have zero consumers of retired review-engine vocabulary", () => {
-  // #807: `core/vps` retired and was deleted; `core/notify/` (the notify modules extracted from it)
-  // takes its place in this scan so the absence guarantee still covers every live source tree.
-  const roots = ["core/opencode", "core/shared", "core/notify", "scripts"];
+  // #807: `core/vps` retired and was deleted; #834 then retired and deleted `core/notify/` (the
+  // notify modules extracted from it, which had briefly taken its place in this scan) — see
+  // docs/vps-retirement.md. Neither root needs a scan entry any more: nothing lives there.
+  const roots = ["core/opencode", "core/shared", "scripts"];
   const retiredVocabulary = [
     "review-guard",
     "loop-decide",
@@ -111,8 +112,9 @@ test("live OC sources have zero consumers of retired review-engine vocabulary", 
 });
 
 test("live OC sources retain no planner-fallback role or native resolver consumers", () => {
-  // #807: `core/vps` retired and was deleted; `core/notify/` takes its place in this scan.
-  for (const root of ["core/opencode", "core/shared", "core/notify"]) {
+  // #807: `core/vps` retired and was deleted; #834 then retired `core/notify/` too, which had
+  // briefly taken its place in this scan — see docs/vps-retirement.md.
+  for (const root of ["core/opencode", "core/shared"]) {
     for (const file of liveSourceFiles(join(repositoryRoot, root))) {
       const source = readFileSync(file, "utf8");
       assert.equal(source.includes("planner-fallback"), false, `live source retains retired planner fallback: ${file}`);

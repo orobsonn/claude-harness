@@ -604,3 +604,59 @@ test("#807-gap atomicWriteMeta failure path (via updateMeta): an unwritable meta
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// REHOMED from core/notify/checkpoint-timestamp.test.mjs (#834).
+// That file imported BOTH this live module and the retired notify-telegram, so
+// deleting core/notify/ would have taken these three oracles with it — they pin
+// `appendEvent`, which has four production importers and which #834 declared
+// untouchable. Exactly the #807 lesson: an oracle for live code hidden inside a
+// doomed directory. The two formatCheckpointTime tests that shared that file
+// pinned the notifier and correctly went with it.
+// ---------------------------------------------------------------------------
+
+test("#ac-2.1 appendEvent: stamps an ISO ts when the event has none", () => {
+  const dir = makeStateDir();
+  try {
+    const metaPath = path.join(dir, "obs-9.json");
+    appendEvent(metaPath, { type: "picked" });
+    const events = readEvents(metaPath);
+    assert.equal(events.length, 1, "exactly 1 event must be recorded");
+    const [ev] = events;
+    assert.equal(typeof ev.ts, "string", "ts must be stamped as a string");
+    assert.ok(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(ev.ts),
+      `ts must look like ISO 8601, got: ${ev.ts}`
+    );
+    assert.equal(
+      new Date(ev.ts).toISOString(),
+      ev.ts,
+      "ts must round-trip through Date/toISOString unchanged"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-2.1 appendEvent: preserves a caller-provided ts", () => {
+  const dir = makeStateDir();
+  try {
+    const metaPath = path.join(dir, "obs-9.json");
+    appendEvent(metaPath, { type: "pr", ts: "2020-01-02T03:04:05.000Z" });
+    const events = readEvents(metaPath);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].ts, "2020-01-02T03:04:05.000Z", "a caller-supplied ts must not be overwritten");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#ac-2.1 appendEvent: tolerates a non-object event without throwing", () => {
+  const dir = makeStateDir();
+  try {
+    const metaPath = path.join(dir, "obs-9.json");
+    assert.doesNotThrow(() => appendEvent(metaPath, "x"), "a non-object event must never crash the append");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

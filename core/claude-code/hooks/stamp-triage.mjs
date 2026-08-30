@@ -1081,7 +1081,9 @@ export function handle(payload, opts = {}) {
       // exactly as the equally-partial `ci-suite-result.json` check is already a documented
       // residual elsewhere in this SKILL.md (Phase 3, "not yet an entry-gate-enforced marker
       // rail"). The rendered body line says "(teste travado)" so a quick glance is not misread as
-      // "build+lint+tests all green" — see notify-telegram.mjs's cosmeticBodyLines gates-ran case.
+      // "build+lint+tests all green" — this was the same wording the retired Telegram renderer's
+      // cosmeticBodyLines gates-ran case used (notify-telegram.mjs, deleted in #834; see
+      // docs/vps-retirement.md), kept here because the explanation still applies even without it.
       if (decision.outcomeStatus === "DONE" || decision.outcomeStatus === "FAILED" || decision.outcomeStatus === "NOT_DONE") {
         obsAppend(
           { type: "gates-ran", task: descriptor.task_id, result: decision.outcomeStatus === "DONE" ? "pass" : "fail" },

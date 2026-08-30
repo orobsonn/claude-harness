@@ -127,3 +127,35 @@ E na mesma mudança: remover as referências restantes em `scripts/cutover-prefl
 `scripts/parity-manifest.test.mjs`, `docs/specs/oc-port/`, `docs/prd/` e o import de
 `resolve-runtime.mjs`. O `package.json` **já** não empacota `core/vps/` (não está em `files`), então
 nada muda para quem instala pela tag do GitHub.
+
+---
+
+## Encerramento — `core/notify/` removido (#834)
+
+A remoção do motor em #807 preservou **três** módulos como "carga viva":
+`obs-outbox.mjs` → `core/shared/lib/`, e `notify-telegram.mjs` + `scoped-env.mjs` → `core/notify/`.
+A #834 fechou a conta: **`core/notify/` foi deletado**.
+
+**Por quê.** O `obs-outbox` foi preservado por mérito próprio — tem 4 importadores de produção e
+continua vivo em `core/shared/lib/obs-outbox.mjs`. O `notify-telegram` foi preservado por um
+argumento de **fecho transitivo** ("ele puxa o `scoped-env` e lê do `obs-outbox`). Só que a
+dependência corre no sentido contrário: o `obs-outbox` não depende do notificador. Com o motor de
+cron apagado, a **raiz** desse fecho ficou sem nenhum chamador de produção — o argumento que
+justificou a preservação foi invalidado pela mesma remoção que o invocou. O notificador já era
+importado apenas por teste **antes** da #807 (é por isso que o `vendor-core` tem a invariante
+"import só-de-teste nunca é espelhado no consumidor"); a #807 não introduziu isso, apenas o mudou de
+endereço. A visibilidade de run que ele existia para simular hoje vem do Orca.
+
+**O que sobreviveu, e onde.**
+
+| coisa | destino |
+|---|---|
+| vocabulário de eventos (o antigo `CURATED_FEED_TYPES`, citado em prosa como "FEED_ALLOWLIST") | `core/shared/lib/obs-event-types.mjs` — era uma `const` **não exportada**, referenciada só por comentário; virou módulo de verdade |
+| oráculos do `appendEvent` que moravam em `core/notify/checkpoint-timestamp.test.mjs` | `core/shared/lib/obs-outbox.test.mjs` — fixam código **vivo** e teriam morrido junto |
+| lições do notificador (fire-and-forget + drain antes de sair, higiene de segredo, contrato de forma de evento entre produtor e consumidor) | `core/claude-code/memory/vps-notify-telegram.md`, marcado `[RETIRED ENGINE]` |
+
+**Uma verdade desconfortável que fica registrada:** o outbox de observabilidade agora tem
+**produtores e nenhum leitor** — 5 produtores escrevem eventos que nada consome, desde que o
+notificador saiu. Isso é **deliberado** e está **fora** do escopo da #834 (a issue fixou
+`obs_outbox_fora`: o `obs-outbox` não entra na decisão). Fica aqui para que a próxima sessão não
+descubra isso como surpresa e conclua sozinha que algo quebrou.

@@ -313,7 +313,7 @@ Every parked finding produces BOTH, **in every mode** — the FULL per-task loop
 - After Phase 3 join (FULL): `action: final-review` → plain `final_review_done` workflow state (push-blocking).
 - After operator demo (FULL INTERACTIVE): `action: demo-done` → plain `demo_done` workflow state (push-blocking when not headless).
 
-Do not invent alternate event type strings — only the types in `notify-telegram` FEED_ALLOWLIST.
+Do not invent alternate event type strings — only the types in `core/shared/lib/obs-event-types.mjs`'s `CURATED_EVENT_TYPES`.
 
 **Post-hand capture path (OC-native — Task hands, not CC spawn-hand):**
 
