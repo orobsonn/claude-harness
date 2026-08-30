@@ -1,11 +1,14 @@
-# Telegram notifier — best-effort one-way (`core/notify/notify-telegram.mjs`)
+# [RETIRED ENGINE] Telegram notifier — best-effort one-way (`core/notify/notify-telegram.mjs`)
 
 > **Address:** this module was `core/vps/notify-telegram.mjs` until the VPS cron engine was retired
-> (#807 / PR #830); it MOVED unchanged-but-for-import-specifiers to `core/notify/notify-telegram.mjs`
-> and is live. Sections tagged **[RETIRED ENGINE]** below describe how the retired cron engine wired
-> it (`install-crons.mjs`, `cron-a-exit.mjs`, `cron-a-dispatch.mjs` — all deleted with the engine, see
-> `docs/vps-retirement.md`). The wiring is history; the traps it records are not, which is why they
-> stay.
+> (#807 / PR #830); it MOVED unchanged-but-for-import-specifiers to `core/notify/notify-telegram.mjs`,
+> then was DELETED outright in #834 — the transitive-closure argument that had preserved it (it pulled
+> in `scoped-env.mjs` and read from the live `obs-outbox.mjs`) was invalidated once the cron engine
+> that was its only real caller was gone. Orca's desktop/mobile run visibility superseded it; see
+> `docs/vps-retirement.md` for the closing record. Sections tagged **[RETIRED ENGINE]** below describe
+> how the retired cron engine wired it (`install-crons.mjs`, `cron-a-exit.mjs`, `cron-a-dispatch.mjs` —
+> all deleted with the engine, same doc). The wiring and the module itself are both history now; the
+> traps the file records are not, which is why the file stays.
 
 Durable patterns from the `vps-notify-telegram` feature (v0.22.0). **Promoted to `core/` (tracked) on
 2026-07-09 by the `retention-sweep-delete-stale-topics` (#178) harvest** — this topic previously

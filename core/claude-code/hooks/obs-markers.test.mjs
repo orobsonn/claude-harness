@@ -4,8 +4,9 @@
  * .claude/plans/vps-run-observability/run/task-6-assertions.md — one test() per
  * assertion, in order. Exercises the REAL mark.mjs (parseArgs/run), the REAL
  * stamp-triage.mjs (handle), the REAL core/shared/lib/obs-outbox.mjs (createRun/readEvents/
- * updateMeta), the REAL core/notify/notify-telegram.mjs (drainTelegramOutbox), and reads
- * the REAL core/skills/orchestrating-delivery/SKILL.md content — no fakes stand in for
+ * appendEvent), and reads the REAL core/skills/orchestrating-delivery/SKILL.md content
+ * (the Telegram drain that once consumed this outbox, notify-telegram.mjs, was retired
+ * in #834 — see docs/vps-retirement.md) — no fakes stand in for
  * production code; the only injected seams are the `send` callback (network boundary)
  * and (test 7) a throwing appendEvent seam to prove the fail-open contract.
  * Zero-dep (node:test + node:assert/strict + node builtins only).
@@ -26,8 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseArgs, run } from "./mark.mjs";
 import { handle } from "./stamp-triage.mjs";
-import { createRun, readEvents, updateMeta, appendEvent } from "../../shared/lib/obs-outbox.mjs";
-import { drainTelegramOutbox } from "../../notify/notify-telegram.mjs";
+import { createRun, readEvents, appendEvent } from "../../shared/lib/obs-outbox.mjs";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -45,26 +45,6 @@ function withTempDir(fn) {
   try {
     process.chdir(tmpDir);
     fn();
-  } finally {
-    process.chdir(savedCwd);
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      /* ignore cleanup errors */
-    }
-  }
-}
-
-/**
- * Async variant of withTempDir for tests that await the real drainTelegramOutbox.
- * @param {() => Promise<void>} fn - Asynchronous test body
- */
-async function withTempDirAsync(fn) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-cwd-"));
-  const savedCwd = process.cwd();
-  try {
-    process.chdir(tmpDir);
-    await fn();
   } finally {
     process.chdir(savedCwd);
     try {
@@ -467,200 +447,15 @@ test("stamp-triage handle(): mark.mjs regate-pending appends a CRITICAL {type:'r
 
       // new: a CRITICAL {type:'regate-pending', task:'task-5'} outbox event is appended
       const events = readEvents(metaPath);
-      const found = events.some((e) => e.type === "regate-pending" && e.task === taskId);
-      assert.ok(found, `expected a CRITICAL {type:'regate-pending', task:'${taskId}'} event, got ${JSON.stringify(events)}`);
+      const regate = events.filter((e) => e.type === "regate-pending" && e.task === taskId);
+      assert.equal(
+        regate.length,
+        1,
+        `expected EXACTLY ONE {type:'regate-pending', task:'${taskId}'} event, got ${JSON.stringify(events)}`,
+      );
     } finally {
       delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
       fs.rmSync(obsDir, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 9. regate-pending critical event: produced -> consumed to the SHARED threadId
-// ---------------------------------------------------------------------------
-
-/**
- * @description Given stamp-triage appends the {type:'regate-pending', task:'task-5'} audit event
- * AND the REAL drainTelegramOutbox (notify-telegram.mjs) then runs, then the regate-pending event
- * is SUPPRESSED from the Telegram feed (no critical ping — it is no longer a CRITICAL type — and
- * no cosmetic send — it is not curated) while the contiguous cursor STILL ADVANCES past it, so a
- * suppressed audit event can never jam the outbox and starve later milestones. Its
- * delivery-blocking obligation stays gate-state-enforced (entry-gate), independent of any ping.
- */
-test("regate-pending event: produced by stamp-triage as an audit record, SUPPRESSED by the real drainTelegramOutbox while the cursor advances past it", async () => {
-  await withTempDirAsync(async () => {
-    const sessionId = "ses_obs9";
-    const featureId = "vps-run-observability";
-    const taskId = "task-5";
-    const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
-    const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-worktree-"));
-    try {
-      const metaPath = createRun({ issueNumber: 9, project: "proj", worktreePath }, obsStateDir);
-      updateMeta(metaPath, { threadId: 555 });
-      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
-
-      const payload = {
-        session_id: sessionId,
-        tool_name: "Bash",
-        tool_input: {
-          command: `node .claude/hooks/mark.mjs regate-pending --feature-id ${featureId} --task-id ${taskId}`,
-        },
-        tool_response: JSON.stringify({ marker: "regate-pending", feature_id: featureId, task_id: taskId }),
-      };
-      handle(payload);
-
-      // The audit trail keeps the event — suppression happens at drain time, never at append time.
-      const appended = readEvents(metaPath).filter((e) => e.type === "regate-pending");
-      assert.equal(appended.length, 1, "the regate-pending audit event must still be appended to the JSONL");
-
-      const sendCalls = [];
-      const fakeSend = async (message) => {
-        sendCalls.push(message);
-        return { sent: true };
-      };
-
-      await drainTelegramOutbox(
-        { stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 },
-        { send: fakeSend },
-      );
-
-      assert.equal(
-        sendCalls.filter((call) => call.event?.type === "regate-pending").length,
-        0,
-        `regate-pending must be suppressed from the feed (no critical ping, no cosmetic send), got ${JSON.stringify(sendCalls)}`,
-      );
-      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-      assert.equal(
-        meta.cursor,
-        readEvents(metaPath).length,
-        "the cursor must still advance past the suppressed regate-pending — never jam the outbox",
-      );
-    } finally {
-      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-      fs.rmSync(obsStateDir, { recursive: true, force: true });
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 10. pipeline-type FULL: produced -> consumed, delivered exactly once
-// ---------------------------------------------------------------------------
-
-/**
- * @description Given a classify.mjs FULL triage payload produces a
- * {type:'pipeline-type', mode:'FULL'} event via stamp-triage AND the REAL
- * drainTelegramOutbox then runs over the outbox, then the pipeline-type checkpoint is
- * delivered by exactly one send (produced->consumed end to end, not pre-seeded).
- */
-test("pipeline-type FULL event: produced by stamp-triage, delivered by exactly one send via the real drainTelegramOutbox", async () => {
-  await withTempDirAsync(async () => {
-    const sessionId = "ses_obs10";
-    const featureId = "vps-run-observability";
-    const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
-    const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-worktree-"));
-    try {
-      const metaPath = createRun({ issueNumber: 10, project: "proj", worktreePath }, obsStateDir);
-      updateMeta(metaPath, { threadId: 555 });
-      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
-
-      const payload = {
-        session_id: sessionId,
-        tool_name: "Bash",
-        tool_input: {
-          command: `node .claude/hooks/classify.mjs --mode FULL --feature-id ${featureId}`,
-        },
-        tool_response: JSON.stringify({ mode: "FULL", feature_id: featureId }),
-      };
-      handle(payload);
-
-      const sendCalls = [];
-      const fakeSend = async (message) => {
-        sendCalls.push(message);
-        return { sent: true };
-      };
-
-      await drainTelegramOutbox(
-        { stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 },
-        { send: fakeSend },
-      );
-
-      const matching = sendCalls.filter(
-        (call) => call.event?.type === "pipeline-type" && call.event?.mode === "FULL",
-      );
-      assert.equal(
-        matching.length,
-        1,
-        `expected exactly one send for the pipeline-type FULL checkpoint, got ${JSON.stringify(sendCalls)}`,
-      );
-    } finally {
-      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-      fs.rmSync(obsStateDir, { recursive: true, force: true });
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 11. plan-reviewed APPROVE: produced -> consumed, delivered exactly once
-// ---------------------------------------------------------------------------
-
-/**
- * @description Given a 'mark.mjs plan-reviewed --verdict APPROVE' payload produces a
- * {type:'plan-reviewed', verdict:'APPROVE'} event via stamp-triage AND the REAL drain
- * then runs, then the plan-reviewer verdict checkpoint is delivered by exactly one
- * send (produced->consumed end to end).
- */
-test("plan-reviewed APPROVE event: produced by stamp-triage, delivered by exactly one send via the real drainTelegramOutbox", async () => {
-  await withTempDirAsync(async () => {
-    const sessionId = "ses_obs11";
-    const featureId = "vps-run-observability";
-    const obsStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-outbox-"));
-    const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "obs-markers-worktree-"));
-    try {
-      const metaPath = createRun({ issueNumber: 11, project: "proj", worktreePath }, obsStateDir);
-      updateMeta(metaPath, { threadId: 555 });
-      process.env.HARNESS_OBSERVABILITY_RUN_PATH = metaPath;
-
-      const payload = {
-        session_id: sessionId,
-        tool_name: "Bash",
-        tool_input: {
-          command: `node .claude/hooks/mark.mjs plan-reviewed --feature-id ${featureId} --task-id task-1 --verdict APPROVE`,
-        },
-        tool_response: JSON.stringify({
-          marker: "plan-reviewed",
-          feature_id: featureId,
-          task_id: "task-1",
-          verdict: "APPROVE",
-        }),
-      };
-      handle(payload);
-
-      const sendCalls = [];
-      const fakeSend = async (message) => {
-        sendCalls.push(message);
-        return { sent: true };
-      };
-
-      await drainTelegramOutbox(
-        { stateDir: obsStateDir, chatId: "shared-chat", threadId: 999 },
-        { send: fakeSend },
-      );
-
-      const matching = sendCalls.filter(
-        (call) => call.event?.type === "plan-reviewed" && call.event?.verdict === "APPROVE",
-      );
-      assert.equal(
-        matching.length,
-        1,
-        `expected exactly one send for the plan-reviewed APPROVE checkpoint, got ${JSON.stringify(sendCalls)}`,
-      );
-    } finally {
-      delete process.env.HARNESS_OBSERVABILITY_RUN_PATH;
-      fs.rmSync(obsStateDir, { recursive: true, force: true });
-      fs.rmSync(worktreePath, { recursive: true, force: true });
     }
   });
 });
