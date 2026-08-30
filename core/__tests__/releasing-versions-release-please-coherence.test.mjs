@@ -15,6 +15,15 @@
  *       names a manual token only in order to FORBID it.
  * Outside the fence, a manual token is legal only on a prohibition line. That is the difference
  * between a gated fallback and an instruction that contradicts release-please (#ac-2.2).
+ *
+ * #831 extends this file to the operator guides (core/<shell>/docs/OPERATOR-GUIDE.md), which had
+ * two rows that predated release-please and still described the pre-#811 manual-only flow. The
+ * shells themselves are DISCOVERED from disk (never a hardcoded ["claude-code","opencode"] list) —
+ * a shell is a real (non-symlink) directory under core/ that contains skills/ — so a future shell
+ * (pi, codex, …) is covered the day it exists, and the SKILL.md TARGETS below are built from the
+ * same discovery rather than a second hardcoded pair of paths. The conditional SKIP is unchanged
+ * and applies to every new test here too: a vendored consumer without release-please must see this
+ * whole file go quiet, guides included.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -51,22 +60,102 @@ const MANUAL_TOKENS = ["gh release create", "npm version", "[Unreleased]"];
 /** A description that promises a hand-rolled version bump + CHANGELOG edit as the skill's behavior. */
 const MANUAL_PROMISE = /(bump[^.]{0,40}CHANGELOG|CHANGELOG[^.]{0,40}bump)/i;
 
-const TARGETS = [
-  {
-    label: "core/claude-code/skills/releasing-versions/SKILL.md",
-    url: new URL("core/claude-code/skills/releasing-versions/SKILL.md", REPO_ROOT),
-    twice: /duas vezes/i,
-    never: /NUNCA/,
-    manualHeadings: ["## MODO OPEN", "## MODO FINISH"],
-  },
-  {
-    label: "core/opencode/skills/releasing-versions/SKILL.md",
-    url: new URL("core/opencode/skills/releasing-versions/SKILL.md", REPO_ROOT),
-    twice: /twice/i,
-    never: /NEVER/,
-    manualHeadings: ["## OPEN mode", "## FINISH mode"],
-  },
-];
+const CORE = new URL("core/", REPO_ROOT);
+
+/**
+ * @description A shell = a REAL directory under core/ that contains skills/ (#ac-X.1).
+ * `withFileTypes` dirents carry lstat semantics: for core/skills, core/agents, core/hooks,
+ * core/memory and core/rules — symlinks into claude-code/ — isDirectory() is false and
+ * isSymbolicLink() is true, so the legacy "claude-code is primary" layout can never be counted
+ * as an extra shell, and neither could a future `core/<alias> -> claude-code`. isDirectory() is
+ * the filter that actually does the excluding (a real alias like `core/cc -> claude-code` would
+ * still pass a bare `skills/`-exists probe, since the symlink resolves); `!isSymbolicLink()` is
+ * kept alongside it only to document intent and stay correct if this ever becomes a stat-based
+ * walk. The predicate deliberately ignores docs/ and the releasing-versions skill: adding either
+ * to the definition would let a new shell escape the assertions below by simply not shipping
+ * that file — exactly the silent-pass shape #ac-X.2/#ac-X.3 forbid.
+ */
+function discoverShells(core) {
+  return readdirSync(core, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(new URL(`${name}/skills/`, core)))
+    .sort();
+}
+
+const SHELLS = discoverShells(CORE);
+
+const RELEASE_SKILL_DIR = /(?:^|-)releasing-versions$/;
+
+/**
+ * @description The release skill a shell ships, or null. The guide row is keyed by the frontmatter
+ * `name:` (claude-code → `releasing-versions`, opencode → `oc-releasing-versions`), never by the
+ * directory, which is identical in both shells. This function must NEVER assert — it is called at
+ * module scope, ungated by SKIP, so an assertion here would hard-crash the whole file (including
+ * the 15 pre-existing #811 tests) for a vendored consumer with no release-please instead of letting
+ * the SKIP-gated tests report the problem cleanly.
+ */
+function releaseSkillOf(shell) {
+  const skills = new URL(`${shell}/skills/`, CORE);
+  const dirs = readdirSync(skills, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && RELEASE_SKILL_DIR.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  if (dirs.length === 0) return null;
+  const [dir] = dirs;
+  const url = new URL(`${dir}/SKILL.md`, skills);
+  const label = `core/${shell}/skills/${dir}/SKILL.md`;
+  if (!existsSync(url)) return { shell, dir, url, label, name: null };
+  const matched = readFileSync(url, "utf8").match(/^name:\s*(.+)$/m);
+  return { shell, dir, url, label, name: matched ? matched[1].trim() : null };
+}
+
+const RELEASE_SKILLS = SHELLS.map(releaseSkillOf).filter(Boolean);
+
+/** Per-shell language of the SKILL.md. Discovery finds the shells; this table carries only what
+ *  disk cannot tell us — which language the file is written in. A shell absent here fails the
+ *  guard below rather than passing in silence (#ac-X.2); a shell present here that no longer ships
+ *  the skill fails the OTHER guard below, so coverage cannot shrink in silence either (#4 of the
+ *  adversarial review — SKILL_LANGUAGE is checked in both directions). */
+const SKILL_LANGUAGE = {
+  "claude-code": { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
+  opencode: { twice: /twice/i, never: /NEVER/, manualHeadings: ["## OPEN mode", "## FINISH mode"] },
+};
+
+const TARGETS = RELEASE_SKILLS.filter((skill) => SKILL_LANGUAGE[skill.shell]).map((skill) => ({
+  ...skill,
+  ...SKILL_LANGUAGE[skill.shell],
+}));
+
+const GUIDE_OF = (shell) => new URL(`${shell}/docs/OPERATOR-GUIDE.md`, CORE);
+/** Strips markdown emphasis (`**`, `` ` ``) and a leading `/` (slash-command prefix) from a table cell. */
+const cellName = (cell) => cell.replace(/[`*]/g, "").trim().replace(/^\//, "");
+const CONVENTIONAL = /(conventional commits|commits convencionais)/i;
+
+/** @description The single table row whose FIRST cell names `skillName`, plus its body (every cell
+ *  except the name cell — column-count agnostic, so a shell with a 4-column table still works).
+ *  Anchoring to the row, not the document, is the whole point: matching anywhere in the file
+ *  re-enacts the /pipe/i-style toothlessness of #810 — both guides mention "release" many times
+ *  outside this row. */
+function guideRow(guide, skillName, label) {
+  const rows = guide.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) return false;
+    const cells = trimmed.split("|").slice(1, -1);
+    return cells.length >= 2 && cellName(cells[0]) === skillName;
+  });
+  assert.equal(
+    rows.length,
+    1,
+    `${label}: expected exactly one table row whose first cell is \`${skillName}\`, found ${rows.length}`,
+  );
+  const cells = rows[0]
+    .trim()
+    .split("|")
+    .slice(1, -1)
+    .map((cell) => cell.trim());
+  return { row: rows[0], body: cells.slice(1).join(" ") };
+}
 
 /** @description Splits a SKILL.md into what is outside the manual fence and what is inside it. */
 function split(content, label) {
@@ -122,6 +211,111 @@ test("ac-1.2 — release-please-config.json still says what SKILL.md §2.1 docum
     "release-please-config.json changed: update SKILL.md §2.1 (feat: → minor pre-1.0) and this test together",
   );
 });
+
+test("#831 ac-X.1 — every shell discovered under core/ ships an OPERATOR-GUIDE", { skip: SKIP }, () => {
+  assert.ok(SHELLS.length > 0, "no shell discovered under core/ — the discovery predicate is broken");
+  const missing = SHELLS.filter((shell) => !existsSync(GUIDE_OF(shell)));
+  assert.deepEqual(
+    missing,
+    [],
+    `shells without docs/OPERATOR-GUIDE.md: ${missing.join(", ")} — the guide is the index an operator reads before opening a skill`,
+  );
+});
+
+test("#831 ac-X.2 — discovery reads the disk and never counts a symlink as a shell", { skip: SKIP }, () => {
+  for (const entry of readdirSync(CORE, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      assert.ok(!SHELLS.includes(entry.name), `symlink core/${entry.name} counted as a shell`);
+    }
+  }
+  for (const shell of SHELLS) {
+    assert.ok(existsSync(new URL(`${shell}/skills/`, CORE)), `discovered shell without skills/: ${shell}`);
+  }
+});
+
+test("#831 ac-X.2 — every discovered releasing-versions SKILL.md declares a frontmatter name", { skip: SKIP }, () => {
+  const nameless = RELEASE_SKILLS.filter((skill) => skill.name === null).map((skill) => skill.label);
+  assert.deepEqual(
+    nameless,
+    [],
+    `SKILL.md without a name: frontmatter: ${nameless.join(", ")} — the guide row is keyed by that name`,
+  );
+});
+
+test("#831 ac-X.2 — every shell shipping releasing-versions has a language profile here", { skip: SKIP }, () => {
+  const uncovered = RELEASE_SKILLS.filter((skill) => !SKILL_LANGUAGE[skill.shell]).map((skill) => skill.shell);
+  assert.deepEqual(
+    uncovered,
+    [],
+    `shells with a releasing-versions skill and no SKILL_LANGUAGE entry: ${uncovered.join(", ")} — add { twice, never, manualHeadings } before the shell ships`,
+  );
+});
+
+test("#831 ac-X.2 — every SKILL_LANGUAGE entry still matches a shell that ships the skill", { skip: SKIP }, () => {
+  const covered = RELEASE_SKILLS.map((skill) => skill.shell);
+  const orphaned = Object.keys(SKILL_LANGUAGE)
+    .filter((shell) => !covered.includes(shell))
+    .sort();
+  assert.deepEqual(
+    orphaned,
+    [],
+    `SKILL_LANGUAGE names shells that no longer ship a releasing-versions skill: ${orphaned.join(", ")} — discovery would silently drop their SKILL.md tests; delete the entry deliberately or restore the skill`,
+  );
+});
+
+for (const shell of SHELLS) {
+  const skill = RELEASE_SKILLS.find((s) => s.shell === shell) ?? null;
+  const label = `core/${shell}/docs/OPERATOR-GUIDE.md`;
+
+  test(`#831 ac-1.1/1.2 — the releasing-versions row describes the release-please regime (${label})`, { skip: SKIP }, () => {
+    if (!existsSync(GUIDE_OF(shell))) return; // #ac-X.1 owns the missing-guide failure
+
+    const guide = readFileSync(GUIDE_OF(shell), "utf8");
+    if (!skill || !skill.name) {
+      // Shell ships no (nameable) release skill: the guide must not document one either.
+      const orphans = guide.split("\n").filter((line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith("|") && RELEASE_SKILL_DIR.test(cellName(trimmed.split("|")[1] ?? ""));
+      });
+      assert.deepEqual(
+        orphans,
+        [],
+        `${label}: documents a releasing-versions skill that core/${shell}/skills/ does not ship`,
+      );
+      return;
+    }
+
+    const { body } = guideRow(guide, skill.name, label);
+    assert.match(body, /release-please/i, `${label}: the ${skill.name} row must name the release-please regime`);
+    assert.ok(body.includes("chore(main): release"), `${label}: the row must name the PR the action opens`);
+    assert.match(body, CONVENTIONAL, `${label}: the row must name Conventional Commits as the input`);
+    assert.match(body, /\btag\b/i, `${label}: the row must state the merge creates the tag`);
+    assert.ok(body.includes("GitHub Release"), `${label}: the row must state the merge creates the GitHub Release`);
+    assert.match(body, /autom[aá]tic/i, `${label}: the row must state tag + Release happen automatically`);
+  });
+
+  test(`#831 ac-1.3 — the row never presents the manual flow as the flow (${label})`, { skip: SKIP }, () => {
+    if (!skill || !skill.name || !existsSync(GUIDE_OF(shell))) return; // covered by the tests above
+
+    const { body } = guideRow(readFileSync(GUIDE_OF(shell), "utf8"), skill.name, label);
+    const releasePlease = body.search(/release-please/i);
+    const manual = body.search(/\bmanual\b/i);
+    assert.notEqual(releasePlease, -1, `${label}: the row must name release-please`);
+    assert.ok(
+      manual === -1 || releasePlease < manual,
+      `${label}: the row names the manual flow before release-please — where release-please is configured it IS the flow`,
+    );
+    if (manual !== -1) {
+      assert.match(body, /fallback/i, `${label}: the manual flow may appear in the row only as the declared fallback`);
+    }
+    for (const token of MANUAL_TOKENS) {
+      assert.ok(
+        !body.includes(token),
+        `${label}: the row carries the manual token "${token}" — the index must not hand out the fallback recipe`,
+      );
+    }
+  });
+}
 
 for (const t of TARGETS) {
   test(`ac-1.1 — release-please is the primary flow above the fence (${t.label})`, { skip: SKIP }, () => {
