@@ -5,6 +5,30 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [1.0.0](https://github.com/orobsonn/claude-harness/compare/v0.59.1...v1.0.0) (2026-08-30)
+
+
+### Features
+
+* **orca:** selector repassa --setup run|skip|inherit ao worktree create ([#826](https://github.com/orobsonn/claude-harness/issues/826)) ([879ac50](https://github.com/orobsonn/claude-harness/commit/879ac503257c1f5e63a34a3ebbdda0b952787176)), closes [#809](https://github.com/orobsonn/claude-harness/issues/809)
+
+
+### Bug Fixes
+
+* **entry-gate:** colheita nao pode rotular a propria issue, e dedupa antes de abrir ([#828](https://github.com/orobsonn/claude-harness/issues/828)) ([041b2e8](https://github.com/orobsonn/claude-harness/commit/041b2e856aa8bdf36251e6f7ba440985d158bfec)), closes [#808](https://github.com/orobsonn/claude-harness/issues/808)
+* **oc-releasing-versions:** FINISH nao cria tag sem checar CI ([#836](https://github.com/orobsonn/claude-harness/issues/836)) ([78c6656](https://github.com/orobsonn/claude-harness/commit/78c6656bd7d15c6f1eb9d74e9a38b1295235bc22)), closes [#833](https://github.com/orobsonn/claude-harness/issues/833)
+
+
+### Refactors
+
+* **notify:** aposenta core/notify — o fecho transitivo que o preservava caiu junto ([#838](https://github.com/orobsonn/claude-harness/issues/838)) ([2743275](https://github.com/orobsonn/claude-harness/commit/27432759467b7a6bdc937b7af4502ff36526cc15)), closes [#834](https://github.com/orobsonn/claude-harness/issues/834)
+* **vps:** extrai os modulos vivos e remove o motor de cron aposentado ([#830](https://github.com/orobsonn/claude-harness/issues/830)) ([ac94f70](https://github.com/orobsonn/claude-harness/commit/ac94f70e0bea33a125d75280de83feced6114729)), closes [#807](https://github.com/orobsonn/claude-harness/issues/807)
+
+
+### Chores
+
+* release 1.0.0 ([#839](https://github.com/orobsonn/claude-harness/issues/839)) ([db2df04](https://github.com/orobsonn/claude-harness/commit/db2df04a46d67b48ed3e28975e476feebc5af458))
+
 ## [0.59.1](https://github.com/orobsonn/claude-harness/compare/v0.59.0...v0.59.1) (2026-08-28)
 
 
