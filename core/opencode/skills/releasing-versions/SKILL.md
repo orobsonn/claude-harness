@@ -301,34 +301,51 @@ echo "$LAST_MSG"   # expected: "chore: release vX.Y.Z (#N)" — squash adds "(#N
 ```
 Extract the version from the end of the message. If it does not match, stop and ask.
 
-### 2. Confirm the tag does not yet exist
+### 2. Verify CI is green via PR checks
+Extract the PR number from the commit message (the `(#N)` squash suffix) and validate CI — use explicit STATE parsing, never just the exit code (`gh pr checks` exits 1 for BOTH a real failure and "no checks at all", so exit 1 is ambiguous and cannot tell the two apart):
+```bash
+PR_NUMBER=$(echo "$LAST_MSG" | sed -nE 's/.*\(#([0-9]+)\).*/\1/p')  # e.g. "chore: release v0.13.0 (#41)" → 41
+STATES=$(gh pr checks "$PR_NUMBER" --json state -q '.[].state' 2>/dev/null)
+```
+If `$PR_NUMBER` is empty, the commit carries no `(#N)` — stop and ask. Mode detection accepts the suffix as optional, so this case is reachable, and a blank PR number would make `gh pr checks` return nothing and silently degrade the gate into the FAIL-SOFT branch below.
+
+Evaluate the contents of `$STATES` in four branches — against the STATE, not the exit code:
+
+- **Empty output** (`$STATES` blank): the repo has no CI workflow → **FAIL-SOFT** (warn, do not block). Warn the operator that no CI workflow is configured, and proceed. This FAIL-SOFT applies ONLY here, in this manual fallback in a project with no CI workflow at all — under release-please, empty output means a run waiting for approval (or a run that never existed) and the behavior is fail-closed (section 3).
+- **Contains `FAILURE`, `ERROR`, `CANCELLED` or `TIMED_OUT`**: CI is **red** → **refuse** the release — do not create the tag. Stop and report the failing checks. Revert via `git revert -m 1 <merge-sha>` + a revert PR (or the GitHub "Revert" button via `gh pr view <N> --web`).
+- **Only `SUCCESS`, `SKIPPED`, `NEUTRAL` or `PENDING` resolved**: CI is green → proceed.
+- **Any other state** (`ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, `QUEUED`, `IN_PROGRESS`, `WAITING`, `REQUESTED`, `EXPECTED` — all real values of GitHub's `CheckConclusionState` / `CheckStatusState` / `StatusState` enums): **NOT green** → stop and ask. `ACTION_REQUIRED`, `STARTUP_FAILURE` and `STALE` are non-success conclusions; the rest mean the run has not concluded. Never read "none of the four red tokens is present" as green.
+
+If it fails on red CI, stop and report.
+
+### 3. Confirm the tag does not yet exist
 ```bash
 git tag -l "vX.Y.Z"
 ```
 If it exists, stop — the release is already done.
 
-### 3. Create local tag
+### 4. Create local tag
 ```bash
 git tag vX.Y.Z
 ```
 
-### 4. Extract release notes
+### 5. Extract release notes
 ```bash
 awk '/^## \[X\.Y\.Z\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > "$TMPDIR/release-notes-X.Y.Z.md"
 ```
 Validate content.
 
-### 5. Push tag
+### 6. Push tag
 ```bash
 git push origin vX.Y.Z
 ```
 
-### 6. Create GitHub Release
+### 7. Create GitHub Release
 ```bash
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file "$TMPDIR/release-notes-X.Y.Z.md" --latest
 ```
 
-### 7. Report (pt-br, product-language)
+### 8. Report (pt-br, product-language)
 - New published version.
 - GitHub Release URL.
 - Tag hash.
