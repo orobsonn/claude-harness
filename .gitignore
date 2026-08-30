@@ -21,3 +21,5 @@ docs/raw/
 
 # Transcripts de sessão do Claude Code (path local + conteúdo da conversa)
 projects/
+
+.worktrees/
