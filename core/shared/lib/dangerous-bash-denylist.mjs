@@ -121,7 +121,7 @@
  * feeds; since resolution is `findLast` (last match wins), an agent that declared its own
  * `bash: allow` made EVERY deny in this constant unreachable FOR THAT AGENT — and the fleet
  * dispatched with exactly such an agent (`opencode run --agent build`,
- * `core/vps/cron-a-dispatch.mjs`'s own `--agent build` invocation). Issue #516 closed this two
+ * the retired VPS cron dispatcher's own `--agent build` invocation). Issue #516 closed this two
  * ways: (1) the redundant `bash: allow` was removed from every agent frontmatter that carried it
  * (`core/opencode/agents/*.md`, locked against drift by `eyes-permission-lockdown.test.mjs`), and
  * (2) `resolveDangerousBashCommand`/`decideDangerousBashDenylist` below back that removal with a

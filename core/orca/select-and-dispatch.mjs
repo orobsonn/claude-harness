@@ -1,7 +1,7 @@
 /**
  * @description The multi-project delivery SELECTOR — the whole scheduled surface of the Orca-based
- * autonomous pipeline. It replaces the VPS cron engine (`core/vps/`, retiring — see
- * `core/vps/DEPRECATED.md`) with the smallest thing that still does the one job a scheduler must do:
+ * autonomous pipeline. It replaces the retired VPS cron engine (see
+ * `docs/vps-retirement.md`) with the smallest thing that still does the one job a scheduler must do:
  * decide WHICH issue runs next, take the lock, and hand it to Orca.
  *
  * The architecture this belongs to is two LAYERS, not two engines:

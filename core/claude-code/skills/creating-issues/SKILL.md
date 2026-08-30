@@ -205,7 +205,7 @@ Produce the form fields for each unit:
 
 ### 4. Validate a roadmap
 
-- After creating a roadmap, run `node core/vps/chain-validate.mjs --config <project.json>` — it catches
+- After creating a roadmap, check the graph BY HAND — there is no automated graph lint. Look for
   the two authoring mistakes the runtime cannot self-heal: **dependency cycles** and **non-existent
   references** (a typo'd `#N`), which would otherwise strand an issue queued forever in silence.
 - Report to the operator, in product terms: the resolved build order, and which prerequisite holds
@@ -214,7 +214,7 @@ Produce the form fields for each unit:
 ## Done when
 
 - Each intended outcome is exactly one small, revertible issue with verifiable ACs, correct scope and
-  sensitivity, and (for a roadmap) valid `harness-deps` — and `chain-validate` is clean.
+  sensitivity, and (for a roadmap) valid `harness-deps` — and the dependency graph checks out by hand.
 - From a PRD: every criterion traces back to a numbered requirement, decisions and model assumptions
   are two separately labelled blocks, and nothing depending on `## Em aberto` went out `harness:ready`.
 - From a deepening candidate: every candidate field landed under `Suposições do modelo (atacáveis)`,

@@ -3,7 +3,7 @@
  * plus (issue #516) a repo-wide anti-drift lock on permission.bash overrides in ANY core/opencode/agents/*.md
  * frontmatter: OpenCode resolves permission.bash with Array.prototype.findLast (last match wins), and agent
  * frontmatter is merged AFTER the global ruleset — so a "bash: allow" scalar or a "*": allow entry inside a
- * nested permission.bash map makes every deny in the global DANGEROUS_BASH_DENYLIST (core/vps/cron-a-dispatch.mjs)
+ * nested permission.bash map makes every deny in the global DANGEROUS_BASH_DENYLIST (core/shared/lib/dangerous-bash-denylist.mjs)
  * unreachable for that agent. The fleet dispatches via `opencode run --agent build`, so this was reachable in
  * production for all 12 agents fixed by #516. Shared mode-all hands remain covered by the
  * repo-wide scan after their CLI spawn twins were retired.

@@ -1957,12 +1957,17 @@ test(
 );
 
 test(
-  "LOCKED issue-form-advisory #6: advisory carries the roadmap dependency standard (harness-deps block + chain-validate lint)",
+  "LOCKED issue-form-advisory #6: advisory carries the roadmap dependency standard (harness-deps block + the manual cycle/dangling-ref check)",
   () => {
     const result = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
     assert.match(result, /harness-deps/, "must guide the fenced dependency block for a chained roadmap");
     assert.match(result, /harness:ready/, "must state every roadmap issue is created harness:ready (never queued by hand)");
-    assert.match(result, /chain-validate/, "must point to the DAG lint to catch cycles / non-existent deps");
+    // #807: the advisory used to point at `node core/vps/chain-validate.mjs`, which retired with the
+    // rest of `core/vps/`. Replacement of EQUAL strength, not a loosening: the assertion still pins a
+    // specific standard, now that NO automated graph lint exists and the author must check cycles and
+    // dangling `#N` by hand. The repo documents why the tool was not rescued (`core/orca/README.md`,
+    // `docs/vps-retirement.md`): it never detected the failure class that actually bit us.
+    assert.match(result, /NO automated graph lint/i, "must state that no lint exists, so the author checks cycles and dangling #N by hand");
   },
 );
 
@@ -2410,7 +2415,7 @@ test("a corrupt hands.json falls back to the STRICT rail, never to the open one"
 // correction for this suite is #1: the deny predicate is `isSubagentCall || routine`, NOT
 // `routine` alone, because `isRoutineSession()` is FALSE on the production Orca dispatch path
 // (core/orca/select-and-dispatch.mjs sets no env markers — the autonomy signal lives in the
-// prompt string) and TRUE only on the retiring core/vps/ dispatch + cloud path. A suite that
+// prompt string) and TRUE only on the retired VPS cron dispatch + cloud path. A suite that
 // only ever injects a routine env marker would stay green while the rail is inert on the exact
 // path that produced the incident (oraculo-app #401) — see the "production Orca env" tests below,
 // which are the ones that actually pin #ac-3.1 for the shipped engine.
@@ -2426,7 +2431,7 @@ const harnessBash = (command, extra = {}) => ({
   ...extra,
 });
 
-// A ROUTINE session per isRoutineSession's own three-marker contract (the retiring core/vps/
+// A ROUTINE session per isRoutineSession's own three-marker contract (the retired VPS cron
 // dispatch + cloud cron path). Used only to prove the routine HALF of the predicate; it is
 // deliberately NOT how the production Orca-dispatched harvester is modeled (see below).
 const ROUTINE_DEPS = { isRoutineFn: () => isRoutineSession({ HARNESS_NOTIFY_PROJECT: "p" }) };
@@ -2649,7 +2654,10 @@ test("LOCKED #808 §6.1-h: adviseIssueForm's 4th param defaults to false — the
   const withExplicitFalse = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, false);
   assert.equal(withDefault, withExplicitFalse, "omitting isRoutine must behave exactly like passing false");
   assert.match(withDefault, /label `harness:ready`/, "interactive advisory must still tell the operator to label harness:ready");
-  assert.match(withDefault, /chain-validate\.mjs/, "interactive advisory must still carry the chained-roadmap DAG lint");
+  // #807: same replacement as issue-form-advisory #6 above — the retired lint's command is gone, the
+  // standard it served is pinned instead. #808's #ac-3.2 regression lock is about the 4th parameter's
+  // DEFAULT (the equality assertion above), not about this sentence, so it is untouched.
+  assert.match(withDefault, /NO automated graph lint/i, "interactive advisory must state that no lint exists, so the author checks cycles and dangling #N by hand");
 });
 
 test("LOCKED #808 §6.1-h: decide() wires isRoutineFn into the advisory too — a routine, label-free create gets the ROUTINE text, not the interactive one", () => {

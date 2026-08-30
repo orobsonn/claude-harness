@@ -15,7 +15,6 @@ import {
 import { join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
-import { resolveRuntime } from "../core/vps/resolve-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,9 +46,6 @@ export const PHASE2_FORBIDDEN_GLOBS = [
   "core/shared/lib/ndjson-session-parser.mjs",
   "core/shared/lib/session-result-parser.mjs",
   "core/shared/lib/opencode-ndjson.mjs",
-  "core/vps/spawn-opencode-session.mjs",
-  "core/vps/opencode-run-driver.mjs",
-  "core/vps/run-opencode-session.mjs",
 ];
 
 // Dual-shape TRACK-row parser (6-column Phase-1/2 + 5-column Phase-0/2b). Extracted to
@@ -238,31 +234,18 @@ export function checkNoPhase2Artifacts(repoRoot, trackText) {
       }
     }
   }
-  // VPS OC session driver files
-  const vpsDir = join(repoRoot, "core/vps");
-  if (existsSync(vpsDir)) {
-    for (const name of readdirSync(vpsDir)) {
-      const lower = name.toLowerCase();
-      if (
-        (lower.includes("opencode") &&
-          (lower.includes("spawn") || lower.includes("session") || lower.includes("driver"))) ||
-        lower === "run-opencode.mjs"
-      ) {
-        found.push(`core/vps/${name}`);
-      }
-    }
-  }
   // autoMergeEnabled true for OC-driven merge (config files only — not Claude tests)
   const ocConfigCandidates = [
     join(repoRoot, "core/opencode/harness.routing.json"),
-    join(repoRoot, "core/vps/config.example.json"),
-    join(repoRoot, "core/vps/fleet.example.json"),
   ];
   for (const path of ocConfigCandidates) {
     if (!existsSync(path)) continue;
     try {
       const j = JSON.parse(readFileSync(path, "utf8"));
-      if (j.autoMergeEnabled === true && resolveRuntime(j) === "opencode") {
+      // Inlined from the retired core/vps/resolve-runtime.mjs: an invalid/missing runtime falls
+      // back to "opencode" — this guard still applies to the live core/opencode/harness.routing.json.
+      const runtime = j.runtime === "claude" || j.runtime === "opencode" ? j.runtime : "opencode";
+      if (j.autoMergeEnabled === true && runtime === "opencode") {
         found.push(`${path}: autoMergeEnabled true for OC`);
       }
     } catch {
@@ -671,7 +654,7 @@ describe("cutover-preflight", () => {
     assert.equal(bad.ok, false);
   });
 
-  it("t10-no-phase2: fails on phase-2 OC VPS artifacts or autoMerge+opencode config; T14 done is now allowed (runtime gate enforces T12+T13+T15)", () => {
+  it("t10-no-phase2: fails on phase-2 OC session-driver artifacts or autoMerge+opencode config; T14 done is now allowed (runtime gate enforces T12+T13+T15)", () => {
     const liveTrack = readFileSync(
       join(REPO_ROOT, "docs/specs/oc-port/IMPLEMENTATION-TRACK.md"),
       "utf8"

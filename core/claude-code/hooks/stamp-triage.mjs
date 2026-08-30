@@ -49,7 +49,7 @@ import {
   markHandRecordCaptured,
   currentHeadSha,
 } from "./lib/gate-lib.mjs";
-import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from "../vps/obs-outbox.mjs";
+import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from "../../shared/lib/obs-outbox.mjs";
 
 // fail-open diagnostic: exactly one stderr line, never throws
 export function failOpenDiag(scope, err, writeStderr = console.error) {

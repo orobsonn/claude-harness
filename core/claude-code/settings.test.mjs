@@ -474,3 +474,91 @@ test("hooks.PostToolUse Agent matcher wires agent-idle-nudge.mjs as a command", 
     "agent-idle-nudge.mjs command uses ${CLAUDE_PROJECT_DIR} variable"
   );
 });
+
+// --- #807: rehomed from core/vps/cron-a-dispatch-seed.test.mjs:257 ------------------------------
+// The seed test died with the retired `core/vps/` engine. This test is NOT redundant with the
+// membership assertions above: those check that a deny STRING is present and that there are exactly
+// 6 destructive-git denies. Tightening `Bash(git push --force *)` to `Bash(git push --force*)` keeps
+// the count at 6, keeps every `.includes()` green, and silently denies `git push --force-with-lease`
+// — which this harness's own shipping flow depends on. Only a RESOLVER test catches that, and before
+// #807 this file was the only place one existed (`grep -n "force" settings.test.mjs` → nothing).
+
+const CLAUDE_SETTINGS = JSON.parse(readFileSync(settingsPath, "utf8"));
+
+/**
+ * @description Minimal matcher for Claude Code's `Bash(...)` dialect, implementing only what's
+ * needed to test our 2 narrowed deny patterns: per the official docs (code.claude.com/docs/en/permissions,
+ * "Bash" section), a space immediately before a trailing `*` — or the equivalent `:*` suffix —
+ * enforces a WORD BOUNDARY: the prefix must be followed by a space or end-of-string. `Bash(cmd *)`
+ * matches `cmd foo` and bare `cmd`, but NOT `cmd-foo` (no boundary). A bare trailing `*` (no space)
+ * has no such boundary. Deny always wins over allow in Claude Code regardless of pattern
+ * specificity or file order ("Rules are evaluated in order: deny, then ask, then allow. The first
+ * match in that order determines the outcome, and rule specificity doesn't change the order.") —
+ * so the ONLY way to let force-with-lease through is to narrow the deny pattern itself, not reorder it.
+ * @param {string} claudePattern
+ * @param {string} command
+ * @returns {boolean}
+ */
+function claudeBashMatches(claudePattern, command) {
+  const inner = claudePattern.replace(/^Bash\(/, "").replace(/\)$/, "");
+  // Reduce the `:*` idiom to its documented-equivalent literal " *" so one regex pass handles
+  // both spellings; a trailing " *" (space before the star) enforces the word-boundary rule
+  // (prefix followed by a space OR end-of-string) — a bare trailing "*" or an embedded "*" (e.g.
+  // "git push * --force") is an ordinary unbounded wildcard, handled by the blanket replace below.
+  const normalized = inner.endsWith(":*") ? `${inner.slice(0, -2)} *` : inner;
+  const boundary = normalized.endsWith(" *");
+  const body = boundary ? normalized.slice(0, -2) : normalized;
+  const escapedBody = body.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const suffix = boundary ? "(?: .*)?" : "";
+  return new RegExp(`^${escapedBody}${suffix}$`).test(command);
+}
+
+/**
+ * @description Resolves a command against settings.json's Bash rules using Claude Code's real
+ * precedence: deny always wins over allow, unconditionally (see `claudeBashMatches` doc).
+ * @param {object} settings
+ * @param {string} command
+ * @returns {"deny"|"allow"|"ask"}
+ */
+function resolveClaudeBash(settings, command) {
+  const denies = settings.permissions.deny.filter((p) => p.startsWith("Bash("));
+  if (denies.some((p) => claudeBashMatches(p, command))) return "deny";
+  const allows = settings.permissions.allow.filter((p) => p.startsWith("Bash("));
+  if (allows.some((p) => claudeBashMatches(p, command))) return "allow";
+  return "ask";
+}
+
+test("settings.json: git push --force-with-lease resolves allow (deny narrowed with a word-boundary space); raw --force/-f stay denied; exactly 6 destructive-git denies (#ac-2.1/#ac-2.2)", () => {
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push --force-with-lease origin minha-branch"), "allow");
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin --force-with-lease"), "allow");
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push --force origin main"), "deny");
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin --force"), "deny");
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push -f origin main"), "deny");
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "git push origin -f"), "deny");
+  const bashDenies = CLAUDE_SETTINGS.permissions.deny.filter((p) => p.startsWith("Bash("));
+  const gitDenyCount = bashDenies.filter((p) => p.startsWith("Bash(git ")).length;
+  strictEqual(gitDenyCount, 6, "settings.json permissions.deny must still carry exactly 6 destructive-git Bash denies");
+
+  // [orca-cutover] Production-deploy class. `Bash(npm run:*)` is an ALLOW, so a package.json with
+  // `"deploy": "wrangler deploy"` was an approved path to production that never passed through a PR.
+  // Deny beats allow in Claude Code, so these close both the direct wrangler spellings that mutate
+  // production and the `npm run deploy` indirection. `d1 execute --local` must stay allowed.
+  for (const command of [
+    "wrangler deploy",
+    "wrangler versions upload",
+    "wrangler secret put API_KEY",
+    "wrangler r2 object delete bucket/key",
+    "wrangler d1 execute DB --remote --command \"delete from users\"",
+    "npx wrangler deploy",
+    "npm run deploy",
+    "pnpm run deploy",
+    "bun run deploy",
+  ]) {
+    strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, command), "deny", `settings.json must deny ${JSON.stringify(command)}`);
+  }
+  ok(
+    resolveClaudeBash(CLAUDE_SETTINGS, "wrangler d1 execute DB --local --command \"select 1\"") !== "deny",
+    "local d1 work must stay reachable — only --remote mutates production",
+  );
+  strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "npm run test"), "allow", "routine npm scripts must stay allowed");
+});

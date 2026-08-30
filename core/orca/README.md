@@ -1,7 +1,7 @@
 # `core/orca/` — entrega autônoma multi-projeto sobre o Orca
 
-Este diretório é o **substituto do motor de cron da VPS** (`core/vps/`, em aposentadoria — ver
-`core/vps/DEPRECATED.md`). Ele contém tudo que sobrou depois de descobrir que quase nada era
+Este diretório é o **substituto do motor de cron da VPS** (aposentado — ver
+`docs/vps-retirement.md`). Ele contém tudo que sobrou depois de descobrir que quase nada era
 necessário:
 
 | Arquivo | Papel |

@@ -388,13 +388,6 @@ const OC_IMPORT_EXTENSIONS = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", 
 const OC_IMPORT_INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs", "index.mts", "index.cts"];
 const OC_OPAQUE_LOADER_ALLOWLIST = new Map([
   ["scripts/parity-manifest.mjs", new Set(["pathToFileURL(join(pluginDir, name)).href"])],
-  [
-    "core/vps/run-cron-review.mjs",
-    new Set([
-      'join(root, ".claude/modules/codex-adversary/references/codex-adversary.mjs")',
-      'join(root, ".claude/modules/codex-adversary/references/merge-findings.mjs")',
-    ]),
-  ],
 ]);
 function slashPath(path) {
   return path.split(sep).join("/");
@@ -1667,12 +1660,12 @@ describe("parity-manifest", () => {
     const tmp = mkdtempSync(join(tmpdir(), "oc-delete-importers-"));
     try {
       mkdirSync(join(tmp, "core/opencode/plugin/lib"), { recursive: true });
-      mkdirSync(join(tmp, "core/vps"), { recursive: true });
+      mkdirSync(join(tmp, "core/orca"), { recursive: true });
       mkdirSync(join(tmp, "scripts/fixtures"), { recursive: true });
       mkdirSync(join(tmp, "scripts/history"), { recursive: true });
       writeFileSync(join(tmp, "core/opencode/plugin/lib/doomed.mjs"), "export default 1\n");
       writeFileSync(join(tmp, "scripts/static.js"), "import value from /* caller trivia */ '../core/opencode/plugin/lib/doomed.mjs'\nvoid value\n");
-      writeFileSync(join(tmp, "core/vps/dynamic.tsx"), "await import(/* caller trivia */ '../opencode/plugin/lib/doomed.mjs', { with: { type: 'json' } })\n");
+      writeFileSync(join(tmp, "core/orca/dynamic.tsx"), "await import(/* caller trivia */ '../opencode/plugin/lib/doomed.mjs', { with: { type: 'json' } })\n");
       writeFileSync(join(tmp, "scripts/static-query.js"), "import '../core/opencode/plugin/lib/doomed.mjs?raw'\n");
       writeFileSync(join(tmp, "scripts/static-fragment.js"), "import '../core/opencode/plugin/lib/doomed.mjs#runtime'\n");
       writeFileSync(join(tmp, "scripts/dynamic-query.js"), "await import('../core/opencode/plugin/lib/doomed.mjs?raw')\n");
@@ -1686,7 +1679,7 @@ describe("parity-manifest", () => {
       writeFileSync(join(tmp, "scripts/fixtures/ignored.js"), "import '../../core/opencode/plugin/lib/doomed.mjs'\n");
       writeFileSync(join(tmp, "scripts/history/ignored.js"), "import '../../core/opencode/plugin/lib/doomed.mjs'\n");
       const expectedConsumers = [
-        "core/vps/dynamic.tsx",
+        "core/orca/dynamic.tsx",
         "scripts/dynamic-fragment.js",
         "scripts/dynamic-query.js",
         "scripts/extensionless.jsx",
@@ -1704,35 +1697,24 @@ describe("parity-manifest", () => {
     }
   });
 
-  it("t12-module-manifest: allows only the three exact audited live loader expressions", () => {
+  /**
+   * @description #807 — the allowlist shrank from three audited live loader expressions to one
+   * once `core/vps/run-cron-review.mjs` (the other two) died with the retired engine. This test
+   * used to prove all three; now it proves the single survivor, both that the exact expression is
+   * allowed and that a one-character mutation of it throws. This is the one place in the #807
+   * extraction where the assertion COUNT legitimately shrinks — because the allowlist itself did.
+   */
+  it("t12-module-manifest: allows only the one exact audited live loader expression left after #807", () => {
     const tmp = mkdtempSync(join(tmpdir(), "oc-loader-allowlist-"));
     try {
       mkdirSync(join(tmp, "core/opencode/plugin/lib"), { recursive: true });
-      mkdirSync(join(tmp, "core/vps"), { recursive: true });
       mkdirSync(join(tmp, "scripts"), { recursive: true });
       writeFileSync(join(tmp, "core/opencode/plugin/lib/doomed.mjs"), "export default 1\n");
       writeFileSync(
         join(tmp, "scripts/parity-manifest.mjs"),
         "await import(pathToFileURL(join(pluginDir, name)).href)\n",
       );
-      writeFileSync(
-        join(tmp, "core/vps/run-cron-review.mjs"),
-        "await import(join(root, \".claude/modules/codex-adversary/references/codex-adversary.mjs\"))\n"
-          + "await import(join(root, \".claude/modules/codex-adversary/references/merge-findings.mjs\"))\n",
-      );
       assert.deepEqual(liveImportersOf("plugin/lib/doomed.mjs", tmp), []);
-
-      writeFileSync(
-        join(tmp, "core/vps/run-cron-review.mjs"),
-        "await import(join(root, \".claude/modules/codex-adversary/references/codex- adversary.mjs\"))\n"
-          + "await import(join(root, \".claude/modules/codex-adversary/references/merge-findings.mjs\"))\n",
-      );
-      assert.throws(() => liveImportersOf("plugin/lib/doomed.mjs", tmp), /opaque module loader is not allowlisted/);
-      writeFileSync(
-        join(tmp, "core/vps/run-cron-review.mjs"),
-        "await import(join(root, \".claude/modules/codex-adversary/references/codex-adversary.mjs\"))\n"
-          + "await import(join(root, \".claude/modules/codex-adversary/references/merge-findings.mjs\"))\n",
-      );
 
       writeFileSync(
         join(tmp, "scripts/parity-manifest.mjs"),

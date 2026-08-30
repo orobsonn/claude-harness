@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vendorOpenCode } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
-import { seedOpencodeRootConfig } from "../vps/cron-a-dispatch.mjs";
 
 const ocRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(ocRoot, "../..");
@@ -80,12 +79,15 @@ test("single evaluator eyes use Sol; secondEyeModel is absent by default", () =>
   assert.equal(routing.roles.adversary.model, routing.roles.planner.model);
 });
 
-test("generated sidecar, vendored runtime, and VPS output expose only approved active models", () => {
+// #807: this test used to assert over a THIRD surface — the worktree that the retired
+// `core/vps/cron-a-dispatch.mjs` seeded via `seedOpencodeRootConfig`. That engine is gone, so the
+// worktree legs went with it. The vendored + sidecar legs are LIVE and stay exactly as they were:
+// deleting this whole file to chase a green import would have dropped the approved-defaults oracles
+// below, which pin the live `opencode.json` and `core/opencode/opencode.json.example` model fields.
+test("generated sidecar and vendored runtime expose only approved active models", () => {
   const root = mkdtempSync(join(tmpdir(), "model-routing-surfaces-"));
   const vendored = join(root, "vendored");
-  const worktree = join(root, "worktree");
   mkdirSync(vendored);
-  mkdirSync(worktree);
   try {
     writeFileSync(join(vendored, "opencode.json"), "{}\n");
     vendorOpenCode({
@@ -94,18 +96,15 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
       version: "test",
       stampDate: "2026-07-14",
     });
-    seedOpencodeRootConfig(worktree, repoRoot);
 
     const jsonPaths = [
       join(vendored, "opencode.json"),
       join(vendored, ".opencode", "harness.routing.json"),
-      join(worktree, "opencode.json"),
-      join(worktree, ".opencode", "harness.routing.json"),
     ];
     for (const path of jsonPaths) assert.equal(existsSync(path), true, `missing generated surface ${path}`);
 
     const active = jsonPaths.flatMap((path) => activeJsonModels(JSON.parse(readFileSync(path, "utf8"))));
-    for (const agentsDir of [join(vendored, ".opencode", "agents"), join(worktree, ".opencode", "agents")]) {
+    for (const agentsDir of [join(vendored, ".opencode", "agents")]) {
       assert.equal(existsSync(agentsDir), true, `missing generated agents ${agentsDir}`);
       for (const file of readdirSync(agentsDir).filter((name) => name.endsWith(".md"))) {
         const match = readFileSync(join(agentsDir, file), "utf8").match(/^model:\s*(\S+)$/m);
@@ -117,7 +116,7 @@ test("generated sidecar, vendored runtime, and VPS output expose only approved a
     const merged = JSON.parse(readFileSync(join(vendored, "opencode.json"), "utf8"));
     assert.deepEqual(merged.plugin, []);
     assert.equal(existsSync(join(vendored, ".opencode", "plugin", "planner-recovery.ts")), false);
-    for (const routingPath of [jsonPaths[1], jsonPaths[3]]) {
+    for (const routingPath of [jsonPaths[1]]) {
       const routing = JSON.parse(readFileSync(routingPath, "utf8"));
       assert.equal(routing.version, 2);
       assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");

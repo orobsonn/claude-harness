@@ -213,7 +213,7 @@ as saídas medidas:
 
 > **O motor de cron da VPS foi aposentado.** As antigas seções sobre `cron-review`,
 > `HARNESS_REVIEW_ENABLED`, `autoMergeEnabled` e o auto-update blue/green do motor descreviam
-> `core/vps/`, que não é mais o caminho — ver [`../core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md)
+> `core/vps/`, que não é mais o caminho — ver [`docs/vps-retirement.md`](vps-retirement.md)
 > para os motivos medidos e para o procedimento de verificação antes de remover o diretório. Não há
 > mais "motor" separado para auto-atualizar: o pipeline é o `.claude/` vendorado no repo, atualizado
 > por PR como qualquer outro código.

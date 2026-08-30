@@ -61,9 +61,10 @@ const ISSUE_FORM_ADVISORY =
   "For a CHAINED ROADMAP, create EVERY issue with `harness:ready` (never `harness:queued` by hand) " +
   "and, in each dependent issue's body, declare its prerequisites in a fenced ```harness-deps block " +
   "(one `#N` per line). The engine gates order and serialization on its own -- a dependent is held " +
-  "until every prerequisite's PR merges, and only one issue is built at a time. After creating the " +
-  "roadmap, run `node core/vps/chain-validate.mjs --config <project.json>` to catch dependency " +
-  "cycles and non-existent references before the engine runs.";
+  "until every prerequisite's PR merges, and only one issue is built at a time. There is NO " +
+  "automated graph lint: before the engine runs, check by hand that no dependency cycle exists " +
+  "and that every referenced #N is a real issue -- a cycle leaves both issues queued forever with " +
+  "no dead node to notify.";
 
 /**
  * @description True when .github/ISSUE_TEMPLATE/harness-task.yml exists under cwd.
@@ -88,7 +89,7 @@ function defaultIssueFormExists(cwd) {
 /**
  * @description Detects a HARNESS ROUTINE (headless-local / cloud cron) session. Parity port of
  * core/claude-code/hooks/entry-gate.mjs isRoutineSession -- SAME three markers, SAME fail-open.
- * The retiring core/vps/ dispatch deliberately does NOT set $CLAUDE_CODE_REMOTE (that would
+ * The retired VPS cron dispatch deliberately did NOT set $CLAUDE_CODE_REMOTE (that would
  * disable cheap hands) but DOES set $HARNESS_NOTIFY_PROJECT and usually
  * $HARNESS_OBSERVABILITY_RUN_PATH, so the routine signal is ANY of the three. Fail-open
  * (returns false -> allow) when env is unavailable. NOTE: the LIVE Orca dispatch

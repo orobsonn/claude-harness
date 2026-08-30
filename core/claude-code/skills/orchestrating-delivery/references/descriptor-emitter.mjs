@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isSafeFeatureId } from '../../../hooks/lib/gate-lib.mjs';
 import { readRunnerConfig as defaultReadRunnerConfig } from './runner-adapters.mjs';
 import { parseFlags, isDirectCli } from './cli-flags.mjs';
-import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../vps/obs-outbox.mjs';
+import { appendEvent as defaultAppendEvent, readEvents as defaultReadEvents } from '../../../../shared/lib/obs-outbox.mjs';
 import { resolveHandModel, resolveHandEffort, detectHandFamily, dispatchModeFor, familyOfHandModel, agentTypeForRung } from '../../../../shared/lib/hand-model-ladder.mjs';
 import { normalizeSeverity, severityRank } from '../../../../shared/lib/severity.mjs';
 

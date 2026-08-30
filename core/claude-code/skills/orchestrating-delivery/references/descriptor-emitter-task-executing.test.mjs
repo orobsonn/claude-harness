@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { emitTaskExecuting } from "./descriptor-emitter.mjs";
-import { createRun, appendEvent, readEvents } from "../../../vps/obs-outbox.mjs";
+import { createRun, appendEvent, readEvents } from "../../../../shared/lib/obs-outbox.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Dual-runtime: core/claude-code/skills/orchestrating-delivery/references → 5 up = repo root.

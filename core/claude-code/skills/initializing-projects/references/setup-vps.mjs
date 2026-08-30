@@ -9,8 +9,8 @@
  *      `core/orca/project.example.json`;
  *   2. one fenced crontab line running `core/orca/select-and-dispatch.mjs --config <that JSON>`.
  *
- * It NO LONGER installs the retired VPS cron engine (`core/vps/install-crons.mjs`: Cron A, the review
- * cron, drain, reaper, Telegram notify). That engine is retired — see `core/vps/DEPRECATED.md` for
+ * It NO LONGER installs the retired VPS cron engine (Cron A, the review
+ * cron, drain, reaper, Telegram notify). That engine is retired — see `docs/vps-retirement.md` for
  * the measured reasons and the verification runbook that must precede deleting it. Notifications are
  * no longer a wizard concern either: Orca runs are visible from desktop and phone, which is what the
  * Telegram plumbing existed to simulate.

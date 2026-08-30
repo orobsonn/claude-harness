@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import {
   appendEvent as defaultAppendEvent,
   readEvents as defaultReadEvents,
-} from "../vps/obs-outbox.mjs";
+} from "../../shared/lib/obs-outbox.mjs";
 import { currentAttemptEvents } from "../../shared/lib/obs-attempt.mjs";
 
 /**

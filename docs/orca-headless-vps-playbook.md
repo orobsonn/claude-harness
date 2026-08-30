@@ -38,7 +38,7 @@ notificando). Com esse motor aposentado, não há competição: há uma camada d
 camada de execução (o `.claude/` do repo).
 
 **O motor de cron da VPS foi aposentado** — por falhas medidas, não por preferência de arquitetura.
-O registro completo está em [`core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md); em resumo:
+O registro completo está em [`docs/vps-retirement.md`](vps-retirement.md); em resumo:
 seleção por issue mais antiga sem filtro de escopo (tornava modo canário impossível), gate de
 dependência ancorado em nome de branch (4 de 14 issues mortas em silêncio, invisíveis para o
 `chain-validate`), execução como root com tokens de vários clientes no ambiente, e uma frota
@@ -453,7 +453,7 @@ Se algo quebrar: `systemctl stop orca-serve`, restaurar **binário e pasta de co
   controle total do runtime pra qualquer um que a veja.
 - **Não reviver o motor de cron da VPS** (`core/vps/`) ao lado do selector. Aí sim seriam dois
   motores competindo pelo mesmo papel — que é o problema real que a antiga cláusula deste playbook
-  descrevia. Ver [`core/vps/DEPRECATED.md`](../core/vps/DEPRECATED.md), inclusive o procedimento de
+  descrevia. Ver [`docs/vps-retirement.md`](vps-retirement.md), inclusive o procedimento de
   verificação antes de remover o diretório (outros projetos ainda podem ter crontab apontando pra lá).
 - **Não rodar o selector como root.** Ele é cron do usuário `orca`, e é assim que a credencial
   escopada faz sentido.

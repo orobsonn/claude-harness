@@ -39,6 +39,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -996,9 +997,9 @@ function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
  * @description Writes the exact Claude files produced by this vendor run. The lifecycle shipper
  * consumes this list instead of a directory prefix, so a project's local `.claude/` cargo never
  * enters the harness PR.
- * @param {{ coreDir: string, claudeCodeDir: string, claudeDir: string, hookVpsDeps: string[], modules: string[] }} options
+ * @param {{ coreDir: string, claudeCodeDir: string, claudeDir: string, modules: string[] }} options
  */
-function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookVpsDeps, modules }) {
+function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, modules }) {
   const entries = [];
   for (const dir of FRAMEWORK_OWNED) {
     const src = join(claudeCodeDir, dir);
@@ -1010,7 +1011,8 @@ function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookV
   }
   const sharedDir = join(coreDir, "shared");
   if (existsSync(sharedDir)) collectDestinationTree(sharedDir, join(".claude", "shared"), entries);
-  for (const name of hookVpsDeps) entries.push({ destination: join(".claude", "vps", name), kind: "file" });
+  // NOTE: no more `.claude/vps/` entries here (issue #807) — the retired `core/vps/` mirror is
+  // gone; `core/shared/` above already carries what was moved out of it (obs-outbox.mjs).
   const modulesRoot = join(coreDir, "..", "modules");
   for (const name of modules) {
     const src = join(modulesRoot, name);
@@ -1033,6 +1035,78 @@ function writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookV
     ".dev.vars.example",
   ]) files.add(path);
   writeFileSync(join(claudeDir, ".harness-owned-files.json"), `${JSON.stringify({ version: 1, files: [...files].sort() }, null, 2)}\n`);
+}
+
+/**
+ * @description Claude-side counterpart to `OC_RETIRED_FILES`, for issue #807: files this installer
+ * previously wrote into `.claude/` that source no longer has. Exact relative paths ONLY (never a
+ * directory or a glob) — same safety rule as `OC_RETIRED_FILES`: this must never risk deleting a
+ * project's own local file placed alongside harness output.
+ * `.claude/vps/` was the mirror of the now-retired `core/vps/` engine; `obs-outbox.mjs` is the ONLY
+ * module it ever held for any hook actually vendored (the closure was seeded from hooks' `../vps/`
+ * imports, and obs-outbox had no vps-internal siblings that any hook imported).
+ */
+export const CLAUDE_RETIRED_FILES = ["vps/obs-outbox.mjs"];
+
+/**
+ * @description Cleans a legacy `.claude/vps/` mirror left behind by a vendor-core that predates the
+ * retirement of `core/vps/` (issue #807). `core/shared/lib/obs-outbox.mjs` is where that module now
+ * lives, already covered by `copyClaudeSharedDeps`; the old `.claude/vps/` copy is a stale second
+ * copy of a live module and, once `.claude/.harness-owned-files.json` stops listing it, an
+ * unattributable one — the lifecycle shipper would otherwise reclassify it as the project's own
+ * cargo and it could leak into a harness PR.
+ *
+ * Delete set = the static `CLAUDE_RETIRED_FILES` ledger **union** any `.claude/vps/...` path listed
+ * in the PRE-EXISTING `.claude/.harness-owned-files.json` (entries there are `.claude/`-prefixed,
+ * e.g. `".claude/vps/obs-outbox.mjs"` — the prefix is stripped before joining to `claudeDir`).
+ * The static ledger is the load-bearing half, not a fallback: on the likeliest real path — an
+ * ALREADY-vendored project's older installer running against this new source — `copyHookVpsDeps` no
+ * longer exists to mirror anything, so `writeClaudeOwnershipManifest` rewrites the manifest WITHOUT
+ * any vps entry the very first time new code runs, orphaning the stale file before the manifest ever
+ * recorded it as gone. The manifest half only catches a release that once mirrored MORE than
+ * `obs-outbox.mjs`.
+ *
+ * MUST be called before `writeClaudeOwnershipManifest` overwrites `.harness-owned-files.json` for
+ * this run — it reads the OLD manifest.
+ *
+ * Never touches a file the operator placed in `.claude/vps/` themselves: only exact ledger/manifest
+ * paths are removed (never a glob or a recursive directory delete), and the directory itself is only
+ * ever removed if left empty — `ENOTEMPTY` (something else is still in there) is a successful,
+ * silent outcome, not an error.
+ * @param {string} claudeDir
+ * @returns {string} status string for the progress line
+ */
+function cleanRetiredClaudeFiles(claudeDir) {
+  const manifestPath = join(claudeDir, ".harness-owned-files.json");
+  const fromManifest = [];
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      for (const entry of manifest.files ?? []) {
+        if (typeof entry !== "string") continue;
+        const normalized = entry.split(sep).join("/");
+        if (normalized.startsWith(".claude/vps/")) fromManifest.push(normalized.slice(".claude/".length));
+      }
+    } catch {
+      // A corrupt/foreign manifest is not this function's problem — fall back to the static ledger.
+    }
+  }
+  const deleteSet = new Set([...CLAUDE_RETIRED_FILES, ...fromManifest]);
+  let removed = 0;
+  for (const rel of deleteSet) {
+    const abs = join(claudeDir, ...rel.split("/"));
+    if (existsSync(abs)) {
+      rmSync(abs, { force: true });
+      removed += 1;
+    }
+  }
+  try {
+    rmdirSync(join(claudeDir, "vps"));
+  } catch {
+    // ENOTEMPTY (an operator's own file remains) or ENOENT (never existed) are both fine outcomes —
+    // per the docstring above, only empty retired dirs are ever removed.
+  }
+  return removed > 0 ? `removed ${removed} file(s)` : "nothing to clean";
 }
 
 /**
@@ -1275,18 +1349,21 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   const claudeDir = join(targetDir, ".claude");
   mkdirSync(claudeDir, { recursive: true });
 
+  // Must run before writeClaudeOwnershipManifest (below) overwrites the manifest this reads.
+  const retiredCleanup = cleanRetiredClaudeFiles(claudeDir);
+  ok(`retired .claude/vps/ mirror (#807): ${retiredCleanup}`);
+
   copyFrameworkOwned(claudeCodeDir, claudeDir);
   ok("agents/skills/rules/hooks copied (*.test.mjs excluded)");
 
-  // Hooks import core/shared pure (absolution, regate, git-state, real-file). Mirror into
-  // .claude/shared and rewrite monorepo-relative imports so vendored hooks resolve.
+  // Hooks import core/shared pure (absolution, regate, git-state, real-file, and — since #807 —
+  // obs-outbox). Mirror into .claude/shared and rewrite monorepo-relative imports so vendored hooks
+  // resolve. This ALSO now covers what used to be the separate .claude/vps/ mirror: obs-outbox.mjs
+  // moved into core/shared/lib/, so this one blanket copy is all it needs.
   const sharedMirrored = copyClaudeSharedDeps(coreDir, claudeDir);
   ok(`hooks' shared deps → .claude/shared/: ${sharedMirrored}`);
   const sharedRewrites = rewriteClaudeSharedImports(claudeDir);
   ok(`shared import rewrites: ${sharedRewrites}`);
-
-  const hookVpsDeps = copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir);
-  ok(`hooks' vps deps → .claude/vps/: ${hookVpsDeps.length ? hookVpsDeps.join(", ") : "none (hooks import no vps modules)"}`);
 
   const modules = copyModules(join(coreDir, "..", "modules"), claudeDir, Boolean(withCodex));
   ok(`modules: ${modules.length ? modules.join(", ") : "none (default off; pass --with-codex to enable)"}`);
@@ -1309,22 +1386,23 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
     : "skipped (no dev.vars.example source)";
   ok(`root .gitignore (.dev.vars): ${devVarsIgnore}`);
 
-  const missingVpsDeps = findMissingHookVpsDeps(claudeDir);
-  if (missingVpsDeps.length > 0) {
-    const lines = missingVpsDeps.map((m) => `    ${m.hook} imports ../vps/${m.module} — MISSING in .claude/vps/`);
+  const importScan = scanVendoredImports(claudeDir);
+  if (importScan.unresolved.length > 0) {
+    const lines = importScan.unresolved.map((m) => `    ${m.file} imports ${m.specifier} — UNRESOLVED`);
     fail(
       [
-        "FATAL — vendored hooks import vps modules that were not mirrored to .claude/vps/:",
+        "FATAL — vendored files import paths that do not exist under .claude/:",
         ...lines,
-        "  A hook with a missing ../vps/ import crashes on load (ERR_MODULE_NOT_FOUND) and silently",
-        "  blocks the entry-gate. Re-run vendor-core (this same, current copy) to mirror them.",
+        "  A file with an unresolved import crashes on load (ERR_MODULE_NOT_FOUND) and silently",
+        "  blocks the entry-gate. Re-run vendor-core (this same, current copy).",
       ].join("\n"),
     );
   }
+  ok(`vendored imports resolved: ${importScan.total} specifiers checked`);
 
   const claudeGitignore = mergeClaudeGitignore(claudeDir);
   writeFileSync(join(claudeDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
-  writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, hookVpsDeps, modules });
+  writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, modules });
   ok(`.claude/.gitignore (${claudeGitignore}), .harness-version written`);
   return { claudeDir };
 }
@@ -1442,80 +1520,112 @@ function rewriteClaudeSharedImports(claudeDir) {
   return n;
 }
 
+// Extensions this scan opens and reads. `.test.mjs` files are never vendored (isFrameworkCopyIncluded
+// excludes them at copy time), so their imports never ship and are skipped here too.
+const VENDORED_IMPORT_SCAN_EXTENSIONS = [".mjs", ".js", ".ts"];
+
+// Three import shapes a vendored file may use, all textual over the SAME comment-stripped source
+// (see stripCommentsForImportScan below) — `from`-shaped covers static imports and re-exports,
+// `import '...'`-shaped covers a bare side-effect import, and the dynamic-call shape covers a
+// deferred `await import(...)`. The dynamic shape exists in shipped code today:
+// `core/claude-code/hooks/vps-access-nudge.mjs` does `await import('../skills/.../orca-doctor.mjs')`
+// and its own docstring names this exact gate as the reason the specifier is a literal.
+const REL_IMPORT_SHAPES = [
+  /\bfrom\s*['"](\.{1,2}\/[^'"\n]+)['"]/g,
+  /\bimport\s+['"](\.{1,2}\/[^'"\n]+)['"]/g,
+  /\bimport\s*\(\s*['"](\.{1,2}\/[^'"\n]+)['"]\s*\)/g,
+];
+
 /**
- * @description The hooks vendored into `.claude/hooks/` import runtime modules from `core/vps/`
- * (e.g. `stamp-triage.mjs` and `obs-eye-append.mjs` both `import "../vps/obs-outbox.mjs"` for the
- * observability outbox). `vps/` is NOT framework-owned, so without this the vendored hook resolves
- * an `import` path that does not exist under `.claude/` → ERR_MODULE_NOT_FOUND → the hook crashes on
- * load → `stamp-triage` never writes `triage.json` → the entry-gate blocks every delivery subagent.
- * This mirrors ONLY the vps modules the hooks actually import (transitive closure of their `./`
- * siblings inside `vps/`) into `.claude/vps/` — never the whole cron runtime.
- * Hooks live under the Claude shell (`claudeCodeDir`); the real engine modules stay at `core/vps/`.
- * @param {string} coreDir - Repo `core/` (holds the real `vps/` engine).
- * @param {string} claudeDir - Target `.claude/`.
- * @param {string} [claudeCodeDir] - Claude shell source (default: same as coreDir for legacy flat layout).
- * @returns {string} status string
+ * @description Strips comments before the import-shape regexes run, LINE-ORIENTED rather than with
+ * a whole-file `/\/\*[\s\S]*?\*\//` block regex — that block form treats any in-string `/*` as a
+ * comment opener, and this tree has one: `detect-stack.mjs` builds the string
+ * `'node --test "**\/*.test.mjs"'`, whose `/*` would otherwise swallow everything up to the NEXT
+ * `*\/` (e.g. the next JSDoc's closer), silently dropping real imports from the scan. Instead: drop
+ * a line whose trimmed form starts with `*`, `//` or `/*` outright (covers JSDoc bodies and full-line
+ * comments), and strip a trailing `//...` only when that `//` is not preceded by `:`, `'`, `"` or `\`
+ * (a URL, a string literal boundary, or an escape are not comment openers).
+ * @param {string} text
+ * @returns {string}
  */
-function copyHookVpsDeps(coreDir, claudeDir, claudeCodeDir = coreDir) {
-  const hooksDir = join(claudeCodeDir, "hooks");
-  if (!existsSync(hooksDir)) return [];
-  const VPS_IMPORT = /from\s+['"]\.\.\/vps\/([\w.-]+\.mjs)['"]/g;
-  const SIBLING_IMPORT = /from\s+['"]\.\/([\w.-]+\.mjs)['"]/g;
-
-  // Seed the worklist from the hooks' direct `../vps/` imports. Only the hooks that are actually
-  // vendored count — exclude `*.test.mjs` (same rule as isFrameworkCopyIncluded), whose imports
-  // never ship, so a test-only import of a heavy vps module is not needlessly mirrored.
-  const queue = [];
-  for (const file of readdirSync(hooksDir)) {
-    if (!file.endsWith(".mjs") || !isFrameworkCopyIncluded(file)) continue;
-    const text = readFileSync(join(hooksDir, file), "utf8");
-    for (const m of text.matchAll(VPS_IMPORT)) queue.push(m[1]);
-  }
-
-  // Transitive closure INSIDE vps/: an imported vps module may import a sibling vps module.
-  // Always read real engine modules from core/vps/ (never monorepo-only claude-code/vps shims).
-  const copied = [];
-  const seen = new Set();
-  while (queue.length) {
-    const name = queue.shift();
-    if (seen.has(name)) continue;
-    seen.add(name);
-    const src = join(coreDir, "vps", name);
-    if (!existsSync(src) || src.endsWith(".test.mjs")) continue;
-    mkdirSync(join(claudeDir, "vps"), { recursive: true });
-    cpSync(src, join(claudeDir, "vps", name));
-    copied.push(name);
-    const text = readFileSync(src, "utf8");
-    for (const m of text.matchAll(SIBLING_IMPORT)) queue.push(m[1]);
-  }
-  return copied.sort();
+function stripCommentsForImportScan(text) {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*")) return "";
+      for (let i = 0; i < line.length - 1; i += 1) {
+        if (line[i] !== "/" || line[i + 1] !== "/") continue;
+        const prev = i > 0 ? line[i - 1] : "";
+        if (prev === ":" || prev === "'" || prev === '"' || prev === "\\") continue;
+        return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
 }
 
 /**
- * @description Post-vendor integrity check over the FINAL vendored state: every `../vps/<mod>.mjs`
- * a vendored hook imports MUST exist under `.claude/vps/`. Catches the stale-jump — a project whose
- * ALREADY-vendored vendor-core predates the vps-mirroring step runs the OLD logic on an update: it
- * refreshes the hooks to a new `../vps/` import WITHOUT creating `.claude/vps/`, shipping a hook that
- * dies with ERR_MODULE_NOT_FOUND on load (invisibly, since PostToolUse hooks are fire-and-forget — the
- * only symptom is the entry-gate silently blocking every delivery subagent). Pure read-only. Returns
- * the list of `{ hook, module }` pairs still missing (empty ⇒ complete).
+ * @description Post-vendor integrity check over the FINAL vendored state (issue #807): every
+ * relative import specifier in every vendored file must resolve to a file that exists under
+ * `.claude/`. Generalizes the retired `.claude/vps/` mirror check (which only read `hooks/` and only
+ * the `from "../vps/…"` shape) to the same failure class it was really guarding against: a vendored
+ * file whose relative import does not resolve under `.claude/` crashes on load
+ * (ERR_MODULE_NOT_FOUND) invisibly — PostToolUse hooks are fire-and-forget, so the only symptom is
+ * the entry-gate silently blocking every delivery subagent.
+ *
+ * Scans the WHOLE vendored `.claude/` tree, not just `FRAMEWORK_OWNED`/`hooks/`: the old hooks-only
+ * scan is why a depth-3 skill reference (`skills/orchestrating-delivery/references/descriptor-emitter.mjs`)
+ * was never covered despite carrying a cross-tree import, and `shared/` — where obs-outbox.mjs now
+ * lives — and `modules/` (vendored under `--with-codex`) are both reachable from `.claude/` but are
+ * neither `FRAMEWORK_OWNED` nor `hooks/`.
+ *
+ * Pure read-only.
  * @param {string} claudeDir
- * @returns {{ hook: string, module: string }[]}
+ * @returns {{ total: number, unresolved: { file: string, specifier: string }[] }}
  */
-export function findMissingHookVpsDeps(claudeDir) {
-  const hooksDir = join(claudeDir, "hooks");
-  const vpsDir = join(claudeDir, "vps");
-  const missing = [];
-  if (!existsSync(hooksDir)) return missing;
-  const VPS_IMPORT = /from\s+['"]\.\.\/vps\/([\w.-]+\.mjs)['"]/g;
-  for (const file of readdirSync(hooksDir)) {
-    if (!file.endsWith(".mjs") || !isFrameworkCopyIncluded(file)) continue;
-    const text = readFileSync(join(hooksDir, file), "utf8");
-    for (const m of text.matchAll(VPS_IMPORT)) {
-      if (!existsSync(join(vpsDir, m[1]))) missing.push({ hook: file, module: m[1] });
+function scanVendoredImports(claudeDir) {
+  const unresolved = [];
+  let total = 0;
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      const info = lstatSync(abs);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (name.endsWith(".test.mjs")) continue;
+      if (!VENDORED_IMPORT_SCAN_EXTENSIONS.some((ext) => name.endsWith(ext))) continue;
+      const stripped = stripCommentsForImportScan(readFileSync(abs, "utf8"));
+      const specifiers = new Set();
+      for (const shape of REL_IMPORT_SHAPES) {
+        for (const m of stripped.matchAll(shape)) specifiers.add(m[1]);
+      }
+      for (const specifier of specifiers) {
+        total += 1;
+        if (!existsSync(resolve(dirname(abs), specifier))) {
+          unresolved.push({ file: relative(claudeDir, abs).split(sep).join("/"), specifier });
+        }
+      }
     }
-  }
-  return missing;
+  };
+  walk(claudeDir);
+  return { total, unresolved };
+}
+
+/**
+ * @description Exported read of `scanVendoredImports` — just the unresolved list (empty ⇒ every
+ * vendored relative import resolves under `.claude/`). See `scanVendoredImports` for the full
+ * rationale; this wrapper exists so the FATAL-gate check in `vendorClaude` and any external caller
+ * (tests, a future probe script) share one implementation.
+ * @param {string} claudeDir
+ * @returns {{ file: string, specifier: string }[]}
+ */
+export function findUnresolvedVendoredImports(claudeDir) {
+  return scanVendoredImports(claudeDir).unresolved;
 }
 
 /**

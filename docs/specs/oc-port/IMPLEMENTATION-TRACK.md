@@ -56,7 +56,7 @@ Statuses: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 |---|---|---|---|---|---|
 | T12 | NDJSON session result parser | 09, 03 | done | 2026-07-12 | T12 complete (NDJSON oracle) |
 | T13 | VPS spawn `opencode run` | 09 | done | 2026-07-12 | T13 complete (opencode run spawn) |
-| T14 | Auto-merge only after T12+T13 proven | 09 | done | 2026-07-13 | **OBJECTIVE (code-checkable):** OC auto-merge activates only when T12+T13+T15 are done in TRACK AND the runtime fail-closed gate `ocAutoMergeGateOpen` (ac-3.3) is in place mirroring that state (status file `core/opencode/oc-automerge-preconditions.json`). **OPERATOR-JUDGMENT (not a code gate):** operator still flips `autoMergeEnabled:true` manually after reviewing OC runs. |
+| T14 | Auto-merge only after T12+T13 proven | 09 | done | 2026-07-13 | **OBJECTIVE (code-checkable):** OC auto-merge activates only when T12+T13+T15 are done in TRACK AND the runtime fail-closed gate `ocAutoMergeGateOpen` (ac-3.3) is in place mirroring that state (status file `core/opencode/oc-automerge-preconditions.json`). **OPERATOR-JUDGMENT (not a code gate):** operator still flips `autoMergeEnabled:true` manually after reviewing OC runs. **UPDATE (issue #807):** the runtime gate `ocAutoMergeGateOpen` retired together with `core/vps/`; `core/opencode/oc-automerge-preconditions.json` is now documentation only, read by no code. |
 
 ---
 

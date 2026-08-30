@@ -85,9 +85,13 @@ may have only `.claude/`, only `.opencode/`, or both):
   (`claude`, `opencode`, or `both`). Running from the `github:…#<tag>` spec always fetches the tagged
   release's CLI — never a stale vendored copy — so no double-run is needed; do **not** use npm `@latest`
   (it lags and may predate OpenCode support). The CLI's `vendor-core` ends with an **integrity gate**:
-  if any vendored hook imports a `../vps/<mod>.mjs` that was NOT mirrored, it exits **non-zero with a
-  loud FATAL** instead of shipping a hook that crashes on load (ERR_MODULE_NOT_FOUND) and blocks the
-  entry-gate. If it fails the gate, STOP and surface it — do not commit a broken shell.
+  it resolves **every relative import of every vendored file** under `.claude/`, and if any one of them
+  points at a path that was not written, it exits **non-zero with a loud FATAL** instead of shipping a
+  file that crashes on load (ERR_MODULE_NOT_FOUND) and blocks the entry-gate. If it fails the gate,
+  STOP and surface it — do not commit a broken shell. The same run also **removes the retired
+  `.claude/vps/` mirror** (issue #807 moved `obs-outbox.mjs` to `.claude/shared/lib/`): only files this
+  installer itself wrote there are deleted — anything you put in `.claude/vps/` yourself is left alone,
+  and the directory survives if it still holds one.
 
 - **install** (first time — no installer in the project yet): invoke the **`initializing-projects`**
   skill and hand it the baked `SOURCE_URL` and the latest tag. It bootstraps the clone and runs the

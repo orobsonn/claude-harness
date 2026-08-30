@@ -1,7 +1,7 @@
 /**
  * @description OC session-side observability emitters — pure decides + fail-open append.
  * Producers: classify, obs-plan-write, obs-eye, obs-hand plugins.
- * Event types must match core/vps/notify-telegram FEED_ALLOWLIST.
+ * Event types must match core/notify/notify-telegram.mjs's FEED_ALLOWLIST.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

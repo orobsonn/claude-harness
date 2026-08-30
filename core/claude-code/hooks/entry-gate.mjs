@@ -373,9 +373,10 @@ const ISSUE_FORM_ADVISORY =
   "For a CHAINED ROADMAP, create EVERY issue with `harness:ready` (never `harness:queued` by hand) " +
   "and, in each dependent issue's body, declare its prerequisites in a fenced ```harness-deps block " +
   "(one `#N` per line). The engine gates order and serialization on its own — a dependent is held " +
-  "until every prerequisite's PR merges, and only one issue is built at a time. After creating the " +
-  "roadmap, run `node core/vps/chain-validate.mjs --config <project.json>` to catch dependency " +
-  "cycles and non-existent references before the engine runs.";
+  "until every prerequisite's PR merges, and only one issue is built at a time. There is NO " +
+  "automated graph lint: before the engine runs, check by hand that no dependency cycle exists " +
+  "and that every referenced #N is a real issue — a cycle leaves both issues queued forever with " +
+  "no dead node to notify.";
 
 /**
  * @description Returns true when .github/ISSUE_TEMPLATE/harness-task.yml exists in cwd.
@@ -605,7 +606,7 @@ function decideBash(payload, { readGateStateFn, gitStateFn, readDescriptorFn, ad
   // REQUIRED CORRECTION over the original spec: `isRoutineFn` alone is FALSE on the production
   // Orca dispatch path that produced the incident — `isRoutineSession` reads env markers
   // (CLAUDE_CODE_REMOTE / HARNESS_NOTIFY_PROJECT / HARNESS_OBSERVABILITY_RUN_PATH) that are only
-  // ever written by the RETIRED core/vps/ dispatcher (see core/vps/DEPRECATED.md); the live
+  // ever written by the RETIRED VPS cron dispatcher (see docs/vps-retirement.md); the live
   // `orca worktree create` spawn sets no env at all — its autonomy signal lives in the PROMPT
   // string, not the environment. The signal that DOES survive Orca dispatch is subagent context:
   // the harvester is always a subagent, and `payload.agent_id` presence is the same signal

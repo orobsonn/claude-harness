@@ -27,12 +27,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   isFrameworkCopyIncluded,
   shouldVendorModule,
-  findMissingHookVpsDeps,
+  findUnresolvedVendoredImports,
   rewriteSharedImportsForVendor,
   pluginsAreRelative,
   defaultOcPluginPaths,
@@ -146,35 +146,145 @@ function snapshotTree(root) {
   return visit(root);
 }
 
-test("findMissingHookVpsDeps: flags a hook whose ../vps import has no file in .claude/vps, and passes when present", () => {
+/**
+ * @description #807 — findUnresolvedVendoredImports replaces the retired core/vps/-only
+ * findMissingHookVpsDeps. The generalized gate answers "does every relative import in every
+ * vendored framework file resolve under .claude/?" — it must catch the same stale-jump failure
+ * class (an updated file importing a path the installer never created → ERR_MODULE_NOT_FOUND on
+ * load → the hook silently dies → the entry-gate blocks every delivery subagent), but for ANY
+ * vendored dir (shared/, modules/, skills/ references at any depth), not just hooks/.
+ */
+test("findUnresolvedVendoredImports: flags a hook whose relative import has no file under .claude/, and passes when present", () => {
   const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
   mkdirSync(join(claudeDir, "hooks"), { recursive: true });
   writeFileSync(
     join(claudeDir, "hooks", "stamp-triage.mjs"),
-    'import { appendEvent } from "../vps/obs-outbox.mjs";\n',
+    'import { appendEvent } from "../shared/lib/obs-outbox.mjs";\n',
     "utf8",
   );
 
-  // vps/ absent → the import is reported missing (the stale-jump state)
-  const missing = findMissingHookVpsDeps(claudeDir);
+  // shared/ absent → the import is reported unresolved (the stale-jump state)
+  const missing = findUnresolvedVendoredImports(claudeDir);
   assert.equal(missing.length, 1);
-  assert.deepEqual(missing[0], { hook: "stamp-triage.mjs", module: "obs-outbox.mjs" });
+  assert.deepEqual(missing[0], {
+    file: join("hooks", "stamp-triage.mjs"),
+    specifier: "../shared/lib/obs-outbox.mjs",
+  });
 
-  // once the module is mirrored, the check passes clean
-  mkdirSync(join(claudeDir, "vps"), { recursive: true });
-  writeFileSync(join(claudeDir, "vps", "obs-outbox.mjs"), "export const x = 1;\n", "utf8");
-  assert.deepEqual(findMissingHookVpsDeps(claudeDir), []);
+  // once the target exists, the check passes clean
+  mkdirSync(join(claudeDir, "shared", "lib"), { recursive: true });
+  writeFileSync(join(claudeDir, "shared", "lib", "obs-outbox.mjs"), "export const x = 1;\n", "utf8");
+  assert.deepEqual(findUnresolvedVendoredImports(claudeDir), []);
 });
 
-test("findMissingHookVpsDeps: ignores *.test.mjs hook imports (their imports never ship)", () => {
+test("findUnresolvedVendoredImports: ignores *.test.mjs imports (their imports never ship)", () => {
   const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
   mkdirSync(join(claudeDir, "hooks"), { recursive: true });
   writeFileSync(
     join(claudeDir, "hooks", "foo.test.mjs"),
-    'import { readEvents } from "../vps/heavy-only-in-tests.mjs";\n',
+    'import { readEvents } from "../shared/lib/heavy-only-in-tests.mjs";\n',
     "utf8",
   );
-  assert.deepEqual(findMissingHookVpsDeps(claudeDir), [], "a test-only ../vps import is never a vendor defect");
+  assert.deepEqual(
+    findUnresolvedVendoredImports(claudeDir),
+    [],
+    "a test-only relative import is never a vendor defect",
+  );
+});
+
+/**
+ * @description Corrections #2/#4 to the spec: the regex must not be `from`-anchored only. A
+ * multi-line import whose specifier line starts with `}` (obs-plan-write.mjs's real shape) must
+ * still be caught, and so must a side-effect-shaped import (`import "./x.mjs"`) and a deferred
+ * dynamic import (`await import('./x.mjs')` — the vps-access-nudge.mjs shape, whose own docstring
+ * promises this exact gate sees it).
+ */
+test("findUnresolvedVendoredImports: catches a multi-line import specifier line starting with '}'", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "obs-plan-write.mjs"),
+    'import {\n  appendEvent,\n} from "../shared/lib/missing-multi.mjs";\n',
+    "utf8",
+  );
+  const missing = findUnresolvedVendoredImports(claudeDir);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].specifier, "../shared/lib/missing-multi.mjs");
+});
+
+test("findUnresolvedVendoredImports: catches a side-effect import and a deferred dynamic import", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(join(claudeDir, "hooks", "side-effect.mjs"), 'import "./missing-side-effect.mjs";\n', "utf8");
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "vps-access-nudge.mjs"),
+    "const mod = await import('../skills/connecting-orca/references/orca-doctor.mjs');\n",
+    "utf8",
+  );
+  const missing = findUnresolvedVendoredImports(claudeDir);
+  const specifiers = missing.map((m) => m.specifier).sort();
+  assert.deepEqual(specifiers, [
+    "../skills/connecting-orca/references/orca-doctor.mjs",
+    "./missing-side-effect.mjs",
+  ]);
+});
+
+/**
+ * @description Correction #3 to the spec: the measured false-positive is side-effect-shaped
+ * (vendor-core.mjs's own JSDoc `import "../vps/obs-outbox.mjs"` prose), and there is a real
+ * `from`-shaped case too (detect-stack.mjs's JSDoc usage example). Both must be ignored once
+ * comments are stripped.
+ */
+test("findUnresolvedVendoredImports: ignores specifiers written only inside a /** ... */ block", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "documented.mjs"),
+    [
+      "/**",
+      " * usage:",
+      " *   import { detectStack } from \"./nope-from.mjs\";",
+      " *   import \"./nope-side-effect.mjs\";",
+      " */",
+      "export const x = 1;",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  assert.deepEqual(
+    findUnresolvedVendoredImports(claudeDir),
+    [],
+    "a specifier that appears only inside a block comment must not be reported",
+  );
+});
+
+/**
+ * @description Correction #4 to the spec: the mandated line-oriented comment stripper must not
+ * treat a `/*` inside a string literal (e.g. a glob like '**\/*.test.mjs') as a comment opener —
+ * detect-stack.mjs's real NODE_TEST_COMMAND constant carries exactly this shape. A whole-file
+ * block-comment regex would swallow everything up to the next comment-close marker, silently
+ * hiding any import that follows.
+ */
+test("findUnresolvedVendoredImports: a glob string containing '/*' does not open a fake block comment", () => {
+  const claudeDir = mkdtempSync(join(tmpdir(), "vendor-check-"));
+  mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+  writeFileSync(
+    join(claudeDir, "hooks", "glob-carrier.mjs"),
+    [
+      'const NODE_TEST_COMMAND = \'node --test "**/*.test.mjs"\';',
+      '/** some later JSDoc */',
+      'import { x } from "./missing-after-glob.mjs";',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const missing = findUnresolvedVendoredImports(claudeDir);
+  assert.deepEqual(
+    missing.map((m) => m.specifier),
+    ["./missing-after-glob.mjs"],
+    "the import after the glob line must still be seen, not swallowed by a fake comment span",
+  );
 });
 
 test("vendor-core: hooks and docs are included in FRAMEWORK_OWNED", (t) => {
@@ -294,43 +404,228 @@ test("vendor-core: vendored skill references importing core/shared actually reso
   }
 });
 
-test("vendor-core: mirrors the vps modules the hooks import so vendored hooks resolve (P1 regression)", async (t) => {
+/** @description Recursively lists every file under `root` (absolute paths). Test-local helper. */
+function listFilesRecursive(root) {
+  const out = [];
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * @description #807 #ac-2.2 — obs-outbox.mjs moved to core/shared/lib/, which is already
+ * blanket-mirrored and depth-rewritten by the pre-existing shared/ vendoring path. A clean vendor
+ * must therefore create NO `.claude/vps/` at all, and — the generalized replacement for the old
+ * hooks-only check — every relative import in every vendored file must resolve under `.claude/`.
+ * The dynamic imports are the real regression guard (a string check on the import line would pass
+ * against a subtly wrong depth): stamp-triage.mjs is the depth-1 hook case, descriptor-emitter.mjs
+ * is the depth-3 skill-reference case the old hooks-only findMissingHookVpsDeps never covered.
+ */
+test("vendor-core: a clean vendor creates NO .claude/vps/, and every vendored file resolves its imports (#807 #ac-2.2)", async (t) => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
   try {
     const result = spawnSync(
       "node",
       [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
-      { encoding: "utf8", stdio: "pipe" }
+      { encoding: "utf8", stdio: "pipe" },
     );
-    if (result.status !== 0) {
-      throw new Error(`vendor-core failed: ${result.stderr || result.stdout}`);
-    }
+    assert.equal(result.status, 0, `vendor-core failed: ${result.stderr || result.stdout}`);
 
-    // stamp-triage.mjs / obs-eye-append.mjs import `../vps/obs-outbox.mjs`; vps/ is not
-    // framework-owned, so without the mirror the vendored hook crashes on load
-    // (ERR_MODULE_NOT_FOUND) → triage.json never writes → the entry-gate blocks every subagent.
-    assert.ok(
-      existsSync(join(tempDir, ".claude/vps/obs-outbox.mjs")),
-      "obs-outbox.mjs must be mirrored into .claude/vps/"
+    assert.equal(
+      existsSync(join(tempDir, ".claude/vps")),
+      false,
+      "the retired vps mirror must not be recreated",
+    );
+    assert.deepEqual(
+      findUnresolvedVendoredImports(join(tempDir, ".claude")),
+      [],
+      "every vendored relative import must resolve under .claude/",
     );
 
-    // The real regression guard: the vendored hook must actually resolve its ../vps import.
-    const hookUrl = pathToFileURL(join(tempDir, ".claude/hooks/stamp-triage.mjs")).href;
     await assert.doesNotReject(
-      import(hookUrl),
-      "vendored stamp-triage.mjs must resolve its ../vps/obs-outbox.mjs import"
+      import(pathToFileURL(join(tempDir, ".claude/hooks/stamp-triage.mjs")).href),
+      "vendored stamp-triage.mjs must resolve its obs-outbox import",
     );
+    await assert.doesNotReject(
+      import(
+        pathToFileURL(
+          join(tempDir, ".claude/skills/orchestrating-delivery/references/descriptor-emitter.mjs"),
+        ).href
+      ),
+      "a depth-3 skill reference must resolve its shared import too",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
-    // Only what the hooks import — cron-only vps runtime must NOT leak into .claude/vps/.
-    assert.ok(
-      !existsSync(join(tempDir, ".claude/vps/cron-a-dispatch.mjs")),
-      "cron-only vps modules must not be vendored"
+/**
+ * @description #807 §2.6 — re-expression of the retired `.claude/vps/notify-telegram.mjs` /
+ * `.claude/vps/scoped-env.mjs` absence checks now that `.claude/vps/` no longer exists at all.
+ * Strictly stronger than the original: notify-telegram.mjs's only live consumer is a test file
+ * (core/claude-code/hooks/obs-markers.test.mjs), so it — and its sole dependent scoped-env.mjs —
+ * must never appear ANYWHERE in a vendored tree, not merely absent from one retired directory.
+ * `core/notify/` (their new home) sits in no FRAMEWORK_OWNED list, no shared/ mirror, and no
+ * OPT_IN_MODULES sibling — this test is the tripwire that keeps that true. cron-a-dispatch.mjs
+ * (the dead engine's composition root) is included for the same reason.
+ */
+test("vendor-core: retired-engine runtime never ships into a vendored project (#807)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir, "--with-codex"],
+      { encoding: "utf8", stdio: "pipe" },
     );
-    // A test-only import of a heavy vps module (notify-telegram.mjs, imported by hooks/*.test.mjs)
-    // must NOT drag it in — *.test.mjs are not vendored, so their imports never ship.
+    assert.equal(result.status, 0, `vendor-core failed: ${result.stderr || result.stdout}`);
+
+    const all = listFilesRecursive(join(tempDir, ".claude"));
+    for (const forbidden of ["notify-telegram.mjs", "scoped-env.mjs", "cron-a-dispatch.mjs"]) {
+      assert.equal(
+        all.some((p) => p.endsWith(sep + forbidden)),
+        false,
+        `${forbidden} must never be vendored — it is not a consumer-side module`,
+      );
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description #807 #ac-2.3 — an OLDER vendoring's `.claude/vps/` must be actively cleaned on the
+ * next vendor, because it is now a second, stale copy of a module that also lives at
+ * `.claude/shared/lib/obs-outbox.mjs` — and once `.harness-owned-files.json` stops listing it, the
+ * lifecycle shipper would otherwise reclassify it as the project's own cargo. The static
+ * CLAUDE_RETIRED_FILES ledger is the load-bearing half (case 3): the manifest is rewritten WITHOUT
+ * the vps entry the very first time the new installer runs (copyHookVpsDeps no longer exists to
+ * repopulate it), orphaning the stale file before the manifest ever recorded it as gone — only the
+ * static ledger catches that case. An operator's own file in `.claude/vps/` must survive untouched,
+ * and the directory itself is only removed when left empty (never force-removed).
+ */
+test("vendor-core: an OLDER vendoring's .claude/vps/ is cleaned, and an operator's own file there survives (#807 #ac-2.3)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    let result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `first vendor failed: ${result.stderr || result.stdout}`);
+
+    // Case 1 + 2: simulate the legacy `.claude/vps/` mirror this installer used to write, with
+    // BOTH a harness-written file and an operator's own file placed alongside it.
+    mkdirSync(join(tempDir, ".claude/vps"), { recursive: true });
+    writeFileSync(join(tempDir, ".claude/vps/obs-outbox.mjs"), "// stale legacy mirror\n", "utf8");
+    writeFileSync(join(tempDir, ".claude/vps/OPERATOR_NOTES.md"), "keep me\n", "utf8");
+
+    result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `second vendor failed: ${result.stderr || result.stdout}`);
+
+    assert.equal(
+      existsSync(join(tempDir, ".claude/vps/obs-outbox.mjs")),
+      false,
+      "the stale harness-written mirror file must be removed",
+    );
     assert.ok(
-      !existsSync(join(tempDir, ".claude/vps/notify-telegram.mjs")),
-      "vps modules imported only by test files must not be vendored"
+      existsSync(join(tempDir, ".claude/vps/OPERATOR_NOTES.md")),
+      "a file the operator placed in .claude/vps/ must survive",
+    );
+    assert.ok(
+      existsSync(join(tempDir, ".claude/vps")),
+      "the directory must not be force-removed while an operator file remains in it",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description #807 #ac-2.3, case with only the harness file present: the retired directory
+ * itself must be fully removed (not left as an empty husk) once nothing but harness output was in
+ * it.
+ */
+test("vendor-core: .claude/vps/ is removed entirely when only the harness's stale file was in it (#807 #ac-2.3)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    let result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `first vendor failed: ${result.stderr || result.stdout}`);
+
+    mkdirSync(join(tempDir, ".claude/vps"), { recursive: true });
+    writeFileSync(join(tempDir, ".claude/vps/obs-outbox.mjs"), "// stale legacy mirror\n", "utf8");
+
+    result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `second vendor failed: ${result.stderr || result.stdout}`);
+
+    assert.equal(
+      existsSync(join(tempDir, ".claude/vps")),
+      false,
+      "an empty retired directory must be removed, not left behind",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @description Correction #5's decisive case: on the LIKELIEST real path — an already-vendored
+ * project whose `.harness-owned-files.json` was already rewritten by a version of this installer
+ * that no longer mirrors `../vps/` deps — the manifest does NOT list the stale
+ * `.claude/vps/obs-outbox.mjs` file at all (copyHookVpsDeps never ran to repopulate it). Only the
+ * static CLAUDE_RETIRED_FILES ledger catches this; the manifest-union half of the delete set would
+ * see nothing here.
+ */
+test("vendor-core: the static retired-files ledger cleans a stale .claude/vps/ file the manifest never listed (#807 #ac-2.3)", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-test-"));
+  try {
+    let result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `first vendor failed: ${result.stderr || result.stdout}`);
+
+    // Simulate the post-stale-jump state: a manifest that already reflects the new installer
+    // (no vps/ entry anywhere) sitting alongside a leftover vps file an older release wrote.
+    const manifestPath = join(tempDir, ".claude/.harness-owned-files.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.ok(
+      !manifest.files.some((f) => f.replace(/\\/g, "/").includes(".claude/vps/")),
+      "sanity check: a fresh manifest from this installer never lists .claude/vps/",
+    );
+    mkdirSync(join(tempDir, ".claude/vps"), { recursive: true });
+    writeFileSync(join(tempDir, ".claude/vps/obs-outbox.mjs"), "// orphaned by an older release\n", "utf8");
+
+    result = spawnSync(
+      "node",
+      [vendorCoreScript, "--source", harnessRoot, "--target", tempDir],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.equal(result.status, 0, `second vendor failed: ${result.stderr || result.stdout}`);
+
+    assert.equal(
+      existsSync(join(tempDir, ".claude/vps/obs-outbox.mjs")),
+      false,
+      "the static ledger must remove this file even though no manifest ever named it",
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
