@@ -92,6 +92,34 @@ escolhe por baixo do pano. Campo vazio, `null` ou só espaço conta como ausente
 campo**, na mesma disciplina do `globalMaxWorking`: opinião que não dá para honrar é recusada alto,
 nunca adivinhada.
 
+## Sinal de vida ≠ sinal de progresso (`orca worktree ps`)
+
+`orca worktree ps` responde **se existe agente vivo**. É exatamente para isso que o selector o usa:
+contar os worktrees em `working` na VPS inteira e comparar com `globalMaxWorking`. Esse é o papel
+dele aqui — **teto de concorrência** — e é o único.
+
+**Ele não diz onde a run está.** O campo de última mensagem do `ps`
+(`agents[].lastAssistantMessage`) é uma foto defasada: na prática **minutos** atrás do que o agente
+está fazendo agora. Um `ps` "parado" é indistinguível de um agente
+pensando, e um `ps` "andando" não prova que alguma coisa foi entregue. Quem usa o `ps` para saber se
+a run progrediu erra nas duas direções: mata run viva por parecer travada, ou espera por run que já
+parou.
+
+**Progresso real são commits e o PR** — os artefatos que a run produz, não o que ela reporta:
+
+```bash
+# o PR já existe? (casa o SUFIXO do ref — ver "O nome do branch é `<owner>/harness-<N>`")
+gh pr list --state all --json number,url,headRefName,updatedAt \
+  --jq '.[] | select(.headRefName | endswith("harness-<N>"))'
+
+# a run commitou desde a última olhada?
+git -C <clonePath> fetch origin --quiet && git -C <clonePath> log --oneline -5 origin/<headRefName>
+```
+
+Regra prática: `worktree ps` responde "**tem agente vivo?**" (e alimenta o teto); commit e PR
+respondem "**andou?**". Trocar um pelo outro é a leitura errada mais barata de fazer e a mais cara
+de descobrir.
+
 ## Cron
 
 Uma linha por projeto, no crontab do usuário `orca` (**nunca root**):
@@ -154,6 +182,38 @@ da dependência está CLOSED?** — o estado que significa "entregue", independe
 
 Estado de dependência ilegível é **fail-closed**: um soluço do `gh` nunca libera uma issue gated.
 
+## O nome do branch é `<owner>/harness-<N>` — e casar prefixo é anti-padrão
+
+Sob o Orca, o branch que uma run publica **não** é `harness/<N>` — esse era o formato do **motor
+aposentado**. O selector passa `--name harness-<N>` (`select-and-dispatch.mjs`), e o Orca prefixa a
+head com o **dono** do repositório no GitHub. O `headRefName` real — observado, não inferido, e o
+mesmo que [`review-prompt.md`](./review-prompt.md) registra para a automação de review:
+
+```
+<owner>/harness-<N>          # ex.: orobsonn/harness-380
+```
+
+`harness/<N>` — com barra e sem prefixo — é o formato do **motor aposentado**, e nesta doc ele só
+aparece como história (ver a armadilha 2 acima e a entrada
+*"2026-08-20 — dependency gates must be anchored on delivery STATE, never on a branch name"* em
+[`core/claude-code/kaizen.md`](../claude-code/kaizen.md)).
+
+**Casar prefixo de branch é anti-padrão.** Um `startsWith("harness/")` — ou qualquer filtro ancorado
+no *começo* do ref — depende de um produtor de nomes que o seu gate não controla, e quebra em
+**silêncio**: nada casa, nada é entregue, e o log fica idêntico ao de "não havia nada a fazer". Foi
+assim que o `chain-release.mjs:dependencyMerged` matou 4 de 14 issues. **A pergunta certa quase nunca
+é o nome do branch: é o estado da issue** — `CLOSED` significa entregue, independente de quem
+entregou e de como.
+
+**O `/harness-[0-9]+$/` da automação de review não contradiz a regra — é como se convive com ela.**
+A automação seleciona os PRs que pode merjar casando `headRefName` contra `/harness-[0-9]+$/`: um
+**sufixo**, ancorado no fim do ref com `$`, não um prefixo. Por isso ele continua casando
+`orobsonn/harness-380` sem alteração nenhuma — o prefixo `<owner>/` fica **fora** da âncora. Se você
+chegou aqui achando que esse regex está quebrado: **não está — não o "conserte"**. O que o
+justifica é o escopo: ali o nome não decide se a issue foi entregue (isso é o estado da issue),
+decide só *quais PRs esta automação se propõe a revisar*. É filtro de trabalho, cujo pior caso é
+revisar de menos — nunca dar por entregue o que não foi.
+
 ## Ordem que é carga estrutural
 
 O flip `harness:ready` → `harness:in-progress` acontece **antes de existir qualquer worktree**. Se o
@@ -200,12 +260,37 @@ STEP 3.5 (abaixo): ninguém descobre que ele é necessário antes de perder uma 
 - sem conflito;
 - e o merge passa `--match-head-commit <sha>` — obrigatório.
 
-> **Consequência do `entry-gate.mjs`:** o comando de merge **não pode** passar `-R`/`--repo`.
-> O gate (`core/shared/lib/merge-check-gate.mjs`, chamado pelo hook `entry-gate.mjs`) lê o rollup de
-> checks do PR antes de permitir `gh pr merge` e **recusa alvo ambíguo**; `--repo`/`-R` e `--auto`
-> resolvem para "ambíguo" por construção (um leitor escopado a um repositório não deve inspecionar um
-> e merjar outro). A automação precisa rodar **dentro do checkout do repo alvo** e passar só o número
-> do PR. Isso é feature, não obstáculo: mantém o gate de CI inescapável.
+> **Consequência do `entry-gate.mjs` — e ela é desejada:** o comando de merge **não pode** passar
+> `-R`/`--repo` (nem `--auto`), **nem carregar pipe ou redirecionamento depois do `gh pr merge`, no
+> mesmo comando**. O gate (`core/shared/lib/merge-check-gate.mjs`, chamado pelo hook
+> `entry-gate.mjs`) lê o rollup de checks do PR antes de permitir `gh pr merge` e **recusa alvo
+> ambíguo** — e "ambíguo" é qualquer coisa além do número do PR e dos flags que ele conhece.
+> Medido contra o hook vivo:
+>
+> ```
+> gh pr merge 828 --squash                    → [entry-gate] Blocked: CI has an unknown conclusion; merge is denied.
+> gh pr merge 828 --squash | tee /tmp/x       → [entry-gate] Blocked: PR target is ambiguous; merge is denied.
+> gh pr merge 828 --squash > /tmp/out.txt     → [entry-gate] Blocked: PR target is ambiguous; merge is denied.
+> gh pr merge -R owner/repo 828 --squash      → [entry-gate] Blocked: PR target is ambiguous; merge is denied.
+> gh pr merge --repo owner/repo 828 --squash  → [entry-gate] Blocked: PR target is ambiguous; merge is denied.
+> ```
+>
+> A primeira linha é o gate fazendo o trabalho dele (CI sem conclusão conhecida). As outras quatro
+> são o gate se recusando a **adivinhar o alvo**: ele lê o **texto literal** do comando, não uma
+> árvore de shell, então o `|` e o `>` entram como tokens a mais depois do `gh pr merge` — e com
+> token a mais deixa de existir alvo único. Na prática: rode **dentro do checkout do repo alvo**,
+> passe **só o número do PR**, e não deixe `| tee` nem `> arquivo` **depois** do `gh pr merge`; se
+> precisar da saída, rode o merge sozinho e leia o resultado depois. O que conta é o que vem
+> **depois** do `gh pr merge` no mesmo comando — encadear com `&&` um comando que não seja outro
+> merge o gate aceita, mas não conte com isso. Pela mesma razão, **aspas, `$`, crase, parênteses ou
+> contra-barra** no mesmo comando também derrubam o alvo para ambíguo: `gh pr merge $PR --squash` é
+> negado (caso fixado em `core/shared/lib/merge-check-gate.test.mjs`), então expanda a variável você
+> mesmo e escreva o número.
+>
+> **Isso é feature, não obstáculo — e deve continuar assim.** Um leitor escopado a um repositório
+> não deve inspecionar um e merjar outro, e alvo que o gate teria de adivinhar é exatamente o caso
+> em que errar custa um merge indevido. **Não contorne** (`--admin`, desligar o hook, `--auto`):
+> **adapte o comando ao gate**, nunca o gate ao comando.
 
 ### STEP 3.5 — quem concilia os arquivos de anotação é o revisor
 

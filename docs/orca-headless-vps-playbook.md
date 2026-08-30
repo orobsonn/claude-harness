@@ -371,8 +371,13 @@ só vale no `git` local, que é justamente onde o revisor roda.
 
 > **O `entry-gate.mjs` do harness continua valendo e é valioso:** ele lê o rollup de checks do PR
 > antes de permitir `gh pr merge` e **recusa alvo ambíguo**. Consequência prática: o comando de merge
-> da automação **não pode** passar `-R`/`--repo` (nem `--auto`) — ele precisa rodar dentro do
-> checkout do repo alvo, passando só o número do PR. Isso é o que mantém o gate de CI inescapável.
+> da automação **não pode** passar `-R`/`--repo` (nem `--auto`), **nem carregar pipe (`|`) ou
+> redirecionamento (`>`) depois do `gh pr merge`, no mesmo comando** — qualquer um deles responde
+> `[entry-gate] Blocked: PR target is ambiguous; merge is denied.`. Ele precisa rodar dentro do
+> checkout do repo alvo, passando só o número do PR; se precisar da saída, rode o merge sozinho e
+> leia depois. Isso é **feature, não obstáculo** — é o que mantém o gate de CI inescapável e **deve
+> continuar assim**. Mecanismo e saídas medidas:
+> [`core/orca/README.md` § Revisão de PR + merge condicional](../core/orca/README.md#revisão-de-pr--merge-condicional).
 
 ## 11. Credencial escopada por projeto
 

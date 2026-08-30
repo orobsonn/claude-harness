@@ -50,7 +50,27 @@ git push origin main
 
 **Pré-requisitos pra a pipeline funcionar de verdade no projeto:**
 - o `.claude/` precisa estar na **branch que a routine clona** (a default — normalmente `main`);
-- o projeto precisa de **runner de teste** (vitest/jest) — senão o gate (`locked_tests`) fica vazio.
+- o projeto precisa de **runner de teste** (vitest/jest) — senão o gate (`locked_tests`) fica vazio;
+- **se o projeto usa release-please:** ligue **Settings → Actions → General → "Allow GitHub Actions
+  to create and approve pull requests"** (na API de permissões do repo é
+  `can_approve_pull_request_reviews: true`). **Sintoma quando falta:** a action roda, **cria o
+  branch e a commit** de release, e **falha na abertura do PR** — com um erro que **não parece de
+  permissão**: o branch `release-please--branches--main` já existe e a commit já está lá, então a
+  falha lê como bug do release-please, e o operador vai procurar defeito na action em vez de na
+  configuração do repo. Ligue **antes** do primeiro release: é um clique que custa uma run inteira
+  quando falta.
+
+> **O toggle não faz o CI aparecer** — são dois sintomas vizinhos, parecidos e de causas diferentes.
+> (a) O primeiro PR `chore(main): release X.Y.Z` autorado pelo `github-actions[bot]` fica com o CI
+> em `action_required` e **zero jobs** até alguém aprovar o workflow run; enquanto o rollup está
+> vazio o `entry-gate` **corretamente** nega o merge
+> (`[entry-gate] Blocked: No CI checks are reported; merge is denied.`). (b) Um PR aberto com o
+> `GITHUB_TOKEN` padrão **não dispara** `on: pull_request` de jeito nenhum — proteção anti-recursão
+> do GitHub, incondicional — e **o toggle acima não cura esse caso**. Diagnóstico e as saídas de
+> cada um (aprovar o run; ou reabrir o PR por um humano) estão na skill
+> [`releasing-versions` §3](../core/claude-code/skills/releasing-versions/SKILL.md) — ela é a
+> referência; este checklist só garante o toggle ligado antes do primeiro release. Em nenhum dos
+> dois casos a saída é contornar o gate.
 
 ---
 
@@ -183,8 +203,13 @@ próprio da revisão é *merjar*, **nenhum** achado ARMADO de severidade alta, C
 
 O hook `entry-gate.mjs` do harness continua valendo e é o que torna esse gate inescapável: ele lê o
 rollup de checks do PR antes de permitir `gh pr merge` e **recusa alvo ambíguo**. Consequência
-prática: o comando de merge da automação **não pode** passar `-R`/`--repo` (nem `--auto`) — precisa
-rodar dentro do checkout do repo alvo, passando só o número do PR.
+prática: o comando de merge da automação **não pode** passar `-R`/`--repo` (nem `--auto`), **nem
+carregar pipe (`|`) ou redirecionamento (`>`) depois do `gh pr merge`, no mesmo comando** —
+qualquer um deles responde `[entry-gate] Blocked: PR target is ambiguous; merge is denied.`. Rode
+dentro do checkout do repo alvo, passando só o número do PR; se precisar da saída, rode o merge
+sozinho e leia depois. Isso é **feature, não obstáculo** — e **deve continuar assim**. Mecanismo e
+as saídas medidas:
+[`core/orca/README.md` § Revisão de PR + merge condicional](../core/orca/README.md#revisão-de-pr--merge-condicional).
 
 > **O motor de cron da VPS foi aposentado.** As antigas seções sobre `cron-review`,
 > `HARNESS_REVIEW_ENABLED`, `autoMergeEnabled` e o auto-update blue/green do motor descreviam
