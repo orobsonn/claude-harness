@@ -43,12 +43,19 @@ test("a missing planned production module is expected red, not a broken test imp
   assert.match(complianceFidelity, /transitive|post-implementation|already exists/i);
 });
 
-test("a transcription failure gets one named test-author correction, never a sniper repair", () => {
+test("autonomous fidelity recovery repairs test enablement instead of terminally stopping the delivery", () => {
   const perTask = section(skill, "### Per-task steps (topological order via `depends_on`)");
   const fidelity = section(skill, "### Test-author fidelity transcription");
-  assert.match(perTask, /initial.*one correction|one correction.*test-author/i);
-  assert.doesNotMatch(perTask, /at most 2 `test-author` dispatches/i);
-  assert.doesNotMatch(fidelity, /sniper-high/i);
-  assert.match(fidelity, /fidelity_transcription_failed/i);
-  assert.match(fidelity, /do not dispatch.*planner|no.*planner/i);
+  const continuity = section(skill, "## Approved-plan continuity");
+
+  assert.match(perTask, /fidelity FAIL/i);
+  assert.match(fidelity, /AUTONOMOUS/i);
+  assert.match(fidelity, /must not.*stop|never.*stop/i);
+  assert.match(fidelity, /test-author/i);
+  assert.match(fidelity, /plan-reviewer/i);
+  assert.match(fidelity, /fixture|setup|import|test runner/i);
+  assert.match(fidelity, /must not.*weaken|never\s+weaken/i);
+  assert.doesNotMatch(fidelity, /fidelity_transcription_failed/i);
+  assert.match(continuity, /test-enablement recovery/i);
+  assert.match(continuity, /product behavior/i);
 });

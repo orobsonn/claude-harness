@@ -220,6 +220,34 @@ After APPROVE, keep ordinary repairs inside each task's approved `scope_paths` a
 task DAG, locked tests, and product decisions. Evidence outside the approved paths is reported as an open
 risk or operator decision; it does not trigger automatic re-planning or widen write authority.
 
+### Test-enablement recovery
+
+A red, invalid, or unrunnable test is an **engineering recovery**, never a terminal reason to abandon an
+AUTONOMOUS delivery. The conductor keeps moving until the acceptance criteria have real executable proof
+and the PR can be delivered. It must not declare a test “invalid”, ship it red, delete it, relax its
+observable, or ask the operator to solve tooling.
+
+Classify exact evidence before any new hand: **TRANSCRIPTION** (missing/altered assertion, parse, direct
+import, setup, or enumerated fixture) returns only to `test-author`; **EXPECTED_PREIMPLEMENTATION_RED**
+(a directly imported production entry in the task's `scope_paths`) passes fidelity and goes to the executor;
+**TEST_INFRA** (runner, helper, transitive import, browser harness, or dependency) can change only the
+smallest required test path/fixture/setup; **PLAN_CONTRADICTION** is a locked assertion that cannot coexist
+with an AC, locked decision, or the real code path. TEST_INFRA outside the approved path or every
+PLAN_CONTRADICTION creates a narrow **test-enablement amendment**: preserve every AC, locked decision, and
+observable; planner amends only the causal paths; `plan-reviewer` approves it in
+`TEST_ENABLEMENT_RECOVERY` mode; then the changed test returns through fidelity before a new freeze.
+`package.json`, a new dependency, and sensitive paths always use the normal FULL/security review — they are
+never silently treated as “just test infrastructure”.
+
+Persist the cause and a failure fingerprint containing task, test path, pinned assertion identifiers, plan
+revision, source SHA, and literal failure. The same category and fingerprint may not re-dispatch the same
+hand without a material diff or new evidence: select the next diagnosis or a stronger eye instead. Never
+weaken a pinned assertion (`skip`, `todo`, `only`, catch-and-pass, a vacuous mock/config, or snapshot
+rebaseline). Compliance rechecks literal fidelity and the real gate is green before shipping. A provider or
+host outage is distinct from a test failure: use durable scheduler backoff/wakeup rather than a busy loop;
+it is not permission to discard proof. Only an unresolved choice that changes product behavior may ask the
+operator.
+
 ---
 
 ## Context curation — the ICM layers (applies to every dispatch)
@@ -264,7 +292,7 @@ Never hand-edit or delete `gate-state.json` to unblock a rail. An accepted risk 
 | # | Step | Who / How |
 |---|---|---|
 | a | Pick executor tier | `executor-<task.complexity ?? task.severity>` (low/medium/high; `max`→high). If `complexity` absent, fall back to `severity`. Re-score a path via `complexity-scorer` tool if needed (one call/path). |
-| a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **`FIDELITY_TRANSCRIPTION` mode**: it checks only the literal pinned assertions and test wiring. A direct assertion failure because production is not implemented yet is **expected red**, not a fidelity failure. `ERR_MODULE_NOT_FOUND` is also expected red only when the missing resolved file is exactly a production entry in the task's `scope_paths` and is directly imported by the locked test; that file is what the executor is about to create. A wrong import path, transitive missing module, or missing dependency/helper/fixture remains FAIL. On fidelity **FAIL**, give the same `test-author` the named pinned assertion and literal transcription/import/setup/fixture defect. On fidelity **PASS** — stamp disk marker **before** any executor spawn. A provider failure is reported as such; it does not select a new phase. |
+| a′ | Locked test + fidelity (when rail applies) | Dispatch `test-author` first (fidelity-**exempt** — it produces the locked test). Then dispatch `compliance` in **`FIDELITY_TRANSCRIPTION` mode**: it checks only the literal pinned assertions and test wiring. A direct assertion failure because production is not implemented yet is **expected red**, not a fidelity failure. `ERR_MODULE_NOT_FOUND` is also expected red only when the missing resolved file is exactly a production entry in the task's `scope_paths` and is directly imported by the locked test; that file is what the executor is about to create. A wrong import path, transitive missing module, or missing dependency/helper/fixture remains FAIL. On fidelity **FAIL**, give the same `test-author` the named pinned assertion and literal transcription/import/setup/fixture defect. If that does not produce new evidence or a valid correction, enter **test-enablement recovery** above — never terminate an AUTONOMOUS task on a test failure. On fidelity **PASS** — stamp disk marker **before** any executor spawn. A provider failure is an engineering recovery, not a new phase or terminal result. |
 | b | Implement | Dispatch `executor-<tier>` via Task / `run-hand` with curated L0–L4 context. **Precondition:** `fidelity_pass` stamped for this feature/task (executor spawn returns `CONFIG_ERROR` if missing). Reads back `DONE \| DONE_WITH_CONCERNS \| NEEDS_CONTEXT \| BLOCKED`. `NEEDS_CONTEXT` → resolve missing engineering context or repair the rail inside the approved task boundary; apply **Approved-plan continuity** above rather than re-planning automatically. Ask only if the missing judgment changes product behavior. |
 | c | Compliance | Dispatch `compliance` (read-only, bash allow) with **diff + ACs + locked_tests only** — no adversary findings. Reads back `pass \| partial \| fail`. |
 | d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary` **VIRGIN**, then attempt `adversary-family-2` only when `roles.adversary.secondEyeModel` is set — no prior verdicts or compliance output — with task spec + `adversarial.focus` + diff. Every brief MUST require both passes and repo-relative `evidence: "file:anchor"`, using a function/exported symbol for code or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Primary issues use exactly `description`, `category`, `severity`, `scope`, `evidence`, and `fix_hint`; routing derives sniper tier from severity. Never ask for verdict/sweep/mechanism/tier fields. Zero findings is a **VALID result — never re-dispatch to hit a count**. A missing, malformed, or unanchored primary report is reported as unusable. |
@@ -296,16 +324,23 @@ Every parked finding produces BOTH, **in every mode** — the FULL per-task loop
 
 ### Test-author fidelity transcription
 
-`FIDELITY_TRANSCRIPTION` is not normal compliance and does not judge implementation. Its initial authoring pass plus **one correction** are the entire content-repair budget for one `test_path`; a provider/host failure is reported separately and does not consume that correction.
+`FIDELITY_TRANSCRIPTION` is not normal compliance and does not judge implementation. In **AUTONOMOUS**, a
+fidelity failure must **never stop** the task or end the run: it enters the causal test-enablement recovery
+path until the test is a faithful, executable proof or a product-behavior decision is genuinely required.
 
 - A fidelity FAIL must name one or more pinned assertions and one literal defect only: missing/altered assertion, parse/import/setup/fixture failure, or a test that never reaches the pinned assertion. It must not add criterion checks, critical-class coverage, production requirements, or a new test idea.
 - A missing production module whose resolved path is exactly a task production `scope_paths` entry and is
   directly imported by the locked test is expected red, not an import defect. Mark fidelity PASS when the pinned assertions are correctly
-  transcribed; do not spend the single correction on creating or changing production. Wrong import paths
+  transcribed; do not spend a transcription correction on creating or changing production. Wrong import paths
   and missing dependencies/helpers/fixtures remain literal fidelity defects.
-- On the one correction's PASS, stamp `fidelity_pass`, freeze the test, and dispatch the executor.
-- If the correction still fails, stop that task as **`fidelity_transcription_failed`** with the test path, named pinned assertion, and literal evidence. Do not dispatch a sniper, executor, planner, or plan-reviewer; do not weaken the assertion. This is a concrete authoring defect, not authority to alter the approved plan.
-- Post-freeze maintenance edits are a separate dispatch shape: only `test-author` may alter a frozen test, followed by this same fidelity check.
+- A fidelity FAIL carries the test path, named pinned assertion, literal defect, command output when
+  available, and recovery fingerprint. Start with `test-author`; on repeated evidence, classify it and use
+  the exact **test-enablement recovery** transition rather than retrying or stopping. `plan-reviewer` must
+  approve any amendment that reaches runner/config/dependency paths or corrects a plan contradiction.
+- On PASS, stamp `fidelity_pass`, freeze the test, and dispatch the executor. The frozen assertion is never
+  weakened, deleted, bypassed, or made green through a vacuous runner/config change.
+- Post-freeze maintenance edits are a separate dispatch shape: only `test-author` may alter a frozen test,
+  followed by this same fidelity check and a fresh freeze manifest.
 
 **Mid-run observability belt (Telegram outbox — fail-open, never gates delivery):** when `HARNESS_OBSERVABILITY_RUN_PATH` is set (VPS headless), structural producers emit the curated events the drain already renders: plugins `obs-plan-write` / `obs-eye` / `obs-hand` plus classify `pipeline-type`. `obs-hand` emits `task-executing` (before) and `hand-ran` (after) for executor/sniper/test-author from the trusted session feature plus the required prompt task marker — do not rely on unsupported Task args or prose alone. Plan-review observation comes from the structural eye producer; the conductor runs no observability CLI checkpoint.
 
@@ -334,11 +369,12 @@ Advance to the next task only when its gates are green.
 
 ### Escalation
 
-Keep the same narrow rule as Claude Code: an implementation that ran but still fails its prescribed
-gates may be handed once to the next executor tier for the same task. Never escalate a sniper, alter a
-frozen test, widen `scope_paths`, or rewrite the plan to make a gate pass. A provider or host failure is
-reported with its concrete evidence; it does not trigger a retry engine, recovery phase, re-planning, or
-a persisted terminal state.
+An implementation that ran but still fails its prescribed gates may be handed once to the next executor
+tier for the same task. Never escalate a sniper or alter a frozen test. The only exception to unchanged
+scope is the evidence-bound **test-enablement recovery** above: planner + `TEST_ENABLEMENT_RECOVERY`
+approval may add the smallest causal paths while preserving every AC, locked decision, and pinned
+observable. A provider or host failure uses durable scheduler backoff/wakeup with its concrete evidence;
+it never becomes a busy loop, a fake green result, or permission to abandon the delivery.
 
 ## LIGHT vs FULL
 
