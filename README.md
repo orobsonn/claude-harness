@@ -303,15 +303,16 @@ Para o desenho e as decisões: [`docs/design.md`](docs/design.md) · [`docs/clou
 
 ---
 
-## OpenCode (dual-runtime) e cutover global
+## Runtimes nativos
 
-O harness tem layout dual-runtime em `core/`:
+O harness tem shells nativos em `core/`:
 
 | Pasta | Papel |
 |---|---|
 | `core/shared/` | libs puras (nunca throw) — paths, validate-plan, merge, capture-oracle, … |
 | `core/claude-code/` | shell Claude Code (agents/skills/hooks) |
 | `core/opencode/` | shell OpenCode (agents/skills/plugin/tools + `harness.routing.json`) |
+| `core/codex/` | shell Codex (agentes, hooks, rules, roteamento e skills) |
 | `core/orca/` | selector multi-projeto (Orca despacha, harness do repo executa) |
 | `core/notify/` | notificação Telegram do motor aposentado — mantida fora de `core/shared/` de propósito: `shared/` é espelhado inteiro em todo projeto vendorado, e este módulo lê `TELEGRAM_BOT_TOKEN` de `~/.claude/.dev.vars`; nenhum caminho do instalador o copia (ver o teste-armadilha em `vendor-core.test.mjs`) |
 
@@ -322,6 +323,18 @@ npx @orobsonn/claude-harness init --target opencode
 ```
 
 Isso cria `.opencode/` no projeto (plugins com paths **relativos**). O harness global em `~/.config/opencode` **não** deve carregar agents/plugins de delivery depois do cutover — senão o projeto não fica isolado.
+
+**Vendor Codex num projeto:**
+
+```bash
+npx @orobsonn/claude-harness init --target codex
+```
+
+Isso cria `.codex/` com agentes, hooks, regras e skills. O `config.toml` já existente continua sendo do projeto:
+os valores definidos pelo operador são preservados e o vendor acrescenta apenas as ativações
+ausentes em uma tabela `[features]`; formas inline/dotted são preservadas como escolha explícita.
+O operador revisa e confia nos hooks pelo fluxo nativo do Codex. Para os três shells,
+use `--target all`; `--target both` preserva o significado histórico Claude Code + OpenCode.
 
 **Cutover do harness global (T10, depois da parity T11):**
 

@@ -1,0 +1,90 @@
+[
+  {
+    "source": "authoring-rules",
+    "target": "harness-rules"
+  },
+  {
+    "source": "brainstorming",
+    "target": "harness-brainstorming"
+  },
+  {
+    "source": "canonical-critical-classes",
+    "target": "harness-rules"
+  },
+  {
+    "source": "committing-changes",
+    "target": "harness-delivery"
+  },
+  {
+    "source": "configuring-model-routing",
+    "target": "harness-routing"
+  },
+  {
+    "source": "connecting-orca",
+    "target": "harness-orca"
+  },
+  {
+    "source": "creating-issues",
+    "target": "harness-issues"
+  },
+  {
+    "source": "creating-plans",
+    "target": "harness-planning"
+  },
+  {
+    "source": "distilling-learnings",
+    "target": "harness-learning"
+  },
+  {
+    "source": "grill",
+    "target": "harness-discovery"
+  },
+  {
+    "source": "importing-claude-memory",
+    "target": "harness-learning"
+  },
+  {
+    "source": "initializing-projects",
+    "target": "harness-lifecycle"
+  },
+  {
+    "source": "measuring-cost",
+    "target": "harness-routing"
+  },
+  {
+    "source": "orchestrating-delivery",
+    "target": "harness-delivery"
+  },
+  {
+    "source": "proposing-deepening",
+    "target": "harness-improvement"
+  },
+  {
+    "source": "proposing-improvements",
+    "target": "harness-improvement"
+  },
+  {
+    "source": "recording-findings",
+    "target": "harness-learning"
+  },
+  {
+    "source": "releasing-versions",
+    "target": "harness-releasing-versions"
+  },
+  {
+    "source": "reviewing-pull-requests",
+    "target": "harness-review"
+  },
+  {
+    "source": "surveying-codebase",
+    "target": "harness-survey"
+  },
+  {
+    "source": "triaging-requests",
+    "target": "harness-triage"
+  },
+  {
+    "source": "updating-harness",
+    "target": "harness-lifecycle"
+  }
+]

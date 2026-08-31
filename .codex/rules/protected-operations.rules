@@ -1,0 +1,43 @@
+# The deterministic command rails complement the Codex sandbox. They do not replace it.
+# `prefix_rule` can only inspect a leading token sequence: force flags placed after a
+# remote/ref are deliberately covered by hooks/policy.mjs, not claimed by this file.
+
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Force push is blocked; use --force-with-lease only after review.",
+    match = ["git push --force origin main"],
+    not_match = ["git push origin main"],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "Hard reset destroys local work; use a reviewed reversible recovery path.",
+    match = ["git reset --hard HEAD"],
+    not_match = ["git reset --soft HEAD"],
+)
+
+prefix_rule(
+    pattern = ["git", "clean", "-f"],
+    decision = "forbidden",
+    justification = "Forced clean destroys untracked work.",
+    match = ["git clean -f"],
+    not_match = ["git clean -n"],
+)
+
+prefix_rule(
+    pattern = ["wrangler", "deploy"],
+    decision = "forbidden",
+    justification = "Deployment is outside the default delivery lane.",
+    match = ["wrangler deploy"],
+    not_match = ["wrangler dev"],
+)
+
+prefix_rule(
+    pattern = ["npm", "run", "deploy"],
+    decision = "forbidden",
+    justification = "Deployment is outside the default delivery lane.",
+    match = ["npm run deploy"],
+    not_match = ["npm run test"],
+)

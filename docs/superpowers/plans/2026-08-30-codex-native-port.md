@@ -4,11 +4,21 @@
 
 **Goal:** Vendor the complete applicable delivery harness into native Codex surfaces with verified model routing and deterministic rails only where they provide leverage.
 
-**Architecture:** `core/codex/` is the source tree. Its vendor output uses `.codex/` for Codex configuration, agents, hooks, rules, and metadata, and `.agents/skills/` for repository skills. A single policy hook owns critical per-event decisions; the rest of the pipeline is skills and AGENTS guidance.
+**Architecture:** `core/codex/` is the source tree. Its vendor output uses `.codex/` for Codex configuration, agents, hooks, rules, skills and metadata. A single policy hook owns critical per-event decisions; the rest of the pipeline is skills and AGENTS guidance.
 
 **Tech Stack:** Node.js 18+ built-ins, TOML/JSON/Markdown, Codex CLI 0.151.0+, Node test runner.
 
 **Spec:** `docs/superpowers/specs/2026-08-30-codex-native-port-design.md`
+
+## Execution status — 2026-08-30
+
+| Etapa | Estado | Evidência de saída |
+|---|---|---|
+| 1. Matriz | concluída | `capability-matrix.test.mjs` exige uma adjudicação exata por superfície, inclusive hooks e primitivas puras. |
+| 2. Runtime declarativo | concluída | 10 agentes, 15 skills com contratos reutilizáveis, roteamento CLI e contratos puros testados. |
+| 3. Rail crítico | concluída | deny de git/Wrangler/segredos/lavish, version check, recibo sem comando e smoke de protocolo passam. |
+| 4. Vendor/atualização/pacote | concluída | `codex`, `all`, idempotência, configuração com ativação mínima, memória não destrutiva e recusa de symlink passam. |
+| 5. Encerramento | concluída | suíte integral, manifesto/pacote, vendor, smoke real do Codex e reauditoria adversarial passaram. |
 
 ## Global Constraints
 
@@ -163,7 +173,7 @@ Expected: tests PASS, smoke proves official payload handling, and Codex accepts 
 test('runtime codex creates only Codex and shared artifacts', () => {
   const result = vendor({ runtime: 'codex', target: fixture });
   assert.ok(existsSync(join(fixture, '.codex', 'hooks.json')));
-  assert.ok(existsSync(join(fixture, '.agents', 'skills')));
+  assert.ok(existsSync(join(fixture, '.codex', 'skills')));
   assert.ok(!existsSync(join(fixture, '.opencode')));
 });
 test('second Codex vendor is byte-idempotent and preserves user config', () => {
@@ -224,4 +234,3 @@ Document installation, trust, permission modes, `$` skills, custom agents, model
 Run: `npm test && node scripts/parity-manifest.mjs --check && node scripts/package-artifact.test.mjs && codex --strict-config exec --sandbox read-only 'Summarize active repository guidance, skills, custom agents, hooks, and rules without making changes.'`
 
 Expected: every command exits 0; the final Codex output acknowledges the vendored surfaces; the adversarial audit has no unaddressed blocker.
-

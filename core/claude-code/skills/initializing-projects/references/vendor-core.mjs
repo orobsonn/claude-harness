@@ -85,6 +85,15 @@ const FRAMEWORK_FILES = ["CLAUDE-HARNESS-MEMORY-MODEL.md"];
 const OC_FRAMEWORK_OWNED = ["agents", "command", "docs", "skills", "plugin", "tools", "hands", "rules", "lib"];
 const OC_FRAMEWORK_FILES = ["harness.routing.json", "AGENTS.md"];
 
+// Codex reads project configuration, custom agents, and project skills from `.codex/`. Keep this adapter intentionally narrow: the
+// source is declarative prose plus one policy hook, not a second workflow engine.
+const CODEX_FRAMEWORK_OWNED = ["agents", "hooks", "rules", "docs", "lib", "skills"];
+const CODEX_FRAMEWORK_FILES = ["hooks.json", "harness.routing.json", "model-routing.mjs"];
+const CODEX_GITIGNORE = `# Codex Harness — local receipts and version cache, never commit
+audit/
+.harness-version-check-cache
+`;
+
 // Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
 // operator opts in (--with-codex) OR it is already present in the target (an update refreshes an
 // existing opt-in instead of letting it go stale). Safe default: a fresh init ships NO modules.
@@ -158,6 +167,13 @@ export const FRESH_NATIVE_PATHS = {
   claude: [
     ".claude/skills/creating-issues/SKILL.md",
     ".claude/rules/creating-issues.md",
+    ".github/ISSUE_TEMPLATE/harness-task.yml",
+  ],
+  codex: [
+    ".codex/agents/planner.toml",
+    ".codex/hooks.json",
+    ".codex/rules/protected-operations.rules",
+    ".codex/skills/harness-triage/SKILL.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
   ],
 };
@@ -277,26 +293,41 @@ export function resolveOpenCodeDir(coreDir) {
   return null;
 }
 
+/** @description Resolves the Codex shell source under `core/codex/`. */
+export function resolveCodexDir(coreDir) {
+  const nested = join(coreDir, "codex");
+  if (
+    existsSync(join(nested, "agents")) ||
+    existsSync(join(nested, "skills")) ||
+    existsSync(join(nested, "hooks.json"))
+  ) {
+    return nested;
+  }
+  return null;
+}
+
 /** @description Tokens that name a runtime shell (never a project directory). */
-export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "both", "all"]);
+export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "codex", "both", "all"]);
 
 /**
- * @description Normalize runtime target flag: claude | opencode | both.
+ * @description Normalize runtime target flag: claude | opencode | codex | both | all.
  * Fails LOUD on an unrecognized non-empty value instead of silently defaulting
  * to claude — a typo / stale-binary / wrong-flag must never masquerade as a
  * successful claude-only vendor. Only an ABSENT (or empty) value defaults to
  * claude for backward compatibility.
  * @param {unknown} raw
- * @returns {"claude"|"opencode"|"both"}
+ * @returns {"claude"|"opencode"|"codex"|"both"|"all"}
  * @throws {Error} when raw is a non-empty string that is not a known token
  */
 export function normalizeRuntimeTarget(raw) {
   const v = String(raw ?? "").toLowerCase().trim();
   if (v === "" || v === "claude") return "claude";
   if (v === "opencode" || v === "oc") return "opencode";
-  if (v === "both" || v === "all") return "both";
+  if (v === "codex") return "codex";
+  if (v === "both") return "both";
+  if (v === "all") return "all";
   throw new Error(
-    `invalid --runtime "${raw}" — expected one of: claude | opencode | both`,
+    `invalid --runtime "${raw}" — expected one of: claude | opencode | codex | both | all`,
   );
 }
 
@@ -864,6 +895,27 @@ function collectDestinationTree(src, destination, entries) {
   }
 }
 
+/**
+ * @description Reject source symlinks before the Codex vendor can enumerate or copy them.
+ * The adapter is a trusted runtime boundary: following a source link would silently package
+ * an arbitrary file outside the reviewed harness tree.
+ */
+function validateCodexSourceTree(root, current = root) {
+  const info = lstatSync(current);
+  if (info.isSymbolicLink()) {
+    throw new Error(`Codex source artifact is a symlink: ${relative(root, current) || "."}`);
+  }
+  const actual = realpathSync(current);
+  if (!isPathContained(root, actual)) {
+    throw new Error(`Codex source artifact escapes source root: ${relative(root, current) || "."}`);
+  }
+  if (!info.isDirectory()) return;
+  for (const name of readdirSync(current)) {
+    if (name.startsWith("._")) continue;
+    validateCodexSourceTree(root, join(current, name));
+  }
+}
+
 function resolveRepoFileSource(coreDir, rel) {
   return join(coreDir, rel);
 }
@@ -963,6 +1015,36 @@ export function preflightOpenCodeVendor(coreDir, targetDir) {
 
   for (const entry of entries) preflightDestination(targetReal, entry.destination, entry.kind);
   return { targetReal, openCodeDir, entries };
+}
+
+/** @description Read-only destination preflight for the native Codex shell. */
+export function preflightCodexVendor(coreDir, targetDir) {
+  const targetReal = pinTargetRoot(targetDir);
+  const coreReal = pinTargetRoot(coreDir);
+  const codexSource = resolveCodexDir(coreReal);
+  if (!codexSource) throw new Error("Codex source missing: core/codex");
+  validateCodexSourceTree(codexSource);
+  const entries = [];
+  for (const dir of CODEX_FRAMEWORK_OWNED) {
+    const src = join(codexSource, dir);
+    if (existsSync(src)) collectDestinationTree(src, join(".codex", dir), entries);
+  }
+  for (const file of CODEX_FRAMEWORK_FILES) {
+    if (existsSync(join(codexSource, file))) entries.push({ destination: join(".codex", file), kind: "file" });
+  }
+  entries.push(
+    { destination: ".codex", kind: "directory" },
+    { destination: ".codex/config.toml", kind: "file" },
+    { destination: ".codex/.gitignore", kind: "file" },
+    { destination: ".codex/.harness-version", kind: "file" },
+    { destination: ".codex/.harness-owned-files.json", kind: "file" },
+    { destination: "AGENTS.md", kind: "file" },
+    { destination: "MEMORY.md", kind: "file" },
+    { destination: "kaizen.md", kind: "file" },
+  );
+  for (const [, destination] of REPO_FILES) entries.push({ destination, kind: "file" });
+  for (const entry of entries) preflightDestination(targetReal, entry.destination, entry.kind);
+  return { targetReal, codexSource, previousOwnedFiles: readPreviousCodexOwnedFiles(targetReal) };
 }
 
 /** @description Writes exact current ownership plus the finite vendor retirement ledger. */
@@ -1339,6 +1421,197 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   );
 
   return { ocDir };
+}
+
+/** @description Idempotently merge only the harness instruction block into root AGENTS.md. */
+function mergeCodexAgentsMd(codexDir, targetDir) {
+  return mergeAgentsMd(codexDir, targetDir);
+}
+
+/** @description Merge the local Codex audit ignore without replacing project entries. */
+function mergeCodexGitignore(codexDir) {
+  const gitignore = join(codexDir, ".gitignore");
+  const current = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : "";
+  const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const required = CODEX_GITIGNORE.split("\n").filter((line) => line.trim());
+  const missing = required.filter((line) => !present.has(line.trim()));
+  if (current.trim() && missing.length === 0) return "already ignored";
+  if (!current.trim()) {
+    writeFileSync(gitignore, CODEX_GITIGNORE);
+    return "created";
+  }
+  writeFileSync(gitignore, `${current.trimEnd()}\n${missing.join("\n")}\n`);
+  return `merged (${missing.length} lines added)`;
+}
+
+/**
+ * @description Add missing activation switches without overriding explicit operator choices.
+ * Codex ignores project hooks/custom agents when their feature switch is absent; silently
+ * preserving an incomplete config would install a visibly inert harness.
+ */
+function ensureCodexRuntimeFeatures(configPath) {
+  const source = readFileSync(configPath, "utf8");
+  const required = ["hooks", "multi_agent"];
+  // TOML permits inline tables and dotted keys. Merge only missing keys into those
+  // valid forms: an explicit false survives, while an absent activation cannot make
+  // the freshly-installed harness inert.
+  const inline = source.match(/^(\s*features\s*=\s*\{)([^}\r\n]*)(\}[^\r\n]*)(\r?\n|$)/m);
+  if (inline) {
+    const [, prefix, body, suffix, newline] = inline;
+    const present = new Set([...body.matchAll(/(?:^|,)\s*([A-Za-z0-9_-]+)\s*=/g)].map((match) => match[1]));
+    const missing = required.filter((key) => !present.has(key));
+    if (missing.length === 0) return "already declared";
+    const trimmedBody = body.replace(/\s+$/, "");
+    const separator = trimmedBody.length === 0 ? "" : ", ";
+    const replacement = `${prefix}${trimmedBody}${separator}${missing.map((key) => `${key} = true`).join(", ")}${body.slice(trimmedBody.length)}${suffix}${newline}`;
+    writeFileSync(configPath, source.replace(inline[0], replacement));
+    return "missing inline activation features added";
+  }
+  const dotted = /^\s*features\.([A-Za-z0-9_-]+)\s*=/gm;
+  const dottedKeys = new Set([...source.matchAll(dotted)].map((match) => match[1]));
+  if (dottedKeys.size > 0) {
+    const missing = required.filter((key) => !dottedKeys.has(key));
+    if (missing.length === 0) return "already declared";
+    const suffix = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`;
+    writeFileSync(configPath, `${suffix}${missing.map((key) => `features.${key} = true\n`).join("")}`);
+    return "missing dotted activation features added";
+  }
+  if (/^\s*features\s*=/m.test(source)) {
+    throw new Error("unsupported Codex features syntax; cannot safely merge activation keys");
+  }
+  const lines = source.split(/(?<=\n)/);
+  const tableStart = lines.findIndex((line) => /^\s*\[features\]\s*(?:#.*)?(?:\r?\n)?$/.test(line));
+  let next;
+  if (tableStart === -1) {
+    const suffix = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`;
+    next = `${suffix}\n[features]\n${required.map((key) => `${key} = true\n`).join("")}`;
+  } else {
+    const tableEnd = lines.findIndex((line, index) => index > tableStart && /^\s*\[/.test(line));
+    const end = tableEnd === -1 ? lines.length : tableEnd;
+    const present = new Set(
+      lines.slice(tableStart + 1, end)
+        .map((line) => line.match(/^\s*([A-Za-z0-9_-]+)\s*=/)?.[1])
+        .filter(Boolean),
+    );
+    const missing = required.filter((key) => !present.has(key));
+    if (missing.length === 0) return "already declared";
+    lines.splice(end, 0, ...missing.map((key) => `${key} = true\n`));
+    next = lines.join("");
+  }
+  writeFileSync(configPath, next);
+  return "missing activation features added";
+}
+
+/** @description Validate a manifest path before it can influence a deletion. */
+function normalizeCodexOwnedPath(value) {
+  if (typeof value !== "string") throw new Error("unsafe Codex ownership manifest path");
+  const rel = value.replace(/\\/g, "/");
+  const parts = rel.split("/");
+  if (
+    !rel || rel.startsWith("/") || ![".codex", ".agents"].includes(parts[0]) ||
+    parts.some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error(`unsafe Codex ownership manifest path: ${String(value)}`);
+  }
+  return rel;
+}
+
+/** @description Read and validate the previous finite ownership set before any vendor write. */
+function readPreviousCodexOwnedFiles(targetDir) {
+  const manifest = join(targetDir, ".codex", ".harness-owned-files.json");
+  if (!existsSync(manifest)) return [];
+  let previous;
+  try {
+    previous = JSON.parse(readFileSync(manifest, "utf8"));
+  } catch {
+    throw new Error("invalid Codex ownership manifest");
+  }
+  if (previous?.version !== 1 || !Array.isArray(previous.files)) {
+    throw new Error("invalid Codex ownership manifest");
+  }
+  return previous.files
+    .filter((path) => typeof path === "string" && (path.startsWith(".codex/") || path.startsWith(".agents/")))
+    .map(normalizeCodexOwnedPath);
+}
+
+/** @description Remove only preflight-validated Codex paths retired by the current source. */
+function pruneRetiredCodexOwned(targetDir, previousOwnedFiles, nextFiles) {
+  for (const rel of previousOwnedFiles) {
+    if (nextFiles.has(rel)) continue;
+    const abs = join(targetDir, rel);
+    const info = lstatIfPresent(abs);
+    if (info?.isFile() || info?.isSymbolicLink()) rmSync(abs, { force: true });
+  }
+}
+
+/** @description Write the finite set of files owned by the Codex adapter for lifecycle updates. */
+function writeCodexOwnershipManifest({ codexDir, previousOwnedFiles, sourceCodexDir, targetDir }) {
+  const entries = [];
+  for (const dir of CODEX_FRAMEWORK_OWNED) {
+    const src = join(sourceCodexDir, dir);
+    if (existsSync(src)) collectDestinationTree(src, join(".codex", dir), entries);
+  }
+  for (const file of CODEX_FRAMEWORK_FILES) {
+    const src = join(sourceCodexDir, file);
+    if (existsSync(src)) entries.push({ destination: join(".codex", file), kind: "file" });
+  }
+  for (const path of [
+    ".codex/.gitignore",
+    ".codex/.harness-version",
+    ".codex/.harness-owned-files.json",
+    "AGENTS.md",
+    ".github/ISSUE_TEMPLATE/harness-task.yml",
+    ".dev.vars.example",
+  ]) entries.push({ destination: path, kind: "file" });
+  const files = new Set(
+    entries.filter((entry) => entry.kind === "file").map((entry) => entry.destination.split(sep).join("/")),
+  );
+  const manifestPath = join(codexDir, ".harness-owned-files.json");
+  pruneRetiredCodexOwned(targetDir, previousOwnedFiles, files);
+  writeFileSync(manifestPath, `${JSON.stringify({ version: 1, files: [...files].sort() }, null, 2)}\n`);
+}
+
+/**
+ * @description Vendor the minimal native Codex adapter: config is operator-owned/non-clobber;
+ * harness agents, hooks, rules, docs and skills are refreshed from explicit source paths.
+ */
+export function vendorCodex({ coreDir, targetDir, version, stampDate }) {
+  const preflight = preflightCodexVendor(coreDir, targetDir);
+  targetDir = preflight.targetReal;
+  const codexSource = preflight.codexSource;
+  const codexDir = join(targetDir, ".codex");
+  mkdirSync(codexDir, { recursive: true });
+
+  for (const dir of CODEX_FRAMEWORK_OWNED) {
+    const src = join(codexSource, dir);
+    if (existsSync(src)) copyOcTree(src, join(codexDir, dir), dir);
+  }
+  for (const file of CODEX_FRAMEWORK_FILES) {
+    const src = join(codexSource, file);
+    if (existsSync(src)) cpSync(src, join(codexDir, file));
+  }
+  const projectConfig = join(codexDir, "config.toml");
+  if (!existsSync(projectConfig)) cpSync(join(codexSource, "config.toml"), projectConfig);
+  const configFeatures = ensureCodexRuntimeFeatures(projectConfig);
+  const accumulated = seedOcAccumulated(targetDir);
+
+  const agents = mergeCodexAgentsMd(codexSource, targetDir);
+  const gitignore = mergeCodexGitignore(codexDir);
+  const versionPath = join(codexDir, ".harness-version");
+  const currentStamp = existsSync(versionPath) ? readFileSync(versionPath, "utf8") : "";
+  if (!currentStamp.startsWith(`${version}\n`)) {
+    writeFileSync(versionPath, `${version}\nvendored_at: ${stampDate}\n`);
+  }
+  const repoFiles = installRepoFiles(coreDir, targetDir);
+  writeCodexOwnershipManifest({
+    codexDir,
+    previousOwnedFiles: preflight.previousOwnedFiles,
+    sourceCodexDir: codexSource,
+    targetDir,
+  });
+  assertFreshNativeInstall(targetDir, "codex");
+  ok(`Codex: agents/hooks/rules/skills refreshed; config ${configFeatures}; memory ${accumulated}; AGENTS.md ${agents}; .gitignore ${gitignore}; repo files ${repoFiles}`);
+  return { codexDir };
 }
 
 /**
@@ -2193,7 +2466,7 @@ if (
 ) {
   const args = parseArgs(process.argv.slice(2));
   const stampDate = args.date ?? new Date().toISOString();
-  // --target is the project DIR; --runtime is the shell (claude|opencode|both).
+  // --target is the project DIR; --runtime is the shell (claude|opencode|codex|both|all).
   // Both resolvers fail LOUD on bad input instead of silently defaulting.
   let target;
   let runtime;
@@ -2209,8 +2482,9 @@ if (
   const startedAt = Date.now();
   try {
     const withCodex = Boolean(args["with-codex"]);
-    const doClaude = runtime === "claude" || runtime === "both";
-    const doOc = runtime === "opencode" || runtime === "both";
+    const doClaude = runtime === "claude" || runtime === "both" || runtime === "all";
+    const doOc = runtime === "opencode" || runtime === "both" || runtime === "all";
+    const doCodex = runtime === "codex" || runtime === "all";
 
     if (doClaude) {
       step("Vendoring Claude harness → .claude/");
@@ -2236,10 +2510,22 @@ if (
       ok(`opencode → ${ocDir}`);
     }
 
+    if (doCodex) {
+      step("Vendoring Codex harness → .codex/");
+      const { codexDir } = vendorCodex({
+        coreDir,
+        targetDir: target,
+        version,
+        stampDate,
+      });
+      ok(`codex → ${codexDir}`);
+    }
+
     const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
     const dests = [
       doClaude ? join(target, ".claude") : null,
       doOc ? join(target, ".opencode") : null,
+      doCodex ? join(target, ".codex") : null,
     ]
       .filter(Boolean)
       .join(" + ");

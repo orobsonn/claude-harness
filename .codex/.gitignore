@@ -1,0 +1,4 @@
+# Codex Harness — local audit receipts, never commit
+audit/
+# Codex Harness — local receipts and version cache, never commit
+.harness-version-check-cache

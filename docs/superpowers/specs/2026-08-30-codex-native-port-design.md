@@ -22,7 +22,7 @@ approval policy are the security boundary; hooks are rails, never isolation.
 `core/codex/` is the tracked source. Vendoring creates:
 
 - root `AGENTS.md`: managed harness block merged without replacing project text;
-- `.agents/skills/harness-*`: Codex-discoverable workflow skills;
+- `.codex/skills/harness-*`: Codex-discoverable workflow skills;
 - `.codex/agents/*.toml`: narrow custom eyes and hands;
 - `.codex/config.toml`, `hooks.json`, `hooks/*.mjs`, and `rules/*.rules`:
   trusted project configuration, lifecycle rails, and external-command policy;
@@ -123,4 +123,3 @@ installed beside the existing trusted layer.
    limits, and bypass boundaries are documented and regression-tested.
 6. The full repository suite, native Codex smoke tests, artifact test, and a
    post-implementation adversarial review are green.
-

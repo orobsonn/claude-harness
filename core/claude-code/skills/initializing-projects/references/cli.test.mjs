@@ -40,6 +40,18 @@ test("parseCliArgs", () => {
     runtimeTarget: "opencode",
     releaseRef: undefined,
   });
+  assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "codex"]), {
+    command: "init",
+    withCodex: false,
+    runtimeTarget: "codex",
+    releaseRef: undefined,
+  });
+  assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "all"]), {
+    command: "init",
+    withCodex: false,
+    runtimeTarget: "all",
+    releaseRef: undefined,
+  });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "both"]), {
     command: "init",
     withCodex: false,
@@ -59,7 +71,7 @@ test("parseCliArgs", () => {
     releaseRef: "v0.55.44",
   });
   // A garbage --target must fail loud, not silently fall back to claude-only.
-  assert.throws(() => parseCliArgs(["node", "cli.mjs", "init", "--target", "codex"]), /invalid --target/);
+  assert.throws(() => parseCliArgs(["node", "cli.mjs", "init", "--target", "cluade"]), /invalid --target/);
 });
 
 test("decideCodex: explicit flag wins without prompting", async () => {
@@ -104,6 +116,20 @@ test("an existing OpenCode installation uses the isolated update path", () => {
     assert.equal(hasInstalledHarness(root, "opencode"), true);
     assert.equal(hasInstalledHarness(root, "both"), true);
     assert.equal(hasInstalledHarness(root, "claude"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an existing Codex installation uses the isolated update path", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-existing-codex-harness-"));
+  try {
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    writeFileSync(join(root, ".codex", ".harness-version"), "v0.59.1\n");
+
+    assert.equal(hasInstalledHarness(root, "codex"), true);
+    assert.equal(hasInstalledHarness(root, "all"), true);
+    assert.equal(hasInstalledHarness(root, "opencode"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

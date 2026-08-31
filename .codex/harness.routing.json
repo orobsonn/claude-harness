@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "defaults": {
+    "model": "gpt-5.6-terra",
+    "reasoning_effort": "medium",
+    "sandbox_mode": "workspace-write"
+  },
+  "roles": {
+    "planner": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "medium": [
+          "gpt-5.6",
+          "high"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "xhigh"
+        ]
+      }
+    },
+    "plan-reviewer": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "medium": [
+          "gpt-5.6",
+          "high"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "xhigh"
+        ]
+      }
+    },
+    "adversary": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "medium": [
+          "gpt-5.6",
+          "high"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "xhigh"
+        ]
+      }
+    },
+    "security": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "medium": [
+          "gpt-5.6",
+          "high"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "xhigh"
+        ]
+      }
+    },
+    "compliance": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    },
+    "executor": {
+      "sandbox_mode": "workspace-write",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    },
+    "sniper": {
+      "sandbox_mode": "workspace-write",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    },
+    "test-author": {
+      "sandbox_mode": "workspace-write",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    },
+    "harvester": {
+      "sandbox_mode": "read-only",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    },
+    "shipper": {
+      "sandbox_mode": "workspace-write",
+      "routes": {
+        "low": [
+          "gpt-5.6-luna",
+          "low"
+        ],
+        "medium": [
+          "gpt-5.6-terra",
+          "medium"
+        ],
+        "high": [
+          "gpt-5.6",
+          "high"
+        ],
+        "critical": [
+          "gpt-5.6",
+          "high"
+        ]
+      }
+    }
+  }
+}

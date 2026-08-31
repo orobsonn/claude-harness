@@ -7,10 +7,12 @@ description: "Installs (vendors) the Claude Harness core into a project's .claud
 
 **This skill installs the framework into a target project.** It vendors the source `core/` into the
 project — into `.claude/` for the **Claude Code** runtime, into `.opencode/` for the **OpenCode**
-runtime, or both — so the pipeline runs both locally and headless. It does not plan, implement, or review.
+runtime, into `.codex/` + `.agents/skills/` for the **Codex** runtime, or every shell — so the
+pipeline runs locally and headless. It does not plan, implement, or review.
 
-The source `core/` is split into three parts: `core/shared/` (runtime-neutral engine + libs),
-`core/claude-code/` (the Claude Code shell), and `core/opencode/` (the OpenCode shell). The vendoring
+The source `core/` is split into four parts: `core/shared/` (runtime-neutral engine + libs),
+`core/claude-code/` (the Claude Code shell), `core/opencode/` (the OpenCode shell), and
+`core/codex/` (the Codex shell). The vendoring
 engine reads the split and writes only the shell(s) you target.
 
 **Announce at start (pt-br):** "Instalando o Claude Harness no `.claude/` do projeto."
@@ -40,14 +42,14 @@ later re-run can update deliberately.
 - **Source:** the claude-harness git URL (preferred) or a local clone path. If the operator has not
   configured a URL yet (the repo may be unpublished), use a local clone path.
 - **Runtime shell** — which shell(s) to vendor:
-  - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, or
-    `both`, honor it verbatim — including `both` on a project that today has only Claude Code (the
+  - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, `codex`,
+    `both`, or `all`, honor it verbatim — including `both` on a project that today has only Claude Code (the
     common way to add OpenCode to an existing project).
   - **default (fresh project, no intent given):** `claude`.
   - **LOCAL:** if unsure and the operator is present, ask which runtime(s). **HEADLESS:** never ask —
     resolve deterministically from the routine prompt, else default `claude`.
 
-  This maps to the engine's **`--runtime claude|opencode|both`** flag. Do **not** confuse it with
+  This maps to the engine's **`--runtime claude|opencode|codex|both|all`** flag. Do **not** confuse it with
   `--target`, which is the destination **directory** — passing a runtime word to `--target` is
   rejected by the engine (it would create a junk `./both/` dir).
 
@@ -56,12 +58,13 @@ Run the deterministic installer (Node builtins only, no install needed):
 
 ```bash
 node .claude/skills/initializing-projects/references/vendor-core.mjs \
-  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>] [--runtime claude|opencode|both]
+  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>] [--runtime claude|opencode|codex|both|all]
 ```
 
-`--runtime opencode` (or `both`) vendors the OpenCode shell into `.opencode/` (agents, skills, plugins,
+`--runtime opencode` (or `both`/`all`) vendors the OpenCode shell into `.opencode/` (agents, skills, plugins,
 tools, `AGENTS.md`, `opencode.json`, `harness.routing.json`); `--runtime claude` (default) vendors the
-Claude shell into `.claude/`. Both destinations are idempotent and non-clobber (see contract below).
+Claude shell into `.claude/`; `--runtime codex` (or `all`) vendors Codex into `.codex/` and
+`.agents/skills/`. All destinations are idempotent and non-clobber (see contract below).
 
 It performs, **idempotently**:
 - **framework-owned (overwritten):** `agents/`, `skills/`, `rules/`, `CLAUDE-HARNESS-MEMORY-MODEL.md`.
@@ -192,13 +195,15 @@ Re-running the installer **updates** a project safely, per shell:
   absent, `AGENTS.md` is merged between markers (project content preserved), and an existing
   `opencode.json` is left untouched (the harness config is written beside it as `opencode.harness.json`
   for manual merge).
+- **Codex shell:** project `config.toml` is copied only when absent; agents, hooks, rules and skills are
+  refreshed from the harness, while `AGENTS.md` is merged between markers and local audit receipts stay ignored.
 - `.harness-version` (in each vendored shell) reflects the new source version.
 
 ---
 
 ## Anti-patterns
 
-- **Copying outside the vendored shell** — the harness lives under `.claude/` (Claude) or `.opencode/` (OpenCode); agents/rules must be at that shell's top for discovery. Do not scatter files into the repo root (the engine already places `AGENTS.md`/`opencode.json` at the root for OpenCode — do not add more).
+- **Copying outside the vendored shell** — the harness lives under `.claude/` (Claude), `.opencode/` (OpenCode), or `.codex/` + `.agents/skills/` (Codex); agents/rules must be at the runtime discovery paths. Do not scatter files into the repo root beyond the managed `AGENTS.md` block.
 - **Passing a runtime word to `--target`** — `--target` is the destination directory; the runtime shell is `--runtime`. `--target both` is rejected by the engine, not silently treated as claude.
 - **Clobbering project state** — never overwrite an existing `settings.json`, `memory/`, `kaizen.md`, or project content in `CLAUDE.md`. The marker merge and settings-merge step exist precisely to avoid this.
 - **Hardcoding the source path** — resolve the source via `--source` (git URL preferred); do not bake a machine-specific path into the skill.

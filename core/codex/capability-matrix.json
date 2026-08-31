@@ -1,0 +1,288 @@
+{
+  "version": 1,
+  "statuses": [
+    "native",
+    "deterministic",
+    "prose",
+    "unsupported",
+    "intentionally-omitted"
+  ],
+  "surfaces": [
+    {
+      "id": "cc-agents",
+      "category": "agents",
+      "source_patterns": [
+        "^core/claude-code/agents/"
+      ],
+      "status": "native",
+      "codex_surface": ".codex/agents/*.toml",
+      "verification": "agents-manifest test and codex --strict-config smoke",
+      "residual_risk": "Custom-agent sandbox inherits live parent overrides."
+    },
+    {
+      "id": "cc-hook-version-check",
+      "category": "hooks",
+      "source_patterns": [
+        "^core/claude-code/hooks/version-check\\.mjs$"
+      ],
+      "status": "deterministic",
+      "codex_surface": ".codex/hooks/version-check.mjs on native SessionStart",
+      "verification": "version-check behavior and hooks-config tests",
+      "residual_risk": "Remote release lookup is cached and fail-open; it does not block a session."
+    },
+    {
+      "id": "cc-hook-lavish-command-gate",
+      "category": "hooks",
+      "source_patterns": [
+        "^core/claude-code/hooks/lavish-command-gate\\.mjs$"
+      ],
+      "status": "deterministic",
+      "codex_surface": ".codex/hooks/policy.mjs on native PreToolUse/PermissionRequest",
+      "verification": "policy regression test covers share/setup and safe preview",
+      "residual_risk": "Only Bash/apply_patch/Agent matchers are covered; no hosted-tool or identity guarantee."
+    },
+    {
+      "id": "cc-hook-state-engine",
+      "category": "hooks",
+      "source_patterns": [
+        "^core/claude-code/hooks/(?!version-check\\.mjs$|lavish-command-gate\\.mjs$)"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": "No Claude hook state machine; Codex keeps only narrow version and operation rails.",
+      "verification": "matrix exact-once test and policy/version tests",
+      "residual_risk": "No entry-gate, plan-state, role-correlation, reinjection, or hosted/opt-out hook parity is claimed."
+    },
+    {
+      "id": "cc-skills",
+      "category": "skills",
+      "source_patterns": [
+        "^core/claude-code/skills/"
+      ],
+      "status": "prose",
+      "codex_surface": ".codex/skills/harness-*",
+      "verification": "skill catalog and vendor artifact test",
+      "residual_risk": "Skill invocation remains model-directed except explicit invocation."
+    },
+    {
+      "id": "cc-rules",
+      "category": "rules",
+      "source_patterns": [
+        "^core/claude-code/rules/"
+      ],
+      "status": "prose",
+      "codex_surface": "AGENTS.md and .codex/skills",
+      "verification": "operator-guide coverage test",
+      "residual_risk": "Instruction prose is not a hard security control."
+    },
+    {
+      "id": "cc-settings",
+      "category": "permissions",
+      "source_patterns": [
+        "^core/claude-code/(settings\\.json|dev\\.vars\\.example)$"
+      ],
+      "status": "deterministic",
+      "codex_surface": ".codex/config.toml, .codex/rules/*.rules, and a narrow Bash policy hook",
+      "verification": "strict-config and policy-hook variants",
+      "residual_risk": "Shell secret paths and command variants have defense-in-depth rails; sandbox and approvals remain the security boundary."
+    },
+    {
+      "id": "cc-root-guidance",
+      "category": "guidance",
+      "source_patterns": [
+        "^core/claude-code/(CLAUDE\\.md|CLAUDE-HARNESS-MEMORY-MODEL\\.md|kaizen\\.md)$"
+      ],
+      "status": "prose",
+      "codex_surface": "root AGENTS.md and operator guide",
+      "verification": "vendor AGENTS merge test",
+      "residual_risk": "Codex has no CLAUDE.md compatibility loader by default."
+    },
+    {
+      "id": "cc-memory",
+      "category": "memory",
+      "source_patterns": [
+        "^core/claude-code/memory/"
+      ],
+      "status": "prose",
+      "codex_surface": "project MEMORY.md and AGENTS.md",
+      "verification": "vendor accumulated-file test",
+      "residual_risk": "Codex memories are experimental and are not a delivery-state store."
+    },
+    {
+      "id": "cc-docs",
+      "category": "documentation",
+      "source_patterns": [
+        "^core/claude-code/docs/"
+      ],
+      "status": "prose",
+      "codex_surface": "core/codex/docs/OPERATOR-GUIDE.md",
+      "verification": "operator guide coverage test",
+      "residual_risk": "Documentation does not enforce runtime behavior."
+    },
+    {
+      "id": "oc-agents",
+      "category": "agents",
+      "source_patterns": [
+        "^core/opencode/agents/"
+      ],
+      "status": "native",
+      "codex_surface": ".codex/agents/*.toml",
+      "verification": "agents-manifest test and strict-config smoke",
+      "residual_risk": "No runtime-proven role identity on later hook payloads."
+    },
+    {
+      "id": "oc-plugin",
+      "category": "hooks",
+      "source_patterns": [
+        "^core/opencode/plugin/"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": "Only the narrow destructive-operation rail is reimplemented in .codex/hooks/policy.mjs; no OpenCode plugin lifecycle is copied.",
+      "verification": "policy behavior test and capability matrix document the intentionally absent plugin system.",
+      "residual_risk": "No plugin state, plan validation, dispatch control, or audit lifecycle parity is claimed."
+    },
+    {
+      "id": "oc-lib",
+      "category": "state",
+      "source_patterns": [
+        "^core/opencode/lib/"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": "No mutable plugin/state engine; native hooks and routing keep only narrow decisions.",
+      "verification": "Capability matrix and policy tests document that no OpenCode coordination engine is copied.",
+      "residual_risk": "Codex has no equivalent durable plugin state contract; recreating it would repeat the rejected second engine."
+    },
+    {
+      "id": "oc-hands",
+      "category": "dispatch",
+      "source_patterns": [
+        "^core/opencode/hands/"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": "native spawn_agent model/effort fields",
+      "verification": "routing resolver and custom-agent tests",
+      "residual_risk": "No independent external hand process is introduced."
+    },
+    {
+      "id": "oc-skills",
+      "category": "skills",
+      "source_patterns": [
+        "^core/opencode/skills/"
+      ],
+      "status": "prose",
+      "codex_surface": ".codex/skills/harness-*",
+      "verification": "skill catalog test",
+      "residual_risk": "Skills do not provide an automatic primary-agent lane switch."
+    },
+    {
+      "id": "oc-rules",
+      "category": "rules",
+      "source_patterns": [
+        "^core/opencode/rules/"
+      ],
+      "status": "prose",
+      "codex_surface": "AGENTS.md and .codex/skills",
+      "verification": "guide coverage test",
+      "residual_risk": "Model compliance is not enforcement."
+    },
+    {
+      "id": "oc-tools-command",
+      "category": "commands",
+      "source_patterns": [
+        "^core/opencode/(tools|command)/"
+      ],
+      "status": "prose",
+      "codex_surface": "skills and documented Codex commands",
+      "verification": "operator guide and routing test",
+      "residual_risk": "Codex does not provide the OpenCode command/agent-lane interface."
+    },
+    {
+      "id": "oc-root-config",
+      "category": "permissions",
+      "source_patterns": [
+        "^core/opencode/[^/]+\\.(json|md)$",
+        "^core/opencode/opencode\\.json\\.example$"
+      ],
+      "status": "native",
+      "codex_surface": ".codex/config.toml, hooks.json, rules",
+      "verification": "strict-config and vendor fixture",
+      "residual_risk": "TOML config is preserved when operator-owned."
+    },
+    {
+      "id": "oc-docs",
+      "category": "documentation",
+      "source_patterns": [
+        "^core/opencode/docs/"
+      ],
+      "status": "prose",
+      "codex_surface": "core/codex/docs/",
+      "verification": "operator guide test",
+      "residual_risk": "Documentation does not enforce runtime behavior."
+    },
+    {
+      "id": "shared-portable-review-and-planning-primitives",
+      "category": "shared-primitives",
+      "source_patterns": [
+        "^core/shared/lib/(complexity-scorer|review-report-schema|merge-verdicts)\\.mjs$"
+      ],
+      "status": "deterministic",
+      "codex_surface": ".codex/lib/review-contracts.mjs: advisory complexity, strict eye output, conservative merge",
+      "verification": "review-contracts tests and fresh vendor artifact test",
+      "residual_risk": "The primitives are explicit tools; they do not create a hidden plan or dispatch state machine."
+    },
+    {
+      "id": "shared-full-plan-and-routing-schemas",
+      "category": "shared-primitives",
+      "source_patterns": [
+        "^core/shared/lib/(validate-plan|routing-validate)\\.mjs$"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": ".codex/lib/plan-contract.mjs is a smaller explicit TDD/route validator, not a claim of the OpenCode v2 locked-test/model-strategy schema.",
+      "verification": "plan-contract tests prove the adapted contract and the matrix preserves the source distinction.",
+      "residual_risk": "Feature IDs, locked-test command allowlists, and OpenCode v2 model-family schema are not represented in Codex without a compatible native caller."
+    },
+    {
+      "id": "shared-unported-remainder",
+      "category": "shared-primitives",
+      "source_patterns": [
+        "^core/shared/lib/(?!complexity-scorer\\.mjs$|review-report-schema\\.mjs$|merge-verdicts\\.mjs$|validate-plan\\.mjs$|routing-validate\\.mjs$)"
+      ],
+      "status": "intentionally-omitted",
+      "codex_surface": "No broad shared-library mirror; only explicitly tested Codex contracts are shipped.",
+      "verification": "matrix exact-once test distinguishes the remaining source files rather than labeling them stateful by default.",
+      "residual_risk": "Some remaining files are pure but have no proven Codex caller; they are intentionally not advertised as ported."
+    },
+    {
+      "id": "shared-schemas-rules-knowledge",
+      "category": "shared-contracts",
+      "source_patterns": [
+        "^core/shared/(schemas|rules|knowledge|github)/"
+      ],
+      "status": "prose",
+      "codex_surface": "skills, docs, and capability matrix",
+      "verification": "matrix coverage test",
+      "residual_risk": "Schemas without a Codex runtime caller are documentation only."
+    },
+    {
+      "id": "github-template",
+      "category": "issue-template",
+      "source_patterns": [
+        "^core/github/"
+      ],
+      "status": "native",
+      "codex_surface": ".github/ISSUE_TEMPLATE/",
+      "verification": "vendor fixture test",
+      "residual_risk": "GitHub integration authorization remains connector/CLI scoped."
+    },
+    {
+      "id": "orca",
+      "category": "external-orchestrator",
+      "source_patterns": [
+        "^core/orca/"
+      ],
+      "status": "unsupported",
+      "codex_surface": "none; retain external orchestrator only after a verified Codex adapter",
+      "verification": "operator guide residual section",
+      "residual_risk": "Orca agent catalog and autonomous Codex contract are not proven compatible."
+    }
+  ]
+}
