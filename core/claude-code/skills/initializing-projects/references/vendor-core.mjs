@@ -1047,8 +1047,8 @@ export function preflightCodexVendor(coreDir, targetDir) {
   return { targetReal, codexSource, previousOwnedFiles: readPreviousCodexOwnedFiles(targetReal) };
 }
 
-/** @description Writes exact current ownership plus the finite vendor retirement ledger. */
-function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
+/** @description Writes exact current ownership plus the deletions made by this vendor run. */
+function writeOcOwnershipManifest(ocDir, entries, retired) {
   const files = new Set(
     entries
       .filter((entry) => entry.kind === "file" && entry.destination.startsWith(join(".opencode", sep)))
@@ -1066,12 +1066,9 @@ function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
     ".github/ISSUE_TEMPLATE/harness-task.yml",
     ".dev.vars.example",
   ]) files.add(path);
-  const retired = OC_RETIRED_FILES
-    .filter((rel) => !existsWithExactCase(sourceOcDir, rel))
-    .map((rel) => `.opencode/${rel}`);
   writeFileSync(
     join(ocDir, ".harness-owned-files.json"),
-    `${JSON.stringify({ version: 1, files: [...files].sort(), retired }, null, 2)}\n`,
+    `${JSON.stringify({ version: 1, files: [...files].sort(), retired: [...retired].sort() }, null, 2)}\n`,
   );
 }
 
@@ -1331,10 +1328,15 @@ function existsWithExactCase(root, rel) {
  * @param {string} sourceOcDir
  */
 export function pruneOcRetiredFiles(ocDir, sourceOcDir) {
+  const removed = [];
   for (const rel of OC_RETIRED_FILES) {
     if (existsWithExactCase(sourceOcDir, rel)) continue;
-    if (existsWithExactCase(ocDir, rel)) rmSync(join(ocDir, rel), { force: true });
+    if (existsWithExactCase(ocDir, rel)) {
+      rmSync(join(ocDir, rel), { force: true });
+      removed.push(`.opencode/${rel}`);
+    }
   }
+  return removed;
 }
 
 /** @description Remove macOS AppleDouble metadata only from framework-owned OpenCode trees. */
@@ -1382,7 +1384,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
     const text = readFileSync(src, "utf8");
     writeFileSync(join(ocDir, file), rewriteSharedImportsForVendor(text, file));
   }
-  pruneOcRetiredFiles(ocDir, openCodeDir);
+  const retiredOcFiles = pruneOcRetiredFiles(ocDir, openCodeDir);
   sweepRetiredDispatchCleanup(targetDir);
 
   // Runtime shared libs (plugins import via rewritten relative paths)
@@ -1421,7 +1423,7 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   if (!currentStamp.startsWith(`${version}\n`)) {
     writeFileSync(versionPath, `${version}\nvendored_at: ${stampDate}\n`);
   }
-  writeOcOwnershipManifest(ocDir, preflight.entries, openCodeDir);
+  writeOcOwnershipManifest(ocDir, preflight.entries, retiredOcFiles);
   ok(`.opencode/.gitignore (${gi}), .harness-version ${currentStamp.startsWith(`${version}\n`) ? "already current" : "written"}`);
 
   const repoFiles = installRepoFiles(coreDir, targetDir);
