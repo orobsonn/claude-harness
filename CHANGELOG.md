@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.1](https://github.com/orobsonn/claude-harness/compare/v2.0.0...v2.0.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **opencode:** prioriza lifecycle antes do triage ([#845](https://github.com/orobsonn/claude-harness/issues/845)) ([d26a3de](https://github.com/orobsonn/claude-harness/commit/d26a3ded2229d78d4df103bf620a72c2c4cff672))
+
 ## [2.0.0](https://github.com/orobsonn/claude-harness/compare/v1.0.0...v2.0.0) (2026-08-31)
 
 
