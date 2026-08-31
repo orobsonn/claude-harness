@@ -67,6 +67,13 @@ test("OpenCode plugin[] is empty for harness; CANONICAL files stay on disk (auto
   assert.ok(CANONICAL_STUBS.length >= 10);
 });
 
+test("OpenCode compacts a long autonomous build session before its model context becomes unreliable", () => {
+  const { root, example } = ocConfigs();
+  const expected = { auto: true, prune: false, preserve_recent_tokens: 8000, reserved: 60000 };
+  assert.deepEqual(root.compaction, expected, "root OpenCode must compact early with a bounded recent tail");
+  assert.deepEqual(example.compaction, expected, "vendored OpenCode must preserve the same compaction contract");
+});
+
 // --- #473 oc-permission-bash-parity ------------------------------------------------------
 
 const CLAUDE_SETTINGS = JSON.parse(

@@ -3,6 +3,12 @@
   "model": "openai/gpt-5.6-terra",
   "small_model": "openai/gpt-5.6-terra",
   "subagent_depth": 5,
+  "compaction": {
+    "auto": true,
+    "prune": false,
+    "preserve_recent_tokens": 8000,
+    "reserved": 60000
+  },
   "instructions": [
     "AGENTS.md"
   ],
