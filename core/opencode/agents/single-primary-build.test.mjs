@@ -29,3 +29,11 @@ test("only build is a primary agent and lifecycle commands stay in that conversa
     assert.match(source, new RegExp(`oc-${command}`));
   }
 });
+
+test("a direct lifecycle request bypasses triage before the first skill call", () => {
+  const rootRules = readFileSync(join(ocRoot, "AGENTS.md"), "utf8");
+  const build = readFileSync(join(agentsDir, "build.md"), "utf8");
+
+  assert.match(rootRules, /direct lifecycle request[\s\S]*before `oc-triaging-requests`/i);
+  assert.match(build, /direct lifecycle request[\s\S]*before `oc-triaging-requests`/i);
+});
