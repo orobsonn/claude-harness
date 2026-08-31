@@ -202,7 +202,7 @@ test("build keeps enough native steps for one autonomous FULL delivery", () => {
   const fm = frontmatter(read(join(AGENTS_DIR, "build.md")));
   assert.equal(
     fmField(fm, "steps"),
-    "500",
+    "1000",
     "build must not inherit OpenCode's short default fuse and end a valid recovery mid-delivery",
   );
 });

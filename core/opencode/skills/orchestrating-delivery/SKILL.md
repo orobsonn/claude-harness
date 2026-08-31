@@ -57,6 +57,15 @@ and make the **next lawful tool call in the same turn**; do not say **"vou"**, *
 genuine unresolved product decision, a formal rail block with its evidence and required authority, or an
 operator request for status.
 
+**Partial delivery is not a terminal state.** Any remaining task, gate, review, demo, PR, or merge is
+positive evidence that this delivery has work left; it is never a valid status-only ending. Read the stable
+plan and current gate state, then make the next lawful tool call. This rule applies after every hand result,
+after a resume, and after a green targeted test. Do not substitute "the next point is ready", "remaining
+steps", or a progress recap for that call. Before any terminal text, read the stable plan plus durable
+task/capture/final-review/ship evidence. A formal rail block or provider failure must cite its literal native
+tool output and the authority required to clear it; an inferred "block" or an unrun test is engineering, so
+continue rather than describe unfinished work.
+
 **Proportionality before escalation:** a finding is material only when evidence shows the proposed delivery
 fails an acceptance criterion, external contract, or normal supported flow; causes material likely harm in
 expected use; or creates a concrete security, privacy, irreversible-loss/corruption, or unauthorized-action

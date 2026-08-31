@@ -46,6 +46,10 @@ test("#autonomy — autonomous delivery emits no textual progress turn between l
   assert.match(skill, /next lawful tool call/i);
   assert.match(skill, /final delivery[\s\S]*product decision[\s\S]*formal rail block/i);
   assert.match(skill, /do not say.*vou|do not say.*na sequ|continuando automaticamente/i);
+  assert.match(skill, /partial delivery is not a terminal state/i);
+  assert.match(skill, /any remaining task, gate, review, demo, PR, or merge/i);
+  assert.match(skill, /stable plan plus durable\s+task\/capture\/final-review\/ship evidence/i);
+  assert.match(skill, /literal native\s+tool output and the authority required/i);
 });
 
 test("#autonomy — only a choice that changes the delivered product remains human-owned", () => {

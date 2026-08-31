@@ -3,7 +3,7 @@ description: Primary orchestrator — handles direct lifecycle requests before t
 mode: primary
 model: openai/gpt-5.6-terra
 temperature: 0.1
-steps: 500
+steps: 1000
 permission:
   edit: allow
 ---
