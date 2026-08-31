@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.11](https://github.com/orobsonn/claude-harness/compare/v2.0.10...v2.0.11) (2026-08-31)
+
+
+### Bug Fixes
+
+* **opencode:** compact autonomous delivery context early ([d4225c9](https://github.com/orobsonn/claude-harness/commit/d4225c9fdaa072642381edd0b0d445146bc0f63a))
+
 ## [2.0.10](https://github.com/orobsonn/claude-harness/compare/v2.0.9...v2.0.10) (2026-08-31)
 
 
