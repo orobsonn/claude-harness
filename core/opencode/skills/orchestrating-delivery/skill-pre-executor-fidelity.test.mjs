@@ -52,6 +52,8 @@ test("autonomous fidelity recovery repairs test enablement instead of terminally
   assert.match(fidelity, /AUTONOMOUS/i);
   assert.match(fidelity, /must not.*stop|never.*stop/i);
   assert.match(fidelity, /test-author/i);
+  assert.match(fidelity, /fresh.*test-author.*dispatch/i);
+  assert.match(fidelity, /never\s+re-?use[\s\S]*task_id/i);
   assert.match(fidelity, /plan-reviewer/i);
   assert.match(fidelity, /fixture|setup|import|test runner/i);
   assert.match(fidelity, /must not.*weaken|never\s+weaken/i);
