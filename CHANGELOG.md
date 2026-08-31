@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.12](https://github.com/orobsonn/claude-harness/compare/v2.0.11...v2.0.12) (2026-08-31)
+
+
+### Bug Fixes
+
+* **vendor:** migrate managed OpenCode compaction ([466b2d5](https://github.com/orobsonn/claude-harness/commit/466b2d5ce9718b64af61d15ea5173fb400f8ad69))
+
 ## [2.0.11](https://github.com/orobsonn/claude-harness/compare/v2.0.10...v2.0.11) (2026-08-31)
 
 
