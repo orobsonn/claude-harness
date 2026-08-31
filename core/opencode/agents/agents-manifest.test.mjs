@@ -198,6 +198,15 @@ test("t6-skills: required loop skills exist under core/opencode/skills", () => {
   }
 });
 
+test("build keeps enough native steps for one autonomous FULL delivery", () => {
+  const fm = frontmatter(read(join(AGENTS_DIR, "build.md")));
+  assert.equal(
+    fmField(fm, "steps"),
+    "500",
+    "build must not inherit OpenCode's short default fuse and end a valid recovery mid-delivery",
+  );
+});
+
 test("planner agent and creating-plans skill expose one canonical terminal summary", () => {
   const canonical = "Plano gerado com N tasks (X high / Y medium / Z low). Tasks com adversarial: [IDs].";
   for (const path of [
