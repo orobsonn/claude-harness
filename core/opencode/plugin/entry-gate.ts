@@ -513,8 +513,8 @@ async function createEntryGateHooks(
         //
         // Subagent detection is TWO-STAGE and both stages are deliberate:
         //   1. the acting agent name (sync, already resolved for the classify-authority check
-        //      above). A name is only a subagent when it is NOT one of OC's `mode: primary`
-        //      agents -- build / plan / harness-config. Treating any non-empty agent as a
+        //      above). A name is only a subagent when it is NOT OpenCode's sole `mode: primary`
+        //      agent -- build. Treating any non-empty agent as a
         //      subagent would classify the OPERATOR's own `build` main loop as one and deny his
         //      hand-applied label, breaking #ac-3.2.
         //   2. the session's parentID (async, the same signal shared/lib/classify-authority.mjs

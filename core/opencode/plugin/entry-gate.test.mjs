@@ -1516,8 +1516,6 @@ test("#808 #ac-3.2: interactive main-loop session is NOT denied — operator pat
       for (const input of [
         { tool: "bash", sessionID: SID },
         { tool: "bash", sessionID: SID, agent: "build" },
-        { tool: "bash", sessionID: SID, agent: "plan" },
-        { tool: "bash", sessionID: SID, agent: "harness-config" },
       ]) {
         await assert.doesNotReject(
           () => before(input, { args: { command: "gh issue create --title x --label harness:ready" } }),

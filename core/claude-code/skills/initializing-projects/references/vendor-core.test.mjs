@@ -1244,14 +1244,21 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     const staleAutonomyController = join(tempDir, ".opencode/plugin/autonomy-controller.ts");
     const staleAutonomyControllerLib = join(tempDir, ".opencode/plugin/lib/autonomy-controller.mjs");
     const projectSibling = join(tempDir, ".opencode/plugin/lib/project-owned-marker.mjs");
+    const stalePrimaryPlan = join(tempDir, ".opencode/agents/plan.md");
+    const staleHarnessConfig = join(tempDir, ".opencode/agents/harness-config.md");
+    const projectAgentSibling = join(tempDir, ".opencode/agents/project-owned-agent.md");
     mkdirSync(dirname(staleResolver), { recursive: true });
     mkdirSync(dirname(staleLib), { recursive: true });
+    mkdirSync(dirname(stalePrimaryPlan), { recursive: true });
     writeFileSync(staleResolver, "// stale plugin from a prior vendor\n", "utf8");
     writeFileSync(staleLib, "// stale lib from a prior vendor\n", "utf8");
     writeFileSync(staleMarkGate, "// stale shell marker from a prior vendor\n", "utf8");
     writeFileSync(staleAutonomyController, "// stale automatic continuation plugin\n", "utf8");
     writeFileSync(staleAutonomyControllerLib, "// stale automatic continuation helper\n", "utf8");
     writeFileSync(projectSibling, "export const projectOwned = true;\n", "utf8");
+    writeFileSync(stalePrimaryPlan, "---\nmode: primary\n---\n# Retired plan\n", "utf8");
+    writeFileSync(staleHarnessConfig, "---\nmode: primary\n---\n# Retired config\n", "utf8");
+    writeFileSync(projectAgentSibling, "---\nmode: subagent\n---\n# Project agent\n", "utf8");
 
     const result = spawnSync(
       "node",
@@ -1265,7 +1272,13 @@ test("re-vendoring onto an already-vendored project deletes retired plugin files
     assert.ok(!existsSync(staleMarkGate), "retired mark-gate helper must be deleted on re-vendor");
     assert.ok(!existsSync(staleAutonomyController), "retired automatic continuation plugin must be deleted on re-vendor");
     assert.ok(!existsSync(staleAutonomyControllerLib), "retired automatic continuation helper must be deleted on re-vendor");
+    assert.ok(!existsSync(stalePrimaryPlan), "retired plan primary agent must be deleted on re-vendor");
+    assert.ok(!existsSync(staleHarnessConfig), "retired harness-config primary agent must be deleted on re-vendor");
     assert.ok(existsSync(projectSibling), "exact retirement must preserve project-owned siblings");
+    assert.ok(existsSync(projectAgentSibling), "exact retirement must preserve project-owned agents");
+    const ownership = JSON.parse(readFileSync(join(tempDir, ".opencode/.harness-owned-files.json"), "utf8"));
+    assert.ok(ownership.retired.includes(".opencode/agents/plan.md"));
+    assert.ok(ownership.retired.includes(".opencode/agents/harness-config.md"));
     // A live harness plugin planted the same run must survive untouched (only the exact
     // retired paths are pruned — this is not a directory wipe).
     assert.ok(existsSync(join(tempDir, ".opencode/plugin/entry-gate.ts")));
@@ -1775,15 +1788,21 @@ test("a pruned source removes vendored zombies, tolerates absent targets, and no
   }
 });
 
-test("retired-file prune matches exact case only — a same-name-different-case user plugin survives on a case-insensitive fs", () => {
+test("retired-file prune matches the exact full path — differently-cased user files and parent directories survive", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-retired-case-"));
   try {
     // Deliberately different case from the retired "command-resolver.ts" — on a
     // case-insensitive filesystem (default macOS/Windows) a naive rmSync(join(dir, retiredName))
     // would resolve and delete this file too, even though its real on-disk name differs.
     const userPlugin = join(tempDir, ".opencode/plugin/Command-Resolver.ts");
+    // The same danger exists one directory higher: resolving the retired
+    // `agents/plan.md` against an `Agents/plan.md` custom path must not delete it on a
+    // case-insensitive filesystem.
+    const userAgent = join(tempDir, ".opencode/Agents/plan.md");
     mkdirSync(dirname(userPlugin), { recursive: true });
+    mkdirSync(dirname(userAgent), { recursive: true });
     writeFileSync(userPlugin, "// user's own local plugin, unrelated to the harness one\n", "utf8");
+    writeFileSync(userAgent, "---\nmode: subagent\n---\n# User's agent\n", "utf8");
 
     const result = spawnSync(
       "node",
@@ -1793,6 +1812,7 @@ test("retired-file prune matches exact case only — a same-name-different-case 
     assert.equal(result.status, 0, `vendor failed: ${result.stderr || result.stdout}`);
 
     assert.ok(existsSync(userPlugin), "a differently-cased user plugin must NOT be pruned");
+    assert.ok(existsSync(userAgent), "a differently-cased user agent directory must NOT be pruned");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

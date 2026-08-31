@@ -1067,7 +1067,7 @@ function writeOcOwnershipManifest(ocDir, entries, sourceOcDir) {
     ".dev.vars.example",
   ]) files.add(path);
   const retired = OC_RETIRED_FILES
-    .filter((rel) => !existsWithExactCase(dirname(join(sourceOcDir, rel)), rel.split("/").pop()))
+    .filter((rel) => !existsWithExactCase(sourceOcDir, rel))
     .map((rel) => `.opencode/${rel}`);
   writeFileSync(
     join(ocDir, ".harness-owned-files.json"),
@@ -1200,6 +1200,11 @@ function cleanRetiredClaudeFiles(claudeDir) {
  * user's own local plugin placed alongside the harness ones in the same auto-load directory.
  */
 export const OC_RETIRED_FILES = [
+  // v2: the top-level conversation is build only. These former primary roles must be
+  // removed during update as well as omitted from a fresh vendor; otherwise OpenCode
+  // keeps discovering them from an already-vendored project's agents directory.
+  "agents/plan.md",
+  "agents/harness-config.md",
   "plugin/command-resolver.ts",
   "plugin/lib/command-resolver.mjs",
   "agents/executor-high-spawn.md",
@@ -1301,17 +1306,22 @@ export const OC_RETIRED_FILES = [
 ];
 
 /**
- * @description True when `dir/name` exists with that EXACT case (case-sensitive directory
- * listing, not a case-insensitive path lookup). Guards `pruneOcRetiredFiles` against deleting
- * a user's own same-named-but-different-case local plugin on a case-insensitive filesystem
- * (default on macOS/Windows) — `rmSync` alone would resolve the wrong file silently.
- * @param {string} dir
- * @param {string} name
+ * @description True when every component of `rel` exists beneath `root` with its exact case
+ * (case-sensitive directory listings, not a case-insensitive path lookup). Guards
+ * `pruneOcRetiredFiles` against deleting a user's same-name-different-case local file OR a file
+ * below a differently-cased parent directory on macOS/Windows — `rmSync` alone could resolve
+ * either path to the wrong on-disk entry.
+ * @param {string} root
+ * @param {string} rel
  * @returns {boolean}
  */
-function existsWithExactCase(dir, name) {
-  if (!existsSync(dir)) return false;
-  return readdirSync(dir).includes(name);
+function existsWithExactCase(root, rel) {
+  let current = root;
+  for (const part of rel.split("/")) {
+    if (!part || !existsSync(current) || !readdirSync(current).includes(part)) return false;
+    current = join(current, part);
+  }
+  return true;
 }
 
 /**
@@ -1322,10 +1332,8 @@ function existsWithExactCase(dir, name) {
  */
 export function pruneOcRetiredFiles(ocDir, sourceOcDir) {
   for (const rel of OC_RETIRED_FILES) {
-    const source = join(sourceOcDir, rel);
-    if (existsWithExactCase(dirname(source), rel.split("/").pop())) continue;
-    const abs = join(ocDir, rel);
-    if (existsWithExactCase(dirname(abs), rel.split("/").pop())) rmSync(abs, { force: true });
+    if (existsWithExactCase(sourceOcDir, rel)) continue;
+    if (existsWithExactCase(ocDir, rel)) rmSync(join(ocDir, rel), { force: true });
   }
 }
 
