@@ -1184,9 +1184,9 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
       "the lifecycle overlay may own only files actually vendored into the clone",
     );
     assert.deepEqual(
-      ownership.retired.filter((path) => path.includes("autonomy-controller")),
-      [".opencode/plugin/autonomy-controller.ts", ".opencode/plugin/lib/autonomy-controller.mjs"],
-      "the vendor must declare each actually-retired controller path for a pre-manifest update",
+      ownership.retired,
+      [],
+      "a fresh install has no tracked deletion to ship; stale paths are declared only when this run removed them",
     );
     assert.ok(!ownership.retired.includes("src/product.js"), "the retirement ledger must never become a product allowlist");
     assert.equal(existsSync(join(tempDir, ".opencode/plugin/harvest-guard.ts")), false);
