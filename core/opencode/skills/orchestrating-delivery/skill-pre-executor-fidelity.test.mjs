@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const compliance = readFileSync(join(here, "..", "..", "agents", "compliance.md"), "utf8");
+const testAuthor = readFileSync(join(here, "..", "..", "agents", "test-author.md"), "utf8");
 
 function section(source, heading) {
   const start = source.indexOf(heading);
@@ -60,4 +61,14 @@ test("autonomous fidelity recovery repairs test enablement instead of terminally
   assert.doesNotMatch(fidelity, /fidelity_transcription_failed/i);
   assert.match(continuity, /test-enablement recovery/i);
   assert.match(continuity, /product behavior/i);
+});
+
+test("a test-author refusal is recovery evidence, never a terminal autonomous delivery outcome", () => {
+  const fidelity = section(skill, "### Test-author fidelity transcription");
+
+  assert.match(fidelity, /NEEDS_CONTEXT|BLOCKED/);
+  assert.match(fidelity, /not.*terminal|never.*terminal/i);
+  assert.match(fidelity, /fresh.*test-author.*dispatch/i);
+  assert.match(testAuthor, /recovery/i);
+  assert.match(testAuthor, /literal.*evidence/i);
 });
