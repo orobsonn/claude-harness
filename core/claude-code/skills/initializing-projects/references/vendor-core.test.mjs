@@ -94,6 +94,29 @@ test("vendor-core CLI stamps the release package version, not an older git-descr
   }
 });
 
+test("vendor-core preserves runtime version markers when the requested release is already installed", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-stable-version-marker-"));
+  try {
+    const run = () => spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "both"],
+      { encoding: "utf8" },
+    );
+    assert.equal(run().status, 0);
+    const before = [".claude", ".opencode"].map((runtime) =>
+      readFileSync(join(target, runtime, ".harness-version"), "utf8"),
+    );
+
+    assert.equal(run().status, 0);
+    const after = [".claude", ".opencode"].map((runtime) =>
+      readFileSync(join(target, runtime, ".harness-version"), "utf8"),
+    );
+    assert.deepEqual(after, before);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test("vendor-core: Codex fresh install ships the native runtime and adds only missing activation features", () => {
   const target = mkdtempSync(join(tmpdir(), "vendor-codex-native-"));
   try {
