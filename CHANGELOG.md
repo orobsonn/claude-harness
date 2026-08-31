@@ -5,6 +5,23 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.0](https://github.com/orobsonn/claude-harness/compare/v1.0.0...v2.0.0) (2026-08-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* porta harness nativo para Codex ([#843](https://github.com/orobsonn/claude-harness/issues/843))
+
+### Features
+
+* **opencode:** unifica sessao primaria em build ([#844](https://github.com/orobsonn/claude-harness/issues/844)) ([b945b73](https://github.com/orobsonn/claude-harness/commit/b945b73bfea4e4b4098f4d68f7e59ac6790c77b9))
+* porta harness nativo para Codex ([#843](https://github.com/orobsonn/claude-harness/issues/843)) ([c75cf37](https://github.com/orobsonn/claude-harness/commit/c75cf372d4101e58b74d0f30f97a6c216b5ef75f))
+
+
+### Bug Fixes
+
+* **releasing-versions:** CC alcanca o OC na deteccao de modo e no ramo nao-verde ([#841](https://github.com/orobsonn/claude-harness/issues/841)) ([fd7109f](https://github.com/orobsonn/claude-harness/commit/fd7109f2582fda98bee9e073a3cda4eb730ec461)), closes [#840](https://github.com/orobsonn/claude-harness/issues/840)
+
 ## [Unreleased]
 
 ### Added
