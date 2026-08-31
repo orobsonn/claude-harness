@@ -1408,9 +1408,13 @@ export function vendorOpenCode({ coreDir, targetDir, version, stampDate }) {
   ok(`MEMORY.md / kaizen.md: ${acc}`);
 
   const gi = mergeOcGitignore(ocDir);
-  writeFileSync(join(ocDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
+  const versionPath = join(ocDir, ".harness-version");
+  const currentStamp = existsSync(versionPath) ? readFileSync(versionPath, "utf8") : "";
+  if (!currentStamp.startsWith(`${version}\n`)) {
+    writeFileSync(versionPath, `${version}\nvendored_at: ${stampDate}\n`);
+  }
   writeOcOwnershipManifest(ocDir, preflight.entries, openCodeDir);
-  ok(`.opencode/.gitignore (${gi}), .harness-version written`);
+  ok(`.opencode/.gitignore (${gi}), .harness-version ${currentStamp.startsWith(`${version}\n`) ? "already current" : "written"}`);
 
   const repoFiles = installRepoFiles(coreDir, targetDir);
   ok(`repo files (.github/...): ${repoFiles}`);
@@ -1674,9 +1678,13 @@ function vendorClaude({ coreDir, claudeCodeDir, targetDir, version, stampDate, w
   ok(`vendored imports resolved: ${importScan.total} specifiers checked`);
 
   const claudeGitignore = mergeClaudeGitignore(claudeDir);
-  writeFileSync(join(claudeDir, ".harness-version"), `${version}\nvendored_at: ${stampDate}\n`);
+  const versionPath = join(claudeDir, ".harness-version");
+  const currentStamp = existsSync(versionPath) ? readFileSync(versionPath, "utf8") : "";
+  if (!currentStamp.startsWith(`${version}\n`)) {
+    writeFileSync(versionPath, `${version}\nvendored_at: ${stampDate}\n`);
+  }
   writeClaudeOwnershipManifest({ coreDir, claudeCodeDir, claudeDir, modules });
-  ok(`.claude/.gitignore (${claudeGitignore}), .harness-version written`);
+  ok(`.claude/.gitignore (${claudeGitignore}), .harness-version ${currentStamp.startsWith(`${version}\n`) ? "already current" : "written"}`);
   return { claudeDir };
 }
 
