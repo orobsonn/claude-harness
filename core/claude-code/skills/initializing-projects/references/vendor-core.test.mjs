@@ -1133,7 +1133,7 @@ test("t9-creates: --runtime opencode creates .opencode agents command docs skill
 
     const required = [
       ".opencode/agents",
-      ".opencode/agents/harness-config.md",
+      ".opencode/agents/build.md",
       ".opencode/command/configuring-model-routing.md",
       ".opencode/command/updating-harness.md",
       ".opencode/docs/SPAWN-PATTERN.md",

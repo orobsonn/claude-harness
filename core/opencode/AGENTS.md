@@ -32,29 +32,17 @@ Both entry skills run **inside `build` (primary)** — never in a Task child / h
 Host rails deny `classify` on child sessions and on any agent other than `build`.
 The full per-task delivery loop lives in the `oc-orchestrating-delivery` skill.
 
-### Harness lifecycle lane
+### Lifecycle shortcuts in build
 
-Administering the harness — installing/updating it, or reconfiguring which models the roles use — runs
-in the `harness-config` primary agent, not in `build`. The operator reaches it by typing
-`/updating-harness` or `/configuring-model-routing`; the command switches the session agent, and the
-lane's frontmatter denies `classify`, ceremony markers, `task`, `edit`, and every skill except the two
-lifecycle ones. It does not call `classify`, create a spec, or enter the delivery loop. It is denied for
-headless/relayed input. After a successful write it **ships to `main` via PR** in the same session
-(branch → selective stage → squash-merge), then ends with a mandatory session restart.
+`build` is the only primary agent. Installing/updating the harness and reconfiguring model routing
+stay in the same conversation through `/updating-harness` and `/configuring-model-routing`. These are
+administrative operations, not product delivery: they do not call `classify`, create a spec, or
+dispatch a task. Native lifecycle tools accept only root interactive `build` sessions; child and fleet
+sessions are denied. A successful write ships to `main` by the existing verified lifecycle engine and
+always requires a new OpenCode session.
 
-### Conversational Plan lane
-
-The `plan` primary agent is a separate discovery lane, read-only except for one narrow
-write carve-out. It is exempt from
-the `build` entry policy: no triage, classify, ceremony markers, implementation, or
-delivery. It may inspect the project, research the web, load only the conversational
-branch of `oc-brainstorming` or the `oc-grill` interview skill, and invoke only the read-only
-`discussion-adversary`. Its single permitted write is the `oc-grill` PRD artifact under
-`docs/prd/` (frontmatter `permission.edit` denies `*` and allows only `docs/prd/*.md`);
-`bash` stays denied.
-Its terminal artifact is a `## Build Spec` in the shared session conversation. The
-operator switches to `build` with Tab when they want that approved spec implemented;
-`build` then applies its normal entry policy.
+Planning remains an internal capability: `build` runs discovery and dispatches `planner` only when the
+request's triage requires it. The operator never changes primary role to plan or resume delivery.
 
 ---
 

@@ -10,8 +10,8 @@ metadata:
 
 # Updating-Harness (OpenCode)
 
-This is the loader-visible lifecycle entry for an OpenCode-native session. It uses the published CLI
-from one pinned git release; it does not depend on a local helper from an older vendor.
+This is the loader-visible lifecycle entry for the root `build` session. Its native tool uses the
+published CLI from one pinned git release; it does not depend on a local helper from an older vendor.
 
 **Announce at start (operator language):** "Atualizando o Claude Harness (OpenCode) a partir do CLI publicado."
 
@@ -19,11 +19,10 @@ All identifiers and commands stay in English; every operator message is concise,
 language.
 
 <HARD-GATE>
-This is one top-level, interactive lifecycle operation, not product delivery. Run only from a direct
-operator request while no delivery is active. Do not call `classify`, create a plan/spec, load
-`oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. The operator reaches this
-lane through `/updating-harness`, never through `build`. In headless or relayed input, stop without
-modifying the harness.
+This is one top-level, interactive lifecycle operation in `build`, not product delivery. Run only from
+a direct operator request while no delivery is active. Do not call `classify`, create a plan/spec, load
+`oc-brainstorming` or `oc-orchestrating-delivery`, or dispatch any subagent. In headless, fleet, child,
+or relayed input, stop without modifying the harness.
 </HARD-GATE>
 
 <LIFECYCLE-QUALITY-BOUNDARY>
@@ -41,44 +40,22 @@ wait. Only send an operator-facing response after the lifecycle result is `merge
 a formal block with command evidence and the authority actually needed.
 </LIFECYCLE-TURN-CONTINUITY>
 
-## Step 1 — resolve the runtime
+## Step 1 — one isolated operation
 
-Detect the OpenCode shell:
+Run the native tool exactly once:
 
-```bash
-test -f .opencode/.harness-version && echo update || echo install
+```
+lifecycle-update({})
 ```
 
-Then run this exact second marker check. Do not probe a directory and do not compose a different shell
-test:
+If neither runtime marker exists, this is a first installation: get the target explicitly from the
+operator and call only one of `lifecycle-update({ target: "opencode" })`,
+`lifecycle-update({ target: "claude" })`, or `lifecycle-update({ target: "both" })`. Never infer or
+expand that target. If a marker exists, pass no target: the tool derives it from the installed runtime.
 
-```bash
-test -f .claude/.harness-version && echo claude || echo no-claude
-```
-
-Use only those marker results to resolve the CLI target. Never use `read` to probe an absent optional
-shell, and never use `test -d`: an absent Claude marker means `opencode`, not an error.
-
-- OpenCode result `update` plus Claude result `claude`: `both`.
-- OpenCode result `update` plus Claude result `no-claude`: `opencode` — the absent Claude shell is optional.
-- OpenCode result `install` plus Claude result `claude`: `claude`.
-- Both results absent: install only the runtime explicitly requested by the operator.
-- Add a runtime only with explicit intent: `both`.
-
-## Step 2 — one isolated operation
-
-Resolve the latest release tag **once** and retain that value for this invocation:
-
-```bash
-gh release view --repo orobsonn/claude-harness --json tagName -q .tagName
-```
-
-Run exactly this single clean command — substitute its placeholders with the resolved values; no
-comment, redirect, `&&`, or second lifecycle command:
-
-```bash
-npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>
-```
+The tool asks for host confirmation, resolves the latest release tag once, detects only existing
+`.opencode/.harness-version` and `.claude/.harness-version` markers, and invokes the pinned CLI with
+a fixed argument vector. Do not construct or run the CLI command through bash.
 
 The published CLI starts from a **clean clone of `origin/main`** (or `origin/master`), vendors the
 pinned release, accepts only the exact generated harness manifest, creates the lifecycle-only commit,
@@ -95,7 +72,7 @@ secrets, and unrelated staged files cannot enter it. The CLI requests the merge 
 rules remain authoritative and reject it when the repository itself requires approval or checks. It
 never polls a just-created PR for checks, because that transient list can be empty before Actions starts.
 
-## Step 3 — close
+## Step 2 — close
 
 - `merged`: report version/PR, that it landed on the default branch, and that the current runtime synchronized.
 - `noop`: report that the requested version was already present and whether the local branch or runtime synchronized.

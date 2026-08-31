@@ -1009,8 +1009,8 @@ test("classify allowed for top-level build", async () => {
   )
 })
 
-test("configure-routing permits only an official root harness-config caller (#446)", async () => {
-  const allowedCaller = async () => ({ ok: true, agent: "harness-config", parentSessionId: null })
+test("configure-routing permits only an official root build caller", async () => {
+  const allowedCaller = async () => ({ ok: true, agent: "build", parentSessionId: null })
   await withHooks(async (hooks) => {
     await assert.doesNotReject(() => hooks["tool.execute.before"](
       { tool: "configure-routing", sessionID: SID, callID: "routing-root" },
@@ -1019,7 +1019,7 @@ test("configure-routing permits only an official root harness-config caller (#44
   }, { resolveConfigureRoutingAuthorityFn: allowedCaller })
 
   for (const caller of [
-    { ok: true, agent: "harness-config", parentSessionId: "ses_parent" },
+    { ok: true, agent: "build", parentSessionId: "ses_parent" },
     { ok: true, agent: "general", parentSessionId: null },
     { ok: true, agent: "explore", parentSessionId: null },
     { ok: false, reason: "official runtime metadata unavailable" },
@@ -1036,8 +1036,8 @@ test("configure-routing permits only an official root harness-config caller (#44
   }
 })
 
-test("configure-routing ignores model-supplied agent fields and binds the exact official tool part (#446)", async () => {
-  const officialClient = ({ agent = "harness-config", parentID = null } = {}) => ({
+test("configure-routing ignores model-supplied agent fields and binds the exact official tool part", async () => {
+  const officialClient = ({ agent = "build", parentID = null } = {}) => ({
     session: {
       get: async () => ({ data: { id: SID, ...(parentID ? { parentID } : {}) } }),
       messages: async () => ({ data: [{
@@ -1056,12 +1056,48 @@ test("configure-routing ignores model-supplied agent fields and binds the exact 
   await withHooks(async (hooks) => {
     await assert.rejects(
       () => hooks["tool.execute.before"](
-        { tool: "configure-routing", sessionID: SID, callID: "routing-official", agent: "harness-config" },
+      { tool: "configure-routing", sessionID: SID, callID: "routing-official", agent: "build" },
         { args: { action: "apply" } },
       ),
       /\[entry-gate\].*general/i,
     )
   }, { client: officialClient({ agent: "general" }) })
+})
+
+test("lifecycle-update permits only an official root build caller outside a fleet dispatch", async () => {
+  const allowedCaller = async () => ({ ok: true, agent: "build", parentSessionId: null })
+  await withHooks(async (hooks) => {
+    await assert.doesNotReject(() => hooks["tool.execute.before"](
+      { tool: "lifecycle-update", sessionID: SID, callID: "lifecycle-root" },
+      { args: {} },
+    ))
+  }, { resolveLifecycleUpdateAuthorityFn: allowedCaller })
+
+  for (const caller of [
+    { ok: true, agent: "build", parentSessionId: "ses_parent" },
+    { ok: true, agent: "general", parentSessionId: null },
+    { ok: false, reason: "official runtime metadata unavailable" },
+  ]) {
+    await withHooks(async (hooks) => {
+      await assert.rejects(
+        () => hooks["tool.execute.before"](
+          { tool: "lifecycle-update", sessionID: SID, callID: "lifecycle-denied" },
+          { args: {} },
+        ),
+        /\[entry-gate\].*(lifecycle-update|official runtime metadata|child session)/i,
+      )
+    }, { resolveLifecycleUpdateAuthorityFn: async () => caller })
+  }
+
+  await withHooks(async (hooks) => {
+    await assert.rejects(
+      () => hooks["tool.execute.before"](
+        { tool: "lifecycle-update", sessionID: SID, callID: "lifecycle-fleet" },
+        { args: {} },
+      ),
+      /fleet-dispatched session/i,
+    )
+  }, { resolveLifecycleUpdateAuthorityFn: allowedCaller, dispatchEnvironment: { HARNESS_NOTIFY_PROJECT: "victor" } })
 })
 
 test("#ac-1.1 corrupt (illegible) gate-state permits task dispatch with a logged warning, and a transient hiccup self-heals on retry", async () => {

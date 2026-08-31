@@ -49,8 +49,6 @@ function requiresTaskLockdown(fm) {
 
 const REQUIRED_AGENTS = [
   "build",
-  "plan",
-  "harness-config",
   "discussion-adversary",
   "planner",
   "plan-reviewer",
@@ -96,8 +94,6 @@ function expectedModels(routing) {
   const r = routing.roles;
   return {
     build: r.build.model,
-    plan: r.build.model,
-    "harness-config": r.build.model,
     planner: r.planner.model,
     "plan-reviewer": r["plan-reviewer"].model,
     adversary: r.adversary.model,

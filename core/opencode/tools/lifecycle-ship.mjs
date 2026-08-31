@@ -1,5 +1,5 @@
 /**
- * @description Prepares the lifecycle-only commit used by the harness-config lane.
+ * @description Prepares the lifecycle-only commit invoked through build's native lifecycle tools.
  * It deliberately has no product-path input: changed paths come from git and are filtered against
  * the exact current vendor ownership set, plus deletions that were exactly owned before the update,
  * before a branch, stage, or commit is attempted.

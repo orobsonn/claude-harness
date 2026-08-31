@@ -67,15 +67,9 @@ Headless is active when **any** of:
 > `$HARNESS_OC_DATA_HOME` is **not** a headless signal on its own — a live operator on the VPS
 > inherits it from the shell. Use the trigger prefix and `$HARNESS_OBSERVABILITY_RUN_PATH`.
 
-In `plan`, **bash is restricted to a read-only git-history allowlist** (`git log`/`diff`/`show`/
-`blame`/`status` only — see `agents/plan.md`) — there is no generic shell probe available (the probe
-above needs an arbitrary `printf`/env read, which is not on that allowlist). Decide from the trigger
-prompt instead: a `plan` session reached through an autonomous/cron prompt is headless and must
-refuse; a live operator conversation is interactive.
-
 Also refuse when you were invoked from inside a subagent/hand `task` with a work brief — the grill
-only ever runs in a top-level operator session — `plan`, or `build` **after** `oc-triaging-requests`
-has run and returned no-ceremony. Never skip or pre-empt the `build` entry gate to reach this skill:
+only ever runs in a top-level `build` session **after** `oc-triaging-requests` has run and returned
+no-ceremony. Never skip or pre-empt the `build` entry gate to reach this skill:
 `oc-triaging-requests` is still the first tool call of a `build` session.
 
 Refusal (pt-br, then stop — do not fall back to "interviewing yourself"):
@@ -85,26 +79,18 @@ Refusal (pt-br, then stop — do not fall back to "interviewing yourself"):
 
 ---
 
-## No state, anywhere, except the PRD (and, in `build`, one on-demand mockup)
+## No state, anywhere, except the PRD and one on-demand mockup
 
-The **only** artifact is `docs/prd/<slug>.md`, plus — only in `build`, only when the operator
-explicitly asks to see one — a single companion `docs/prd/<slug>-mockup.html` (§ Visual mockup on
-demand). No `.opencode/` state, no session markers, no gate stamps, no resume file, no decision
+The **only** artifact is `docs/prd/<slug>.md`, plus — when the operator explicitly asks to see one —
+a single companion `docs/prd/<slug>-mockup.html` (§ Visual mockup on demand). No `.opencode/` state,
+no session markers, no gate stamps, no resume file, no decision
 ledger. Resuming a multi-session grill means **re-reading the PRD's own `## Em aberto` section** and
 continuing from there — the file is the memory.
 
-### Writing the file, per primary agent
+### Writing the file
 
-- **In `plan` (the normal home for this skill):** `plan` is read-only by design and holds a
-  **narrow write permission scoped to `docs/prd/*.md` only** (`agents/plan.md`: `edit: {"*": deny,
-  "docs/prd/*.md": allow}`). Write the PRD there and **nowhere else** — do not attempt any other
-  path, including a mockup file: the glob does not match `.html`, and `plan`'s bash is limited to a
-  read-only git-history allowlist (no generic write/exec vector), so there is no workaround either.
-  The visual mockup capability below does **not** exist in `plan`.
-- **In `build`:** `edit` is allowed without restriction (`agents/build.md`: `edit: allow`) — write
-  the PRD directly with the edit tool, same as any other file. (Older revisions of this skill said
-  `edit` was denied here and to use `printf`/`tee` — that predates the current `build.md`; ignore it
-  if you see it cached anywhere.)
+`build` writes the PRD directly with the edit tool. This skill has a narrow result: write only the
+PRD and, when explicitly requested, its single mockup companion; it never starts delivery itself.
 
 ---
 
@@ -171,8 +157,7 @@ and in the PRD. Do not invent parallel vocabulary; do not create the file.
 
 You **may** attack the requirements while they are still forming — this is cheaper here than after
 the code exists. Use `task(subagent_type: "discussion-adversary")` with the requirements as they
-stand and ask it to find what makes them unviable. In `plan` this is the **only** subagent you may
-call — do not delegate ordinary research to it.
+stand and ask it to find what makes them unviable. Do not delegate ordinary research to it.
 
 Also run a read-only **risk lens** over the codebase yourself: *"does this break what already
 exists?"* — importers, existing flows, data already stored.
@@ -183,23 +168,20 @@ judgment) or a line under `## Riscos conhecidos` (if it is a technical risk to c
 ### 8. Architectural forks
 
 When a branch is an architecture decision that is expensive to reverse, produce the viable
-alternatives and have `discussion-adversary` attack them. (Fanning out several *independent*
-designers is a `build`-side capability; in `plan` the single allowed subagent is
-`discussion-adversary`, so develop the alternatives yourself and let the adversary be the
-independent eye.)
+alternatives and have `discussion-adversary` attack them. Develop the alternatives yourself and let
+the adversary be the independent eye.
 
 **What reaches the operator is ONE recommendation plus the product-level tradeoff he can actually
 rule on.** Never present N architectures for the operator to choose between — that is handing an
 engineering decision to someone who cannot evaluate it, and the "choice" becomes a coin flip you
 will later cite as his decision.
 
-### 9. Visual mockup on demand (`build` only)
+### 9. Visual mockup on demand
 
 A UI question is sometimes easier to answer by looking than by reading — the operator asking to
 *see* a layout before answering is not a different activity from answering a text question, it is
 the same discovery step in another modality. When the operator explicitly asks to see a UI option
-("mostra como ficaria", "quero ver a tela", "gera um mock disso") — never unprompted, and only when
-the session's primary agent is `build` (confirm from the running session; do not assume) — write
+("mostra como ficaria", "quero ver a tela", "gera um mock disso") — never unprompted — write
 **one** file, `docs/prd/<slug>-mockup.html`. On a later request for the same slug, overwrite that
 same file — never accumulate a second mockup file.
 
@@ -246,9 +228,6 @@ The operator's reaction to the mockup is ordinary interview input, nothing more 
 `## Em aberto` line it responds to. The mockup file is a discovery aid, not a spec: it never
 substitutes for `## Requisitos`, and `oc-creating-issues` does not read it.
 
-In `plan`, this does not exist (see § Writing the file above) — keep pointing the operator at the
-`build` → `oc-creating-issues` → craft/`QUICK-craft` handoff for anything visual.
-
 ---
 
 ## The PRD contract
@@ -272,8 +251,8 @@ Path: **`docs/prd/<slug>.md`** (`<slug>` kebab-case). Sections, in this exact or
 ## Riscos conhecidos     <- saída do adversário, se rodou
 ```
 
-Take today's date from the session context; if it is genuinely unavailable (no bash in `plan`), ask
-the operator once. `status: rascunho` while `## Em aberto` is non-empty; `pronto` only when it is
+Take today's date from the session context; if it is genuinely unavailable, ask the operator once.
+`status: rascunho` while `## Em aberto` is non-empty; `pronto` only when it is
 empty or holds nothing that could still change a requirement.
 
 **`## Requisitos` is the load-bearing section.** `oc-creating-issues` converts each numbered
@@ -289,11 +268,8 @@ here means the whole pipeline aims at the wrong target.
 1. Write the PRD.
 2. Show the operator the `## Requisitos`, `## Suposições do modelo` and `## Em aberto` sections in
    pt-br and ask if anything is wrong. Fix and rewrite the file if so.
-3. Hand off to issue authoring **in the same session**:
-   - **In `build`:** `skill({ name: "oc-creating-issues" })` with the PRD as its input.
-   - **In `plan`:** issue authoring is not available here. Point the operator at the file and close
-     with one short line: `PRD escrito em docs/prd/<slug>.md — troque para build com Tab e peça as
-     issues a partir dele.`
+3. Hand off to issue authoring **in the same session**: `skill({ name: "oc-creating-issues" })`
+   with the PRD as its input.
 
 **One feature per session is enforced downstream** (`core/shared/lib/classify-stub.mjs` denies a
 feature switch once a session has classified). So the grill session **stops at issue creation** —
@@ -308,5 +284,4 @@ it does not implement. Building happens in a fresh session, entered normally thr
   `## Suposições do modelo`, and requirements that are observable and verifiable.
 - Every branch that could change a requirement is either closed or explicitly parked under
   `## Em aberto`.
-- The issue(s) are created via `oc-creating-issues` (or the operator is told to switch to `build` to
-  create them).
+- The issue(s) are created via `oc-creating-issues`.

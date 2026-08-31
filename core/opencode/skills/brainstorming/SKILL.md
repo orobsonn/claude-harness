@@ -12,17 +12,8 @@ metadata:
 
 Turn an idea (issue, request) into a fully-formed design and spec through natural collaborative dialogue **with the operator**.
 
-## Plan conversational branch
-
-When the invoking primary agent is `plan`, this branch overrides every delivery instruction below:
-
-1. Explore relevant project context with read-only tools and use web research when it resolves a material unknown.
-2. Ask one operator-owned question at a time, compare 2-3 viable approaches, and capture settled choices as locked decisions in the conversation.
-3. For non-trivial technical decisions, invoke only `discussion-adversary`, then incorporate its honest critique.
-4. Return the `## Build Spec` contract defined by the `plan` agent. Use `DRAFT` while blocking questions remain and `READY` only when acceptance criteria are observable and the required adversarial pass is complete.
-5. Stop. Do not write `.opencode/decision-ledger.md`, runtime specs, or design docs; do not call `classify`, `mark`, `planner`, `oc-orchestrating-delivery`, or any delivery role.
-
-The operator can then switch to `build` with Tab in the same session. `build` consumes the conversational Build Spec and starts its normal entry policy. Never infer that switching agents authorizes implementation while still running as `plan`.
+`build` keeps a design discussion in the same session and starts its normal entry policy only when the
+operator asks for delivery. Never infer that a design discussion alone authorizes implementation.
 
 This skill runs inside the `build` (primary) agent. Its output is the approved (or multi-agent-validated) spec that Phase 1 hands to the `planner`.
 
