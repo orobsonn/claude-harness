@@ -1,6 +1,6 @@
 ---
 name: oc-triaging-requests
-description: "Entry gate of every session — load and follow this FIRST, before any spec, plan, or code. Classifies the operator's request into no-ceremony / QUICK / LIGHT / FULL and routes accordingly. Parity with Claude Code triaging (interactive + headless). The build orchestrator MUST run this on the first request; skipping it lets ceremony be guessed instead of judged."
+description: "Entry gate of every product-delivery session — load and follow this FIRST after a direct lifecycle shortcut has been excluded, before any spec, plan, or code. Classifies the operator's request into no-ceremony / QUICK / LIGHT / FULL and routes accordingly. Parity with Claude Code triaging (interactive + headless)."
 license: MIT
 compatibility: opencode
 metadata:
@@ -12,7 +12,9 @@ metadata:
 
 **This skill classifies and routes. It does not plan, implement, or review.**
 
-The `build` (primary) agent loads and follows this on the **first request of every session**, before anything else. It runs inside `build` — never in a nested subagent that cannot own ceremony stamps.
+After `build` excludes a direct lifecycle shortcut, it loads and follows this on the **first product
+request of every session**, before anything else. It runs inside `build` — never in a nested subagent
+that cannot own ceremony stamps.
 
 Announce at start (pt-br): "Analisando o pedido para escolher a cerimônia certa."
 

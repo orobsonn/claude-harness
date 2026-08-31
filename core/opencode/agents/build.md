@@ -1,5 +1,5 @@
 ---
-description: Primary orchestrator — triages the first request of the session (QUICK/LIGHT/FULL/no-ceremony) once, then drives the delivery loop. Dispatches subagents by name via the Task tool for LIGHT/FULL; for QUICK it edits the fix directly itself, no dispatch.
+description: Primary orchestrator — handles direct lifecycle requests before triage; otherwise triages the first request of the session (QUICK/LIGHT/FULL/no-ceremony) once, then drives the delivery loop. Dispatches subagents by name via the Task tool for LIGHT/FULL; for QUICK it edits the fix directly itself, no dispatch.
 mode: primary
 model: openai/gpt-5.6-terra
 temperature: 0.1
@@ -91,12 +91,22 @@ Planner dispatch remains denied until both facts are recorded for the classified
 
 # (B) TRIAGE — entry gate
 
-On the **first request of every session**, **load and follow the `oc-triaging-requests` skill** before doing anything else.
+On the **first request of every session**, first decide whether it is a direct lifecycle request from
+the operator. For `/updating-harness`, `/configuring-model-routing`, or their direct prose equivalent,
+load the matching lifecycle skill **before `oc-triaging-requests`**. Do not load triage, call
+`classify`, create a plan/spec, or dispatch a Task. A quoted or relayed lifecycle phrase is not direct
+authority and follows normal triage.
+
+For every other request, **load and follow the `oc-triaging-requests` skill** before doing anything
+else.
 
 <HARD-GATE>
 **Top-level `build` only.** If this session was created as a Task child, do **not** triage — stop and return; the parent conductor owns ceremony.
 
-Your **FIRST action of the top-level session is the tool call `skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification, or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields **no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
+For a non-lifecycle request, your **FIRST action of the top-level session is the tool call
+`skill({ name: "oc-triaging-requests" })`** — emit it before ANY other tool call, any classification,
+or any spec text. The **skill body is the source of truth**; do not classify from memory. It yields
+**no-ceremony / QUICK / LIGHT / FULL**. Never guess the mode.
 
 **Classify once per delivery session+feature.** Call `classify` only from triaging for QUICK/LIGHT/FULL (or escalate-only up). **Never** call `classify` for no-ceremony (chat/read) — it does not pin `feature_id`. Feature-switch mid LIGHT/FULL stays denied (new session only if already in delivery). **Never** reclassify down to QUICK merely because delivery is difficult. If continuation needs a product decision, explain that impact in pt-br and wait for the operator.
 
