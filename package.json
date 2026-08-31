@@ -1,6 +1,6 @@
 {
   "name": "@orobsonn/claude-harness",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "One-command vendoring of the Claude Harness delivery pipeline into a project's .claude/",
   "type": "module",
   "bin": {
