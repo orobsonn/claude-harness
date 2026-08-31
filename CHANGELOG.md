@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.9](https://github.com/orobsonn/claude-harness/compare/v2.0.8...v2.0.9) (2026-08-31)
+
+
+### Bug Fixes
+
+* **opencode:** extend autonomous build step budget ([#861](https://github.com/orobsonn/claude-harness/issues/861)) ([4f64c0f](https://github.com/orobsonn/claude-harness/commit/4f64c0ff36356e352551748ae298376f063de2bd))
+
 ## [2.0.8](https://github.com/orobsonn/claude-harness/compare/v2.0.7...v2.0.8) (2026-08-31)
 
 
