@@ -246,42 +246,67 @@ function normalizedLifecyclePath(value) {
   return path;
 }
 
+/** @param {string} path @param {string} root @param {string} manifest */
+function assertRetiredLifecyclePathScope(path, root, manifest) {
+  // `retired` is a deletion ledger, not another generic write allowlist.  It may only
+  // name a file in the runtime that published this manifest; shared root files must be
+  // retired through an explicit future mechanism rather than silently gaining delete
+  // authority here.
+  if (!path.startsWith(`${root}/`)) {
+    throw new Error(`retired lifecycle path is outside the expected runtime root (${manifest}): ${path}`);
+  }
+}
+
 /** @param {string} directory @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget */
 function vendoredOwnership(directory, runtimeTarget) {
   const manifests = runtimeTarget === "all"
-    ? [".opencode/.harness-owned-files.json", ".claude/.harness-owned-files.json", ".codex/.harness-owned-files.json"]
+    ? [
+      { path: ".opencode/.harness-owned-files.json", root: ".opencode" },
+      { path: ".claude/.harness-owned-files.json", root: ".claude" },
+      { path: ".codex/.harness-owned-files.json", root: ".codex" },
+    ]
     : runtimeTarget === "both"
-      ? [".opencode/.harness-owned-files.json", ".claude/.harness-owned-files.json"]
+      ? [
+        { path: ".opencode/.harness-owned-files.json", root: ".opencode" },
+        { path: ".claude/.harness-owned-files.json", root: ".claude" },
+      ]
       : [runtimeTarget === "opencode"
-        ? ".opencode/.harness-owned-files.json"
+        ? { path: ".opencode/.harness-owned-files.json", root: ".opencode" }
         : runtimeTarget === "codex"
-          ? ".codex/.harness-owned-files.json"
-          : ".claude/.harness-owned-files.json"];
+          ? { path: ".codex/.harness-owned-files.json", root: ".codex" }
+          : { path: ".claude/.harness-owned-files.json", root: ".claude" }];
   const paths = new Set();
   const retired = new Set();
   for (const manifest of manifests) {
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync(join(directory, manifest), "utf8"));
+      parsed = JSON.parse(readFileSync(join(directory, manifest.path), "utf8"));
     } catch {
-      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest}`);
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest.path}`);
     }
     if (parsed?.version !== 1 || !Array.isArray(parsed.files)) {
-      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest}`);
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest.path}`);
     }
     for (const path of parsed.files) paths.add(normalizedLifecyclePath(path));
     if (parsed.retired !== undefined && !Array.isArray(parsed.retired)) {
-      throw new Error(`invalid lifecycle retired-path manifest: ${manifest}`);
+      throw new Error(`invalid lifecycle retired-path manifest: ${manifest.path}`);
     }
-    for (const path of parsed.retired ?? []) retired.add(normalizedLifecyclePath(path));
+    for (const rawPath of parsed.retired ?? []) {
+      const path = normalizedLifecyclePath(rawPath);
+      assertRetiredLifecyclePathScope(path, manifest.root, manifest.path);
+      if (paths.has(path)) {
+        throw new Error(`lifecycle ownership manifest declares path as both active and retired: ${path}`);
+      }
+      retired.add(path);
+    }
+  }
+  for (const path of retired) {
+    if (paths.has(path)) {
+      throw new Error(`lifecycle ownership manifest declares path as both active and retired: ${path}`);
+    }
   }
   if (paths.size === 0) throw new Error("lifecycle ownership manifest declares no files");
   return { paths, retired };
-}
-
-/** @param {string} directory @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget */
-function vendoredOwnershipPaths(directory, runtimeTarget) {
-  return vendoredOwnership(directory, runtimeTarget).paths;
 }
 
 /** @param {string} directory */
@@ -291,6 +316,20 @@ function lifecycleChangedPaths(directory) {
   return new Set([...tracked, ...untracked].map(normalizedLifecyclePath));
 }
 
+/** @param {string} directory @param {Set<string>} retired */
+function assertRetiredLifecycleDeletions(directory, retired) {
+  for (const path of retired) {
+    if (existsSync(join(directory, path))) {
+      throw new Error(`retired lifecycle path is still present after vendoring: ${path}`);
+    }
+    const status = gitAt(directory, ["diff", "--name-status", "-z", "HEAD", "--", path])
+      .split("\0").filter(Boolean);
+    if (status.length !== 2 || status[0] !== "D" || normalizedLifecyclePath(status[1]) !== path) {
+      throw new Error(`retired lifecycle path is not an exact tracked deletion: ${path}`);
+    }
+  }
+}
+
 /**
  * The clone is known-clean before vendoring, so the current vendor manifests are the only authority
  * needed to make the lifecycle commit. This stays independent of either runtime's local helper.
@@ -298,7 +337,9 @@ function lifecycleChangedPaths(directory) {
  * @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget
  */
 function prepareVendoredLifecycle(directory, runtimeTarget) {
-  const owned = vendoredOwnershipPaths(directory, runtimeTarget);
+  const ownership = vendoredOwnership(directory, runtimeTarget);
+  assertRetiredLifecycleDeletions(directory, ownership.retired);
+  const owned = new Set([...ownership.paths, ...ownership.retired]);
   const changed = lifecycleChangedPaths(directory);
   if (changed.has("opencode.harness.json")) {
     throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");

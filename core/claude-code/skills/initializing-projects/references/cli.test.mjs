@@ -565,6 +565,137 @@ test("runIsolatedLifecycleUpdate vendors in a clone then synchronizes active mai
   }
 });
 
+test("runIsolatedLifecycleUpdate commits manifest-declared retired OpenCode files", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-retired-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  const gitOut = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, ".opencode", "agents"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", ".harness-version"), "v1\n");
+    writeFileSync(join(seed, ".opencode", "agents", "plan.md"), "---\nmode: primary\n---\n# Retired\n");
+    writeFileSync(join(seed, ".opencode", "agents", "harness-config.md"), "---\nmode: primary\n---\n# Retired\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+    git(caller, ["config", "user.email", "test@example.com"]);
+    git(caller, ["config", "user.name", "Test"]);
+
+    const result = runIsolatedLifecycleUpdate({
+      cwd: caller,
+      ref: "v2-test",
+      runtimeTarget: "opencode",
+      runVendor: ({ target }) => {
+        rmSync(join(target, ".opencode", "agents", "plan.md"), { force: true });
+        rmSync(join(target, ".opencode", "agents", "harness-config.md"), { force: true });
+        writeFileSync(join(target, ".opencode", ".harness-version"), "v2\n");
+        writeFileSync(join(target, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+          version: 1,
+          files: [".opencode/.harness-version", ".opencode/.harness-owned-files.json"],
+          retired: [".opencode/agents/plan.md", ".opencode/agents/harness-config.md"],
+        }));
+      },
+      ship: ({ directory, prepared }) => {
+        assert.equal(prepared.action, "committed");
+        assert.deepEqual(prepared.paths, [
+          ".opencode/.harness-owned-files.json",
+          ".opencode/.harness-version",
+          ".opencode/agents/harness-config.md",
+          ".opencode/agents/plan.md",
+        ]);
+        const committed = gitOut(directory, ["show", "--format=", "--name-status", "HEAD"]);
+        assert.match(committed, /D\s+\.opencode\/agents\/plan\.md/);
+        assert.match(committed, /D\s+\.opencode\/agents\/harness-config\.md/);
+        return prepared;
+      },
+    });
+
+    assert.equal(result.action, "committed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedLifecycleUpdate rejects retired paths that are still present or outside their runtime", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-retired-guard-"));
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const caller = join(root, "caller");
+  const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "ignore" });
+  try {
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], { stdio: "ignore" });
+    execFileSync("git", ["init", "--initial-branch=main", seed], { stdio: "ignore" });
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "user.name", "Test"]);
+    mkdirSync(join(seed, ".opencode", "agents"), { recursive: true });
+    writeFileSync(join(seed, ".opencode", "agents", "plan.md"), "old\n");
+    writeFileSync(join(seed, "product.txt"), "product\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "base"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", remote, caller], { stdio: "ignore" });
+
+    assert.throws(
+      () => runIsolatedLifecycleUpdate({
+        cwd: caller,
+        ref: "v2-test",
+        runtimeTarget: "opencode",
+        runVendor: ({ target }) => writeFileSync(join(target, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+          version: 1,
+          files: [".opencode/.harness-owned-files.json"],
+          retired: [".opencode/agents/plan.md"],
+        })),
+        ship: () => assert.fail("a present retired path must never reach PR shipping"),
+      }),
+      /still present after vendoring/i,
+    );
+
+    assert.throws(
+      () => runIsolatedLifecycleUpdate({
+        cwd: caller,
+        ref: "v2-test",
+        runtimeTarget: "opencode",
+        runVendor: ({ target }) => writeFileSync(join(target, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+          version: 1,
+          files: [".opencode/.harness-owned-files.json", ".opencode/agents/plan.md"],
+          retired: [".opencode/agents/plan.md"],
+        })),
+        ship: () => assert.fail("an active-and-retired path must never reach PR shipping"),
+      }),
+      /both active and retired/i,
+    );
+
+    assert.throws(
+      () => runIsolatedLifecycleUpdate({
+        cwd: caller,
+        ref: "v2-test",
+        runtimeTarget: "opencode",
+        runVendor: ({ target }) => {
+          rmSync(join(target, "product.txt"));
+          writeFileSync(join(target, ".opencode", ".harness-owned-files.json"), JSON.stringify({
+            version: 1,
+            files: [".opencode/.harness-owned-files.json"],
+            retired: ["product.txt"],
+          }));
+        },
+        ship: () => assert.fail("a cross-runtime retired path must never reach PR shipping"),
+      }),
+      /outside the expected runtime root/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runIsolatedLifecycleUpdate refreshes the runtime overlay when the caller is a feature branch", () => {
   const root = mkdtempSync(join(tmpdir(), "cli-lifecycle-run-overlay-"));
   const remote = join(root, "remote.git");
