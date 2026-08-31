@@ -2383,7 +2383,40 @@ test("writeOpencodeConfig preserves a project compaction opt-out", () => {
 
     writeOpencodeConfig(oc, tempDir, "v2.0.12");
     assert.equal(JSON.parse(readFileSync(dest, "utf8")).compaction, false);
-    assert.equal(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel, undefined);
+    assert.equal(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel.compaction, undefined);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig adds the Terra context policy to a legacy harness config and preserves a project provider override", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-terra-context-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v2.0.12"), "created");
+    const dest = join(tempDir, "opencode.json");
+    const manifestPath = join(tempDir, ".opencode", ".harness-config-manifest.json");
+    const legacyConfig = JSON.parse(readFileSync(dest, "utf8"));
+    const legacyManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete legacyConfig.provider;
+    delete legacyManifest.ownedTopLevel.providerOpenAiTerraLimit;
+    legacyConfig.instructions = ["AGENTS.md"];
+    writeFileSync(dest, `${biomeInlineShortArrays(JSON.stringify(legacyConfig, null, 2))}\n`);
+    writeFileSync(manifestPath, `${JSON.stringify(legacyManifest, null, 2)}\n`);
+
+    const status = writeOpencodeConfig(oc, tempDir, "v2.0.13");
+    const after = readFileSync(dest, "utf8");
+    assert.match(status, /Terra context policy: added/);
+    assert.match(after, /"instructions": \["AGENTS.md"\]/, "unrelated project formatting must survive insertion");
+    assert.deepEqual(JSON.parse(after).provider.openai.models["gpt-5.6-terra"].limit, { context: 200000, output: 32000 });
+    assert.deepEqual(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel.providerOpenAiTerraLimit, { context: 200000, output: 32000 });
+
+    const custom = JSON.parse(after);
+    custom.provider.openai.models["gpt-5.6-terra"].limit.context = 250000;
+    writeFileSync(dest, `${JSON.stringify(custom, null, 2)}\n`);
+    writeOpencodeConfig(oc, tempDir, "v2.0.13");
+    assert.equal(JSON.parse(readFileSync(dest, "utf8")).provider.openai.models["gpt-5.6-terra"].limit.context, 250000);
+    assert.equal(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel.providerOpenAiTerraLimit, undefined);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -46,6 +46,16 @@ const HARNESS_COMPACTION = {
   reserved: 60000,
 };
 
+const HARNESS_TERRA_CONTEXT = {
+  openai: {
+    models: {
+      "gpt-5.6-terra": {
+        limit: { context: 200000, output: 32000 },
+      },
+    },
+  },
+};
+
 test("compaction reaches a provenanced legacy project, updates only an owned value, and preserves explicit opt-outs", () => {
   const legacy = migrateOpencodeConfig({
     existingConfig: { model: "project/model", permission: {} },
@@ -94,6 +104,45 @@ test("compaction never appears in an unprovenanced existing project config", () 
   });
   assert.equal(Object.hasOwn(result.config, "compaction"), false);
   assert.equal(result.manifest.ownedTopLevel, undefined);
+});
+
+test("the harness context policy reaches only a provenanced config with no provider override", () => {
+  const legacy = migrateOpencodeConfig({
+    existingConfig: {
+      model: "openai/gpt-5.6-terra",
+      permission: {},
+      provider: { openai: { options: { baseURL: "https://operator.example/v1" }, models: { "operator-model": { name: "keep" } } }, anthropic: { whitelist: ["claude"] } },
+    },
+    newConfig: { permission: {}, provider: HARNESS_TERRA_CONTEXT },
+    previousHarnessVersionStamp: "v2.0.12",
+    newHarnessVersion: "v2.0.13",
+    isExistingProject: true,
+  });
+  assert.equal(legacy.config.provider.openai.options.baseURL, "https://operator.example/v1");
+  assert.equal(legacy.config.provider.openai.models["operator-model"].name, "keep");
+  assert.deepEqual(legacy.config.provider.openai.models["gpt-5.6-terra"].limit, { context: 200000, output: 32000 });
+  assert.deepEqual(legacy.config.provider.anthropic, { whitelist: ["claude"] });
+  assert.deepEqual(legacy.manifest.ownedTopLevel.providerOpenAiTerraLimit, { context: 200000, output: 32000 });
+
+  const custom = migrateOpencodeConfig({
+    existingConfig: {
+      model: "openai/gpt-5.6-terra",
+      permission: {},
+      provider: { openai: { models: { "gpt-5.6-terra": { limit: { context: 999999, output: 32000 } } } } },
+    },
+    newConfig: { permission: {}, provider: HARNESS_TERRA_CONTEXT },
+    previousHarnessVersionStamp: "v2.0.12",
+    isExistingProject: true,
+  });
+  assert.equal(custom.config.provider.openai.models["gpt-5.6-terra"].limit.context, 999999);
+  assert.equal(custom.manifest.ownedTopLevel, undefined);
+
+  const unmanaged = migrateOpencodeConfig({
+    existingConfig: { model: "openai/gpt-5.6-terra", permission: {} },
+    newConfig: { permission: {}, provider: HARNESS_TERRA_CONTEXT },
+    isExistingProject: true,
+  });
+  assert.equal(Object.hasOwn(unmanaged.config, "provider"), false);
 });
 
 const RETIRED_MARK_GATE_PERMISSIONS = [

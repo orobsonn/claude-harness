@@ -144,6 +144,7 @@ export function isValidOpencodeConfigShape(config) {
   if (!isPlainObject(config)) return false;
   if (config.permission !== undefined && !isPlainObject(config.permission)) return false;
   if (config.plugin !== undefined && !Array.isArray(config.plugin)) return false;
+  if (config.provider !== undefined && !isPlainObject(config.provider)) return false;
   return true;
 }
 
@@ -155,6 +156,49 @@ export function isValidHarnessCompaction(value) {
     if (!Number.isInteger(value[key]) || value[key] < 0) return false;
   }
   return true;
+}
+
+/** @description Validates the single OpenAI model overlay that keeps native compaction below the Orca provider limit. */
+export function isValidHarnessTerraContextPolicy(value) {
+  const limit = value?.openai?.models?.["gpt-5.6-terra"]?.limit;
+  return (
+    isPlainObject(value) &&
+    Object.keys(value).length === 1 &&
+    isPlainObject(value.openai) &&
+    Object.keys(value.openai).length === 1 &&
+    isPlainObject(value.openai.models) &&
+    Object.keys(value.openai.models).length === 1 &&
+    isPlainObject(value.openai.models["gpt-5.6-terra"]) &&
+    Object.keys(value.openai.models["gpt-5.6-terra"]).length === 1 &&
+    isPlainObject(limit) &&
+    Number.isInteger(limit.context) &&
+    Number.isInteger(limit.output) &&
+    limit.context >= 128000 &&
+    limit.output > 0 &&
+    limit.output < limit.context
+  );
+}
+
+function readTerraLimit(provider) {
+  const limit = provider?.openai?.models?.["gpt-5.6-terra"]?.limit;
+  return isPlainObject(limit) ? limit : undefined;
+}
+
+function canSetTerraLimit(provider) {
+  if (provider === undefined) return true;
+  if (!isPlainObject(provider)) return false;
+  if (provider.openai !== undefined && !isPlainObject(provider.openai)) return false;
+  if (provider.openai?.models !== undefined && !isPlainObject(provider.openai.models)) return false;
+  if (provider.openai?.models?.["gpt-5.6-terra"] !== undefined && !isPlainObject(provider.openai.models["gpt-5.6-terra"])) return false;
+  return true;
+}
+
+function withTerraLimit(provider, limit) {
+  const root = isPlainObject(provider) ? provider : {};
+  const openai = isPlainObject(root.openai) ? root.openai : {};
+  const models = isPlainObject(openai.models) ? openai.models : {};
+  const terra = isPlainObject(models["gpt-5.6-terra"]) ? models["gpt-5.6-terra"] : {};
+  return { ...root, openai: { ...openai, models: { ...models, "gpt-5.6-terra": { ...terra, limit } } } };
 }
 
 /**
@@ -310,39 +354,59 @@ export function migrateOpencodeConfig({
     ? reorderCanonicalProtection(merged.value, newPermission)
     : merged.value;
 
-  // `compaction` is the sole non-permission harness policy that must reach an already-vendored
-  // project. Keep its ownership separate from `owned` so legacy manifests continue to describe
-  // permissions exactly as they did before this migration. A missing key is a safe harness add;
-  // a present unowned key is an operator choice and must never be overwritten or adopted.
+  // Keep non-permission policy ownership separate from `owned` so legacy manifests continue to
+  // describe permissions exactly as they did before this migration. A missing key is a safe
+  // harness add; a present unowned key is an operator choice and must never be overwritten.
   const canonicalCompaction = newConfig?.compaction;
+  const canonicalTerraLimit = isValidHarnessTerraContextPolicy(newConfig?.provider) ? readTerraLimit(newConfig.provider) : undefined;
   const existingOwnedTopLevel = isPlainObject(manifest?.ownedTopLevel) ? manifest.ownedTopLevel : {};
-  const ownedCompaction = existingOwnedTopLevel.compaction;
   const nextOwnedTopLevel = { ...existingOwnedTopLevel };
   const config = { ...existingConfig, permission };
   const report = [...merged.report];
 
+  const hasCompaction = Object.hasOwn(existingConfig, "compaction");
+  const hasOwnedCompaction = Object.hasOwn(existingOwnedTopLevel, "compaction");
   if (canonicalCompaction !== undefined) {
-    const hasCompaction = Object.hasOwn(existingConfig, "compaction");
-    const hasOwnedCompaction = Object.hasOwn(existingOwnedTopLevel, "compaction");
     if (hasOwnedCompaction && !hasCompaction) {
-      // An explicit removal after a prior vendor run is an operator opt-out, not a missing
-      // legacy default. Do not re-add it forever.
       delete nextOwnedTopLevel.compaction;
       report.push({ path: ["compaction"], action: "removed-opt-out" });
-    } else if (hasOwnedCompaction && deepEqual(existingConfig.compaction, ownedCompaction)) {
+    } else if (hasOwnedCompaction && deepEqual(existingConfig.compaction, existingOwnedTopLevel.compaction)) {
       config.compaction = canonicalCompaction;
       nextOwnedTopLevel.compaction = canonicalCompaction;
-      if (!deepEqual(existingConfig.compaction, canonicalCompaction)) {
-        report.push({ path: ["compaction"], action: "updated", from: existingConfig.compaction, to: canonicalCompaction });
-      }
+      if (!deepEqual(existingConfig.compaction, canonicalCompaction)) report.push({ path: ["compaction"], action: "updated" });
     } else if (!hasCompaction && (!isExistingProject || hasHarnessProvenance)) {
       config.compaction = canonicalCompaction;
       nextOwnedTopLevel.compaction = canonicalCompaction;
-      report.push({ path: ["compaction"], action: "added", value: canonicalCompaction });
+      report.push({ path: ["compaction"], action: "added" });
+    } else if (!isExistingProject && deepEqual(existingConfig.compaction, canonicalCompaction)) {
+      nextOwnedTopLevel.compaction = canonicalCompaction;
     } else {
-      if (hasCompaction) config.compaction = existingConfig.compaction;
       delete nextOwnedTopLevel.compaction;
-      if (hasCompaction) report.push({ path: ["compaction"], action: "kept-custom", value: existingConfig.compaction });
+      if (hasCompaction) report.push({ path: ["compaction"], action: "kept-custom" });
+    }
+  }
+
+  const terraOwnershipKey = "providerOpenAiTerraLimit";
+  const existingTerraLimit = readTerraLimit(existingConfig.provider);
+  const ownedTerraLimit = existingOwnedTopLevel[terraOwnershipKey];
+  const hasOwnedTerraLimit = Object.hasOwn(existingOwnedTopLevel, terraOwnershipKey);
+  if (canonicalTerraLimit !== undefined) {
+    if (hasOwnedTerraLimit && existingTerraLimit === undefined) {
+      delete nextOwnedTopLevel[terraOwnershipKey];
+      report.push({ path: ["provider", "openai", "models", "gpt-5.6-terra", "limit"], action: "removed-opt-out" });
+    } else if (hasOwnedTerraLimit && deepEqual(existingTerraLimit, ownedTerraLimit)) {
+      config.provider = withTerraLimit(existingConfig.provider, canonicalTerraLimit);
+      nextOwnedTopLevel[terraOwnershipKey] = canonicalTerraLimit;
+      if (!deepEqual(existingTerraLimit, canonicalTerraLimit)) report.push({ path: ["provider", "openai", "models", "gpt-5.6-terra", "limit"], action: "updated" });
+    } else if (existingTerraLimit === undefined && canSetTerraLimit(existingConfig.provider) && (!isExistingProject || hasHarnessProvenance)) {
+      config.provider = withTerraLimit(existingConfig.provider, canonicalTerraLimit);
+      nextOwnedTopLevel[terraOwnershipKey] = canonicalTerraLimit;
+      report.push({ path: ["provider", "openai", "models", "gpt-5.6-terra", "limit"], action: "added" });
+    } else if (!isExistingProject && deepEqual(existingTerraLimit, canonicalTerraLimit)) {
+      nextOwnedTopLevel[terraOwnershipKey] = canonicalTerraLimit;
+    } else {
+      delete nextOwnedTopLevel[terraOwnershipKey];
+      if (existingTerraLimit !== undefined) report.push({ path: ["provider", "openai", "models", "gpt-5.6-terra", "limit"], action: "kept-custom" });
     }
   }
 
@@ -366,5 +430,6 @@ export default {
   normalizeOcVersionStamp,
   isValidOpencodeConfigShape,
   isValidHarnessCompaction,
+  isValidHarnessTerraContextPolicy,
   migrateOpencodeConfig,
 };
