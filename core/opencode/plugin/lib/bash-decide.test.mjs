@@ -992,14 +992,13 @@ test("#808 §6.2: isRoutineSession parity with the Claude Code contract — all 
   assert.equal(isRoutineSession({ HARNESS_OBSERVABILITY_RUN_PATH: "/run" }), true);
 });
 
-test("#808 #ac-3.2: isSubagentActingAgent must NOT classify OC's mode:primary agents as subagents", () => {
-  // core/opencode/agents/*.md — build.md, plan.md and harness-config.md are `mode: primary`;
-  // they ARE the operator's own top-level lane. Reading any non-empty agent name as a subagent
-  // would deny the operator's hand-applied harness:ready and break #ac-3.2 in production.
-  for (const primary of ["build", "plan", "harness-config", "Build", " build ", "build.md"]) {
+test("#808 #ac-3.2: isSubagentActingAgent recognizes build as OpenCode's only primary agent", () => {
+  // build.md is the operator's only top-level lane. Reading any non-empty agent name as a
+  // subagent would deny the operator's hand-applied harness:ready and break #ac-3.2.
+  for (const primary of ["build", "Build", " build ", "build.md"]) {
     assert.equal(isSubagentActingAgent(primary), false, `primary: ${primary}`);
   }
-  for (const sub of ["harvester", "shipper", "executor-high", "adversary", "test-author"]) {
+  for (const sub of ["plan", "harness-config", "harvester", "shipper", "executor-high", "adversary", "test-author"]) {
     assert.equal(isSubagentActingAgent(sub), true, `subagent: ${sub}`);
   }
   // Absence is NOT evidence of a subagent — the caller falls back to the session-parent probe.

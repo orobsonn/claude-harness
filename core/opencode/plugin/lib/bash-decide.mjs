@@ -107,13 +107,12 @@ export function isRoutineSession(env = process.env) {
 }
 
 /**
- * @description The OpenCode agents declared `mode: primary` in core/opencode/agents/*.md
- * (build.md, plan.md, harness-config.md). A bash call whose acting agent is one of these is the
- * OPERATOR's own top-level lane, NOT a subagent -- misreading it as a subagent would deny the
- * operator's hand-applied `harness:ready` and break #ac-3.2. Every other agent in that directory
- * is `mode: subagent` or `mode: all` (harvester.md is `mode: subagent`).
+ * @description `build` is the sole OpenCode primary agent. A bash call whose acting agent is
+ * `build` is the OPERATOR's own top-level lane, NOT a subagent -- misreading it as a subagent
+ * would deny the operator's hand-applied `harness:ready` and break #ac-3.2. Every other agent
+ * in core/opencode/agents is `mode: subagent` or `mode: all` (harvester.md is `mode: subagent`).
  */
-const OC_PRIMARY_AGENTS = new Set(["build", "plan", "harness-config"]);
+const OC_PRIMARY_AGENTS = new Set(["build"]);
 
 /**
  * @description True when an acting-agent name denotes a SUBAGENT lane. Null/empty -> false
