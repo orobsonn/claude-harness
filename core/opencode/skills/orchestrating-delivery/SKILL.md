@@ -343,6 +343,11 @@ path until the test is a faithful, executable proof or a product-behavior decisi
   id or pass a runtime `task_id` argument. On repeated evidence, classify it and use
   the exact **test-enablement recovery** transition rather than retrying or stopping. `plan-reviewer` must
   approve any amendment that reaches runner/config/dependency paths or corrects a plan contradiction.
+- A `test-author` **`NEEDS_CONTEXT` or `BLOCKED` is never terminal** in AUTONOMOUS delivery. Read its
+  required literal evidence and recovery category, then: make a fresh transcription dispatch for a
+  transcribable omission; repair minimal approved test/fixture/setup for `TEST_INFRA`; or run the narrow
+  planner + `TEST_ENABLEMENT_RECOVERY` review for `PLAN_CONTRADICTION`. Re-run fidelity afterward. Ask the
+  operator only if preserving the locked observable requires changing product behavior.
 - On PASS, stamp `fidelity_pass`, freeze the test, and dispatch the executor. The frozen assertion is never
   weakened, deleted, bypassed, or made green through a vacuous runner/config change.
 - Post-freeze maintenance edits are a separate dispatch shape: only `test-author` may alter a frozen test,
