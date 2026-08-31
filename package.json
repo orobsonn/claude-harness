@@ -17,7 +17,8 @@
     "core/github",
     "core/orca",
     "core/shared",
-    "core/claude-code"
+    "core/claude-code",
+    "core/codex"
   ],
   "engines": {
     "node": ">=18"

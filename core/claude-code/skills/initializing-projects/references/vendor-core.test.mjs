@@ -47,6 +47,7 @@ import {
   assertFreshNativeInstall,
   OC_RETIRED_FILES,
   pruneOcRetiredFiles,
+  preflightCodexVendor,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -90,6 +91,223 @@ test("vendor-core CLI stamps the release package version, not an older git-descr
     assert.equal(stamp, expected);
   } finally {
     rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex fresh install ships the native runtime and adds only missing activation features", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-native-"));
+  try {
+    const config = "model = \"project-choice\"\n";
+    mkdirSync(join(target, ".codex"), { recursive: true });
+    writeFileSync(join(target, ".codex", "config.toml"), config);
+
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const installedConfig = readFileSync(join(target, ".codex", "config.toml"), "utf8");
+    assert.match(installedConfig, /^model = "project-choice"$/m, "project setting survives");
+    assert.match(installedConfig, /^\[features\]$/m);
+    assert.match(installedConfig, /^hooks = true$/m, "installed hooks are enabled when operator did not decide otherwise");
+    assert.match(installedConfig, /^multi_agent = true$/m, "installed custom agents are enabled when operator did not decide otherwise");
+    assert.ok(existsSync(join(target, ".codex", "agents", "planner.toml")));
+    assert.ok(existsSync(join(target, ".codex", "hooks.json")));
+    assert.ok(existsSync(join(target, ".codex", "model-routing.mjs")), "runtime can resolve the vendored model route");
+    assert.ok(existsSync(join(target, ".codex", "rules", "protected-operations.rules")));
+    assert.ok(existsSync(join(target, ".codex", "lib", "review-contracts.mjs")), "pure review/complexity contracts are vendored for Codex skills");
+    assert.ok(existsSync(join(target, ".codex", "lib", "plan-contract.mjs")), "the explicit TDD plan contract is vendored for Codex skills");
+    assert.ok(existsSync(join(target, ".codex", "skills", "harness-triage", "SKILL.md")), "Codex discovers project skills from .codex/skills");
+    assert.ok(!existsSync(join(target, ".agents", "skills", "harness-triage", "SKILL.md")), "the legacy universal skill path is not advertised as native Codex discovery");
+    assert.ok(existsSync(join(target, ".codex", ".harness-owned-files.json")));
+    assert.ok(existsSync(join(target, "MEMORY.md")), "Codex receives the portable project memory seed");
+    assert.ok(existsSync(join(target, "kaizen.md")), "Codex receives the portable continuous-improvement log");
+    assert.ok(!existsSync(join(target, ".claude")), "codex-only does not create the Claude shell");
+    assert.ok(!existsSync(join(target, ".opencode")), "codex-only does not create the OpenCode shell");
+
+    const first = snapshotTree(join(target, ".codex"));
+    const rerun = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.equal(rerun.status, 0, rerun.stderr || rerun.stdout);
+    assert.deepEqual(snapshotTree(join(target, ".codex")), first, "a second vendor run converges");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex vendor never overrides an explicit operator feature opt-out", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-opt-out-"));
+  try {
+    mkdirSync(join(target, ".codex"), { recursive: true });
+    writeFileSync(join(target, ".codex", "config.toml"), "[features]\nhooks = false\n");
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(readFileSync(join(target, ".codex", "config.toml"), "utf8"), /^hooks = false$/m);
+    assert.match(readFileSync(join(target, ".codex", "config.toml"), "utf8"), /^multi_agent = true$/m);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex preserves inline and dotted feature opt-outs without creating a conflicting table", () => {
+  for (const config of [
+    "features = { hooks = false, multi_agent = false }\n",
+    "features.hooks = false\nfeatures.multi_agent = false\n",
+  ]) {
+    const target = mkdtempSync(join(tmpdir(), "vendor-codex-inline-opt-out-"));
+    try {
+      mkdirSync(join(target, ".codex"), { recursive: true });
+      writeFileSync(join(target, ".codex", "config.toml"), config);
+      const result = spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(readFileSync(join(target, ".codex", "config.toml"), "utf8"), config, "explicit feature syntax stays byte-identical");
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  }
+});
+
+test("vendor-core: Codex completes absent activation keys in inline and dotted feature syntax", () => {
+  const cases = [
+    ["features = { hooks = false }\n", "features = { hooks = false, multi_agent = true }\n"],
+    ["features.hooks = false\n", "features.hooks = false\nfeatures.multi_agent = true\n"],
+  ];
+  for (const [config, expected] of cases) {
+    const target = mkdtempSync(join(tmpdir(), "vendor-codex-partial-features-"));
+    try {
+      mkdirSync(join(target, ".codex"), { recursive: true });
+      writeFileSync(join(target, ".codex", "config.toml"), config);
+      const result = spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(readFileSync(join(target, ".codex", "config.toml"), "utf8"), expected);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  }
+});
+
+test("vendor-core: Codex refuses memory seed symlinks before an outside file can be created", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-memory-link-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-codex-memory-outside-"));
+  const victim = join(outside, "created-outside.md");
+  try {
+    symlinkSync(victim, join(target, "MEMORY.md"));
+    const result = spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr || result.stdout, /symlink vendor destination/i);
+    assert.ok(!existsSync(victim), "vendor must not follow a dangling memory link outside the project");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex memory seeds are idempotent and never overwrite operator knowledge", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-memory-"));
+  try {
+    const run = () => spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.equal(run().status, 0);
+    writeFileSync(join(target, "MEMORY.md"), "operator memory survives\n");
+    writeFileSync(join(target, "kaizen.md"), "operator kaizen survives\n");
+    assert.equal(run().status, 0);
+    assert.equal(readFileSync(join(target, "MEMORY.md"), "utf8"), "operator memory survives\n");
+    assert.equal(readFileSync(join(target, "kaizen.md"), "utf8"), "operator kaizen survives\n");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: runtime all includes Claude, OpenCode, and Codex without changing both semantics", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-all-native-"));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "all"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.ok(existsSync(join(target, ".claude", ".harness-version")));
+    assert.ok(existsSync(join(target, ".opencode", ".harness-version")));
+    assert.ok(existsSync(join(target, ".codex", ".harness-version")));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex vendor rejects a .codex symlink before writing outside the project", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-symlink-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-codex-outside-"));
+  try {
+    symlinkSync(outside, join(target, ".codex"));
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0, "symlink destination must fail closed");
+    assert.match(result.stderr || result.stdout, /symbolic link|symlink/i);
+    assert.ok(!existsSync(join(outside, "hooks.json")), "vendor must not write through the link");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: Codex vendor rejects a traversal path in its prior ownership manifest", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-manifest-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-codex-victim-"));
+  const victim = join(outside, "victim.txt");
+  try {
+    mkdirSync(join(target, ".codex"), { recursive: true });
+    writeFileSync(victim, "must survive\n");
+    writeFileSync(join(target, ".codex", ".harness-owned-files.json"), JSON.stringify({
+      version: 1,
+      files: [".codex/../../victim.txt"],
+    }));
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0, "unsafe ownership input must fail closed");
+    assert.match(result.stderr || result.stdout, /unsafe Codex ownership manifest path/i);
+    assert.equal(readFileSync(victim, "utf8"), "must survive\n");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("preflightCodexVendor rejects a source symlink before any target write", () => {
+  const core = mkdtempSync(join(tmpdir(), "vendor-codex-source-"));
+  const target = mkdtempSync(join(tmpdir(), "vendor-codex-target-"));
+  const outside = mkdtempSync(join(tmpdir(), "vendor-codex-source-outside-"));
+  try {
+    mkdirSync(join(core, "codex"), { recursive: true });
+    writeFileSync(join(outside, "planner.toml"), "name = 'outside'\n");
+    symlinkSync(outside, join(core, "codex", "agents"));
+    writeFileSync(join(core, "codex", "hooks.json"), "{}\n");
+    assert.throws(
+      () => preflightCodexVendor(core, target),
+      /Codex source artifact is a symlink/i,
+    );
+    assert.ok(!existsSync(join(target, ".codex")), "target stays untouched");
+  } finally {
+    rmSync(core, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -1840,10 +2058,10 @@ test("normalizeRuntimeTarget: absent/empty → claude; known tokens map; garbage
   assert.equal(normalizeRuntimeTarget("opencode"), "opencode");
   assert.equal(normalizeRuntimeTarget("oc"), "opencode");
   assert.equal(normalizeRuntimeTarget("both"), "both");
-  assert.equal(normalizeRuntimeTarget("all"), "both");
+  assert.equal(normalizeRuntimeTarget("codex"), "codex");
+  assert.equal(normalizeRuntimeTarget("all"), "all");
   assert.equal(normalizeRuntimeTarget("BOTH"), "both");
   // The fail-open bug: a typo / stale-binary token must NOT become a silent claude-only vendor.
-  assert.throws(() => normalizeRuntimeTarget("codex"), /invalid --runtime/);
   assert.throws(() => normalizeRuntimeTarget("cluade"), /invalid --runtime/);
 });
 

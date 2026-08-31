@@ -1,0 +1,57 @@
+{
+  "description": "Codex Delivery Harness lifecycle rails. Review and trust this definition before it runs.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/version-check.mjs\"",
+            "timeout": 3,
+            "statusMessage": "Checking harness version"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/policy.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Applying delivery policy"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash|apply_patch|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/policy.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Reviewing permission request"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/policy.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Recording delivery event",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

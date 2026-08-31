@@ -5,6 +5,16 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Unreleased]
+
+### Added
+
+* **codex:** adiciona shell nativo, vendor `--target codex|all`, roteamento Luna/Terra/Sol,
+  10 agentes, skills com contratos de delivery/governança/memória, version check, rails de
+  segredo/Wrangler/lavish, primitivas puras de review e matriz de paridade auditável.
+* **test-infra:** mantém a orientação de fixtures para `@cloudflare/vitest-pool-workers` via import
+  `?raw`, sem `node:fs` no isolate.
+
 ## [1.0.0](https://github.com/orobsonn/claude-harness/compare/v0.59.1...v1.0.0) (2026-08-30)
 
 

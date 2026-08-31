@@ -119,6 +119,7 @@ const RELEASE_SKILLS = SHELLS.map(releaseSkillOf).filter(Boolean);
  *  adversarial review — SKILL_LANGUAGE is checked in both directions). */
 const SKILL_LANGUAGE = {
   "claude-code": { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
+  codex: { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
   opencode: { twice: /twice/i, never: /NEVER/, manualHeadings: ["## OPEN mode", "## FINISH mode"] },
 };
 
