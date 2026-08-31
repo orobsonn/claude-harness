@@ -82,6 +82,9 @@ function isPlainObject(value) {
 function deepEqual(a, b) {
   if (a === b) return true;
   if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, index) => deepEqual(value, b[index]));
+  }
   if (!isPlainObject(a) || !isPlainObject(b)) return false;
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
@@ -141,6 +144,16 @@ export function isValidOpencodeConfigShape(config) {
   if (!isPlainObject(config)) return false;
   if (config.permission !== undefined && !isPlainObject(config.permission)) return false;
   if (config.plugin !== undefined && !Array.isArray(config.plugin)) return false;
+  return true;
+}
+
+/** @description Validates only the harness-owned compaction policy before it can be written. */
+export function isValidHarnessCompaction(value) {
+  if (!isPlainObject(value)) return false;
+  if (typeof value.auto !== "boolean" || typeof value.prune !== "boolean") return false;
+  for (const key of ["preserve_recent_tokens", "reserved"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 0) return false;
+  }
   return true;
 }
 
@@ -267,6 +280,7 @@ function reorderCanonicalProtection(mergedPermission, canonicalPermission) {
  *   manifest: { owned?: Record<string, unknown> } | null,
  *   previousHarnessVersionStamp?: string | null,
  *   newHarnessVersion?: string | null,
+ *   isExistingProject?: boolean,
  * }} params
  * @returns {{
  *   config: Record<string, unknown>,
@@ -281,6 +295,7 @@ export function migrateOpencodeConfig({
   manifest = null,
   previousHarnessVersionStamp = null,
   newHarnessVersion = null,
+  isExistingProject = false,
 }) {
   const tier = manifest ? 1 : previousHarnessVersionStamp ? 2 : 3;
   const ledgerByPath = new Map(RETIRED_OC_PERMISSION_ENTRIES.map((entry) => [pathKey(entry.path), entry]));
@@ -295,15 +310,52 @@ export function migrateOpencodeConfig({
     ? reorderCanonicalProtection(merged.value, newPermission)
     : merged.value;
 
+  // `compaction` is the sole non-permission harness policy that must reach an already-vendored
+  // project. Keep its ownership separate from `owned` so legacy manifests continue to describe
+  // permissions exactly as they did before this migration. A missing key is a safe harness add;
+  // a present unowned key is an operator choice and must never be overwritten or adopted.
+  const canonicalCompaction = newConfig?.compaction;
+  const existingOwnedTopLevel = isPlainObject(manifest?.ownedTopLevel) ? manifest.ownedTopLevel : {};
+  const ownedCompaction = existingOwnedTopLevel.compaction;
+  const nextOwnedTopLevel = { ...existingOwnedTopLevel };
+  const config = { ...existingConfig, permission };
+  const report = [...merged.report];
+
+  if (canonicalCompaction !== undefined) {
+    const hasCompaction = Object.hasOwn(existingConfig, "compaction");
+    const hasOwnedCompaction = Object.hasOwn(existingOwnedTopLevel, "compaction");
+    if (hasOwnedCompaction && !hasCompaction) {
+      // An explicit removal after a prior vendor run is an operator opt-out, not a missing
+      // legacy default. Do not re-add it forever.
+      delete nextOwnedTopLevel.compaction;
+      report.push({ path: ["compaction"], action: "removed-opt-out" });
+    } else if (hasOwnedCompaction && deepEqual(existingConfig.compaction, ownedCompaction)) {
+      config.compaction = canonicalCompaction;
+      nextOwnedTopLevel.compaction = canonicalCompaction;
+      if (!deepEqual(existingConfig.compaction, canonicalCompaction)) {
+        report.push({ path: ["compaction"], action: "updated", from: existingConfig.compaction, to: canonicalCompaction });
+      }
+    } else if (!hasCompaction && (!isExistingProject || hasHarnessProvenance)) {
+      config.compaction = canonicalCompaction;
+      nextOwnedTopLevel.compaction = canonicalCompaction;
+      report.push({ path: ["compaction"], action: "added", value: canonicalCompaction });
+    } else {
+      if (hasCompaction) config.compaction = existingConfig.compaction;
+      delete nextOwnedTopLevel.compaction;
+      if (hasCompaction) report.push({ path: ["compaction"], action: "kept-custom", value: existingConfig.compaction });
+    }
+  }
+
   return {
-    config: { ...existingConfig, permission },
+    config,
     manifest: {
       version: 1,
       harnessVersion: newHarnessVersion ?? previousHarnessVersionStamp ?? manifest?.harnessVersion ?? "unknown",
       owned: merged.owned,
+      ...(Object.keys(nextOwnedTopLevel).length > 0 ? { ownedTopLevel: nextOwnedTopLevel } : {}),
     },
     tier,
-    report: merged.report,
+    report,
   };
 }
 
@@ -313,5 +365,6 @@ export default {
   readHarnessVersionStamp,
   normalizeOcVersionStamp,
   isValidOpencodeConfigShape,
+  isValidHarnessCompaction,
   migrateOpencodeConfig,
 };

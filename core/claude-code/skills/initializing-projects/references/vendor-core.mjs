@@ -50,6 +50,7 @@ import { fileURLToPath } from "node:url";
 import {
   MANIFEST_FILENAME,
   isValidOpencodeConfigShape,
+  isValidHarnessCompaction,
   migrateOpencodeConfig,
   normalizeOcVersionStamp as normalizeHarnessVersionStamp,
   readHarnessVersionStamp,
@@ -614,20 +615,21 @@ function sameJsonValue(left, right) {
 
 /**
  * @description Preserve raw project formatting while replacing only harness-owned top-level
- * `plugin` / `permission` values. Null means a conservative canonical rewrite is required.
+ * `plugin` / `permission` / `compaction` values. Null means a conservative canonical rewrite is required.
  */
 function preserveProjectConfigFormatting(existingRaw, originalConfig, migratedConfig) {
   const originalKeys = Object.keys(originalConfig);
   const migratedKeys = Object.keys(migratedConfig);
   const keys = new Set([...originalKeys, ...migratedKeys]);
   const changedKeys = [...keys].filter((key) => !sameJsonValue(originalConfig[key], migratedConfig[key]));
-  if (changedKeys.length === 0 || changedKeys.some((key) => key !== "plugin" && key !== "permission")) return null;
+  if (changedKeys.length === 0 || changedKeys.some((key) => key !== "plugin" && key !== "permission" && key !== "compaction")) return null;
 
   const spans = topLevelJsonValueSpans(existingRaw);
-  if (!spans || changedKeys.some((key) => !spans.has(key))) return null;
+  if (!spans) return null;
 
   const newline = existingRaw.includes("\r\n") ? "\r\n" : "\n";
   const replacements = changedKeys
+    .filter((key) => spans.has(key))
     .map((key) => {
       const span = spans.get(key);
       const indentation = lineIndentationAt(existingRaw, span.start);
@@ -639,6 +641,24 @@ function preserveProjectConfigFormatting(existingRaw, originalConfig, migratedCo
   let candidate = existingRaw;
   for (const replacement of replacements) {
     candidate = `${candidate.slice(0, replacement.start)}${replacement.value}${candidate.slice(replacement.end)}`;
+  }
+
+  const missingKeys = changedKeys.filter((key) => !spans.has(key));
+  if (missingKeys.length > 0) {
+    const nextSpans = topLevelJsonValueSpans(candidate);
+    if (!nextSpans) return null;
+    const closeIndex = candidate.lastIndexOf("}");
+    if (closeIndex < 0 || candidate.slice(closeIndex + 1).trim() !== "") return null;
+    const firstSpan = nextSpans.values().next().value;
+    const indentation = firstSpan ? lineIndentationAt(candidate, firstSpan.start) : "  ";
+    const inserted = missingKeys
+      .map((key) => {
+        const value = JSON.stringify(migratedConfig[key], null, 2).replace(/\n/g, `${newline}${indentation}`);
+        return `${JSON.stringify(key)}: ${value}`;
+      })
+      .join(`,${newline}${indentation}`);
+    const prefix = candidate.slice(0, closeIndex).trimEnd();
+    candidate = `${prefix}${prefix.endsWith("{") ? "" : ","}${newline}${indentation}${inserted}${newline}${candidate.slice(closeIndex)}`;
   }
 
   try {
@@ -661,10 +681,10 @@ function preserveProjectConfigFormatting(existingRaw, originalConfig, migratedCo
  * actually removes a retired key, the pre-migration file is preserved once at
  * `opencode.json.pre-migration.bak`.
  * Issue #441: when an existing file needs no semantic mutation (plugin[] already clean of harness
- * autoload paths AND permission migration is a no-op including key order), skip the write entirely
+ * autoload paths AND the harness-owned migration is a no-op including key order), skip the write entirely
  * and return `"unchanged"` so project formatters (Biome/Prettier) are not destroyed by a cosmetic
  * `JSON.stringify(..., null, 2)` rewrite. For a real plugin/permission migration, preserve the raw
- * project fields and replace only those two harness-owned root values; unsupported layouts safely
+ * project fields and replace only those harness-owned root values; unsupported layouts safely
  * fall back to canonical JSON.
  * @param {string} openCodeDir - source core/opencode
  * @param {string} targetDir - project root
@@ -682,6 +702,9 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
     }
   } else {
     cfg = {};
+  }
+  if (cfg.compaction !== undefined && !isValidHarnessCompaction(cfg.compaction)) {
+    throw new Error("invalid harness compaction policy in opencode.json.example");
   }
   // Strip harness autoload paths from example; keep only external package plugins if any.
   if (Array.isArray(cfg.plugin)) {
@@ -746,6 +769,7 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
     manifest,
     previousHarnessVersionStamp,
     newHarnessVersion: version ?? null,
+    isExistingProject: wasPresent,
   });
 
   // Validation gate BEFORE the rename — a migration that produced something un-writable never
@@ -755,8 +779,10 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
     return "migration failed validation gate → wrote opencode.harness.json for manual repair";
   }
 
-  const removedEntries = migrated.report.filter((r) => r.action === "removed-retired");
-  const keptEntries = migrated.report.filter((r) => r.action === "kept-custom");
+  const permissionReports = migrated.report.filter((r) => r.path[0] !== "compaction");
+  const removedEntries = permissionReports.filter((r) => r.action === "removed-retired");
+  const keptEntries = permissionReports.filter((r) => r.action === "kept-custom");
+  const compactionReport = migrated.report.find((r) => r.path[0] === "compaction");
 
   const canonicalConfigText = `${JSON.stringify(migrated.config, null, 2)}\n`;
   const nextConfigText =
@@ -804,14 +830,18 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
 
   if (!wasPresent) return "created";
   if (configUnchanged) return "unchanged";
-  if (removedEntries.length === 0 && keptEntries.length === 0) {
-    return "updated existing opencode.json plugins (stripped harness autoload paths)";
+  if (removedEntries.length === 0 && keptEntries.length === 0 && !compactionReport) {
+    return "updated existing opencode.json harness configuration";
   }
   const describe = (r) => `${r.path.join(".")}=${JSON.stringify(r.value)}`;
   const removedNote = removedEntries.length ? `removed retired [${removedEntries.map(describe).join(", ")}]` : "";
   const keptNote = keptEntries.length ? `kept custom [${keptEntries.map(describe).join(", ")}]` : "";
-  const migrationNote = [removedNote, keptNote].filter(Boolean).join("; ");
-  return `updated existing opencode.json plugins (stripped harness autoload paths) (permission migration: ${migrationNote})`;
+  const permissionNote = [removedNote, keptNote].filter(Boolean).join("; ");
+  const compactionNote = compactionReport ? `compaction: ${compactionReport.action}` : "";
+  const migrationNote = [permissionNote ? `permission migration: ${permissionNote}` : "", compactionNote]
+    .filter(Boolean)
+    .join("; ");
+  return `updated existing opencode.json harness configuration (${migrationNote})`;
 }
 
 /**
