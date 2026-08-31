@@ -14,8 +14,6 @@ export { validateRouting };
  */
 export const AGENT_ROUTE_RESOLVERS = Object.freeze({
   build: (r) => asAgentRoute(r.build),
-  plan: (r) => asAgentRoute(r.build),
-  "harness-config": (r) => asAgentRoute(r.build),
   planner: (r) => asAgentRoute(r.planner),
   compliance: (r) => asAgentRoute(r.compliance),
   security: (r) => asAgentRoute(r.security),

@@ -55,6 +55,12 @@ export type EntryGateDeps = {
     callId: string
     toolName: string
   }) => Promise<{ ok: boolean; reason?: string; agent?: unknown; parentSessionId?: unknown }>
+  /** Resolve exact official caller facts for the one-shot lifecycle update tool. */
+  resolveLifecycleUpdateAuthorityFn?: (input: {
+    sessionId: string
+    callId: string
+    toolName: string
+  }) => Promise<{ ok: boolean; reason?: string; agent?: unknown; parentSessionId?: unknown }>
   /** Official SDK client used only to bind factual child Task metadata. */
   client?: any
 }
@@ -87,6 +93,13 @@ function isConfigureRoutingTool(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false
   const n = toolName.toLowerCase()
   return n === "configure-routing" || n.endsWith("_configure-routing") || n.endsWith(".configure-routing")
+}
+
+/** @description Native vendoring tool — root interactive build only. */
+function isLifecycleUpdateTool(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false
+  const n = toolName.toLowerCase()
+  return n === "lifecycle-update" || n.endsWith("_lifecycle-update") || n.endsWith(".lifecycle-update")
 }
 
 /**
@@ -341,6 +354,8 @@ async function createEntryGateHooks(
         return { ok: false, reason: "official runtime metadata unavailable" }
       }
     })
+  const resolveLifecycleUpdateAuthorityFn =
+    deps.resolveLifecycleUpdateAuthorityFn ?? resolveConfigureRoutingAuthorityFn
 
   const writingHand = (role: unknown) => isExecutorRole(role) || isSniperRole(role) || isTestAuthorRole(role)
   const client = deps.client
@@ -399,9 +414,28 @@ async function createEntryGateHooks(
         })
         if (!authority?.ok) throw new Error(`${PREFIX} configure-routing denied: ${authority?.reason ?? "official runtime metadata unavailable"}`)
         const parent = typeof authority.parentSessionId === "string" ? authority.parentSessionId.trim() : ""
-        if (parent) throw new Error(`${PREFIX} configure-routing denied on child session — only the root harness-config lane may change routing`)
+        if (parent) throw new Error(`${PREFIX} configure-routing denied on child session — only the root build session may change routing`)
         const agent = typeof authority.agent === "string" ? authority.agent.trim().toLowerCase().replace(/\.md$/, "") : ""
-        if (agent !== "harness-config") throw new Error(`${PREFIX} configure-routing denied for agent '${typeof authority.agent === "string" ? authority.agent : "unknown"}' — only harness-config may change routing`)
+        if (agent !== "build") throw new Error(`${PREFIX} configure-routing denied for agent '${typeof authority.agent === "string" ? authority.agent : "unknown"}' — only build may change routing`)
+        return
+      }
+
+      // Lifecycle update is intentionally outside delivery ceremony, but it is not a generic
+      // shell escape hatch: only a root interactive build session may reach its fixed-argv tool.
+      if (isLifecycleUpdateTool(toolName)) {
+        if (dispatchEnvironment.HARNESS_NOTIFY_PROJECT) {
+          throw new Error(`${PREFIX} lifecycle-update denied in fleet-dispatched session`)
+        }
+        const authority = await resolveLifecycleUpdateAuthorityFn({
+          sessionId: typeof sessionId === "string" ? sessionId : "",
+          callId: typeof input?.callID === "string" ? input.callID : typeof input?.callId === "string" ? input.callId : "",
+          toolName: typeof toolName === "string" ? toolName : "",
+        })
+        if (!authority?.ok) throw new Error(`${PREFIX} lifecycle-update denied: ${authority?.reason ?? "official runtime metadata unavailable"}`)
+        const parent = typeof authority.parentSessionId === "string" ? authority.parentSessionId.trim() : ""
+        if (parent) throw new Error(`${PREFIX} lifecycle-update denied on child session — only the root build session may update the harness`)
+        const agent = typeof authority.agent === "string" ? authority.agent.trim().toLowerCase().replace(/\.md$/, "") : ""
+        if (agent !== "build") throw new Error(`${PREFIX} lifecycle-update denied for agent '${typeof authority.agent === "string" ? authority.agent : "unknown"}' — only build may update the harness`)
         return
       }
 

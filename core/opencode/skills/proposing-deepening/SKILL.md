@@ -1,6 +1,6 @@
 ---
 name: oc-proposing-deepening
-description: "Architectural retrofit analysis for an EXISTING codebase — walks the code, finds DIRECTORIES of shallow modules, and proposes at most 5 ranked deepening candidates to docs/architecture/deepening-candidates.md. Runs in the `plan` primary agent, where source edits are DENIED and bash is restricted to a read-only git-history allowlist (no generic shell): never-write-source and propose-only are enforced by permission, not by prose. (One narrower exception is prose-enforced, not permission-enforced: the git-history allowlist has no path-scoping, so a secret committed to history is technically reachable via `git show`/`blame` on a pathspec — this skill's own instructions avoid that, they are not blocked from attempting it.) LOCAL/interactive only — it refuses in any headless or cron session. A candidate is a model deduction, never a locked decision, and the issue derived from it is NEVER created harness:ready: a blind restructure of working code is delivered locally, never auto-merged. Use when a legacy/existing project needs its architecture retrofitted toward deep modules, or when asked to find where the codebase became hard to change."
+description: "Architectural retrofit analysis for an EXISTING codebase — walks the code, finds DIRECTORIES of shallow modules, and proposes at most 5 ranked deepening candidates to docs/architecture/deepening-candidates.md. Runs in the sole `build` primary agent and never writes source, opens an issue, or dispatches delivery. LOCAL/interactive only — it refuses in any headless or cron session. A candidate is a model deduction, never a locked decision, and the issue derived from it is NEVER created harness:ready: a blind restructure of working code is delivered locally, never auto-merged. Use when a legacy/existing project needs its architecture retrofitted toward deep modules, or when asked to find where the codebase became hard to change."
 license: MIT
 compatibility: opencode
 metadata:
@@ -21,24 +21,12 @@ product-language** — he decides on impact and risk, never on class names.
 
 ---
 
-## Where it runs (OpenCode) — `plan`, and the boundary is a permission, not a promise
+## Where it runs (OpenCode) — `build`
 
-Runs in the **`plan` primary agent**, the same host as `oc-grill`. There, `bash` is restricted to a
-**read-only git-history allowlist** (`git log`/`diff`/`show`/`blame`/`status` only — no `--output`,
-no `>`/`>>` redirect, no `--ext-diff`/`--textconv`, no other command; see `agents/plan.md`), `task` is
-limited to `discussion-adversary`, and `edit` denies every path except `docs/prd/*.md` and
-`docs/architecture/deepening-candidates.md`. So "never edits source, never opens an issue, never
-dispatches a delivery agent" is **impossible by construction here** — not a prose commitment. Do not
-try to reach this skill from `build`.
-
-What the host implies for the procedure below:
-
-- **No shell.** Every detection step uses `read` / `grep` / `glob` / `list` only. No `git log`, no
-  scripts. The procedure is written for that; the git enrichment in step 6 is Claude-Code-side only.
-- **No commit.** You cannot commit the candidates file from here — hand that to the operator (step 8).
-- **No issue creation.** Issue authoring lives in `build`; you never author or label anything.
-- **No date command.** Take today's date from the session context; if genuinely unavailable, ask the
-  operator once (same as `oc-grill`).
+Runs in the sole **`build` primary agent**, after normal entry routing identifies it as a
+no-delivery discovery request. The result is intentionally narrow: it may write the candidates
+document, but never source code, an issue, a delivery task, or a commit. Do not use a generic shell
+write path to work around that boundary.
 
 ---
 
@@ -61,11 +49,6 @@ Headless is active when **any** of these holds:
     "$CLAUDE_CODE_REMOTE" "$HARNESS_NOTIFY_PROJECT" "$HARNESS_OBSERVABILITY_RUN_PATH"
   ```
 
-> **In `plan` bash is restricted to the read-only git-history allowlist above** — there is no generic
-> shell probe (the headless-detection probe used elsewhere needs an arbitrary `printf`/env read, which
-> is not on this allowlist). Decide from the trigger prompt instead: a `plan` session reached through
-> an autonomous/cron prompt is headless and must refuse; a live operator conversation is interactive.
->
 > `$CLAUDE_CODE_REMOTE` alone is **not** a sufficient test. The VPS cron dispatcher
 > (`core/vps/cron-a-dispatch.mjs`) **deliberately unsets it** so the run stays "headless-local" and
 > the cheap hands stay enabled. A skill keyed only on that variable would happily hand a
@@ -100,8 +83,7 @@ against.
 ## Hard constraints
 
 - **READ-ONLY on source.** Never edit, move, rename, or delete a single line of project code. The
-  only file this skill writes is the candidates file — and in `plan` it is the only path `edit`
-  allows besides the `oc-grill` PRD.
+  only file this skill writes is the candidates file.
 - **PROPOSE-ONLY.** Never create a GitHub issue, never invoke `oc-creating-issues`, never dispatch a
   delivery agent. The operator picks; then he authors the work in `build`.
 - **NOT a source of truth.** *(the single most important line in this file)* A candidate is 100%
@@ -126,7 +108,7 @@ return) and `## Bloqueados`.
 Then read the project memory — the project-root `MEMORY.md`, the nested `AGENTS.md` files, and
 `CONTEXT.md` if it exists. Use `CONTEXT.md`'s vocabulary verbatim in candidate titles; never invent
 parallel terms; never edit any of these files (`oc-surveying-codebase` seeds them, the `harvester`
-maintains them) — and in `plan` you could not anyway.
+maintains them).
 
 **The inverse risk, stated plainly.** `oc-surveying-codebase` records what the code *actually does* — so
 a directory full of shallow forwarders can be written into memory as a **convention**, and the
@@ -205,7 +187,7 @@ would make it sliceable.
 Rank on **how much complexity concentrates behind the smaller interface** (the deletion-test result):
 forwarding hops removed, callers freed from knowing the internal order, places where the same domain
 knowledge stops being re-derived. That is the leverage, and it is structural — it does not need git,
-which is why it is the primary axis even now that a narrow git-history allowlist exists in `plan`.
+which is why it is the primary axis even when repository history is available.
 
 **Do not rank by change frequency.** The heuristic is anti-correlated with the actual problem: the
 worst module in a codebase is often the one **nobody touches because everybody is afraid of it**, and
@@ -216,17 +198,11 @@ functions, "legacy"/"não mexer"/"TODO" comments, and — the strongest signal �
 duplicates its job elsewhere** rather than changing it. Ask the operator one direct question, since
 this is a product-level answer he owns: *"Tem alguma parte do sistema que todo mundo evita mexer?"*
 
-Change signal is a **secondary tie-breaker only**, never the axis. It **is** now gatherable in `plan`
-too — the git-history allowlist covers plain `git log --no-merges -- <path>` (never `--output`, never
-a `>`/`>>` redirect, never combined with `--ext-diff`/`--textconv`; a bare count/date read only, not a
-content dump) — excluding lockfiles, snapshots, `CHANGELOG`, `dist/`, `vendor/`, `node_modules/` and
-generated trees, dropping paths that no longer exist on disk, and remembering that a **squash-merge
-repo collapses a whole PR into one commit** so churn understates activity. Do not use `-p`/`git show`/
-`git blame` on a path to pull this signal — those can surface file content this agent's own read
-denylist blocks (`.env*`, `*.pem`, `*.key`, secrets committed to history) and the allowlist has no
-path-scoping to stop it; a bare `git log --no-merges -- <path>` for counts/dates carries none of that
-risk. If for any reason the signal cannot be gathered, rank without it rather than reach for a denied
-form of the command.
+Change signal is a **secondary tie-breaker only**, never the axis. Use only a bare
+`git log --no-merges -- <path>` for counts/dates: no `-p`, `git show`, or `git blame`, which could
+surface historical secrets. Exclude lockfiles, snapshots, `CHANGELOG`, `dist/`, `vendor/`,
+`node_modules/`, and generated trees; remember a **squash-merge repo collapses a whole PR into one
+commit**, so churn understates activity. If the signal cannot be gathered, rank without it.
 
 Push down anything that crosses a sensitive path (auth, payment, billing, SQL, migrations) — it costs
 a FULL delivery with a security auditor and must be a deliberate choice, never a by-product of a
@@ -260,12 +236,10 @@ scan would exceed it, rank the old actives and the new finds **together** and ke
 demoted entry moves to `## Fila` with one line saying what outranked it. Never let `## Ativos` grow
 past 5 by accumulation.
 
-**It must be committed — and you cannot commit it here.** `docs/architecture/` is outside any
-delivery scope and the `shipper` never runs in this flow, so nothing auto-stages the file; `plan`'s
-git-history allowlist is read-only inspection only (`log`/`diff`/`show`/`blame`/`status`) — no `add`,
-no `commit`, no write git command of any kind. Close with one line: `Candidatos escritos em docs/architecture/deepening-candidates.md —
-troque para build com Tab e peça o commit (committing-changes).` Uncommitted, the next scan reads
-nothing and re-proposes everything the operator already rejected.
+**Commit only on an explicit operator request.** This discovery ends after writing and presenting
+the candidates; do not auto-stage or auto-commit it. If the operator asks, use the normal
+`oc-committing-changes` flow. Uncommitted, the next scan still reads the document from the working
+tree, so it does not re-propose the current session's candidates.
 
 ```markdown
 # Candidatos a aprofundamento
@@ -332,8 +306,8 @@ Close with one question: which, if any, he wants to turn into work. **Stop there
 
 ### 10. Handoff contract — what the accepted candidate becomes
 
-Issue authoring is not available in `plan`. If he picks one, point him at the file and let him author
-it in `build`. When it is authored, this mapping holds:
+If he picks one, author the issue in this same `build` session. When it is authored, this mapping
+holds:
 
 | Candidate field | Where it lands in the issue |
 |---|---|

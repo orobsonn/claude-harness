@@ -18,6 +18,8 @@ const projectRoot = join(__dirname, "..");
 const ccUpdating = readFileSync(join(projectRoot, "skills/updating-harness/SKILL.md"), "utf8");
 const ccInit = readFileSync(join(projectRoot, "skills/initializing-projects/SKILL.md"), "utf8");
 const ocUpdatingPath = join(projectRoot, "opencode/skills/updating-harness/SKILL.md");
+const ocLifecycleTool = readFileSync(join(projectRoot, "opencode/tools/lifecycle-update-core.mjs"), "utf8");
+const ocLifecycleToolRuntime = readFileSync(join(projectRoot, "opencode/tools/lifecycle-update.ts"), "utf8");
 const ocTriage = readFileSync(join(projectRoot, "opencode/skills/triaging-requests/SKILL.md"), "utf8");
 const ocBuild = readFileSync(join(projectRoot, "opencode/agents/build.md"), "utf8");
 const ocAgents = readFileSync(join(projectRoot, "opencode/AGENTS.md"), "utf8");
@@ -40,34 +42,26 @@ test("CC initializing-projects is runtime-aware (--runtime + .opencode destinati
   assert.match(ccInit, /\.opencode/, "must document the OpenCode destination");
 });
 
-test("OC updating-harness skill exists, is loader-shaped, and runs the CLI from the pinned git tag", () => {
+test("OC updating-harness skill exists and its native tool pins the lifecycle CLI to a git release", () => {
   assert.ok(existsSync(ocUpdatingPath), "the OpenCode-side updating-harness skill must exist (finding 6)");
   const ocUpdating = readFileSync(ocUpdatingPath, "utf8");
   assert.match(ocUpdating, /^name: oc-updating-harness$/m, "must have the loader frontmatter name");
   assert.match(ocUpdating, /compatibility: opencode/, "must declare OpenCode compatibility");
   assert.match(
-    ocUpdating,
+    ocLifecycleTool,
     /github:orobsonn\/claude-harness#/,
-    "must run the CLI from the github:…#<tag> spec, not npm @latest",
+    "native tool must run the CLI from the github:…#<tag> spec, not npm @latest",
   );
-  assert.match(ocUpdating, /\.opencode\/\.harness-version/, "must detect via the OC shell marker");
+  assert.match(ocUpdating, /lifecycle-update\(\{\}\)/, "skill must use the native lifecycle tool");
+  assert.match(ocLifecycleToolRuntime, /\.opencode.*\.harness-version/, "tool must detect via the OC shell marker");
 });
 
-test("OC harness updates use a direct lifecycle lane without delivery ceremony", () => {
+test("OC harness updates run inside build without delivery ceremony", () => {
   const updating = readFileSync(ocUpdatingPath, "utf8");
-  assert.match(ocTriage, /Harness lifecycle operations do \*\*not\*\* run here[\s\S]*`harness-config`/i);
-  assert.match(ocTriage, /\/updating-harness/, "triage must route to the command, not run the skill");
+  assert.match(ocTriage, /Harness lifecycle operations run in this same root `build` conversation/i);
+  assert.match(ocTriage, /oc-updating-harness/, "triage must route to the lifecycle skill");
   assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
-  assert.match(
-    updating,
-    /OpenCode result `update` plus Claude result `no-claude`:[\s\S]*`opencode`[\s\S]*absent Claude shell is optional/i,
-    "an OpenCode-only project must update without depending on a Claude shell",
-  );
-  assert.match(
-    updating,
-    /OpenCode result `update` plus Claude result `claude`:[\s\S]*`both`/i,
-    "a dual-runtime project must synchronize both installed shells",
-  );
-  assert.match(ocBuild, /lifecycle operations are the exception[\s\S]*never classifies/i);
-  assert.match(ocAgents, /Harness lifecycle lane[\s\S]*does not call `classify`/i);
+  assert.match(ocLifecycleTool, /hasOpenCode[\s\S]*hasClaude/, "tool must derive an OpenCode-only or dual-runtime target");
+  assert.match(ocBuild, /load their matching skill without classify, plan, or Task dispatch/i);
+  assert.match(ocAgents, /Lifecycle shortcuts in build[\s\S]*do not call `classify`/i);
 });

@@ -24,16 +24,17 @@ test("updating-harness — only a final lifecycle result or formal block may ans
   assert.match(skill, /formal block/i);
 });
 
-test("updating-harness — an OpenCode-only project does not treat an absent Claude shell as an error", () => {
-  assert.match(skill, /never use `read` to probe an absent optional\s+shell/i);
-  assert.match(skill, /absent Claude marker means `opencode`/i);
-  assert.match(skill, /test -f \.claude\/\.harness-version && echo claude \|\| echo no-claude/i);
-  assert.doesNotMatch(skill, /test -d \.opencode/i);
+test("updating-harness — native tool owns marker detection and does not expose a shell recipe", () => {
+  assert.match(skill, /lifecycle-update\(\{\}\)/i);
+  assert.match(skill, /\.opencode\/\.harness-version.*\.claude\/\.harness-version/i);
+  assert.match(skill, /fixed argument vector/i);
+  assert.doesNotMatch(skill, /test -f \.claude\/\.harness-version/i);
+  assert.doesNotMatch(skill, /npx --yes --package=/i);
 });
 
-test("updating-harness — one isolated command lands the tag and fast-forwards active main", () => {
-  assert.match(skill, /resolve the latest release tag\s+\*\*once\*\*/i);
-  assert.match(skill, /claude-harness lifecycle-update --target <resolved-runtime> --ref <latest-tag>/i);
+test("updating-harness — one isolated native operation lands the tag and fast-forwards active main", () => {
+  assert.match(skill, /native tool exactly once/i);
+  assert.match(skill, /resolves the latest release tag once/i);
   assert.match(skill, /clean clone.*origin\/main/i);
   assert.match(skill, /fast-forwards the invoking default-branch checkout/i);
   assert.match(skill, /never switches a feature branch/i);

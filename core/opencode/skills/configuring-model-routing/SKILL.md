@@ -12,11 +12,11 @@ metadata:
 
 **This skill reconfigures model routing. It does not implement features.**
 
-Runs interactively inside the `harness-config` lane (primary), which the operator reaches by typing `/configuring-model-routing` — operator messages in **pt-br product-language**; file content in English.
+Runs interactively inside the root `build` conversation. The operator may type `/configuring-model-routing` or make a direct request — operator messages in **pt-br product-language**; file content in English.
 
 Announce at start (pt-br): "Vamos ajustar quais modelos cada papel do harness usa."
 
-**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery — it never runs in `build`: `oc-triaging-requests` Step 0 refuses a prose request and tells the operator to type the command (no `classify`, no `oc-brainstorming`, no planner/adversary). The engine below is the safety net.
+**No ceremony.** Reconfiguring routing is a harness-lifecycle op, not a product delivery. It runs before triage in root `build` (no `classify`, no `oc-brainstorming`, no planner/adversary); the native tool and entry gate are the safety net.
 
 **Apply via the native tool — never `node -e`, never hand-edit the touchpoints.**  
 The `configure-routing` tool wraps the sanctioned engine in-process with validation, staged-write, and rollback across every touchpoint. Hand-editing routing with `sed`/`perl` skips all of that and risks leaving touchpoints out of sync — bash can technically reach the files, but use the tool anyway.
@@ -41,7 +41,7 @@ Engine internals live in `skills/configuring-model-routing/references/apply-rout
 
 | Agent file(s) | Routing path |
 |---|---|
-| `build.md`, `plan.md`, `harness-config.md` | `roles.build` (model + optional reasoningEffort) |
+| `build.md` | `roles.build` (model + optional reasoningEffort) |
 | `planner.md` | `roles.planner` |
 | `plan-reviewer.md` | `roles.plan-reviewer` (+ optional `secondEyeModel`) |
 | `adversary.md` | `roles.adversary` (+ optional `secondEyeModel`) |

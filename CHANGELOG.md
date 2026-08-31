@@ -15,6 +15,12 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 * **test-infra:** mantém a orientação de fixtures para `@cloudflare/vitest-pool-workers` via import
   `?raw`, sem `node:fs` no isolate.
 
+### Changed
+
+* **opencode:** `plan` e `harness-config` deixam de ser roles primárias. Inicie e retome qualquer
+  pedido pelo `build`; planejamento continua interno e o lifecycle é uma ferramenta nativa desse
+  mesmo agent, com argumentos fixos e bloqueio de child/fleet.
+
 ## [1.0.0](https://github.com/orobsonn/claude-harness/compare/v0.59.1...v1.0.0) (2026-08-30)
 
 
