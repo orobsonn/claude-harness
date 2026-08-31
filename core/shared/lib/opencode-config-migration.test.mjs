@@ -39,6 +39,63 @@ const NEW_CONFIG = {
   },
 };
 
+const HARNESS_COMPACTION = {
+  auto: true,
+  prune: false,
+  preserve_recent_tokens: 8000,
+  reserved: 60000,
+};
+
+test("compaction reaches a provenanced legacy project, updates only an owned value, and preserves explicit opt-outs", () => {
+  const legacy = migrateOpencodeConfig({
+    existingConfig: { model: "project/model", permission: {} },
+    newConfig: { permission: {}, compaction: HARNESS_COMPACTION },
+    previousHarnessVersionStamp: "v2.0.10",
+    newHarnessVersion: "v2.0.12",
+    isExistingProject: true,
+  });
+  assert.deepEqual(legacy.config.compaction, HARNESS_COMPACTION);
+  assert.deepEqual(legacy.manifest.ownedTopLevel.compaction, HARNESS_COMPACTION);
+
+  const upgradedPolicy = { ...HARNESS_COMPACTION, reserved: 70000 };
+  const managed = migrateOpencodeConfig({
+    existingConfig: legacy.config,
+    newConfig: { permission: {}, compaction: upgradedPolicy },
+    manifest: legacy.manifest,
+    newHarnessVersion: "v2.0.13",
+    isExistingProject: true,
+  });
+  assert.deepEqual(managed.config.compaction, upgradedPolicy, "an unchanged harness value must update");
+
+  const custom = migrateOpencodeConfig({
+    existingConfig: { ...legacy.config, compaction: false },
+    newConfig: { permission: {}, compaction: upgradedPolicy },
+    manifest: legacy.manifest,
+    isExistingProject: true,
+  });
+  assert.equal(custom.config.compaction, false, "an explicit project opt-out must survive");
+  assert.equal(custom.manifest.ownedTopLevel, undefined, "a diverged value must not remain harness-owned");
+
+  const removed = migrateOpencodeConfig({
+    existingConfig: { model: "project/model", permission: {} },
+    newConfig: { permission: {}, compaction: upgradedPolicy },
+    manifest: legacy.manifest,
+    isExistingProject: true,
+  });
+  assert.equal(Object.hasOwn(removed.config, "compaction"), false, "removing a previously owned value is an opt-out");
+  assert.equal(removed.manifest.ownedTopLevel, undefined);
+});
+
+test("compaction never appears in an unprovenanced existing project config", () => {
+  const result = migrateOpencodeConfig({
+    existingConfig: { model: "project/model", permission: {} },
+    newConfig: { permission: {}, compaction: HARNESS_COMPACTION },
+    isExistingProject: true,
+  });
+  assert.equal(Object.hasOwn(result.config, "compaction"), false);
+  assert.equal(result.manifest.ownedTopLevel, undefined);
+});
+
 const RETIRED_MARK_GATE_PERMISSIONS = [
   "node .opencode/plugin/lib/mark-gate.mjs *",
   "node core/opencode/plugin/lib/mark-gate.mjs *",

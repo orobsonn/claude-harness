@@ -2193,6 +2193,7 @@ test("writeOpencodeConfig propagates the example's permission block into a fresh
     const written = JSON.parse(readFileSync(join(targetDir, "opencode.json"), "utf8"));
     assert.strictEqual(written.permission.question, "allow");
     assert.strictEqual(written.permission.external_directory, "allow");
+    assert.deepEqual(written.compaction, { auto: true, prune: false, preserve_recent_tokens: 8000, reserved: 60000 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2332,6 +2333,57 @@ test("writeOpencodeConfig preserves Biome-formatted project fields when a real h
       "an unrelated project field must retain the formatter's inline-array layout",
     );
     assert.deepEqual(JSON.parse(after).plugin, []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig adds compaction to a legacy harness config without rewriting project formatting, then converges", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-compaction-legacy-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v2.0.10"), "created");
+    const dest = join(tempDir, "opencode.json");
+    const manifestPath = join(tempDir, ".opencode", ".harness-config-manifest.json");
+    const config = JSON.parse(readFileSync(dest, "utf8"));
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete config.compaction;
+    delete manifest.ownedTopLevel;
+    config.instructions = ["AGENTS.md"];
+    writeFileSync(dest, `${biomeInlineShortArrays(JSON.stringify(config, null, 2))}\n`);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const status = writeOpencodeConfig(oc, tempDir, "v2.0.12");
+    const after = readFileSync(dest, "utf8");
+    assert.match(status, /updated existing/);
+    assert.match(after, /"instructions": \["AGENTS.md"\]/, "unrelated project formatting must survive insertion");
+    assert.deepEqual(JSON.parse(after).compaction, { auto: true, prune: false, preserve_recent_tokens: 8000, reserved: 60000 });
+    assert.deepEqual(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel.compaction, JSON.parse(after).compaction);
+
+    const configBefore = readFileSync(dest, "utf8");
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v2.0.12"), "unchanged");
+    assert.equal(readFileSync(dest, "utf8"), configBefore);
+    assert.equal(readFileSync(manifestPath, "utf8"), manifestBefore);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig preserves a project compaction opt-out", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "vendor-oc-compaction-custom-"));
+  try {
+    const oc = join(harnessRoot, "core/opencode");
+    assert.equal(writeOpencodeConfig(oc, tempDir, "v2.0.10"), "created");
+    const dest = join(tempDir, "opencode.json");
+    const manifestPath = join(tempDir, ".opencode", ".harness-config-manifest.json");
+    const config = JSON.parse(readFileSync(dest, "utf8"));
+    config.compaction = false;
+    writeFileSync(dest, `${JSON.stringify(config, null, 2)}\n`);
+
+    writeOpencodeConfig(oc, tempDir, "v2.0.12");
+    assert.equal(JSON.parse(readFileSync(dest, "utf8")).compaction, false);
+    assert.equal(JSON.parse(readFileSync(manifestPath, "utf8")).ownedTopLevel, undefined);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
