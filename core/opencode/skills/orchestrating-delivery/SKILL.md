@@ -312,7 +312,32 @@ Never hand-edit or delete `gate-state.json` to unblock a rail. An accepted risk 
 | d | Adversary (if `task.adversarial.enabled`) | Dispatch `adversary` **VIRGIN**, then attempt `adversary-family-2` only when `roles.adversary.secondEyeModel` is set — no prior verdicts or compliance output — with task spec + `adversarial.focus` + diff. Every brief MUST require both passes and repo-relative `evidence: "file:anchor"`, using a function/exported symbol for code or a real `<section>`, `<key>`, or `<operation>` for a non-executable surface. Primary issues use exactly `description`, `category`, `severity`, `scope`, `evidence`, and `fix_hint`; routing derives sniper tier from severity. Never ask for verdict/sweep/mechanism/tier fields. Zero findings is a **VALID result — never re-dispatch to hit a count**. A missing, malformed, or unanchored primary report is reported as unusable. |
 | e | Security (conditional) | Dispatch `security` when the task touches auth/secrets/external-input/new-deps/SQL/service-entrypoint. Returns `SECURE \| UNSAFE` + issues. |
 | f | Gates (deterministic, no LLM) | For a targeted Vitest file, run it directly via bash against the exact named path (or use `verify` for the resolver lookup). Run other prescribed gates through their existing channel. Failure → issue list. |
-| g | Fix | Map issues from compliance, adversary, security, and gates to `sniper-<issue.severity>` (`max`→high). Sniper is the only fixer (`edit` allow, `bash` deny, no new files). After a material `sniper-medium` or `sniper-high` fix, the conductor calls native `mark` with `action: regate-pending` for the owning `task_id`, then re-runs the affected gates with a fresh adversary when the changed surface needs independent review. A review with no blocking findings, or a localized frozen test that demonstrably changes from red to green because of the fix, may call native `mark` with `action: regate-passed` + `task_id` + `sha` = HEAD. Under autonomy, repair an open material engineering finding and re-gate without asking. Never use a numeric retry/convergence rule to clear the rail. |
+| g | Fix | Map issues from compliance, adversary, security, and gates to `sniper-<issue.severity>` (`max`→high). Sniper is the only fixer (`edit` allow, `bash` deny, no new files). After a material `sniper-medium` or `sniper-high` fix, the conductor calls native `mark` with `action: regate-pending` for the owning `task_id`, then performs the **mandatory scoped re-entry**: affected deterministic gates, lean `compliance`, conditional `security` when the task's trigger still applies, and a fresh VIRGIN `adversary`. A review with no blocking findings, or a localized frozen test that demonstrably changes from red to green because of the fix, may call native `mark` with `action: regate-passed` + `task_id` + `sha` = HEAD. Under autonomy, repair an open material engineering finding and re-gate without asking. Never use a numeric retry/convergence rule to clear the rail. |
+
+**Sniper repair is not a terminal result.** A prior finding remains only evidence to re-check; neither a
+`sniper-*` `DONE` nor the earlier eye report establishes that it is still open. Until the mandatory scoped
+re-entry is clean, a material repair is unfinished and **must not terminally stop** an AUTONOMOUS delivery.
+If the re-entry finds another material engineering defect, route it through the same task's fix path and
+re-enter its affected verification; this is not a new spec or plan. Do not repeat a repair for the same
+finding fingerprint without a diff or new evidence: take a different diagnosis path, or use a formal native
+provider/rail block. Ask the operator only when the remaining repair changes product behavior.
+
+**Scoped re-entry barrier (medium/high):** stamp `regate-pending` immediately after a material sniper diff,
+before any capture, phase advance, or terminal text. Verify the sniper changed only its approved scope and
+its read-back addresses the finding; run affected gates first. A red gate is itself armed engineering work,
+not permission for clean eyes or a terminal. With green gates, run normal compliance on the whole task
+contract (or whole feature in Phase 3), conditional security when the current changed paths or finding touch
+auth, external input, secrets, dependencies, SQL, or a service entrypoint, then a fresh VIRGIN adversary on
+that whole scope plus the post-fix diff. Do not give the adversary the previous finding or compliance result;
+the conductor deduplicates afterward. A malformed eye/provider result is not clean. Only the complete clean
+barrier may stamp `regate-passed`; a repair needing a new path, frozen test/fixture change, dependency,
+non-additive migration, or observable contract change takes the existing amendment/review path instead.
+
+The recovery fingerprint is `{taskId, scopeKind, category, evidence, normalizedTrigger, preFixSha,
+postFixSha, gate}`. A matching fingerprint without a new diff, new evidence, or a distinct diagnosis/fix
+hint is a formal hand/scope/gate diagnosis — never a blind sniper redispatch. A real post-fix diff that still
+leaves the same defect reachable is not a loop by itself: repair it with the new causal diagnosis and cross
+the barrier again.
 | h | Record | Append material finding blocks (compliance/adversary/security/sniper) to the run `findings.md` buffer at the project root — it is the producer the harvester/`oc-recording-findings` consumes. |
 | i | Escalate | See escalation ladder below. |
 
@@ -416,7 +441,12 @@ Scope = the **whole feature**, not one task.
 - `compliance` — whole implementation vs spec.
 - `adversary` — **VIRGIN**, hunts bugs across the full feature with both passes and repo-relative `evidence: "file:anchor"`, including non-executable anchors.
 
-Findings → tiered sniper (same rules as Phase 2, step g). Re-run gates after fixes. Proceed only when feature-wide gates are green.
+Findings → tiered sniper (same rules as Phase 2, step g). Every material sniper repair uses the same scoped
+re-entry barrier — affected gates, lean compliance, conditional security, and fresh VIRGIN adversary — over
+the whole feature and post-fix diff before the feature-wide review can be accepted. A previous adversary
+finding or a sniper `DONE` is not a terminal outcome: AUTONOMOUS delivery must not terminally stop until the
+scoped re-entry is clean, a formal native rail/provider block exists, or a product-behavior decision is
+genuinely required. Proceed only when feature-wide gates are green.
 
 **Ship rail (FULL — privileged):** after the final review completes (every dispatched eye result collected, feature-wide gates green), call the native `mark` tool with `action: final-review`. This records plain `final_review_done: true` workflow state on gate-state. **FULL `git push` / `gh pr` is denied without it** (`denied_class=final-review-missing`). There is no dedicated privileged shell CLI; same-user import/instantiation and direct state writes remain outside the boundary above and are prohibited.
 
