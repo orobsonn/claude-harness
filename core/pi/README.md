@@ -10,7 +10,7 @@ Na worktree onde o harness foi instalado, rode:
 pi-harness --verify
 ```
 
-O resultado precisa ser `{"ok":true,"runtimeVersion":"0.84.4","roles":10}`. Ele não chama modelo nem lê a configuração Pi normal do operador.
+O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.84.4"` e `"subagentsVersion":"21.2.0"`. Ele não chama modelo nem lê a configuração Pi normal do operador.
 
 ## Uso no Orca
 
@@ -28,4 +28,4 @@ Em uma run FULL, depois da aprovação explícita do plano pelo operador, o Pi r
 
 ## Limites
 
-`harness-*` preserva os papéis do harness. O gate permite somente uma delegação foreground por vez e não aceita role do projeto com o mesmo nome. Isso é controle de workflow; a worktree Orca é a separação de trabalho.
+`harness-*` preserva os papéis do harness. O gate permite somente uma delegação foreground por vez e não aceita role do projeto com o mesmo nome. Isso é controle de workflow; a worktree Orca é a separação de trabalho. Pi roda com as permissões do usuário que o iniciou: não é sandbox de sistema, não isola credenciais nem substitui a política de acesso do Orca.
