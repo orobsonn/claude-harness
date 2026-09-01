@@ -18,7 +18,7 @@
  *     model as the OpenCode config migration) — harness-owned keys move forward, operator
  *     customizations survive, a stale settings.harness.json orphan from before this migration existed
  *     is consumed and removed
- *   - .claude/.gitignore + .claude/.harness-version: written
+ *   - runtime markers/launchers are written for Claude Code, OpenCode, Codex, and Pi
  *
  * Exit codes: 0 ok · 1 usage/IO error.
  */
@@ -94,6 +94,13 @@ const CODEX_FRAMEWORK_FILES = ["hooks.json", "harness.routing.json", "model-rout
 const CODEX_GITIGNORE = `# Codex Harness — local receipts and version cache, never commit
 audit/
 .harness-version-check-cache
+`;
+
+const PI_GITIGNORE = `# Pi Harness — local sessions and package cache, never commit
+harness/runtime/
+sessions/
+npm/
+git/
 `;
 
 // Opt-in add-on modules (siblings of core/, NOT framework-owned). Each is vendored ONLY when the
@@ -177,6 +184,11 @@ export const FRESH_NATIVE_PATHS = {
     ".codex/rules/protected-operations.rules",
     ".codex/skills/harness-triage/SKILL.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
+  ],
+  pi: [
+    ".pi/harness/pi-harness.mjs",
+    ".pi/.harness-version",
+    ".pi/.harness-owned-files.json",
   ],
 };
 
@@ -314,16 +326,16 @@ export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "codex", "bot
 /**
  * @description Normalize runtime target flag: claude | opencode | codex | both | all.
  * Fails LOUD on an unrecognized non-empty value instead of silently defaulting
- * to claude — a typo / stale-binary / wrong-flag must never masquerade as a
- * successful claude-only vendor. Only an ABSENT (or empty) value defaults to
- * claude for backward compatibility.
+ * to all — a typo / stale-binary / wrong-flag must never masquerade as a
+ * successful partial vendor. Only an ABSENT (or empty) value defaults to all.
  * @param {unknown} raw
  * @returns {"claude"|"opencode"|"codex"|"both"|"all"}
  * @throws {Error} when raw is a non-empty string that is not a known token
  */
 export function normalizeRuntimeTarget(raw) {
   const v = String(raw ?? "").toLowerCase().trim();
-  if (v === "" || v === "claude") return "claude";
+  if (v === "") return "all";
+  if (v === "claude") return "claude";
   if (v === "opencode" || v === "oc") return "opencode";
   if (v === "codex") return "codex";
   if (v === "both") return "both";
@@ -1664,6 +1676,97 @@ export function vendorCodex({ coreDir, targetDir, version, stampDate }) {
   return { codexDir };
 }
 
+function mergePiGitignore(piDir) {
+  const gitignore = join(piDir, ".gitignore");
+  const current = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : "";
+  const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const required = PI_GITIGNORE.split("\n").filter((line) => line.trim());
+  const missing = required.filter((line) => !present.has(line));
+  if (current.trim() && missing.length === 0) return "already ignored";
+  if (!current.trim()) {
+    writeFileSync(gitignore, PI_GITIGNORE);
+    return "created";
+  }
+  writeFileSync(gitignore, `${current.trimEnd()}\n${missing.join("\n")}\n`);
+  return `merged (${missing.length} lines added)`;
+}
+
+/** @description Rejects a foreign Pi harness directory before the vendor can overwrite it. */
+function readPreviousPiOwnedFiles(targetReal) {
+  const harnessDir = join(targetReal, ".pi", "harness");
+  const manifestPath = join(targetReal, ".pi", ".harness-owned-files.json");
+  if (!existsSync(harnessDir)) return [];
+  if (!existsSync(manifestPath)) throw new Error("refusing foreign .pi/harness without a harness ownership manifest");
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    throw new Error("invalid Pi ownership manifest");
+  }
+  if (manifest?.version !== 1 || !Array.isArray(manifest.files)) throw new Error("invalid Pi ownership manifest");
+  for (const path of manifest.files) {
+    if (typeof path !== "string" || !path.startsWith(".pi/") || path.includes("..")) {
+      throw new Error("invalid Pi ownership manifest");
+    }
+  }
+  return manifest.files;
+}
+
+/** @description Read-only Pi destination preflight. Pi's own `.pi/` settings remain operator-owned. */
+export function preflightPiVendor(coreDir, targetDir) {
+  const targetReal = pinTargetRoot(targetDir);
+  const coreReal = pinTargetRoot(coreDir);
+  if (!existsSync(join(coreReal, "pi", "bin", "pi-harness.mjs"))) {
+    throw new Error("Pi source missing: core/pi/bin/pi-harness.mjs");
+  }
+  const previousOwnedFiles = readPreviousPiOwnedFiles(targetReal);
+  const entries = [
+    { destination: ".pi", kind: "directory" },
+    { destination: ".pi/harness", kind: "directory" },
+    { destination: ".pi/harness/pi-harness.mjs", kind: "file" },
+    { destination: ".pi/.gitignore", kind: "file" },
+    { destination: ".pi/.harness-version", kind: "file" },
+    { destination: ".pi/.harness-owned-files.json", kind: "file" },
+  ];
+  for (const entry of entries) preflightDestination(targetReal, entry.destination, entry.kind);
+  return { targetReal, previousOwnedFiles };
+}
+
+function piLauncherSource(version) {
+  return `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+
+const result = spawnSync("npx", ["--yes", "--package=github:orobsonn/claude-harness#${version}", "pi-harness", ...process.argv.slice(2)], { stdio: "inherit" });
+if (result.error) throw result.error;
+process.exitCode = result.status ?? 1;
+`;
+}
+
+/** @description Vendor the Pi launcher without claiming its project settings or normal Pi resources. */
+export function vendorPi({ coreDir, targetDir, version, stampDate }) {
+  const preflight = preflightPiVendor(coreDir, targetDir);
+  targetDir = preflight.targetReal;
+  const piDir = join(targetDir, ".pi");
+  const harnessDir = join(piDir, "harness");
+  mkdirSync(harnessDir, { recursive: true });
+  const launcher = join(harnessDir, "pi-harness.mjs");
+  writeFileSync(launcher, piLauncherSource(version), { mode: 0o755 });
+  const gitignore = mergePiGitignore(piDir);
+  const versionPath = join(piDir, ".harness-version");
+  const currentStamp = existsSync(versionPath) ? readFileSync(versionPath, "utf8") : "";
+  if (!currentStamp.startsWith(`${version}\n`)) writeFileSync(versionPath, `${version}\nvendored_at: ${stampDate}\n`);
+  const files = [
+    ".pi/.gitignore",
+    ".pi/.harness-version",
+    ".pi/.harness-owned-files.json",
+    ".pi/harness/pi-harness.mjs",
+  ];
+  writeFileSync(join(piDir, ".harness-owned-files.json"), `${JSON.stringify({ version: 1, files }, null, 2)}\n`);
+  assertFreshNativeInstall(targetDir, "pi");
+  ok(`Pi: pinned launcher refreshed; .gitignore ${gitignore}; invoke node .pi/harness/pi-harness.mjs`);
+  return { piDir };
+}
+
 /**
  * @description Vendor Claude shell into project `.claude/` (existing behavior).
  * @param {{ coreDir: string, claudeCodeDir: string, targetDir: string, version: string, stampDate: string, withCodex: boolean }} opts
@@ -2539,6 +2642,7 @@ if (
     const doClaude = runtime === "claude" || runtime === "both" || runtime === "all";
     const doOc = runtime === "opencode" || runtime === "both" || runtime === "all";
     const doCodex = runtime === "codex" || runtime === "all";
+    const doPi = runtime === "all";
 
     if (doClaude) {
       step("Vendoring Claude harness → .claude/");
@@ -2575,11 +2679,23 @@ if (
       ok(`codex → ${codexDir}`);
     }
 
+    if (doPi) {
+      step("Vendoring Pi harness launcher → .pi/harness/");
+      const { piDir } = vendorPi({
+        coreDir,
+        targetDir: target,
+        version,
+        stampDate,
+      });
+      ok(`pi → ${piDir}`);
+    }
+
     const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
     const dests = [
       doClaude ? join(target, ".claude") : null,
       doOc ? join(target, ".opencode") : null,
       doCodex ? join(target, ".codex") : null,
+      doPi ? join(target, ".pi", "harness") : null,
     ]
       .filter(Boolean)
       .join(" + ");

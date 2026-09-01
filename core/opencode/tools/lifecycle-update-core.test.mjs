@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildLifecycleUpdateInvocation } from "./lifecycle-update-core.mjs";
 
-test("buildLifecycleUpdateInvocation derives the exact vendoring command from verified runtime markers", () => {
+test("buildLifecycleUpdateInvocation always synchronizes all runtime harnesses", () => {
   assert.deepEqual(
     buildLifecycleUpdateInvocation({ tag: "v1.2.3", hasOpenCode: true, hasClaude: true }),
     {
@@ -14,23 +14,19 @@ test("buildLifecycleUpdateInvocation derives the exact vendoring command from ve
         "claude-harness",
         "lifecycle-update",
         "--target",
-        "both",
+        "all",
         "--ref",
         "v1.2.3",
       ],
-      target: "both",
+      target: "all",
     },
   );
 });
 
-test("buildLifecycleUpdateInvocation rejects a tag that could alter argv or a project without a runtime", () => {
+test("buildLifecycleUpdateInvocation rejects a tag that could alter argv or a partial target", () => {
   assert.throws(
     () => buildLifecycleUpdateInvocation({ tag: "v1.2.3 --admin", hasOpenCode: true, hasClaude: false }),
     /invalid release tag/i,
-  );
-  assert.throws(
-    () => buildLifecycleUpdateInvocation({ tag: "v1.2.3", hasOpenCode: false, hasClaude: false }),
-    /no installed harness runtime/i,
   );
   assert.throws(
     () => buildLifecycleUpdateInvocation({ tag: "v1.2.3", hasOpenCode: false, hasClaude: false, requestedTarget: "opencode; rm -rf /" }),
@@ -38,18 +34,18 @@ test("buildLifecycleUpdateInvocation rejects a tag that could alter argv or a pr
   );
 });
 
-test("buildLifecycleUpdateInvocation allows an explicit runtime only for a first installation", () => {
+test("buildLifecycleUpdateInvocation accepts only the all-runtimes target", () => {
   const invocation = buildLifecycleUpdateInvocation({
     tag: "v1.2.3",
     hasOpenCode: false,
     hasClaude: false,
-    requestedTarget: "opencode",
+    requestedTarget: "all",
   });
 
-  assert.equal(invocation.target, "opencode");
-  assert.deepEqual(invocation.args.slice(-4), ["--target", "opencode", "--ref", "v1.2.3"]);
+  assert.equal(invocation.target, "all");
+  assert.deepEqual(invocation.args.slice(-4), ["--target", "all", "--ref", "v1.2.3"]);
   assert.throws(
     () => buildLifecycleUpdateInvocation({ tag: "v1.2.3", hasOpenCode: true, hasClaude: false, requestedTarget: "both" }),
-    /installed runtime markers/i,
+    /invalid lifecycle target/i,
   );
 });

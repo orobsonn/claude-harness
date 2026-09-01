@@ -7,16 +7,12 @@ description: "Use to install or update the Claude Harness in the CURRENT project
 
 This skill is the **one-call shortcut** for keeping a project's vendored harness in sync. The operator
 just invokes it in the repo; the source URL lives here, so there is no URL to copy/paste. It does not
-plan, implement, or review — it only vendors the framework `core/` into the project's runtime shell(s)
-(`.claude/` for Claude Code, `.opencode/` for OpenCode).
+plan, implement, or review — it vendors the framework `core/` into all project runtime shells:
+Claude Code (`.claude/`), OpenCode (`.opencode/`), Codex (`.codex/`) and the pinned Pi launcher
+(`.pi/harness/`).
 
-**Two distinct verbs — do not conflate them:**
-- **Sync (default):** refresh the shell(s) the project **already has** to the latest version. Detected
-  automatically (see Step 2), no operator input needed.
-- **Add a runtime:** vendor a shell the project does **not** yet have (e.g. add OpenCode to a
-  Claude-only project). This is **never** inferred from detection — detection is blind to a shell that
-  isn't there yet. It requires **explicit operator intent** (`opencode` / `both`), passed as the public
-  CLI's `--target`.
+**One operation:** install or synchronize Claude Code, OpenCode, Codex and Pi to the same release.
+Use `all`; a smaller target is only for an explicit compatibility request.
 
 **Announce at start (pt-br):** "Atualizando o Claude Harness a partir do repo-fonte."
 
@@ -60,17 +56,11 @@ may have only `.claude/`, only `.opencode/`, or both):
 
 ```bash
 { test -f .claude/skills/initializing-projects/references/vendor-core.mjs || \
-  test -f .opencode/.harness-version; } && echo update || echo install
+  test -f .opencode/.harness-version || test -f .codex/.harness-version || \
+  test -f .pi/.harness-version; } && echo update || echo install
 ```
 
-**2b — Resolve the runtime to vendor** (the public CLI's `--target` value = runtime shell):
-- **Sync (default):** the set of shells already present — `.claude/` present → include `claude`;
-  `.opencode/` present → include `opencode`; both present → `both`.
-- **Add a runtime (explicit intent only):** if the operator asked to add a shell (e.g. "add opencode",
-  "vendor both"), use that intent instead — it is a **superset** of what's present, never inferred from
-  detection. `both` on a Claude-only project is the normal way to add OpenCode.
-- The public CLI's `--target opencode|claude|both` names the **runtime shell** (the CLI maps it to the
-  engine's low-level `--runtime`). Use that vocabulary here — do not hand-invoke the low-level engine.
+**2b — Runtime target:** use `all`. It provisions the four harness runtimes at the same pinned release.
 
 - **update** (already vendored — the common case): run the CLI from the **pinned latest release tag**
   via `npx`, passing the resolved runtime. `init` is idempotent — it re-vendors the framework files to
@@ -79,10 +69,9 @@ may have only `.claude/`, only `.opencode/`, or both):
   token re-triggers the anti-forgery block when this same skill is loaded inside an OpenCode session
   (both shells expose a skill named `updating-harness`, and OpenCode may load this Claude one):
   ```bash
-  npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <resolved-runtime>
+  npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target all
   ```
-  Substitute `<latest-tag>` with the concrete `vX.Y.Z` from Step 1 and `<resolved-runtime>` from 2b
-  (`claude`, `opencode`, or `both`). Running from the `github:…#<tag>` spec always fetches the tagged
+  Substitute `<latest-tag>` with the concrete `vX.Y.Z` from Step 1. Running from the `github:…#<tag>` spec always fetches the tagged
   release's CLI — never a stale vendored copy — so no double-run is needed; do **not** use npm `@latest`
   (it lags and may predate OpenCode support). The CLI's `vendor-core` ends with an **integrity gate**:
   it resolves **every relative import of every vendored file** under `.claude/`, and if any one of them
@@ -134,6 +123,8 @@ paths; never `git add -A` / force-push / `--no-verify` / `gh pr merge --admin`.
 3. Selective stage **one path per call**, only what changed among:
    - `.claude`
    - `.opencode` (when present)
+   - `.codex` (when present)
+   - `.pi` (when present)
    - `opencode.json` (when present/changed)
    - **`AGENTS.md` at project root** (vendor merges harness markers here — do not skip)
 4. `git commit -m "chore: sincroniza harness vendored"`

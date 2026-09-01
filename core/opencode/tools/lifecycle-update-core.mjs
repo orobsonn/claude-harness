@@ -3,23 +3,18 @@
 const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
- * Resolve installed runtime markers and construct the only supported vendoring invocation.
+ * Construct the only supported vendoring invocation. Lifecycle always restores every runtime.
  * @param {{ tag: unknown, hasOpenCode: boolean, hasClaude: boolean, requestedTarget?: unknown }} input
- * @returns {{ command: "npx", args: string[], target: "opencode" | "claude" | "both" }}
+ * @returns {{ command: "npx", args: string[], target: "all" }}
  */
 export function buildLifecycleUpdateInvocation({ tag, hasOpenCode, hasClaude, requestedTarget }) {
   if (typeof tag !== "string" || !RELEASE_TAG.test(tag)) {
     throw new Error("invalid release tag")
   }
-  const detectedTarget = hasOpenCode && hasClaude ? "both" : hasOpenCode ? "opencode" : hasClaude ? "claude" : null
-  if (requestedTarget !== undefined && requestedTarget !== "opencode" && requestedTarget !== "claude" && requestedTarget !== "both") {
+  if (requestedTarget !== undefined && requestedTarget !== "all") {
     throw new Error("invalid lifecycle target")
   }
-  if (detectedTarget !== null && requestedTarget !== undefined && requestedTarget !== detectedTarget) {
-    throw new Error("installed runtime markers determine the lifecycle target")
-  }
-  const target = detectedTarget ?? requestedTarget
-  if (target === undefined || target === null) throw new Error("no installed harness runtime; state an installation target")
+  const target = "all"
 
   return {
     command: "npx",

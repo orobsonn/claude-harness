@@ -99,6 +99,7 @@
       "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target opencode": "allow",
       "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target claude": "allow",
       "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target both": "allow",
+      "npx --yes --package=github:orobsonn/claude-harness#v* claude-harness init --target all": "allow",
       "npm test": "allow",
       "npm test*": "allow",
       "npm run*": "allow",

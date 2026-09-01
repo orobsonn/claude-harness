@@ -24,10 +24,10 @@ test("updating-harness — only a final lifecycle result or formal block may ans
   assert.match(skill, /formal block/i);
 });
 
-test("updating-harness — native tool owns marker detection and does not expose a shell recipe", () => {
+test("updating-harness — native tool owns all-runtimes selection and does not expose a shell recipe", () => {
   assert.match(skill, /lifecycle-update\(\{\}\)/i);
-  assert.match(skill, /\.opencode\/\.harness-version.*\.claude\/\.harness-version/i);
-  assert.match(skill, /fixed argument vector/i);
+  assert.match(skill, /Claude Code, OpenCode, Codex and Pi/i);
+  assert.match(skill, /fixed all-runtimes argument vector/i);
   assert.doesNotMatch(skill, /test -f \.claude\/\.harness-version/i);
   assert.doesNotMatch(skill, /npx --yes --package=/i);
 });

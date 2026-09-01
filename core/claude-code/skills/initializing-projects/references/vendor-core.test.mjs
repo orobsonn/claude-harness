@@ -48,6 +48,7 @@ import {
   OC_RETIRED_FILES,
   pruneOcRetiredFiles,
   preflightCodexVendor,
+  preflightPiVendor,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -252,7 +253,7 @@ test("vendor-core: Codex memory seeds are idempotent and never overwrite operato
   }
 });
 
-test("vendor-core: runtime all includes Claude, OpenCode, and Codex without changing both semantics", () => {
+test("vendor-core: runtime all includes Claude, OpenCode, Codex, and Pi without changing both semantics", () => {
   const target = mkdtempSync(join(tmpdir(), "vendor-all-native-"));
   try {
     const result = spawnSync(
@@ -264,6 +265,20 @@ test("vendor-core: runtime all includes Claude, OpenCode, and Codex without chan
     assert.ok(existsSync(join(target, ".claude", ".harness-version")));
     assert.ok(existsSync(join(target, ".opencode", ".harness-version")));
     assert.ok(existsSync(join(target, ".codex", ".harness-version")));
+    assert.ok(existsSync(join(target, ".pi", ".harness-version")));
+    assert.ok(existsSync(join(target, ".pi", "harness", "pi-harness.mjs")));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("Pi vendor refuses a foreign .pi/harness before any harness file is written", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-foreign-"));
+  try {
+    mkdirSync(join(target, ".pi", "harness"), { recursive: true });
+    writeFileSync(join(target, ".pi", "harness", "operator-script.mjs"), "// preserve me\n");
+    assert.throws(() => preflightPiVendor(join(harnessRoot, "core"), target), /foreign \.pi\/harness/i);
+    assert.equal(readFileSync(join(target, ".pi", "harness", "operator-script.mjs"), "utf8"), "// preserve me\n");
   } finally {
     rmSync(target, { recursive: true, force: true });
   }
@@ -2093,10 +2108,10 @@ test("t9-relative: plugin entries are relative paths not absolute home paths", (
   }
 });
 
-test("normalizeRuntimeTarget: absent/empty → claude; known tokens map; garbage THROWS (no silent fail-open)", () => {
-  assert.equal(normalizeRuntimeTarget(undefined), "claude");
-  assert.equal(normalizeRuntimeTarget(null), "claude");
-  assert.equal(normalizeRuntimeTarget(""), "claude");
+test("normalizeRuntimeTarget: absent/empty → all; known tokens map; garbage THROWS (no silent fail-open)", () => {
+  assert.equal(normalizeRuntimeTarget(undefined), "all");
+  assert.equal(normalizeRuntimeTarget(null), "all");
+  assert.equal(normalizeRuntimeTarget(""), "all");
   assert.equal(normalizeRuntimeTarget("claude"), "claude");
   assert.equal(normalizeRuntimeTarget("opencode"), "opencode");
   assert.equal(normalizeRuntimeTarget("oc"), "opencode");
