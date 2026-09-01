@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.14](https://github.com/orobsonn/claude-harness/compare/v2.0.13...v2.0.14) (2026-09-01)
+
+
+### Bug Fixes
+
+* **opencode:** revalidate every material sniper repair ([#871](https://github.com/orobsonn/claude-harness/issues/871)) ([0c84572](https://github.com/orobsonn/claude-harness/commit/0c84572d4d728dda2d6cf6c96a53d8c4364a91bc))
+
 ## [2.0.13](https://github.com/orobsonn/claude-harness/compare/v2.0.12...v2.0.13) (2026-09-01)
 
 
