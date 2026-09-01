@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.1.0](https://github.com/orobsonn/claude-harness/compare/v2.0.15...v2.1.0) (2026-09-01)
+
+
+### Features
+
+* **opencode:** configure planner effort defaults ([#875](https://github.com/orobsonn/claude-harness/issues/875)) ([86dd583](https://github.com/orobsonn/claude-harness/commit/86dd5838d8fec394c888a2fa8c474dc52c1ad34d))
+
 ## [2.0.15](https://github.com/orobsonn/claude-harness/compare/v2.0.14...v2.0.15) (2026-09-01)
 
 
