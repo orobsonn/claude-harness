@@ -2,6 +2,7 @@
 description: Solution architect — writes a validated execution-plan JSON to the stable feature path. Refuses trivial (QUICK) requests.
 mode: subagent
 model: openai/gpt-5.6-sol
+reasoningEffort: xhigh
 temperature: 0.1
 permission:
   classify: deny

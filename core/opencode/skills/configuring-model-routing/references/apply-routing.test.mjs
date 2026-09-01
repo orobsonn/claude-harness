@@ -40,6 +40,8 @@ test("CANONICAL_DEFAULT_ROUTING is valid once capabilities are derived", () => {
   assert.equal(validateRouting(built.routing).ok, true);
   // sanity: the three-layer architecture is intact
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.build.model, "openai/gpt-5.6-terra");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles.planner.reasoningEffort, "xhigh");
+  assert.equal(CANONICAL_DEFAULT_ROUTING.roles["plan-reviewer"].reasoningEffort, "xhigh");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.compliance.model, "openai/gpt-5.6-sol");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles["test-author"].model, "openai/gpt-5.6-terra");
   assert.equal(CANONICAL_DEFAULT_ROUTING.roles.security.model, "openai/gpt-5.6-sol");
@@ -108,7 +110,7 @@ test("buildRoutingFromSlots roles overlay + hands effort (extreme malleability)"
     supportEye: "xai/grok-4.5",
     testAuthor: "xai/grok-4.5",
     roles: {
-      planner: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+      planner: { model: "openai/gpt-5.5", reasoningEffort: "medium" },
       "plan-reviewer": { model: "openai/gpt-5.5", reasoningEffort: "high" },
       adversary: { model: "openai/gpt-5.5", reasoningEffort: "high" },
       harvester: { model: "openai/gpt-5.6-luna", reasoningEffort: "medium" },
@@ -127,7 +129,7 @@ test("buildRoutingFromSlots roles overlay + hands effort (extreme malleability)"
   assert.equal(r.compliance.model, "xai/grok-4.5");
   assert.equal(r.security.model, "xai/grok-4.5");
   assert.equal(r.planner.model, "openai/gpt-5.5");
-  assert.equal(r.planner.reasoningEffort, "high");
+  assert.equal(r.planner.reasoningEffort, "medium");
   assert.equal(r["plan-reviewer"].reasoningEffort, "high");
   assert.equal(r.adversary.reasoningEffort, "high");
   assert.equal(r.harvester.model, "openai/gpt-5.6-luna");
@@ -265,9 +267,9 @@ test("rewriteAgentsModelTable rewrites §8 from routing", () => {
   const sample = [
     "## 8. Model routing (operator default)",
     "",
-    "| Role | Model |",
-    "|---|---|",
-    "| build | `old/model` |",
+    "| Role | Model | Effort |",
+    "|---|---|---|",
+    "| build | `old/model` | `default` |",
     "",
     "Default hands use the OpenAI Luna → Terra ladder. Reconfigure via skill `configuring-model-routing`.",
     "",
@@ -281,6 +283,8 @@ test("rewriteAgentsModelTable rewrites §8 from routing", () => {
   assert.equal(r.ok, true);
   assert.equal(r.changed, true);
   assert.match(r.body, /openai\/gpt-5\.6-sol/);
+  assert.match(r.body, /\| planner \| `openai\/gpt-5\.6-sol` \| `xhigh` \|/);
+  assert.match(r.body, /\| plan-reviewer \| `openai\/gpt-5\.6-sol` \| `xhigh` \|/);
   assert.match(r.body, /## 9\. Hands vs eyes/);
   assert.match(r.body, /hands here/);
 });

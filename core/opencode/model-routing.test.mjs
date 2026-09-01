@@ -69,6 +69,8 @@ test("single evaluator eyes use Sol; secondEyeModel is absent by default", () =>
   const routing = JSON.parse(readFileSync(join(ocRoot, "harness.routing.json"), "utf8"));
   assert.equal(routing.roles.adversary.model, "openai/gpt-5.6-sol");
   assert.equal(routing.roles["plan-reviewer"].model, "openai/gpt-5.6-sol");
+  assert.equal(routing.roles.planner.reasoningEffort, "xhigh");
+  assert.equal(routing.roles["plan-reviewer"].reasoningEffort, "xhigh");
   assert.equal(routing.roles.adversary.families, undefined);
   assert.equal(routing.roles["plan-reviewer"].families, undefined);
   assert.equal(routing.roles.adversary.secondEyeModel, undefined);
@@ -77,6 +79,13 @@ test("single evaluator eyes use Sol; secondEyeModel is absent by default", () =>
   assert.equal(routing.constraints?.crossFamilyRoles, undefined);
   // Evaluator may match planner — same as the Claude Code lane.
   assert.equal(routing.roles.adversary.model, routing.roles.planner.model);
+});
+
+test("planner and plan-reviewer agents receive the configurable routing effort", () => {
+  for (const name of ["planner", "plan-reviewer"]) {
+    const body = readFileSync(join(ocRoot, "agents", `${name}.md`), "utf8");
+    assert.match(body, /^reasoningEffort: xhigh$/m, `${name} must pin the shipped default`);
+  }
 });
 
 // #807: this test used to assert over a THIRD surface — the worktree that the retired

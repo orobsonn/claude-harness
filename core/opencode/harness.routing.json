@@ -6,10 +6,12 @@
       "model": "openai/gpt-5.6-terra"
     },
     "planner": {
-      "model": "openai/gpt-5.6-sol"
+      "model": "openai/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
     },
     "plan-reviewer": {
-      "model": "openai/gpt-5.6-sol"
+      "model": "openai/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
     },
     "adversary": {
       "model": "openai/gpt-5.6-sol"

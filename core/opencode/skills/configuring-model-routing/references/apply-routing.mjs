@@ -433,8 +433,8 @@ export const CANONICAL_DEFAULT_ROUTING = Object.freeze({
   version: 2,
   roles: {
     build: { model: "openai/gpt-5.6-terra" },
-    planner: { model: "openai/gpt-5.6-sol" },
-    "plan-reviewer": { model: "openai/gpt-5.6-sol" },
+    planner: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+    "plan-reviewer": { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
     adversary: { model: "openai/gpt-5.6-sol" },
     compliance: { model: "openai/gpt-5.6-sol" },
     security: { model: "openai/gpt-5.6-sol" },
@@ -659,24 +659,28 @@ export function rewriteAgentsModelTable(agentsMd, routing) {
   const secondEyeLine = secondEye
     ? `Optional \`secondEyeModel\` \`${secondEye}\` is fail-open — never blocks delivery.`
     : "Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.";
+  const primaryRoute = (role) =>
+    typeof roles[role]?.model === "string" ? roles[role] : (roles[role]?.families?.["family-1"] ?? {});
+  const effort = (route) => route?.reasoningEffort ?? "default";
   const table = [
     "## 8. Model routing (operator default)",
     "",
-    "| Role | Model |",
-    "|---|---|",
-    `| build | \`${roles.build?.model}\` |`,
-    `| planner | \`${roles.planner?.model}\` |`,
-    `| plan-reviewer | \`${planReviewer}\` |`,
-    `| adversary | \`${adversary}\` |`,
-    `| compliance | \`${roles.compliance?.model}\` |`,
-    `| security | \`${roles.security?.model}\` |`,
-    `| executor/sniper low | \`${roles.executor?.tiers?.low?.model}\` |`,
-    `| executor/sniper medium | \`${roles.executor?.tiers?.medium?.model}\` |`,
-    `| executor/sniper high | \`${roles.executor?.tiers?.high?.model}\` |`,
-    `| test-author | \`${roles["test-author"]?.model}\` |`,
-    `| harvester / shipper | \`${roles.harvester?.model}\` |`,
+    "| Role | Model | Effort |",
+    "|---|---|---|",
+    `| build | \`${roles.build?.model}\` | \`${effort(roles.build)}\` |`,
+    `| planner | \`${roles.planner?.model}\` | \`${effort(roles.planner)}\` |`,
+    `| plan-reviewer | \`${planReviewer}\` | \`${effort(primaryRoute("plan-reviewer"))}\` |`,
+    `| adversary | \`${adversary}\` | \`${effort(primaryRoute("adversary"))}\` |`,
+    `| compliance | \`${roles.compliance?.model}\` | \`${effort(roles.compliance)}\` |`,
+    `| security | \`${roles.security?.model}\` | \`${effort(roles.security)}\` |`,
+    `| executor/sniper low | \`${roles.executor?.tiers?.low?.model}\` | \`${effort(roles.executor?.tiers?.low)}\` |`,
+    `| executor/sniper medium | \`${roles.executor?.tiers?.medium?.model}\` | \`${effort(roles.executor?.tiers?.medium)}\` |`,
+    `| executor/sniper high | \`${roles.executor?.tiers?.high?.model}\` | \`${effort(roles.executor?.tiers?.high)}\` |`,
+    `| test-author | \`${roles["test-author"]?.model}\` | \`${effort(roles["test-author"])}\` |`,
+    `| harvester / shipper | \`${roles.harvester?.model}\` | \`${effort(roles.harvester)}\` |`,
     "",
     `**Single evaluator** on plan-reviewer and adversary. ${secondEyeLine}`,
+    "Planner and plan-reviewer default to `xhigh`; every role can override effort via skill `oc-configuring-model-routing`.",
     "Default hands use the OpenAI Luna → Terra ladder. Reconfigure via skill `oc-configuring-model-routing`.",
   ].join("\n");
 

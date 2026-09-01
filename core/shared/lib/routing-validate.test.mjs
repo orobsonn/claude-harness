@@ -54,7 +54,7 @@ describe("routing-validate", () => {
     nested.version = 1;
     nested.roles.planner.fallback = { model: "ollama-cloud/kimi-k2.7-code" };
     const adapted = adaptRoutingV1(nested);
-    assert.deepEqual(adapted.roles.planner, { model: "openai/gpt-5.6-sol" });
+    assert.deepEqual(adapted.roles.planner, { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" });
     assert.equal(validateRouting(adapted).ok, true);
 
     const topLevel = structuredClone(defaultRouting);
