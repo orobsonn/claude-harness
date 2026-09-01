@@ -51,8 +51,10 @@ export function materializeRuntime(root, runtimeDir) {
 /** @param {string} root */
 export function verifyPiHarness(root) {
   const runtimePackage = join(root, "node_modules/@earendil-works/pi-coding-agent/package.json");
+  const subagentsPackage = join(root, "node_modules/@gotgenes/pi-subagents/package.json");
   const requiredPaths = [
     runtimePackage,
+    subagentsPackage,
     join(root, "node_modules/@gotgenes/pi-subagents/src/index.ts"),
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-plan-tracker.ts"),
@@ -64,8 +66,10 @@ export function verifyPiHarness(root) {
   const missing = requiredPaths.find((path) => !existsSync(path));
   if (missing) return { ok: false, reason: `missing:${missing}` };
   const runtime = JSON.parse(readFileSync(runtimePackage, "utf8"));
+  const subagents = JSON.parse(readFileSync(subagentsPackage, "utf8"));
   if (runtime.version !== "0.84.4") return { ok: false, reason: `runtime-version:${runtime.version}` };
-  return { ok: true, runtimeVersion: runtime.version, roles: CANONICAL_ROLES.length };
+  if (subagents.version !== "21.2.0") return { ok: false, reason: `subagents-version:${subagents.version}` };
+  return { ok: true, runtimeVersion: runtime.version, subagentsVersion: subagents.version, roles: CANONICAL_ROLES.length };
 }
 
 function main() {

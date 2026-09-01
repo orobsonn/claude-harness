@@ -2644,6 +2644,11 @@ if (
     const doCodex = runtime === "codex" || runtime === "all";
     const doPi = runtime === "all";
 
+    // The all-runtime path must reject a foreign Pi harness before any other
+    // runtime can write to the project. The individual vendors retain their
+    // own complete preflight immediately before their writes.
+    if (doPi) preflightPiVendor(coreDir, target);
+
     if (doClaude) {
       step("Vendoring Claude harness → .claude/");
       const { claudeDir } = vendorClaude({

@@ -23,7 +23,7 @@
     "core/pi"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "test": "node --test \"core/**/*.test.mjs\" \"modules/**/*.test.mjs\" \"scripts/**/*.test.mjs\""

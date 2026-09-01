@@ -267,6 +267,11 @@ test("vendor-core: runtime all includes Claude, OpenCode, Codex, and Pi without 
     assert.ok(existsSync(join(target, ".codex", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", "harness", "pi-harness.mjs")));
+    assert.match(
+      readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8"),
+      /github:orobsonn\/claude-harness#v2\.1\.0/,
+      "Pi launcher must resolve the published v-prefixed release tag",
+    );
   } finally {
     rmSync(target, { recursive: true, force: true });
   }
@@ -279,6 +284,25 @@ test("Pi vendor refuses a foreign .pi/harness before any harness file is written
     writeFileSync(join(target, ".pi", "harness", "operator-script.mjs"), "// preserve me\n");
     assert.throws(() => preflightPiVendor(join(harnessRoot, "core"), target), /foreign \.pi\/harness/i);
     assert.equal(readFileSync(join(target, ".pi", "harness", "operator-script.mjs"), "utf8"), "// preserve me\n");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("runtime all preflights a foreign Pi harness before writing the other runtimes", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-all-pi-foreign-"));
+  try {
+    mkdirSync(join(target, ".pi", "harness"), { recursive: true });
+    writeFileSync(join(target, ".pi", "harness", "operator-script.mjs"), "// preserve me\n");
+    const before = snapshotTree(target);
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "all"],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0, "foreign Pi harness must fail the complete install");
+    assert.match(result.stderr || result.stdout, /foreign \.pi\/harness/i);
+    assert.deepEqual(snapshotTree(target), before, "all-runtime preflight must leave no partial install");
   } finally {
     rmSync(target, { recursive: true, force: true });
   }

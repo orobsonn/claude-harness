@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { verifyPiHarness } from "./bin/pi-harness.mjs";
@@ -12,6 +13,7 @@ test("preflight verifies the pinned Pi runtime and all canonical role assets", (
   assert.deepEqual(verifyPiHarness(ROOT), {
     ok: true,
     runtimeVersion: "0.84.4",
+    subagentsVersion: "21.2.0",
     roles: 10,
   });
 });
@@ -23,5 +25,15 @@ test("launcher offers a provider-free preflight for the Orca terminal", () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { ok: true, runtimeVersion: "0.84.4", roles: 10 });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    ok: true,
+    runtimeVersion: "0.84.4",
+    subagentsVersion: "21.2.0",
+    roles: 10,
+  });
+});
+
+test("Pi runtime's Node requirement is reflected by the published package", () => {
+  const manifest = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
+  assert.equal(manifest.engines.node, ">=22.19.0");
 });
