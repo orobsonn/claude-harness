@@ -1,29 +1,74 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { CANONICAL_ROLES } from "../lib/roles.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const resolveFromHarness = (specifier) => fileURLToPath(import.meta.resolve(specifier));
+
+function isDirectCli(scriptPath) {
+  if (!scriptPath) return false;
+  try {
+    return realpathSync(scriptPath) === SCRIPT_PATH;
+  } catch {
+    return scriptPath === SCRIPT_PATH;
+  }
+}
+
+function packageRootFromEntry(packageName, entryPath) {
+  let candidate = dirname(entryPath);
+  while (candidate !== dirname(candidate)) {
+    const manifest = join(candidate, "package.json");
+    if (existsSync(manifest)) {
+      const parsed = JSON.parse(readFileSync(manifest, "utf8"));
+      if (parsed.name === packageName) return candidate;
+    }
+    candidate = dirname(candidate);
+  }
+  throw new Error(`package root not found for ${packageName}`);
+}
 
 /**
- * @param {{root: string, argv: string[], env: NodeJS.ProcessEnv, runtimePrompt?: string}} options
+ * Resolves Pi's pinned packages from the harness package when it was normally installed, or from
+ * npx's hoisted package set when the harness was installed directly from a Git ref.
+ * @param {string} root
+ * @param {(specifier: string) => string} [resolveModule]
+ * @param {(packageName: string, entryPath: string) => string} [resolvePackageRoot]
  */
-export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "" }) {
+export function resolvePiDependencyPaths(root, resolveModule = resolveFromHarness, resolvePackageRoot = packageRootFromEntry) {
+  const dependencyPath = (packageName, path) => {
+    const nested = join(root, "node_modules", packageName, path);
+    if (existsSync(nested)) return nested;
+    return join(resolvePackageRoot(packageName, resolveModule(packageName)), path);
+  };
+  return {
+    piCli: dependencyPath("@earendil-works/pi-coding-agent", "dist/bundle/cli.js"),
+    piPackage: dependencyPath("@earendil-works/pi-coding-agent", "package.json"),
+    subagentsExtension: dependencyPath("@gotgenes/pi-subagents", "src/index.ts"),
+    subagentsPackage: dependencyPath("@gotgenes/pi-subagents", "package.json"),
+  };
+}
+
+/**
+ * @param {{root: string, argv: string[], env: NodeJS.ProcessEnv, runtimePrompt?: string, dependencyPaths?: ReturnType<typeof resolvePiDependencyPaths>}} options
+ */
+export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", dependencyPaths = resolvePiDependencyPaths(root) }) {
   const runtimeDir = resolve(process.cwd(), ".pi/harness/runtime");
   return {
     command: process.execPath,
     args: [
-      join(root, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"),
+      dependencyPaths.piCli,
       "--no-extensions",
       "--no-skills",
       "--no-context-files",
       "-e",
       join(root, "core/pi/extensions/harness-bootstrap.ts"),
       "-e",
-      join(root, "node_modules/@gotgenes/pi-subagents/src/index.ts"),
+      dependencyPaths.subagentsExtension,
       "-e",
       join(root, "core/pi/extensions/harness-dispatch.ts"),
       "-e",
@@ -50,12 +95,17 @@ export function materializeRuntime(root, runtimeDir) {
 
 /** @param {string} root */
 export function verifyPiHarness(root) {
-  const runtimePackage = join(root, "node_modules/@earendil-works/pi-coding-agent/package.json");
-  const subagentsPackage = join(root, "node_modules/@gotgenes/pi-subagents/package.json");
+  let dependencies;
+  try {
+    dependencies = resolvePiDependencyPaths(root);
+  } catch (error) {
+    return { ok: false, reason: `missing-dependency:${error instanceof Error ? error.message : String(error)}` };
+  }
   const requiredPaths = [
-    runtimePackage,
-    subagentsPackage,
-    join(root, "node_modules/@gotgenes/pi-subagents/src/index.ts"),
+    dependencies.piCli,
+    dependencies.piPackage,
+    dependencies.subagentsPackage,
+    dependencies.subagentsExtension,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-plan-tracker.ts"),
     join(root, "core/codex/skills"),
@@ -65,8 +115,8 @@ export function verifyPiHarness(root) {
   ];
   const missing = requiredPaths.find((path) => !existsSync(path));
   if (missing) return { ok: false, reason: `missing:${missing}` };
-  const runtime = JSON.parse(readFileSync(runtimePackage, "utf8"));
-  const subagents = JSON.parse(readFileSync(subagentsPackage, "utf8"));
+  const runtime = JSON.parse(readFileSync(dependencies.piPackage, "utf8"));
+  const subagents = JSON.parse(readFileSync(dependencies.subagentsPackage, "utf8"));
   if (runtime.version !== "0.84.4") return { ok: false, reason: `runtime-version:${runtime.version}` };
   if (subagents.version !== "21.2.0") return { ok: false, reason: `subagents-version:${subagents.version}` };
   return { ok: true, runtimeVersion: runtime.version, subagentsVersion: subagents.version, roles: CANONICAL_ROLES.length };
@@ -87,4 +137,4 @@ function main() {
   process.exitCode = result.status ?? 1;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isDirectCli(process.argv[1])) main();
