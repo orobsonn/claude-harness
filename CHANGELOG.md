@@ -5,6 +5,19 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.2.0](https://github.com/orobsonn/claude-harness/compare/v2.1.0...v2.2.0) (2026-09-01)
+
+
+### Features
+
+* **pi:** port delivery harness ([#877](https://github.com/orobsonn/claude-harness/issues/877)) ([9d0a739](https://github.com/orobsonn/claude-harness/commit/9d0a739e363e9350936c308cac92a50028ac3f20))
+
+
+### Bug Fixes
+
+* **pi:** harden installer compatibility checks ([#879](https://github.com/orobsonn/claude-harness/issues/879)) ([21cb3ee](https://github.com/orobsonn/claude-harness/commit/21cb3ee564990e1fd7bef9ea600a81e7f1f23d08))
+* **test:** derive Pi launcher tag from package version ([#880](https://github.com/orobsonn/claude-harness/issues/880)) ([f0eab18](https://github.com/orobsonn/claude-harness/commit/f0eab1845393efa552e94dbe39fc04bfa2b22ed1))
+
 ## [2.1.0](https://github.com/orobsonn/claude-harness/compare/v2.0.15...v2.1.0) (2026-09-01)
 
 
