@@ -267,9 +267,10 @@ test("vendor-core: runtime all includes Claude, OpenCode, Codex, and Pi without 
     assert.ok(existsSync(join(target, ".codex", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", "harness", "pi-harness.mjs")));
+    const currentVersion = JSON.parse(readFileSync(join(harnessRoot, "package.json"), "utf8")).version;
     assert.match(
       readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8"),
-      /github:orobsonn\/claude-harness#v2\.1\.0/,
+      new RegExp(`github:orobsonn/claude-harness#v${currentVersion.replaceAll(".", "\\.")}`),
       "Pi launcher must resolve the published v-prefixed release tag",
     );
   } finally {
