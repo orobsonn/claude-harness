@@ -51,6 +51,7 @@ import {
   MANIFEST_FILENAME,
   isValidOpencodeConfigShape,
   isValidHarnessCompaction,
+  isValidHarnessTerraContextPolicy,
   migrateOpencodeConfig,
   normalizeOcVersionStamp as normalizeHarnessVersionStamp,
   readHarnessVersionStamp,
@@ -615,14 +616,14 @@ function sameJsonValue(left, right) {
 
 /**
  * @description Preserve raw project formatting while replacing only harness-owned top-level
- * `plugin` / `permission` / `compaction` values. Null means a conservative canonical rewrite is required.
+ * `plugin` / `permission` / `compaction` / `provider` values. Null means a conservative canonical rewrite is required.
  */
 function preserveProjectConfigFormatting(existingRaw, originalConfig, migratedConfig) {
   const originalKeys = Object.keys(originalConfig);
   const migratedKeys = Object.keys(migratedConfig);
   const keys = new Set([...originalKeys, ...migratedKeys]);
   const changedKeys = [...keys].filter((key) => !sameJsonValue(originalConfig[key], migratedConfig[key]));
-  if (changedKeys.length === 0 || changedKeys.some((key) => key !== "plugin" && key !== "permission" && key !== "compaction")) return null;
+  if (changedKeys.length === 0 || changedKeys.some((key) => key !== "plugin" && key !== "permission" && key !== "compaction" && key !== "provider")) return null;
 
   const spans = topLevelJsonValueSpans(existingRaw);
   if (!spans) return null;
@@ -706,6 +707,9 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   if (cfg.compaction !== undefined && !isValidHarnessCompaction(cfg.compaction)) {
     throw new Error("invalid harness compaction policy in opencode.json.example");
   }
+  if (cfg.provider !== undefined && !isValidHarnessTerraContextPolicy(cfg.provider)) {
+    throw new Error("invalid harness Terra context policy in opencode.json.example");
+  }
   // Strip harness autoload paths from example; keep only external package plugins if any.
   if (Array.isArray(cfg.plugin)) {
     cfg.plugin = cfg.plugin.filter((entry) => typeof entry === "string" && !isHarnessAutoloadPluginPath(entry));
@@ -779,10 +783,11 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
     return "migration failed validation gate → wrote opencode.harness.json for manual repair";
   }
 
-  const permissionReports = migrated.report.filter((r) => r.path[0] !== "compaction");
+  const permissionReports = migrated.report.filter((r) => r.path[0] !== "compaction" && r.path[0] !== "provider");
   const removedEntries = permissionReports.filter((r) => r.action === "removed-retired");
   const keptEntries = permissionReports.filter((r) => r.action === "kept-custom");
   const compactionReport = migrated.report.find((r) => r.path[0] === "compaction");
+  const providerReport = migrated.report.find((r) => r.path[0] === "provider");
 
   const canonicalConfigText = `${JSON.stringify(migrated.config, null, 2)}\n`;
   const nextConfigText =
@@ -830,7 +835,7 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
 
   if (!wasPresent) return "created";
   if (configUnchanged) return "unchanged";
-  if (removedEntries.length === 0 && keptEntries.length === 0 && !compactionReport) {
+  if (removedEntries.length === 0 && keptEntries.length === 0 && !compactionReport && !providerReport) {
     return "updated existing opencode.json harness configuration";
   }
   const describe = (r) => `${r.path.join(".")}=${JSON.stringify(r.value)}`;
@@ -838,7 +843,8 @@ export function writeOpencodeConfig(openCodeDir, targetDir, version) {
   const keptNote = keptEntries.length ? `kept custom [${keptEntries.map(describe).join(", ")}]` : "";
   const permissionNote = [removedNote, keptNote].filter(Boolean).join("; ");
   const compactionNote = compactionReport ? `compaction: ${compactionReport.action}` : "";
-  const migrationNote = [permissionNote ? `permission migration: ${permissionNote}` : "", compactionNote]
+  const providerNote = providerReport ? `Terra context policy: ${providerReport.action}` : "";
+  const migrationNote = [permissionNote ? `permission migration: ${permissionNote}` : "", compactionNote, providerNote]
     .filter(Boolean)
     .join("; ");
   return `updated existing opencode.json harness configuration (${migrationNote})`;
