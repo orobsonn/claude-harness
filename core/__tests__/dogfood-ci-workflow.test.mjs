@@ -71,6 +71,11 @@ test("locked-1: ci.yml has correct trigger, node-version string, and test comman
     ),
     `ci.yml must include a step running: node --test "core/**/*.test.mjs" "modules/**/*.test.mjs" "scripts/**/*.test.mjs"`,
   );
+
+  assert.ok(
+    content.includes("- run: npm ci"),
+    "ci.yml must install the lockfile dependencies before executing the tests",
+  );
 });
 
 // ---------------------------------------------------------------------------
