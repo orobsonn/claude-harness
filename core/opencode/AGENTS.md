@@ -131,21 +131,22 @@ statement set is ambiguous, it forces FULL.
 
 ## 8. Model routing (operator default)
 
-| Role | Model |
-|---|---|
-| build | `openai/gpt-5.6-terra` |
-| planner | `openai/gpt-5.6-sol` |
-| plan-reviewer | `openai/gpt-5.6-sol` |
-| adversary | `openai/gpt-5.6-sol` |
-| compliance | `openai/gpt-5.6-sol` |
-| security | `openai/gpt-5.6-sol` |
-| executor/sniper low | `openai/gpt-5.6-luna` |
-| executor/sniper medium | `openai/gpt-5.6-luna` |
-| executor/sniper high | `openai/gpt-5.6-terra` |
-| test-author | `openai/gpt-5.6-terra` |
-| harvester / shipper | `openai/gpt-5.6-luna` |
+| Role | Model | Effort |
+|---|---|---|
+| build | `openai/gpt-5.6-terra` | `default` |
+| planner | `openai/gpt-5.6-sol` | `xhigh` |
+| plan-reviewer | `openai/gpt-5.6-sol` | `xhigh` |
+| adversary | `openai/gpt-5.6-sol` | `default` |
+| compliance | `openai/gpt-5.6-sol` | `default` |
+| security | `openai/gpt-5.6-sol` | `default` |
+| executor/sniper low | `openai/gpt-5.6-luna` | `default` |
+| executor/sniper medium | `openai/gpt-5.6-luna` | `default` |
+| executor/sniper high | `openai/gpt-5.6-terra` | `default` |
+| test-author | `openai/gpt-5.6-terra` | `default` |
+| harvester / shipper | `openai/gpt-5.6-luna` | `default` |
 
 **Single evaluator** on plan-reviewer and adversary. Optional `secondEyeModel` (absent by default) is fail-open — never blocks delivery.
+Planner and plan-reviewer default to `xhigh`; every role can override effort via skill `oc-configuring-model-routing`.
 Default hands use the OpenAI Luna → Terra ladder. Reconfigure by typing the `/configuring-model-routing` command.
 
 
