@@ -7,12 +7,13 @@ description: "Installs (vendors) the Claude Harness core into a project's .claud
 
 **This skill installs the framework into a target project.** It vendors the source `core/` into the
 project — into `.claude/` for the **Claude Code** runtime, into `.opencode/` for the **OpenCode**
-runtime, into `.codex/` + `.agents/skills/` for the **Codex** runtime, or every shell — so the
+runtime, into `.codex/` + `.agents/skills/` for the **Codex** runtime, and a pinned launcher in
+`.pi/harness/` for the **Pi** runtime — so the
 pipeline runs locally and headless. It does not plan, implement, or review.
 
 The source `core/` is split into four parts: `core/shared/` (runtime-neutral engine + libs),
 `core/claude-code/` (the Claude Code shell), `core/opencode/` (the OpenCode shell), and
-`core/codex/` (the Codex shell). The vendoring
+`core/codex/` (the Codex shell), and `core/pi/` (the Pi launcher/runtime). The vendoring
 engine reads the split and writes only the shell(s) you target.
 
 **Announce at start (pt-br):** "Instalando o Claude Harness no `.claude/` do projeto."
@@ -45,9 +46,9 @@ later re-run can update deliberately.
   - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, `codex`,
     `both`, or `all`, honor it verbatim — including `both` on a project that today has only Claude Code (the
     common way to add OpenCode to an existing project).
-  - **default (fresh project, no intent given):** `claude`.
-  - **LOCAL:** if unsure and the operator is present, ask which runtime(s). **HEADLESS:** never ask —
-    resolve deterministically from the routine prompt, else default `claude`.
+  - **default (fresh project, no intent given):** `all`: Claude Code, OpenCode, Codex and Pi.
+  - **LOCAL/HEADLESS:** never ask merely to choose a runtime; use `all` unless the operator explicitly
+    requests a smaller installation.
 
   This maps to the engine's **`--runtime claude|opencode|codex|both|all`** flag. Do **not** confuse it with
   `--target`, which is the destination **directory** — passing a runtime word to `--target` is
@@ -62,9 +63,10 @@ node .claude/skills/initializing-projects/references/vendor-core.mjs \
 ```
 
 `--runtime opencode` (or `both`/`all`) vendors the OpenCode shell into `.opencode/` (agents, skills, plugins,
-tools, `AGENTS.md`, `opencode.json`, `harness.routing.json`); `--runtime claude` (default) vendors the
+tools, `AGENTS.md`, `opencode.json`, `harness.routing.json`); `--runtime claude` vendors the
 Claude shell into `.claude/`; `--runtime codex` (or `all`) vendors Codex into `.codex/` and
-`.agents/skills/`. All destinations are idempotent and non-clobber (see contract below).
+`.agents/skills/`; `--runtime all` also writes a Pi launcher in `.pi/harness/pi-harness.mjs` pinned
+to the same harness release. All destinations are idempotent and non-clobber (see contract below).
 
 It performs, **idempotently**:
 - **framework-owned (overwritten):** `agents/`, `skills/`, `rules/`, `CLAUDE-HARNESS-MEMORY-MODEL.md`.

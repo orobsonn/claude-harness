@@ -155,7 +155,7 @@ export function syncCallerRuntimeOverlay({ cwd, sourceDirectory, runtimeTarget }
   // paths never produce a partial runtime update.
   for (const path of paths) assertSafeRuntimeDestination(cwd, path);
 
-  const markerPaths = new Set([".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version"]);
+  const markerPaths = new Set([".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version", ".pi/.harness-version"]);
   const write = (path) => {
     const source = sourceFiles.get(path);
     if (!source) return;
@@ -264,6 +264,7 @@ function vendoredOwnership(directory, runtimeTarget) {
       { path: ".opencode/.harness-owned-files.json", root: ".opencode" },
       { path: ".claude/.harness-owned-files.json", root: ".claude" },
       { path: ".codex/.harness-owned-files.json", root: ".codex" },
+      { path: ".pi/.harness-owned-files.json", root: ".pi" },
     ]
     : runtimeTarget === "both"
       ? [
@@ -475,7 +476,7 @@ export function isDirectCli(scriptPath) {
  * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"codex"|"both"|"all", releaseRef: string | undefined }}
  */
 export function parseCliArgs(argv) {
-  let runtimeTarget = "claude";
+  let runtimeTarget = "all";
   let releaseRef;
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--target" && argv[i + 1]) {
@@ -584,10 +585,10 @@ export function codexSetupNotes() {
  * @param {() => string | null} options.resolveTag - Function to resolve the latest tag.
  * @param {(opts: { source: string, ref: string, target: string, withCodex: boolean, runtimeTarget: string }) => void} options.runVendor
  * @param {boolean} [options.withCodex] - Vendor the cross-family Codex module.
- * @param {"claude"|"opencode"|"codex"|"both"|"all"} [options.runtimeTarget] - Shell to vendor (default claude).
+ * @param {"claude"|"opencode"|"codex"|"both"|"all"} [options.runtimeTarget] - Shells to vendor (default all).
  * @returns {string} The resolved tag.
  */
-export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtimeTarget = "claude" }) {
+export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtimeTarget = "all" }) {
   const tag = resolveTag();
   if (!tag) {
     throw new Error(
@@ -609,7 +610,7 @@ export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtime
  */
 export function hasInstalledHarness(cwd, runtimeTarget) {
   const markers = runtimeTarget === "all"
-    ? [".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version"]
+    ? [".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version", ".pi/.harness-version"]
     : runtimeTarget === "both"
       ? [".opencode/.harness-version", ".claude/.harness-version"]
       : [runtimeTarget === "opencode" ? ".opencode/.harness-version" : runtimeTarget === "codex" ? ".codex/.harness-version" : ".claude/.harness-version"];
@@ -669,7 +670,7 @@ function resolveLatestTag() {
  * @param {boolean} [options.withCodex]
  * @param {string} [options.runtimeTarget]
  */
-function runVendorDefault({ source, ref, target, withCodex = false, runtimeTarget = "claude" }) {
+function runVendorDefault({ source, ref, target, withCodex = false, runtimeTarget = "all" }) {
   const here = dirname(fileURLToPath(import.meta.url));
   const vendorCorePath = join(here, "vendor-core.mjs");
   const flags = [

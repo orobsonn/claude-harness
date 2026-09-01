@@ -4,7 +4,8 @@
   "description": "One-command vendoring of the Claude Harness delivery pipeline into a project's .claude/",
   "type": "module",
   "bin": {
-    "claude-harness": "core/claude-code/skills/initializing-projects/references/cli.mjs"
+    "claude-harness": "core/claude-code/skills/initializing-projects/references/cli.mjs",
+    "pi-harness": "core/pi/bin/pi-harness.mjs"
   },
   "publishConfig": {
     "access": "public"
@@ -18,7 +19,8 @@
     "core/orca",
     "core/shared",
     "core/claude-code",
-    "core/codex"
+    "core/codex",
+    "core/pi"
   ],
   "engines": {
     "node": ">=18"
@@ -37,5 +39,18 @@
     "delivery-pipeline"
   ],
   "license": "MIT",
-  "dependencies": {}
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@gotgenes/pi-subagents": "21.2.0"
+  },
+  "pi": {
+    "extensions": [
+      "./core/pi/extensions/harness-bootstrap.ts",
+      "./node_modules/@gotgenes/pi-subagents/src/index.ts",
+      "./core/pi/extensions"
+    ],
+    "skills": [
+      "./core/codex/skills"
+    ]
+  }
 }

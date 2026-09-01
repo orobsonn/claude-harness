@@ -26,7 +26,7 @@ export default tool({
     "Update the installed harness through the verified, pinned lifecycle CLI. " +
     "Only root build sessions may invoke it; it derives the runtime and argv itself, opens and squash-merges a manifest-only PR, then requires a new session.",
   args: {
-    target: tool.schema.string().optional().describe("Required only to install into a checkout that has no harness runtime: opencode, claude, or both."),
+    target: tool.schema.literal("all").optional().describe("Optional compatibility field; lifecycle always installs all harness runtimes."),
   },
   async execute(args, context) {
     await context.ask({

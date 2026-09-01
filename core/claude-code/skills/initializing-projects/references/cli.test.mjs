@@ -13,25 +13,25 @@ test("parseCliArgs", () => {
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init"]), {
     command: "init",
     withCodex: false,
-    runtimeTarget: "claude",
+    runtimeTarget: "all",
     releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "bogus"]), {
     command: "bogus",
     withCodex: false,
-    runtimeTarget: "claude",
+    runtimeTarget: "all",
     releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs"]), {
     command: undefined,
     withCodex: false,
-    runtimeTarget: "claude",
+    runtimeTarget: "all",
     releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--with-codex"]), {
     command: "init",
     withCodex: true,
-    runtimeTarget: "claude",
+    runtimeTarget: "all",
     releaseRef: undefined,
   });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "opencode"]), {
@@ -159,7 +159,7 @@ test("runInit delegates to vendor with resolved tag", () => {
     ref: "v0.15.0",
     target: "/tmp/target-proj",
     withCodex: false,
-    runtimeTarget: "claude",
+    runtimeTarget: "all",
   });
   assert.equal(ret, "v0.15.0");
 });
