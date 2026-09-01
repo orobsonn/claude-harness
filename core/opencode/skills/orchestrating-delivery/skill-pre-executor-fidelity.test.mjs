@@ -12,6 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const skill = readFileSync(join(here, "SKILL.md"), "utf8");
 const compliance = readFileSync(join(here, "..", "..", "agents", "compliance.md"), "utf8");
 const testAuthor = readFileSync(join(here, "..", "..", "agents", "test-author.md"), "utf8");
+const build = readFileSync(join(here, "..", "..", "agents", "build.md"), "utf8");
 
 function section(source, heading) {
   const start = source.indexOf(heading);
@@ -71,6 +72,20 @@ test("a test-author refusal is recovery evidence, never a terminal autonomous de
   assert.match(fidelity, /fresh.*test-author.*dispatch/i);
   assert.match(testAuthor, /recovery/i);
   assert.match(testAuthor, /literal.*evidence/i);
+});
+
+test("invalid or unexecutable locked tests are recovery work, never an autonomous terminal", () => {
+  const fidelity = section(skill, "### Test-author fidelity transcription");
+
+  assert.match(build, /invalid|inexecutável|unexecutable/i);
+  assert.match(build, /fidelity/i);
+  assert.match(build, /must not.*terminal|never.*terminal/i);
+  assert.match(build, /not.*re-plan|never.*re-plan/i);
+  assert.match(build, /next lawful tool call/i);
+  assert.match(build, /skip|todo|only|catch-and-pass|vacuous mock/i);
+  assert.match(fidelity, /must not.*terminal|never.*terminal/i);
+  assert.match(fidelity, /fresh.*test-author.*dispatch/i);
+  assert.doesNotMatch(fidelity, /only one correction|uma correção.*entire|fidelity_transcription_failed/i);
 });
 
 test("a material sniper repair re-enters scoped verification before an autonomous terminal", () => {

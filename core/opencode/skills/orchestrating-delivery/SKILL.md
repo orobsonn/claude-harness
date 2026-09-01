@@ -66,6 +66,12 @@ task/capture/final-review/ship evidence. A formal rail block or provider failure
 tool output and the authority required to clear it; an inferred "block" or an unrun test is engineering, so
 continue rather than describe unfinished work.
 
+**Test-failure terminal check:** in AUTONOMOUS, neither a fidelity FAIL, an invalid/unexecutable or red
+locked test, nor a `test-author` `NEEDS_CONTEXT`/`BLOCKED` outcome may produce terminal text or restart the
+feature plan. They require the causal **test-enablement recovery** below and its next lawful tool call. The
+test remains a real proof: do not bypass it with `skip`, `todo`, `only`, catch-and-pass, a vacuous
+mock/config, or snapshot rebaseline; no red gate may ship.
+
 **Proportionality before escalation:** a finding is material only when evidence shows the proposed delivery
 fails an acceptance criterion, external contract, or normal supported flow; causes material likely harm in
 expected use; or creates a concrete security, privacy, irreversible-loss/corruption, or unauthorized-action
