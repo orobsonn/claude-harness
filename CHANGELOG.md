@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.0.13](https://github.com/orobsonn/claude-harness/compare/v2.0.12...v2.0.13) (2026-09-01)
+
+
+### Bug Fixes
+
+* **opencode:** compact before provider context cliff ([#869](https://github.com/orobsonn/claude-harness/issues/869)) ([669d9e9](https://github.com/orobsonn/claude-harness/commit/669d9e9d1e63b38b2dd1234307942895616a1f38))
+
 ## [2.0.12](https://github.com/orobsonn/claude-harness/compare/v2.0.11...v2.0.12) (2026-08-31)
 
 
