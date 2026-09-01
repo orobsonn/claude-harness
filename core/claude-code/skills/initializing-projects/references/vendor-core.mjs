@@ -1736,7 +1736,7 @@ function piLauncherSource(version) {
   return `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
-const result = spawnSync("npx", ["--yes", "--package=github:orobsonn/claude-harness#${version}", "pi-harness", ...process.argv.slice(2)], { stdio: "inherit" });
+const result = spawnSync("npx", ["--yes", "--package=github:orobsonn/claude-harness#${version}", "--package=@earendil-works/pi-coding-agent@0.84.4", "--package=@gotgenes/pi-subagents@21.2.0", "pi-harness", ...process.argv.slice(2)], { stdio: "inherit" });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
 `;

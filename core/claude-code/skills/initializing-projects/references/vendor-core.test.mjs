@@ -273,6 +273,11 @@ test("vendor-core: runtime all includes Claude, OpenCode, Codex, and Pi without 
       new RegExp(`github:orobsonn/claude-harness#v${currentVersion.replaceAll(".", "\\.")}`),
       "Pi launcher must resolve the published v-prefixed release tag",
     );
+    assert.match(
+      readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8"),
+      /--package=@earendil-works\/pi-coding-agent@0\.84\.4/,
+      "Pi launcher must install the pinned runtime beside a Git-hosted harness package",
+    );
   } finally {
     rmSync(target, { recursive: true, force: true });
   }
