@@ -72,3 +72,24 @@ test("a test-author refusal is recovery evidence, never a terminal autonomous de
   assert.match(testAuthor, /recovery/i);
   assert.match(testAuthor, /literal.*evidence/i);
 });
+
+test("a material sniper repair re-enters scoped verification before an autonomous terminal", () => {
+  const perTask = section(skill, "### Per-task steps (topological order via `depends_on`)");
+  const finalReview = section(skill, "## Phase 3 — Final review (both modes, feature-wide)");
+
+  const scopedReentry = perTask.slice(perTask.indexOf("mandatory scoped re-entry"));
+  assert.match(scopedReentry, /affected.*gates/i);
+  assert.match(scopedReentry, /compliance/i);
+  assert.match(scopedReentry, /security/i);
+  assert.match(scopedReentry, /virgin.*adversary/i);
+  assert.match(perTask, /prior finding[\s\S]*sniper.*DONE[\s\S]*not.*terminal/i);
+  assert.match(perTask, /same\s+finding fingerprint[\s\S]*without.*diff[\s\S]*different diagnosis|different diagnosis[\s\S]*same\s+finding fingerprint/i);
+  assert.match(perTask, /regate-pending[\s\S]*before any capture[\s\S]*terminal text/i);
+  assert.match(perTask, /red gate[\s\S]*armed engineering work/i);
+  assert.match(perTask, /whole task[\s\S]*post-fix diff/i);
+  assert.match(perTask, /do not give the adversary the previous finding/i);
+  assert.match(perTask, /malformed eye\/provider result is not clean/i);
+  assert.match(perTask, /new path[\s\S]*amendment\/review path/i);
+  assert.match(finalReview, /same scoped\s+re-entry|scoped\s+re-entry[\s\S]*gates[\s\S]*compliance[\s\S]*adversary/i);
+  assert.match(finalReview, /must not.*terminal|never.*terminal/i);
+});
