@@ -103,6 +103,19 @@ test('write e edit não mutam caminhos do harness (.codex, .agents, .pi)', () =>
   assert.deepEqual(decidePiPolicy({ toolName: 'write', input: { path: 'src/app.ts' } }), { block: false })
 })
 
+test('plano canônico é delegado ao plan-write-gate, não bloqueado pela policy genérica', () => {
+  for (const toolName of ['write', 'edit']) {
+    assert.deepEqual(
+      decidePiPolicy({ toolName, input: { path: '.pi/harness/plans/pi-canary/execution-plan.json' } }),
+      { block: false },
+      toolName,
+    )
+  }
+  // O mesmo carve-out não abre estado, tooling nem arquivo parecido.
+  assert.equal(decidePiPolicy({ toolName: 'write', input: { path: '.pi/harness/plans/state/execution-plan.json' } }).block, true)
+  assert.equal(decidePiPolicy({ toolName: 'write', input: { path: '.pi/harness/plans/pi-canary/notes.json' } }).block, true)
+})
+
 test('ler config do harness continua liberado enquanto mutações de shell são negadas', () => {
   assert.deepEqual(bash('cat .codex/hooks.json'), { block: false })
   assert.deepEqual(bash('cat .pi/harness/state/gate-state.json'), { block: false })

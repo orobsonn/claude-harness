@@ -18,6 +18,7 @@ import {
   isPiWriteTool
 } from './pi-adapter-map.mjs'
 import { piStateRoot } from './pi-paths.mjs'
+import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
 
 /** Mesma frase de policy.mjs (denyForCommand) — não inventar prefixo novo. */
 const SECRET_REASON = 'Secret-bearing paths are blocked from shell access by the delivery harness.'
@@ -92,6 +93,11 @@ export function decidePiPolicy(call = {}, options = {}) {
 
   const payload = toCodexPreToolPayload({ toolName, input })
   if (!payload) return ALLOW
+
+  // O plano canônico é um único carve-out: a policy de superfície não sabe quem escreve;
+  // o plan-write-gate, carregado depois, prova sessão-filho + papel planner e nega todo o resto.
+  // Sem este deferimento, a policy bloquearia a própria trilha FULL antes daquele gate rodar.
+  if (isPiWriteTool(toolName) && isPiCanonicalPlanPath(input.path)) return ALLOW
 
   const codex = fromCodexDecision(evaluateHook(payload))
   if (codex.block) return codex
