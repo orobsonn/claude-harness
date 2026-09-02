@@ -78,6 +78,23 @@ const PREFIX = "[entry-gate]";
 
 const ALLOW = Object.freeze({ ok: true, decision: "allow", reason: "pi-entry-allow" });
 
+/**
+ * @description O Pi materializa transcrições, locks e records do próprio runtime dentro da
+ * worktree. Eles são efeitos do HOST, não alterações feitas pela mão na issue; atribuí-los à
+ * mão transformaria toda conclusão em falsa violação de escopo. Mantemos o filtro estreito:
+ * plano canônico e qualquer outro arquivo do projeto continuam visíveis ao capture rail.
+ * @param {unknown[]} paths
+ * @returns {string[]}
+ */
+export function excludePiHarnessArtifacts(paths) {
+  return (Array.isArray(paths) ? paths : []).filter(
+    (item) =>
+      typeof item === "string" &&
+      !item.startsWith(".pi/harness/runtime/") &&
+      !item.startsWith(".pi/harness/state/"),
+  );
+}
+
 /** @description Papel que ESCREVE código/teste (executor/sniper/test-author), no vocabulário do
  * Pi ('harness-executor') ou no bare da lane OC. Nunca lança.
  * @param {unknown} role
@@ -727,10 +744,10 @@ export function recordPiTaskCompletion(input = {}) {
       parentSessionId: input.sessionId,
       callId: input.producerCallId,
     });
-    const touched = pathsChangedSinceBaseline(
+    const touched = excludePiHarnessArtifacts(pathsChangedSinceBaseline(
       projectRoot,
       producer.ok ? producer.record.worktree_baseline : null,
-    );
+    ));
     const outcome = resolvePiHandOutcome(parseHandStatusFromOutput(outputText), outputText);
     const recorded = recordPiHandFinished({
       projectRoot,
@@ -774,6 +791,7 @@ export { hasFidelityPass, isDeliveryCommand, isRoutineSession };
 export default {
   decidePiBashGate,
   decidePiDispatchGate,
+  excludePiHarnessArtifacts,
   extractPiFeatureTaskIds,
   isWritingHandRole,
   piGitState,

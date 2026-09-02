@@ -29,3 +29,11 @@ test("o prompt descreve os rails que existem e não promete sandbox", () => {
   assert.match(prompt, /não sandbox|não é sandbox/i);
   assert.match(prompt, /execution-plan\.json/);
 });
+
+test("o prompt exige vermelho executável antes do fidelity-pass", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /vermelho executável/i);
+  assert.match(prompt, /dependência.*ausente|runner.*ausente/i);
+  assert.match(prompt, /fidelity-pass/i);
+});

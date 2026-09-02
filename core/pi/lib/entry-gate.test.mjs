@@ -17,6 +17,7 @@ import { decideBashHarnessLabel } from "../../opencode/plugin/lib/bash-decide.mj
 import {
   decidePiBashGate,
   decidePiDispatchGate,
+  excludePiHarnessArtifacts,
   extractPiFeatureTaskIds,
   isWritingHandRole,
   recordPiTaskCompletion,
@@ -536,6 +537,20 @@ function completionFixture() {
   );
   return { root, sessionId, featureId, close: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("artefatos internos do runtime Pi não são atribuídos à mão como mudança de produto", () => {
+  const touched = excludePiHarnessArtifacts([
+    ".pi/harness/runtime/sessions/run.jsonl",
+    ".pi/harness/state/ses-pi-completion/dispatch-records/call.json",
+    ".pi/harness/plans/feat-pi-completion/execution-plan.json",
+    "src/a.ts",
+  ]);
+
+  assert.deepEqual(touched, [
+    ".pi/harness/plans/feat-pi-completion/execution-plan.json",
+    "src/a.ts",
+  ]);
+});
 
 test("conclusão DONE grava o hand-record sob .pi/harness/state e carimba hand_finished", () => {
   const f = completionFixture();
