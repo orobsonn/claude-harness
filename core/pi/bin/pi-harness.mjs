@@ -10,6 +10,69 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const resolveFromHarness = (specifier) => fileURLToPath(import.meta.resolve(specifier));
 
+/**
+ * Extensões carregadas ANTES do pi-subagents. `harness-policy` vem primeiro de propósito: hooks
+ * `tool_call` rodam na ordem de carga e o primeiro `block` vence, então o deny de segredo/comando
+ * destrutivo julga antes de qualquer rail de pipeline. `harness-bootstrap` é só a fronteira
+ * ordenada imediatamente antes do pi-subagents.
+ */
+const EXTENSIONS_BEFORE_SUBAGENTS = [
+  "core/pi/extensions/harness-policy.ts",
+  "core/pi/extensions/harness-bootstrap.ts",
+];
+
+/**
+ * Extensões carregadas DEPOIS do pi-subagents (que registra a tool `subagent`): todo rail que
+ * julga um dispatch precisa da tool já existente. Ordem = ordem de julgamento:
+ * dispatch (contrato de papel) → entry-gate (estado do pipeline) → plan-gate (plano estável) →
+ * plan-write-gate (anti-forja + escopo de escrita) → marker/classify (tools de estado) →
+ * lavish/run-hand → observabilidade e UI, que nunca bloqueiam. `harness-plan-tracker` fica por
+ * último: é só UI.
+ */
+const EXTENSIONS_AFTER_SUBAGENTS = [
+  "core/pi/extensions/harness-dispatch.ts",
+  "core/pi/extensions/harness-entry-gate.ts",
+  "core/pi/extensions/harness-plan-gate.ts",
+  "core/pi/extensions/harness-plan-write-gate.ts",
+  "core/pi/extensions/harness-marker.ts",
+  "core/pi/extensions/harness-classify.ts",
+  "core/pi/extensions/harness-lavish-gate.ts",
+  "core/pi/extensions/harness-run-hand.ts",
+  "core/pi/extensions/harness-obs.ts",
+  "core/pi/extensions/harness-idle-nudge.ts",
+  "core/pi/extensions/harness-reinject-state.ts",
+  "core/pi/extensions/harness-version-check.ts",
+  "core/pi/extensions/harness-context-files.ts",
+  "core/pi/extensions/harness-plan-tracker.ts",
+];
+
+/** Libs host-agnósticas que as extensões acima importam; ausência de qualquer uma deixa um gate mudo. */
+const REQUIRED_LIBS = [
+  "core/pi/lib/classify.mjs",
+  "core/pi/lib/context-files.mjs",
+  "core/pi/lib/dispatch-rail.mjs",
+  "core/pi/lib/entry-gate.mjs",
+  "core/pi/lib/marker-authority.mjs",
+  "core/pi/lib/obs.mjs",
+  "core/pi/lib/pi-adapter-map.mjs",
+  "core/pi/lib/pi-child-identity.mjs",
+  "core/pi/lib/pi-gate-state.mjs",
+  "core/pi/lib/pi-paths.mjs",
+  "core/pi/lib/pi-result-text.mjs",
+  "core/pi/lib/pi-state-records.mjs",
+  "core/pi/lib/plan-gate.mjs",
+  "core/pi/lib/plan-tracker.mjs",
+  "core/pi/lib/plan-write-decide.mjs",
+  "core/pi/lib/policy.mjs",
+  "core/pi/lib/roles.mjs",
+  "core/pi/lib/run-hand.mjs",
+  "core/pi/lib/session-state.mjs",
+  "core/pi/lib/version-check.mjs",
+];
+
+/** Defaults imutáveis do pacote materializados no data dir do Pi na primeira execução. */
+const RUNTIME_DEFAULTS = ["agents", "models-store.json", "settings.json", "subagents.json"];
+
 function isDirectCli(scriptPath) {
   if (!scriptPath) return false;
   try {
@@ -54,10 +117,26 @@ export function resolvePiDependencyPaths(root, resolveModule = resolveFromHarnes
 }
 
 /**
+ * @description Diretório de estado do harness na worktree corrente (`<cwd>/.pi/harness/state`),
+ * irmão do data dir do Pi. É a raiz de gate-state, dispatch/hand-records e locks da lane.
+ * @param {string} runtimeDir
+ * @returns {string}
+ */
+export function harnessStateDir(runtimeDir) {
+  return join(dirname(runtimeDir), "state");
+}
+
+/**
  * @param {{root: string, argv: string[], env: NodeJS.ProcessEnv, runtimePrompt?: string, dependencyPaths?: ReturnType<typeof resolvePiDependencyPaths>}} options
  */
 export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", dependencyPaths = resolvePiDependencyPaths(root) }) {
   const runtimeDir = resolve(process.cwd(), ".pi/harness/runtime");
+  const extensionArgs = [
+    ...EXTENSIONS_BEFORE_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
+    "-e",
+    dependencyPaths.subagentsExtension,
+    ...EXTENSIONS_AFTER_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
+  ];
   return {
     command: process.execPath,
     args: [
@@ -65,14 +144,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
       "--no-extensions",
       "--no-skills",
       "--no-context-files",
-      "-e",
-      join(root, "core/pi/extensions/harness-bootstrap.ts"),
-      "-e",
-      dependencyPaths.subagentsExtension,
-      "-e",
-      join(root, "core/pi/extensions/harness-dispatch.ts"),
-      "-e",
-      join(root, "core/pi/extensions/harness-plan-tracker.ts"),
+      ...extensionArgs,
       "--skill",
       join(root, "core/codex/skills"),
       "--append-system-prompt",
@@ -83,10 +155,17 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
   };
 }
 
-/** Materializes immutable package defaults in the project's ignored Pi runtime. */
-export function materializeRuntime(root, runtimeDir) {
+/**
+ * Materializes immutable package defaults in the project's ignored Pi runtime and creates the
+ * harness state root, so the first gate never fails for a missing directory.
+ * @param {string} root
+ * @param {string} runtimeDir
+ * @param {string} [stateDir]
+ */
+export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir)) {
   mkdirSync(runtimeDir, { recursive: true });
-  for (const name of ["agents", "models-store.json", "subagents.json"]) {
+  mkdirSync(stateDir, { recursive: true });
+  for (const name of RUNTIME_DEFAULTS) {
     const source = join(root, "core/pi/runtime", name);
     const target = join(runtimeDir, name);
     if (!existsSync(target)) cpSync(source, target, { recursive: true });
@@ -106,11 +185,14 @@ export function verifyPiHarness(root) {
     dependencies.piPackage,
     dependencies.subagentsPackage,
     dependencies.subagentsExtension,
-    join(root, "core/pi/extensions/harness-dispatch.ts"),
-    join(root, "core/pi/extensions/harness-plan-tracker.ts"),
+    ...EXTENSIONS_BEFORE_SUBAGENTS.map((rel) => join(root, rel)),
+    ...EXTENSIONS_AFTER_SUBAGENTS.map((rel) => join(root, rel)),
+    ...REQUIRED_LIBS.map((rel) => join(root, rel)),
     join(root, "core/codex/skills"),
     join(root, "core/pi/prompts/harness-runtime.md"),
     join(root, "core/pi/runtime/subagents.json"),
+    join(root, "core/pi/runtime/models-store.json"),
+    join(root, "core/pi/runtime/settings.json"),
     ...CANONICAL_ROLES.map((role) => join(root, "core/pi/runtime/agents", `${role}.md`)),
   ];
   const missing = requiredPaths.find((path) => !existsSync(path));

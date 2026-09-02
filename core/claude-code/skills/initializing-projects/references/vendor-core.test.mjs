@@ -49,6 +49,9 @@ import {
   pruneOcRetiredFiles,
   preflightCodexVendor,
   preflightPiVendor,
+  piLauncherSource,
+  rewritePiImportsForVendor,
+  rewritePiLauncherForVendor,
 } from "./vendor-core.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -267,20 +270,246 @@ test("vendor-core: runtime all includes Claude, OpenCode, Codex, and Pi without 
     assert.ok(existsSync(join(target, ".codex", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", ".harness-version")));
     assert.ok(existsSync(join(target, ".pi", "harness", "pi-harness.mjs")));
-    const currentVersion = JSON.parse(readFileSync(join(harnessRoot, "package.json"), "utf8")).version;
-    assert.match(
-      readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8"),
-      new RegExp(`github:orobsonn/claude-harness#v${currentVersion.replaceAll(".", "\\.")}`),
-      "Pi launcher must resolve the published v-prefixed release tag",
+    assert.ok(existsSync(join(target, ".pi", "harness", "bin", "pi-harness.mjs")));
+    const shim = readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8");
+    assert.ok(!shim.includes("npx"), "vendored Pi shim must never shell out to npx");
+    assert.match(shim, /"bin", "pi-harness\.mjs"/, "Pi shim must run the local vendored launcher");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+/** @description Runs the real CLI with `--runtime all` (the only runtime that vendors Pi). */
+function vendorAllInto(target) {
+  return spawnSync(
+    process.execPath,
+    [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "all"],
+    { encoding: "utf8" },
+  );
+}
+
+const PI_TREE_ANCHORS = [
+  ".pi/harness/pi-harness.mjs",
+  ".pi/harness/bin/pi-harness.mjs",
+  ".pi/harness/extensions/harness-bootstrap.ts",
+  ".pi/harness/extensions/harness-dispatch.ts",
+  ".pi/harness/lib/pi-paths.mjs",
+  ".pi/harness/lib/policy.mjs",
+  ".pi/harness/prompts/harness-runtime.md",
+  ".pi/harness/runtime-defaults/subagents.json",
+  ".pi/harness/runtime-defaults/agents/harness-planner.md",
+  ".pi/harness/skills/harness-triage/SKILL.md",
+  ".pi/harness/vendor/shared/lib/gate-state-shape.mjs",
+  ".pi/harness/vendor/opencode/lib/gate-state.mjs",
+  ".pi/harness/vendor/opencode/plugin/lib/session-state.mjs",
+  ".pi/harness/vendor/codex/hooks/policy.mjs",
+];
+
+test("Pi vendor writes the whole core/pi tree, its dependency closure, and a manifest that matches", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-tree-"));
+  try {
+    const result = vendorAllInto(target);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const manifest = JSON.parse(readFileSync(join(target, ".pi", ".harness-owned-files.json"), "utf8"));
+    assert.equal(manifest.version, 1);
+    for (const rel of manifest.files) {
+      assert.ok(existsSync(join(target, rel)), `manifest owns a file that was never written: ${rel}`);
+    }
+    for (const rel of PI_TREE_ANCHORS) {
+      assert.ok(manifest.files.includes(rel), `manifest must own ${rel}`);
+      assert.ok(existsSync(join(target, rel)), `vendor must write ${rel}`);
+    }
+    for (const rel of [".pi/.gitignore", ".pi/.harness-version", ".pi/.harness-owned-files.json"]) {
+      assert.ok(manifest.files.includes(rel), `manifest must own ${rel}`);
+    }
+    assert.ok(
+      !manifest.files.some((rel) => rel.endsWith(".test.mjs")),
+      "tests never ship into a vendored project",
     );
     assert.match(
-      readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8"),
-      /--package=@earendil-works\/pi-coding-agent@0\.84\.4/,
-      "Pi launcher must install the pinned runtime beside a Git-hosted harness package",
+      readFileSync(join(target, ".pi", "harness", "lib", "policy.mjs"), "utf8"),
+      /["']\.\.\/vendor\/codex\/hooks\/policy\.mjs["']/,
+      "a Pi lib's monorepo sibling import must be re-rooted onto .pi/harness/vendor/",
     );
   } finally {
     rmSync(target, { recursive: true, force: true });
   }
+});
+
+test("Pi vendor deletes a file the previous manifest owned and the current source no longer ships", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-orphan-"));
+  try {
+    assert.equal(vendorAllInto(target).status, 0);
+    const manifestPath = join(target, ".pi", ".harness-owned-files.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const orphan = ".pi/harness/lib/retired-piece.mjs";
+    writeFileSync(join(target, orphan), "// retired by a later harness version\n");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ version: 1, files: [...manifest.files, orphan].sort() }, null, 2)}\n`,
+    );
+
+    const second = vendorAllInto(target);
+    assert.equal(second.status, 0, second.stderr || second.stdout);
+    assert.ok(!existsSync(join(target, orphan)), "a file that left the manifest must be deleted");
+    const refreshed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.ok(!refreshed.files.includes(orphan));
+    assert.ok(existsSync(join(target, ".pi", "harness", "bin", "pi-harness.mjs")), "live files survive the prune");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("Pi .gitignore ignores state/ and plans/ once, keeping operator lines and never duplicating", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-gitignore-"));
+  try {
+    mkdirSync(join(target, ".pi"), { recursive: true });
+    writeFileSync(join(target, ".pi", ".gitignore"), "# operator\nharness/runtime/\nmy-scratch/\n");
+    assert.equal(vendorAllInto(target).status, 0);
+    const first = readFileSync(join(target, ".pi", ".gitignore"), "utf8");
+    const lines = first.split("\n").map((line) => line.trim());
+    for (const required of ["harness/runtime/", "harness/state/", "harness/plans/", "sessions/", "npm/", "git/"]) {
+      assert.equal(
+        lines.filter((line) => line === required).length,
+        1,
+        `${required} must be ignored exactly once`,
+      );
+    }
+    assert.ok(lines.includes("my-scratch/"), "operator ignore lines survive the merge");
+    assert.equal(vendorAllInto(target).status, 0);
+    assert.equal(readFileSync(join(target, ".pi", ".gitignore"), "utf8"), first, "re-vendoring is idempotent");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("the vendored Pi shim runs the local launcher and answers --verify with ok:true", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-verify-"));
+  try {
+    assert.equal(vendorAllInto(target).status, 0);
+    const shim = readFileSync(join(target, ".pi", "harness", "pi-harness.mjs"), "utf8");
+    assert.ok(!shim.includes("npx"), "the shim must not resolve packages over the network on every call");
+    assert.ok(!shim.includes("github:orobsonn/claude-harness"), "the shim must not re-download the harness");
+    assert.match(shim, /"bin", "pi-harness\.mjs"/);
+    // A real project pins the Pi runtime in its own package.json; the symlink stands in for that install.
+    symlinkSync(join(harnessRoot, "node_modules"), join(target, "node_modules"), "dir");
+    const verify = spawnSync(
+      process.execPath,
+      [join(target, ".pi", "harness", "pi-harness.mjs"), "--verify"],
+      { cwd: target, encoding: "utf8" },
+    );
+    assert.equal(verify.status, 0, verify.stderr || verify.stdout);
+    assert.deepEqual(JSON.parse(verify.stdout.trim()).ok, true, verify.stdout);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("Pi preflight refuses to copy when an extension or lib is missing from the source", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-missing-source-"));
+  const sourceRoot = mkdtempSync(join(tmpdir(), "vendor-pi-source-"));
+  try {
+    cpSync(join(harnessRoot, "core"), join(sourceRoot, "core"), { recursive: true });
+    rmSync(join(sourceRoot, "core", "pi", "extensions", "harness-policy.ts"), { force: true });
+    assert.throws(
+      () => preflightPiVendor(join(sourceRoot, "core"), target),
+      /Pi source missing: core\/pi\/extensions\/harness-policy\.ts/,
+    );
+    assert.ok(!existsSync(join(target, ".pi")), "a failed preflight writes nothing");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test("Pi import rewrite re-roots only monorepo siblings, depth-aware", () => {
+  assert.equal(
+    rewritePiImportsForVendor('import { x } from "../../shared/lib/feature-id.mjs";', "lib/policy.mjs"),
+    'import { x } from "../vendor/shared/lib/feature-id.mjs";',
+  );
+  assert.equal(
+    rewritePiImportsForVendor("import { x } from '../../opencode/lib/gate-state.mjs'", "extensions/harness-dispatch.ts"),
+    "import { x } from '../vendor/opencode/lib/gate-state.mjs'",
+  );
+  assert.equal(
+    rewritePiImportsForVendor('import { x } from "../lib/roles.mjs";', "bin/pi-harness.mjs"),
+    'import { x } from "../lib/roles.mjs";',
+    "a sibling inside the Pi tree keeps its relative path",
+  );
+  assert.equal(
+    rewritePiImportsForVendor('import { x } from "../codex/hooks/policy.mjs";', "README.md"),
+    'import { x } from "./vendor/codex/hooks/policy.mjs";',
+    "a root-level file still gets a relative specifier — a bare `vendor/…` would not resolve",
+  );
+});
+
+test("Pi launcher copy is re-rooted onto the vendored .pi/harness directory", () => {
+  const source = readFileSync(join(harnessRoot, "core", "pi", "bin", "pi-harness.mjs"), "utf8");
+  const rewritten = rewritePiLauncherForVendor(source);
+  assert.ok(!rewritten.includes('"core/pi/'), "monorepo core/pi prefixes must not survive vendoring");
+  assert.ok(!rewritten.includes('"core/codex/skills"'), "the Codex skills path must point at the vendored copy");
+  assert.match(rewritten, /new URL\("\.\.\/", import\.meta\.url\)/);
+  assert.match(rewritten, /"skills"/);
+  assert.ok(
+    !/"runtime[",/]/.test(rewritten.replace(/"runtime-defaults/g, '"seed')),
+    "the launcher must read its defaults from the committed seed, never from the ignored data dir",
+  );
+  assert.match(rewritten, /"runtime-defaults"/, "materializeRuntime seeds from the committed defaults");
+  assert.match(rewritten, /"runtime-defaults\/subagents\.json"/, "verify checks the committed defaults");
+});
+
+test("Pi vendor never writes into the ignored runtime data dir and never packages auth.json", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-runtime-"));
+  try {
+    assert.equal(vendorAllInto(target).status, 0);
+    const manifest = JSON.parse(readFileSync(join(target, ".pi", ".harness-owned-files.json"), "utf8"));
+    assert.ok(
+      !manifest.files.some((rel) => rel.startsWith(".pi/harness/runtime/")),
+      "`.pi/harness/runtime/` is git-ignored — vendoring there ships nothing to a fresh clone",
+    );
+    assert.ok(
+      !manifest.files.some((rel) => rel.endsWith("auth.json")),
+      "a credentials file is never packaged",
+    );
+    assert.ok(!existsSync(join(target, ".pi", "harness", "runtime")), "the data dir is the launcher's to create");
+
+    // An operator login must survive a re-vendor.
+    mkdirSync(join(target, ".pi", "harness", "runtime"), { recursive: true });
+    const auth = join(target, ".pi", "harness", "runtime", "auth.json");
+    writeFileSync(auth, '{"openai-codex":{"refresh":"operator-token"}}\n');
+    assert.equal(vendorAllInto(target).status, 0);
+    assert.match(readFileSync(auth, "utf8"), /operator-token/, "re-vendoring must not wipe a live Pi login");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("a fresh clone (git-ignored paths absent) still answers --verify with ok:true", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-pi-clone-"));
+  try {
+    assert.equal(vendorAllInto(target).status, 0);
+    // What a clone gets: `.pi/.gitignore` drops `harness/runtime/`, `harness/state/`, `harness/plans/`.
+    for (const ignored of ["runtime", "state", "plans"]) {
+      rmSync(join(target, ".pi", "harness", ignored), { recursive: true, force: true });
+    }
+    symlinkSync(join(harnessRoot, "node_modules"), join(target, "node_modules"), "dir");
+    const verify = spawnSync(process.execPath, [join(target, ".pi", "harness", "pi-harness.mjs"), "--verify"], {
+      cwd: target,
+      encoding: "utf8",
+    });
+    assert.equal(verify.status, 0, verify.stderr || verify.stdout);
+    assert.equal(JSON.parse(verify.stdout.trim()).ok, true, verify.stdout);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("piLauncherSource stamps the harness version without a network dependency", () => {
+  const shim = piLauncherSource("v9.9.9");
+  assert.ok(shim.includes("v9.9.9"));
+  assert.ok(!shim.includes("npx"));
+  assert.ok(!shim.includes("--package="));
+  assert.match(shim, /join\(dirname\(fileURLToPath\(import\.meta\.url\)\), "bin", "pi-harness\.mjs"\)/);
 });
 
 test("Pi vendor refuses a foreign .pi/harness before any harness file is written", () => {
