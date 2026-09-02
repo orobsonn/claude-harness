@@ -7,6 +7,7 @@
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -535,6 +536,13 @@ function completionFixture() {
     join(root, ".pi", "harness", "state", sessionId, "gate-state.json"),
     JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true, mode: "FULL" }),
   );
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src", "a.ts"), "export const value = 1;\n");
+  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "pi-entry-gate@example.test"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Pi entry gate test"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
   return { root, sessionId, featureId, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -550,6 +558,80 @@ test("artefatos internos do runtime Pi não são atribuídos à mão como mudan�
     ".pi/harness/plans/feat-pi-completion/execution-plan.json",
     "src/a.ts",
   ]);
+});
+
+test("capture real ignora só runtime/state do host e mantém o arquivo de produto atribuído", () => {
+  const f = completionFixture();
+  try {
+    const claimed = claimPiDispatchForRuntime(
+      f.root,
+      { sessionId: f.sessionId, callId: "call-capture", role: "harness-executor", taskId: "task-1", featureId: f.featureId },
+      { env: {}, isAncestorFn: () => null },
+    );
+    assert.equal(claimed.ok, true, claimed.reason);
+    writeFileSync(join(f.root, "src", "a.ts"), "export const value = 2;\n");
+    mkdirSync(join(f.root, ".pi", "harness", "runtime"), { recursive: true });
+    writeFileSync(join(f.root, ".pi", "harness", "runtime", "session.jsonl"), "host artifact\n", { flag: "w" });
+    writeFileSync(join(f.root, ".pi", "harness", "state", "runtime-lock.json"), "host artifact\n", { flag: "w" });
+
+    const out = recordPiTaskCompletion({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      featureId: f.featureId,
+      taskId: "task-1",
+      role: "harness-executor",
+      producerCallId: "call-capture",
+      outputText: "Status: DONE",
+    });
+    assert.equal(out.ok, true, out.reason);
+    assert.equal(out.capturePending, true);
+    const record = JSON.parse(readFileSync(
+      join(f.root, ".pi", "harness", "state", "hand-records", f.featureId, f.sessionId, "task-1.json"),
+      "utf8",
+    ));
+    assert.deepEqual(record.touchedPaths, ["src/a.ts"]);
+  } finally {
+    f.close();
+  }
+});
+
+test("capture real não ignora subdiretórios com prefixo parecido", () => {
+  const f = completionFixture();
+  try {
+    const claimed = claimPiDispatchForRuntime(
+      f.root,
+      { sessionId: f.sessionId, callId: "call-prefix", role: "harness-executor", taskId: "task-1", featureId: f.featureId },
+      { env: {}, isAncestorFn: () => null },
+    );
+    assert.equal(claimed.ok, true, claimed.reason);
+    mkdirSync(join(f.root, ".pi", "harness", "runtime-evil"), { recursive: true });
+    mkdirSync(join(f.root, ".pi", "harness", "state-evil"), { recursive: true });
+    writeFileSync(join(f.root, ".pi", "harness", "runtime-evil", "outside.ts"), "outside\n");
+    writeFileSync(join(f.root, ".pi", "harness", "state-evil", "outside.ts"), "outside\n");
+
+    const out = recordPiTaskCompletion({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      featureId: f.featureId,
+      taskId: "task-1",
+      role: "harness-executor",
+      producerCallId: "call-prefix",
+      outputText: "Status: DONE",
+    });
+    assert.equal(out.ok, true, out.reason);
+    assert.equal(out.capturePending, false);
+    const record = JSON.parse(readFileSync(
+      join(f.root, ".pi", "harness", "state", "hand-records", f.featureId, f.sessionId, "task-1.json"),
+      "utf8",
+    ));
+    assert.equal(record.outcome, "BLOCKED");
+    assert.deepEqual(record.scopeViolations, [
+      ".pi/harness/runtime-evil/outside.ts",
+      ".pi/harness/state-evil/outside.ts",
+    ]);
+  } finally {
+    f.close();
+  }
 });
 
 test("conclusão DONE grava o hand-record sob .pi/harness/state e carimba hand_finished", () => {

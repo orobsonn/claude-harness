@@ -81,8 +81,8 @@ const ALLOW = Object.freeze({ ok: true, decision: "allow", reason: "pi-entry-all
 /**
  * @description O Pi materializa transcrições, locks e records do próprio runtime dentro da
  * worktree. Eles são efeitos do HOST, não alterações feitas pela mão na issue; atribuí-los à
- * mão transformaria toda conclusão em falsa violação de escopo. Mantemos o filtro estreito:
- * plano canônico e qualquer outro arquivo do projeto continuam visíveis ao capture rail.
+ * mão transformaria toda conclusão em falsa violação de escopo. A exceção se limita a duas
+ * subárvores host-owned; plano canônico e qualquer outro caminho continuam visíveis ao capture rail.
  * @param {unknown[]} paths
  * @returns {string[]}
  */
