@@ -133,7 +133,7 @@ function writeRuntimeFileAtomically(destination, body, mode) {
  * Refreshes the exact harness files in an active feature checkout after an isolated lifecycle PR
  * has merged. This intentionally leaves a visible local diff: it is the only way for the next
  * process in that worktree to load the new vendored runtime without merging or rebasing product work.
- * @param {{ cwd: string, sourceDirectory: string, runtimeTarget: "claude"|"opencode"|"codex"|"both"|"all" }} input
+ * @param {{ cwd: string, sourceDirectory: string, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all" }} input
  */
 export function syncCallerRuntimeOverlay({ cwd, sourceDirectory, runtimeTarget }) {
   const ownership = vendoredOwnership(sourceDirectory, runtimeTarget);
@@ -257,7 +257,7 @@ function assertRetiredLifecyclePathScope(path, root, manifest) {
   }
 }
 
-/** @param {string} directory @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget */
+/** @param {string} directory @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} runtimeTarget */
 function vendoredOwnership(directory, runtimeTarget) {
   const manifests = runtimeTarget === "all"
     ? [
@@ -275,7 +275,9 @@ function vendoredOwnership(directory, runtimeTarget) {
         ? { path: ".opencode/.harness-owned-files.json", root: ".opencode" }
         : runtimeTarget === "codex"
           ? { path: ".codex/.harness-owned-files.json", root: ".codex" }
-          : { path: ".claude/.harness-owned-files.json", root: ".claude" }];
+          : runtimeTarget === "pi"
+            ? { path: ".pi/.harness-owned-files.json", root: ".pi" }
+            : { path: ".claude/.harness-owned-files.json", root: ".claude" }];
   const paths = new Set();
   const retired = new Set();
   for (const manifest of manifests) {
@@ -412,9 +414,9 @@ function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
  * @param {{
  *   cwd: string,
  *   ref: string,
- *   runtimeTarget: "claude"|"opencode"|"both",
+ *   runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all",
  *   runVendor?: typeof runVendorDefault,
- *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"both") => { action: string, branch?: string, paths?: string[], url?: string },
+ *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all") => { action: string, branch?: string, paths?: string[], url?: string },
  *   ship?: typeof shipPreparedLifecycle,
  *   syncCaller?: typeof syncCallerCheckout,
  *   syncRuntime?: typeof syncCallerRuntimeOverlay,
@@ -471,9 +473,9 @@ export function isDirectCli(scriptPath) {
 /**
  * @description Parses the command and flags from argv (raw — no aliasing; the `init`→`setup-local`
  * alias is resolved by the dispatcher in main()).
- * Public `--target opencode|claude|codex|both|all` selects the runtime shell (default claude).
+ * Public `--target opencode|claude|codex|pi|both|all` selects the runtime shell (default all).
  * @param {string[]} argv - The process.argv-shaped array.
- * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"codex"|"both"|"all", releaseRef: string | undefined }}
+ * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all", releaseRef: string | undefined }}
  */
 export function parseCliArgs(argv) {
   let runtimeTarget = "all";
@@ -484,9 +486,10 @@ export function parseCliArgs(argv) {
       if (v === "claude") runtimeTarget = "claude";
       else if (v === "opencode" || v === "oc") runtimeTarget = "opencode";
       else if (v === "codex") runtimeTarget = "codex";
+      else if (v === "pi") runtimeTarget = "pi";
       else if (v === "both") runtimeTarget = "both";
       else if (v === "all") runtimeTarget = "all";
-      else throw new Error(`invalid --target "${v}" — expected: opencode | claude | codex | both | all`);
+      else throw new Error(`invalid --target "${v}" — expected: opencode | claude | codex | pi | both | all`);
     }
     if (argv[i] === "--ref") {
       const value = String(argv[++i] ?? "").trim();
@@ -585,7 +588,7 @@ export function codexSetupNotes() {
  * @param {() => string | null} options.resolveTag - Function to resolve the latest tag.
  * @param {(opts: { source: string, ref: string, target: string, withCodex: boolean, runtimeTarget: string }) => void} options.runVendor
  * @param {boolean} [options.withCodex] - Vendor the cross-family Codex module.
- * @param {"claude"|"opencode"|"codex"|"both"|"all"} [options.runtimeTarget] - Shells to vendor (default all).
+ * @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} [options.runtimeTarget] - Shells to vendor (default all).
  * @returns {string} The resolved tag.
  */
 export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtimeTarget = "all" }) {
@@ -606,14 +609,14 @@ export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtime
  * vendors in place; an existing shell must use the isolated updater so a failed write cannot leave
  * a partially vendored checkout for the old skill to ship.
  * @param {string} cwd
- * @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget
+ * @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} runtimeTarget
  */
 export function hasInstalledHarness(cwd, runtimeTarget) {
   const markers = runtimeTarget === "all"
     ? [".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version", ".pi/.harness-version"]
     : runtimeTarget === "both"
       ? [".opencode/.harness-version", ".claude/.harness-version"]
-      : [runtimeTarget === "opencode" ? ".opencode/.harness-version" : runtimeTarget === "codex" ? ".codex/.harness-version" : ".claude/.harness-version"];
+      : [runtimeTarget === "opencode" ? ".opencode/.harness-version" : runtimeTarget === "codex" ? ".codex/.harness-version" : runtimeTarget === "pi" ? ".pi/.harness-version" : ".claude/.harness-version"];
   return markers.some((marker) => existsSync(join(cwd, marker)));
 }
 
@@ -662,7 +665,7 @@ function resolveLatestTag() {
 /**
  * @description Default vendor runner that delegates to vendor-core.mjs.
  * Public CLI `--target` is the runtime shell; vendor-core uses `--target` for project dir
- * and `--runtime` for claude|opencode|both.
+ * and `--runtime` for claude|opencode|codex|pi|both|all.
  * @param {object} options - The vendor options.
  * @param {string} options.source - The source URL.
  * @param {string} options.ref - The git ref.
@@ -848,10 +851,10 @@ async function main() {
   if (command !== "setup-local") {
     process.stderr.write(
       "Usage:\n" +
-        "  npx claude-harness init --target opencode|claude|codex|both|all [--with-codex]\n" +
-        "  npx claude-harness setup-local [--target opencode|claude|codex|both|all] [--with-codex]\n" +
+        "  npx claude-harness init --target opencode|claude|codex|pi|both|all [--with-codex]\n" +
+        "  npx claude-harness setup-local [--target opencode|claude|codex|pi|both|all] [--with-codex]\n" +
       "  npx claude-harness lifecycle-snapshot updating-harness\n" +
-      "  npx claude-harness lifecycle-update --target opencode|claude|codex|both|all --ref <release-tag>\n" +
+      "  npx claude-harness lifecycle-update --target opencode|claude|codex|pi|both|all --ref <release-tag>\n" +
       "  npx claude-harness setup-orca            (alias: setup-vps)\n" +
       "  npx claude-harness orca-doctor [--environment <nome>] [--ssh-host <alias>] [--json]\n"
     );
@@ -859,7 +862,7 @@ async function main() {
   }
 
   const withCodex =
-    runtimeTarget === "opencode" || runtimeTarget === "codex" || runtimeTarget === "all"
+    runtimeTarget === "opencode" || runtimeTarget === "codex" || runtimeTarget === "pi" || runtimeTarget === "all"
       ? false
       : await decideCodex({
           withCodexFlag,
@@ -898,10 +901,12 @@ async function main() {
         ? "./.opencode"
         : runtimeTarget === "codex"
           ? "./.codex + ./.agents/skills"
-        : runtimeTarget === "both"
+        : runtimeTarget === "pi"
+          ? "./.pi/harness"
+          : runtimeTarget === "both"
           ? "./.claude + ./.opencode"
           : runtimeTarget === "all"
-            ? "./.claude + ./.opencode + ./.codex + ./.agents/skills"
+            ? "./.claude + ./.opencode + ./.codex + ./.agents/skills + ./.pi/harness"
           : "./.claude";
     process.stdout.write(
       `[claude-harness] vendored harness ${tag} into ${destHint} — review and commit.\n`

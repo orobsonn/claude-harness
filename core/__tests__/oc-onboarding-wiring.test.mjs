@@ -24,9 +24,9 @@ const ocTriage = readFileSync(join(projectRoot, "opencode/skills/triaging-reques
 const ocBuild = readFileSync(join(projectRoot, "opencode/agents/build.md"), "utf8");
 const ocAgents = readFileSync(join(projectRoot, "opencode/AGENTS.md"), "utf8");
 
-test("CC updating-harness detects existing shells and requests all runtimes", () => {
+test("CC updating-harness detects existing shells and documents all runtimes as the default", () => {
   assert.match(ccUpdating, /\.opencode\/\.harness-version/, "must detect install-vs-update on the OC shell marker");
-  assert.match(ccUpdating, /--target all/, "must request the four-runtime install from the published CLI");
+  assert.match(ccUpdating, /default[\s\S]*Use `all` unless the operator explicitly selects/i, "must document all four as the default while preserving an explicit selection");
 });
 
 test("CC updating-harness OC-only fallback runs the CLI from the pinned git tag, not npm @latest", () => {
@@ -53,7 +53,7 @@ test("OC updating-harness skill exists and its native tool pins the lifecycle CL
     "native tool must run the CLI from the github:…#<tag> spec, not npm @latest",
   );
   assert.match(ocUpdating, /lifecycle-update\(\{\}\)/, "skill must use the native lifecycle tool");
-  assert.match(ocLifecycleToolRuntime, /all harness runtimes/i, "tool must document the all-runtimes lifecycle");
+  assert.match(ocLifecycleToolRuntime, /defaults to all runtimes unless the operator explicitly selects/i, "tool must document all runtimes as the default while preserving an explicit selection");
 });
 
 test("OC harness updates run inside build without delivery ceremony", () => {
@@ -61,7 +61,6 @@ test("OC harness updates run inside build without delivery ceremony", () => {
   assert.match(ocTriage, /Harness lifecycle operations run in this same root `build` conversation/i);
   assert.match(ocTriage, /oc-updating-harness/, "triage must route to the lifecycle skill");
   assert.match(updating, /Do not call `classify`[\s\S]*Do not call|Do not call `classify`[\s\S]*dispatch any subagent/i);
-  assert.match(ocLifecycleTool, /const target = "all"/, "tool must not reduce lifecycle to a detected subset");
   assert.match(ocBuild, /load their matching skill without classify, plan, or Task dispatch/i);
   assert.match(ocAgents, /Lifecycle shortcuts in build[\s\S]*do not call `classify`/i);
 });

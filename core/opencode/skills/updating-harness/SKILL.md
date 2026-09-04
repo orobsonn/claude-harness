@@ -48,12 +48,12 @@ Run the native tool exactly once:
 lifecycle-update({})
 ```
 
-Call `lifecycle-update({})`. It always installs or synchronizes Claude Code, OpenCode, Codex and Pi
-to the same pinned release; no marker inspection may reduce that set. `target: "all"` is accepted only
-as a compatibility spelling.
+Call `lifecycle-update({})`. It installs or synchronizes Claude Code, OpenCode, Codex and Pi to the
+same pinned release; no marker inspection may reduce that default set. Pass `target` when the
+operator explicitly selects `claude`, `opencode`, `codex`, `pi`, `both`, or `all`.
 
 The tool asks for host confirmation, resolves the latest release tag once, and invokes the pinned CLI
-with a fixed all-runtimes argument vector. Do not construct or run the CLI command through bash.
+with a fixed, allowlisted runtime argument vector. Do not construct or run the CLI command through bash.
 
 The published CLI starts from a **clean clone of `origin/main`** (or `origin/master`), vendors the
 pinned release, accepts only the exact generated harness manifest, creates the lifecycle-only commit,
@@ -85,6 +85,6 @@ checkout runtime synchronized.
 
 - Running a multi-step vendor/commit/PR sequence in the checkout that carries the conversation.
 - Using `@orobsonn/claude-harness@latest` from npm; the npm release can lag the git tag.
-- Reducing the lifecycle to already-detected runtimes; the supported lifecycle is all four.
+- Reducing the lifecycle to already-detected runtimes when the operator did not explicitly select a target; the default lifecycle is all four.
 - Turning absent project CI into a product-test demand or an operator choice.
 - Broad staging, force-push, `--no-verify`, or an admin merge.

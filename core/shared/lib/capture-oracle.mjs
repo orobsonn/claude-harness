@@ -16,7 +16,7 @@ export const OUTCOME = Object.freeze({
 export const OUTCOME_VALUES = new Set(Object.values(OUTCOME));
 
 /**
- * Exact harness-internal cache paths (both runtimes). Exact equality only — never prefix.
+ * Exact harness-internal cache paths (every runtime lane). Exact equality only — never prefix.
  * @type {readonly string[]}
  */
 const HARNESS_INTERNAL_PATHS = Object.freeze([
@@ -24,6 +24,8 @@ const HARNESS_INTERNAL_PATHS = Object.freeze([
   ".claude/.harness-version-check-cache.tmp",
   ".opencode/.harness-version-check-cache",
   ".opencode/.harness-version-check-cache.tmp",
+  ".pi/.harness-version-check-cache",
+  ".pi/.harness-version-check-cache.tmp",
 ]);
 
 /**

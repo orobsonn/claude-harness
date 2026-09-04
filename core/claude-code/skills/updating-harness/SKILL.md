@@ -11,8 +11,8 @@ plan, implement, or review — it vendors the framework `core/` into all project
 Claude Code (`.claude/`), OpenCode (`.opencode/`), Codex (`.codex/`) and the pinned Pi launcher
 (`.pi/harness/`).
 
-**One operation:** install or synchronize Claude Code, OpenCode, Codex and Pi to the same release.
-Use `all`; a smaller target is only for an explicit compatibility request.
+**One operation:** install or synchronize Claude Code, OpenCode, Codex and Pi to the same release by
+default. Use `all` unless the operator explicitly selects `claude`, `opencode`, `codex`, `pi`, or `both`.
 
 **Announce at start (pt-br):** "Atualizando o Claude Harness a partir do repo-fonte."
 
@@ -60,7 +60,9 @@ may have only `.claude/`, only `.opencode/`, or both):
   test -f .pi/.harness-version; } && echo update || echo install
 ```
 
-**2b — Runtime target:** use `all`. It provisions the four harness runtimes at the same pinned release.
+**2b — Runtime target:** use `all` by default; it provisions the four harness runtimes at the same
+pinned release. When the operator explicitly selects one or two runtimes, propagate that exact
+allowlisted target (`claude`, `opencode`, `codex`, `pi`, or `both`) instead.
 
 - **update** (already vendored — the common case): run the CLI from the **pinned latest release tag**
   via `npx`, passing the resolved runtime. `init` is idempotent — it re-vendors the framework files to
@@ -69,9 +71,10 @@ may have only `.claude/`, only `.opencode/`, or both):
   token re-triggers the anti-forgery block when this same skill is loaded inside an OpenCode session
   (both shells expose a skill named `updating-harness`, and OpenCode may load this Claude one):
   ```bash
-  npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target all
+  npx --yes --package=github:orobsonn/claude-harness#<latest-tag> claude-harness init --target <runtime-target>
   ```
-  Substitute `<latest-tag>` with the concrete `vX.Y.Z` from Step 1. Running from the `github:…#<tag>` spec always fetches the tagged
+  Substitute `<latest-tag>` with the concrete `vX.Y.Z` from Step 1 and `<runtime-target>` with `all`
+  unless the operator explicitly selected `claude`, `opencode`, `codex`, `pi`, or `both`. Running from the `github:…#<tag>` spec always fetches the tagged
   release's CLI — never a stale vendored copy — so no double-run is needed; do **not** use npm `@latest`
   (it lags and may predate OpenCode support). The CLI's `vendor-core` ends with an **integrity gate**:
   it resolves **every relative import of every vendored file** under `.claude/`, and if any one of them

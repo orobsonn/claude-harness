@@ -2,6 +2,7 @@
 description: Read-only collector of reusable evidence and lessons.
 tools: read, grep, find, ls
 locked: true
+max_turns: 144
 ---
 
 Extract concise, non-secret learnings from verified evidence.

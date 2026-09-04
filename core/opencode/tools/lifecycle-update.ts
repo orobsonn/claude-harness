@@ -24,9 +24,9 @@ async function latestReleaseTag(): Promise<string> {
 export default tool({
   description:
     "Update the installed harness through the verified, pinned lifecycle CLI. " +
-    "Only root build sessions may invoke it; it derives the runtime and argv itself, opens and squash-merges a manifest-only PR, then requires a new session.",
+    "Only root build sessions may invoke it; it defaults to all runtimes unless the operator explicitly selects one runtime, opens and squash-merges a manifest-only PR, then requires a new session.",
   args: {
-    target: tool.schema.literal("all").optional().describe("Optional compatibility field; lifecycle always installs all harness runtimes."),
+    target: tool.schema.string().optional().describe("Optional explicit runtime target. Omit to update Claude Code, OpenCode, Codex, and Pi together."),
   },
   async execute(args, context) {
     await context.ask({
